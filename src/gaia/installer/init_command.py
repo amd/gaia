@@ -180,9 +180,8 @@ INIT_PROFILES = {
     "gaia": {
         "description": "The flagship GAIA agent — chat, documents, data, web, memory",
         # Installs the flagship from the Agent Hub, which publishes it as a
-        # native binary (`gaia-agent`), not a wheel -- so nothing it installs is
-        # importable. `gaia chat` still needs the `gaia-agent-gaia` wheel
-        # separately; the completion message says so.
+        # native binary (`gaia-agent`), not a wheel, so nothing it installs is
+        # importable.
         "agent": "gaia",
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
@@ -2334,31 +2333,6 @@ class InitCommand:
 
         return f"Read {EmbeddedLemonade().log_path} for the server's own error."
 
-    def _verify_model(self, client, model_id: str) -> tuple:
-        """
-        Verify a model is available (downloaded) on the server.
-
-        Note: We only check if the model exists in the server's model list.
-        Running inference to verify would require loading each model, which is
-        slow and can cause server issues. If a model is corrupted, the error
-        will surface when the user tries to use it.
-
-        Args:
-            client: LemonadeClient instance
-            model_id: Model ID to verify
-
-        Returns:
-            Tuple of (success: bool, error_type: str or None)
-        """
-        try:
-            # Check if model is in the available models list
-            if client.check_model_available(model_id):
-                return (True, None)
-            return (False, "not_found")
-        except Exception as e:
-            log.debug(f"Model verification failed for {model_id}: {e}")
-            return (False, "server_error")
-
     def _check_device_available(self) -> bool:
         """Check that the required hardware device is available.
 
@@ -3315,7 +3289,7 @@ class InitCommand:
             True if verification passes, False on failure
         """
         try:
-            from gaia.llm.lemonade_client import LemonadeClient
+            from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
             client = LemonadeClient(verbose=self.verbose)
 
@@ -3330,9 +3304,10 @@ class InitCommand:
                     self._print_error("Server not responding")
                     self._emit_test("server", None, "failed", "Server not responding")
                     return False
-            except Exception:
-                self._print_error("Server not responding")
-                self._emit_test("server", None, "failed", "Server not responding")
+            except LemonadeClientError as e:
+                detail = f"Server not responding: {e}"
+                self._print_error(detail)
+                self._emit_test("server", None, "failed", detail)
                 return False
 
             # Ensure proper context size for this profile
@@ -4050,8 +4025,8 @@ class InitCommand:
             if self.profile == "sd":
                 self.console.print(
                     "    [cyan]gaia chat[/cyan]                            "
-                    "Then ask for an image — image generation runs through the "
-                    "agent's SD tools"
+                    "Then ask for an image. The image tools are off while chat "
+                    "runs on Gemma 4 E4B; pick a larger chat model to use them"
                 )
             elif self.profile in ("gaia", "npu"):
                 if has_tui:
@@ -4087,7 +4062,7 @@ class InitCommand:
                     "    [cyan]gaia download --list --agent vlm[/cyan]  Check the vision model is downloaded"
                 )
                 self.console.print(
-                    "    [dim]Vision model ready! Use with the driver logs processor or VLM SDK:[/dim]"
+                    "    [dim]Vision model ready! Use it with the VLM SDK:[/dim]"
                 )
                 self.console.print(
                     "    [cyan]from gaia.vlm import StructuredVLMExtractor[/cyan]"
@@ -4128,8 +4103,9 @@ class InitCommand:
             # Profile-specific quick start commands
             if self.profile == "sd":
                 self._print(
-                    "    gaia chat                    Then ask for an image — "
-                    "image generation runs through the agent's SD tools"
+                    "    gaia chat                    Then ask for an image. "
+                    "The image tools are off while chat runs on Gemma 4 E4B; "
+                    "pick a larger chat model to use them"
                 )
             elif self.profile in ("gaia", "npu"):
                 if has_tui:

@@ -44,7 +44,6 @@ type rowEntry struct {
 	// optional is the extra's role: speech, voice or image creation.
 	optional string
 	source   string
-	purpose  string
 }
 
 func entryFrom(e setupapi.CatalogEntry) rowEntry {
@@ -71,7 +70,6 @@ func entryFrom(e setupapi.CatalogEntry) rowEntry {
 		gaiaModel:   e.GaiaModel,
 		readsImages: e.ReadsImages,
 		compact:     e.FeatureTier == setupapi.TierCompact,
-		purpose:     e.Purpose,
 	}
 	if e.FullSizeGB != nil {
 		r.fullGB = *e.FullSizeGB
@@ -119,10 +117,9 @@ func (r rowEntry) left() float64 {
 // selection is the user's staged choice: what is ticked and which model chats.
 // Nothing is saved until Continue (setup) or Apply (/models).
 type selection struct {
-	rows    []rowEntry
-	ticked  map[string]bool
-	chat    string
-	initial map[string]bool
+	rows   []rowEntry
+	ticked map[string]bool
+	chat   string
 	// unticked are models the user unticked by hand, not ones never ticked.
 	unticked map[string]bool
 	// chatChosen is set once the user picked their own chat model (or saved
@@ -143,7 +140,7 @@ const visionNone = "none"
 // newSelection lays the plan out as rows and starts from the backend's own
 // selection: recommended models ticked, skipped ones not.
 func newSelection(p setupapi.Plan, cloud bool) selection {
-	s := selection{ticked: map[string]bool{}, initial: map[string]bool{}, unticked: map[string]bool{},
+	s := selection{ticked: map[string]bool{}, unticked: map[string]bool{},
 		chatChosen: p.ChatModel.UserSet, cloud: cloud}
 	if p.RecommendedModel != nil {
 		s.recommended = *p.RecommendedModel
@@ -156,7 +153,6 @@ func newSelection(p setupapi.Plan, cloud bool) selection {
 		s.rows = append(s.rows, r)
 		if !r.installed && (r.selected || r.kept()) {
 			s.ticked[r.id] = true
-			s.initial[r.id] = true
 		}
 	}
 	// Setup's own models first, then GAIA's other chat models, then what is

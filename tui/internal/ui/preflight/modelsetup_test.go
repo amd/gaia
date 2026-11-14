@@ -221,6 +221,55 @@ func TestFinishingSetupPersistsSelectedChatModelBeforeRecheck(t *testing.T) {
 	}
 }
 
+// A chat model that could not be saved is said, and the screen waits for it to
+// be read: the re-check's own notes must not replace it.
+func TestAFailedSaveOfTheChatModelIsShown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv(configFileEnv, path)
+	if err := os.WriteFile(path, []byte(`{not json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newWith(scriptedRunner{rep: readyReport(), fixes: &[]FixKind{}},
+		Config{AgentID: "gaia", AgentName: "GAIA"}, Options{})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+	m.setup = &modelsetup.Model{}
+	updated, _ = m.Update(modelsetup.FinishedMsg{ChatModel: "model-B"})
+	m = updated.(Model)
+	updated, cmd := m.Update(reportMsg{rep: readyReport()})
+	m = updated.(Model)
+
+	if s := strings.Join(strings.Fields(plain(m)), " "); !strings.Contains(s, "Could not save the selected chat model") {
+		t.Fatalf("the failed save is not on screen:\n%s", plain(m))
+	}
+	if cmd != nil || !m.HeldForReview() {
+		t.Fatal("the screen handed off before the failed save could be read")
+	}
+}
+
+// The model choice is the model step's fix: the gate is busy while it is open,
+// so a host shortcut that checks Busy cannot open over it.
+func TestTheGateIsBusyWhileTheModelChoiceIsOpen(t *testing.T) {
+	api := plannedFake()
+	m := newWith(modelChoosingRunner{scriptedRunner{rep: modelStepReport(), fixes: &[]FixKind{}}, api},
+		Config{AgentID: "gaia", AgentName: "GAIA"}, Options{})
+	updated, _ := m.Update(reportMsg{rep: modelStepReport()})
+	m = updated.(Model)
+	if m.Busy() {
+		t.Fatal("test setup: the settled checklist should be idle")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.SetupScreen() == "" || !m.Busy() {
+		t.Fatalf("screen=%q busy=%v, want the choice open and the gate busy", m.SetupScreen(), m.Busy())
+	}
+	updated, _ = m.Update(modelsetup.BackMsg{})
+	if updated.(Model).Busy() {
+		t.Fatal("still busy after leaving the model choice")
+	}
+}
+
 // A runner that cannot ask (the daemon runner) keeps its own download.
 func TestRunnersThatCannotAskKeepTheirDownload(t *testing.T) {
 	m, fixes := settledOn(t, modelStepReport(), 80, 24)

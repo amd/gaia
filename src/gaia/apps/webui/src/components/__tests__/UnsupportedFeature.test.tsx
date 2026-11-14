@@ -106,6 +106,19 @@ describe('UploadErrorToast', () => {
         expect(onDismiss).toHaveBeenCalledOnce();
     });
 
+    it('says what to do with a refused video or image, not only that it was refused', () => {
+        const { rerender } = render(
+            <UploadErrorToast filename="call.mp4" error="Unsupported file type" onDismiss={() => {}} timeout={0} />
+        );
+        expect(screen.getByText(/Attach the video to a chat, and GAIA will transcribe it\./)).toBeInTheDocument();
+        // Attaching already works, so there is no feature to request.
+        expect(screen.queryByRole('link')).toBeNull();
+
+        rerender(<UploadErrorToast filename="IMG_1.heic" error="Unsupported file type" onDismiss={() => {}} timeout={0} />);
+        expect(screen.getByText(/Convert it to PNG or JPEG/)).toBeInTheDocument();
+        expect(screen.getByRole('link')).toBeInTheDocument();
+    });
+
     it('renders connection error correctly', () => {
         render(
             <UploadErrorToast

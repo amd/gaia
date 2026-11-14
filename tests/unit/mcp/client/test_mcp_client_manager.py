@@ -697,6 +697,20 @@ class TestMCPClientManagerStatusReport:
         assert "bad_server" in manager._failed
         assert manager._failed["bad_server"] == "Connection refused"
 
+    def test_unusable_config_entries_are_reported_not_dropped(self):
+        manager = MCPClientManager()
+        manager.config._servers = {
+            "remote": {"type": "http", "url": "https://example.test/mcp"},
+            "blank": {"args": ["-y", "server"]},
+        }
+
+        manager.load_from_config()
+
+        report = {row["name"]: row for row in manager.get_status_report()}
+        assert "stdio" in report["remote"]["error"]
+        assert report["blank"]["error"] == "No command specified"
+        assert not report["remote"]["connected"]
+
     def test_get_status_report_includes_failed_servers(self):
         manager = MCPClientManager()
 

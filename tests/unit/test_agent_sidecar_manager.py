@@ -133,6 +133,21 @@ def test_real_email_spec_dev_spawn_has_nonempty_module_and_existing_app_dir(
     assert "server:app" in argv and "" not in argv
 
 
+def test_dev_mode_missing_source_names_the_agents_own_install_dir(
+    monkeypatch, tmp_path
+):
+    """The remedy must point at this agent's checkout, not the email agent's."""
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    src = tmp_path / "hub" / "agents" / "other" / "python"
+    spec = dataclasses.replace(builtin_specs()["email"], dev_src_dir=src)
+
+    with pytest.raises(SidecarSpawnError) as excinfo:
+        mgr.AgentSidecarManager(spec).build_spawn_command(port=9127)
+
+    assert f"uv pip install -e {src}" in str(excinfo.value)
+    assert "hub/agents/email/python" not in str(excinfo.value)
+
+
 # ---------------------------------------------------------------------------
 # errors.py — relocated hierarchy + backward-compat shim
 # ---------------------------------------------------------------------------

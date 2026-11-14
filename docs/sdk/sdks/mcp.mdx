@@ -163,7 +163,8 @@ Connect to as many servers as needed. GAIA prefixes each tool with the server na
 ```python
 class MultiToolAgent(Agent, MCPClientMixin):
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        Agent.__init__(self, **kwargs)
+        MCPClientMixin.__init__(self, auto_load_config=False)
         self.connect_mcp_server("filesystem", {
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
@@ -315,7 +316,16 @@ if client.connect():
 ```
 
 <Note>
-`MCPClient` only supports **stdio** transport (subprocess-based). HTTP and SSE transports are not supported at this time.
+Config-driven servers (`MCPClient.from_config`, `MCPClientManager` and `connect_mcp_server`) are **stdio** only. For a remote streamable-HTTP server, build the client directly:
+
+```python
+from gaia.mcp.client import MCPClient
+from gaia.mcp.client.transports import HTTPTransport
+
+client = MCPClient("remote", HTTPTransport("http://localhost:8080/mcp", timeout=30))
+if client.connect():
+    tools = client.list_tools()
+```
 </Note>
 
 ---
@@ -323,6 +333,8 @@ if client.connect():
 ## Error Handling
 
 GAIA's MCP client uses a **return-value** error model rather than raising exceptions for expected failures.
+
+Call `MCPClientMixin.__init__` (see the examples above) before connecting; without it `connect_mcp_server` returns `False`.
 
 ```python
 success = agent.connect_mcp_server("server", {

@@ -348,3 +348,27 @@ def test_progress_follows_the_model_once_lemonade_drops_the_user_prefix(monkeypa
     assert system._get_download_progress(listed)["percent"] == 40
     assert system._get_download_progress(lc.GPT_OSS_20B_MODEL_NAME)["percent"] == 40
     assert system._get_download_progress("gpt-oss-20b-mxfp4-GGUF") is None
+
+
+def test_ttl_eviction_spares_a_retry_started_within_the_ttl(monkeypatch):
+    """A retry's fresh entry must survive the previous pull's eviction timer."""
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_DOWNLOAD_PROGRESS_TTL", 0)
+    system._set_download_progress("m", {"state": "error"})
+
+    async def _run():
+        evict = asyncio.create_task(system._evict_progress_after_ttl("m"))
+        await asyncio.sleep(0)
+        system._set_download_progress("m", {"state": "starting"})
+        await evict
+
+    asyncio.run(_run())
+    assert system._get_download_progress("m") == {"state": "starting"}
+
+
+def test_ttl_eviction_drops_the_terminal_entry(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_DOWNLOAD_PROGRESS_TTL", 0)
+    system._set_download_progress("m", {"state": "complete"})
+    asyncio.run(system._evict_progress_after_ttl("m"))
+    assert system._get_download_progress("m") is None

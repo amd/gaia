@@ -6,9 +6,11 @@ CLI entry point for GAIA OpenAI-compatible API server
 This module provides command-line interface for managing the API server.
 
 Usage:
-    gaia api start [--host HOST] [--port PORT] [--background]
-    gaia api status
-    gaia api stop
+    python -m gaia.api.app start [--host HOST] [--port PORT] [--background]
+    python -m gaia.api.app status
+    python -m gaia.api.app stop
+
+``gaia api start|status|stop`` covers the same commands without ``--background``.
 """
 
 import argparse
@@ -23,6 +25,9 @@ from gaia.api.local_http import assert_bind_is_authenticated
 from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
 logger = logging.getLogger(__name__)
+
+#: How long a background start watches the child for an immediate crash.
+STARTUP_CHECK_SECONDS = 3.0
 
 
 def start_server(
@@ -85,6 +90,14 @@ def start_server(
                 stdout=f,
                 stderr=f,
             )
+        try:
+            exit_code = proc.wait(timeout=STARTUP_CHECK_SECONDS)
+        except subprocess.TimeoutExpired:
+            exit_code = None
+        if exit_code is not None:
+            print(f"❌ GAIA API server exited during startup (exit code {exit_code}).")
+            print(f"📝 See {log_file.resolve()} for the error.")
+            sys.exit(1)
         print(f"✅ GAIA API server started in background (PID: {proc.pid})")
         print(f"📝 Logs: {log_file}")
         print(f"🌐 URL: http://{host}:{port}")
@@ -252,10 +265,10 @@ def main() -> None:
     CLI entry point for API server commands.
 
     Example:
-        $ gaia api start
-        $ gaia api start --host 0.0.0.0 --port 8000 --background
-        $ gaia api status
-        $ gaia api stop
+        $ python -m gaia.api.app start
+        $ python -m gaia.api.app start --host 0.0.0.0 --port 8000 --background
+        $ python -m gaia.api.app status
+        $ python -m gaia.api.app stop
     """
     parser = argparse.ArgumentParser(description="GAIA OpenAI-compatible API server")
 

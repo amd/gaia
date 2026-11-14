@@ -180,5 +180,5 @@ def run_sync(
             f"Connector async operation timed out after {timeout}s. "
             "Check that the connector provider endpoint is reachable and "
             "that no background operation is blocking the connectors loop. "
-            "See docs/sdk/infrastructure/connections.mdx."
+            "See docs/sdk/infrastructure/connectors.mdx."
         ) from e

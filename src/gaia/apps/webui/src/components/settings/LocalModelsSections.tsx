@@ -209,7 +209,7 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
                 onResume={(id) => void enqueue([id])}
                 onResumeAll={() => void enqueue((status.models ?? []).filter((m) => m.state === 'cancelled').map((m) => m.id))}
             />
-            {storeError && <p className="settings-error" role="alert">{storeError}</p>}
+            {storeError && <p className="settings-error settings-server-text" role="alert">{storeError}</p>}
         </section>
     );
 

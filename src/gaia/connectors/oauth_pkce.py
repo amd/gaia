@@ -34,7 +34,7 @@ from gaia.connectors.flow import (
 from gaia.connectors.handler import register_handler
 from gaia.connectors.spec import ConnectorSpec
 from gaia.connectors.store import DEFAULT_ACCOUNT, delete_connection
-from gaia.connectors.tokens import get_or_refresh
+from gaia.connectors.tokens import get_or_refresh, invalidate_cached_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +263,7 @@ class OAuthPkceHandler:
         await locked_write(
             provider_id, delete_connection, provider_id, account_email=account_email
         )
+        invalidate_cached_tokens(provider_id)
 
         # Wipe per-agent grants for this connector_id. Local import keeps
         # the module-level dependency graph identical to before.

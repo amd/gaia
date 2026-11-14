@@ -636,12 +636,14 @@ def _store_entry(
         try:
             on_stored(knowledge_id, entry.content)
         except Exception as e:
+            from gaia.llm.lemonade_launcher import describe_start_hint
+
             raise RuntimeError(
                 f"Onboarding stored entry {knowledge_id} but could not embed "
                 f"it: {e}. The row itself is safe and will be embedded at the "
-                "next agent start. To finish onboarding now, start "
-                "lemonade-server, or run `gaia memory bootstrap --chat-only`, "
-                "which needs no embedder."
+                "next agent start. To finish onboarding now, run `gaia memory "
+                "bootstrap --chat-only`, which needs no embedder, or start "
+                f"Lemonade Server: {describe_start_hint().instruction}"
             ) from e
 
     logger.debug("[bootstrap] stored %s (%s)", knowledge_id, entry.category)

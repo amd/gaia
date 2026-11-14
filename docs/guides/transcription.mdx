@@ -151,17 +151,10 @@ appears in seconds is a summary of the opening minutes.
 ## Quick start
 
 <Steps>
-  <Step title="Install the skill">
-    ```bash
-    gaia skill import hub/skills/transcribe-meeting
-    gaia skill import hub/skills/summarize
-    gaia skill import hub/skills/analyze-recording --allow-experimental
-    ```
-
-    `import` copies each folder into `~/.gaia/skills/`, where the agent finds
-    them by name. `transcribe-meeting` delegates the brief to `summarize`, so
-    install both. `analyze-recording` covers classes, talks and videos, and needs
-    `--allow-experimental` because it ships a script for batch use.
+  <Step title="Skills">
+    `transcribe-meeting`, `summarize` and `analyze-recording` are built in to the GAIA
+    agent. Nothing to install. `transcribe-meeting` delegates the brief to
+    `summarize`; `analyze-recording` covers classes, talks and videos.
   </Step>
 
   <Step title="Start Lemonade Server">

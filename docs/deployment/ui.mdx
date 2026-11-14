@@ -9,7 +9,7 @@ icon: "desktop"
 
 # Overview
 
-The GAIA Agent UI is distributed as an [npm package](https://www.npmjs.com/package/@amd-gaia/agent-ui) and can also be packaged as an Electron desktop app for Windows and Ubuntu.
+The GAIA Agent UI is distributed as an [npm package](https://www.npmjs.com/package/@amd-gaia/agent-ui) and can also be packaged as an Electron desktop app for Windows, Ubuntu and macOS (Apple silicon).
 
 <CardGroup cols={2}>
   <Card title="Agent UI Guide" icon="desktop" href="/guides/agent-ui">
@@ -53,6 +53,7 @@ Artifact names follow
 ## Supported platforms
 - Windows 11 (64-bit) - Full GUI and CLI support
 - Linux: Ubuntu 24.04 LTS (64-bit) - Full GUI and CLI support
+- macOS (Apple silicon) - `gaia-agent-ui-<version>-arm64.dmg` from [Releases](https://github.com/amd/gaia/releases)
 
 ## Windows (.exe)
 1. Download `gaia-agent-ui-<version>-x64-setup.exe` from [Releases](https://github.com/amd/gaia/releases).
@@ -182,11 +183,10 @@ The Gaia Agent UI is a privacy-first desktop chat application built with a Pytho
 
 ## Key Features
 
-- **Privacy-first**: All data stays local — no cloud, no telemetry
+- **Local by default**: Chats run on this PC unless you connect a cloud provider; no telemetry
 - **Document Q&A**: Drag-and-drop 50+ file formats for RAG-powered search
 - **Session management**: Create, rename, export, and delete conversations
 - **Streaming responses**: Real-time SSE streaming from local LLMs
-- **Shared CLI/UI state**: Same SQLite database as `gaia chat` CLI
 - **Modern frontend**: React + TypeScript SPA with Zustand state management
 
 ## Architecture
@@ -202,7 +202,7 @@ Gaia Agent UI
     |
     v
   GAIA Core SDKs
-    - AgentSDK, RAGSDK, LemonadeClient
+    - GAIA agent (GaiaAgent), RAGSDK, LemonadeClient
     |
     v
   Lemonade Server (port 13305)

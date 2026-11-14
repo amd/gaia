@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import tempfile
 import zipfile
@@ -388,33 +389,53 @@ def import_agent_bundle(bundle_path: Path) -> ImportResult:
 
                 final_dir = agents_root / agent_id
                 existed = final_dir.exists()
+                # Beside the agent, not in the staging dir: a backup that cannot
+                # be restored must outlive this import.
+                backup_dir = agents_root / f".backup-{agent_id}"
                 if existed:
-                    # Move existing to a sibling temp dir so we can restore on failure.
-                    backup_dir = staging_root / f".backup-{agent_id}"
+                    if backup_dir.exists():
+                        result.errors.append(
+                            f"{agent_id}: an earlier import left a backup at "
+                            f"{backup_dir}. Restore or delete it, then import again."
+                        )
+                        continue
                     os.replace(final_dir, backup_dir)
                 try:
                     os.replace(staged_dir, final_dir)
                 except Exception as exc:
-                    # Attempt rollback.
-                    if existed and (staging_root / f".backup-{agent_id}").exists():
-                        try:
-                            os.replace(staging_root / f".backup-{agent_id}", final_dir)
-                        except OSError:
-                            pass
-                    # Log full exception detail server-side; surface only a
-                    # generic message to the caller so OS-level paths and
-                    # implementation details do not leak into HTTP responses
+                    # Full detail goes to the log; the caller gets a generic
+                    # message so OS paths stay out of HTTP responses
                     # (CodeQL py/stack-trace-exposure).
                     log.warning(
                         "Failed to move staged agent %s into place: %s",
                         agent_id,
                         exc,
                     )
+                    if existed:
+                        try:
+                            os.replace(backup_dir, final_dir)
+                        except OSError as restore_exc:
+                            log.error(
+                                "Could not restore agent %s; its previous "
+                                "version is kept at %s: %s",
+                                agent_id,
+                                backup_dir,
+                                restore_exc,
+                            )
+                            result.errors.append(
+                                f"{agent_id}: import failed and the previous "
+                                f"version could not be put back. It is kept in "
+                                f"the agents folder as {backup_dir.name}."
+                            )
+                            continue
                     result.errors.append(
                         f"{agent_id}: failed to move to final location "
                         f"(see server logs)"
                     )
                     continue
+
+                if existed:
+                    shutil.rmtree(backup_dir, ignore_errors=True)
 
                 if existed:
                     result.overwritten.append(agent_id)

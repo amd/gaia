@@ -40,7 +40,7 @@ from starlette.convertors import Convertor, register_url_convertor
 
 from gaia.api import local_http
 from gaia.daemon.errors import DaemonError
-from gaia.daemon.timeouts import DEFAULT_AGENT_READ_TIMEOUT, agent_read_timeout
+from gaia.daemon.timeouts import agent_read_timeout
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -52,9 +52,6 @@ AUTH_SCHEME = local_http.AUTH_SCHEME
 
 #: Connect timeout — a dead daemon should fail fast on TCP connect.
 CONNECT_TIMEOUT = 10.0
-#: Read timeout between chunks — spans a whole agent-loop step relayed by the
-#: daemon, so it matches the daemon relay's own long per-request budget.
-READ_TIMEOUT = DEFAULT_AGENT_READ_TIMEOUT
 
 #: HTTP methods the fixed-function relay accepts. OPTIONS/HEAD are intentionally
 #: left to the CORS middleware / FastAPI defaults.

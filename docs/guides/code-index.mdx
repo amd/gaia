@@ -137,7 +137,7 @@ All processing is local. No source code is sent to external services. Sensitive 
 
 ## Testing
 
-The code-index stack has unit-test coverage in `tests/unit/test_code_index*.py` — **64 tests** spanning the SDK (cache layout, incremental re-index, atomic writes), the parsers (Python AST + the regex backends for JS/TS/Go/Rust/Java/C/C++), and the `CodeIndexToolsMixin` tool surface.
+The code-index stack has unit-test coverage in `tests/unit/test_code_index*.py`, spanning the SDK (cache layout, incremental re-index, atomic writes), the parsers (Python AST + the regex backends for JS/TS/Go/Rust/Java/C/C++), and the `CodeIndexToolsMixin` tool surface.
 
 Run them with:
 
@@ -168,7 +168,10 @@ sdk.index_repository()
 
 The 51-minute figure predates the repo's growth and is **network-bound** (embeddings sent to a remote Lemonade Server over an ngrok tunnel). On a local setup the embedding model (a GGUF model run through llama.cpp) runs on the GPU, with a CPU fallback, so there is no network hop and it is substantially faster. For retrieval-quality metrics see [#868](https://github.com/amd/gaia/issues/868).
 
+## Use it from an MCP client
+
+`gaia mcp code-index` serves the index over stdio, so an external code assistant can drive it. See [`gaia mcp code-index`](/reference/cli#gaia-mcp-code-index-options) for the options.
+
 ## Roadmap
 
-- [#869](https://github.com/amd/gaia/issues/869) — MCP server wrapper, so external code assistants can drive the index.
 - [#870](https://github.com/amd/gaia/issues/870) — Multi-repo indexing in a single namespace.

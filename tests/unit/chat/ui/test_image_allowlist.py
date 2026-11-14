@@ -3,12 +3,11 @@
 """Images can be indexed when picked, but a folder walk never indexes them (#730)."""
 
 import pytest
-from fastapi import HTTPException
 
 from gaia.ui.utils import (
     ALLOWED_EXTENSIONS,
     FOLDER_INDEX_EXTENSIONS,
-    sanitize_document_path,
+    unsupported_type_message,
 )
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
@@ -22,13 +21,11 @@ def test_images_are_explicit_only_never_folder_indexed():
     assert ALLOWED_EXTENSIONS == FOLDER_INDEX_EXTENSIONS | IMAGE_EXTENSIONS
 
 
-@pytest.mark.parametrize("name", ["shot.png", "scan.JPG", "page.webp"])
-def test_image_paths_are_accepted(tmp_path, name):
-    assert sanitize_document_path(str(tmp_path / name)).name == name
+@pytest.mark.parametrize("ext", [".png", ".jpg", ".webp"])
+def test_image_types_are_accepted(ext):
+    assert ext in ALLOWED_EXTENSIONS
 
 
-def test_heic_is_still_rejected_with_a_conversion_hint(tmp_path):
-    with pytest.raises(HTTPException) as excinfo:
-        sanitize_document_path(str(tmp_path / "photo.heic"))
-    assert excinfo.value.status_code == 400
-    assert "PNG or JPEG" in excinfo.value.detail
+def test_heic_is_still_rejected_with_a_conversion_hint():
+    assert ".heic" not in ALLOWED_EXTENSIONS
+    assert "PNG or JPEG" in unsupported_type_message("photo.heic")

@@ -79,8 +79,7 @@ func declineSlackCmd(never bool) tea.Cmd {
 type slackSetupStep int
 
 const (
-	slackStepIdle slackSetupStep = iota
-	slackStepConfirmCreated
+	slackStepConfirmCreated slackSetupStep = iota
 	slackStepAppToken
 	slackStepBotToken
 	slackStepConnecting
@@ -202,9 +201,7 @@ func (m ChatModel) handleSlackSetupAnswer(requestID, value string) (tea.Model, t
 	switch strings.TrimPrefix(requestID, slackQuestionPrefix) {
 	case "created":
 		if value != "yes" {
-			m.slackSetup = nil
-			return m.statusNote(
-				"Cancelled — nothing was stored. Type /slack setup to start over."), nil
+			return m.cancelSlackSetup(), nil
 		}
 		m.slackSetup.step = slackStepAppToken
 		return m.askSlackToken("app-token",
@@ -237,6 +234,13 @@ func (m ChatModel) handleSlackSetupAnswer(requestID, value string) (tea.Model, t
 			connectSlackCmd(appToken, token)
 	}
 	return m, nil
+}
+
+// cancelSlackSetup is Esc on one of the flow's questions.
+func (m ChatModel) cancelSlackSetup() ChatModel {
+	m.question = nil
+	m.slackSetup = nil
+	return m.statusNote("Cancelled — nothing was stored. Type /slack setup to start over.")
 }
 
 // handleSlackConnected reports the outcome.

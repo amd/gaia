@@ -62,7 +62,7 @@ icon: "rocket"
       </Tab>
     </Tabs>
 
-    All dependencies (nlohmann/json, cpp-httplib, yaml-cpp, Google Test) are fetched automatically by CMake — no manual installs required.
+    All dependencies (nlohmann/json, cpp-httplib, yaml-cpp, FTXUI unless `-DGAIA_BUILD_TUI=OFF`, Google Test; SQLite is vendored) are fetched automatically by CMake — no manual installs required.
   </Step>
 
   <Step title="Start an LLM server">
@@ -119,7 +119,7 @@ Verify your build with the unit test suite (no LLM server required):
   </Tab>
 </Tabs>
 
-See the [Testing Guide](/cpp/testing) for the full test suite — unit tests (20 modules), integration tests (LLM, MCP, Wi-Fi, Health, VLM), CI pipeline, and how to add new tests.
+See the [Testing Guide](/cpp/testing) for the full test suite — unit tests (29 modules), integration tests (LLM, MCP, Wi-Fi, Health, VLM), CI pipeline, and how to add new tests.
 
 ## Next Steps
 

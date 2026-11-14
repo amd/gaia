@@ -176,10 +176,12 @@ class GaiaConfig:
             many minutes, so its memory goes back to the system. 0 keeps it
             running until ``gaia daemon stop``. Never applies to a server
             ``LEMONADE_BASE_URL`` names.
-        llamacpp_backend: The llama.cpp backend (``vulkan``, ``rocm``, ``metal``
-            or ``cpu``) GAIA asks Lemonade for when it loads a local chat
-            model. ``None`` (set it to ``auto``) leaves the choice to Lemonade.
-            Takes effect on the next load; the embedding model keeps its own.
+        llamacpp_backend: The llama.cpp backend GAIA asks Lemonade for when it
+            loads a local chat model. Only ``TESTED_LLAMACPP_BACKENDS``
+            (``vulkan``) can be set; a value saved before a backend was
+            withdrawn still loads. ``None`` (set it to ``auto``) leaves the
+            choice to Lemonade. Takes effect on the next load; the embedding
+            model keeps its own.
         cloud_reasoning_effort: ``off`` (the default) sends cloud models no
             ``reasoning_effort``, leaving each at its provider's default.
             ``low``, ``medium`` or ``high`` turns on a one-time probe per cloud
@@ -376,7 +378,8 @@ class GaiaConfig:
         if word not in cls.LLAMACPP_BACKEND_CHOICES:
             raise GaiaConfigError(
                 f"{where}: 'llamacpp_backend' must be one of "
-                f"{', '.join(cls.LLAMACPP_BACKEND_CHOICES)}, but it is {value!r}. "
+                f"{', '.join((*cls.TESTED_LLAMACPP_BACKENDS, 'auto'))}, "
+                f"but it is {value!r}. "
                 "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
             )
         return word

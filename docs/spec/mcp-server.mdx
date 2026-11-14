@@ -49,8 +49,7 @@ AgentMCPServer is a generic wrapper that exposes any MCPAgent subclass as an MCP
 3. **Parameter Mapping**
    - Handle VSCode's nested `kwargs` wrapper
    - Parse stringified JSON
-   - Map parameter name variations (app_dir → appPath)
-   - Log parameter transformations
+   - Log the unwrapped arguments in verbose mode
 
 4. **Server Management**
    - Start MCPServer with streamable-http
@@ -118,7 +117,7 @@ class AgentMCPServer:
         """Dynamically register agent tools with MCPServer."""
         pass
 
-    def _print_startup_info(self):
+    def _print_startup_info(self, stream=None, transport: Transport = None):
         """Print startup banner with server info."""
         pass
 ```
@@ -176,13 +175,6 @@ def _register_agent_tools(self):
                             # Stringified JSON, parse
                             kwargs = json.loads(kwargs_value)
 
-                    # Map parameter variations
-                    if "app_dir" in kwargs and "appPath" not in kwargs:
-                        kwargs["appPath"] = kwargs.pop("app_dir")
-
-                    if "directory" in kwargs and "appPath" not in kwargs:
-                        kwargs["appPath"] = kwargs.pop("directory")
-
                     if verbose:
                         logger.info(f"[MCP TOOL] Final args: {kwargs}")
 
@@ -227,49 +219,14 @@ if "kwargs" in kwargs:
         kwargs = json.loads(kwargs_value)  # Parse JSON string
 ```
 
-2. **Parameter name variations:**
-```python
-# Map common variations
-if "app_dir" in kwargs:
-    kwargs["appPath"] = kwargs.pop("app_dir")
-
-if "directory" in kwargs:
-    kwargs["appPath"] = kwargs.pop("directory")
-
-if "project_path" in kwargs:
-    kwargs["appPath"] = kwargs.pop("project_path")
-```
+The wrapper unwraps only the `kwargs` envelope; it does not rename parameters.
 
 ### Startup Banner
 
-```python
-def _print_startup_info(self):
-    """Print startup banner."""
-
-    # Fix Windows Unicode
-    if sys.platform == "win32":
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-
-    tools = self.agent.get_mcp_tool_definitions()
-
-    print("=" * 60)
-    print(f"🚀 {self.name}")
-    print("=" * 60)
-    print(f"Server: http://{self.host}:{self.port}")
-    print(f"Agent: {self.agent_class.__name__}")
-    print(f"Tools: {len(tools)}")
-    for tool in tools:
-        print(f"  - {tool['name']}: {tool.get('description', 'No description')}")
-    if self.verbose:
-        print(f"\n🔍 Verbose Mode: ENABLED")
-    print("\n📍 MCP Endpoint:")
-    print(f"  http://{self.host}:{self.port}/mcp")
-    print("\n  Supports:")
-    print("    - HTTP POST for requests")
-    print("    - SSE streaming for real-time responses")
-    print("=" * 60)
-    print("\nPress Ctrl+C to stop\n")
-```
+`_print_startup_info(self, stream=None, transport: Transport = None)` prints the
+agent name, tool list and, over HTTP, the `/mcp` endpoint. With stdio it writes
+to stderr (stdout carries the JSON-RPC frames) and prints
+`Transport: stdio (JSON-RPC over stdin/stdout)` instead of the endpoint block.
 
 ---
 
@@ -337,18 +294,15 @@ async def test_parameter_mapping():
 ### Integration Tests
 
 ```bash
-# Start server
-python -m gaia.mcp.start_example_mcp --port 8081 --verbose
+# Start the server (your own script, see Example 3)
+python -m my_package.serve --port 8081 --verbose
 
-# Test with MCP client
-curl -X POST http://localhost:8081/mcp/tools/greet \
+# Call the tool with a JSON-RPC request. Streamable HTTP serves /mcp only;
+# a real session first sends initialize, so prefer an MCP client for this.
+curl -X POST http://localhost:8081/mcp \
   -H "Content-Type: application/json" \
-  -d '{"name": "Ada"}'
-
-# Verify response
-{
-  "message": "Hello, Ada!"
-}
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"greet","arguments":{"name":"Ada"}}}'
 ```
 
 ---
@@ -440,8 +394,8 @@ server.start()
 
 ### Example 3: CLI Wrapper
 
-```bash
-# src/gaia/mcp/start_example_mcp.py
+```python
+# my_package/serve.py (a script you write; GAIA ships no such module)
 import argparse
 from gaia.mcp.agent_mcp_server import AgentMCPServer
 from my_package.agent import GreeterAgent
@@ -462,7 +416,7 @@ server.start()
 
 **Usage:**
 ```bash
-python -m gaia.mcp.start_example_mcp --port 8081 --verbose
+python -m my_package.serve --port 8081 --verbose
 ```
 
 ---
@@ -470,6 +424,10 @@ python -m gaia.mcp.start_example_mcp --port 8081 --verbose
 ## Related Specifications
 
 - [mcp-agent](/spec/mcp-agent) - MCPAgent interface
+
+The MCP servers GAIA ships are `AgentMCPServer` plus the modules in
+`src/gaia/mcp/servers/` (`agent_ui_mcp.py`, `tui_mcp.py`, `code_index_mcp.py`,
+`engineering_mcp.py`).
 
 ---
 

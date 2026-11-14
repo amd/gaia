@@ -350,7 +350,6 @@ def _calls_configure(node):
 _ENTRY_POINTS_STATIC = [
     ("src/gaia/daemon/server.py", "run"),
     ("src/gaia/api/app.py", "main"),
-    ("src/gaia/chat/app.py", "main"),
 ]
 
 

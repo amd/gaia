@@ -102,9 +102,7 @@ const PROVIDER_NAMES: Record<string, string> = {
 };
 
 function openAuthUrl(url: string): void {
-    const bridge = (window as unknown as { gaia?: { openExternal?: (url: string) => void } }).gaia;
-    if (bridge?.openExternal) bridge.openExternal(url);
-    else window.open(url, '_blank', 'noopener');
+    window.open(url, '_blank', 'noopener');
 }
 
 const POLL_MS = 4000;

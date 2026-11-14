@@ -54,9 +54,6 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
-#: Long enough for a local model to work, short enough to catch a wedged turn.
-TASK_TIMEOUT_S = 1200.0
-
 #: Text that means the AGENT never got to run — a backend outage, an exhausted
 #: credit balance, a transport failure. Scoring one of these as a coding failure
 #: blames the model for the harness: an out-of-credit run once came back as

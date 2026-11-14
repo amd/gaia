@@ -201,13 +201,11 @@ class TestErrorEnvelopeCallers:
         assert post.call_args.kwargs["timeout"] >= 600
 
 
-class TestStreamChatModelPin:
-    """The /api/chat/send model pin must be provider-aware (eval plan §5c).
+class TestStreamChatPayload:
+    """/api/chat/send takes no model: the backend's default_model decides.
 
-    env unset -> DEFAULT_MODEL_NAME pinned, byte-identical to today.
-    GAIA_EVAL_AGENT_PROVIDER=claude -> NO Lemonade pin (the backend's
-    use_claude opt-in is authoritative). Anything else -> loud error,
-    never a silent Lemonade fallback.
+    An unsupported GAIA_EVAL_AGENT_PROVIDER is a loud error, never a silent
+    Lemonade fallback.
     """
 
     @staticmethod
@@ -225,9 +223,8 @@ class TestStreamChatModelPin:
 
         return captured, _fake_post
 
-    def test_default_payload_pins_the_lemonade_model(self, monkeypatch):
+    def test_default_payload_names_no_model(self, monkeypatch):
         monkeypatch.delenv("GAIA_EVAL_AGENT_PROVIDER", raising=False)
-        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
         from gaia.mcp.servers.agent_ui_mcp import UI_HEADER, _stream_chat
 
         captured, fake_post = self._capture_payload()
@@ -238,13 +235,12 @@ class TestStreamChatModelPin:
             "session_id": "sess-1",
             "message": "hi",
             "stream": True,
-            "model": DEFAULT_MODEL_NAME,
         }
         # The backend rejects mutating calls without this header; a mock that
         # does not accept it turns the CSRF contract into a silent pass.
         assert captured["headers"] == UI_HEADER
 
-    def test_claude_provider_omits_the_lemonade_pin(self, monkeypatch):
+    def test_claude_provider_names_no_model(self, monkeypatch):
         monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "claude")
         from gaia.mcp.servers.agent_ui_mcp import _stream_chat
 
@@ -257,10 +253,10 @@ class TestStreamChatModelPin:
 
     def test_unknown_provider_fails_loudly_not_a_lemonade_fallback(self, monkeypatch):
         monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "lemonade")
-        from gaia.mcp.servers.agent_ui_mcp import _model_pin
+        from gaia.mcp.servers.agent_ui_mcp import _check_eval_provider
 
         with pytest.raises(ValueError) as excinfo:
-            _model_pin()
+            _check_eval_provider()
         assert "GAIA_EVAL_AGENT_PROVIDER" in str(excinfo.value)
         assert "claude" in str(excinfo.value)
 

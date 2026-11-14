@@ -9,7 +9,7 @@ weather server. Demonstrates how to compose ``Agent`` with
 ``MCPClientMixin`` and connect to a stdio-based MCP server at runtime.
 
 Requirements:
-- Python 3.12+
+- Python 3.10+
 - uv (which provides `uvx` for launching the MCP server on demand)
 - Lemonade server running for LLM reasoning
 

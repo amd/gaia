@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gaia.audio.media import AUDIO_EXTENSIONS, MEDIA_EXTENSIONS, VIDEO_EXTENSIONS
@@ -137,11 +137,12 @@ def test_an_attached_recording_reaches_the_agent_by_path(client, tmp_path, monke
 
 @pytest.mark.parametrize("ext", [".mp4", ".mkv", ".mp3", ".m4a"])
 def test_the_document_library_points_recordings_at_the_chat(ext):
-    with pytest.raises(HTTPException) as refused:
-        utils.sanitize_document_path(f"C:/x/talk{ext}")
+    assert ext not in utils.ALLOWED_EXTENSIONS
 
-    assert "Attach" in refused.value.detail
-    assert "gaia talk" not in refused.value.detail
+    message = utils.unsupported_type_message(f"talk{ext}")
+
+    assert "Attach" in message
+    assert "gaia talk" not in message
 
 
 def test_the_ui_list_matches_the_backend():

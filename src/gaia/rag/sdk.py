@@ -1951,9 +1951,7 @@ class RAGSDK:
                 ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
-                    print(
-                        "     1. Open Lemonade Model Manager (http://localhost:13305)"
-                    )
+                    print(f"     1. Open Lemonade Model Manager ({vlm.server_url})")
                     print(f"     2. Download model: {self.config.vlm_model}")
 
             except Exception as vlm_error:
@@ -2292,6 +2290,11 @@ class RAGSDK:
             except Exception as conv_err:
                 self.log.debug("PPTX→PDF conversion not available: %s", conv_err)
 
+            if tmp_dir and not pdf_conversion_path:
+                import shutil
+
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
             if pdf_conversion_path:
                 try:
                     if self.config.show_stats:
@@ -2382,9 +2385,7 @@ class RAGSDK:
                 ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
-                    print(
-                        "     1. Open Lemonade Model Manager (http://localhost:13305)"
-                    )
+                    print(f"     1. Open Lemonade Model Manager ({vlm.server_url})")
                     print(f"     2. Download model: {self.config.vlm_model}")
 
             except Exception as vlm_error:

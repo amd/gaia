@@ -214,7 +214,7 @@ def assert_result_has_keys(
 
     Example:
         result = agent.process_query("test")
-        assert_result_has_keys(result, ["answer", "steps_taken"])
+        assert_result_has_keys(result, ["result", "steps_taken"])
     """
     assert isinstance(
         result, dict

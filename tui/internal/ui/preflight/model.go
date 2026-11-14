@@ -178,6 +178,9 @@ type Model struct {
 	setup *modelsetup.Model
 	// setupChoices are the model choices left with esc, for the next visit.
 	setupChoices *modelsetup.Choices
+	// saveFailure is why setup's chat model was not saved, shown once the
+	// re-check that follows has cleared its own note.
+	saveFailure string
 	// motion is how much this screen animates (NO_MOTION and friends).
 	motion modelsetup.Motion
 }
@@ -247,9 +250,10 @@ func (m Model) Report() Report { return m.rep }
 // Ready reports whether every precondition passed.
 func (m Model) Ready() bool { return m.rep.Ready() }
 
-// Busy reports whether a probe or a fix is in flight.
+// Busy reports whether a probe or a fix is in flight. The model setup screens
+// are the model step's fix, so they count while they are open.
 func (m Model) Busy() bool {
-	return m.phase == phaseChecking || m.phase == phaseFixing || m.phase == phaseProvisioning
+	return m.setup != nil || m.phase == phaseChecking || m.phase == phaseFixing || m.phase == phaseProvisioning
 }
 
 // FocusKey is the row the user is on, for snapshots and tests.
@@ -592,7 +596,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.phase = phaseIdle
 		// The rows now say everything the "…re-checking" note did.
-		m.note = ""
+		m.note, m.saveFailure = m.saveFailure, ""
 		if idx := m.rep.FirstAttention(); idx >= 0 {
 			m.focus = idx
 		} else {

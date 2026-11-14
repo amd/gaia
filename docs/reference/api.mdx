@@ -48,13 +48,13 @@ The server exposes one model, `gaia` — the flagship agent. Capability that use
     curl -X POST http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
-        "model": "your-agent-id",
+        "model": "gaia",
         "messages": [{"role": "user", "content": "Write a hello world function"}]
       }'
     ```
     </CodeGroup>
 
-    The health response includes API, Lemonade LLM, and RAG component status.
+    The health response includes API and Lemonade LLM component status.
     A running API returns HTTP 200 with top-level status `degraded` when
     Lemonade is unavailable or has no LLM loaded.
   </Step>
@@ -135,6 +135,9 @@ The server exposes one model, `gaia` — the flagship agent. Capability that use
     ```bash
     gaia api start --host 0.0.0.0 --port 8888
     ```
+
+    Binding beyond localhost is refused unless `GAIA_API_KEY` is set. Callers then send
+    `Authorization: Bearer <key>`.
   </Tab>
 </Tabs>
 
@@ -166,7 +169,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="your-agent-id",
+    model="gaia",
     messages=[{"role": "user", "content": "Create a REST API with Express and SQLite"}]
 )
 
@@ -182,7 +185,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="your-agent-id",
+    model="gaia",
     messages=[{"role": "user", "content": "Create a Django REST API with authentication"}]
 )
 
@@ -198,7 +201,7 @@ client = OpenAI(
 )
 
 stream = client.chat.completions.create(
-    model="your-agent-id",
+    model="gaia",
     messages=[{"role": "user", "content": "Write a calculator class"}],
     stream=True
 )
@@ -221,7 +224,7 @@ async function chat(message) {
     const response = await axios.post(
         'http://localhost:8080/v1/chat/completions',
         {
-            model: 'your-agent-id',
+            model: 'gaia',
             messages: [{ role: 'user', content: message }]
         }
     );
@@ -239,7 +242,7 @@ async function chat(message) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            model: 'your-agent-id',
+            model: 'gaia',
             messages: [{ role: 'user', content: message }]
         })
     });
@@ -259,7 +262,7 @@ async function chat(message) {
     curl -X POST http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
-        "model": "your-agent-id",
+        "model": "gaia",
         "messages": [{"role": "user", "content": "Write a function"}]
       }'
     ```
@@ -270,7 +273,7 @@ async function chat(message) {
     curl -X POST http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
-        "model": "your-agent-id",
+        "model": "gaia",
         "messages": [{"role": "user", "content": "Write a function"}],
         "stream": true
       }'
@@ -354,7 +357,7 @@ Register additional agents in `AGENT_MODELS` ([`src/gaia/api/agent_registry.py`]
 | Issue | Solution |
 |-------|----------|
 | "Model not found" | Confirm the model id is registered in `AGENT_MODELS` — `GET /v1/models` lists what's actually available |
-| "Agent processing failed" | Check the model server with `gaia daemon status`; start it with `gaia daemon start` |
+| HTTP 500, or an `error` chunk in a stream | Check the model server with `gaia daemon status`; start it with `gaia daemon start` |
 | "Port already in use" | Stop existing server or use `--port` flag |
 | Streaming not working | Ensure `"stream": true` in request |
 

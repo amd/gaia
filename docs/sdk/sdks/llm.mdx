@@ -64,7 +64,7 @@ models use `create_client("lemonade", base_url=..., model=...)`.
 
 When the user has set `network_policy` to `local_ai_only`, `LemonadeClient`'s
 inference methods (`chat_completions`, `completions`, `responses`, `embeddings`,
-`generate_image`, `create_image_variation`) raise `gaia.llm.local_only.CloudDisabledError` for any model
+`generate_audio`, `generate_image`, `generate_3d_model`, `create_image_variation`) raise `gaia.llm.local_only.CloudDisabledError` for any model
 Lemonade's catalog doesn't list as local, before sending anything.
 `create_client("claude")` and `ClaudeProvider` raise it too. Model management
 (`pull_model`, `load_model`, `delete_model`) is unaffected. The message names the
@@ -118,6 +118,89 @@ URL = DEFAULT_LEMONADE_URL   # "http://localhost:13305/api/v1"
 
 # Used internally by LLMClient when no provider specified
 ```
+
+### LemonadeClient reference
+
+`LemonadeClient` (`gaia.llm.lemonade_client`) is the HTTP client behind the
+Lemonade provider. Use it directly for model management, status and the
+non-chat inference endpoints.
+
+```python
+from gaia.llm.lemonade_client import LemonadeClient
+
+client = LemonadeClient(model="Gemma-4-E4B-it-GGUF")
+print(client.health_check())
+```
+
+Constructor: `LemonadeClient(model=None, host=None, port=None, base_url=None,
+verbose=True, keep_alive=False, api_key=None, ctx_size_override=None,
+model_lease_priority=None)`. `keep_alive=True` leaves a server this client
+launched running when the client closes.
+
+**Server lifecycle**
+
+| Method | What it does |
+|--------|--------------|
+| `initialize(agent="mcp", ctx_size=None, auto_start=True, ...)` | Initialize Lemonade Server for an agent profile |
+| `launch_server(log_level="info", background="none", ctx_size=None)` | Launch the Lemonade server in a subprocess |
+| `terminate_server()` | Stop the server this client launched, and nothing else |
+| `close()` | Release the client; stops a server it launched unless `keep_alive` |
+| `health_check(timeout=None)` | Check server health |
+| `get_lemonade_version()` | Installed Lemonade version |
+| `is_users_server()` | True when the client talks to the user's own server |
+| `current_base_url()` / `credential_base_url()` | Where requests go now, and where a cloud key may be sent |
+| `wait_for_gaia_lemonade(model=None, *, timeout=...)` | Wait for GAIA's own server to answer again |
+
+**Inference**
+
+| Method | What it does |
+|--------|--------------|
+| `chat_completions(model, messages, ...)` | Call the chat completions endpoint |
+| `completions(model, prompt, ...)` | Call the completions endpoint |
+| `responses(model, input, ...)` | Call the responses endpoint |
+| `embeddings(input_texts, model=None, ...)` | Generate embeddings for one or more texts |
+| `generate_audio(payload, output_path, *, timeout=1800)` | Stream WAV bytes to a file |
+| `generate_image(prompt, model="SDXL-Turbo", ...)` | Generate an image with a downloaded image model |
+| `generate_3d_model(image, model="TRELLIS-3D", ...)` | Generate a GLB mesh from a base64-encoded image |
+| `create_image_variation(image_path, ...)` | Generate variations of a PNG |
+
+**Models**
+
+| Method | What it does |
+|--------|--------------|
+| `list_models(show_all=False)` / `list_sd_models(show_all=False)` | List models, or image-generation models |
+| `get_model_info(model_name)` | Download size and status from the catalog |
+| `get_model_details(model_id)` | Detailed information about one model |
+| `get_model_max_context_window(model_id, ...)` | Trained context ceiling of a model |
+| `check_model_available(model_id)` / `check_model_loaded(model_id)` | Downloaded on the server, or loaded in memory |
+| `pull_model(model_name, ...)` / `pull_model_stream(model_name, ...)` | Install a model, the second with streaming progress |
+| `ensure_model_downloaded(model_name, show_progress=True, ...)` | Download a model if it is missing |
+| `cancel_download(model_name)` / `get_active_downloads()` | Stop waiting on a download; list active downloads |
+| `load_model(model_name, ...)` / `unload_model(model_name=None, ...)` | Load or unload a model |
+| `delete_model(model_name)` | Delete a model from the server |
+| `refresh_cloud_models()` / `cloud_model_provider(model)` | Re-read the catalog; the provider of a cloud model |
+
+**Backends and status**
+
+| Method | What it does |
+|--------|--------------|
+| `install_backend(spec, force=False)` / `uninstall_backend(spec)` | Install or uninstall a Lemonade backend |
+| `ensure_npu_backend(model_name)` | Install the FLM backend an FLM model needs |
+| `get_recipe_status(recipe)` | Status of one recipe from system-info |
+| `get_stats()` | Performance statistics from the last request |
+| `get_system_info(verbose=False)` | Hardware and device enumeration |
+| `get_status(include_catalog=True)` | Comprehensive Lemonade status |
+| `validate_context_size(required_tokens=32768, quiet=False)` | Check the server's context size is large enough |
+
+**Agent profiles**
+
+| Method | What it does |
+|--------|--------------|
+| `get_agent_profile(agent)` / `list_agents()` | One agent profile, or all of them |
+| `get_required_models(agent="all")` | Model IDs an agent (or all agents) needs |
+| `download_agent_models(agent="all")` | Download the models an agent needs, with progress |
+
+The module-level `initialize_lemonade()` creates a temporary client and runs `initialize` on it.
 
 ---
 

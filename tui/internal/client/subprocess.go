@@ -375,8 +375,8 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 	}
 
 	scanner := bufio.NewScanner(stdoutPipe)
-	// 1MB buffer for large tool outputs
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	// Same line cap as the daemon stream: a tool result can be large.
+	scanner.Buffer(make([]byte, 0, 1024*1024), maxFrameBytes)
 
 	if err := cmd.Start(); err != nil {
 		group.close()

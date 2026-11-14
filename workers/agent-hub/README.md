@@ -236,7 +236,7 @@ schemas live in [`schemas/`](./schemas):
   `package` (`{ filename, size_bytes, files: [{name, size_bytes}] }` — the
   whole-package `.zip` download + its file listing, present only when a
   `package_files` manifest was published). This shape is the build-time contract
-  for the website Hub pages (`website/src/data/catalog.ts`). It also carries
+  for the website's `/hub` page (`website/src/data/hub.ts`). It also carries
   `type` (the lane discriminator) and, on `type: "skill"` entries only,
   `skill_metadata` (`tools`, `tools_required`, the skill-shaped `requirements`,
   and the `audit` record). A skill entry populates every agent-lane key with a

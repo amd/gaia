@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 from gaia.daemon import client, paths
 from gaia.daemon.constants import AUTH_SCHEME
 from gaia.daemon.errors import DaemonError
-from gaia.daemon.timeouts import agent_read_timeout
+from gaia.daemon.timeouts import agent_read_timeout, requests_read_timeout
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -88,7 +88,7 @@ def relay_json(
             url,
             headers=headers,
             json=json_body,
-            timeout=(_CONNECT_TIMEOUT, read_timeout),
+            timeout=(_CONNECT_TIMEOUT, requests_read_timeout(read_timeout)),
         )
     except requests.exceptions.ReadTimeout as e:
         raise AgentResponseTimeoutError(

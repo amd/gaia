@@ -18,6 +18,8 @@ from typing import Any, Dict
 
 import requests
 
+from gaia.messaging.telegram_api import redact_token
+
 TELEGRAM_API = "https://api.telegram.org"
 _NOTIFICATION_SYSTEMS = ("Darwin", "Linux", "Windows")
 _WINDOWS_NOTIFICATION_STARTUP_GRACE_S = 3
@@ -203,10 +205,12 @@ def _to_telegram(output: str, sink_args: Dict[str, Any]) -> None:
     try:
         resp = requests.post(url, json={"chat_id": to, "text": output}, timeout=30)
     except requests.RequestException as e:
+        # The request URL holds the token, so the original error is not chained.
         raise RuntimeError(
-            f"telegram sink could not reach {TELEGRAM_API}: {e}. "
+            f"telegram sink could not reach {TELEGRAM_API}: "
+            f"{redact_token(str(e), token)}. "
             f"Check network connectivity."
-        ) from e
+        ) from None
     if resp.status_code != 200:
         raise RuntimeError(
             f"telegram sink got HTTP {resp.status_code} from sendMessage: "

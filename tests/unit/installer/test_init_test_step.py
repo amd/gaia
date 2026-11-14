@@ -727,3 +727,17 @@ def test_a_retest_of_a_load_check_failure_repeats_the_load():
         None,
     )
     client.chat_completions.assert_not_called()
+
+
+def test_a_failed_health_check_says_why():
+    cmd = _command()
+    client = _client()
+    client.health_check.side_effect = LemonadeClientError(
+        "Request failed: connection refused"
+    )
+
+    assert _verify(cmd, client, lambda c, m: (True, None)) is False
+
+    server = [e for e in _tests(cmd) if e["job"] == "server"][-1]
+    assert server["state"] == "failed"
+    assert "connection refused" in server["error"]

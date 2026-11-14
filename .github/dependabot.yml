@@ -107,8 +107,11 @@ updates:
           - "*"
 
   # GitHub Actions dependencies
+  # "/" covers .github/workflows only; composite actions need their own glob.
   - package-ecosystem: "github-actions"
-    directory: "/"
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
       day: "monday"

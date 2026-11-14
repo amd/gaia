@@ -265,7 +265,7 @@ class SDToolsMixin:
         )
         def get_generation_history(limit: int = 10) -> Dict[str, Any]:
             """Get recent generations from this session."""
-            recent = self.sd_generations[-limit:] if self.sd_generations else []
+            recent = self.sd_generations[-limit:] if limit > 0 else []
             return {
                 "total_generations": len(self.sd_generations),
                 "showing": len(recent),

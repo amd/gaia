@@ -392,7 +392,8 @@ class TelegramMessage:
         chat = data.get("chat") or {}
         self.chat_id: int = chat["id"]
         self.chat_type: Optional[str] = chat.get("type")
-        self.text: Optional[str] = data.get("text")
+        # Text sent with a photo or file arrives as its caption.
+        self.text: Optional[str] = data.get("text") or data.get("caption")
         self.photo = [TelegramAttachment(api, p) for p in data.get("photo") or []]
         document = data.get("document")
         self.document = TelegramAttachment(api, document) if document else None

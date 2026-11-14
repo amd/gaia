@@ -147,6 +147,27 @@ func TestEscShowsTheChatWithoutCancelling(t *testing.T) {
 	}
 }
 
+// A warm-up stopped the hard way is over: the next turn's answer is an answer,
+// not the warm-up's sentinel.
+func TestAHardStopEndsTheWarmUp(t *testing.T) {
+	m, _ := warmModel(t)
+	m.cancelFn = func() {}
+	for i := 0; i < 2; i++ {
+		updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+		m = updated.(ChatModel)
+	}
+	if m.streaming || m.warming || m.warmHidden {
+		t.Fatalf("streaming=%t warming=%t hidden=%t after a hard stop", m.streaming, m.warming, m.warmHidden)
+	}
+
+	m.streaming = true
+	m = feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: "Paris."})
+	last := m.messages[len(m.messages)-1]
+	if last.Role != RoleAssistant || last.Content != "Paris." {
+		t.Fatalf("the answer after a stopped warm-up was not shown: %+v", last)
+	}
+}
+
 // Typing during the warm-up queues the message for when the agent is ready —
 // never a mid-turn follow-up into the sentinel's "turn".
 func TestAMessageTypedDuringWarmUpWaitsForIt(t *testing.T) {

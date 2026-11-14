@@ -281,6 +281,7 @@ class MicrosoftOAuthProvider:
                     "--scopes $SCOPES --grant-agent installed:email"
                 ),
                 docs="https://amd-gaia.ai/docs/connectors/microsoft",
+                needs_client_secret=False,
             )
         self.client_id: str = resolved_id
         # CRC32 fingerprint for log correlation / tripwire comparison only.

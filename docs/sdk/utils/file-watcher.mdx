@@ -127,7 +127,19 @@ class IntakeAgent(Agent, DatabaseMixin):
 | `start()` | Start watching (safe to call multiple times) |
 | `stop()` | Stop watching (safe to call multiple times) |
 | `is_running` | Property: True if watching |
+| `directory` | Property: the watched directory as a `Path` |
 | `telemetry` | Property: Event statistics |
+
+### FileWatcherMixin
+
+Adds watching to an agent. `watch_directory(directory, on_created=None, on_modified=None, on_deleted=None, on_moved=None, extensions=None, filter_func=None, debounce_seconds=2.0, recursive=False, auto_start=True)` creates a `FileWatcher` and returns it; with `auto_start=False` call `start()` yourself.
+
+| Member | Description |
+|--------|-------------|
+| `stop_all_watchers()` | Stop every watcher the mixin created |
+| `watchers` | Property: list of the mixin's watchers |
+| `watching_directories` | Property: directories (`Path`) of the running watchers |
+| `watcher_telemetry` | Property: telemetry combined across all watchers |
 
 ### FileChangeHandler
 
@@ -141,6 +153,14 @@ class IntakeAgent(Agent, DatabaseMixin):
 | `filter_func` | `Callable[[str], bool]` | `None` | Custom filter |
 | `debounce_seconds` | `float` | `2.0` | How long a file must stay unchanged before it is reported |
 | `ignore_directories` | `bool` | `True` | Skip directory events |
+
+| Method | Description |
+|--------|-------------|
+| `wait_idle(timeout=None)` | Block until every reported event has been dispatched; returns `False` if `timeout` passed first |
+| `close()` | Stop the dispatch thread; pending reports are dropped and logged |
+| `reopen()` | Accept events again after `close()` |
+| `reset_telemetry()` | Reset the telemetry counters |
+| `telemetry` | Property: event statistics |
 
 ## Examples
 
@@ -277,16 +297,24 @@ finally:
     watcher.stop()
 ```
 
+## Other `gaia.utils` Helpers
+
+`gaia.utils` also exports file-hashing and parsing helpers:
+
+| Function | Description |
+|----------|-------------|
+| `compute_file_hash(path, algorithm="sha256", chunk_size=65536, allowed_dir=...)` | Hex hash of a file read in chunks. `allowed_dir` is required (`ValueError` without it); returns `None` if the file cannot be read or lies outside it |
+| `compute_bytes_hash(data, algorithm="sha256")` | Hex hash of bytes already in memory |
+| `extract_json_from_text(text)` | Parse a JSON object or array embedded in surrounding text (balanced-bracket matching); `None` if none is found |
+| `pdf_page_to_image(path, page=0, scale=2.0)` | Render a PDF page to PNG bytes with PDFium. Raises `FileNotFoundError`, `PdfRenderError` (damaged or encrypted file, missing page, render failure) or `ImportError` (no `pypdfium2`) |
+| `PdfRenderError` | `RuntimeError` raised when a PDF page cannot be rendered |
+| `detect_field_changes(old_data, new_data, fields=None)` | List of `{"field", "old", "new"}` dicts for the fields that differ |
+| `validate_required_fields(data, required_fields)` | `(is_valid, missing_fields)`; a field that is absent or empty counts as missing |
+
 ## Requirements
 
-FileWatcher requires the `watchdog` package:
-
-```bash
-pip install "watchdog>=2.1.0,<7"
-
-# Or with GAIA
-pip install "amd-gaia[dev]"
-```
+FileWatcher uses the `watchdog` package (`>=2.1.0,<7`), a core dependency that
+`pip install amd-gaia` installs. No separate install is needed.
 
 Check if watchdog is available:
 

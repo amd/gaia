@@ -225,6 +225,14 @@
     color: inherit;
 }
 
+/* The server's English keeps its full stop at its end in an Arabic window. */
+.settings-server-text {
+    unicode-bidi: plaintext;
+}
+.settings-server-text:dir(rtl) {
+    text-align: right;
+}
+
 .settings-warning {
     display: flex;
     flex-direction: column;

@@ -117,7 +117,7 @@ def recall_key(provider: str) -> Optional[str]:
     try:
         value = peek_secret(slot)
     except ConnectorsError as e:
-        log.debug(f"Could not read the stored {provider} key: {e}")
+        log.warning(f"Could not read the stored {provider} key: {e}")
         return None
     return value.strip() if value and value.strip() else None
 

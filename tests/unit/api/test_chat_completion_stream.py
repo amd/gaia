@@ -144,3 +144,98 @@ def test_successful_stream_is_unchanged(mocker):
     assert '"finish_reason": "stop"' in body
     assert '"error"' not in body
     assert not agent.console.cancelled.is_set()
+
+
+class _ClosingProbeAgent(_ProbeAgent):
+    """A probe that records when it is closed, like GaiaAgent.close."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.events = []
+        self.closed = threading.Event()
+
+    def process_query(self, *args, **kwargs):
+        try:
+            return super().process_query(*args, **kwargs)
+        finally:
+            self.events.append("query done")
+
+    def close(self):
+        self.events.append("closed")
+        self.closed.set()
+
+
+def _closing_agent():
+    return _ClosingProbeAgent(
+        skip_lemonade=True, silent_mode=True, output_handler=SSEOutputHandler()
+    )
+
+
+def test_a_finished_stream_closes_its_agent(mocker):
+    agent = _closing_agent()
+    agent.chat.llm_client.chat = lambda *a, **k: "fine answer"
+    mocker.patch.object(openai_server.registry, "get_agent", return_value=agent)
+
+    asyncio.run(_run_asgi(disconnect_after_first_chunk=False))
+
+    assert agent.events == ["query done", "closed"]
+
+
+def test_a_failed_stream_closes_its_agent(mocker):
+    agent = _closing_agent()
+    mocker.patch.object(
+        _ProbeAgent, "process_query", side_effect=RuntimeError("boom"), autospec=True
+    )
+    mocker.patch.object(openai_server.registry, "get_agent", return_value=agent)
+
+    asyncio.run(_run_asgi(disconnect_after_first_chunk=False))
+
+    assert agent.events == ["query done", "closed"]
+
+
+def test_a_disconnected_stream_closes_its_agent_after_the_query_ends(mocker):
+    agent = _closing_agent()
+    llm_started = threading.Event()
+
+    def slow_chat(messages, model=None, stream=False, **kwargs):
+        llm_started.set()
+        agent._cancel_event.wait(timeout=5)
+        return "late answer"
+
+    agent.chat.llm_client.chat = slow_chat
+    mocker.patch.object(openai_server.registry, "get_agent", return_value=agent)
+
+    asyncio.run(_run_asgi(disconnect_after_first_chunk=True, cancel_after=llm_started))
+
+    assert agent.closed.wait(timeout=10)
+    assert agent.events == ["query done", "closed"]
+
+
+def test_a_non_streaming_reply_closes_its_agent(mocker):
+    from fastapi.testclient import TestClient
+
+    agent = _closing_agent()
+    agent.chat.llm_client.chat = lambda *a, **k: "fine answer"
+    mocker.patch.object(openai_server.registry, "get_agent", return_value=agent)
+
+    response = TestClient(app).post(
+        "/v1/chat/completions", json={**_PAYLOAD, "stream": False}
+    )
+
+    assert response.status_code == 200
+    assert agent.events == ["query done", "closed"]
+
+
+def test_an_agent_without_close_is_served_as_before(mocker):
+    from fastapi.testclient import TestClient
+
+    agent = _probe_agent()
+    assert not hasattr(agent, "close")
+    agent.chat.llm_client.chat = lambda *a, **k: "fine answer"
+    mocker.patch.object(openai_server.registry, "get_agent", return_value=agent)
+
+    response = TestClient(app).post(
+        "/v1/chat/completions", json={**_PAYLOAD, "stream": False}
+    )
+
+    assert response.status_code == 200

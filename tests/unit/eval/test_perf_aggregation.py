@@ -12,7 +12,7 @@ dropping the scenario's numbers entirely.
 import pytest
 
 from gaia.eval.runner import _aggregate_performance
-from gaia.mcp.servers.agent_ui_mcp import _model_pin
+from gaia.mcp.servers.agent_ui_mcp import _check_eval_provider
 
 
 def _turn(tps=None, ttft=None, inp=None, out=None, tools=()):
@@ -81,21 +81,18 @@ class TestNoStatsBackend:
         assert "tool_usage" not in result
 
 
-class TestEvalModelPin:
-    """CI must evaluate Gemma. A regression here would silently evaluate
-    whatever model Lemonade happened to have loaded."""
+class TestEvalProviderCheck:
+    """The eval bridge sends no model: the backend's default_model decides."""
 
-    def test_unset_provider_pins_the_lemonade_default(self, monkeypatch):
-        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
-        monkeypatch.delenv("GAIA_EVAL_AGENT_PROVIDER", raising=False)
-        assert _model_pin() == {"model": DEFAULT_MODEL_NAME}
-
-    def test_claude_provider_sends_no_lemonade_pin(self, monkeypatch):
-        monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "claude")
-        assert _model_pin() == {}
+    @pytest.mark.parametrize("provider", [None, "claude"])
+    def test_supported_providers_pass(self, monkeypatch, provider):
+        if provider is None:
+            monkeypatch.delenv("GAIA_EVAL_AGENT_PROVIDER", raising=False)
+        else:
+            monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", provider)
+        _check_eval_provider()
 
     def test_unknown_provider_refuses_to_guess(self, monkeypatch):
         monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "ollama")
         with pytest.raises(ValueError, match="not a supported eval agent provider"):
-            _model_pin()
+            _check_eval_provider()

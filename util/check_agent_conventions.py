@@ -3,8 +3,8 @@
 
 """Lint GAIA agent conventions.
 
-Scans ``src/gaia/agents/*/agent.py`` (plus ``agent_*.py`` variants) and
-validates:
+Scans the packaged agents (``hub/agents/<id>/python/<package>/*agent.py``) and
+any agent under ``src/gaia/agents/*/agent.py``, and validates:
 
 Hard checks (block CI on failure):
 - Agent module parses as Python
@@ -25,13 +25,13 @@ Run via: ``python util/lint.py --agents`` or ``python util/check_agent_conventio
 """
 
 import ast
-import json
 import sys
 from pathlib import Path
 from typing import List, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AGENTS_DIR = REPO_ROOT / "src" / "gaia" / "agents"
+HUB_AGENTS_DIR = REPO_ROOT / "hub" / "agents"
 TESTS_DIR = REPO_ROOT / "tests"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 DOCS_JSON = REPO_ROOT / "docs" / "docs.json"
@@ -107,13 +107,20 @@ def _manages_registry_state(cls: ast.ClassDef) -> bool:
     return not has_register_tools
 
 
+def _agent_name(agent_dir: Path) -> str:
+    """The agent's id: ``hub/agents/<id>/python`` or ``src/gaia/agents/<id>``."""
+    if agent_dir.name == "python" and agent_dir.parent.parent == HUB_AGENTS_DIR:
+        return agent_dir.parent.name
+    return agent_dir.name
+
+
 def _check_agent_file(
     agent_dir: Path, agent_file: Path
 ) -> Tuple[List[str], List[str]]:
     """Return (errors, warnings) for a single agent.py file."""
     errors: List[str] = []
     warnings: List[str] = []
-    name = agent_dir.name
+    name = _agent_name(agent_dir)
     rel = agent_file.relative_to(REPO_ROOT)
 
     try:
@@ -233,9 +240,8 @@ def _discover_agent_files() -> List[Tuple[Path, Path]]:
     ``agent.py`` as the canonical entry point.
     """
     pairs: List[Tuple[Path, Path]] = []
-    if not AGENTS_DIR.exists():
-        return pairs
-    for d in sorted(AGENTS_DIR.iterdir()):
+    core_dirs = sorted(AGENTS_DIR.iterdir()) if AGENTS_DIR.exists() else []
+    for d in core_dirs:
         if not d.is_dir() or d.name in _NON_AGENT_DIRS:
             continue
         canonical = d / "agent.py"
@@ -246,6 +252,11 @@ def _discover_agent_files() -> List[Tuple[Path, Path]]:
             if py.name == "__init__.py":
                 continue
             pairs.append((d, py))
+    # Packaged agents: hub/agents/<id>/python/<package>/agent.py and *_agent.py.
+    for package_root in sorted(HUB_AGENTS_DIR.glob("*/python")):
+        for package in sorted(p.parent for p in package_root.glob("*/__init__.py")):
+            for py in sorted(package.glob("*agent.py")):
+                pairs.append((package_root, py))
     return pairs
 
 

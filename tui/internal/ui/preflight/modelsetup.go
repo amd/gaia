@@ -81,9 +81,14 @@ func (m Model) updateSetup(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 	switch msg := msg.(type) {
 	case modelsetup.FinishedMsg:
 		m.setup = nil
+		// The ready summary was the review, so a passing re-check hands off
+		// without holding for another enter.
+		m.fixApplied = false
 		if msg.ChatModel != "" {
 			if _, err := WriteLastModel("local", msg.ChatModel); err != nil {
-				m.note = "Could not save the selected chat model: " + err.Error()
+				// Held for enter: the hand-off would take the line with it.
+				m.saveFailure = "Could not save the selected chat model, so the next launch won't remember it: " + err.Error()
+				m.fixApplied = true
 			}
 			if local, ok := m.r.(localRunner); ok {
 				local.opts.Model = msg.ChatModel
@@ -91,9 +96,6 @@ func (m Model) updateSetup(msg tea.Msg) (tea.Model, tea.Cmd, bool) {
 				m.r = local
 			}
 		}
-		// The ready summary was the review, so a passing re-check hands off
-		// without holding for another enter.
-		m.fixApplied = false
 		m.note = "Setup finished. Checking that everything loads…"
 		m.phase = phaseChecking
 		m.rep.Rows = checkingRows(m.r, m.cfg)

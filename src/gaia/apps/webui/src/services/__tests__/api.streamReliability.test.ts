@@ -24,6 +24,7 @@ function openStream() {
         send: (event: Record<string, unknown>) => ctrl.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)),
         keepalive: () => ctrl.enqueue(encoder.encode(': keepalive\n\n')),
         cut: () => ctrl.error(new TypeError('network error')),
+        close: () => ctrl.close(),
     };
 }
 
@@ -146,6 +147,20 @@ describe('chat stream idle watchdog (E4)', () => {
         await vi.advanceTimersByTimeAsync(1_000);
         expect(cb.onDone).toHaveBeenCalledTimes(1);
         expect(cb.onError).not.toHaveBeenCalled();
+    });
+
+    it('closes the turn once when an error event is followed by a clean close', async () => {
+        const s = openStream();
+        fetchMock().mockResolvedValue(s.response);
+        const cb = callbacks();
+        sendMessageStream('s1', 'hi', cb);
+        await vi.advanceTimersByTimeAsync(0);
+        s.send({ type: 'chunk', content: 'half an answer' });
+        s.send({ type: 'error', content: 'boom' });
+        s.close();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(cb.onError).toHaveBeenCalledTimes(1);
+        expect(cb.onDone).not.toHaveBeenCalled();
     });
 
     it('closes the turn once when an error event is followed by a dead connection', async () => {

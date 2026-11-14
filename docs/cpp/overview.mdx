@@ -12,7 +12,7 @@ icon: "code"
 **Component:** `gaia::Agent` base class and supporting libraries
 **Language:** C++17
 **Build system:** CMake 3.14+
-**Dependencies:** nlohmann/json, cpp-httplib, yaml-cpp, Google Test (all fetched automatically)
+**Dependencies:** nlohmann/json, cpp-httplib, yaml-cpp, FTXUI (unless `-DGAIA_BUILD_TUI=OFF`), Google Test — all fetched automatically; SQLite is vendored
 </Note>
 
 ---
@@ -101,7 +101,7 @@ graph TB
     User("User query")
     Agent("WindowsSystemHealthAgent<br/>gaia::Agent subclass")
     LLM("LLM<br/>http://localhost:13305")
-    MCP("Windows MCP Server<br/>uvx windows-mcp")
+    MCP("Windows MCP Server<br/>uvx windows-mcp@0.8.2 serve")
 
     User --> Agent
     Agent -->|"chat/completions"| LLM
@@ -254,11 +254,15 @@ config.debug = true;
 | `maxConsecutiveRepeats` | `int` | `4` | Consecutive identical responses before loop-detection triggers |
 | `maxHistoryMessages` | `int` | `40` | Max messages kept between queries (0 = unlimited) |
 | `contextSize` | `int` | `16384` | LLM context window size in tokens (`n_ctx`) |
+| `maxTokens` | `int` | `4096` | Max tokens in each LLM response |
+| `structuredEvents` | `bool` | `false` | Always emit structured events (thought, goal, answer), even while streaming |
 | `debug` | `bool` | `false` | Enable verbose debug logging to stdout |
 | `showPrompts` | `bool` | `false` | Print full system prompts and LLM responses |
-| `silentMode` | `bool` | `false` | Suppress all console output (use `SilentConsole`) |
-| `streaming` | `bool` | `false` | Enable streaming responses from the LLM — implemented via `LemonadeClient::chatCompletionsStreaming()` + `SseParser`. A server error event or an unparseable stream event raises `std::runtime_error` with the server's message. An exception thrown by your token callback propagates to the caller |
+| `silentMode` | `bool` | `false` | Suppress progress output (uses `SilentConsole`); the final answer is still printed to stdout |
+| `streaming` | `bool` | `false` (`true` when `GAIA_STREAMING=1`) | Enable streaming responses from the LLM — implemented via `LemonadeClient::chatCompletionsStreaming()` + `SseParser`. A server error event or an unparseable stream event raises `std::runtime_error` with the server's message. An exception thrown by your token callback propagates to the caller |
 | `temperature` | `double` | `0.7` | LLM sampling temperature (`0.0` = deterministic, `1.0` = creative) |
+
+Environment variables (`GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, ...) override these values — see [Runtime Configuration](/cpp/api-reference#runtime-configuration). The tool-calling fields (`responseMode`, `nativeToolCalls`, `toolChoice`) and skill fields (`skillSet`, `skillManifest`) are in the [API Reference](/cpp/api-reference#agentconfig-fields).
 
 ---
 
@@ -276,6 +280,8 @@ cpp/
     json_utils.h            # JSON extraction with multi-strategy fallback
     console.h               # TerminalConsole / SilentConsole output handlers
     clean_console.h         # CleanConsole — polished TUI with colors and word-wrap
+    ...                     # more public headers (lemonade_client.h, process.h, file_tools.h,
+                            # session.h, skill.h, ...) — see the API Reference
   src/
     agent.cpp               # Agent loop state machine
     tool_registry.cpp
@@ -322,8 +328,8 @@ cpp/
 | JSON parsing with fallbacks | Yes | Yes |
 | OpenAI-compatible LLM backend | Yes | Yes |
 | Multiple LLM providers (Claude, OpenAI) | Yes | Planned |
-| Task-specific capabilities via skills and connectors | Yes | — |
-| REST API server | Yes | — |
+| Task-specific capabilities via skills and connectors | Yes | `SKILL.md` parsing + skill sets (loader not shipped) |
+| REST API server | Yes | `gaia-bash` only |
 | Audio / RAG / Stable Diffusion | Yes | — |
 
 ---

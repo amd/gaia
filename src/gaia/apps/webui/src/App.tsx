@@ -728,34 +728,52 @@ function App() {
             .catch((err) => log.system.debug('Mobile access unavailable', err));
     }, []);
 
+    const tunnelActiveRef = useRef(tunnelActive);
+    tunnelActiveRef.current = tunnelActive;
+
+    // Every path announces, so the session panel's switch never sticks on "Starting…".
     const openMobileAccess = useCallback(async () => {
-        setShowMobileAccess(true);
-        setTunnelError(null);
-        if (tunnelActive) {
-            setTunnelSetup(null);
-            return;
-        }
+        let active = tunnelActive;
         try {
+            setShowMobileAccess(true);
+            setTunnelError(null);
+            if (tunnelActive) {
+                setTunnelSetup(null);
+                return;
+            }
             const status = await api.startTunnel();
             // Kept until the retry answers, so the setup panel doesn't flash to "Starting".
             const notInstalled = status.reason === 'ngrok_not_installed';
             setTunnelSetup(notInstalled ? status.installCommands ?? [] : null);
             if (notInstalled) return;
-            if (status.error) setTunnelError(status.error);
-            else setTunnelActive(true);
+            if (status.error) {
+                log.system.error('Mobile access did not start', status.error);
+                setTunnelError(status.error);
+            } else {
+                setTunnelActive(true);
+                active = true;
+            }
         } catch (err) {
+            log.system.error('Could not start mobile access', err);
             setTunnelSetup(null);
             setTunnelError(err instanceof Error ? err.message : 'Could not start mobile access');
+        } finally {
+            announceMobileAccess(active);
         }
     }, [tunnelActive]);
 
     const stopMobileAccess = useCallback(async () => {
+        let active = tunnelActiveRef.current;
         try {
             await api.stopTunnel();
             setTunnelActive(false);
+            active = false;
             setShowMobileAccess(false);
         } catch (err) {
+            log.system.error('Could not stop mobile access', err);
             setTunnelError(err instanceof Error ? err.message : 'Could not stop mobile access');
+        } finally {
+            announceMobileAccess(active);
         }
     }, []);
 
@@ -873,10 +891,10 @@ function App() {
                         <span>{restoreNotice.message}</span>
                         {!restoreNotice.ok && (
                             <button type="button" className="link-btn" onClick={() => { dismissRestoreNotice(); openSettings('model'); }}>
-                                Pick a model
+                                {t('banner.restore.pick')}
                             </button>
                         )}
-                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label="Dismiss">
+                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label={t('banner.dismiss')}>
                             <X size={14} />
                         </button>
                     </div>

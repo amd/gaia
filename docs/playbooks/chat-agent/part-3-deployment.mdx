@@ -603,7 +603,7 @@ def _generate_search_keys(self, query: str) -> List[str]:
     ```
 
     <Tip>
-    **AMD Ryzen AI Optimization:** Smaller models like Qwen3-0.6B are optimized for NPU execution, providing fast inference with minimal power consumption on AI PCs.
+    **Small models:** Smaller GGUF models like Qwen3-0.6B run on llama.cpp (the GPU or CPU) and load fast with little memory. The Ryzen AI NPU runs FastFlowLM (FLM) builds of a model instead — see the [NPU guide](/guides/npu).
     </Tip>
   </Tab>
 </Tabs>

@@ -273,7 +273,7 @@ re-anchoring it:
 
 ```bash
 gaia daemon stop && gaia daemon start
-gaia daemon status    # "api: v1.1" is repo source; "v1" is the released wheel
+gaia daemon status    # "api:" shows DAEMON_API_VERSION (src/gaia/daemon/constants.py); the TUI needs v1.1 or newer
 ```
 
 The footgun: a per-user daemon keeps serving the checkout that launched it no

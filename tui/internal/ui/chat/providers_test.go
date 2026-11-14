@@ -3,6 +3,7 @@
 package chat
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -47,6 +48,30 @@ func TestCloudHeaderDoesNotCallFireworksClaude(t *testing.T) {
 	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", ModelID: "Gemma-4-E4B-it-GGUF", ModelDisplay: "Gemma", ModelBackend: "lemonade"})
 	if m.skipLocalChatSetup() {
 		t.Fatal("local setup must restore local chat requirement")
+	}
+}
+
+// A result that lands while the panel is open still reaches the chat: dropped,
+// the switch check would look in flight forever and Enter would only queue.
+func TestAResultArrivingUnderTheProviderPanelIsNotDropped(t *testing.T) {
+	m := NewChatModelForFlagship(&queryCapturingClient{}, "gaia", "GAIA", true, true)
+	m.width, m.height = 80, 24
+	updated, _ := m.submit("/provider")
+	m = updated.(ChatModel)
+	m.relayedSwitching = true
+
+	updated, _ = m.Update(relayedSwitchMsg{provider: "local", target: "some-model", err: errors.New("it is not downloaded")})
+	m = updated.(ChatModel)
+
+	if m.relayedSwitching {
+		t.Fatal("the switch check's answer was dropped: Enter would queue forever")
+	}
+	if m.providerPanel == nil {
+		t.Fatal("an unrelated result closed the panel")
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if updated.(ChatModel).providerPanel == nil {
+		t.Fatal("the panel stopped taking keys")
 	}
 }
 

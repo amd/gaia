@@ -47,6 +47,14 @@ class TestCreateTable:
         assert "sales" in result
         assert "product TEXT, quantity INTEGER" in result
 
+    @pytest.mark.parametrize(
+        "constraint", ["CHECK(amount > 0)", "UNIQUE(product,amount)", "check (1)"]
+    )
+    def test_table_constraint_without_a_space_is_accepted(self, scratchpad, constraint):
+        scratchpad.create_table("sales", f"product TEXT, amount REAL, {constraint}")
+
+        assert scratchpad.list_tables()[0]["name"] == "sales"
+
     def test_create_table_rejects_invalid_name(self, scratchpad):
         """A name with punctuation is refused, not rewritten, and nothing is created."""
         with pytest.raises(ValueError, match=r"\[A-Za-z_\]\[A-Za-z0-9_\]\*"):

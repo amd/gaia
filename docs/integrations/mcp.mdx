@@ -135,6 +135,33 @@ gaia mcp test --query "Hello GAIA!"
   </Tab>
 </Tabs>
 
+### `gaia mcp start` options
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--host` | `localhost` | Interface to bind |
+| `--port` | `8765` | Port to listen on |
+| `--base-url` | Lemonade default | LLM backend URL |
+| `--auth-token` | `$GAIA_MCP_AUTH_TOKEN` | Require `Authorization: Bearer <token>` on every request except `/health` (see [Authentication](#authentication-and-limits)) |
+| `--no-streaming` | off | Disable streaming responses |
+| `--background` | off | Run in the background |
+| `--log-file` | `gaia.mcp.log` | Log file for background mode |
+| `--verbose` | off | Log all HTTP requests |
+| `--ctx-size` | `32768` | Context size for Lemonade Server |
+
+### Authentication and limits
+
+Without a token the bridge is unauthenticated. Set one with `--auth-token` or
+`GAIA_MCP_AUTH_TOKEN`:
+
+- A missing or malformed `Authorization` header gets **401**; a wrong token gets
+  **403**. `/health` stays public, and so do CORS preflights.
+- Browser requests from a non-loopback `Origin` get **403**, token or not.
+  Allow more origins with `GAIA_MCP_ALLOWED_ORIGINS` (comma-separated).
+- The body limit is 1 MiB; raise it with `GAIA_MCP_MAX_BODY_BYTES`. A larger
+  `Content-Length` gets **413**, a chunked body **411**, and a client that
+  stops sending for 30 seconds **408**.
+
 ### Managing the Server
 
 Check if server is running:
@@ -178,11 +205,11 @@ The MCP Server acts as an HTTP bridge between external applications and GAIA's n
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Server health check |
-| `/status` | GET | Bridge status (connected agents, loaded tools, uptime) |
-| `/tools` | GET | List available tools |
+| `/status` | GET | Bridge status: host, port, LLM backend, agents, tools, endpoints |
+| `/tools` | GET | List available tools (alias: `/v1/tools`) |
 | `/chat` | POST | Conversational chat (with context) |
 | `/llm` | POST | Direct LLM queries (no context) |
-| `/` | POST | JSON-RPC 2.0 endpoint |
+| `/` | POST | JSON-RPC 2.0 endpoint (aliases: `/v1/messages`, `/rpc`) |
 
 Calls take turns on the bridge. If a client disconnects or times out before its reply arrives, the bridge stops that call, so the next caller isn't kept waiting. A `/llm` reply stops mid-answer; a `/chat` call stops while it is still queued or waiting for the model.
 
@@ -206,13 +233,13 @@ Calls take turns on the bridge. If a client disconnects or times out before its 
     curl http://localhost:8765/health
     ```
 
-    Response (agent/tool counts vary by installation):
+    Response (the bridge has two agents, `llm` and `chat`, and two tools, `gaia.query` and `gaia.chat`):
     ```json
     {
       "status": "healthy",
       "service": "GAIA MCP Bridge (HTTP)",
-      "agents": 4,
-      "tools": 5
+      "agents": 2,
+      "tools": 2
     }
     ```
   </Tab>
@@ -391,7 +418,7 @@ The MCP server exposes the following GAIA agents as tools:
 
     **Solutions**:
     - Check server logs: `gaia mcp start --verbose`
-    - Verify GAIA installation: `pip show gaia`
+    - Verify GAIA installation: `pip show amd-gaia`
     - Reinstall MCP dependencies: `uv pip install -e ".[mcp]"`
   </Accordion>
 </AccordionGroup>
@@ -453,7 +480,7 @@ The tests validate:
 For production deployments, always implement these security measures:
 </Warning>
 
-1. **Authentication**: Always use authentication tokens in production
+1. **Authentication**: Always use authentication tokens in production. The bridge has built-in bearer auth: start it with `--auth-token` or `GAIA_MCP_AUTH_TOKEN` (see [Authentication and limits](#authentication-and-limits))
 2. **SSL/TLS**: Use encrypted connections for sensitive data
 3. **Rate Limiting**: Implement rate limits to prevent abuse
 4. **Access Control**: Restrict access to specific IP addresses or networks
@@ -465,11 +492,11 @@ For production deployments, always implement these security measures:
   <Card title="HTTP-Native" icon="globe">
     Pure REST/JSON-RPC, no WebSocket dependencies
   </Card>
-  <Card title="Stateless" icon="server">
-    Each request is independent for better scalability
+  <Card title="One Shared Conversation" icon="server">
+    `/chat` keeps a single conversation for all callers; `/llm` and `gaia.query` carry no context
   </Card>
-  <Card title="Agent Access" icon="robot">
-    Direct access to all GAIA agents
+  <Card title="Two Tools" icon="robot">
+    The bridge exposes `gaia.query` and `gaia.chat`
   </Card>
   <Card title="Loopback Browser Origins" icon="browser">
     Browser apps on localhost work; other origins need `GAIA_MCP_ALLOWED_ORIGINS`

@@ -5,7 +5,7 @@ Fronts the **amd-gaia.ai apex** and splits traffic between two origins:
 | Path            | Origin                                             | Why |
 |-----------------|----------------------------------------------------|-----|
 | `/docs`, `/docs/*` | Mintlify (the zone origin)                       | Keeps the existing docs live, unchanged. |
-| everything else | Railway Astro site (`website/`)                    | Landing (`/`), Agent Hub (`/hub`, `/hub/<id>`), assets (`/_astro/*`). |
+| everything else | Railway Astro site (`website/`)                    | Landing (`/`), the skills page (`/hub`), assets (`/_astro/*`). |
 
 ## How the `/docs` carve-out stays loop-free
 

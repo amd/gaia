@@ -500,7 +500,7 @@ describe('DocumentLibrary path box', () => {
         submitPath('C:\\Users\\me\\photo.heic');
 
         const toast = await screen.findByRole('alert');
-        expect(toast.textContent).toContain('This image format cannot be indexed.');
+        expect(toast.textContent).toContain("GAIA can't index this image format. Convert it to PNG or JPEG");
         expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\photo.heic');
         expect(mockedApi.indexFolder).not.toHaveBeenCalled();
     });

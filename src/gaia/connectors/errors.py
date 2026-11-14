@@ -50,13 +50,19 @@ class OAuthClientNotConfiguredError(ConfigurationError):
         console_steps: str,
         docs: str,
         example: str | None = None,
+        needs_client_secret: bool = True,
     ):
         self.provider_id = provider_id
         self.provider_label = provider_label
         self.console_steps = console_steps
         super().__init__(
             self._build_message(
-                provider_id, provider_label, console_steps, docs, example
+                provider_id,
+                provider_label,
+                console_steps,
+                docs,
+                example,
+                needs_client_secret,
             )
         )
 
@@ -67,28 +73,34 @@ class OAuthClientNotConfiguredError(ConfigurationError):
         console_steps: str,
         docs: str,
         example: str | None,
+        needs_client_secret: bool = True,
     ) -> str:
         # Registering the client, authorizing scopes, and granting the agent is
         # two commands: `--grant-agent` folds the grant into `connect` so the
         # scopes can never drift (the mismatch was the #1 setup failure, #2347).
         example_block = f"{example}\n" if example else ""
         env_prefix = f"GAIA_{pid.upper()}"
+        if needs_client_secret:
+            secret_flag = " --client-secret <SECRET>"
+            env_vars = f"set {env_prefix}_CLIENT_ID and {env_prefix}_CLIENT_SECRET"
+        else:
+            # Public PKCE clients must not send a secret.
+            secret_flag = ""
+            env_vars = f"set {env_prefix}_CLIENT_ID"
         return (
             f"{label} OAuth client is not configured, so GAIA cannot start the "
             f"sign-in flow. GAIA ships no OAuth credentials — create your own "
             f"client once (free), then register it with GAIA:\n"
             f"{console_steps}\n"
             f"Then register the client and sign in — no Agent UI required:\n"
-            f"  gaia connectors configure {pid} --client-id <ID> "
-            f"--client-secret <SECRET>\n"
+            f"  gaia connectors configure {pid} --client-id <ID>{secret_flag}\n"
             f"  gaia connectors connect {pid} --grant-agent <agent-id>\n"
             f"  (omitting --scopes derives them from the agent's own "
             f"declaration; pass --scopes explicitly for a narrower set)\n"
             f"{example_block}"
-            f"(Power users / CI can instead set {env_prefix}_CLIENT_ID and "
-            f"{env_prefix}_CLIENT_SECRET in the environment before launching "
-            f"GAIA.) In the Agent UI you can instead use Settings -> Connectors "
-            f"-> {label}. Full walkthrough: {docs}"
+            f"(Power users / CI can instead {env_vars} in the environment "
+            f"before launching GAIA.) In the Agent UI you can instead use "
+            f"Settings -> Connectors -> {label}. Full walkthrough: {docs}"
         )
 
 
@@ -147,7 +159,7 @@ class AuthRequiredError(ConnectorsError):
                 f"No {prov} connection. Connect via Settings → Connectors in "
                 "AgentUI, or run `gaia connectors connect "
                 f"{pid}`. "
-                "See docs/sdk/infrastructure/connections.mdx."
+                "See docs/sdk/infrastructure/connectors.mdx."
             )
         if self.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED:
             agent = self.agent_id or "this agent"
@@ -171,7 +183,7 @@ class AuthRequiredError(ConnectorsError):
             return (
                 f"Agent '{agent}' has no grant for {prov}. Grant the required "
                 f"scopes in Settings → Connectors, or run {command}. "
-                "See docs/sdk/infrastructure/connections.mdx."
+                "See docs/sdk/infrastructure/connectors.mdx."
             )
         if self.reason is AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES:
             scopes = ", ".join(self.missing_scopes) or "<unknown>"
@@ -192,7 +204,7 @@ class AuthRequiredError(ConnectorsError):
                 f"The {prov} connection lacks required scopes ({scopes}). "
                 "Reconnect with the missing scopes from Settings → Connectors, "
                 f"or run {command}. "
-                "See docs/sdk/infrastructure/connections.mdx."
+                "See docs/sdk/infrastructure/connectors.mdx."
             )
         if self.reason is AuthRequiredError.Reason.REAUTH_REQUIRED:
             return (
@@ -287,7 +299,7 @@ class ScopeMismatchError(ConnectorsError):
             f"Connectors, or run `gaia connectors connect "
             f"{pid} --scopes "
             f"{' '.join(full_scopes) or '<none>'}`. "
-            "See docs/sdk/infrastructure/connections.mdx."
+            "See docs/sdk/infrastructure/connectors.mdx."
         )
 
 

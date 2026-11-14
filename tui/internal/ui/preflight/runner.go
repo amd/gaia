@@ -132,12 +132,13 @@ func (d daemonRunner) Fix(ctx context.Context, cfg Config, kind FixKind, onProgr
 			}
 		})
 		if res.OK {
-			return FixResult{Note: "Download complete.", Final: res.Final}
+			return FixResult{Note: "Download complete.", Final: res.Final, Log: res.Lines}
 		}
 		return FixResult{
 			Err:       errFixFailed,
 			Diagnosis: res.Diagnosis,
 			Final:     res.Final,
+			Log:       res.Lines,
 		}
 	}
 	return FixResult{Err: errNoFix}

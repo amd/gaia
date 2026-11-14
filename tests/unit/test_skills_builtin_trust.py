@@ -185,6 +185,18 @@ def test_trust_list_on_a_cold_machine_shows_the_builtin_key(run_trust):
     assert "verified" in line and "AMD (built-in)" in line
 
 
+def test_trust_add_of_a_wrong_length_key_is_an_error_not_a_traceback(run_trust):
+    import base64
+
+    run, root = run_trust
+    short_key = base64.b64encode(b"x" * 10).decode()
+    rc, _, err = run("add", short_key)
+    assert rc == skills_cli.EXIT_INVALID
+    assert "not a usable Ed25519 public key" in err
+    assert "gaia skill keygen" in err
+    assert not (root / signing.TRUST_STORE_FILENAME).exists()
+
+
 def test_trust_remove_refuses_the_builtin_key_and_leaves_no_file(run_trust):
     run, root = run_trust
     rc, _, err = run("remove", AMD_KEY_ID)

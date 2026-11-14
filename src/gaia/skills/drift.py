@@ -74,15 +74,6 @@ DRIFT_UNTRACKED = "untracked"
 #: checked at all, which is not the same as "checked and clean".
 DRIFT_UNRECORDED = "unrecorded"
 
-DRIFT_KINDS = (
-    DRIFT_VERSION,
-    DRIFT_TIER,
-    DRIFT_CONTENT,
-    DRIFT_MISSING,
-    DRIFT_UNTRACKED,
-    DRIFT_UNRECORDED,
-)
-
 
 def _attested(entry: LockEntry) -> bool:
     """Whether the lock says a signature earned this skill more than the floor.
@@ -651,7 +642,6 @@ def _relock_locked(root: Path, lock: SkillLock) -> RelockResult:
 
 __all__ = [
     "DRIFT_CONTENT",
-    "DRIFT_KINDS",
     "DRIFT_MISSING",
     "DRIFT_TIER",
     "DRIFT_UNRECORDED",

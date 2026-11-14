@@ -5,13 +5,12 @@ icon: "box"
 
 # Application Packaging
 
-<Warning>
-**Roadmap page — not all commands shown are implemented.** The `gaia package
---agent ... --ui web/electron` CLI sketched below remains a planned convenience
-wrapper. Today you can already expose agents as a web API (`gaia api start`) or
-as an Electron app via the Agent UI shell (`src/gaia/apps/webui/`). See
-the [Agent UI SDK](/sdk/sdks/agent-ui) for what's currently shipping.
-</Warning>
+<Note>
+There is no `gaia package` command. Distribute an agent as a Python package
+(see 14.3), expose it as a web API with `gaia api start`, or run it in the Agent
+UI (`gaia chat --ui`, shell in `src/gaia/apps/webui/`). See the
+[Agent UI SDK](/sdk/sdks/agent-ui).
+</Note>
 
 ![Status](https://img.shields.io/badge/status-architecture_reference-blue)
 
@@ -21,7 +20,11 @@ the [Agent UI SDK](/sdk/sdks/agent-ui) for what's currently shipping.
 
 ---
 
-## 14.1 Web UI Generation
+## 14.1 Web UI
+
+The Agent UI is a browser app served by `gaia chat --ui` (backend in
+`src/gaia/ui/`, frontend in `src/gaia/apps/webui/`). It runs the agents GAIA
+discovers, so an agent packaged as in 14.3 appears there without extra work.
 
 ```python
 from gaia.agents.base.agent import Agent
@@ -33,50 +36,21 @@ class MyAgent(Agent):
     def _get_system_prompt(self) -> str:
         return "You are a helpful assistant."
 
-    def _create_console(self):
-        from gaia.agents.base.console import AgentConsole
-        return AgentConsole()
-
     def _register_tools(self):
         @tool
         def my_capability(query: str) -> dict:
             """Custom tool."""
             return {"result": f"Processed: {query}"}
-
-# Package as web UI
-# Run: gaia package --agent my_agent.MyAgent --ui web --output ./dist
-
-# Generates:
-# ./dist/
-#   ├── index.html        # Web interface
-#   ├── app.js           # Frontend code
-#   ├── server.py        # FastAPI backend
-#   └── requirements.txt  # Dependencies
 ```
 
 ---
 
-## 14.2 Electron Desktop App
+## 14.2 Desktop App
 
-```bash
-# Package as cross-platform desktop app
-gaia package \
-    --agent my_package.MyAgent \
-    --desktop electron \
-    --output ./desktop \
-    --platforms windows,linux
-
-# Generates:
-# ./desktop/
-#   ├── MyAgent-1.0.0-win.exe     # Windows app
-#   └── MyAgent-1.0.0-linux.AppImage  # Linux app
-
-# Features:
-# - Native desktop integration
-# - System tray support
-# - Auto-updates
-# - Offline mode
-```
+The Electron shell around the Agent UI lives in `src/gaia/apps/webui/`, and the
+desktop installer is described in the
+[Desktop Installer Plan](/plans/desktop-installer). GAIA does not generate a
+per-agent desktop app.
 
 ---
 

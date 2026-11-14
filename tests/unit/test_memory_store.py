@@ -3124,6 +3124,29 @@ class TestEmptyStringNormalization:
         # so the original domain "project:gaia" should be unchanged.
         assert row[0] == "project:gaia", "update(domain='') should be a no-op"
 
+    def test_update_none_clears_due_at_domain_and_entity(self, store):
+        """update(due_at=None, ...) clears; omitting the field leaves it."""
+        kid = store.store(
+            category="reminder",
+            content="Update clear test",
+            domain="project:gaia",
+            entity="person:alice",
+            due_at="2026-03-01T09:00:00+00:00",
+        )
+        assert store.update(kid, content="Update clear test, edited")
+        row = store._conn.execute(
+            "SELECT domain, entity, due_at FROM knowledge WHERE id = ?", (kid,)
+        ).fetchone()
+        assert row[0] == "project:gaia" and row[1] == "person:alice"
+        assert row[2] is not None
+
+        assert store.update(kid, due_at=None, domain=None, entity=None)
+        row = store._conn.execute(
+            "SELECT domain, entity, due_at FROM knowledge WHERE id = ?", (kid,)
+        ).fetchone()
+        assert tuple(row) == (None, None, None)
+        assert kid not in {item["id"] for item in store.get_upcoming(within_days=7)}
+
 
 # ===========================================================================
 # 40. _auto_store_error() — empty error message not stored

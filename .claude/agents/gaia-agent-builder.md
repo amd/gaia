@@ -131,13 +131,23 @@ The registry discovers packaged agents by scanning the `gaia.agent` entry-point 
 | Semantic code search (FAISS) | `CodeIndexToolsMixin` (`code_index`) | `src/gaia/agents/tools/code_index_tools.py` |
 | Fuzzy/glob file search | `FileSearchToolsMixin` (`file_search`) | `src/gaia/agents/tools/file_tools.py` |
 | Read/write/edit files | `FileIOToolsMixin` (`file_io`) | `src/gaia/agents/tools/file_io_tools.py` |
+| Watch directories for new documents | `FileToolsMixin` (`file_monitor`) | `src/gaia/agents/tools/file_monitor_tools.py` |
 | Sandboxed shell | `ShellToolsMixin` (`shell`) | `src/gaia/agents/tools/shell_tools.py` |
+| Install and sign in to a skill's CLI | `CliSetupToolsMixin` (`cli_setup`) | `src/gaia/agents/tools/cli_setup_tools.py` |
 | Screen capture | `ScreenshotToolsMixin` (`screenshot`) | `src/gaia/agents/tools/screenshot_tools.py` |
 | File system navigation | `FileSystemToolsMixin` (`filesystem`) | `src/gaia/agents/tools/filesystem_tools.py` |
 | SQL scratchpad tables | `ScratchpadToolsMixin` (`scratchpad`) | `src/gaia/agents/tools/scratchpad_tools.py` |
 | Web search / fetch / download | `BrowserToolsMixin` (`browser`) | `src/gaia/agents/tools/browser_tools.py` |
+| Live browser: open, observe, act, sign in | `BrowserUseToolsMixin` (`browser_use`) | `src/gaia/agents/tools/browser_use_tools.py` |
+| Read-only mailbox (Gmail / Outlook) | `EmailToolsMixin` (`email`) | `src/gaia/agents/tools/email_tools.py` |
 | Stable Diffusion | `SDToolsMixin` (`sd`) | `src/gaia/sd/mixin.py` |
 | Vision / structured extraction | `VLMToolsMixin` (`vlm`) | `src/gaia/vlm/mixin.py` |
+| Skill library (list/search/install/load/unload) | `SkillLibraryToolsMixin` (`skills`) | `src/gaia/agents/tools/skill_library_tools.py` |
+| Persist lessons learned in a skill | `SkillLearningToolsMixin` (`skill_learning`) | `src/gaia/agents/tools/skill_learning_tools.py` |
+| Transcribe audio/video, label speakers, subtitles | `AudioToolsMixin` (`audio`) | `src/gaia/agents/tools/audio_tools.py` |
+| Generate WAV music and sound effects | `AudioGenerationToolsMixin` (`audio_generation`) | `src/gaia/agents/tools/audio_generation_tools.py` |
+| `sleep` up to 300 s | `WaitToolsMixin` (`wait`) | `src/gaia/agents/tools/wait_tools.py` |
+| Per-step reasoning effort (gpt-oss) | `ReasoningEffortToolsMixin` (`reasoning_effort`) | `src/gaia/agents/tools/reasoning_tools.py` |
 
 That's the full `KNOWN_TOOLS` set — re-read `registry.py` rather than trusting this table if it looks short.
 
@@ -145,9 +155,8 @@ That's the full `KNOWN_TOOLS` set — re-read `registry.py` rather than trusting
 
 ## Default models (verified)
 
-- Leave `model_id` unset and your agent inherits `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`) — that's what nearly every agent uses, so switching agents never evicts and cold-reloads the resident model (Summarizer is the deliberate exception)
+- Leave `model_id` unset and your agent inherits `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`) — or, where the hardware fits it, the `default_model` that `gaia init` records (`resolve_default_chat_model()`). Sharing one model id means switching agents never evicts and cold-reloads the resident model
 - Vision: same default (`Qwen3-VL-4B-Instruct-GGUF` also supported)
-- Summarization: `Qwen3-4B-Instruct-2507-GGUF`
 
 Pin an override via the agent's `@dataclass` config default — never hardcode inside `__init__`. This lets CLI `--model` and the eval harness override it. Picking a *different* model than the shared default needs a reason: it forces a model swap on the user's box.
 

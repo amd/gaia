@@ -185,6 +185,23 @@ class TestTelegramSink:
         with pytest.raises(RuntimeError, match="could not reach"):
             sinks.dispatch("telegram", {"token": "tok", "to": "42"}, "hello")
 
+    def test_request_exception_never_carries_the_bot_token(self, mocker):
+        import requests as real_requests
+
+        token = "123456789:AAExampleBotTokenValue_abcdefghijklmn"
+        mock_requests = mocker.patch(_REQUESTS)
+        mock_requests.RequestException = real_requests.RequestException
+        mock_requests.post.side_effect = real_requests.RequestException(
+            f"Max retries exceeded with url: /bot{token}/sendMessage"
+        )
+
+        with pytest.raises(RuntimeError) as excinfo:
+            sinks.dispatch("telegram", {"token": token, "to": "42"}, "hello")
+
+        assert token not in str(excinfo.value)
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__suppress_context__
+
 
 # ===========================================================================
 # 4. notification sink

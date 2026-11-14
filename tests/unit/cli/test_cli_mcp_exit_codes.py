@@ -197,13 +197,7 @@ class TestFailuresExitOne:
         assert "❌ Failed to stop process 4242" in capsys.readouterr().out
         assert not pid_file.exists()
 
-    def test_start_without_mcp_extras(self, monkeypatch, capsys):
-        monkeypatch.setitem(sys.modules, "aiohttp", None)
-        assert _run_main(monkeypatch, "mcp", "start", "--no-lemonade-check") == 1
-        assert "❌ Error: MCP dependencies not installed" in capsys.readouterr().out
-
     def test_start_when_lemonade_is_not_ready(self, monkeypatch, stub_bridge):
-        monkeypatch.setitem(sys.modules, "aiohttp", types.ModuleType("aiohttp"))
         monkeypatch.setattr(
             cli, "initialize_lemonade_for_agent", lambda **_kwargs: (False, None)
         )
@@ -213,7 +207,6 @@ class TestFailuresExitOne:
     def test_background_start_when_already_running(
         self, monkeypatch, capsys, stub_bridge, fake_bridge, in_tmp
     ):
-        monkeypatch.setitem(sys.modules, "aiohttp", types.ModuleType("aiohttp"))
         port = fake_bridge({})
         code = _run_main(
             monkeypatch,
@@ -230,7 +223,6 @@ class TestFailuresExitOne:
         assert "❌ MCP bridge is already running" in capsys.readouterr().out
 
     def test_start_error(self, monkeypatch, capsys, stub_bridge):
-        monkeypatch.setitem(sys.modules, "aiohttp", types.ModuleType("aiohttp"))
 
         def boom(**_kwargs):
             raise OSError("address in use")
@@ -326,8 +318,12 @@ class TestNonFailuresStayZero:
         assert _run_main(monkeypatch, "mcp", "stop") == 0
         assert not pid_file.exists()
 
+    def test_start_does_not_require_aiohttp(self, monkeypatch, capsys, stub_bridge):
+        monkeypatch.setitem(sys.modules, "aiohttp", None)
+        assert _run_main(monkeypatch, "mcp", "start", "--no-lemonade-check") == 0
+        assert "MCP dependencies not installed" not in capsys.readouterr().out
+
     def test_start_stopped_with_ctrl_c(self, monkeypatch, capsys, stub_bridge):
-        monkeypatch.setitem(sys.modules, "aiohttp", types.ModuleType("aiohttp"))
 
         def interrupted(**_kwargs):
             raise KeyboardInterrupt

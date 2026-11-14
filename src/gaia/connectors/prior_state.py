@@ -103,7 +103,7 @@ def resolve_or_reject_empty_scopes(
             f"Reconnecting {provider_id!r} with no scopes would drop the "
             f"{len(current_scopes)} scope(s) this connection currently "
             f"carries. {how}"
-            "See docs/sdk/infrastructure/connections.mdx."
+            "See docs/sdk/infrastructure/connectors.mdx."
         )
 
     default_list = list(default_scopes)

@@ -708,6 +708,68 @@ class TestUpdateKnowledgeInputValidation:
         assert resp.status_code == 200
 
 
+class TestUpdateKnowledgeClearsFields:
+    """An explicit null clears domain, entity or due_at; an omitted field stays."""
+
+    def _row(self, test_store, kid):
+        return test_store._conn.execute(
+            "SELECT content, domain, entity, due_at FROM knowledge WHERE id = ?",
+            (kid,),
+        ).fetchone()
+
+    def test_null_clears_due_at_domain_and_entity(self, client, test_store):
+        kid = test_store.store(
+            category="reminder",
+            content="Renew passport",
+            domain="travel",
+            entity="person:me",
+            due_at="2026-03-01T09:00:00+00:00",
+        )
+        overdue = client.get("/api/memory/upcoming").json()
+        assert kid in {item["id"] for item in overdue}
+        resp = client.put(
+            f"/api/memory/knowledge/{kid}",
+            json={
+                "content": "Renew passport",
+                "domain": None,
+                "entity": None,
+                "due_at": None,
+            },
+        )
+        assert resp.status_code == 200
+        _, domain, entity, due_at = self._row(test_store, kid)
+        assert (domain, entity, due_at) == (None, None, None)
+        upcoming = client.get("/api/memory/upcoming").json()
+        assert kid not in {item["id"] for item in upcoming}
+
+    def test_content_only_update_leaves_due_at(self, client, test_store):
+        kid = test_store.store(
+            category="reminder",
+            content="Call the dentist",
+            domain="health",
+            entity="person:me",
+            due_at="2026-03-01T09:00:00+00:00",
+        )
+        resp = client.put(
+            f"/api/memory/knowledge/{kid}", json={"content": "Call the dentist soon"}
+        )
+        assert resp.status_code == 200
+        content, domain, entity, due_at = self._row(test_store, kid)
+        assert content == "Call the dentist soon"
+        assert (domain, entity) == ("health", "person:me")
+        assert due_at is not None and due_at.startswith("2026-03-01T09:00:00")
+
+    @pytest.mark.parametrize(
+        "field", ["content", "category", "context", "sensitive", "reminded_at"]
+    )
+    def test_null_on_unclearable_field_returns_422(self, client, test_store, field):
+        kid = test_store.store(category="fact", content="Keep me")
+        resp = client.put(f"/api/memory/knowledge/{kid}", json={field: None})
+        assert resp.status_code == 422
+        assert field in resp.json()["detail"]
+        assert self._row(test_store, kid)[0] == "Keep me"
+
+
 class TestListKnowledgeSensitiveDefault:
     """Sensitive items must be excluded from list_knowledge by default."""
 

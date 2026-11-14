@@ -16,7 +16,7 @@ class LLMClient(ABC):
     """
 
     #: Whether the server accepts ``reasoning_content`` on assistant messages
-    #: in the request history. OpenAI's API rejects unknown message fields.
+    #: in the request history. Strict servers reject unknown message fields.
     accepts_reasoning_history: bool = False
 
     @property

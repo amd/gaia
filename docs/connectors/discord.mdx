@@ -69,8 +69,8 @@ grant lets the agent use the credential; activation makes the tools visible
 to it, and is off by default:
 
 ```bash
-gaia connectors grants grant mcp-discord builtin:chat --scopes "*"
-gaia connectors activations activate mcp-discord builtin:chat
+gaia connectors grants grant mcp-discord installed:gaia --scopes "*"
+gaia connectors activations activate mcp-discord installed:gaia
 ```
 
 (In the UI, the tile's **GAIA can use Discord in chat** switch does both.)

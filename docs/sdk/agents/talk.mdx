@@ -135,10 +135,10 @@ print(response.text)         # Generated response text
 print(response.is_complete)  # True for final response
 print(response.stats)        # Performance statistics
 
-# Stats include:
-# - total_tokens
-# - latency_ms
-# - model_name
+# Stats are populated only when show_stats=True, and include:
+# - prompt_tokens, completion_tokens, total_tokens
+# - cached_tokens, reasoning_tokens (when the backend reports them)
+# - tokens_per_second
 ```
 
 ---

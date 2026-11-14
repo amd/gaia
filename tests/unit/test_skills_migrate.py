@@ -553,6 +553,20 @@ def test_support_files_are_carried_across(tmp_path):
     assert (target / "scripts" / "run.sh").is_file()
 
 
+def test_a_standalone_md_file_installs_without_its_neighbours(tmp_path):
+    """Migrating ./OTHER.md must not ship every file that happens to sit beside it."""
+    directory = tmp_path / "downloads"
+    directory.mkdir()
+    other = directory / "OTHER.md"
+    other.write_text(OPENCLAW_INSTRUCTION_ONLY, encoding="utf-8")
+    (directory / "unrelated.txt").write_text("private\n", encoding="utf-8")
+
+    outcome = migrate_skill_dir(other, vendor=VENDOR_OPENCLAW)
+    target = install_migrated(outcome, tmp_path / "dest")
+
+    assert sorted(p.name for p in target.iterdir()) == [SKILL_FILENAME]
+
+
 def test_install_refuses_to_clobber_without_force(tmp_path):
     source = write_source(tmp_path / "src", "release-notes", OPENCLAW_INSTRUCTION_ONLY)
     destination = tmp_path / "dest"

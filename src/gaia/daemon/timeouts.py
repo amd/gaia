@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import math
 import os
+from typing import Optional
 
 # A single agent-loop step can be quiet while the sidecar is classifying a
 # mailbox message. Keep the shipping idle-read budget unless the operator has
@@ -43,3 +45,8 @@ def agent_read_timeout() -> float:
             f"({DEFAULT_AGENT_READ_TIMEOUT})."
         )
     return max(DEFAULT_AGENT_READ_TIMEOUT, configured + _TIMEOUT_GRACE)
+
+
+def requests_read_timeout(seconds: float) -> Optional[float]:
+    """Map an ``inf`` budget to ``None``, the "no limit" ``requests`` accepts."""
+    return None if math.isinf(seconds) else seconds

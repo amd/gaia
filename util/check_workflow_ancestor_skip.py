@@ -39,7 +39,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, List
 
 import yaml
 
