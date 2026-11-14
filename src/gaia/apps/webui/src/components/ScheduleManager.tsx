@@ -510,7 +510,7 @@ export function ScheduleManager() {
                                         value={schedulePrompt}
                                         onChange={(e) => setSchedulePrompt(e.target.value)}
                                     />
-                                    <div className="schedule-field-hint">{t('schedules.promptHint')}</div>
+                                    <div className="schedule-prompt-hint">{t('schedules.promptHint')}</div>
                                 </div>
 
                                 {formError && <p className="schedule-form-error"><bdi>{formError}</bdi></p>}

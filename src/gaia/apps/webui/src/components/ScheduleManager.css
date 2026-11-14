@@ -23,7 +23,8 @@
     color: var(--text-secondary);
 }
 
-.schedule-field-hint {
+.schedule-field-hint,
+.schedule-prompt-hint {
     font-size: 11px;
     color: var(--text-muted);
 }
