@@ -8069,13 +8069,14 @@ class ShellToolsMixin:
             display_label="Shell state",
         )
         def get_shell_state() -> Dict[str, Any]:
-            """Report the shell session's current working directory.
+            """Read the shell session's state: its current working directory.
 
-            Shell commands share one session, so a `cd` from an earlier command
+            This runs no command and reports no environment variables. Shell
+            commands share one session, so a `cd` from an earlier command
             (when it was not a one-shot `working_directory` override) is still
             in effect. Call this to read that directory instead of guessing it.
-            When the user asks you to run a command, `pwd` included, run it with
-            `run_shell_command`; this only reads the session's state.
+            To run a command the user asked for, `pwd` included, use
+            `run_shell_command`.
             """
             return {
                 "status": "success",
