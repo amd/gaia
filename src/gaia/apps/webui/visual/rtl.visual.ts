@@ -2448,6 +2448,17 @@ for (const locale of ['ar', 'en']) {
         });
     }
 
+    test(`desktop app and updates: skipped, dark (${locale})`, async ({ page }) => {
+        const update = { status: 'downloaded', version: '0.26.0', skippedVersion: '0.26.0' };
+        await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p, update); }, 'dark');
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const updates = page.locator('.settings-disclosure', { hasText: /Updates/ });
+        await expect(updates).toBeVisible();
+        await updates.scrollIntoViewIfNeeded();
+        await shot(page, `updates-${locale}-skipped-dark`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`desktop app and updates: status unreadable (${locale})`, async ({ page }) => {
         const failure = "Error invoking remote method 'gaia-updater:get-status': Error: No handler registered for 'gaia-updater:get-status'";
         await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p, {}, undefined, failure); });
@@ -4405,6 +4416,16 @@ for (const locale of ['ar', 'en']) {
             test(`chip: ${name}`, async ({ page }, info) => {
                 await open(page, '', locale, withUpdater(update));
                 await expect(page.locator('.update-chip')).toBeVisible();
+                expect(await audit(page)).toEqual([]);
+                await page.screenshot({ path: info.outputPath('chip.png') });
+            });
+        }
+
+        for (const name of ['available', 'ready']) {
+            test(`chip: ${name}, dark`, async ({ page }, info) => {
+                await open(page, '', locale, withUpdater(UPDATE_STATES[name]), 'dark');
+                await expect(page.locator('.update-chip')).toBeVisible();
+                await expect(page.locator('.update-chip__dismiss')).toBeVisible();
                 expect(await audit(page)).toEqual([]);
                 await page.screenshot({ path: info.outputPath('chip.png') });
             });

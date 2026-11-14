@@ -280,6 +280,31 @@ describe("a download electron-updater starts by itself", () => {
   });
 });
 
+test("a failure shows its first line, not electron-updater's headers and stack", async () => {
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  saveConfig({ feedUrl: "https://example.test/feed/" });
+  const dump = [
+    'Cannot find channel "latest.yml" update info: HttpError: 404 ',
+    '"method: GET url: https://example.test/feed/latest.yml"',
+    'Headers: {  "server": "github.com" }',
+    "    at createHttpError (httpExecutor.js:53:12)",
+  ].join("\n");
+  mockUpdater.checkForUpdates = jest.fn(async () => {
+    throw new Error(dump);
+  });
+
+  await m.checkForUpdates();
+  expect(m.getState()).toMatchObject({
+    status: "error",
+    error: 'Cannot find channel "latest.yml" update info: HttpError: 404',
+  });
+
+  await m.checkForUpdates({ background: true });
+  expect(m.getState().lastCheckError).toBe('Cannot find channel "latest.yml" update info: HttpError: 404');
+
+  await expect(m.installVersion("v0.24.0")).rejects.toThrow(/^Cannot find channel "latest.yml" update info: HttpError: 404 Updates are not paused\.$/);
+});
+
 describe("only the update on offer may install on quit", () => {
   async function putOffRestart() {
     const m = initUpdater({ confirmRestart: jest.fn(async () => false) });

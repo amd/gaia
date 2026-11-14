@@ -1068,7 +1068,7 @@ async function installVersion(tag) {
     restartWhenDownloaded = false;
     // Don't leave the app pinned to a version that never installed.
     const pinNote = _restorePinAfterFailedInstall(previousPin, tag);
-    const msg = (err && err.message) || String(err);
+    const msg = _reason(err);
     setState({ status: STATES.ERROR, error: msg });
     // A coded cause keeps its code; any other shows its own text.
     const coded = err && _isUserCode(err.code);
@@ -1565,7 +1565,7 @@ async function _download({ install }) {
   try {
     await autoUpdaterRef.downloadUpdate();
   } catch (err) {
-    const message = (err && err.message) || String(err);
+    const message = _reason(err);
     installRequested = false;
     _applyInstallPolicy();
     setState({ status: STATES.ERROR, error: message });
@@ -1684,9 +1684,18 @@ async function _cancelBackgroundDownload() {
   await download.settled;
 }
 
+/**
+ * What went wrong, in one line. electron-updater appends the response headers
+ * and a stack trace to an HTTP error's message; the UI shows only the first line.
+ */
+function _reason(err) {
+  return String((err && err.message) || err).split("\n")[0].trim();
+}
+
 /** Show a failure the user asked to hear about; otherwise note it and go idle. */
 function _recordFailure(what, err) {
-  const message = (err && err.message) || String(err);
+  const message = _reason(err);
+  if (message !== ((err && err.message) || String(err))) log("warn", `${what} full error:`, err && err.message);
   // The installer may be gone: look again before trusting the release.
   releasesWithUpdate.clear();
   // electron-updater starts an automatic download without awaiting it, so the

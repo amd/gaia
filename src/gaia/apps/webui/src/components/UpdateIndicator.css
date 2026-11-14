@@ -113,7 +113,8 @@
     color: inherit;
 }
 
-/* The "not now" button must stay readable on the green chip. */
+/* "Not now" is a choice, not decoration: keep it readable on either chip. */
+.update-chip--available .update-chip__dismiss,
 .update-chip--ready .update-chip__dismiss {
     opacity: 0.85;
 }
