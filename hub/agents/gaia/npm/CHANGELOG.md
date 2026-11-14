@@ -16,6 +16,36 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   documents fill), and never calls one of those "not attached": asking about
   one by name loads it.
 
+- **A reply that is only the model's reasoning no longer ends the turn as
+  done.** A model writing JSON tool calls sometimes replied with just a
+  `thought`: a fenced one was taken as the final answer, and after a bare one
+  the agent asked again with nothing new, up to the step limit. The agent now asks once for a tool call or an
+  answer, and a second such reply in a row ends the turn as incomplete.
+- **`GAIA_AGENT_PLAN_RECAP=0` shortens what a finished plan sends back.** For a
+  model that writes tool calls as JSON text, a finished plan was followed by the
+  whole request and plan again, which every later call re-sent. With the switch
+  off it is one line saying how many plan steps ran and how many steps are
+  left. On by default, so nothing changes unless you set it.
+- **Writing the report after the tests no longer counts as an untested
+  change.** A task that ran its tests and then wrote its summary file, or a
+  changelog entry, was told its passing tests "ran before the last change" and
+  re-ran them for nothing. Prose docs (`.md`, `.rst`, a `README` or
+  `CHANGELOG`, files under `docs/`) and the output file the request asked for
+  no longer make an earlier run stale, unless they sit in a test or data
+  folder or inside a package. Every other write still does.
+- **Large files and outputs are read in fewer, larger pieces.** Reading a file
+  too large for one result returned small archived parts the agent fetched one
+  per call. It now returns the file's first lines and a line-numbered outline
+  of its definitions or headings, so the agent reads the part it needs by line
+  range. `read_tool_output` takes `to_entry` to return a run of parts in one
+  call, up to the same size limit as any tool result.
+- **A command killed at its timeout keeps what it printed, and the agent scopes
+  the retry.** A Python lint or test run that timed out came back with no
+  output at all, and the hint suggested running it again with a longer
+  timeout. Commands and `run_python` scripts now run unbuffered, so the partial
+  output survives the kill, and a timed-out lint or test command's hint names
+  the files the turn changed and says to check just those instead of the whole
+  repository.
 - **The agent knows an MCP server it set up didn't start.** The notice the
   user sees about MCP servers that couldn't start, couldn't load or went over
   the tool limit now also reaches the model each turn, so asked about one it
@@ -275,7 +305,8 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   files in that step. If the file still isn't written, the answer says so
   instead of claiming it was. A file written that way is read back like any
   other edit, and if it is missing, empty or no longer parses, the answer says
-  that too.
+  that too. A turn the loop guard ends gets the same completion check as other
+  early stops, so a claimed write that no tool made is named too.
 - **A refused action is reported as refused, not as your decision.** When a
   safety rule blocks a command, the agent says the command was refused, and a
   refused delete still guards what it would have deleted.

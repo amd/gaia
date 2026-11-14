@@ -1055,7 +1055,7 @@ def test_the_reader_advertises_entry_first_and_no_fixed_page_size():
     assert "1 to 8000" not in doc
     assert "almost never needed" in doc
     params = agent._tools_registry["read_tool_output"]["parameters"]
-    assert list(params) == ["artifact", "entry", "offset", "limit"]
+    assert list(params) == ["artifact", "entry", "to_entry", "offset", "limit"]
     assert params["entry"]["type"] == "integer" and not params["entry"]["required"]
     # Re-sent on every call, so it answers to the same budget as every tool.
     assert len(doc) <= MAX_TOOL_DESCRIPTION_CHARS

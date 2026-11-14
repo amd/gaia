@@ -629,9 +629,11 @@ class TestNoRegression:
 
         assert "timed out after 5 seconds" in error["error"]
         assert "ls" in error["error"]
-        # The hint carries the next step: which class it ran as, and the ceiling.
+        # The hint carries the next step: which class it ran as, and to narrow
+        # the run rather than raise the ceiling.
         assert "'default'" in error["hint"]
-        assert str(MAX_COMMAND_TIMEOUT) in error["hint"]
+        assert str(MAX_COMMAND_TIMEOUT) not in error["hint"]
+        assert "larger timeout" not in error["hint"]
 
 
 class TestStopDuringACommand:

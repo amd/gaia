@@ -4500,7 +4500,10 @@ def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
     command sets outlives it or reaches the agent. GAIA's internal credentials
     are left out (see ``gaia.env.child_env``).
     """
-    return child_env(assignments)
+    env = child_env(assignments)
+    # A killed Python child keeps what it printed only if it never buffered it.
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    return env
 
 
 class _CommandCancelled(Exception):
@@ -4585,12 +4588,14 @@ def _run_pipeline(
             for proc in procs[:-1]:
                 proc.wait(timeout=max(deadline - time.monotonic(), 0))
         except subprocess.TimeoutExpired as exc:
-            for proc in procs:
+            for proc in procs[:-1]:
                 proc.kill()
+            # The last stage's reader holds what it printed before the kill.
+            out, _ = terminate_process_tree(procs[-1])
             for proc in procs:
                 proc.wait()
             raise subprocess.TimeoutExpired(
-                exc.cmd, timeout, output=exc.output, stderr=_read_all(errs)
+                exc.cmd, timeout, output=out or exc.output, stderr=_read_all(errs)
             ) from exc
     except BaseException:
         for proc in procs:
@@ -5324,6 +5329,19 @@ def _run_step(
         stdout=stdout,
         stderr=stderr,
     )
+
+
+#: Changed files a timeout hint names before it says "and N more".
+_HINT_MAX_FILES = 8
+
+
+def _relative_to(path: str, cwd: str) -> str:
+    """*path* relative to *cwd* when it lies under it, else as given."""
+    try:
+        rel = os.path.relpath(path, cwd)
+    except ValueError:  # another drive on Windows
+        return path
+    return path if rel == os.pardir or rel.startswith(os.pardir + os.sep) else rel
 
 
 def _as_text(raw: Any) -> str:
@@ -6772,6 +6790,44 @@ class ShellToolsMixin:
             except subprocess.TimeoutExpired:
                 continue  # slice expired, not the command's own deadline
 
+    def _timeout_hint(self, timeout_class: str, cwd: str) -> str:
+        """The next step after a kill: scope the run to what this turn changed.
+
+        Never "raise the timeout": a repo-wide lint or test run that blew its
+        class default usually blows a larger one too. A build or download is
+        pointed at a background run instead.
+        """
+        cls = TIMEOUT_CLASSES[timeout_class]
+        hint = (
+            f"It ran as a '{timeout_class}' command ({cls.summary}, "
+            f"{cls.seconds}s by default). Whatever it printed before the kill "
+            "is in 'stdout'/'stderr' above."
+        )
+        if timeout_class not in ("test", "script"):
+            return (
+                f"{hint} If it was still making progress, run it in the "
+                f"background and poll it with {_WAIT_TOOL}, or split it into "
+                "shorter steps."
+            )
+        written = getattr(self, "_files_written_this_turn", None)
+        changed = list(dict.fromkeys(written())) if callable(written) else []
+        if not changed:
+            return (
+                f"{hint} Narrow it to the change: one test file rather than the "
+                "whole suite, the linter on the edited files rather than the "
+                "whole repository."
+            )
+        shown = [_relative_to(path, cwd) for path in changed[:_HINT_MAX_FILES]]
+        more = len(changed) - len(shown)
+        listed = ", ".join(f"`{path}`" for path in shown) + (
+            f" and {more} more" if more > 0 else ""
+        )
+        return (
+            f"{hint} Files changed this turn: {listed}. Run the check on just "
+            "those (the linter on these files, the test files that cover them) "
+            "instead of the whole repository."
+        )
+
     def _record_command_execution(self):
         """Record command execution timestamp for rate limiting."""
         if getattr(self, "_shell_polling", False):
@@ -7341,6 +7397,7 @@ class ShellToolsMixin:
                 "duration_seconds": time.monotonic() - start_time,
                 "cwd": cwd,
                 "steps": [{"command": command, "return_code": None}],
+                "hint": self._timeout_hint(timeout_class, cwd),
             }
         except BaseException:
             terminate_process_tree(process)
@@ -7788,16 +7845,7 @@ class ShellToolsMixin:
                                 "duration_seconds": time.monotonic() - start_time,
                                 "cwd": cwd,
                                 "steps": ran,
-                                "hint": (
-                                    f"It ran as a '{timeout_class}' command "
-                                    f"({TIMEOUT_CLASSES[timeout_class].summary}, "
-                                    f"{TIMEOUT_CLASSES[timeout_class].seconds}s by "
-                                    "default). Whatever it printed before the kill is "
-                                    "in 'stdout'/'stderr' above. Either narrow the "
-                                    "command (one test file rather than the whole "
-                                    "suite) or re-run it with a larger timeout, up to "
-                                    f"{MAX_COMMAND_TIMEOUT}s."
-                                ),
+                                "hint": self._timeout_hint(timeout_class, cwd),
                             },
                             check_from_command(
                                 command,
