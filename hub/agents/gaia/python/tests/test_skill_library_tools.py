@@ -964,6 +964,135 @@ def test_other_install_failures_keep_their_message_and_do_not_block_capture(
     call(session, "remove_skill", name="plain-refusal")
 
 
+class _WebClient:
+    """Stands in for WebClient; serves one body for every URL and records them."""
+
+    calls: list = []
+    body = b""
+
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+    def get(self, url: str, **_kwargs):
+        type(self).calls.append(url)
+        return SimpleNamespace(
+            content=type(self).body, headers={"Content-Type": "text/plain"}, url=url
+        )
+
+
+@pytest.fixture
+def web(monkeypatch):
+    _WebClient.calls = []
+    _WebClient.body = b""
+    monkeypatch.setattr("gaia.web.client.WebClient", _WebClient)
+    return _WebClient
+
+
+def test_after_a_tampered_install_no_guessed_url_or_path_is_even_fetched(
+    session, hub, web, tmp_path
+):
+    """The bypass: a tampered install, then capture from wherever it might live."""
+    from gaia.skills.capture import failed_verification_message
+
+    _publish_signed(hub, tmp_path, "sealed-notes")
+    _repack_with_extra_file(hub, tmp_path, "sealed-notes")
+    installed = call(session, "install_skill", name="sealed-notes")
+    assert installed["error_type"] == "SkillSignatureError"
+
+    # Served content renamed, so only the source itself can give the skill away.
+    web.body = _pasted("innocent-name").encode("utf-8")
+    local = tmp_path / "downloads" / "sealed-notes"
+    local.mkdir(parents=True)
+    (local / "SKILL.md").write_text(_pasted("innocent-name"), encoding="utf-8")
+    sources = [
+        "https://raw.githubusercontent.com/amd/gaia/main/hub/skills/sealed-notes/SKILL.md",
+        "https://github.com/someone/skills/archive/sealed-notes-1.0.0.zip",
+        "https://mirror.example/download?skill=sealed-notes",
+        "https://mirror.example/SEALED-NOTES/SKILL.md",
+        "https://mirror.example/sealed%2Dnotes/SKILL.md",
+        "https://mirror.example/sealed%252Dnotes/SKILL.md",
+        "https://mirror.example/sealed_notes/SKILL.md",
+        "https://mirror.example/x\\sealed-notes\\SKILL.md",
+        f"{hub.store.BASE_URL}/skills/sealed-notes/1.0.0/sealed-notes-1.0.0.zip",
+        str(local),
+    ]
+    for source in sources:
+        captured = call(session, "capture_skill", source=source)
+        assert captured["status"] == "error", source
+        assert captured["error"] == failed_verification_message("sealed-notes")
+    assert web.calls == [], "a refused source must never be fetched"
+    assert not (session.library.user / "innocent-name").exists()
+    assert not (session.library.user / "sealed-notes").exists()
+
+
+def test_a_redirect_to_the_refused_skill_is_refused(
+    session, hub, web, tmp_path, monkeypatch
+):
+    from gaia.skills.capture import failed_verification_message
+
+    _publish_signed(hub, tmp_path, "sealed-notes")
+    _repack_with_extra_file(hub, tmp_path, "sealed-notes")
+    call(session, "install_skill", name="sealed-notes")
+
+    def _redirected(self, url, **_kwargs):
+        type(self).calls.append(url)
+        return SimpleNamespace(
+            content=_pasted("innocent-name").encode("utf-8"),
+            headers={"Content-Type": "text/plain"},
+            url="https://mirror.example/sealed-notes/SKILL.md",
+        )
+
+    monkeypatch.setattr(_WebClient, "get", _redirected)
+    captured = call(session, "capture_skill", source="https://short.example/r/1")
+
+    assert captured["error"] == failed_verification_message("sealed-notes")
+    assert not (session.library.user / "innocent-name").exists()
+
+
+def test_an_unrelated_capture_still_works_after_a_tampered_install(
+    session, hub, web, tmp_path
+):
+    _publish_signed(hub, tmp_path, "sealed-notes")
+    _repack_with_extra_file(hub, tmp_path, "sealed-notes")
+    call(session, "install_skill", name="sealed-notes")
+
+    # Near misses share text with the refused name but name a different skill.
+    landed = []
+    for name, url in (
+        ("meeting-notes", "https://mirror.example/meeting-notes/SKILL.md"),
+        ("unsealed-notes", "https://mirror.example/unsealed-notes/SKILL.md"),
+        ("sealed-notes-extra", "https://mirror.example/sealed-notes-extra/SKILL.md"),
+    ):
+        web.body = _pasted(name).encode("utf-8")
+        captured = call(session, "capture_skill", source=url)
+        assert captured["status"] == "success", (url, captured)
+        landed.append(name)
+    pasted = call(session, "capture_skill", source=_pasted("my-own-notes"))
+    assert pasted["status"] == "success", pasted
+    landed.append("my-own-notes")
+    for name in landed:
+        call(session, "remove_skill", name=name)
+
+
+def test_a_network_failure_on_install_does_not_block_capture(
+    session, hub, web, monkeypatch
+):
+    def _offline(url: str) -> bytes:
+        raise OSError(f"network unreachable: {url}")
+
+    monkeypatch.setattr("gaia.skills.hub.fetch_bytes", _offline)
+    installed = call(session, "install_skill", name="flaky-notes")
+    assert installed["status"] == "error"
+    assert FINAL_SENTENCE not in installed["error"]
+
+    web.body = _pasted("flaky-notes").encode("utf-8")
+    captured = call(
+        session, "capture_skill", source="https://mirror.example/flaky-notes/SKILL.md"
+    )
+    assert captured["status"] == "success", captured
+    call(session, "remove_skill", name="flaky-notes")
+
+
 def test_capture_refuses_what_the_configured_hub_publishes(
     session, hub, tmp_path, monkeypatch
 ):
@@ -1326,6 +1455,7 @@ class TestCaptureSkillTool:
         loaded = call(session, "load_skill", name="captured-notes")
         assert loaded["status"] == "success"
         assert CAPTURED_MARKER in session.agent._prompt_text()
+        call(session, "remove_skill", name="captured-notes")
 
     def test_captured_code_is_inert_until_promoted(self, session, tmp_path):
         """The full lifecycle: capture → load (tools deferred, said honestly)
@@ -1359,6 +1489,7 @@ class TestCaptureSkillTool:
             session.agent._tools_registry["shouter/shout"]["function"](text="hi")
             == "HI"
         )
+        call(session, "remove_skill", name="shouter")
 
     def test_capture_block_refuses_and_writes_nothing(self, session):
         hostile = "\n".join(

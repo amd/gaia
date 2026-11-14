@@ -1344,8 +1344,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should use dynamic version from build constant', () => {
-      expect(advancedContent).toContain('const version = __APP_VERSION__');
-      expect(advancedContent).toContain('GAIA v{version}');
+      const aboutContent = fs.readFileSync(path.join(settingsDir, 'AboutSettings.tsx'), 'utf8');
+      expect(aboutContent).toContain('`GAIA v${__APP_VERSION__}`');
     });
 
     it('should render as a modal settings dialog with section nav', () => {
@@ -1379,9 +1379,11 @@ describe('Chat App Integration', () => {
       expect(privacyContent).toContain('className="btn-danger"');
     });
 
-    it('should have danger zone warning text and two-step confirm', () => {
+    it('should have danger zone warning text and a confirmation sheet', () => {
       expect(privacyContent).toContain("t('settings.privacy.deleteWarning')");
-      expect(privacyContent).toContain("confirm ? t('settings.privacy.deleteConfirm') : t('settings.privacy.delete')");
+      expect(privacyContent).toContain('<ConfirmSheet');
+      expect(privacyContent).toContain("'settings.privacy.deleteYes'");
+      expect(privacyContent).toContain("t('settings.privacy.deleteCancel')");
     });
   });
 

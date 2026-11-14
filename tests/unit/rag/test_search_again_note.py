@@ -18,6 +18,7 @@ import pytest
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.rag_tools import (
     _SEARCH_AGAIN_NOTE,
+    _SEARCH_ALL_NOTE,
     RAGToolsMixin,
     _answers_in_question_language,
     _asks_once_for_another_search,
@@ -252,3 +253,26 @@ def test_the_flagship_rule_matches_the_note_order():
     assert "labeled as such" in rule[web:]
     # The no-padding guard survives the web clause.
     assert miss < rule.index('never "approximately X"') < web
+
+
+def test_a_one_file_miss_with_other_documents_attached_asks_to_search_them_all(
+    tmp_path,
+):
+    """Gemma searched the Latin-named files and never the Arabic-named one."""
+    host, doc = _host(tmp_path)
+    other = tmp_path / "مُحَمَّد_report.txt"
+    host.rag.indexed_files = {str(doc), str(other)}
+
+    result = _ask_file(doc)
+
+    assert result["instruction"].endswith(_SEARCH_ALL_NOTE)
+    assert "query_documents" in _SEARCH_ALL_NOTE
+
+
+def test_a_search_across_all_documents_keeps_the_reword_note(tmp_path):
+    host, doc = _host(tmp_path)
+    host.rag.indexed_files = {str(doc), str(tmp_path / "other.md")}
+
+    result = _TOOL_REGISTRY["query_documents"]["function"](query="operating margin")
+
+    assert result["instruction"].endswith(_SEARCH_AGAIN_NOTE)

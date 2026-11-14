@@ -26,7 +26,7 @@ from gaia.chat.sdk import (
     SimpleChat,
     quick_chat,
 )
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, _get_lemonade_config
 
 # Gemma-4 sometimes reasons for a few hundred tokens before a one-line answer;
 # a smaller budget ends the reply mid-thought with no answer at all.
@@ -43,7 +43,7 @@ class TestAgentSDKIntegration(unittest.TestCase):
         print("CHAT SDK INTEGRATION TESTS - REAL LLM SERVER")
         print(f"{'='*60}")
 
-        cls.server_url = "http://localhost:13305"
+        cls.server_url = _get_lemonade_config()[2].rstrip("/")
         cls.model = os.environ.get("GAIA_TEST_MODEL", DEFAULT_MODEL_NAME)
         cls.timeout = 30  # seconds
 
@@ -52,7 +52,7 @@ class TestAgentSDKIntegration(unittest.TestCase):
 
         # Test basic server connectivity
         try:
-            response = requests.get(f"{cls.server_url}/api/v1/health", timeout=5)
+            response = requests.get(f"{cls.server_url}/health", timeout=5)
             if response.status_code == 200:
                 health_data = response.json()
                 print(f"✅ Server health check passed")
@@ -71,7 +71,7 @@ class TestAgentSDKIntegration(unittest.TestCase):
         start_time = time.time()
         while time.time() - start_time < cls.timeout:
             try:
-                response = requests.get(f"{cls.server_url}/api/v1/health", timeout=5)
+                response = requests.get(f"{cls.server_url}/health", timeout=5)
                 if response.status_code == 200:
                     print(f"✅ LLM server is ready")
                     return

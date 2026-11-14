@@ -61,11 +61,19 @@ class _Rag:
 
     def __init__(self, validator):
         self.validator = validator
+        self.indexed_files: set = set()
+        self.removed: list = []
 
     def index_document(self, path):
         if not self.validator.is_path_allowed(path, prompt_user=False):
             return {"success": False, "error": f"Access denied: {path}"}
+        self.indexed_files.add(path)
         return {"success": True, "num_chunks": 1}
+
+    def remove_document(self, path):
+        self.indexed_files.discard(path)
+        self.removed.append(path)
+        return True
 
 
 class _DocAgent:
@@ -277,6 +285,7 @@ def chat(monkeypatch, sidecar_flagship_registry, tmp_path):
             path.name, str(path), hashlib.sha256(content).hexdigest(), len(content)
         )
         db.attach_document(session_id, doc["id"])
+        return doc["id"]
 
     yield SimpleNamespace(db=db, send=send, attach=attach, session_id=session_id)
     session_permissions.reset_all()
@@ -329,6 +338,69 @@ def test_a_document_attached_on_turn_three_is_read_by_the_relayed_flagship(
         agents[0].path_validator.is_path_allowed(str(sibling), prompt_user=False)
         is False
     )
+
+
+@pytest.mark.parametrize("remove", ["detach", "delete"])
+def test_a_document_taken_off_the_chat_is_no_longer_searched_by_the_relayed_flagship(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path, remove
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    kept = tmp_path / "kept.txt"
+    kept.write_text("KEPT-1", encoding="utf-8")
+    gone = tmp_path / "gone.txt"
+    gone.write_text("GONE-2", encoding="utf-8")
+    chat.attach(kept)
+    gone_id = chat.attach(gone)
+    assert _answer(chat.send("codes?")) == "GONE-2 | KEPT-1"
+
+    if remove == "detach":
+        chat.db.detach_document(chat.session_id, gone_id)
+    else:
+        chat.db.delete_document(gone_id)
+    answer = _answer(chat.send("codes?"))
+
+    assert answer == "KEPT-1"
+    [agent] = agents
+    assert agent.rag.removed == [str(gone.resolve())]
+
+
+def test_a_file_dropped_into_an_earlier_message_stays_searchable(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    import gaia.ui.utils as ui_utils
+
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    monkeypatch.setattr(ui_utils, "uploads_dir", lambda: uploads)
+    (uploads / "report.txt").write_text("UPLOAD-4", encoding="utf-8")
+    linked = "Read this [report.txt](/api/files/uploads/report.txt)"
+    chat.db.add_message(chat.session_id, "user", linked)
+    assert _answer(chat.send(ui_utils.resolve_upload_links(linked))) == "UPLOAD-4"
+
+    chat.db.add_message(chat.session_id, "user", "and section 3?")
+    answer = _answer(chat.send("and section 3?"))
+
+    assert answer == "UPLOAD-4"
+    [agent] = agents
+    assert agent.rag.removed == []
+
+
+def test_detaching_every_document_empties_the_relayed_flagship(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    doc = tmp_path / "only.txt"
+    doc.write_text("ONLY-3", encoding="utf-8")
+    doc_id = chat.attach(doc)
+    assert _answer(chat.send("code?")) == "ONLY-3"
+
+    chat.db.detach_document(chat.session_id, doc_id)
+
+    assert _answer(chat.send("code?")) == "no documents are indexed"
 
 
 def test_an_older_flagship_says_documents_need_an_update(
