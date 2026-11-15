@@ -309,6 +309,33 @@ def guarded_open_refusal(
     return None
 
 
+#: Audit events that copy or give a file a name outside its folder; args[0] is
+#: the source. Windows copies through CopyFile2, which raises no "open" event.
+_MOVE_EVENTS = frozenset(
+    {
+        "os.rename",
+        "os.link",
+        "shutil.copyfile",
+        "shutil.copytree",
+        "_winapi.CopyFile2",
+    }
+)
+
+
+def guarded_move_refusal(path: object, folders: Sequence[str]) -> Optional[str]:
+    """Why copying, moving or linking *path* is refused: it is in or holds *folders*."""
+    if isinstance(path, int) or path is None:
+        return None
+    try:
+        real = os.path.realpath(os.path.abspath(os.fsdecode(path)))
+    except (TypeError, ValueError):
+        return None
+    for folder in folders:
+        if _within(real, folder) or _within(folder, real):
+            return f"{real} is in or holds {folder}, which holds credentials"
+    return None
+
+
 def guard_folders(folders: Sequence[str]) -> None:
     """Refuse every file open in *folders* for the rest of this process.
 
@@ -323,7 +350,20 @@ def guard_folders(folders: Sequence[str]) -> None:
     ids = _file_ids(folders)
 
     def hook(event: str, args: tuple) -> None:
-        if event != "open" or not args:
+        if not args:
+            return
+        if event in _MOVE_EVENTS:
+            # Copied or moved out, it would open under a name the folder check misses.
+            why = guarded_move_refusal(args[0], folders) or guarded_open_refusal(
+                args[0], folders, ids
+            )
+            if why:
+                raise PermissionError(
+                    f"GAIA does not let scripts copy, move or link this file: {why}. "
+                    "Do it yourself if you need to."
+                )
+            return
+        if event != "open":
             return
         why = guarded_open_refusal(args[0], folders, ids)
         if why:

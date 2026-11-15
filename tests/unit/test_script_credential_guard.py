@@ -98,6 +98,59 @@ def test_a_hard_link_into_the_folder_is_refused(home, tmp_path):
     assert "PermissionError" in run.stderr
 
 
+@pytest.mark.parametrize(
+    "move_expr",
+    [
+        "os.rename(os.path.join(HOME, '.keys', 'id_decoy'), 'out.txt')",
+        "os.replace(os.path.join(HOME, '.keys', 'id_decoy'), 'out.txt')",
+        "shutil.move(os.path.join(HOME, '.keys', 'id_decoy'), 'out.txt')",
+        "os.rename(os.path.join(HOME, '.keys'), 'out')",
+        "os.link(os.path.join(HOME, '.keys', 'id_decoy'), 'out.txt')",
+        "shutil.copyfile(os.path.join(HOME, '.keys', 'id_decoy'), 'out.txt')",
+        "shutil.copy2(os.path.join(HOME, '.keys', 'id_decoy'), 'out.txt')",
+        "shutil.copytree(os.path.join(HOME, '.keys'), 'out')",
+    ],
+)
+def test_moving_a_file_out_of_the_folder_is_refused(home, tmp_path, move_expr):
+    code = f"""
+        import os, shutil
+        HOME = {str(home)!r}
+        {move_expr}
+        print(open('out.txt').read() if os.path.isfile('out.txt') else 'moved-dir')
+        """
+    run = _run(code, home, tmp_path)
+    assert run.returncode == 1
+    assert "PermissionError" in run.stderr
+    assert (home / ".keys" / "id_decoy").read_text() == "SECRET-BYTES"
+    assert not (home / "work" / "out.txt").exists()
+
+
+def test_copying_a_hard_link_into_the_folder_is_refused(home, tmp_path):
+    link = home / "work" / "hl.txt"
+    os.link(home / ".keys" / "id_decoy", link)
+    code = f"""
+        import shutil
+        shutil.copy({str(link)!r}, 'out.txt')
+        print(open('out.txt').read())
+        """
+    run = _run(code, home, tmp_path)
+    assert "SECRET-BYTES" not in run.stdout
+    assert "PermissionError" in run.stderr
+    assert not (home / "work" / "out.txt").exists()
+
+
+def test_other_files_move_and_copy_as_usual(home, tmp_path):
+    code = """
+        import os, shutil
+        shutil.copyfile('notes.txt', 'copy.txt')
+        os.rename('notes.txt', 'renamed.txt')
+        """
+    run = _run(code, home, tmp_path)
+    assert run.returncode == 0, run.stderr
+    assert (home / "work" / "renamed.txt").read_text() == "plain"
+    assert (home / "work" / "copy.txt").read_text() == "plain"
+
+
 def test_other_files_open_as_usual(home, tmp_path):
     code = f"""
         import os
