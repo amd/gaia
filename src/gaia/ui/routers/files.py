@@ -469,7 +469,7 @@ async def open_file_or_folder(request: OpenFileRequest):
 
     try:
         resolved = raw_path.resolve(strict=False)
-    except ValueError as e:  # longer than Windows allows
+    except (ValueError, OSError) as e:  # too long for the OS
         raise HTTPException(status_code=400, detail=f"Invalid path: {e}") from e
 
     # Security: restrict to user's home directory FIRST, before ANY

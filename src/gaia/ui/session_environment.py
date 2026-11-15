@@ -364,7 +364,7 @@ def check_folder(path: str) -> Path:
     try:
         target = Path(os.path.expanduser(path)).resolve()
         is_dir = target.is_dir()
-    except ValueError as e:  # a null byte, or longer than Windows allows
+    except (ValueError, OSError) as e:  # a null byte, or a path too long for the OS
         shown = path if len(path) <= 120 else path[:120] + "…"
         raise EnvironmentChangeError(
             f"{shown!r} is not a path this PC can open: {e}."

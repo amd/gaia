@@ -9,6 +9,7 @@ SQLite's integer range raised OverflowError; an unknown provider name on
 /v1/connections raised KeyError or reached the OS credential store.
 """
 
+import errno
 from unittest.mock import patch
 
 import pytest
@@ -70,6 +71,30 @@ def test_a_document_path_longer_than_windows_allows_is_refused(client):
 def test_opening_a_path_longer_than_windows_allows_is_refused(client):
     r = client.post("/api/files/open", json={"path": HUGE_PATH})
     assert r.status_code == 400
+
+
+# Linux and macOS raise OSError(ENAMETOOLONG) where Windows raises ValueError.
+def _posix_too_long(*_args, **_kwargs):
+    raise OSError(errno.ENAMETOOLONG, "File name too long")
+
+
+@pytest.mark.parametrize(
+    "method, url, body",
+    [
+        ("post", "/api/environment/folders/check", {"path": "C:\gaia-test\long"}),
+        ("post", "/api/files/open", {"path": "C:\gaia-test\long"}),
+        ("post", "/api/documents/upload-path", {"filepath": "C:\gaia-test\long.txt"}),
+    ],
+    ids=["folder-check", "open-file", "document-by-path"],
+)
+def test_a_path_too_long_for_posix_is_refused_too(
+    client, monkeypatch, method, url, body
+):
+    monkeypatch.setattr("pathlib.Path.resolve", _posix_too_long)
+    r = getattr(client, method)(url, json=body)
+    assert r.status_code in (200, 400)
+    if r.status_code == 200:
+        assert "is not a path this PC can open" in r.json()["refusal"]
 
 
 @pytest.mark.parametrize(
