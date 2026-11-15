@@ -107,6 +107,8 @@ export const enMessages = {
     'modelStatus.busyRequest': 'The model is answering a request. Restart it once that finishes.',
     'modelStatus.startServer': 'Start the model server and load the model',
     'modelStatus.reload': 'Reload the model at its context size',
+    'modelStatus.serverDown.gaia': "The model server isn't answering at {url}. Restart starts it.",
+    'modelStatus.serverDown.notOurs': "The model server isn't answering at {url}. GAIA doesn't start a server it doesn't run; start it yourself.",
 
     // The log viewer
     'logs.title': "Logs",

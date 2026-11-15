@@ -107,6 +107,8 @@ const messages: Messages = {
     'modelStatus.busyRequest': 'النموذج يجيب عن طلب. أعِد تشغيله بعد انتهاء ذلك.',
     'modelStatus.startServer': 'تشغيل خادم النموذج وتحميل النموذج',
     'modelStatus.reload': 'إعادة تحميل النموذج بحجم السياق الخاص به',
+    'modelStatus.serverDown.gaia': 'خادم النماذج لا يستجيب على {url}. اضغط «إعادة التشغيل» لتشغيله.',
+    'modelStatus.serverDown.notOurs': 'خادم النماذج لا يستجيب على {url}. لا يشغّل GAIA خادمًا لا يديره، فشغّله بنفسك.',
 
     // The log viewer
     'logs.title': "السجلات",
