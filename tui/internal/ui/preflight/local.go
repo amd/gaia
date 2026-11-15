@@ -655,6 +655,9 @@ var listedCloudModels = func(ctx context.Context, provider string) ([]lemonade.M
 // another one — the system server, before setup installed GAIA's own — is unknown
 // here, and the first turn would fail.
 func checkCloudModel(ctx context.Context, chosen string, row Row) (Row, bool) {
+	if lemonade.IsHybridID(chosen) {
+		return checkHybridModels(ctx, row)
+	}
 	provider, _, _ := strings.Cut(chosen, ".")
 	listed, err := cloudModelListed(ctx, provider, chosen)
 	var (
@@ -698,6 +701,48 @@ func checkCloudModel(ctx context.Context, chosen string, row Row) (Row, bool) {
 			" key: " + replayErr.Error()
 	}
 	return row, false
+}
+
+// readHybridModels is hybrid's concrete models. A var so tests need no config.
+var readHybridModels = lemonade.ReadHybridModels
+
+// checkHybridModels confirms every concrete model hybrid routes to can answer;
+// `hybrid` itself is never downloaded or loaded.
+func checkHybridModels(ctx context.Context, row Row) (Row, bool) {
+	models, err := readHybridModels()
+	if err != nil {
+		row.State = StateFailed
+		row.Disposition = status.DispositionHalt
+		row.Line = "hybrid's models can't be read"
+		row.Detail = err.Error()
+		row.Raw = err.Error()
+		row.Fix = FixNone
+		row.Remedy = Remedy{Action: "Fix the hybrid_* keys in GAIA's config.json, then press r to check again."}
+		return row, false
+	}
+	for _, r := range models.Roles() {
+		var (
+			got Row
+			ok  bool
+		)
+		if lemonade.IsCloudID(r.Model) {
+			got, ok = checkCloudModel(ctx, r.Model, row)
+		} else {
+			got = checkLocalModelDownloaded(ctx, r.Model, row)
+			ok = got.State == StateOK
+		}
+		if ok {
+			continue
+		}
+		got.Line = "hybrid's " + r.Role + " model: " + got.Line
+		if got.State == StateFailed {
+			got.Remedy.Action = strings.TrimSpace(got.Remedy.Action + " Or choose another " + r.Role +
+				" model with `gaia config set " + r.Key + " <id>` — `gaia gateway models` lists the gateway's.")
+			got.Remedy.Command = "gaia config set " + r.Key + " <id>"
+		}
+		return got, false
+	}
+	return row, true
 }
 
 func cloudModelListed(ctx context.Context, provider, chosen string) (bool, error) {

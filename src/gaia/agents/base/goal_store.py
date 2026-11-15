@@ -99,6 +99,16 @@ _GOAL_STATUSES = frozenset(get_args(GoalStatus))
 _TASK_STATUSES = frozenset(get_args(TaskStatus))
 
 
+def is_damaged_store_error(exc: BaseException) -> bool:
+    """Whether SQLite could not read the goal store file as a database at all.
+
+    "file is not a database" and "database disk image is malformed" are plain
+    ``DatabaseError``; a locked file is an ``OperationalError`` and clears once
+    the other user lets go, so it is not damage.
+    """
+    return type(exc) is sqlite3.DatabaseError  # pylint: disable=unidiomatic-typecheck
+
+
 def _require_status(status: str, allowed: frozenset, kind: str) -> None:
     """Raise when ``status`` is not one the store's state machine knows."""
     if status not in allowed:
@@ -483,6 +493,12 @@ class GoalStore:
     ) -> Optional[Goal]:
         """Update a goal's status and optionally append progress notes.
 
+        Moving a goal back to ``queued`` from another status starts a fresh
+        retry budget: the unfinished-run count and any pause are cleared, so a
+        re-queued goal gets the full number of tries again. A status update
+        that leaves the goal ``queued`` (a progress note, for instance) keeps
+        the count it has.
+
         Raises:
             ValueError: ``status`` is not a ``GoalStatus``.
         """
@@ -490,10 +506,23 @@ class GoalStore:
         now = _now_iso()
         with self._lock:
             conn = self._get_conn()
-            conn.execute(
-                "UPDATE goals SET status=?, progress_notes=COALESCE(?, progress_notes), updated_at=? WHERE id=?",
-                (status, progress_notes, now, goal_id),
-            )
+            row = conn.execute(
+                "SELECT status FROM goals WHERE id=?", (goal_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            if status == "queued" and row["status"] != "queued":
+                conn.execute(
+                    "UPDATE goals SET status=?, attempts=0, retry_at=NULL, "
+                    "progress_notes=COALESCE(?, progress_notes), updated_at=? "
+                    "WHERE id=?",
+                    (status, progress_notes, now, goal_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE goals SET status=?, progress_notes=COALESCE(?, progress_notes), updated_at=? WHERE id=?",
+                    (status, progress_notes, now, goal_id),
+                )
             conn.commit()
         return self.get_goal(goal_id)
 

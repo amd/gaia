@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import requests
 
+from gaia.credential_shapes import redact_file_content
 from gaia.logger import route_console_logging_to_stderr
 from gaia.mcp.ports import AGENT_UI_MCP_PORT
 from gaia.mcp.servers.agent_ui_control import (
@@ -779,7 +780,8 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     @mcp.tool()
     def preview_file(filepath: str) -> Dict[str, Any]:
         """Preview the contents of a file (first lines for text, metadata for binary)."""
-        return _api(backend_url, "get", "/files/preview", params={"path": filepath})
+        preview = _api(backend_url, "get", "/files/preview", params={"path": filepath})
+        return redact_file_content(preview)
 
     # ── Screenshot ──────────────────────────────────────────────
 

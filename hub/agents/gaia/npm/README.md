@@ -197,8 +197,10 @@ characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a 400. See
 and eviction behavior.
 
 **Attaching files to a conversation? Send them in `documents`** (contract ≥
-2.16): the absolute paths, the whole set on every turn. The agent indexes any it
-has not read yet before answering, and can read those exact files and nothing
+2.16): the absolute paths, the whole set on every turn, an empty list when none
+are left. The agent indexes any it has not read yet before answering (up to 100
+documents or 10,000 passages; it loads any other by name when asked about it),
+stops searching any you left out, and can read those exact files and nothing
 else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Private chat, or memory off? Send `memory` every turn** (contract ≥ 2.18):

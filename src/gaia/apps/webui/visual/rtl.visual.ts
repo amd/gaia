@@ -474,6 +474,35 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
+    id: `lib-${i}`, filename: `meeting-notes-${i}.txt`, filepath: `C:/library/meeting-notes-${i}.txt`, file_size: 512,
+    chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0,
+}));
+
+for (const locale of ['en', 'ar']) {
+    // 600 attached documents drew 600 chips and pushed the message box off the screen.
+    test(`a new chat with a whole large library attached keeps the message box on screen (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route('**/api/documents', (route) => route.fulfill({
+            json: { documents: BIG_LIBRARY, total: 600, total_size_bytes: 307_200, total_chunks: 600 },
+        })));
+        const box = page.locator('.new-chat textarea').first();
+        const onScreen = async (why: string) => {
+            const r = (await box.boundingBox())!;
+            const vh = page.viewportSize()!.height;
+            expect(r.y >= 0 && r.y + r.height <= vh, `${why}: the message box is at y=${r.y}`).toBe(true);
+        };
+        await page.locator('.new-chat-docs .link-btn').first().click();
+        await expect(page.locator('.new-chat-doc')).toHaveCount(5);
+        await onScreen('five chips and +595 more');
+        await shot(page, `new-chat-600-docs-${locale}`);
+        await page.locator('.new-chat-doc-toggle').click();
+        await expect(page.locator('.new-chat-doc')).toHaveCount(600);
+        await onScreen('the whole list opened');
+        await shot(page, `new-chat-600-docs-open-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 for (const locale of ['en', 'ar']) {
     test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
         await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({
@@ -972,6 +1001,74 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A chat with 150 documents attached: more than one chat searches at once. */
+const MANY_DOCS = Array.from({ length: 150 }, (_, i) => ({
+    id: `station-${i}`, filename: `station_${String(i).padStart(3, '0')}.txt`,
+    filepath: `C:\\Users\\me\\Stations\\station_${String(i).padStart(3, '0')}.txt`,
+    file_size: 64, chunk_count: 1, indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1, indexing_status: 'complete',
+}));
+
+async function withManyDocuments(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === '/api/documents', (route) =>
+        route.fulfill({ json: { documents: MANY_DOCS, total: 150, total_size_bytes: 9600, total_chunks: 150 } }),
+    );
+    const sessions = SESSIONS.map((s) => (s.id === ANSWER_SESSION ? { ...s, document_ids: MANY_DOCS.map((d) => d.id) } : s));
+    await page.route((url) => url.pathname === '/api/sessions', (route) =>
+        route.fulfill({ json: { sessions, total: sessions.length } }),
+    );
+}
+
+/** A path with no spaces, longer than the column; its chip made the whole chat scroll sideways. */
+const LONG_PATH = `C:\\reports\\${'a_very_long_segment_'.repeat(9)}.pdf`;
+
+async function withLongPath(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `Is ${LONG_PATH} the right report?`, created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `Yes, ${LONG_PATH} is the one.`, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a chat with more documents than it searches at once says so (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withManyDocuments);
+        const notice = page.locator('.doc-context-past-cap');
+        await expect(notice).toBeVisible();
+        // The whole sentence shows beside the docked panel, never under it.
+        const [box, bar] = await Promise.all([notice.locator('span').boundingBox(), page.locator('.messages-scroll').boundingBox()]);
+        expect(box!.x).toBeGreaterThanOrEqual(bar!.x);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(bar!.x + bar!.width);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`docs-past-cap-${locale}.png`) });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a long path with no spaces wraps inside the chat column (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongPath);
+        const chips = page.locator('.file-path-link');
+        await expect(chips).toHaveText([LONG_PATH, LONG_PATH]);
+        const scroller = page.locator('.messages-scroll');
+        const box = (await scroller.boundingBox())!;
+        for (const chip of await chips.all()) {
+            const r = (await chip.boundingBox())!;
+            expect(r.x, 'the path chip starts outside the column').toBeGreaterThanOrEqual(box.x - 1);
+            expect(r.x + r.width, 'the path chip runs past the column').toBeLessThanOrEqual(box.x + box.width + 1);
+            // The whole path stays one click target, with the full path in its title.
+            await expect(chip).toHaveAttribute('title', new RegExp(`${LONG_PATH.replace(/[\\.]/g, '\\$&')}$`));
+        }
+        const sideways = await scroller.evaluate((el) => el.scrollWidth - el.clientWidth);
+        expect(sideways, 'the chat scrolls sideways').toBeLessThanOrEqual(1);
+        await shot(page, `long-path-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 /** A dropped file (stored with an id in front) and two same-named files, each cited by its path. */
 const CITED_DOCS = [
     { id: 'drop', filename: 'notes.md', filepath: 'C:\\Users\\me\\.gaia\\documents\\0123456789ab_notes.md' },
@@ -1276,6 +1373,25 @@ for (const locale of ['en', 'ar']) {
         await shot(page, `documents-${locale}-unreadable`);
         expect(await audit(page)).toEqual([]);
     });
+
+    // A down model server was blamed on the file, with the raw connection error.
+    test(`a document that failed because the model server was down (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: {
+                documents: [
+                    { id: 'd1', filename: 'third.md', filepath: 'C:/third.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_down', last_error: "RAG indexing failed for third.md: Lemonade Server is not reachable: HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded", indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 },
+                ],
+                total: 1, total_size_bytes: 1024, total_chunks: 0,
+            } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        const row = page.locator('.doc-failure');
+        await expect(row).toBeVisible();
+        await expect(row).not.toContainText('HTTPConnectionPool');
+        if (locale === 'ar') expect(await untranslated(page, '.doc-failure', 'bdi')).toEqual([]);
+        await shot(page, `documents-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 for (const locale of ['ar', 'en']) {
@@ -1381,6 +1497,11 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.fb-entry-date')).toHaveText(month);
         await shot(page, `dates-${locale}-files`);
         // No audit yet: the file browser's names and sizes still break the RTL rules, tracked separately.
+
+        // Closing a browser opened from the library used to drop you back in the chat.
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.doc-modal')).toBeVisible();
+        await expect(page.locator('.fb-entry-date')).toHaveCount(0);
     });
 
     // At 200% zoom the action buttons sat below the window and the wheel couldn't reach them.
@@ -1541,6 +1662,21 @@ test('session panel with Arabic names', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const locale of ['ar', 'en'] as const) {
+    test(`the session panel leads with files and folders, details last (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('.sp-group-title')).toBeVisible();
+        const titles = await panel.locator('.sp-section-title, .sp-group-title').allInnerTexts();
+        const details = titles.findIndex((t) => t.includes(locale === 'ar' ? 'التفاصيل' : 'Details'));
+        const context = titles.findIndex((t) => t.includes(locale === 'ar' ? 'السياق' : 'Context'));
+        expect(details).toBeGreaterThan(0);
+        expect(context).toBeGreaterThan(details);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `session-panel-${locale}`);
+    });
+}
+
 test('a long hyphenated folder path wraps as one unit, below its Arabic label', async ({ page }) => {
     const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
@@ -1671,7 +1807,14 @@ for (const locale of ['ar', 'en']) {
         // Wheel over the pane, the way a person scrolls, so the rule doesn't name the scroller.
         await page.mouse.move(dialogBox.x + dialogBox.width / 2, dialogBox.y + dialogBox.height / 2);
         await page.mouse.wheel(0, 10_000);
-        await expect.poll(async () => (await title.boundingBox())?.y ?? 0).toBeLessThan(titleBefore.y - 100);
+        await expect.poll(() => dialog.locator('.settings-scroll').evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
+        // The tab title stays in view as a header (#7402).
+        const titleAfter = await title.boundingBox();
+        expect(titleAfter && titleAfter.y >= dialogBox.y && titleAfter.y < titleBefore.y + 1).toBe(true);
+        const titleShown = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-pane-title'),
+            [titleAfter!.x + titleAfter!.width / 2, titleAfter!.y + titleAfter!.height / 2]);
+        expect(titleShown, 'scrolled rows are drawn over the tab title').toBe(true);
+        await shot(page, `settings-sticky-title-${locale}`);
 
         const after = await close.boundingBox();
         if (!after) throw new Error('close button left the layout after scrolling');
@@ -1681,6 +1824,11 @@ for (const locale of ['ar', 'en']) {
         const onTop = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-close'),
             [after.x + after.width / 2, after.y + after.height / 2]);
         expect(onTop, 'the close button is covered by scrolled content').toBe(true);
+
+        // Another tab opens at its own top, not at this one's scroll offset.
+        await dialog.locator('[data-section="general"]').click();
+        await expect(title).toHaveText(/General|عام/);
+        expect(await dialog.locator('.settings-scroll').evaluate((el) => el.scrollTop)).toBe(0);
     });
 }
 
@@ -1923,6 +2071,20 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`Delete all chats asks in a dialog (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        await scrollPane(page, 'bottom');
+        await page.locator('.settings-pane .btn-danger').click();
+        const ask = page.getByRole('alertdialog');
+        await expect(ask).toBeVisible();
+        // The safe choice starts focused, so Enter never deletes (#7405).
+        await expect(ask.locator('.btn-secondary')).toBeFocused();
+        await shot(page, `privacy-delete-all-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`a skills search that matches nothing says so (${locale})`, async ({ page }) => {
         await open(page, '', locale, withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -1972,6 +2134,13 @@ for (const locale of ['ar', 'en']) {
             [link.x + link.width / 2, link.y + link.height / 2])).toBe(true);
         await shot(page, `setup-row-jump-${locale}`);
         expect(await audit(page)).toEqual([]);
+        // The pinned tab title must not paint over the button.
+        await dialog.locator('.settings-scroll').evaluate((el) => { el.scrollTop = 0; });
+        const backBox = await back.boundingBox();
+        const backOnTop = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-back'),
+            [backBox!.x + backBox!.width / 2, backBox!.y + backBox!.height / 2]);
+        expect(backOnTop, 'the tab title covers the Back button').toBe(true);
+        await shot(page, `setup-row-jump-${locale}-top`);
         await back.click();
         await expect(dialog.locator('[data-section="setup"]')).toHaveAttribute('aria-current', 'page');
         await expect(back).toHaveCount(0);
@@ -2015,7 +2184,7 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
-    for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+    for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced', 'about']) {
         test(`settings ${section} pane (${locale})`, async ({ page }) => {
             await open(page, '', locale, withSettingsPanes);
             await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2573,7 +2742,7 @@ test('no spending chip on a model on this PC', async ({ page }) => {
     await expect(page.locator('.spend-meter')).toHaveCount(0);
 });
 
-for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced', 'about']) {
     test(`settings ${section} pane has no leftover English`, async ({ page }) => {
         await open(page, '', 'ar', withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -3758,6 +3927,49 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+/** A finished turn, reopened: a document step and an image step that found no vision model. */
+async function withSavedVisionOffer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'What colour is the attached image?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'I can\'t see the image yet: GAIA needs its vision model to read images.',
+                        agent_steps: [
+                            { id: 1, type: 'tool', label: 'Using tool', tool: 'index_document', detail: 'notes.txt', result: 'Indexed 1 chunk', active: false, success: true },
+                            {
+                                id: 2, type: 'tool', label: 'Using tool', tool: 'answer_question_about_image', active: false, success: false, needsModel: 'vision',
+                                result: "error: Vision extraction failed for page 1, image 1: Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded",
+                            },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a reopened chat still offers the vision model, with its steps folded (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withSavedVisionOffer);
+        const reply = page.locator('.msg-assistant').last();
+        await expect(reply.locator('.flow-steps.folded')).toBeVisible();
+        await expect(reply.locator('.flow-tool-offer')).toHaveCount(1);
+        await expect(reply.locator('.flow-tool-offer').getByRole('button')).toBeVisible();
+        await expect(reply).not.toContainText('Gemma-4-E4B-it-GGUF');
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`vision-offer-folded-${locale}.png`) });
+        await reply.locator('.flow-steps-summary').click();
+        await expect(reply.locator('.flow-tool-offer')).toHaveCount(1);
+        await expect(reply.locator('.flow-tool-failure')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`vision-offer-open-${locale}.png`) });
+    });
+}
+
 const CHANGE_PROMPTS = {
     write: {
         type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-write',
@@ -3940,9 +4152,58 @@ for (const locale of ['ar', 'en']) {
         if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
         await shot(page, `notification-panel-${locale}`);
     });
+
+    test(`the notification panel hides what is under it in the dark theme (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale, undefined, 'dark');
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // A see-through panel shows the side panel's text inside the list.
+        const background = await panel.evaluate((el) => getComputedStyle(el).backgroundColor);
+        expect(background).toMatch(/^rgb\(/);
+        await shot(page, `notification-panel-dark-${locale}`);
+    });
 }
 
 for (const locale of ['ar', 'en']) {
+    test(`the notification panel opens at the bell, with tabs that fit (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const bell = page.locator('.sb-bottom-actions .sb-icon-btn').first();
+        // Empty: one line, no filter tabs.
+        await bell.click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-empty')).toBeVisible();
+        await expect(panel.getByRole('tab')).toHaveCount(0);
+        await shot(page, `notification-panel-empty-${locale}`);
+        await bell.click();
+
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await bell.click();
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // Anchored to the bell (#7416): it opens beside it, not across the window.
+        const b = (await bell.boundingBox())!;
+        const p = (await panel.boundingBox())!;
+        const vw = page.viewportSize()!.width;
+        const nearBell = locale === 'ar' ? vw - (p.x + p.width) < 40 : p.x < 40;
+        expect(nearBell, 'the panel opens on the bell side of the window').toBe(true);
+        expect(p.y + p.height).toBeLessThanOrEqual(b.y);
+        // Every tab is whole: none cut off at the panel's edge.
+        const bar = (await panel.locator('.notification-filter-bar').boundingBox())!;
+        for (const tab of await panel.getByRole('tab').all()) {
+            const box = (await tab.boundingBox())!;
+            expect(box.x >= bar.x - 1 && box.x + box.width <= bar.x + bar.width + 1).toBe(true);
+        }
+        await shot(page, `notification-panel-anchored-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`a scheduled task's failed and finished notices are in the UI language (${locale})`, async ({ page }) => {
         const before = { ...SCHEDULE_ROW, run_count: 8, error_count: 0, last_error: null };
         let loads = 0;
@@ -4402,6 +4663,23 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'goals-empty');
         });
 
+        // Create once did nothing and said nothing, and the banner said to restart.
+        test('goals, a damaged goal list', async ({ page }) => {
+            const damaged = "GAIA's goal list is damaged (file is not a database), so goals can't be shown or saved. Start a new goal list on this page; the damaged file is kept.";
+            await openMemory(page, locale, {});
+            await page.route('**/api/goals/health', (route) => route.fulfill({ json: { error: damaged, damaged: true } }));
+            await page.route((url) => /\/api\/goals(\/stats)?$/.test(url.pathname), (route) =>
+                route.fulfill({ status: 503, json: { detail: damaged } }));
+            await memoryTab(page, /Goals/);
+            await expect(page.getByRole('button', { name: locale === 'ar' ? /بدء قائمة أهداف جديدة/ : 'Start a new goal list' })).toBeVisible();
+            await expect(page.locator('.mem-goals-tab .mem-empty')).toHaveCount(0);
+            await page.locator('.mem-goals-toolbar .btn-primary').click();
+            await page.locator('.mem-goals-add-form input').fill('Tidy my notes');
+            await page.locator('.mem-goals-add-form .mem-goals-form-row .btn-primary').click();
+            await expect(page.locator('.mem-goals-add-form [role="alert"]')).toContainText('file is not a database');
+            await checkMemory(page, locale, 'goals-damaged');
+        });
+
         test('profile setup, before and after a discovery run', async ({ page }) => {
             await openMemory(page, locale);
             await memoryTab(page, /Profile setup/);
@@ -4603,6 +4881,9 @@ for (const locale of ['ar', 'en']) {
             await expect(page.getByLabel(locale === 'ar' ? /رسالة|Message/ : 'Message').first()).toBeEnabled();
             await shot(page, `pick-load-${locale}-${name}`);
             expect(await audit(page)).toEqual([]);
+            // A long memory-switch label gives way; the model's name is not the chip that is cut.
+            const modelName = page.locator('.composer-row-right .composer-chip-label', { hasText: PICKED });
+            expect(await modelName.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
         });
     }
 }

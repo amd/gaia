@@ -61,6 +61,7 @@ from gaia.skills.hub import (
     fetch_skill_doc,
     fetch_skill_manifest,
 )
+from gaia.skills.human_only import require_user_terminal
 from gaia.skills.lock import SOURCE_HUB, LockEntry, SkillLock
 from gaia.skills.manager import SkillManager
 from gaia.skills.naming import artifact_path, skill_directory
@@ -191,6 +192,9 @@ def install_skill(
         SkillSignatureError: a present signature does not verify.
         SkillNotFoundError: no published version satisfies the pin.
     """
+    if allow_experimental or assume_yes:
+        # Unsigned code, or a dangerous grant nobody is asked about.
+        require_user_terminal("gaia skill install")
     name, spec = parse_skill_ref(reference)
     resolver = manager if manager is not None else SkillManager()
     destination_root = resolver.user_root

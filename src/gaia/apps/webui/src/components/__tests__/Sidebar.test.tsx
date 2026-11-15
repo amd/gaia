@@ -115,6 +115,14 @@ describe('Sidebar', () => {
         expect(useChatStore.getState().showMemoryDashboard).toBe(false);
     });
 
+    it('marks only Memory as selected while it replaces the chat', () => {
+        useChatStore.setState({ currentSessionId: 'a', showMemoryDashboard: true });
+        const { container } = render(<Sidebar onNewChat={vi.fn()} />);
+        expect(container.querySelectorAll('.sb-row.is-active, .sb-nav-item.is-active')).toHaveLength(1);
+        expect(container.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
+        expect(container.querySelector('.sb-nav-item.is-active')).toHaveAccessibleName('Memory');
+    });
+
     it('clicking the open chat leaves the Memory dashboard too', () => {
         useChatStore.setState({ currentSessionId: 'a', showMemoryDashboard: true, messages: [] });
         render(<Sidebar onNewChat={vi.fn()} />);

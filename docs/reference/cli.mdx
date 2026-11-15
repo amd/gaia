@@ -113,10 +113,11 @@ echo "List the Python files here" | gaia -p --output-format json
 | Flag | Description |
 |------|-------------|
 | `-p`, `--print [prompt]` | The prompt. With no text after it, the prompt is read from stdin; an empty stdin or an interactive terminal is an error |
-| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`). Default: `default_model` from `gaia config`, else the agent's own default |
+| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`), or `hybrid` to pick a cheap or strong model for the turn ([Hybrid model](/guides/llm-gateway#hybrid-model)). Default: `default_model` from `gaia config`, else the agent's own default |
 | `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
 | `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
 | `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
+| `--time-limit <seconds>` | Wall-clock seconds the turn may take, at least 1. At 70% the agent is told to write what was asked for. Near the limit (at 90%, or earlier when its steps are slow) it stops working, writes any requested file still missing, and answers. A turn still busy at the limit is stopped there: a running shell or Python command ends, a model call already sent is waited for, and the answer says the time limit stopped the turn, followed by the agent's latest findings. A turn the limit ended reports `status: incomplete` and exits 1, even when it wrote its file and answered. Counted from the start of the turn, after server start-up, so give a wrapper's own timeout some headroom above it. Can't be combined with `--attempts` yet (a usage error). Default: no limit |
 | `--attempts <n>` | Run `n` (up to 4) independent attempts, then one turn that checks and combines them ([below](#independent-attempts)). Default: 1 |
 | `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking |
 | `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
@@ -150,8 +151,10 @@ subcommand instead.
 | `duration_s` | Wall-clock seconds for the turn, excluding server start-up |
 | `error_count` | Errors the agent recorded during the turn |
 | `error` | Only when `is_error`: why the turn failed |
+| `time_limit_reached` | Only when `--time-limit` ended the turn early |
 | `attempts` | Only with `--attempts` above 1: each attempt's `is_error`, `status`, `error` (why it failed), `duration_s`, steps, tool calls and tokens. The top-level counts include them |
 | `conversation` | Only with `--verbose`: the turn's messages and tool calls |
+| `route` | Only with `--model hybrid`: the model the turn ran on and why — `model`, `kind`, `difficulty`, `stakes`, `reason`, `classified` (false when the classifier gave no valid label), `seconds`, `sticky`, `policy` (the `hybrid_policy` in effect), `classifier_format` (`json_object` or `plain`), `fix` (what to change when the classifier failed), `degraded` and `notice` (true, with a message, once the classifier has failed 3 turns in a row) |
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
 than `success`), when the model server could not be started, or when no prompt was
@@ -228,11 +231,13 @@ in either mode.
 
 Agents stop after a maximum number of reasoning/tool steps. The flagship GAIA agent (`gaia chat`, the Agent UI, the TUI) defaults to **1000**: a backstop for a turn that never finishes, set high enough that long, multi-part desktop tasks do not reach it. Other agents default to **50**.
 
-When 20, 10 and 5 steps remain, the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. That summary is kept even when a requested file was never written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off.
+When 20, 10 and 5 steps remain, the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. If a file the request asked for doesn't exist yet, the agent first gets one step in which it may only write those files. The summary is kept even when a requested file still wasn't written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off.
 
-Before an agent answers, it reads back the files it edited that turn. If one is missing, empty, or does not parse (Python and JSON), the agent gets two extra steps to fix it, on top of the step limit. Content the user gave word for word in the request is left as written. This happens at most twice per turn; anything still broken after that is listed under the answer. Set `GAIA_AGENT_VERIFY_EDITS=0` to turn the read-back off.
+Before an agent answers, it reads back the files it edited that turn. If one is missing, empty, or does not parse (Python and JSON), the agent gets two extra steps to fix it, on top of the step limit. Content the user gave word for word in the request is left as written. This happens at most twice per turn; anything still broken after that is listed under the answer. A turn that stops early (step limit, time limit, a repeating call) still reads its edits back, but has no steps left to fix them, so anything broken is listed under the answer. Set `GAIA_AGENT_VERIFY_EDITS=0` to turn the read-back off.
 
-The same closing call runs when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused get the same closing call, told what failed, and the failure is reported after the answer, so research done before the loop is kept. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
+A model that writes its tool calls as JSON text can answer with a plan of several calls, which run without a model call between them. When the plan finishes, the agent restates the request and the whole plan before asking for an answer or another plan. Set `GAIA_AGENT_PLAN_RECAP=0` to send a one-line note instead (how many plan steps ran and how many steps are left): the plan and its results are already in the conversation, so this cuts what every later call re-sends. Models that call tools natively never take this path.
+
+The same closing call, and the same write step for a missing requested file, run when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused get the same closing call, told what failed, and the failure is reported after the answer, so research done before the loop is kept. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
 
 - **Per-invocation:** pass `--max-steps <n>` to `gaia chat` (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
@@ -1858,6 +1863,7 @@ gaia gateway models                   # what the gateway offers
 gaia gateway enable amd.Claude-Opus-5 # add it to your enabled set
 gaia gateway disable amd.Claude-Opus-5 # remove it from your enabled set
 gaia gateway use amd.Claude-Opus-5    # make it the default for chat/llm/prompt
+gaia gateway use hybrid               # route each agent turn to a cheap or strong model
 gaia gateway test "Say hello"         # end-to-end round trip on the active model
 gaia gateway test --model amd.Gemma-4-31B "Say hello"  # test a specific model
 gaia gateway auth --no-remember       # ask me every restart instead
@@ -1892,6 +1898,8 @@ which caches prompts; `test` uses that route for them too. Set
 When a gateway model answers HTTP 404, GAIA records it. `status` and `models` then
 mark it unavailable, and `chat`, `llm`, and `prompt` warn when it is your saved
 default. GAIA never switches models for you; pick another with `gaia gateway use <id>`.
+The exception is `hybrid`, which you choose so that GAIA picks a cheap or strong
+model per turn — see [Hybrid model](/guides/llm-gateway#hybrid-model).
 
 [→ LLM Gateway Guide](/guides/llm-gateway)
 
@@ -1922,8 +1930,13 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | `skipped_models` | _(empty)_ | Models you chose not to download; `gaia init` and first-run setup leave them out. Comma-separated with `gaia config set`; also set by `gaia init --skip-model` and the setup screens. See [Choosing models](#choosing-models) |
 | `full_access` | `false` | Launch `gaia-cli` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, the one GAIA has tested, or `auto` to let Lemonade choose. A value saved before this (`rocm`, `metal`, `cpu`) still loads but can't be set again. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
+| `hybrid_cheap_model` | `amd.DeepSeek-V4.1-Flash` | Model the `hybrid` model id runs routine turns on. `""` restores the default. See [Hybrid model](/guides/llm-gateway#hybrid-model) |
+| `hybrid_strong_model` | `amd.Claude-Opus-5-5` | Model `hybrid` runs every other turn on. Must differ from the cheap model |
+| `hybrid_classifier_model` | _(the cheap model)_ | Model that labels each turn for `hybrid` |
+| `hybrid_classifier_timeout` | `15` | Seconds `hybrid` waits for the label (1-120) before running the turn on the strong model |
+| `hybrid_policy` | `quality` | How readily `hybrid` uses the cheap model: `quality` or `balanced`, which also sends medium-difficulty code changes to the cheap model — cheaper, with a measurable quality cost on harder fixes. See [Hybrid model](/guides/llm-gateway#hybrid-model) |
 | `cloud_reasoning_effort` | `off` | `off` sends cloud models no `reasoning_effort`, leaving each in its provider's default mode. `low`, `medium` or `high` probes each cloud model once and sends that effort to the ones that reason, at the cost of more tokens and slower replies. See [Reasoning](/guides/llm-gateway#reasoning) |
-| `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-cli` or the Agent UI, restored on its next launch and used by `gaia schedule` runs — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
+| `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-cli` or the Agent UI, restored on its next launch and used by `gaia schedule` runs (on `hybrid`, each run's prompt is routed like a chat turn and runs on the cheap or strong model it picks) — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
 | `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA process has held it, and it has served no request, for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
 | `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
@@ -2007,8 +2020,14 @@ commands GAIA otherwise refuses outright (a credential print such as
 Three things hold in every mode, full access included. A shell command or
 Python code that reads a file the file tools refuse (`.env`, a private key,
 `.npmrc`, `secrets.json`) is refused. Writing one, copying over one, or naming
-one as a search pattern still runs, and so does a recursive search such as
-`grep -rn TODO .`, with any lines from those files hidden in its output. Tokens
+one as a search pattern still runs. Credential files never take part in a
+recursive search. A command that is just `grep -r`, `rg` or `git grep` runs with
+them left out, so `grep -rn TODO .` still searches everything else. Any other
+recursive search (piped or chained, inside a script, `findstr /s`,
+`Select-String` over `Get-ChildItem -Recurse`, `ag`, `find -exec`) is refused
+when the folder it searches holds one, and so is a `git grep` of a credential
+file's blob (`HEAD:.env`). On Windows, use `rg` or `git grep` for this: a
+recursive `grep` there is refused when the folder holds a credential file. Tokens
 in shell and Python output, such as the one in a `git remote -v` URL, are
 masked before the model reads it. And a cloud-metadata or link-local address
 (`169.254.169.254`, `fe80::/10`, `metadata.google.internal`) the web fetcher
@@ -2020,7 +2039,7 @@ them, and the status bar shows the one that is on:
 
 | Mode | What still asks |
 |---|---|
-| `ask` (default) | Every shell command, Python run and file write |
+| `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python. File edits inside the folder GAIA was started in run unasked, except hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on `PATH`, and on Windows a file that shadows a program. Never the home folder or a drive root |
 | `full access` | Nothing |
 

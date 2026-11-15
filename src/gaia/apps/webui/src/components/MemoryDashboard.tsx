@@ -399,6 +399,10 @@ export function MemoryDashboard() {
     const [goalStats, setGoalStats] = useState<GoalStats | null>(null);
     const [goalsLoading, setGoalsLoading] = useState(false);
     const goalStoreError = useGoalHealthStore((s) => s.error);
+    const goalStoreDamaged = useGoalHealthStore((s) => s.damaged);
+    const [goalsLoadError, setGoalsLoadError] = useState<string | null>(null);
+    const [goalFormError, setGoalFormError] = useState<string | null>(null);
+    const [resettingGoalStore, setResettingGoalStore] = useState(false);
     const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
     const [confirmGoalDeleteId, setConfirmGoalDeleteId] = useState<string | null>(null);
     const [showAddGoalForm, setShowAddGoalForm] = useState(false);
@@ -600,8 +604,10 @@ export function MemoryDashboard() {
             ]);
             setGoals(goalsRes.goals);
             setGoalStats(statsRes);
+            setGoalsLoadError(null);
         } catch (err) {
             log.system.warn('Failed to load goals', err);
+            setGoalsLoadError(errorText(err));
         } finally {
             setGoalsLoading(false);
         }
@@ -615,6 +621,41 @@ export function MemoryDashboard() {
             log.system.error(`Goal action failed (${failure})`, err);
             showToast(t('mem.goals.failed', { what: ref(failure), error: errorText(err) }), 'error');
             return;
+        }
+        loadGoals();
+    }, [loadGoals, showToast, t]);
+
+    const createGoal = useCallback(async () => {
+        if (!goalForm.title.trim()) return;
+        setGoalFormError(null);
+        try {
+            await memoryApi.createGoal(goalForm);
+        } catch (err) {
+            log.system.error('Goal create failed', err);
+            // Said on the form itself: a toast is gone before anyone reads it.
+            setGoalFormError(t('mem.goals.failed', { what: ref('mem.goals.createFailed'), error: errorText(err) }));
+            return;
+        }
+        setGoalForm({ title: '', description: '', priority: 'medium' });
+        setShowAddGoalForm(false);
+        loadGoals();
+    }, [goalForm, loadGoals, t]);
+
+    // A goal list that reads again makes a "list is damaged" form error stale.
+    useEffect(() => {
+        if (!goalStoreError) setGoalFormError(null);
+    }, [goalStoreError]);
+
+    const startNewGoalList = useCallback(async () => {
+        setResettingGoalStore(true);
+        try {
+            const { kept } = await memoryApi.resetGoalStore();
+            showToast(t('mem.goals.newListStarted', { file: kept }), 'success');
+        } catch (err) {
+            log.system.error('Starting a new goal list failed', err);
+            showToast(t('mem.goals.failed', { what: ref('mem.goals.startNewListFailed'), error: errorText(err) }), 'error');
+        } finally {
+            setResettingGoalStore(false);
         }
         loadGoals();
     }, [loadGoals, showToast, t]);
@@ -2616,11 +2657,18 @@ export function MemoryDashboard() {
                     {activeTab === 'goals' && (
                         <div className="mem-goals-tab">
                             <p className="mem-tab-intro">{t('mem.goals.intro')}</p>
-                            {goalStoreError && (
+                            {goalStoreError && (goalStoreDamaged ? (
+                                <div className="mem-advanced-error" role="alert">
+                                    <AlertTriangle size={14} /> {t('mem.goals.storeDamaged')}{' '}
+                                    <button type="button" className="link-btn" disabled={resettingGoalStore} onClick={startNewGoalList}>
+                                        {t('mem.goals.startNewList')}
+                                    </button>
+                                </div>
+                            ) : (
                                 <div className="mem-advanced-error" role="alert">
                                     <AlertTriangle size={14} /> {t('mem.goals.storeError')}: <bdi>{goalStoreError}</bdi>
                                 </div>
-                            )}
+                            ))}
                             {/* Header stat row */}
                             <div className="mem-goals-stats-row">
                                 {(['queued','in_progress','completed','failed'] as const).map(s => (
@@ -2658,7 +2706,7 @@ export function MemoryDashboard() {
 
                             {/* Add goal button */}
                             <div className="mem-goals-toolbar">
-                                <button className="btn-primary" onClick={() => setShowAddGoalForm(v => !v)}>
+                                <button className="btn-primary" onClick={() => { setGoalFormError(null); setShowAddGoalForm(v => !v); }}>
                                     <Plus size={14} /> {t('mem.goals.new')}
                                 </button>
                             </div>
@@ -2689,21 +2737,18 @@ export function MemoryDashboard() {
                                             <option value="medium">{t.bare('mem.goals.priorityMedium')}</option>
                                             <option value="high">{t.bare('mem.goals.priorityHigh')}</option>
                                         </select>
-                                        <button className="btn-primary" disabled={!goalForm.title.trim()} onClick={() => {
-                                            runGoalAction(async () => {
-                                                await memoryApi.createGoal(goalForm);
-                                                setGoalForm({ title: '', description: '', priority: 'medium' });
-                                                setShowAddGoalForm(false);
-                                            }, 'mem.goals.createFailed');
-                                        }}>{t('mem.goals.create')}</button>
-                                        <button className="btn-secondary" onClick={() => setShowAddGoalForm(false)}>{t('mem.cancel')}</button>
+                                        <button className="btn-primary" disabled={!goalForm.title.trim()} onClick={createGoal}>{t('mem.goals.create')}</button>
+                                        <button className="btn-secondary" onClick={() => { setGoalFormError(null); setShowAddGoalForm(false); }}>{t('mem.cancel')}</button>
                                     </div>
+                                    {goalFormError && <p className="mem-form-error" role="alert"><bdi>{goalFormError}</bdi></p>}
                                 </div>
                             )}
 
                             {/* Goal list */}
                             {goalsLoading ? (
                                 <div className="mem-loading"><div className="mem-spinner" /> {t('mem.goals.loading')}</div>
+                            ) : goalsLoadError ? (
+                                <p className="mem-form-error" role="alert">{t('mem.goals.loadFailed')} <bdi>{goalsLoadError}</bdi></p>
                             ) : goals.filter(g => g.status !== 'pending_approval' && g.status !== 'rejected').length === 0 ? (
                                 <div className="mem-empty">
                                     <div className="mem-empty-icon"><Target size={32} /></div>

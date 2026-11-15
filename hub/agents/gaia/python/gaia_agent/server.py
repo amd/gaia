@@ -66,6 +66,12 @@ from starlette.responses import StreamingResponse
 from gaia.agents.base import file_snapshots
 from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
+from gaia.agents.tools.rag_tools import (
+    _forget_evicted,
+    index_limit,
+    not_held,
+    not_loaded_summary,
+)
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.llm.surface_hints import surface_wording
@@ -100,7 +106,8 @@ AGENT_ID = "gaia"
 #: 2.27 added ``GET /sessions/{id}/tools``: the tools the session's agent has.
 #: 2.28 added the non-terminal ``context_usage`` event for a caller that sends
 #: ``turns``: the turn's first call is measured before the answer streams.
-API_VERSION = "2.28"
+#: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
+API_VERSION = "2.29"
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
@@ -204,9 +211,12 @@ class QueryRequest(_Strict):
         description=(
             "Absolute paths of the files the user attached to this conversation "
             "(contract >= 2.16). Each is granted as that exact file, never its "
-            "folder, and indexed before the turn runs. Send the full set every "
-            "turn: files already indexed in a retained session are skipped, so "
-            "one attached mid-conversation is picked up on the next turn."
+            "folder, and indexed before the turn runs, up to 100 documents or "
+            "10,000 passages; the rest load when the agent is asked about one. "
+            "Send the full set every turn, an empty list when none are attached: "
+            "files already indexed in a retained session are skipped, so one "
+            "attached mid-conversation is picked up on the next turn, and one "
+            "sent before but left out now is removed from the session's index."
         ),
     )
 
@@ -756,6 +766,21 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     }
 
 
+def _run_route(run: "_QueryRun") -> Optional[Dict[str, Any]]:
+    """The route a ``hybrid`` session's turn took (contract >= 2.29), or None.
+
+    Read from the agent while the run's tail is still going: the route is
+    decided before the turn starts, so it is known by the time ``final`` is.
+    """
+    recorded = run.result.get("route") if isinstance(run.result, dict) else None
+    if isinstance(recorded, dict):
+        return recorded
+    if getattr(run.agent, "hybrid_router", None) is None:
+        return None
+    route = getattr(run.agent, "last_route", None)
+    return route.as_record() if route is not None else None
+
+
 def _run_answer(result: Optional[Dict[str, Any]]) -> Optional[str]:
     """The answer text a finished run returned, or None when it has none."""
     if not isinstance(result, dict) or result.get("status") == "cancelled":
@@ -891,16 +916,54 @@ def _attach_refusal(agent: Any, path: str) -> str:
     return reason if blocked else ""
 
 
+def _grant_unloaded(agent: Any, documents: List[str]) -> None:
+    """Grant attached documents the full index can't hold, so one loads on request."""
+    for doc in documents:
+        if not _attach_refusal(agent, doc):
+            agent.path_validator.add_allowed_path(doc)
+
+
+def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
+    """Take the documents attached last turn but not this one out of the index."""
+    attached = getattr(agent, "_attached_documents", set())
+    dropped = attached - set(documents)
+    agent._attached_documents = set(documents)
+    if not dropped:
+        return
+    rag = agent.rag
+    for doc in sorted(dropped):
+        if doc not in agent.indexed_files:
+            continue
+        held = rag is not None and str(Path(doc).absolute()) in rag.indexed_files
+        if held and not rag.remove_document(doc):
+            raise RuntimeError(
+                f"{Path(doc).name} was taken off this conversation but could not "
+                "be removed from its document index. Start a new conversation; "
+                "the GAIA log has the details."
+            )
+        agent.indexed_files.discard(doc)
+    agent.rebuild_system_prompt()
+
+
 def _index_attached_documents(agent: Any, documents: List[str], handler: Any) -> None:
     """Index the documents the caller attached to this conversation (>= 2.16).
 
     Grants each as that exact file, never its folder: the scope an in-process
     Agent UI agent gets. Files already indexed are skipped, so a retained
-    session pays only for documents attached since its last turn.
+    session pays only for documents attached since its last turn. Loading
+    stops once the index is full; the rest stay attached and load on request.
+    A document attached on an earlier turn and left out of *documents* is
+    dropped.
     """
+    _drop_detached_documents(agent, documents)
+    agent.attached_documents = list(documents)
     indexed = agent.indexed_files
     pending = [d for d in documents if d not in indexed]
     if not pending:
+        return
+    if agent.rag is not None and agent.rag.is_full():
+        # Already said when the index filled; the model is told every turn.
+        _grant_unloaded(agent, pending)
         return
     handler.print_tool_usage(_ATTACH_TOOL)
     handler.pretty_print_json(
@@ -910,16 +973,27 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     lines: List[str] = []
     cancel = getattr(agent, "_cancel_event", None)
     stopped = False
+    filled = False
+    left = 0
+    stop_index = len(pending)
+    stop_line: Optional[int] = None
+    unreadable: set = set()
+    loaded_line: Dict[str, int] = {}
     for position, doc in enumerate(pending):
-        # Stop ends the loading here; what is left stays pending for the next turn.
+        # Stop ends the loading here; what is left stays attached for later.
         if cancel is not None and cancel.is_set():
             left = len(pending) - position
+            stop_index = position
+            stop_line = len(lines)
             lines.append(
                 "Stopped: "
                 + ("1 document was" if left == 1 else f"{left} documents were")
                 + " not loaded. They load with your next message."
             )
             stopped = True
+            break
+        if rag is not None and rag.is_full():
+            filled = True
             break
         name = Path(doc).name
         reason = (
@@ -928,6 +1002,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             else _attach_refusal(agent, doc)
         )
         if reason:
+            unreadable.add(doc)
             lines.append(f"{name}: not indexed: {reason}")
             continue
         agent.path_validator.add_allowed_path(doc)
@@ -935,18 +1010,47 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             result = rag.index_document(doc)
         except Exception as exc:  # reported in the visible step below
             logger.exception("Indexing attached document %s failed", doc)
+            unreadable.add(doc)
             lines.append(f"{name}: not indexed: {exc}")
             continue
         if result.get("success") and not result.get("error"):
+            filled = filled or bool(result.get("evicted"))
+            _forget_evicted(indexed, result.get("evicted", []))
             indexed.add(doc)
+            loaded_line[doc] = len(lines)
             lines.append(f"{name}: {result.get('num_chunks', 0)} chunks")
         else:
+            unreadable.add(doc)
             error = result.get("error") or "the indexer gave no reason"
             lines.append(f"{name}: not indexed: {error}")
+    # On a stop, report only what a load pushed out; the stop count covers the rest.
+    unloaded = []
+    if filled and rag is not None:
+        missed = not_held(rag, pending, unreadable)
+        if stopped:
+            attempted = set(pending[:stop_index])
+            unloaded = [d for d in missed if d in attempted]
+        else:
+            unloaded = missed
+    if stopped and rag is not None and rag.is_full() and stop_line is not None:
+        lines[stop_line] = (
+            "Stopped: "
+            + ("1 document was" if left == 1 else f"{left} documents were")
+            + " not loaded. "
+            + index_limit(rag).capitalize()
+            + "; they load only when you ask about one by name."
+        )
+    for doc in unloaded:
+        if doc in loaded_line:
+            lines[loaded_line[doc]] += " (then pushed out to fit the index)"
+    if unloaded:
+        lines.append(not_loaded_summary(rag, unloaded))
+        _grant_unloaded(agent, unloaded)
+    not_loaded = len(unloaded)
     succeeded = sum(1 for d in pending if d in indexed)
     if succeeded:
         agent.rebuild_system_prompt()
-    all_indexed = succeeded == len(pending)
+    all_indexed = succeeded == len(pending) - not_loaded
     status = "stopped" if stopped else "indexed" if all_indexed else "not all indexed"
     handler._emit(
         {
@@ -1530,7 +1634,7 @@ _QUERY_SSE_RESPONSES = {
             "prompt_context?} | needs_input {run_id, request_id, question, "
             "options, allow_free_text, sensitive, respond_url, "
             "timeout_seconds?} | final {answer, usage?, failed?, failure?, "
-            "performance?, context?, context_error?, model_messages?} | "
+            "performance?, context?, context_error?, model_messages?, route?} | "
             "error {detail, status}. A needs_confirmation's `args` are exactly "
             "the arguments the model sent for the gated call, each value capped "
             "at 64,000 characters (`args_truncated: true` when one was cut); "
@@ -1785,7 +1889,7 @@ async def query(request: QueryRequest):
         raise _start_failure(exc, _wording_surface(request)) from exc
 
     def _process() -> None:
-        if request.documents:
+        if request.documents is not None:
             _index_attached_documents(agent, request.documents, handler)
         if request.turns is not None and hasattr(agent, "conversation_history"):
             # Sizing them can ask the model server for its window: never on the loop.
@@ -1931,7 +2035,7 @@ async def query(request: QueryRequest):
         return _sse(_worded(event, _wording_surface(request)))
 
     async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
-        """``final`` carrying the turn's context measurement (contract >= 2.21) and timings."""
+        """``final`` carrying the turn's context measurement (>= 2.21), timings and route."""
         if final.get("type") != "final":
             return final
         if run.result is None and thread.is_alive() and run.received_turns is not None:
@@ -1943,6 +2047,10 @@ async def query(request: QueryRequest):
         performance = turn_record(run.result)
         if performance is not None:
             final = {**final, "performance": performance}
+        route = _run_route(run)
+        if route is not None:
+            # The host bills and labels the turn by the model that ran it.
+            final = {**final, "route": route}
         if final.get("failed"):
             # A failure notice is not a turn the next push carries.
             return final
@@ -2024,6 +2132,9 @@ async def query(request: QueryRequest):
                             usage = _usage_from_result(run.result)
                             if usage:
                                 refusal["usage"] = usage
+                        route = _run_route(run)
+                        if route is not None:
+                            refusal["route"] = route
                         yield _emit(refusal)
                         terminated = True
                         return
@@ -2492,6 +2603,9 @@ class _StartupWarmUp:
             from gaia.llm.lemonade_client import resolve_default_chat_model
 
             model = resolve_default_chat_model()
+        from gaia.llm.hybrid import start_model
+
+        model = start_model(model)
         with self._lock:
             self._turn_models.append(model)
             self._stop_for_another_model()

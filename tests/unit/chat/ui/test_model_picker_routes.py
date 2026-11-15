@@ -814,3 +814,18 @@ def test_free_memory_never_exceeds_the_total(client, lemonade, monkeypatch):
 def test_active_says_where_a_new_chat_runs_before_any_chat(client, lemonade):
     body = client.get("/api/providers/active").json()
     assert body["inference_remote"] is False
+
+
+@pytest.mark.parametrize("models", ["x", ["Unlisted-Dense-30B-GGUF"], None])
+def test_a_malformed_model_list_names_itself_for_an_unregistered_model(
+    client, lemonade, models
+):
+    lemonade.models = models
+    get = client.get("/api/providers/local/context", params={"model": UNREGISTERED})
+    put = client.put(
+        "/api/providers/local/context",
+        json={"model": UNREGISTERED, "ctx_size": 131072},
+    )
+    for resp in (get, put):
+        assert resp.status_code == 502, resp.text
+        assert "model list came back in an unexpected shape" in resp.json()["detail"]
