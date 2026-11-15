@@ -177,7 +177,12 @@ def test_a_windows_device_name_always_gets_an_id(tmp_path, stem):
     assert place_copy(tmp_path, stem, ".txt", b"x").name != f"{stem}.txt"
 
 
-@pytest.mark.parametrize("stem", ["CONSOLE", "nullable", "COM10", "lpt", "icon"])
+@pytest.mark.parametrize("stem", ["REPORT~1", "report~12", "a~1b"])
+def test_a_windows_short_name_always_gets_an_id(tmp_path, stem):
+    assert reserve_copy_path(tmp_path, stem, ".pdf").name.endswith(f"_{stem}.pdf")
+
+
+@pytest.mark.parametrize("stem", ["CONSOLE", "nullable", "COM10", "lpt", "icon", "a~b"])
 def test_names_that_only_start_like_a_device_stay_plain(tmp_path, stem):
     assert reserve_copy_path(tmp_path, stem, ".txt").name == f"{stem}.txt"
 

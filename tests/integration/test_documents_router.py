@@ -221,6 +221,26 @@ def test_upload_blob_never_takes_over_a_gone_document_of_other_content(
     assert Path(doc2["filepath"]).read_bytes() == b"a different report"
 
 
+def test_upload_blob_name_differing_only_in_case_is_still_the_gone_documents(
+    client, mock_index_document, managed_docs_sandbox
+):
+    """On Windows and macOS ``Report.txt`` would open a gone ``report.txt`` row."""
+    doc1 = client.post(
+        "/api/documents/upload",
+        files={"file": ("report.txt", b"first report", "text/plain")},
+    ).json()
+    Path(doc1["filepath"]).unlink()
+
+    doc2 = client.post(
+        "/api/documents/upload",
+        files={"file": ("Report.txt", b"a different report", "text/plain")},
+    ).json()
+
+    assert Path(doc2["filepath"]).name.endswith("_Report.txt")
+    assert client.delete(f"/api/documents/{doc1['id']}").status_code == 200
+    assert Path(doc2["filepath"]).read_bytes() == b"a different report"
+
+
 @pytest.mark.parametrize(
     "name",
     [

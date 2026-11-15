@@ -17,6 +17,7 @@ _ID_CHARS = 12
 _NAME_CHARS = 80
 _FALLBACK_NAME = "attachment"
 _COPY_NAME_RE = re.compile(rf"[0-9a-f]{{{_ID_CHARS}}}_(?P<name>.+)")
+_SHORT_NAME_RE = re.compile(r"~\d")
 
 
 def upload_copy_stem(original_name: str) -> str:
@@ -56,11 +57,16 @@ def _copy_name(stem: str, ext: str) -> str:
 def _plain_name_usable(name: str) -> bool:
     """Whether a copy can go by *name* alone, with no id in front.
 
-    A device name would open the device on Windows, and a name that already
-    looks like ``<id>_<name>`` would be cited without its first part.
+    A device name would open the device on Windows, a name shaped like a
+    Windows short name (``REPORT~1``) can open a different file, and a name
+    that already looks like ``<id>_<name>`` would be cited without its first part.
     """
     device = name.split(".", 1)[0].rstrip(" ").upper()
-    return device not in _DEVICE_NAMES and not _COPY_NAME_RE.fullmatch(name)
+    return (
+        device not in _DEVICE_NAMES
+        and not _SHORT_NAME_RE.search(name)
+        and not _COPY_NAME_RE.fullmatch(name)
+    )
 
 
 def reserve_copy_path(
