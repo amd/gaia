@@ -122,7 +122,7 @@ _HTML = r"""<!doctype html>
   <div class="top">
     <h1>GAIA Email Agent · Playground</h1>
     <span class="ver" id="ver-badge"></span>
-    <span class="badge">⬤ 100% local</span>
+    <span class="badge">⬤ local inference</span>
   </div>
   <div class="sub">Served by your local sidecar — code, data, and inference never leave this machine.</div>
 
