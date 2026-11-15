@@ -233,7 +233,7 @@ def test_a_program_the_user_installed_themselves_is_found_on_the_next_try(
         "source env.sh",  # a sh built-in
         "Get-ChildItem .",  # a PowerShell cmdlet
         "docker-compose up",  # hyphenated: cannot tell it from a cmdlet
-        ".\\build.cmd",  # a path, not a bare name
+        "./build.cmd",  # a path, not a bare name
     ],
 )
 def test_what_a_shell_might_still_run_is_never_called_missing(
