@@ -309,7 +309,7 @@ def guarded_open_refusal(
     return None
 
 
-#: Audit events that copy, move, link or delete files, with how many of their
+#: Audit events that copy, move, link, empty or delete files, with how many of their
 #: leading args are paths. Windows copies through CopyFile2, which raises no
 #: "open" event.
 _MOVE_EVENTS: Dict[str, int] = {
@@ -322,6 +322,7 @@ _MOVE_EVENTS: Dict[str, int] = {
     "os.remove": 1,
     "os.rmdir": 1,
     "shutil.rmtree": 1,
+    "os.truncate": 1,
 }
 
 

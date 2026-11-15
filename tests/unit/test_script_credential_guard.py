@@ -136,6 +136,7 @@ def test_moving_a_file_out_of_the_folder_is_refused(home, tmp_path, move_expr):
         "os.remove(os.path.join(HOME, '.keys', 'id_decoy'))",
         "os.unlink(os.path.join(HOME, '.keys', 'id_decoy'))",
         "shutil.rmtree(os.path.join(HOME, '.keys'))",
+        "os.truncate(os.path.join(HOME, '.keys', 'id_decoy'), 0)",
     ],
 )
 def test_changing_what_the_folder_holds_is_refused(home, tmp_path, change_expr):
