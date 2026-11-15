@@ -39,6 +39,20 @@ SHELL_DENIED = [{"tool": "run_shell_command", "ran": False}]
         ("Please run git status", "Working tree clean."),
         ("Run `npm test` and report the result", "All 30 passed."),
         ("Using the terminal, list the files here", "a.txt b.txt"),
+        # Everyday wordings that named no known program right after "run".
+        ("Run this command: gh auth status", "Logged in to github.com"),
+        ("Run exactly this command: hostname", "DESKTOP-1"),
+        ("Run exactly: whoami", "me"),
+        ("Please run the following command: git status", "Working tree clean."),
+        ("Run this: npm test", "All 30 passed."),
+        ("Can you run git status?", "Working tree clean."),
+        ("Could you execute pytest for me", "12 passed"),
+        ("Run cmdkey /list", "Currently stored credentials: none"),
+        ("In the shell, run: dir", "a.txt b.txt"),
+        (
+            'Use run_shell_command once with this exact command: cmd /c "set GH_"',
+            "GH_=",
+        ),
     ],
 )
 def test_an_answer_to_a_run_request_with_nothing_run_is_flagged(query, answer):
@@ -76,6 +90,10 @@ def test_an_answer_to_a_run_request_with_nothing_run_is_flagged(query, answer):
             [{"tool": "write_file", "ran": True}],
         ),
         ("Run me through how RAG works", "RAG retrieves…", []),
+        ("Can you run me through this file?", "It defines…", []),
+        ("Now run it again", "Done.", []),
+        ("Run the numbers on Q3 / Q4 revenue", "Q4 is up 4%.", []),
+        ("Runtime: what is it?", "The time a program takes.", []),
         # Honest refusals in other words.
         ("Use your shell tool to run pwd", "I haven't run it: no shell here.", []),
         (
