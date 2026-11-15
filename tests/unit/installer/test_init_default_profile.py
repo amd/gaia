@@ -75,7 +75,7 @@ class TestBareInitTargetsTheFlagship:
 
     def test_flagship_profile_carries_the_chat_models_and_ui_extras(self):
         """A flagship session needs the chat LLM, the RAG/memory embedder and
-        the [ui] extras — [rag] for documents plus the daemon that gaia-tui,
+        the [ui] extras — [rag] for documents plus the daemon that gaia-cli,
         `gaia hub install` and `gaia chat --ui` run on. With only [rag], a
         `pip install amd-gaia` user finished init and every next step it
         printed failed with "needs packages not in the base install"."""
@@ -441,14 +441,14 @@ class TestFlagshipCompletionMessage:
     """A headline about the flagship must not be answered with a different
     package's install line."""
 
-    def _completion(self, available, tui_path="/usr/local/bin/gaia-tui"):
+    def _completion(self, available, tui_path="/usr/local/bin/gaia-cli"):
         from gaia.installer.init_command import InitCommand
 
         cmd = InitCommand(profile=FLAGSHIP_AGENT_ID, yes=True)
         cmd._is_hub_agent_available = lambda _id: available
         printed = []
         cmd._print = lambda msg, end="\n": printed.append(msg)
-        which = {"gaia-tui": tui_path}
+        which = {"gaia-cli": tui_path}
         with (
             patch("gaia.installer.init_command.RICH_AVAILABLE", False),
             patch(
@@ -468,16 +468,16 @@ class TestFlagshipCompletionMessage:
     def test_quick_start_names_something_that_starts_the_flagship(self):
         """`gaia chat` runs a different agent through a wheel this profile
         never installs, so it cannot be the only next step offered."""
-        assert "gaia-tui" in self._completion(available=True)
+        assert "gaia-cli" in self._completion(available=True)
 
     def test_pip_install_without_tui_points_at_the_installer(self):
-        """A pip install never ships gaia-tui, so naming it as a command to
+        """A pip install never ships gaia-cli, so naming it as a command to
         run would be a dead end; the installer is what provides it."""
         from gaia.installer import init_command
 
         out = self._completion(available=True, tui_path=None)
         assert not any(
-            line.strip().startswith("gaia-tui") for line in out.splitlines()
+            line.strip().startswith("gaia-cli") for line in out.splitlines()
         ), out
         assert init_command._INSTALLER_HINT in out
         assert "https://amd-gaia.ai/install." in init_command._INSTALLER_HINT
