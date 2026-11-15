@@ -226,6 +226,31 @@ describe('context window too small', () => {
     });
 });
 
+describe('a failed model download', () => {
+    const healthy = {
+        lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF', model_downloaded: true, expected_model_loaded: true,
+        context_size_sufficient: true,
+    };
+    const progress = (state: 'downloading' | 'error') => ({
+        state, model_name: 'Gemma-4-E4B-it-GGUF', percent: 40, file: null, file_index: 1, total_files: 1,
+        downloaded_bytes: 0, total_bytes: 0, message: state === 'error' ? 'disk full' : undefined,
+    });
+
+    it('goes away when dismissed, and a later failure shows again', () => {
+        useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus });
+        const { rerender } = render(<ConnectionBanner />);
+        expect(screen.getByRole('alert')).toHaveTextContent('failed');
+        fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+        expect(screen.queryByRole('alert')).toBeNull();
+
+        act(() => { useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('downloading') } as SystemStatus }); });
+        rerender(<ConnectionBanner />);
+        act(() => { useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus }); });
+        rerender(<ConnectionBanner />);
+        expect(screen.getByRole('alert')).toHaveTextContent('failed');
+    });
+});
+
 describe('an unreadable config is surfaced, not hidden', () => {
     it('shows the backend config error verbatim', () => {
         const message = 'GAIA config at /home/u/.gaia/config.json is not valid JSON: x. Delete it to reset to defaults.';
