@@ -191,7 +191,9 @@
 
 .composer-attachment-name {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     color: var(--text-primary);
 }
@@ -267,7 +269,9 @@
 
 .composer-chip-label {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 /* A long memory-switch label is cut before it squeezes the model name; its eye icon carries the state. */

@@ -31,7 +31,7 @@
 .perm-card-title {
     color: var(--text-primary);
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.45;
 }
 
@@ -155,7 +155,7 @@
     margin-top: 6px;
     color: var(--text-primary);
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .perm-card-actions {

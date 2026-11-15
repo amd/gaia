@@ -64,10 +64,12 @@
 }
 .resource-label {
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     color: var(--text-primary);
 }
 .resource-reading {
@@ -91,7 +93,9 @@
 .resource-detail {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     color: var(--text-muted);
 }
 

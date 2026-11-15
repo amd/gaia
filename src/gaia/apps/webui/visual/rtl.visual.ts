@@ -63,8 +63,13 @@ async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) 
 }
 
 /** Every rule break on the page, as readable lines. */
-const audit = (page: Page): Promise<string[]> =>
-    page.evaluate(() => {
+// A cut text's fade follows a scroll timeline, which picks up new text on the next frame.
+const nextFrames = (page: Page) =>
+    page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+
+const audit = async (page: Page): Promise<string[]> => {
+    await nextFrames(page);
+    return page.evaluate(() => {
         const problems: string[] = [];
         const label = (el: Element) =>
             `<${el.tagName.toLowerCase()} class="${String(el.className).slice(0, 40)}"> "${(el.textContent ?? '').trim().slice(0, 40)}"`;
@@ -124,13 +129,20 @@ const audit = (page: Page): Promise<string[]> =>
             const text = el.textContent?.trim() ?? '';
             if (el.querySelector(':scope > :not(i18n-label)') || !text) continue;
 
+            // Cut text fades out at its end; a "…" is the old look, and a hard cut hides that more exists.
+            const faded = (style.maskImage || style.getPropertyValue('-webkit-mask-image')) !== 'none';
+            const cut = !srOnly && box.width > 2 && style.whiteSpace === 'nowrap' && style.overflowX === 'hidden'
+                && el.scrollWidth > el.clientWidth + 1;
+            if (style.textOverflow === 'ellipsis') problems.push(`ends in "…" instead of fading: ${label(el)}`);
+            else if (cut && !faded) problems.push(`cut off with no fade: ${label(el)}`);
+
             // A long name that shrinks to nothing tells the reader nothing.
-            if (style.textOverflow === 'ellipsis' && box.width < 40 && el.scrollWidth > box.width + 1) {
+            if (cut && box.width < 40) {
                 problems.push(`text squeezed to ${Math.round(box.width)}px: ${label(el)}`);
             }
 
             // An English name cut off in rtl keeps its end and loses its start.
-            if (style.textOverflow === 'ellipsis' && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
+            if (cut && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
                 problems.push(`Latin text truncates from its start: ${label(el)}`);
             }
 
@@ -341,6 +353,7 @@ const audit = (page: Page): Promise<string[]> =>
         }
         return [...new Set(problems)];
     });
+};
 
 // A reply that never ends, so the card stays up for the screenshot.
 const RECORDING_EVENTS = [

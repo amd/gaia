@@ -19,7 +19,7 @@
 
 .schedule-field-label {
     font-size: var(--fs-label);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-secondary);
 }
 
@@ -114,7 +114,7 @@
 
 .schedule-section h4 {
     font-size: var(--fs-label);
-    font-weight: 700;
+    font-weight: 500;
     color: var(--text-muted);
     margin-bottom: 10px;
 }
@@ -171,16 +171,18 @@
 
 .schedule-card-name {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     flex: 1;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
 .schedule-card-status {
     font-size: var(--fs-caption);
-    font-weight: 600;
+    font-weight: 500;
     text-transform: capitalize;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
@@ -229,6 +231,8 @@
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 3;
+    animation: fade-cut-block both;
+    animation-timeline: scroll(self block);
     overflow-wrap: anywhere;
 }
 
@@ -283,7 +287,7 @@
 
 .schedule-results h4 {
     font-size: var(--fs-label);
-    font-weight: 700;
+    font-weight: 500;
     color: var(--text-muted);
     margin-bottom: 10px;
 }
@@ -379,7 +383,7 @@
 }
 
 .schedule-parsed-description {
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
     margin-bottom: 4px;
 }

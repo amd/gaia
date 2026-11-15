@@ -137,7 +137,9 @@
     font-weight: 500;
     font-size: 13px;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 .doc-meta { font-size: 12px; color: var(--text-muted); }
@@ -285,7 +287,7 @@
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     color: var(--accent);
-    font-weight: 600;
+    font-weight: 500;
     white-space: nowrap;
 }
 .doc-undo:hover { background: var(--bg-hover); }

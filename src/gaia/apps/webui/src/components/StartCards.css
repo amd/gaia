@@ -36,7 +36,7 @@
     align-items: center;
     gap: 4px;
     font-size: 13.5px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .start-card-title svg {
@@ -92,7 +92,9 @@
     display: inline-block;
     max-inline-size: 100%;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
     vertical-align: bottom;
 }
