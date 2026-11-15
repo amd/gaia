@@ -41,6 +41,8 @@ class Job:
 
     id: str = field(default_factory=lambda: uuid4().hex[:12])
     name: str = ""
+    # Stable id the Agent UI translates; ``name`` is a log label only.
+    step: Optional[str] = None
     status: JobStatus = JobStatus.PENDING
     visible: bool = False
     error: Optional[str] = None
@@ -73,13 +75,14 @@ class DispatchQueue:
         *args: Any,
         visible: bool = False,
         depends_on: Optional[str] = None,
+        step: Optional[str] = None,
     ) -> str:
         """Submit *fn* for execution on the thread-pool.
 
         Returns the job ID immediately (non-blocking).  Must be called from
         the running event-loop thread.
         """
-        job = Job(name=name, visible=visible, depends_on=depends_on)
+        job = Job(name=name, step=step, visible=visible, depends_on=depends_on)
         self._jobs[job.id] = job
         loop = asyncio.get_running_loop()
         loop.create_task(self._run(job, fn, *args))

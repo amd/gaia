@@ -358,6 +358,16 @@ longer budget would only hold the turn longer with nothing to show.
 A timeout above the 3600s ceiling is **refused, not clamped** — a command killed
 at a limit its caller never chose is a failure with no visible cause.
 
+A command killed at its timeout still returns what it printed: commands run
+with `PYTHONUNBUFFERED=1` unless the command or the user's environment sets it,
+so a Python child's output isn't lost in its buffer. The result's `hint` never
+suggests a larger timeout. For a `test` or `script` command it names the files
+the turn changed and says to run the check on just those, or, with nothing
+changed, to narrow the run to one test file or the edited files: a repo-wide
+lint or test run that blew one budget usually blows a bigger one too. Any other
+class is pointed at a background run polled with `wait_for_condition`, or at
+shorter steps.
+
 ### Waiting Without Spinning
 
 `wait_for_condition` exists so the agent never sleeps-and-rechecks. Polling

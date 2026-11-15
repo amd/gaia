@@ -103,6 +103,26 @@ describe('AdvancedSettings', () => {
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
     });
 
+    it('offers no Load for an expected model Lemonade does not have', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: 'Qwen3-4B-GGUF', model_device: 'gpu',
+            default_model_name: 'no-such-model-xyz-123', model_labels: null, model_downloaded: false,
+        }));
+        render(<AdvancedSettings />);
+        await screen.findByText('Qwen3-4B-GGUF');
+
+        expect(screen.queryByText('Wrong model loaded.')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
+    });
+
+    it('marks Custom model ID as a place Settings can jump to', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({}));
+        const { container } = render(<AdvancedSettings />);
+        await screen.findByText('amd.o1-mini');
+
+        expect(container.querySelector('[data-settings-target="custom-model"]')).not.toBeNull();
+    });
+
     it('shows why Force Re-download could not start', async () => {
         modelActions.downloadError = "Cannot download 'user.x': add it from its Hugging Face link.";
         mockedApi.getSystemStatus.mockResolvedValue(status({
@@ -264,23 +284,6 @@ describe('AdvancedSettings', () => {
             expect(await screen.findByDisplayValue('fireworks.no-such-model')).toBeInTheDocument();
             expect(await screen.findByText(/the model server doesn't list “fireworks.no-such-model”/)).toBeInTheDocument();
             expect(mockedApi.updateSettings).not.toHaveBeenCalled();
-        });
-
-        it('offers no Load for a saved ID the model server does not list', async () => {
-            mockedApi.getSystemStatus.mockResolvedValue(status({
-                default_model_is_cloud: false, model_loaded: 'Qwen3-4B-GGUF', model_device: 'gpu',
-                default_model_name: 'no-such-model-xyz-123', model_labels: null,
-            }));
-            mockedApi.getSettings.mockResolvedValue({
-                custom_model: 'no-such-model-xyz-123',
-                model_status: { found: false, checked: true, downloaded: false, loaded: false },
-                dynamic_tools: false, dynamic_tools_locked: false,
-            } as never);
-            render(<AdvancedSettings />);
-
-            expect(await screen.findByText(/the model server doesn't list “no-such-model-xyz-123”/)).toBeInTheDocument();
-            expect(screen.queryByText('Wrong model loaded.')).not.toBeInTheDocument();
-            expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
         });
 
         it('opens with no note on a saved ID the model server lists', async () => {

@@ -1305,7 +1305,8 @@ class TestHeredocCannotHideARefusedCommand:
     def test_the_scan_stays_linear(self, command):
         start = time.perf_counter()
         _strip_heredoc_bodies(command)
-        assert time.perf_counter() - start < 0.05
+        # Runaway backtracking takes seconds here; a busy CI runner adds tens of ms.
+        assert time.perf_counter() - start < 0.5
 
 
 class TestReadOnlySubGuardsLiftUnderBypassOnly:
@@ -1812,7 +1813,11 @@ class TestASpellingDoesNotChangeTheTier:
             "/opt/homebrew/bin/gh auth token",
         ],
     )
-    def test_a_refused_invocation_stays_unvouched_by_path_or_alias(self, command):
+    def test_a_refused_invocation_stays_unvouched_by_path_or_alias(
+        self, command, request
+    ):
+        if "/gh " in command:
+            request.getfixturevalue("gh_on_path")
         error, _ = _Host()._validate_shell_command(command)
         assert error is not None
         # An encoded script is refused by any spelling; the rest are asked once.
@@ -1829,8 +1834,12 @@ class TestASpellingDoesNotChangeTheTier:
             "/opt/homebrew/bin/gh issue list",
         ],
     )
-    def test_another_spelling_of_a_read_asks_rather_than_runs_unasked(self, command):
+    def test_another_spelling_of_a_read_asks_rather_than_runs_unasked(
+        self, command, request
+    ):
         """The no-prompt list names bare programs; nothing else joins it."""
+        if "/gh " in command:
+            request.getfixturevalue("gh_on_path")
         assert validate(command)["tier"] == TIER_CONFIRM
         assert refusal(command) is None
 

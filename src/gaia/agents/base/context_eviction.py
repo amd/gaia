@@ -294,6 +294,12 @@ def _reread_page(text: str, store) -> Optional[Tuple[str, str]]:
         and isinstance(content, str)
     ):
         return None
+    first, last = parsed.get("entry"), parsed.get("to_entry")
+    if all(isinstance(n, int) and not isinstance(n, bool) for n in (first, last)):
+        # A run of entries can be longer than one offset page.
+        return handle, (
+            f"read_tool_output(artifact={handle}, entry={first}, to_entry={last})"
+        )
     return handle, (
         f"read_tool_output(artifact={handle}, offset={offset}, "
         f"limit={max(1, len(content))})"

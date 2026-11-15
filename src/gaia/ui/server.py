@@ -716,15 +716,22 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
         # waits for A (needs Lemonade reachable) before loading the model.
+        # A visible job's `step` needs banner.boot.<step> in every UI locale.
         lemonade_id = queue.dispatch(
-            "Checking LLM server", _check_lemonade, visible=True
+            "Checking LLM server", _check_lemonade, visible=True, step="check_server"
         )
-        queue.dispatch("Loading ML libraries", _import_modules, visible=True)
+        queue.dispatch(
+            "Loading ML libraries",
+            _import_modules,
+            visible=True,
+            step="load_libraries",
+        )
         model_job = queue.dispatch(
             "Loading AI model",
             _load_model,
             visible=True,
             depends_on=lemonade_id,
+            step="load_model",
         )
         from gaia.ui import warmup
         from gaia.ui.dispatch import JobStatus

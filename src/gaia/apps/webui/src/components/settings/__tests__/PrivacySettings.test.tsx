@@ -114,6 +114,44 @@ describe('PrivacySettings local only', () => {
         expect(await screen.findByRole('status')).toHaveTextContent('Cloud models are unavailable');
     });
 
+    describe('with the model server not answering', () => {
+        const RAW = "couldn't check whether collection.router is a cloud model: Request failed: "
+            + "HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded [WinError 10061]";
+        beforeEach(() => {
+            mockedApi.updateSettings.mockResolvedValue({
+                network_policy: 'local_ai_only',
+                policy_notices: [
+                    { code: 'saved_models_not_checked', severity: 'warning', reason: RAW, cause: 'model_server_down', models: ['collection.router'] },
+                    { code: 'users_server_keeps_keys', severity: 'info', url: 'http://127.0.0.1:59999' },
+                ],
+            } as never);
+        });
+        afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+        it('says so in plain words, without the connection error', async () => {
+            render(<PrivacySettings />);
+            fireEvent.click(await findReadySwitch());
+
+            const alert = await screen.findByRole('alert');
+            expect(alert).toHaveTextContent("Local only is on, but GAIA couldn't check whether your saved model collection.router is a cloud model because the model server isn't answering");
+            expect(alert).toHaveTextContent('Settings → Model');
+            expect(alert).toHaveTextContent('keeps any cloud keys it already holds');
+            expect(alert.textContent).not.toMatch(/HTTPConnectionPool|WinError|Request failed|\(/);
+            expect(screen.getByRole('switch', { name: 'Local only' })).toBeChecked();
+        });
+
+        it('says so in Arabic', async () => {
+            useChatStore.setState({ locale: 'ar' });
+            render(<PrivacySettings />);
+            fireEvent.click(await screen.findByRole('switch'));
+
+            const alert = await screen.findByRole('alert');
+            expect(alert).toHaveTextContent('خادم النماذج لا يستجيب');
+            expect(alert).toHaveTextContent('collection.router');
+            expect(alert.textContent).not.toMatch(/HTTPConnectionPool|WinError/);
+        });
+    });
+
     it('still reports a failed switch-on when the saved policy loads late', async () => {
         const loaded = slowPolicyLoad();
         mockedApi.updateSettings.mockRejectedValueOnce(new Error('policy file is read-only'));
