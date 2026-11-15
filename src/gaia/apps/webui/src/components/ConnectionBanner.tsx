@@ -150,6 +150,17 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
         if (shouldReset) setDismissed(false);
     }, [systemStatus, hasActiveConversation]);
 
+    const activeProgress = systemStatus?.download_progress ?? null;
+    const isActiveDownload =
+        isDownloadingModel ||
+        activeProgress?.state === 'downloading' ||
+        activeProgress?.state === 'starting';
+    const [downloadErrorDismissed, setDownloadErrorDismissed] = useState(false);
+    // A new download's failure must show even if the last one was dismissed.
+    useEffect(() => {
+        if (isActiveDownload) setDownloadErrorDismissed(false);
+    }, [isActiveDownload]);
+
     // A crashed backend outranks everything, even a chat in progress: nothing answers until it's back.
     if (lifecycle && lifecycle.status !== 'running') return <BackendRestartBanner lifecycle={lifecycle} />;
 
@@ -161,13 +172,8 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     // state would silently look like the app froze. Same reasoning for
     // suppressing during an active conversation: if the download fails
     // mid-chat we still want to surface the failure prominently.
-    const activeProgress = systemStatus?.download_progress ?? null;
     const downloadName = activeProgress?.model_name || modelName;
-    const isActiveDownload =
-        isDownloadingModel ||
-        activeProgress?.state === 'downloading' ||
-        activeProgress?.state === 'starting';
-    if (isActiveDownload || activeProgress?.state === 'error') {
+    if (isActiveDownload || (activeProgress?.state === 'error' && !downloadErrorDismissed)) {
         const sizeHint = activeProgress?.total_bytes
             ? `${(activeProgress.total_bytes / 1e9).toFixed(1)} GB`
             : 'large download';
@@ -249,7 +255,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 {isError && (
                     <button
                         className="connection-banner__dismiss"
-                        onClick={() => setDismissed(true)}
+                        onClick={() => setDownloadErrorDismissed(true)}
                         aria-label="Dismiss"
                     >
                         <X size={14} />

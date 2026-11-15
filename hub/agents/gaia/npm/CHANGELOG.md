@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **No "I haven't confirmed this works" line under an answer that already
+  reports the failure.** An answer such as "No, the suite fails: 1 failed",
+  which claims no success, no longer ends with "… 1 of 2 pytest runs didn't
+  pass". A failed lint or build, a blocked check or an unchecked change
+  still gets the line, and `verification` still records every failure.
 - **More attached documents than one conversation searches.** A conversation
   searches at most 100 documents or 10,000 passages at once. With more in
   `documents`, the agent loads up to that limit instead of loading every one

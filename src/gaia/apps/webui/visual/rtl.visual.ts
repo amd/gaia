@@ -1056,6 +1056,44 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withLongPasteAndTable(page: Page): Promise<void> {
+    const paste = Array.from({ length: 200 }, (_, i) => `row ${i + 1}: the quick brown fox`).join('\n');
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `${paste}\nWhich databases fit a team of five?`, created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: [
+                            '## Which one to use', '',
+                            'Pick by where the data lives.', '',
+                            '### Comparison', '',
+                            '| Engine | Monthly cost | When it fits |',
+                            '|---|---|---|',
+                            '| SQLite | 0 | One app, small data, no server to run |',
+                            '| PostgreSQL | 1,200 | Many writers, extensions such as PostGIS |',
+                        ].join('\n'),
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a long paste shows its ending, and a table aligns only its numbers (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongPasteAndTable);
+        await expect(page.locator('.msg-excerpt')).toContainText('Which databases fit a team of five?');
+        const prose = page.locator('.md-table tr').nth(1).locator('td').nth(2);
+        await expect(prose).toHaveCSS('text-align', 'start');
+        await expect(page.locator('.md-table tr').nth(1).locator('td').nth(1)).toHaveClass('is-numeric');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`answer-polish-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
@@ -3469,7 +3507,7 @@ for (const locale of ['ar', 'en']) {
         await open(page, '', locale, async (p) => {
             await withSettingsPanes(p);
             await p.route('**/api/system/status', (route) => route.fulfill({
-                json: { ...SYSTEM_STATUS, lemonade_running: false, model_loaded: null, start_command: 'gaia init', start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.' },
+                json: { ...SYSTEM_STATUS, initialized: false, lemonade_running: false, model_loaded: null, start_command: 'gaia init', start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.' },
             }));
         });
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -3497,6 +3535,46 @@ for (const locale of ['ar', 'en']) {
         const banner = page.locator('.connection-banner');
         await expect(banner.locator('button.connection-banner__retry')).toHaveCount(2);
         await shot(page, `banner-${locale}-not-installed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a chosen server that isn't answering says so in Advanced and Setup (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/system/status', (route) => route.fulfill({
+                json: { ...SYSTEM_STATUS, initialized: true, lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null, start_instruction: "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do." },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const row = page.locator('.status-row--has-hint').first();
+        await expect(row).toBeVisible();
+        await expect(row).not.toContainText(/gaia init|Cloud providers still work/);
+        await expect(page.getByRole('dialog').locator('.settings-card .btn-primary')).toHaveCount(0);
+        await expect(page.locator('.connection-banner')).not.toContainText('gaia init');
+        await shot(page, `advanced-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+        await withSetup(page);
+        await page.getByRole('dialog').locator('[data-section="setup"]').click();
+        await expect(page.locator('.settings-setup-status strong')).not.toHaveText(locale === 'en' ? 'Ready' : 'جاهز');
+        await shot(page, `setup-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`GAIA's own server that isn't answering names no command (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/system/status', (route) => route.fulfill({
+                json: { ...SYSTEM_STATUS, initialized: true, lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null, start_instruction: null },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const card = page.getByRole('dialog').locator('.settings-card').first();
+        await expect(card.locator('.status-row--has-hint')).toHaveCount(2);
+        await expect(card).not.toContainText(/gaia |first message|أول رسالة/);
+        await expect(page.locator('.connection-banner')).not.toContainText(/gaia |run /);
+        await shot(page, `advanced-${locale}-own-server-down`);
         expect(await audit(page)).toEqual([]);
     });
 }
