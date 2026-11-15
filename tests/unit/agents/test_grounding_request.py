@@ -45,8 +45,9 @@ SHELL_DENIED = [{"tool": "run_shell_command", "ran": False}]
         ("Run exactly: whoami", "me"),
         ("Please run the following command: git status", "Working tree clean."),
         ("Run this: npm test", "All 30 passed."),
-        ("Can you run git status?", "Working tree clean."),
-        ("Could you execute pytest for me", "12 passed"),
+        ("Can you run `git status`?", "Working tree clean."),
+        ("Could you run this command: pytest -q", "12 passed"),
+        ("Can you run cmdkey /list", "Currently stored credentials: none"),
         ("Run cmdkey /list", "Currently stored credentials: none"),
         ("In the shell, run: dir", "a.txt b.txt"),
         (
@@ -94,6 +95,16 @@ def test_an_answer_to_a_run_request_with_nothing_run_is_flagged(query, answer):
         ("Now run it again", "Done.", []),
         ("Run the numbers on Q3 / Q4 revenue", "Q4 is up 4%.", []),
         ("Runtime: what is it?", "The time a program takes.", []),
+        # Questions about ability are not orders (PR review).
+        ("Can you run Python scripts?", "Yes, I can.", []),
+        ("Can you run docker containers on this PC?", "Yes.", []),
+        ("Can you run git commands, or only read files?", "Both.", []),
+        ("Could you run the tests if I asked?", "Yes.", []),
+        (
+            "How do I install it from the terminal? Can I run it after?",
+            "Use pip, then yes.",
+            [],
+        ),
         # Honest refusals in other words.
         ("Use your shell tool to run pwd", "I haven't run it: no shell here.", []),
         (

@@ -944,27 +944,34 @@ _SHELL = r"(?:shell|terminal|command[- ]line|bash|powershell|cmd)"
 _SHELL_REQUEST = re.compile(
     rf"\b(?:use|using|with)\s+(?:your|the)\s+{_SHELL}\b"
     # "In the shell, run: dir"
-    rf"|\b(?:in|from)\s+(?:your|the|a)\s+{_SHELL}\b[^.\n]{{0,20}}\b(?:run|execute)\b"
+    rf"|\b(?:in|from)\s+(?:your|the|a)\s+{_SHELL}\b[^.?!\n]{{0,20}}\b(?:run|execute)\b"
     # The shell tool named outright.
     r"|\buse\s+(?:the\s+)?run_shell_command\b",
     re.IGNORECASE,
 )
 #: A message that opens with "run"/"execute" and a command: quoted, a known
 #: program, "this/the command", "this:", or a program with a switch
-#: ("cmdkey /list"). A polite lead-in may come first. Not "run a web search" or
-#: "run me through it", and only the opening: a pasted README's "Run npm
-#: install" is not a request.
+#: ("cmdkey /list"). Not "run a web search" or "run me through it", and only
+#: the opening: a pasted README's "Run npm install" is not a request.
+_RUN = r"(?:run|execute)(?:\s+|(?=:))(?:exactly\b\s*)?"
+#: A command spelled out: quoted, after a colon, or a program with a switch.
+_SPELLED_OUT = (
+    r"[`\"']"
+    r"|(?:(?:this|the\s+following)\b\s*(?:exact\s+)?(?:commands?\s*)?)?:"
+    r"|[\w.\-]+\s+(?:--?|/)[A-Za-z?]"
+)
 _COMMAND_REQUEST = re.compile(
-    r"\A\s*(?:(?:please|now|then|ok(?:ay)?|(?:can|could|would|will)\s+you)[\s,]+)*"
-    r"(?:run|execute)(?:\s+|(?=:))(?:exactly\b\s*)?"
-    r"(?:[`\"']"
+    rf"\A\s*(?:(?:please|now|then|ok(?:ay)?)[\s,]+)*{_RUN}"
+    rf"(?:{_SPELLED_OUT}"
     r"|(?:git|gh|npm|npx|pip|python|py|pytest|node|go|cargo|make|cmake|docker|"
     r"ls|dir|pwd|cd|echo|cat|type|whoami|hostname|ipconfig|ping|uv|ruff|"
     r"black|mypy|tsc|yarn|pnpm|dotnet|java|mvn|gradle)\b"
     r"|(?:the|this|that|these|the\s+following)\s+(?:exact\s+|one\s+)?"
-    r"(?:commands?|script|tests?|test\s+suite|build|linter|lint)\b"
-    r"|(?:this\s*)?:"
-    r"|[\w.\-]+\s+(?:--?|/)[A-Za-z?])",
+    r"(?:commands?|script|tests?|test\s+suite|build|linter|lint)\b)"
+    # "Can you run …" is often a question about ability: only a spelled-out
+    # command makes it a request.
+    rf"|\A\s*(?:please[\s,]+)?(?:can|could|would|will)\s+you\s+(?:please\s+)?"
+    rf"{_RUN}(?:{_SPELLED_OUT})",
     re.IGNORECASE,
 )
 _SAYS_NOT_RUN = re.compile(
