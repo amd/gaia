@@ -48,7 +48,9 @@ my_agent/
 
 A skill is a `SKILL.md`: frontmatter plus a Markdown body. Keep the body short —
 it is injected into the session context at the start of the first user message when the skill loads, and every token it
-takes is a token your tool results no longer have.
+takes is a token your tool results no longer have. On Claude, a skill loaded partway through a task is added as a
+message after the conversation instead, so the cached start of the prompt stays unchanged, and it moves into the
+session context on the next turn.
 
 ```markdown
 ---

@@ -34,6 +34,8 @@ from gaia.skills import cli as skills_cli
 from tests.unit.packaging_helpers import find_source_packages
 from tests.unit.skills_helpers import copy_fixture, write_skill_dir
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 

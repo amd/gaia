@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { ErrorNotice } from '../settings/ErrorNotice';
 import { useChatStore } from '../../stores/chatStore';
@@ -64,13 +64,44 @@ describe('a model picked from the list', () => {
 });
 
 describe('the start-up banner', () => {
-    it('names the boot task that is running', () => {
-        useChatStore.setState({ systemStatus: {
-            lemonade_running: true, init_state: 'initializing',
-            init_tasks: [{ name: 'Checking LLM server', status: 'done' }, { name: 'Loading AI model', status: 'running' }],
-        } as SystemStatus });
+    const booting = (step: string | undefined, name: string) => useChatStore.setState({ systemStatus: {
+        lemonade_running: true, init_state: 'initializing',
+        init_tasks: [{ name: 'Checking LLM server', step: 'check_server', status: 'done' }, { name, step, status: 'running' }],
+    } as SystemStatus });
+
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    it.each([
+        ['check_server', 'Checking LLM server', 'Checking the model server', 'جارٍ فحص خادم النماذج'],
+        ['load_libraries', 'Loading ML libraries', 'Getting document search ready', 'جارٍ تجهيز البحث في المستندات'],
+        ['load_model', 'Loading AI model', 'Loading the model', 'جارٍ تحميل النموذج'],
+    ])('names the %s step in the interface language, not the server\'s label', (step, name, en, ar) => {
+        booting(step, name);
+        const { unmount } = render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent(en);
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
         render(<ConnectionBanner />);
-        expect(screen.getByRole('status')).toHaveTextContent('Loading AI model');
+        expect(screen.getByRole('status')).toHaveTextContent(ar);
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
+    });
+
+    it.each([
+        ['an unknown step', 'warm_flux_capacitor', 'Warming the flux capacitor'],
+        ['no step at all', undefined, 'Loading AI model'],
+    ])('reads as getting GAIA ready for %s, never the server\'s label', (_, step, name) => {
+        booting(step, name);
+        const { unmount } = render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent('Getting GAIA ready');
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent('جارٍ تجهيز GAIA');
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
     });
 
     it('never says it is loading once every boot task has finished', () => {

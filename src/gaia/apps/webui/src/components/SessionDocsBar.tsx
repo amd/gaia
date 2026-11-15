@@ -9,6 +9,29 @@ import { log } from '../utils/logger';
 import { middleTruncate } from '../utils/format';
 import { useT } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
+import { isServerFailure } from '../utils/documentFailure';
+
+/** What one chat searches at once: ``RAGConfig.max_indexed_files`` and ``max_total_chunks`` in ``gaia/rag/sdk.py``. */
+export const SEARCHED_AT_ONCE = 100;
+export const PASSAGES_AT_ONCE = 10000;
+
+/**
+ * Which limit stops the chat's index short of *docs*, walked in the order they load:
+ * ``'size'`` for passages, ``'files'`` for the document count, null when all fit.
+ * Mirrors ``RAGSDK.full_by``: a load past the passage limit pushes one out and stops there.
+ */
+export function indexLimitHit(docs: { chunk_count: number }[]): 'files' | 'size' | null {
+    let held = 0;
+    let passages = 0;
+    for (const d of docs) {
+        if (passages >= PASSAGES_AT_ONCE) return 'size';
+        if (held >= SEARCHED_AT_ONCE) return 'files';
+        passages += d.chunk_count;
+        held += 1;
+        if (passages > PASSAGES_AT_ONCE && held > 1) return 'size';
+    }
+    return null;
+}
 
 /** The documents indexed for this chat, shown under the header; renders nothing when there are none. */
 export function SessionDocsBar({ sessionId, onDetachFailed }: {
@@ -56,11 +79,22 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
     });
     const visibleDocs = docsExpanded ? sorted : sorted.slice(0, 3);
     const hiddenCount = sorted.length - 3;
-    const failedCount = sessionDocs.filter((d) => d.indexing_status === 'failed').length;
+    const failedDocs = sessionDocs.filter((d) => d.indexing_status === 'failed');
+    const failedCount = failedDocs.length;
+    // A file that failed only because the model server was down isn't unreadable.
+    const serverWaitCount = failedDocs.filter((d) => isServerFailure(d.error_kind)).length;
+    const unreadableCount = failedCount - serverWaitCount;
     const readableCount = sessionDocs.length - failedCount;
+    const byId = new Map(sessionDocs.map((d) => [d.id, d]));
+    const loadOrder = (session?.document_ids ?? []).flatMap((id) => {
+        const d = byId.get(id);
+        return d && d.indexing_status !== 'failed' ? [d] : [];
+    });
+    const limitHit = indexLimitHit(loadOrder);
     const label = t.compose((say) => [
         readableCount > 0 ? say(pluralKey('docsBar.count', readableCount), { n: readableCount }) : null,
-        failedCount > 0 ? say(pluralKey('docsBar.failed', failedCount), { n: failedCount }) : null,
+        unreadableCount > 0 ? say(pluralKey('docsBar.failed', unreadableCount), { n: unreadableCount }) : null,
+        serverWaitCount > 0 ? say(pluralKey('docsBar.serverWaiting', serverWaitCount), { n: serverWaitCount }) : null,
     ].filter(Boolean).join(' · '));
     return (
         <div
@@ -76,11 +110,12 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
             <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
                 {visibleDocs.map((d) => {
                     const failed = d.indexing_status === 'failed';
+                    const failedTitle = isServerFailure(d.error_kind) ? 'docsBar.serverTitle' : 'docsBar.failedTitle';
                     return (
                     <span
                         key={d.id}
                         className={`doc-pill${failed ? ' doc-pill-failed' : ''}`}
-                        title={failed ? t('docsBar.failedTitle', { name: d.filename }) : d.filepath || d.filename}
+                        title={failed ? t(failedTitle, { name: d.filename }) : d.filepath || d.filename}
                     >
                         {failed
                             ? <AlertCircle size={9} className="doc-pill-icon" aria-hidden="true" />
@@ -106,6 +141,16 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
                 <button className="doc-pill-collapse" onClick={(e) => { e.stopPropagation(); setDocsExpanded(false); }}>
                     {t('docsBar.less')}
                 </button>
+            )}
+            {limitHit && (
+                <p className="doc-context-past-cap" role="status">
+                    <AlertCircle size={12} className="doc-context-icon doc-context-icon-warn" aria-hidden="true" />
+                    <span className="doc-context-past-cap-text">
+                        {limitHit === 'size'
+                            ? t('docsBar.pastSize', { passages: PASSAGES_AT_ONCE.toLocaleString(), n: readableCount })
+                            : t('docsBar.pastCap', { limit: SEARCHED_AT_ONCE, n: readableCount })}
+                    </span>
+                </p>
             )}
         </div>
     );

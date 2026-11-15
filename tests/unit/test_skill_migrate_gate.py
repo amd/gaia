@@ -30,6 +30,8 @@ from gaia.skills.migrate import install_migrated, migrate_skill_dir
 from gaia.skills.tiers import enforce_skill_tier_ceiling, held_tier
 from tests.unit.skills_helpers import isolated_manager
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 
 def _openclaw(root: Path, name: str, requires: str = "") -> Path:
     directory = root / name

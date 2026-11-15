@@ -613,6 +613,7 @@ def _restart_gaia_lemonade() -> None:
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
     from gaia.config import GaiaConfigError
+    from gaia.installer.model_choice import download_size_gb
     from gaia.llm.lemonade_choice import LemonadeChoiceError
 
     # The config names the Lemonade server, so a broken one is reported, not raised.
@@ -718,7 +719,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     if models_resp.status_code == 200:
                         for m in _catalog_entries(models_resp.json()):
                             if m.get("id") == status.model_loaded:
-                                status.model_size_gb = m.get("size")
+                                status.model_size_gb = download_size_gb(
+                                    status.model_loaded, m.get("size")
+                                )
                                 status.model_labels = m.get("labels")
                             if "embed" in (m.get("id") or "").lower():
                                 status.embedding_model_loaded = True
@@ -802,9 +805,9 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                                     # "not downloaded" banner can show an
                                     # accurate hint instead of a hard-coded
                                     # number that drifts with model changes.
-                                    cat_size = m.get("size")
-                                    if cat_size is not None:
-                                        status.default_model_size_gb = float(cat_size)
+                                    status.default_model_size_gb = download_size_gb(
+                                        _target, m.get("size")
+                                    )
                                     break
                             # Model not found in catalog → treat as not downloaded
                             if status.model_downloaded is None:
@@ -990,7 +993,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         _shutil = sys.modules.get("gaia.ui.server", sys.modules[__name__])
         _shutil_mod = getattr(_shutil, "shutil", shutil)
         usage = _shutil_mod.disk_usage(Path.home())
-        status.disk_space_gb = round(usage.free / (1024**3), 1)
+        # Decimal GB, the unit setup and the model sizes use.
+        status.disk_space_gb = round(usage.free / 1e9, 1)
         _probe_ok("disk")
     except OSError as exc:
         _probe_failed(status, "disk", f"Could not read free disk space: {exc}")
@@ -1042,7 +1046,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         else:
             status.init_state = "ready"
         status.init_tasks = [
-            InitTaskInfo(name=j.name, status=j.status.value) for j in visible
+            InitTaskInfo(name=j.name, step=j.step, status=j.status.value)
+            for j in visible
         ]
 
     # ── Live download progress ──────────────────────────────────────────

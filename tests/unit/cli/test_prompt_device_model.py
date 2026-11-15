@@ -38,6 +38,8 @@ def _stub_init_and_client(monkeypatch, calls):
     )
 
     class _StubClient:
+        failed = False
+
         # Mirror the real signature: _gaia_cli_client_params filters kwargs
         # against it, so a stub with only **kwargs would receive nothing.
         def __init__(
@@ -185,6 +187,8 @@ def test_saved_default_model_still_applies_without_device(
 
 def _stub_streaming_client(monkeypatch, stats):
     class _StreamingClient:
+        failed = False
+
         def __init__(self, **_):
             pass
 
