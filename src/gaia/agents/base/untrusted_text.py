@@ -8,6 +8,7 @@ can never spell the fence itself, however it nests, cases or widens it.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from typing import List, Tuple
 
@@ -68,19 +69,34 @@ def _without_fence_runs(text: str) -> str:
 MARKER_NAME_REMOVED = "[fence marker removed]"
 
 
+#: "LATIN SMALL LETTER O WITH STROKE", "LATIN LETTER SMALL CAPITAL E": the letter.
+_LATIN_LETTER_NAME = re.compile(
+    r"LATIN (?:(?:SMALL|CAPITAL) LETTER|LETTER SMALL CAPITAL) ([A-Z])(?: WITH .+)?\Z"
+)
+
+
+def _latin_base(char: str) -> str:
+    """The plain letter a non-ASCII Latin letter is a form of, else *char*."""
+    if char.isascii():
+        return char
+    named = _LATIN_LETTER_NAME.match(unicodedata.name(char, ""))
+    return named.group(1) if named else char
+
+
 def _marker_letters(char: str) -> str:
     """The ASCII letters and digits *char* reads as, for comparing marker names.
 
     NFKC folds width, NFD then splits a precomposed accented letter (``É``)
     into its base letter and a combining mark, which is dropped so the base
     letter survives the ASCII filter below the same way an already-decomposed
-    accented letter does. The UTS #39 table maps other look-alikes (Cyrillic,
+    accented letter does. A Latin letter Unicode never splits (``Ø``, ``Ł``,
+    small capital ``ᴇ``) is read by its name. The UTS #39 table maps other look-alikes (Cyrillic,
     Greek, Cherokee and so on) to the letters they imitate, and the ASCII fold
     makes ``m`` and ``rn``, or ``I``, ``l`` and ``1``, compare equal.
     """
     decomposed = unicodedata.normalize("NFD", unicodedata.normalize("NFKC", char))
     base = "".join(c for c in decomposed if not unicodedata.combining(c))
-    mapped = "".join(LOOKALIKES.get(c, c) for c in base)
+    mapped = "".join(LOOKALIKES.get(c) or _latin_base(c) for c in base)
     return "".join(
         ASCII_FOLD.get(c, c) for c in mapped.casefold() if c.isascii() and c.isalnum()
     )
