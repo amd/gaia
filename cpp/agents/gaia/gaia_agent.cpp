@@ -799,7 +799,9 @@ std::optional<std::string> GaiaAgent::unopenedFilesNote(const std::string& answe
         R"(|no (?:information|mention|record|details?|data|reference) (?:about|of|on|for|regarding)\b)"
         R"(|(?:could(?:n't| not)|was unable to|unable to|cannot|can't) (?:find|locate|determine|confirm)\b)"
         R"(|(?:is|are) (?:missing|absent)\b)"
-        R"(|no (?:[\w-]+ ){1,3}(?:was|were) found\b|found (?:nothing|no [\w-]+)\b))",
+        R"(|no (?:[\w-]+ ){1,3}(?:was|were) found\b|found (?:nothing|no [\w-]+)\b)"
+        R"(|(?:none|neither) of (?:the|these|those|them)\b[^.\n]{0,40}\b(?:contains?|mentions?|ha(?:s|ve)|includes?|covers?|states?)\b)"
+        R"(|(?:cannot|can't|unable to) answer\b))",
         std::regex::icase);
     // A turn that never looked at the folder was a question about the world, not the files.
     if (std::none_of(calls.begin(), calls.end(),

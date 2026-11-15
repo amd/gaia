@@ -740,6 +740,9 @@ TEST(GaiaAgentTest, ASearchThatFoundNothingIsNotACheckOfEachFile) {
     EXPECT_TRUE(GaiaAgent::unopenedFilesNote(
         "I searched the indexed documents, but no relevant passages were found in the files.", {w.path}, phrase));
     EXPECT_TRUE(GaiaAgent::unopenedFilesNote(
+        "I have checked faq.md, and none of these files contain information about the X200 warranty.", {w.path},
+        phrase));
+    EXPECT_TRUE(GaiaAgent::unopenedFilesNote(
         "I did not find any files containing the phrase \"X200 warranty\". Could you clarify where I should look?",
         {w.path}, phrase));
 }

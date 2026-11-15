@@ -677,6 +677,96 @@ json FileIOTools::doFileRead(const json& args) {
             out["note"] = "To total, count or compare this data, read the file by its path in a script "
                           "(pandas.read_csv or the csv module). Don't paste its rows into a command.";
         }
+        // Rows that are not data, and labels that differ only by case or spacing, are what a
+        // small model's script totals wrongly.
+        if ((ext == ".csv" || ext == ".tsv") && !truncated && startLine <= 0 && endLine <= 0) {
+            std::vector<std::string> rows;
+            {
+                std::istringstream in(content);
+                for (std::string line; std::getline(in, line);) {
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    rows.push_back(line);
+                }
+            }
+            auto blank = [](const std::string& r) {
+                return std::all_of(r.begin(), r.end(), [](unsigned char c) { return std::isspace(c) || c == ',' || c == ';'; });
+            };
+            auto folded = [](std::string v) {
+                while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.pop_back();
+                size_t lead = 0;
+                while (lead < v.size() && std::isspace(static_cast<unsigned char>(v[lead]))) ++lead;
+                v.erase(0, lead);
+                for (auto& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                return v;
+            };
+            if (!rows.empty() && !blank(rows[0])) {
+                const std::string& header = rows[0];
+                const char sep = ext == ".tsv" ? '\t'
+                                 : (header.find(';') != std::string::npos && header.find(',') == std::string::npos) ? ';' : ',';
+                auto cells = [sep](const std::string& r) {
+                    std::vector<std::string> out;
+                    std::string cell;
+                    bool quoted = false;
+                    for (char c : r) {
+                        if (c == '"') quoted = !quoted;
+                        else if (c == sep && !quoted) { out.push_back(cell); cell.clear(); }
+                        else cell.push_back(c);
+                    }
+                    out.push_back(cell);
+                    return out;
+                };
+                const std::vector<std::string> names = cells(header);
+                std::vector<std::string> found;
+                size_t dataRows = 0, blanks = 0;
+                std::vector<std::map<std::string, std::set<std::string>>> spellings(names.size());
+                for (size_t i = 1; i < rows.size(); ++i) {
+                    if (blank(rows[i])) {
+                        if (i + 1 < rows.size()) ++blanks;
+                        continue;
+                    }
+                    const std::string line = std::to_string(i + 1);
+                    if (rows[i] == header) {
+                        found.push_back("line " + line + " repeats the header");
+                        continue;
+                    }
+                    const std::vector<std::string> row = cells(rows[i]);
+                    const std::string first = folded(row[0]);
+                    if (first == "total" || first == "totals" || first == "grand total" || first == "subtotal" ||
+                        first == "sum") {
+                        found.push_back("line " + line + " is a totals row, not data");
+                        continue;
+                    }
+                    ++dataRows;
+                    for (size_t c = 0; c < row.size() && c < names.size(); ++c) {
+                        const std::string key = folded(row[c]);
+                        const bool text = std::any_of(key.begin(), key.end(), [](unsigned char ch) { return std::isalpha(ch); });
+                        if (text && key.size() <= 40) spellings[c][key].insert(row[c]);
+                    }
+                }
+                if (blanks) found.push_back(std::to_string(blanks) + " blank line" + (blanks == 1 ? "" : "s") + " among the rows");
+                for (size_t c = 0; c < names.size(); ++c) {
+                    for (const auto& [key, raw] : spellings[c]) {
+                        if (raw.size() < 2) continue;
+                        std::string list;
+                        for (const auto& r : raw) list += (list.empty() ? "\"" : ", \"") + r + "\"";
+                        found.push_back("column " + folded(names[c]) + " spells one value several ways (" + list + ")");
+                        break;
+                    }
+                }
+                std::string note;
+                if (dataRows == 0) {
+                    note = "This file has a header row and no data rows. Its data is missing, not zero: say that, "
+                           "report the figure as unknown, and look for a log or error beside it that says why.";
+                } else if (!found.empty() || sep == ';') {
+                    if (sep == ';') found.insert(found.begin(), "fields are separated by semicolons (sep=';')");
+                    if (found.size() > 6) found.resize(6);
+                    for (const auto& f : found) note += (note.empty() ? "Before totalling, note: " : "; ") + f;
+                    note += ". Handle these in the script (skip those lines, strip and lower-case that column), "
+                            "and tell the user what you cleaned.";
+                }
+                if (!note.empty()) out["note"] = out.contains("note") ? out["note"].get<std::string>() + " " + note : note;
+            }
+        }
         // policy_v1.md beside policy_v2.md, or terms_2024.md beside terms_2026.txt: a small
         // model answers from whichever it opened first.
         static const std::set<std::string> kDocuments = {".md", ".txt", ".pdf", ".docx", ".html", ".htm", ".rst"};
@@ -720,14 +810,16 @@ json FileIOTools::doFileRead(const json& args) {
             }
             if (later.empty() && !earlier.empty()) {
                 const std::string note = earlier + " in the same folder looks like an earlier version of this "
-                                         "document. Read it too: if the two give different figures, tell the user "
-                                         "which one this version replaces, since they may be relying on the old one.";
+                                         "document. Read it too: if the two give different figures, give the user "
+                                         "both, the old figure and this one, and say this version replaces the "
+                                         "earlier one, since they may be relying on the old figure.";
                 out["note"] = out.contains("note") ? out["note"].get<std::string>() + " " + note : note;
             }
             if (!later.empty()) {
                 const std::string note = later + " in the same folder looks like a later version of this document. "
                                          "Read it too: where the two disagree, the later one applies unless the "
-                                         "user asked about this one, and say that this one is superseded.";
+                                         "user asked about this one. Give the user both figures, the old and the "
+                                         "new, and say that this one is superseded.";
                 out["note"] = out.contains("note") ? out["note"].get<std::string>() + " " + note : note;
             }
         }

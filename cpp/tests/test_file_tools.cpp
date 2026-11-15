@@ -120,6 +120,29 @@ TEST_F(FileToolsTest, FileRead_ALaterVersionBesideTheFileIsPointedOut) {
     }
 }
 
+TEST_F(FileToolsTest, FileRead_ACsvsRowsThatAreNotDataAreNamed) {
+    ToolInfo tool = FileIOTools::fileRead();
+    const std::string messy = writeFile(
+        "sales_messy.csv",
+        "Date,Region,Rep,Amount\n2026-01-04,North,Priya,\"$1,204.50\"\n2026-01-06,south,Marco,880.00\n"
+        "2026-01-09,North ,Priya,\"$2,310.00\"\n\nDate,Region,Rep,Amount\n2026-01-22,NORTH,Lena,\"$1,480.00\"\n"
+        "TOTAL,,,\"$5,874.50\"\n");
+    const std::string note = tool.callback({{"path", messy}}).value("note", "");
+    EXPECT_NE(note.find("line 6 repeats the header"), std::string::npos) << note;
+    EXPECT_NE(note.find("line 8 is a totals row"), std::string::npos) << note;
+    EXPECT_NE(note.find("1 blank line"), std::string::npos) << note;
+    EXPECT_NE(note.find("column region spells one value several ways"), std::string::npos) << note;
+
+    const std::string headerOnly = writeFile("orders_2026-09.csv", "order_id,customer,amount,placed_at\n");
+    EXPECT_NE(tool.callback({{"path", headerOnly}}).value("note", "").find("no data rows"), std::string::npos);
+    const std::string ledger = writeFile("ledger.csv", "datum;posten;betrag\n2026-01-01;Miete;1200,00\n");
+    EXPECT_NE(tool.callback({{"path", ledger}}).value("note", "").find("semicolons"), std::string::npos);
+
+    // A tidy file gets no such note.
+    const std::string tidy = writeFile("tidy.csv", "region,amount\nNorth,1200\nSouth,340\nNorth,2150\n");
+    EXPECT_FALSE(tool.callback({{"path", tidy}}).contains("note"));
+}
+
 TEST_F(FileToolsTest, FileRead_WithLineRange) {
     std::string path = writeFile("lines.txt", "AAA\nBBB\nCCC\nDDD\nEEE\n");
 
