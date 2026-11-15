@@ -476,7 +476,7 @@ describe('ModelSettings: an unreachable AMD gateway (#5604)', () => {
         render(<ModelSettings />);
         const tab = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
         expect(tab).toBeDisabled();
-        expect(tab).toHaveAttribute('title', NO_NET);
+        expect(tab).toHaveAttribute('title', "Unavailable: needs AMD's network or VPN.");
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
     });
 

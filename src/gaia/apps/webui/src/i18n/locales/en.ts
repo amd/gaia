@@ -12,6 +12,7 @@ export const enMessages = {
     'sidebar.collapse': 'Collapse sidebar',
     'sidebar.resize': 'Resize sidebar',
     'sidebar.resizeTitle': 'Drag to resize, double-click to reset',
+    'sidebar.open': 'Open sidebar',
     'sidebar.search': 'Search chats',
     'sidebar.newChat': 'New chat',
     'sidebar.memory': 'Memory',
@@ -304,6 +305,7 @@ export const enMessages = {
     'agentNotice.failed': 'The GAIA agent could not be installed: {error}',
     'agentNotice.retry': 'Try again',
     'agentNotice.noBuild': "No GAIA agent build for this PC yet, so chat isn't available here.",
+    'agentNotice.sendRefused': "The GAIA agent isn't installed. Install it from the notice above, then send again.",
 
     // A message and its actions
     'msg.sent': 'Sent {time}',
@@ -2304,6 +2306,7 @@ export const enMessages = {
     'settings.skills.link.title': 'Add skills',
     'settings.skills.link.get': 'Get {name}',
     'settings.skills.link.getAria': 'Get {name}: {description}',
+    'settings.skills.link.featured.pstack': 'Engineering workflows: design, review, CI fixes, TDD, PR hygiene (MIT)',
     'settings.skills.link.placeholder': 'Paste a GitHub, skills.sh or .zip link',
     'settings.skills.link.hint': 'A GitHub repo or folder, owner/repo, a skills.sh page, or an https .zip. A library adds every skill in it.',
     'settings.skills.link.aria': 'Link to a skill or skills library',
@@ -2952,7 +2955,7 @@ export const enMessages = {
     'schedules.notUnderstood': "That schedule can't be used.",
     'schedules.nextRun': 'Next run: {when}',
     'schedules.name': 'Name',
-    'schedules.namePlaceholder': 'Schedule name (e.g. daily-summary)',
+    'schedules.namePlaceholder': 'Schedule name, e.g. daily-summary',
     'schedules.prompt': 'Prompt',
     'schedules.promptPlaceholder': 'Prompt to execute on each run...',
     'schedules.promptHint': "Scheduled tasks run on their own, so they can't write files or run commands. Ask GAIA in a chat for those.",
@@ -3114,6 +3117,7 @@ export const enMessages = {
     'mem.domain.technical': 'technical',
     'mem.domain.personal': 'personal',
     'mem.domain.general': 'general',
+    'mem.context.global': 'global',
 
     // Memory dashboard: About you
     'mem.about.title': 'What GAIA knows about you',
@@ -3164,6 +3168,7 @@ export const enMessages = {
     'mem.source.consolidation': 'From an older chat',
     'mem.source.inferred': 'From your profile setup',
     'mem.source.discovery': 'Found on this PC during profile setup',
+    'mem.source.error_auto': 'Recorded from a tool error',
     'mem.source.other': 'Saved',
     'mem.day.today': 'today',
     'mem.day.yesterday': 'yesterday',

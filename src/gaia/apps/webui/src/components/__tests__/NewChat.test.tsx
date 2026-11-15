@@ -7,6 +7,7 @@ import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
+import { FlagshipMissing } from '../../utils/newTask';
 import newChatCss from '../NewChat.css?raw';
 import type { ActiveModel, Document, StartScreen, SystemStatus } from '../../types';
 
@@ -148,6 +149,23 @@ describe('NewChat while GAIA is starting', () => {
         fireEvent.change(box, { target: { value: 'hello' } });
         fireEvent.keyDown(box, { key: 'Enter' });
         expect(onSend).toHaveBeenCalledWith('hello');
+    });
+});
+
+describe('NewChat without the GAIA agent', () => {
+    it('points a refused send at the install notice only while that notice shows', async () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        const onSend = vi.fn().mockRejectedValue(new FlagshipMissing());
+        const { rerender } = render(<NewChat onSend={onSend} agentMissing />);
+
+        const box = screen.getByLabelText('Message');
+        fireEvent.change(box, { target: { value: 'hello' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        expect(await screen.findByRole('alert')).toHaveTextContent('Install it from the notice above');
+        expect(box).toHaveValue('hello');
+
+        rerender(<NewChat onSend={onSend} agentMissing={false} />);
+        expect(screen.queryByText(/notice above/)).not.toBeInTheDocument();
     });
 });
 
