@@ -24,7 +24,7 @@ from gaia.agents.base.completion import (
 )
 from gaia.agents.base.grounding import ungrounded
 from gaia.agents.base.look_first import named_workspace_paths
-from gaia.agents.base.text_task import instruction_part
+from gaia.agents.base.text_task import hands_over_text_only, instruction_part
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.turn_scope import TurnScopeGuard
 
@@ -267,3 +267,167 @@ def test_loop_takes_the_translation_as_the_answer(agent):
     assert SAVE_TRANSLATED in result["result"]
     assert "No successful write" not in result["result"]
     assert "couldn't confirm" not in result["result"]
+
+
+# --- a gated tool the model reaches for on handed-over text is not asked ----
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        SAVE_SENTENCE,
+        CHECK_SENTENCE,
+        QUOTED_SAVE_SENTENCE,
+        'Translate this: "Hello there, friend." into Spanish!',
+        'Please translate the following text into German: "Good morning to you."',
+    ],
+)
+def test_a_request_that_only_hands_over_text_is_recognised(request_text):
+    assert hands_over_text_only(request_text)
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        'Translate this to French: "Hello there, friend." Then save it to fr.txt',
+        "Translate README.md to French",
+        'Translate "Hello there, friend" to French using the shell',
+        "Translate this file to French: notes.txt",
+        # Unquoted: a save typed after the text cannot be told from the text.
+        "Translate to German: Good morning everyone. Save the result as de.txt",
+        "Proofread this:\nTheir going home.\n\nThen write the corrected text to out.md",
+        "Proofread this:\nPlease save it to x.md",
+        # Work after the quote that no word list foresees is still asked about.
+        'Translate this to French: "Hello there, friend." Then paste it into my notes',
+        'Translate this to French: "Hello there, friend." and post it on Slack',
+        'Translate this to French: "Hello there, friend." then speak it aloud',
+        # So is work written before the colon.
+        'Translate this to French and post it on Slack: "Hello there, friend."',
+        'Translate and then speak it aloud: "Hello there, my friend."',
+        'Translate this to French and paste it into my notes: "Hello there, friend."',
+        'Translate to French, do nothing else, then email it: "Hello there, friend."',
+        # A quoted file name is a file to read, not text.
+        'Translate "Quarterly Sales Report.docx" to French',
+        'Translate this: "Quarterly Sales Report.docx"',
+        "What is 17 times 23?",
+        "",
+    ],
+)
+def test_a_request_that_asks_for_work_is_not(request_text):
+    assert not hands_over_text_only(request_text)
+
+
+def test_a_shell_call_after_unquoted_text_is_still_put_to_the_user(shell_agent):
+    _script(shell_agent, _ECHO, {"answer": "Done."})
+
+    shell_agent.process_query(
+        "Translate to German: Good morning everyone. Save the result as de.txt",
+        max_steps=10,
+    )
+
+    shell_agent.console.confirm_tool_execution.assert_called_once()
+
+
+class _ShellAgent(Agent):
+    ran = []
+
+    def _get_system_prompt(self):
+        return "test"
+
+    def _register_tools(self):
+        @tool
+        def run_shell_command(command: str) -> dict:
+            """Run a command."""
+            _ShellAgent.ran.append(command)
+            return {"status": "success", "stdout": "", "return_code": 0}
+
+
+@pytest.fixture
+def shell_agent(tmp_path, monkeypatch):
+    snapshot = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+    _ShellAgent.ran = []
+    monkeypatch.chdir(tmp_path)
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _ShellAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    agent._tool_requires_confirmation = lambda *a, **kw: True
+    agent.console = MagicMock()
+    agent.console.cancelled = None
+    agent.console.confirm_tool_execution.return_value = True
+    yield agent
+    _TOOL_REGISTRY.clear()
+    _TOOL_REGISTRY.update(snapshot)
+
+
+_ECHO = {"tool": "run_shell_command", "tool_args": {"command": 'echo "Le fichier"'}}
+
+
+def test_a_shell_call_on_handed_over_text_is_declined_without_asking(shell_agent):
+    sent = _script(shell_agent, _ECHO, {"answer": "Le fichier est introuvable."})
+
+    result = shell_agent.process_query(CHECK_SENTENCE, max_steps=10)
+
+    shell_agent.console.confirm_tool_execution.assert_not_called()
+    assert _ShellAgent.ran == []
+    assert "Le fichier est introuvable." in result["result"]
+    assert "hands over text" in json.dumps(sent[-1])
+
+
+def _tool_results(agent) -> list:
+    return [
+        c.args[0]
+        for c in agent.console.pretty_print_json.call_args_list
+        if isinstance(c.args[0], dict) and c.args[0].get("status") == "denied"
+    ]
+
+
+def test_a_call_declined_without_asking_is_marked_as_gaias_decline(shell_agent):
+    _script(shell_agent, _ECHO, {"answer": "Le fichier est introuvable."})
+
+    shell_agent.process_query(CHECK_SENTENCE, max_steps=10)
+
+    (result,) = _tool_results(shell_agent)
+    assert result["declined_by"] == "agent"
+
+
+def test_a_call_declined_without_asking_drops_its_prepared_preview(shell_agent):
+    forgotten = []
+
+    class _Preflight:
+        def __call__(self, tool_args):
+            return None  # nothing to refuse
+
+        @staticmethod
+        def forget(tool_args):
+            forgotten.append(tool_args)
+
+    shell_agent._tools_registry["run_shell_command"]["preflight"] = _Preflight()
+    _script(shell_agent, _ECHO, {"answer": "Le fichier est introuvable."})
+
+    shell_agent.process_query(CHECK_SENTENCE, max_steps=10)
+
+    assert forgotten == [_ECHO["tool_args"]]
+
+
+def test_a_call_the_user_declines_is_not_marked_as_gaias(shell_agent):
+    shell_agent.console.confirm_tool_execution.return_value = False
+    _script(shell_agent, _ECHO, {"answer": "Not run."})
+
+    shell_agent.process_query(
+        'Translate "Hello there, friend" to French using the shell', max_steps=10
+    )
+
+    shell_agent.console.confirm_tool_execution.assert_called_once()
+    (result,) = _tool_results(shell_agent)
+    assert "declined_by" not in result
+
+
+def test_a_shell_call_the_instruction_asks_for_is_still_put_to_the_user(shell_agent):
+    _script(shell_agent, _ECHO, {"answer": "Done."})
+
+    shell_agent.process_query(
+        'Translate "Hello there, friend" to French using the shell', max_steps=10
+    )
+
+    shell_agent.console.confirm_tool_execution.assert_called_once()

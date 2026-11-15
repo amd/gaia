@@ -728,6 +728,74 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const RAW_MODEL_ERROR = "Failed to start the query run: Failed to preload Lemonade model 'no-such-model-xyz-123' with ctx_size=65536 "
+    + "on idle server at http://localhost:64679/api/v1: Failed to auto-download 'no-such-model-xyz-123': Download failed: "
+    + 'When registering a new model, the model name must include the `user` namespace. Received: no-such-model-xyz-123';
+
+async function withFailedTurn(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Say hello.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: RAW_MODEL_ERROR, created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [{ id: 1, type: 'error', label: 'Error', detail: RAW_MODEL_ERROR, active: false, success: false }],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed turn names the cause and offers Settings, with the server error under Details (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailedTurn);
+        const reply = page.locator('.msg-error');
+        await expect(reply.locator('.msg-failed-lead')).toBeVisible();
+        await expect(reply.locator('details.msg-failed-details')).not.toHaveAttribute('open', '');
+        // Collapsed, the server's words are not on screen.
+        await expect(reply.locator('.msg-failed-details .md-content')).toBeHidden();
+        await expect(reply.locator('.msg-try-again', { hasText: '›' })).toHaveCount(1);
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`failed-turn-${locale}.png`) });
+        await reply.locator('.msg-failed-details summary').click();
+        await expect(reply.locator('.msg-failed-details .md-content')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`failed-turn-open-${locale}.png`) });
+    });
+
+    test(`a failed turn's Settings button lands on the setting it names (${locale})`, async ({ page }) => {
+        const worded = "There is no model called `no-such-model-xyz-123` to download: the model server doesn't list it. "
+            + 'If you typed this model ID yourself, clear it under Settings > Advanced > Custom model ID.';
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: {
+                    messages: [
+                        { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Say hello.', created_at: NOW.toISOString(), rag_sources: null },
+                        { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: worded, created_at: NOW.toISOString(), rag_sources: null, failed: true },
+                    ],
+                    total: 2,
+                },
+            }));
+            await p.route('**/api/settings', (route) => route.fulfill({ json: {
+                custom_model: 'no-such-model-xyz-123', model_status: { found: false, checked: true, downloaded: false, loaded: false },
+                context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+            } }));
+        });
+        await page.locator('.msg-error .msg-try-again').filter({ hasText: /Advanced|متقدم/ }).click();
+        const custom = page.locator('details[data-settings-target="custom-model"]');
+        // Opened and focused, not the top of the tab (#7861).
+        await expect(custom).toHaveAttribute('open', '');
+        await expect(custom.locator('summary')).toBeFocused();
+        await expect(custom.locator('input')).toBeInViewport();
+        await expect(page.locator('.settings-back')).toHaveCount(0);
+        await shot(page, `failed-turn-to-custom-model-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 /** A new chat whose empty history is still loading when its first message goes out. */
 async function withSlowNewChat(page: Page): Promise<void> {
     const created = { ...SESSIONS[0], title: 'New chat', message_count: 0 };
@@ -4712,6 +4780,32 @@ for (const locale of ['ar', 'en'] as const) {
         await expect(page.locator('.flow-tool-label').filter({ hasText: /run python|request user input/ })).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
         await shot(page, `declined-steps-${locale}`);
+    });
+}
+
+// A call GAIA turned down itself, for a request that only asked to translate.
+const AUTO_DECLINED_STEPS = [
+    { type: 'tool_start', tool: 'run_shell_command', narration: 'Running a command' },
+    {
+        type: 'tool_result', success: false, status: 'denied', declined_by: 'agent',
+        summary: 'Not run: the request only asks for text in the reply.',
+    },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a call GAIA turned down itself reads as not needed, not as declined (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, AUTO_DECLINED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('translate "Good morning" to French');
+        await page.keyboard.press('Enter');
+        const row = page.locator('.flow-steps.live .flow-tool').first();
+        await expect(row).toBeVisible();
+        if (locale === 'en') await expect(row.locator('.flow-tool-label')).toHaveText(/^Not run, not needed for this request: /);
+        await expect(row.locator('.flow-tool-label')).not.toContainText('You declined');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `auto-declined-step-${locale}`);
     });
 }
 
