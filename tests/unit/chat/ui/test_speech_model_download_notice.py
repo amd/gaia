@@ -102,9 +102,20 @@ async def test_the_finished_download_is_saved_with_the_turns_steps(
     assert not any(s["active"] for s in steps)
 
 
-def test_a_reopened_chat_keeps_the_finished_download():
-    from gaia.ui.models import AgentStepResponse
+@pytest.mark.asyncio
+async def test_a_reopened_chat_keeps_the_finished_download(
+    runtime,  # noqa: F811
+):
+    from gaia.ui.utils import message_to_response
 
-    step = AgentStepResponse(id=1, type="status", label=_DONE, kept=True)
-    # Without the field the API dropped it, and the line vanished on reload.
-    assert step.model_dump()["kept"] is True
+    tool = {"type": "tool_start", "tool": "transcribe_media", "detail": "standup.wav"}
+    _, done = _over_the_wire(SPEECH_MODEL_DOWNLOADED_PHASE, _DONE)
+    result = {"type": "tool_result", "title": "Transcribed", "success": True}
+    sid, _events = await _run(runtime, [tool, done, result])
+
+    # Read back the way a reopened chat is: without the field the API dropped it.
+    saved = message_to_response(runtime.get_messages(sid)[-1])
+    assert [(s.label, s.kept) for s in saved.agent_steps] == [
+        (_DONE, True),
+        ("Using transcribe_media", None),
+    ]
