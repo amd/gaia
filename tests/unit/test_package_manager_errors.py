@@ -51,6 +51,18 @@ def test_nothing_is_made_up_for_a_code_gaia_cannot_read(program, code):
     assert package_manager_errors.explain(program, code) is None
 
 
+@pytest.mark.parametrize("code", [0x8A150061, 0x8A15002B, -1978335135])
+def test_already_installed_is_not_a_failure(code):
+    assert package_manager_errors.nothing_to_do("winget.exe", code)
+
+
+@pytest.mark.parametrize(
+    "program, code", [("winget", CERTIFICATE), ("winget", 0), ("git", 0x8A150061)]
+)
+def test_a_real_failure_is_still_one(program, code):
+    assert not package_manager_errors.nothing_to_do(program, code)
+
+
 def test_a_failed_install_says_what_the_code_means(monkeypatch):
     plan = InstallPlan(
         binary="gh",

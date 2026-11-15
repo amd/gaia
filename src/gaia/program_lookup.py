@@ -66,16 +66,19 @@ def refresh_path(after_install: bool = False) -> List[str]:
 
 
 def _registry_path_entries() -> List[str]:
-    """The user's and the machine's ``Path`` from the Windows registry, expanded."""
+    """The machine's then the user's ``Path`` from the Windows registry, expanded.
+
+    Machine first, as Windows builds a new process's ``Path``.
+    """
     import winreg  # pylint: disable=import-outside-toplevel,import-error
 
     entries: List[str] = []
     for root, subkey in (
-        (winreg.HKEY_CURRENT_USER, r"Environment"),
         (
             winreg.HKEY_LOCAL_MACHINE,
             r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
         ),
+        (winreg.HKEY_CURRENT_USER, r"Environment"),
     ):
         try:
             with winreg.OpenKey(root, subkey) as key:

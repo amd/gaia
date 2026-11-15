@@ -54,6 +54,22 @@ _WINGET = {
 
 _TABLES = {"winget": _WINGET}
 
+#: Non-zero codes that say the work was already done.
+_NOTHING_TO_DO = {"winget": frozenset({0x8A15002B, 0x8A150061})}
+
+
+def _program_name(program: str) -> str:
+    name = os.path.basename(program.replace("\\", "/")).lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def nothing_to_do(program: str, return_code: Optional[int]) -> bool:
+    """True when *return_code* is non-zero but means there was nothing to do."""
+    if not return_code:
+        return False
+    codes = _NOTHING_TO_DO.get(_program_name(program), frozenset())
+    return return_code & 0xFFFFFFFF in codes
+
 
 def explain(program: str, return_code: Optional[int]) -> Optional[str]:
     """What *return_code* from *program* means, or None when GAIA cannot say.
@@ -63,6 +79,4 @@ def explain(program: str, return_code: Optional[int]) -> Optional[str]:
     """
     if not return_code:
         return None
-    name = os.path.basename(program.replace("\\", "/")).lower()
-    name = name[:-4] if name.endswith(".exe") else name
-    return _TABLES.get(name, {}).get(return_code & 0xFFFFFFFF)
+    return _TABLES.get(_program_name(program), {}).get(return_code & 0xFFFFFFFF)

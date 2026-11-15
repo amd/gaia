@@ -8168,17 +8168,19 @@ class ShellToolsMixin:
         }
         if waited:
             outcome["waited_seconds"] = round(waited, 1)
-        meaning = next(
-            (
-                found
-                for segment in segments
-                if segment
-                and (found := package_manager_errors.explain(segment[0], code))
-            ),
-            None,
-        )
-        if meaning:
-            outcome["exit_code_meaning"] = meaning
+        for segment in segments:
+            meaning = (
+                package_manager_errors.explain(segment[0], code) if segment else ""
+            )
+            if not meaning:
+                continue
+            if package_manager_errors.nothing_to_do(segment[0], code):
+                # "Already installed" is not a failed step.
+                outcome["expected_exit"] = meaning
+                outcome["has_errors"] = False
+            else:
+                outcome["exit_code_meaning"] = meaning
+            break
         return attach_check(
             outcome, check_from_command(command, segments, code, raw_out, raw_err)
         )

@@ -352,6 +352,27 @@ def test_a_failed_winget_run_carries_what_its_exit_code_means(_isolated):
     assert "certificate" in outcome["exit_code_meaning"]
 
 
+@pytest.mark.skipif(
+    __import__("os").name != "nt", reason="winget and its exit codes are Windows'"
+)
+def test_winget_saying_already_installed_is_not_shown_as_a_failed_step(_isolated):
+    from types import SimpleNamespace
+
+    from gaia.agents.base.tool_outcome import tool_result_failed
+
+    agent = _agent(_isolated)
+    agent.shell_command_times = []
+    steps = [SimpleNamespace(segments=[["winget", "install", "Git.Git"]])]
+
+    outcome = agent._run_approved_once(
+        "exit /b -1978335135", str(_isolated), steps, 30, "default", 0
+    )
+
+    assert "already installed" in outcome["expected_exit"]
+    assert "exit_code_meaning" not in outcome
+    assert not tool_result_failed(outcome)
+
+
 def test_git_is_told_not_to_wait_for_a_password_nobody_can_type(monkeypatch):
     from gaia.agents.tools.shell_tools import _segment_env
 
