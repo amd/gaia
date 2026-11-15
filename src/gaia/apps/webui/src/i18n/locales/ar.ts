@@ -2632,7 +2632,7 @@ const messages: Messages = {
     'settings.server.address': 'عنوان خادم Lemonade',
     'settings.server.key': 'مفتاح API لـ Lemonade',
     'settings.server.keySaved': 'مفتاح API (اتركه فارغًا للإبقاء على المحفوظ)',
-    'settings.server.keyOptional': 'مفتاح API إن كان مطلوبًا',
+    'settings.server.keyOptional': 'مفتاح API إن لزم',
     'settings.server.checking': 'جارٍ الفحص…',
     'settings.server.use': 'استخدام هذا الخادم',
     'settings.server.useOwn': 'استخدام خادم GAIA',
