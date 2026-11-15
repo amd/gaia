@@ -1468,6 +1468,31 @@ for (const locale of ['en', 'ar']) {
         await shot(page, `documents-${locale}-server-down`);
         expect(await audit(page)).toEqual([]);
     });
+
+    // The chat's document bar called a server-down file unreadable while the library didn't.
+    test(`the chat's document bar with a file waiting for the model server (${locale})`, async ({ page }) => {
+        const docs = [
+            { id: 'd1', filename: 'third.md', filepath: 'C:/third.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_down', last_error: 'Lemonade Server is not reachable', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+            { id: 'd2', filename: 'broken.pdf', filepath: 'C:/broken.pdf', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'corrupt', last_error: 'Could not read PDF: broken.pdf', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+            { id: 'd3', filename: 'garden-notes.txt', filepath: 'C:/garden-notes.txt', file_size: 7270, chunk_count: 7, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+        ];
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === '/api/documents', (route) =>
+                route.fulfill({ json: { documents: docs, total: docs.length, total_size_bytes: 9318, total_chunks: 7 } }));
+            const sessions = SESSIONS.map((s) => (s.id === ANSWER_SESSION ? { ...s, document_ids: docs.map((d) => d.id) } : s));
+            await p.route((url) => url.pathname === '/api/sessions', (route) =>
+                route.fulfill({ json: { sessions, total: sessions.length } }));
+        });
+        const label = page.locator('.doc-context-label');
+        await expect(label).toBeVisible();
+        // Same split as the library: one waiting for the server, one truly unreadable.
+        await expect(label).toContainText(locale === 'ar' ? 'بانتظار خادم النماذج: 1' : '1 waiting for the model server');
+        await expect(label).toContainText(locale === 'ar' ? 'تعذّرت قراءتها: 1' : "1 couldn't be read");
+        await expect(page.locator('.doc-pill', { hasText: 'third.md' })).toHaveAttribute('title', locale === 'ar' ? /بانتظار خادم النماذج/ : /waiting for GAIA's model server/);
+        if (locale === 'ar') expect(await untranslated(page, '.doc-context-bar', '.doc-pill-name')).toEqual([]);
+        await shot(page, `chat-docs-bar-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 for (const locale of ['ar', 'en']) {
