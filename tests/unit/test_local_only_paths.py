@@ -472,6 +472,32 @@ def test_unanswering_server_is_a_plain_notice_and_a_logged_error(
     assert saved["default_model"] == "collection.router"
 
 
+def test_two_unchecked_models_are_worded_in_the_plural(local_only_on, monkeypatch):
+    from gaia import config as config_mod
+    from gaia.llm.lemonade_client import LemonadeClientError, record_cloud_models
+
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps({"default_model": "collection.a", "last_model": "collection.b"}),
+        encoding="utf-8",
+    )
+    record_cloud_models({"data": []})
+
+    def refused(self, **_kwargs):
+        try:
+            raise requests.exceptions.ConnectionError("refused")
+        except requests.exceptions.ConnectionError as e:
+            raise LemonadeClientError(f"Request failed: {e}") from e
+
+    monkeypatch.setattr(LemonadeClient, "list_models", refused)
+    result = local_only.apply_policy("local_ai_only")
+
+    [notice] = [n for n in result["notices"] if n["severity"] == "warning"]
+    assert notice["models"] == ["collection.a", "collection.b"]
+    [warning] = [w for w in result["warnings"] if "collection.a" in w]
+    assert "collection.a, collection.b are cloud models" in warning
+    assert "so they are still saved" in warning
+
+
 def test_known_cloud_default_is_cleared_when_catalog_is_down(
     local_only_on, monkeypatch
 ):

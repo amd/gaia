@@ -414,16 +414,20 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
                 exc_info=True,
             )
             down = _server_not_answering(e)
+            many = len(models) > 1
+            what = "are cloud models" if many else "is a cloud model"
+            kept = "they are" if many else "it is"
             if down:
                 message = (
-                    f"couldn't check whether {unchecked} is a cloud model because "
-                    "the model server isn't answering, so it is still saved. Turn "
-                    "Local only on again once the model server is back to check it"
+                    f"couldn't check whether {unchecked} {what} because the "
+                    f"model server isn't answering, so {kept} still saved. Turn "
+                    "Local only on again once the model server is back to check "
+                    + ("them" if many else "it")
                 )
             else:
                 message = (
-                    f"couldn't check whether {unchecked} is a cloud model, so it "
-                    f"is still saved: {e}"
+                    f"couldn't check whether {unchecked} {what}, so {kept} "
+                    f"still saved: {e}"
                 )
             raise SavedModelsNotCheckedError(
                 message, list(cleared), models=models, server_down=down
