@@ -86,7 +86,7 @@ function AutomationCard({ item, busy, onToggle, onRemove }: {
                 {item.quiet && <span>{t('settings.automations.quiet')} <bdi dir="ltr">{item.quiet}</bdi></span>}
                 {item.days && <span>{t('settings.automations.days')} {daysPhrase(item.days, t)}</span>}
             </p>
-            {detail && <p className="automation-detail"><bdi>{detail}</bdi></p>}
+            {detail && <p className="automation-detail" dir="auto"><bdi>{detail}</bdi></p>}
             {item.check && (
                 <p className="settings-hint automation-check">
                     {t('settings.automations.check')} <code dir="ltr">{item.check}</code>

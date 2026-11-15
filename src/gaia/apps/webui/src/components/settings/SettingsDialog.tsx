@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { lazy, Suspense, useEffect, useRef, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, type KeyboardEvent } from 'react';
 import { ChevronLeft, Loader2, X } from 'lucide-react';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
@@ -49,6 +49,11 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     useDialogFocus(panel, isOpen, () =>
         panel.current?.querySelector<HTMLElement>('.settings-nav-item.is-active'),
     );
+
+    // One scroller serves every tab, so a new tab would open at the last one's offset.
+    useLayoutEffect(() => {
+        if (scroller.current) scroller.current.scrollTop = 0;
+    }, [section]);
 
     // Panes load their data first, so wait for the setting to appear before landing on it.
     useEffect(() => {

@@ -290,7 +290,11 @@ def chat_spend(
 
 def limit_refusal(db, model_id: Optional[str]) -> Optional[str]:
     """Why a turn on *model_id* must not start, or None when it may."""
-    provider = cloud_provider(model_id)
+    from gaia.llm.hybrid import candidate_models
+
+    provider = next(
+        filter(None, (cloud_provider(m) for m in candidate_models(model_id))), None
+    )
     if provider is None:
         return None
     report = month_report(db)

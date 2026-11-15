@@ -411,12 +411,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   integrator using this package is unaffected and keeps resolving the mailbox from
   the local GAIA connector store exactly as before (#2154).
 - **The agent's autonomy commands now work against the shipped binary.** `gaia
-  email autonomy status/set-level/pause/resume/run/undo/kill/trust` call REST
+  email autonomy status/set-level/pause/resume/run/kill/trust` call REST
   routes (`/v1/email/agent/autonomy*`) that did not exist in any previously
   published binary — a sidecar installed from 0.5.0 or earlier 404'd on every
-  one of them, with nothing telling the caller why. All eight subcommands now
+  one of them, with nothing telling the caller why. All seven subcommands now
   reach a real route and get back a 200, or a correct 409 when autonomy is
-  off (#2894).
+  off (#2894). Undo has no CLI subcommand; it is available over REST only, as
+  `POST /v1/email/agent/autonomy/undo`.
 - **Muting a sender no longer buries their genuinely urgent mail as
   promotional.** The category override for a muted (low-priority) sender was
   unconditional — every message from that sender was force-classified

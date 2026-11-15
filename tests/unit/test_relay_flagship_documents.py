@@ -70,6 +70,9 @@ class _Rag:
         self.indexed_files.add(path)
         return {"success": True, "num_chunks": 1}
 
+    def is_full(self):
+        return False
+
     def remove_document(self, path):
         self.indexed_files.discard(path)
         self.removed.append(path)
