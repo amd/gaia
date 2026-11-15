@@ -1236,6 +1236,7 @@ export const enMessages = {
     'prompt.alwaysAllow': 'Always allow {scope} in this chat',
     'prompt.always.file': '{action} {name}',
     'prompt.always.folder': '{action} in {folder}',
+    'prompt.always.changes': 'changing files in {folder}',
     'prompt.deny': 'Deny',
     'prompt.details': 'Details',
     'prompt.technicalDetails': 'Technical details',
