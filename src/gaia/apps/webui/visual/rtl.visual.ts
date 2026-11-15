@@ -4248,7 +4248,7 @@ for (const locale of ['ar', 'en'] as const) {
         await page.addInitScript(streamThenWait, [{
             type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-always',
             args: { file_path: '/private/tmp/plans/weekly-grocery-plan.md', content: '# Weekly grocery plan\n' },
-            always_scope: 'write_file on files in /private/tmp/plans', always_label: 'writing files in /private/tmp/plans',
+            always_scope: 'changes to files in /private/tmp/plans', always_label: 'changing files in /private/tmp/plans',
         }]);
         await open(page, `#${ANSWER_SESSION}`, locale);
         await page.locator('textarea').first().fill('save my grocery plan');

@@ -14,7 +14,7 @@ So a grant is keyed on the *invocation*, not the tool name:
     run_shell_command  command="cd p && python -m pytest -q 2>&1"
                                                  ->  run_shell_command:pytest
     write_file         file_path="notes.md"      ->  write_file:notes.md
-    (safe host-resolved folder)                  ->  write_file:/project/*
+    (safe host-resolved folder)                  ->  file_change:/project/*
     (home/PATH/hidden safety path)               ->  write_file:/home/u/notes.md
 
 A shell grant covers a command *family*: the program and its subcommand,
