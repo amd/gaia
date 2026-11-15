@@ -84,6 +84,7 @@ from gaia.utils.file_lock import (
     write_text_atomic,
 )
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.text_decoding import TRIED_ENCODINGS, decode_text
 
 _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -91,10 +92,6 @@ _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF32_BE, "utf-32"),
     (codecs.BOM_UTF16_LE, "utf-16"),
     (codecs.BOM_UTF16_BE, "utf-16"),
-)
-_TEXT_TRIED_ENCODINGS = ", ".join(
-    list(dict.fromkeys(e for _, e in _TEXT_BOM_ENCODINGS))
-    + ["utf-8", "cp1252", "detected legacy encodings (Windows-1256, Shift-JIS, GBK…)"]
 )
 
 
@@ -196,39 +193,6 @@ def folder_index_skip_reason(file_path) -> Optional[str]:
     if not ext:
         return "no file extension, so the document type is unknown"
     return f"{ext} files are not a supported document type"
-
-
-def _decode_text_bytes(data: bytes) -> str:
-    """Decode text bytes, detecting legacy encodings; raise when none fits."""
-    for bom, encoding in _TEXT_BOM_ENCODINGS:
-        if data.startswith(bom):
-            return data.decode(encoding)
-
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        pass
-
-    from charset_normalizer import from_bytes
-
-    matches = from_bytes(data)
-    try:
-        cp1252_text = data.decode("cp1252")
-    except UnicodeDecodeError:
-        cp1252_text = None
-    # Short Western text scores as cp1250/cp775 too; keep cp1252 when it reads cleanly.
-    if cp1252_text is not None and any(str(m) == cp1252_text for m in matches):
-        return cp1252_text
-    best = matches.best()
-    if best is not None:
-        return str(best)
-    # Symbol-heavy Western text ("12€ — 15€") the detector can't place.
-    high = sum(byte >= 0x80 for byte in data)
-    if cp1252_text is not None and high <= sum(0x20 < byte < 0x80 for byte in data):
-        return cp1252_text
-    raise UnicodeDecodeError(
-        "text", data, 0, len(data), "no text encoding fits these bytes"
-    )
 
 
 # --- PDF extraction errors ---------------------------------------------------
@@ -2782,11 +2746,11 @@ These positions indicate where to split the text."""
                 data = f.read()
 
             try:
-                text = _decode_text_bytes(data)
+                text = decode_text(data)[0]
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
@@ -2817,11 +2781,11 @@ These positions indicate where to split the text."""
                 data = f.read()
 
             try:
-                decoded = _decode_text_bytes(data)
+                decoded = decode_text(data)[0]
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode CSV file: {csv_path}\n"
-                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
                     "  2. Check if the file is a valid CSV (not corrupted)\n"
