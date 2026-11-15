@@ -642,7 +642,7 @@ class GaiaAgent(
         )
 
     def get_memory_dynamic_context(self) -> str:
-        """Per-turn context, plus the skills that match this request.
+        """Per-turn context, plus the skills that may fit this request.
 
         In the user message, not the system prompt: a line that changes from
         turn to turn anywhere in the system prompt makes the server re-read the
