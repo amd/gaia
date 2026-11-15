@@ -139,6 +139,7 @@ from gaia.agents.base.python_scope import python_scope_refusal
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
 from gaia.agents.base.task_lessons import attach as attach_task_lessons
+from gaia.agents.base.text_task import instruction_part
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
@@ -12132,8 +12133,11 @@ Do NOT wrap conversational replies in JSON.
         self._last_tool_filter = None
 
         # Relative paths resolve against the working directory, as the file tools do.
+        # Text handed over to translate names no source to inventory.
         self._extraction_ledger = ExtractionLedger(
-            user_input, os.getcwd(), available=self._read_validator() is not None
+            instruction_part(user_input),
+            os.getcwd(),
+            available=self._read_validator() is not None,
         )
         # A test agent built via __new__ never ran Agent.__init__, so it has
         # no guard yet — create one rather than crash (mirrors _extraction_ledger).

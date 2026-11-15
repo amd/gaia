@@ -502,7 +502,8 @@ describe('PermissionPrompt heading and question in the UI language', () => {
 
     it.each([
         ['file', 'write_file on notes.txt', 'السماح دائمًا بـ كتابة ملف notes.txt في هذه المحادثة'],
-        ['folder', 'write_file on files in /private/tmp/plans', 'السماح دائمًا بـ كتابة ملف في /private/tmp/plans في هذه المحادثة'],
+        ['folder', 'write_file on files in /private/tmp/plans', 'السماح دائمًا بـ كتابة ملف في plans في هذه المحادثة'],
+        ['changes', 'changes to files in /private/tmp/plans', 'السماح دائمًا بـ تغيير الملفات في plans في هذه المحادثة'],
     ])('words the file-write question and its always button in Arabic with no English (%s)', (_kind, alwaysScope, button) => {
         useChatStore.setState({ locale: 'ar' });
         useNotificationStore.getState().addNotification(request({
