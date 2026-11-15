@@ -12,6 +12,7 @@ const messages: Messages = {
     'sidebar.collapse': 'طي الشريط الجانبي',
     'sidebar.resize': 'تغيير حجم الشريط الجانبي',
     'sidebar.resizeTitle': 'اسحب لتغيير الحجم، وانقر مرتين لإعادة الضبط',
+    'sidebar.open': 'فتح الشريط الجانبي',
     'sidebar.search': 'البحث في المحادثات',
     'sidebar.newChat': 'محادثة جديدة',
     'sidebar.memory': 'الذاكرة',
@@ -304,6 +305,7 @@ const messages: Messages = {
     'agentNotice.failed': 'تعذّر تثبيت وكيل GAIA: {error}',
     'agentNotice.retry': 'إعادة المحاولة',
     'agentNotice.noBuild': 'لا يتوفر إصدار من وكيل GAIA لهذا الكمبيوتر بعد، لذا لا تتوفر المحادثة هنا.',
+    'agentNotice.sendRefused': 'وكيل GAIA غير مثبّت. ثبّته من الإشعار في الأعلى، ثم أرسل رسالتك مجددًا.',
 
     // A message and its actions
     'msg.sent': 'أُرسلت في {time}',
@@ -2302,6 +2304,7 @@ const messages: Messages = {
     'settings.skills.link.title': 'إضافة مهارات',
     'settings.skills.link.get': 'الحصول على {name}',
     'settings.skills.link.getAria': 'الحصول على {name}: {description}',
+    'settings.skills.link.featured.pstack': 'سير عمل هندسي: التصميم والمراجعة وإصلاح CI وTDD وترتيب طلبات الدمج، برخصة MIT',
     'settings.skills.link.placeholder': 'الصق رابط GitHub أو skills.sh أو ملف ‎.zip',
     'settings.skills.link.hint': 'مستودع أو مجلد على GitHub، أو owner/repo، أو صفحة skills.sh، أو رابط https لملف ‎.zip. المكتبة تضيف كل مهارة فيها.',
     'settings.skills.link.aria': 'رابط مهارة أو مكتبة مهارات',
@@ -2946,7 +2949,7 @@ const messages: Messages = {
     'schedules.notUnderstood': 'لا يمكن استخدام هذا الموعد.',
     'schedules.nextRun': 'التشغيل التالي: {when}',
     'schedules.name': 'الاسم',
-    'schedules.namePlaceholder': 'اسم المهمة (مثل ⁦daily-summary⁩)',
+    'schedules.namePlaceholder': 'اسم المهمة، مثل ⁦daily-summary⁩',
     'schedules.prompt': 'الطلب',
     'schedules.promptPlaceholder': 'الطلب الذي يُنفَّذ في كل تشغيل…',
     'schedules.promptHint': 'المهام المجدولة تعمل من تلقاء نفسها، لذلك لا يمكنها كتابة الملفات أو تشغيل الأوامر. اطلب ذلك من GAIA في محادثة.',
@@ -3103,6 +3106,7 @@ const messages: Messages = {
     'mem.domain.technical': 'تقني',
     'mem.domain.personal': 'شخصي',
     'mem.domain.general': 'عام',
+    'mem.context.global': 'شامل',
 
     // Memory dashboard: About you
     'mem.about.title': 'ما يعرفه GAIA عنك',
@@ -3153,6 +3157,7 @@ const messages: Messages = {
     'mem.source.consolidation': 'من محادثة أقدم',
     'mem.source.inferred': 'من إعداد ملفك الشخصي',
     'mem.source.discovery': 'وُجد على هذا الجهاز أثناء إعداد الملف الشخصي',
+    'mem.source.error_auto': 'سُجّل من خطأ في أداة',
     'mem.source.other': 'محفوظ',
     'mem.day.today': 'اليوم',
     'mem.day.yesterday': 'أمس',
