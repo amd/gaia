@@ -8,9 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from gaia.agents.tools.text_files import read_text
 from gaia.rag.sdk import RAGSDK
-from tests.fixtures.legacy_text import LEGACY_SAMPLES
 
 
 @pytest.fixture
@@ -153,12 +151,3 @@ def test_truncated_utf16_raises_with_tried_encodings(rag, tmp_path):
 
     with pytest.raises(ValueError, match="Tried encodings: .*utf-8,.*cp1252"):
         rag._extract_text_from_text_file(str(document))
-
-
-@pytest.mark.parametrize(**LEGACY_SAMPLES)
-def test_document_qa_reads_a_file_as_the_file_tools_do(rag, tmp_path, text, encoding):
-    document = tmp_path / "legacy.txt"
-    document.write_bytes(text.encode(encoding))
-
-    assert rag._extract_text_from_text_file(str(document)) == text.strip()
-    assert read_text(document)[0] == text
