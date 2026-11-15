@@ -1025,15 +1025,16 @@ def _index_attached_documents(
         # Already said when the index filled; the model is told every turn.
         _grant_unloaded(agent, pending)
         return
+    # Set before the step opens, so a Stop that lands now still gets its count.
+    load = _DocumentLoad(len(pending), getattr(agent, "_cancel_event", None))
+    if run is not None:
+        run.document_load = load
     handler.print_tool_usage(_ATTACH_TOOL)
     handler.pretty_print_json(
         {"documents": [Path(d).name for d in pending]}, title="Arguments"
     )
     rag = agent.rag
     lines: List[str] = []
-    load = _DocumentLoad(len(pending), getattr(agent, "_cancel_event", None))
-    if run is not None:
-        run.document_load = load
     stopped = False
     filled = False
     left = 0
