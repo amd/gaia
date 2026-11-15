@@ -1212,6 +1212,7 @@ const messages: Messages = {
     'prompt.alwaysAllow': 'السماح دائمًا بـ {scope} في هذه المحادثة',
     'prompt.always.file': '{action} {name}',
     'prompt.always.folder': '{action} في {folder}',
+    'prompt.always.changes': 'تغيير الملفات في {folder}',
     'prompt.deny': 'رفض',
     'prompt.details': 'التفاصيل',
     'prompt.technicalDetails': 'التفاصيل التقنية',

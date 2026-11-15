@@ -314,3 +314,56 @@ class TestRenameCannotReachFurther:
             k.startswith("file_change:") for k in scope.keys
         )
         assert not [p for p in looked if "attacker" in p]
+
+
+def _dir_link_or_skip(link, target):
+    """A folder link: a junction on Windows (no privilege needed), else a symlink."""
+    try:
+        if os.name == "nt":
+            import _winapi
+
+            _winapi.CreateJunction(str(target), str(link))
+        else:
+            os.symlink(target, link, target_is_directory=True)
+    except (OSError, ImportError, AttributeError) as e:
+        pytest.skip(f"cannot create a folder link here: {e}")
+
+
+class TestTheGrantNamesOneFolder:
+    @pytest.fixture
+    def sibling(self, folder):
+        twin = folder.parent / f"{folder.name}2"
+        twin.mkdir()
+        (twin / "notes.txt").write_text("twin")
+        return twin
+
+    def test_a_sibling_sharing_the_name_prefix_is_asked(self, folder, sibling):
+        granted = _file("write_file", folder / "summary.md")
+        assert not _covers(granted, _file("edit_file", sibling / "notes.txt"))
+        rename = _shell(f'{MOVE} "{sibling / "notes.txt"}" "{sibling / "x.txt"}"')
+        assert not _covers(granted, rename)
+
+    def test_a_rename_into_a_prefixed_sibling_is_asked(self, folder, sibling):
+        granted = _file("write_file", folder / "summary.md")
+        call = _shell(f'{MOVE} "{folder / "draft_old.txt"}" "{sibling / "x.txt"}"')
+        assert not _covers(granted, call)
+
+    def test_a_folder_link_out_of_the_folder_is_asked(self, folder, sibling):
+        link = folder / "out"
+        _dir_link_or_skip(link, sibling)
+        granted = _file("write_file", folder / "summary.md")
+        assert not _covers(granted, _file("edit_file", link / "notes.txt"))
+        rename = _shell(f'{MOVE} "{link / "notes.txt"}" "{link / "x.txt"}"')
+        assert not _covers(granted, rename)
+
+    @pytest.mark.parametrize("hidden", [".ssh", ".aws", ".gnupg"])
+    def test_a_credential_dot_folder_gets_no_folder_grant(self, folder, hidden):
+        creds = folder.parent / hidden
+        creds.mkdir()
+        (creds / "config").write_text("secret")
+        scope = _file("edit_file", creds / "config")
+        assert not any(k.startswith("file_change:") for k in scope.keys)
+        rename = _shell(f'{MOVE} "{creds / "config"}" "{creds / "config2"}"')
+        assert rename is None or not any(
+            k.startswith("file_change:") for k in rename.keys
+        )

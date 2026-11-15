@@ -3770,8 +3770,15 @@ for (const locale of ['ar', 'en'] as const) {
         const card = page.locator('.perm-card');
         await expect(card).toBeVisible();
         const always = card.locator('.perm-btn').nth(1);
-        await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
-        if (locale === 'en') await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        if (locale === 'en') {
+            await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
+            await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        } else {
+            const title = await always.getAttribute('title');
+            expect(title?.replace(/[\u2066-\u2069]/g, '')).toBe(`تغيير الملفات في ${FOLDER}`);
+            await expect(always).not.toContainText('Documents');
+            expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+        }
         expect(await audit(page)).toEqual([]);
         await shot(page, `permission-folder-${locale}`);
     });
