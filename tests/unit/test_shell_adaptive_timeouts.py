@@ -17,6 +17,7 @@ timeout rework runs straight through them: the applied timeout comes back in the
 result, a timed-out command is flagged, and partial output survives the kill.
 """
 
+import os
 import subprocess
 import time
 
@@ -529,6 +530,11 @@ def test_a_granted_binary_reaches_its_class_through_the_real_allowlist(monkeypat
     host, tools = _shell_tools()
     host._granted_binaries = BinaryGrants()
     host._granted_binaries.grant("pytest", skill_name="python-testing")
+    # The process is faked below, so pytest need not be on this machine's PATH.
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools._program_on_path",
+        lambda name, _cwd: os.path.join(os.sep, "tools", f"{name}.exe"),
+    )
     clock = _fake_clock(monkeypatch)
     _hangs_forever(monkeypatch, clock)
 

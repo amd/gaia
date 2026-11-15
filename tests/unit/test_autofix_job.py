@@ -8,6 +8,7 @@ main, so these tests run the outcome check itself against a stand-in ``gh``.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -94,7 +95,7 @@ def run_step(job, tmp_path):
     summary = tmp_path / "summary.md"
     output = tmp_path / "output"
 
-    def run(name, content=None, open_pr="", linked="", fail_gh=False):
+    def run(name, content=None, open_pr="", linked="", fail_gh=False, exec_file=""):
         if content is not None:
             outcome.write_text(content, encoding="utf-8")
         env = {
@@ -106,12 +107,14 @@ def run_step(job, tmp_path):
             "ISSUE_NUMBER": "42",
             "REPO": "amd/gaia",
             "OUTCOME_FILE": str(outcome),
+            "EXEC_FILE": exec_file,
             "GITHUB_STEP_SUMMARY": str(summary),
             "GITHUB_OUTPUT": str(output),
         }
         result = subprocess.run(
             ["bash", "-e", "-c", step(job, name)["run"]],
             env=env,
+            cwd=ROOT,
             capture_output=True,
             text=True,
             timeout=30,
@@ -126,9 +129,9 @@ def run_step(job, tmp_path):
 
 @pytest.fixture
 def run_check(run_step):
-    def run(content, open_pr="", linked="", fail_gh=False):
+    def run(content, open_pr="", linked="", fail_gh=False, exec_file=""):
         result, summary, _ = run_step(
-            "Check the auto-fix outcome", content, open_pr, linked, fail_gh
+            "Check the auto-fix outcome", content, open_pr, linked, fail_gh, exec_file
         )
         return result, summary
 
@@ -379,3 +382,143 @@ def test_a_second_start_queues_instead_of_cancelling(job):
     # The template's own `labeled` event starts the run; `opened` would be a second one.
     assert "'opened'" not in job["if"]
     assert "github.event.label.name == 'bug'" in job["if"]
+
+
+# --- Claude ends a run with the outcome in its reply but no file (#8186, #8226) ---
+
+sys.path.insert(0, str(ROOT / "util"))
+import autofix_outcome  # noqa: E402  pylint: disable=wrong-import-position
+
+
+def transcript(*texts, result=None):
+    msgs = [{"type": "system", "subtype": "init"}]
+    msgs += [
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": t}]}}
+        for t in texts
+    ]
+    msgs.append({"type": "result", "subtype": "success", "result": result})
+    return json.dumps(msgs)
+
+
+def test_every_stop_in_the_prompt_writes_the_outcome_first(job):
+    text = prompt(job)
+    assert "last action on every path is writing `/tmp/autofix-outcome.md`" in text
+    assert "Then stop." not in text
+    assert "- Exit." not in text
+    assert "Exit without an issue" not in text
+    assert "`Outcome: FAILED`), then stop" in text
+    assert "`Outcome: A`), then stop" in text
+    assert "`Outcome: C`, no details), then stop" in text
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["Outcome: C", "**Outcome: C**", "> Outcome: C", "`Outcome: C`", "Outcome: C."],
+)
+def test_a_stated_outcome_is_recovered_however_it_is_marked_up(line):
+    texts = autofix_outcome.replies(
+        transcript(f"Done.\n\n{line}\n**An LLM-behaviour issue.**")
+    )
+    assert (
+        autofix_outcome.stated_outcome(texts) == "Outcome: C\nAn LLM-behaviour issue.\n"
+    )
+
+
+def test_the_newest_outcome_wins():
+    texts = autofix_outcome.replies(
+        transcript(
+            "Plan: Outcome: A if it reproduces.\nOutcome: A\nmaybe",
+            result="Outcome: C\nfeature",
+        )
+    )
+    assert autofix_outcome.stated_outcome(texts).startswith("Outcome: C\n")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The outcome is C.",
+        "Outcome: D\nnope",
+        "Outcome: A and B",
+        "I would pick Outcome: C",
+    ],
+)
+def test_no_outcome_is_invented(text):
+    assert (
+        autofix_outcome.stated_outcome(autofix_outcome.replies(transcript(text)))
+        is None
+    )
+
+
+def test_an_outcome_without_a_reason_still_says_so():
+    out = autofix_outcome.stated_outcome(["Outcome: B"])
+    assert out.startswith("Outcome: B\n") and "no reason" in out
+
+
+def test_one_message_per_line_transcripts_are_read():
+    raw = "\n".join(
+        json.dumps(m) for m in json.loads(transcript("x", result="Outcome: C\nwhy"))
+    )
+    assert (
+        autofix_outcome.stated_outcome(autofix_outcome.replies(raw))
+        == "Outcome: C\nwhy\n"
+    )
+
+
+def test_no_outcome_puts_the_last_reply_in_the_summary(tmp_path):
+    exec_file, outcome, summary = (tmp_path / n for n in ("exec.json", "o.md", "s.md"))
+    exec_file.write_text(
+        transcript("::error::looked", result="I could not reproduce it.")
+    )
+    rc = autofix_outcome.main(["x", str(exec_file), str(outcome), str(summary)])
+    assert rc == 0 and not outcome.exists()
+    assert "> I could not reproduce it." in summary.read_text(encoding="utf-8")
+
+
+def test_an_unreadable_transcript_writes_nothing(tmp_path):
+    exec_file = tmp_path / "exec.json"
+    exec_file.write_text("{not json")
+    out = tmp_path / "o.md"
+    assert (
+        autofix_outcome.main(["x", str(exec_file), str(out), str(tmp_path / "s.md")])
+        == 0
+    )
+    assert not out.exists()
+
+
+@needs_bash
+def test_a_decline_stated_only_in_the_reply_passes(run_check, tmp_path):
+    exec_file = tmp_path / "exec.json"
+    exec_file.write_text(
+        transcript(result="Outcome: C\n::error::LLM behaviour, not a code bug.")
+    )
+    result, summary = run_check(None, exec_file=str(exec_file))
+    assert result.returncode == 0
+    assert "LLM behaviour" in summary
+    assert "::error::LLM" not in result.stdout
+
+
+@needs_bash
+def test_a_reply_with_no_outcome_still_fails_and_shows_the_reply(run_check, tmp_path):
+    exec_file = tmp_path / "exec.json"
+    exec_file.write_text(transcript(result="Looked around, nothing to do."))
+    result, summary = run_check(None, exec_file=str(exec_file))
+    assert result.returncode == 1
+    assert "without writing" in result.stdout
+    assert "nothing to do" in summary
+
+
+@needs_bash
+def test_an_open_fix_pr_is_outcome_a_without_a_file(run_check):
+    result, summary = run_check(None, open_pr="77")
+    assert result.returncode == 0
+    assert "Fix PR #77 is open" in summary
+
+
+@needs_bash
+def test_a_stated_fix_with_no_pr_still_fails(run_check, tmp_path):
+    exec_file = tmp_path / "exec.json"
+    exec_file.write_text(transcript(result="Outcome: A\nOpened a PR."))
+    result, _ = run_check(None, exec_file=str(exec_file))
+    assert result.returncode == 1
+    assert "PR missing" in result.stdout
