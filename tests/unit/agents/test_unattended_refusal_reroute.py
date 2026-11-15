@@ -272,7 +272,8 @@ def test_a_persons_no_to_curl_still_blocks_the_feed_tool(_isolated, monkeypatch)
     assert agent.ran == []
 
 
-def test_a_hard_policy_block_still_blocks(_isolated):
+def test_a_hard_policy_block_on_a_program_does_not_block_the_file(_isolated):
+    """Refusing a program says nothing of its files; write_file has its own checks."""
     agent = _unattended(_isolated)
     agent.policy_refusal_for_call = lambda name, args: (
         {"status": "error", "tier": "refuse", "error": "not allowed"}
@@ -285,9 +286,8 @@ def test_a_hard_policy_block_still_blocks(_isolated):
         "write_file", {"file_path": "b.txt", "content": "copied"}
     )
 
-    assert rerouted["status"] == "denied"
-    assert "was refused" in rerouted["error"]
-    assert agent.ran == []
+    assert rerouted["status"] == "success"
+    assert agent.ran == [("write_file", "b.txt")]
 
 
 _PY_DELETES = [
@@ -373,7 +373,7 @@ _NO_PROMPT = ("dir", "findstr") if os.name == "nt" else ("ls", "grep")
 def test_the_refusal_names_the_auto_approved_routes(_isolated):
     agent = _unattended(_isolated)
 
-    error = _shell(agent, "type notes.txt")["error"]
+    error = _shell(agent, "Get-Process")["error"]
 
     for route in ("read_file", "browse_directory", "run_python"):
         assert route in error

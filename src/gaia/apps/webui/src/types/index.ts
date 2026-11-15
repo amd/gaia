@@ -297,6 +297,18 @@ export interface InferenceStats {
     retried?: boolean | null;
     /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
     place?: string | null;
+    /** Set on a `hybrid` chat's turns: the model the turn was routed to, and why. */
+    route?: TurnRoute | null;
+}
+
+/** The model a `hybrid` turn was routed to (`inference_stats.route`). */
+export interface TurnRoute {
+    model: string;
+    reason?: string;
+    /** True once the router's classifier has failed several turns in a row. */
+    degraded?: boolean;
+    /** The warning to show while `degraded`; empty otherwise. */
+    notice?: string;
 }
 
 /** Estimated tokens the next model call holds, by kind (GET /api/chat/context). */
@@ -632,7 +644,8 @@ export interface SystemStatus {
     download_progress: DownloadProgress | null;
     // Boot-time initialization tracking
     init_state?: 'initializing' | 'ready' | 'degraded';
-    init_tasks?: Array<{ name: string; status: string }>;
+    /** `step` picks the banner's translated line; `name` is an English log label, never shown. */
+    init_tasks?: Array<{ name: string; step?: string | null; status: string }>;
     /** Priming of a new chat's prompt; never blocks sending. */
     warm_up?: WarmUpStatus | null;
     /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */

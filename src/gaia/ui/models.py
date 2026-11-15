@@ -286,6 +286,8 @@ class InitTaskInfo(BaseModel):
     """Summary of a boot-time initialization task (embedded in SystemStatus)."""
 
     name: str
+    # The UI shows banner.boot.<step> in the user's language, never ``name``.
+    step: Optional[str] = None
     status: str  # pending | running | done | failed
 
 
@@ -669,6 +671,17 @@ class AgentStepResponse(BaseModel):
     needsModel: Optional[str] = None
 
 
+class TurnRouteResponse(BaseModel):
+    """The model a ``hybrid`` turn was routed to, and why."""
+
+    model: str
+    reason: str = ""
+    # True once the classifier has failed several turns in a row.
+    degraded: bool = False
+    # A one-line warning for the user when ``degraded``; empty otherwise.
+    notice: str = ""
+
+
 class InferenceStatsResponse(BaseModel):
     """LLM inference performance metrics for a message."""
 
@@ -686,6 +699,8 @@ class InferenceStatsResponse(BaseModel):
     retried: Optional[bool] = None
     # Where the turn was answered, as the footer says it: "on your GPU", "via Fireworks AI".
     place: Optional[str] = None
+    # Set on a ``hybrid`` session's turns.
+    route: Optional[TurnRouteResponse] = None
 
 
 class TurnSummaryPage(BaseModel):
@@ -813,6 +828,7 @@ class DocumentResponse(BaseModel):
     # Set with last_error when retrying can't help until the file is fixed:
     # "corrupted", "encrypted", "empty" (no extractable text), "empty_file"
     # (nothing to index) or "unsupported_workbook" (.xls or password-protected).
+    # "model_server_down" / "model_server_busy": the file is fine; retry later.
     error_kind: Optional[str] = None
 
 

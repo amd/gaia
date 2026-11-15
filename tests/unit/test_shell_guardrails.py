@@ -938,11 +938,12 @@ class TestOperatorsUnderBypass:
         # What bypass actually lifts now: redirection, backgrounding,
         # substitution and the newline — the operators that only a shell can
         # act on, and that no per-segment check can judge. By default they are
-        # a one-time approval of the exact line; a line break is refused, since
-        # the line would not read on screen the way it runs.
+        # a one-time approval of the exact command, line breaks included; cmd
+        # refuses a line break, since it would run only the first line.
         result = check(command, bypass=False)
         assert result is not None
-        expected = TIER_REFUSE if "\n" in command else TIER_CONFIRM_ONCE
+        first_line_only = "\n" in command and shell_tools._pipe_dialect() == "cmd"
+        expected = TIER_REFUSE if first_line_only else TIER_CONFIRM_ONCE
         assert result["tier"] == expected, result
 
     def test_a_pipe_is_refused_for_its_binary_not_for_the_pipe(self):
@@ -1663,6 +1664,88 @@ def env_pre_approves(monkeypatch):
     monkeypatch.setattr(
         "gaia.agents.base.console.auto_approve_env_enabled", lambda: True
     )
+
+
+def _desktop_full_access_host():
+    """The Agent UI's Full access: prompts pre-approved, shell gates still on."""
+    host = _Host(auto_approve=True)
+    host.console.asks_past_preapproval = True
+    host.console.answers_confirmations = True
+    host.console.grants_paths = True
+    return host
+
+
+class TestMultiLineCommandsAreJudgedNotRefusedOnSight:
+    """A line break alone must not refuse a command before anyone is asked (#8028).
+
+    The Agent UI's Full access keeps the shell gates on, so a heredoc becomes a
+    one-time approval, and every one was refused for "line breaks" before the
+    prompt. The prompt shows the exact text with its lines, and sh runs every
+    line, so the line is judged like any other; cmd.exe runs only the first.
+    """
+
+    HEREDOCS = [
+        "cat <<'EOF' > hd_notes.txt\nhello heredoc\nEOF",
+        "cat > notes.txt <<'EOF'\none; two | three\nEOF",
+        "echo one\necho two",
+    ]
+
+    HIDDEN_DELETES = [
+        "cat <<'EOF' > out.txt\nhello\nEOF\nrm -rf x",
+        "echo hi\nrm -rf x",
+        "cat <<'A' <<'B'\none\nA\ntwo\nB\nrm -rf x",
+    ]
+
+    @pytest.fixture
+    def posix(self, monkeypatch):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "posix")
+
+    @pytest.mark.parametrize("command", HEREDOCS)
+    def test_desktop_full_access_puts_a_heredoc_to_the_person(self, posix, command):
+        host = _desktop_full_access_host()
+        assert (
+            host.policy_refusal_for_call("run_shell_command", {"command": command})
+            is None
+        )
+        shown = host.confirmation_args_for_call(
+            "run_shell_command", {"command": command}
+        )
+        assert shown["command"] == command
+        assert shown.get("_needs_person") is True
+
+    @pytest.mark.parametrize("command", HEREDOCS)
+    def test_ask_mode_offers_a_heredoc_once(self, posix, command):
+        assert refusal(command) is None
+
+    @pytest.mark.parametrize("command", HIDDEN_DELETES)
+    def test_a_delete_on_another_line_is_still_refused(self, posix, command):
+        for host in (_desktop_full_access_host(), _Host()):
+            error = host.policy_refusal_for_call(
+                "run_shell_command", {"command": command}
+            )
+            assert error is not None and error["tier"] == TIER_REFUSE, error
+            assert "rm -rf x" in error["error"]
+        assert refusal(command, full_access=True) is not None
+
+    @pytest.mark.parametrize(
+        "command", ["echo hi\recho there", "git commit -m wip\u2028echo x"]
+    )
+    def test_a_carriage_return_or_invisible_break_is_still_refused(
+        self, posix, command
+    ):
+        error = refusal(command)
+        assert error is not None and error["tier"] == TIER_REFUSE
+
+    @pytest.mark.parametrize("command", HEREDOCS)
+    def test_windows_says_it_runs_only_the_first_line(self, monkeypatch, command):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        error = _desktop_full_access_host().policy_refusal_for_call(
+            "run_shell_command", {"command": command}
+        )
+        assert error is not None and error["tier"] == TIER_REFUSE
+        assert "only the first line" in error["error"]
+        assert "invisible" not in error["error"]
+        assert "file tools" in error["hint"]
 
 
 class TestTiers:

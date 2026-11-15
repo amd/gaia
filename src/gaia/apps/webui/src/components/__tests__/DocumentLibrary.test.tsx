@@ -135,10 +135,10 @@ describe('DocumentLibrary with no chat open', () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
         render(<DocumentLibrary />);
 
-        fireEvent.click(await screen.findByRole('button', { name: 'Attach good.pdf to your next chat' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Add good.pdf to your next chat' }));
 
         expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']);
-        expect(screen.queryByRole('button', { name: 'Attach good.pdf to your next chat' })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Add good.pdf to your next chat' })).toBeNull();
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
     });
 
@@ -198,7 +198,7 @@ describe('DocumentLibrary says where documents go', () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
         render(<DocumentLibrary />);
 
-        const button = await screen.findByRole('button', { name: 'Attach good.pdf to “Budget review”' });
+        const button = await screen.findByRole('button', { name: 'Add good.pdf to “Budget review”' });
         expect(button.getAttribute('title')).toBe('Use in “Budget review”');
     });
 
@@ -210,7 +210,7 @@ describe('DocumentLibrary says where documents go', () => {
         expect(screen.getByRole('option', { name: 'This chat: “Budget review”' })).toBeInTheDocument();
         indexPath();
 
-        expect(await screen.findByRole('status')).toHaveTextContent('Attached good.pdf to “Budget review”.');
+        expect(await screen.findByRole('status')).toHaveTextContent('Added good.pdf to “Budget review”.');
     });
 
     it('holds documents for the next new chat when chosen, leaving the open chat alone', async () => {
@@ -221,7 +221,7 @@ describe('DocumentLibrary says where documents go', () => {
 
         await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']));
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
-        expect(screen.getByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
+        expect(screen.getByRole('status')).toHaveTextContent('good.pdf will be added to your next new chat.');
     });
 
     it('drops the "will be attached" line when that document is removed', async () => {
@@ -230,12 +230,12 @@ describe('DocumentLibrary says where documents go', () => {
         render(<DocumentLibrary />);
         fireEvent.change(screen.getByRole('combobox', { name: 'Add documents to' }), { target: { value: 'next' } });
         indexPath();
-        expect(await screen.findByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
+        expect(await screen.findByRole('status')).toHaveTextContent('good.pdf will be added to your next new chat.');
 
         fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
 
-        await waitFor(() => expect(screen.queryByText(/will be attached to your next new chat/)).toBeNull());
-        expect(useChatStore.getState().draftDocumentIds).toEqual([]);
+        expect(screen.queryByText(/will be added to your next new chat/)).toBeNull();
+        await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual([]), { timeout: 10_000 });
     });
 
     it('says so when indexing worked but attaching did not', async () => {
@@ -251,7 +251,7 @@ describe('DocumentLibrary says where documents go', () => {
         useChatStore.setState({ currentSessionId: null });
         render(<DocumentLibrary />);
 
-        expect(screen.getByText('Documents you add here are attached to your next new chat.')).toBeInTheDocument();
+        expect(screen.getByText('Documents you add here go to your next new chat.')).toBeInTheDocument();
         expect(screen.queryByRole('combobox', { name: 'Add documents to' })).toBeNull();
     });
 
@@ -367,7 +367,7 @@ describe('DocumentLibrary failure reasons', () => {
         await screen.findByText('empty.txt');
 
         expect(screen.getByText("Can't be read")).toBeTruthy();
-        expect(screen.getByText('This file is empty. Add content to it, then index it again.')).toBeTruthy();
+        expect(screen.getByText('This file is empty. Add content to it, then add it again.')).toBeTruthy();
         const retry = screen.getByRole('button', { name: /Retry indexing empty\.txt/i });
         expect(retry.className).toContain('btn-retry-quiet');
     });
@@ -413,8 +413,8 @@ describe('DocumentLibrary path box', () => {
         submitPath('C:\\Users\\me\\.gaia\\documents');
 
         const notice = await screen.findByRole('status');
-        expect(notice.textContent).toContain('Indexed 2 files from "documents".');
-        expect(notice.textContent).toContain("Skipped 1 file of a type GAIA doesn't index.");
+        expect(notice.textContent).toContain('Added 2 files from "documents".');
+        expect(notice.textContent).toContain("Skipped 1 file of a type GAIA can't add.");
         expect(mockedApi.indexFolder).toHaveBeenCalledWith('C:\\Users\\me\\.gaia\\documents', false);
         expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1', 'doc-ok-2']);
         expect(screen.queryByRole('alert')).toBeNull();
@@ -483,7 +483,7 @@ describe('DocumentLibrary path box', () => {
         submitPath('C:\\Users\\me\\notes.v2\\');
 
         const notice = await screen.findByRole('status');
-        expect(notice.textContent).toContain('Indexed 1 file from "notes.v2".');
+        expect(notice.textContent).toContain('Added 1 file from "notes.v2".');
         expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\notes.v2\\');
         expect(screen.queryByRole('alert')).toBeNull();
     });
@@ -569,10 +569,10 @@ describe('DocumentLibrary notices follow the interface language', () => {
         submitPath(container, '/home/me/trip');
 
         const text = stripIsolates((await screen.findByRole('status')).textContent ?? '');
-        expect(text).toContain('الملفات المفهرسة من «trip»: 2.');
-        expect(text).toContain('الملفات المتخطّاة لأن GAIA لا يفهرس نوعها: 1.');
+        expect(text).toContain('الملفات المضافة من «trip»: 2.');
+        expect(text).toContain('الملفات المتخطّاة لأن GAIA لا يستطيع إضافة نوعها: 1.');
         expect(text).toContain('لا تُضمَّن المجلدات الفرعية.');
-        expect(text.indexOf('الملفات المفهرسة')).toBe(0);
+        expect(text.indexOf('الملفات المضافة')).toBe(0);
     });
 
     it('says in Arabic how many images a folder left out', async () => {

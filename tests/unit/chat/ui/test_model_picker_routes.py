@@ -203,7 +203,7 @@ def test_local_list_reports_state_device_fit_and_speed(client, lemonade, db):
     assert gemma["placement"]["label"] == "GPU · Vulkan"
     assert gemma["placement"]["source"] == "reported"
     assert gemma["fits"] is True
-    assert gemma["size_gb"] == 5.6
+    assert gemma["size_gb"] == 6.0
     assert gemma["tokens_per_second"] == 38.0
     assert gemma["display_name"] == "Gemma 4 E4B"
     # The large default is offered even before it is downloaded.
@@ -212,6 +212,27 @@ def test_local_list_reports_state_device_fit_and_speed(client, lemonade, db):
     assert body["memory_source"] == "AMD iGPU"
     # 96 + 16 GiB from Lemonade, in the decimal GB the GPU memory pane uses.
     assert body["memory_gb"] == round(112 * GB_PER_GIB, 1)
+
+
+def test_a_model_shows_the_size_setup_shows(client, lemonade):
+    """Lemonade lists Qwen3.6 at 21.7 (GiB); setup says 23.3 GB, and so must the picker."""
+    lemonade.models[1]["downloaded"] = True
+    lemonade.models.append(
+        {
+            "id": "Unknown-To-Gaia-GGUF",
+            "recipe": "llamacpp",
+            "downloaded": True,
+            "size": 4.2,
+            "labels": ["chat"],
+        }
+    )
+    by_id = {m["id"]: m for m in providers._list_models(providers.LOCAL)}
+    assert by_id[LARGE_DEFAULT_MODEL_NAME]["size_gb"] == 23.3
+    assert by_id["Unknown-To-Gaia-GGUF"]["size_gb"] == 4.2
+    body = client.get("/api/providers/local/models").json()
+    shown = {m["id"]: m["size_gb"] for m in body["models"]}
+    assert shown[LARGE_DEFAULT_MODEL_NAME] == 23.3
+    assert shown["Unknown-To-Gaia-GGUF"] == 4.2
 
 
 def test_cloud_list_is_unchanged(client, lemonade):

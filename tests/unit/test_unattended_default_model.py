@@ -191,3 +191,149 @@ def test_a_missing_last_model_points_at_the_app_not_default_model(
         runner.fire(Schedule(name="t", cron="0 7 1 1 *", prompt="hi"))
     assert "Pick a model you have in the GAIA app" in str(excinfo.value)
     assert "default_model" not in str(excinfo.value)
+
+
+# --- a ``hybrid`` pick routes each scheduled run, as a chat turn does -------
+
+CHEAP = "amd.DeepSeek-V4.1-Flash"
+STRONG = "amd.Claude-Opus-5-5"
+
+
+@pytest.fixture
+def classifier(monkeypatch):
+    """The hybrid classifier's answer for the next run; records each prompt."""
+    from gaia.llm import hybrid
+
+    asked = []
+    answer = {"label": ("write_prose", 1, "low")}
+
+    def classify(_router, text, base_url=None):
+        asked.append(text)
+        label = answer["label"]
+        if isinstance(label, BaseException):
+            raise label
+        kind, difficulty, stakes = label
+        return {
+            "kind": kind,
+            "difficulty": difficulty,
+            "stakes": stakes,
+            "reason": "r",
+            "format": hybrid.FORMAT_JSON,
+        }
+
+    monkeypatch.setattr(hybrid.HybridRouter, "classify", classify)
+    monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: False)
+    hybrid.reset_classifier_health()
+    yield answer, asked
+    hybrid.reset_classifier_health()
+
+
+def _fire(prompt="Summarise my notes."):
+    return runner.fire(Schedule(name="t", cron="0 7 1 1 *", prompt=prompt))
+
+
+@pytest.mark.parametrize(
+    "config",
+    [{"last_model": "hybrid"}, {"default_model": "hybrid"}],
+    ids=["last_model", "default_model"],
+)
+def test_a_routine_scheduled_run_on_hybrid_runs_on_the_cheap_model(
+    tmp_path, fake_sdk, catalog, classifier, monkeypatch, config
+):
+    _write_config(tmp_path, monkeypatch, **config)
+    _answer, asked = classifier
+
+    _fire()
+
+    assert asked == ["Summarise my notes."]
+    assert fake_sdk.configs[0].model == CHEAP
+
+
+def test_a_hard_scheduled_run_on_hybrid_runs_on_the_strong_model(
+    tmp_path, fake_sdk, catalog, classifier, monkeypatch
+):
+    _write_config(tmp_path, monkeypatch, last_model="hybrid")
+    answer, _asked = classifier
+    answer["label"] = ("find_defects", 4, "high")
+
+    _fire("Audit the deploy script.")
+
+    assert fake_sdk.configs[0].model == STRONG
+
+
+def test_a_failed_classification_runs_the_scheduled_run_strong(
+    tmp_path, fake_sdk, catalog, classifier, monkeypatch
+):
+    """Fail closed, as chat does: never quietly fall to the cheap model."""
+    _write_config(tmp_path, monkeypatch, last_model="hybrid")
+    answer, _asked = classifier
+    answer["label"] = TimeoutError("classifier timed out")
+
+    _fire()
+
+    assert fake_sdk.configs[0].model == STRONG
+
+
+def test_scheduled_runs_on_hybrid_do_not_stick_to_strong(
+    tmp_path, fake_sdk, catalog, classifier, monkeypatch
+):
+    """Each run is its own session: a hard one doesn't pin the next."""
+    _write_config(tmp_path, monkeypatch, last_model="hybrid")
+    answer, _asked = classifier
+    answer["label"] = ("find_defects", 4, "high")
+    _fire("Audit it.")
+    answer["label"] = ("write_prose", 1, "low")
+    _fire("Summarise it.")
+
+    assert [c.model for c in fake_sdk.configs] == [STRONG, CHEAP]
+
+
+def test_local_only_refuses_a_cloud_hybrid_scheduled_run(
+    tmp_path, fake_sdk, catalog, classifier, monkeypatch
+):
+    _write_config(tmp_path, monkeypatch, last_model="hybrid")
+    monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: True)
+    _answer, asked = classifier
+
+    with pytest.raises(RuntimeError, match="Local only is on"):
+        _fire()
+    assert asked == [] and fake_sdk.configs == []
+
+
+def test_a_routed_local_model_that_is_not_downloaded_names_its_hybrid_setting(
+    tmp_path, fake_sdk, catalog, classifier, monkeypatch
+):
+    _write_config(
+        tmp_path,
+        monkeypatch,
+        last_model="hybrid",
+        hybrid_cheap_model="Gemma-4-E4B-it-GGUF",
+        hybrid_strong_model=STRONG,
+    )
+    catalog.downloaded = False
+
+    with pytest.raises(runner.ScheduleModelError) as excinfo:
+        _fire()
+    message = str(excinfo.value)
+    assert message.startswith("Gemma-4-E4B-it-GGUF is not downloaded")
+    assert "gaia config set hybrid_cheap_model" in message
+    assert "default_model" not in message
+    assert fake_sdk.configs == []
+
+
+def test_a_broken_hybrid_config_fails_the_scheduled_run(
+    tmp_path, fake_sdk, catalog, classifier, monkeypatch
+):
+    from gaia.llm.hybrid import HybridConfigError
+
+    _write_config(
+        tmp_path,
+        monkeypatch,
+        last_model="hybrid",
+        hybrid_cheap_model=STRONG,
+        hybrid_strong_model=STRONG,
+    )
+
+    with pytest.raises(HybridConfigError, match="nothing to route between"):
+        _fire()
+    assert fake_sdk.configs == []
