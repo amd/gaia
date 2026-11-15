@@ -353,3 +353,28 @@ def test_cancel_reports_no_documents_when_all_were_loaded(built, docs):
 
     late = client.post(f"/v1/gaia/query/{run_id}/cancel").json()
     assert late["documents_left"] is None
+
+
+def test_a_full_index_is_not_reported_as_documents_stop_left(built, docs, monkeypatch):
+    """Documents a full index left out load on request; a Stop after that must
+    not claim it left them for the next message."""
+    client, _ = built
+    folder, _, _ = docs
+    paths = []
+    for n in range(5):
+        path = folder / f"doc{n}.txt"
+        path.write_text(f"document {n}", encoding="utf-8")
+        paths.append(str(path))
+    monkeypatch.setattr(_Rag, "is_full", lambda self: len(self.indexed) >= 2)
+    monkeypatch.setattr(
+        _Rag, "indexed_files", property(lambda self: self.indexed), raising=False
+    )
+    run_id = str(uuid.uuid4())
+
+    client.post(
+        "/v1/gaia/query",
+        json={"query": "q", "run_id": run_id, "context": [], "documents": paths},
+    )
+
+    late = client.post(f"/v1/gaia/query/{run_id}/cancel").json()
+    assert late["documents_left"] is None
