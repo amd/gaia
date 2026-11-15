@@ -763,6 +763,7 @@ export interface TurnRouteResponse {
 export interface InitTaskInfo {
   name: string;
   status: string;
+  step?: string | null;
 }
 /**
  * Body for ``POST /api/agents/install``.
@@ -1114,7 +1115,9 @@ export interface PermissionModeRequest {
  * Structured Local only notice translated by the Agent UI.
  */
 export interface PolicyNotice {
+  cause?: string | null;
   code: string;
+  models?: string[] | null;
   reason?: string | null;
   severity: "info" | "warning";
   url?: string | null;
