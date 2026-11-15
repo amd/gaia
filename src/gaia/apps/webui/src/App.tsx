@@ -39,7 +39,7 @@ import { NEW_CHAT_DRAFT_KEY, chatDraftKey, clearSavedDraft, readSavedDraft, writ
 import { getApiBase } from './utils/apiBase';
 import { followBackendLifecycle, resyncBackend } from './stores/backendStore';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
-import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
+import { FLAGSHIP_AGENT_ID, FlagshipMissing, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
 import { runWhileVisible } from './utils/visibleInterval';
 import { RETRY_INITIAL_MS, retryUntilOk, type Retrier } from './utils/retry';
 import { shouldShowStartupScreen } from './utils/startupGate';
@@ -550,7 +550,7 @@ function App() {
         } catch (err) {
             if (!isFlagshipMissingError(err)) throw err;
             setFlagshipRefused(true);
-            throw new Error("The GAIA agent isn't installed. Install it from the notice above, then send again.");
+            throw new FlagshipMissing();
         }
         if (flagshipMissingRef.current) {
             // Created after all: the agent list was stale (installed from the CLI meanwhile).
@@ -819,13 +819,13 @@ function App() {
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
-        <NewChat key={`${newChatSeed}:${draftText}`} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} />
+        <NewChat key={`${newChatSeed}:${draftText}`} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} agentMissing={flagshipMissing} />
     );
 
     return (
         <div className="app">
             {!sidebarOpen && (
-                <button className="sidebar-toggle" onClick={() => setSidebarOpen(true)} aria-label="Open sidebar">
+                <button className="sidebar-toggle" onClick={() => setSidebarOpen(true)} aria-label={t('sidebar.open')}>
                     <Menu size={18} />
                 </button>
             )}
