@@ -447,3 +447,54 @@ class TestIndexDocumentKinds:
                 await _index_document(Path("x.pdf"))
 
         assert not isinstance(exc_info.value, UnreadableDocumentError)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "unreachable, busy, kind",
+        [(True, False, "model_server_down"), (False, True, "model_server_busy")],
+    )
+    async def test_a_model_server_failure_is_not_blamed_on_the_file(
+        self, unreachable, busy, kind
+    ):
+        from gaia.ui._chat_helpers import _index_document
+
+        rag = MagicMock()
+        rag.index_document.return_value = {
+            "success": False,
+            "error": "Lemonade Server is not reachable: HTTPConnectionPool(...)",
+            "error_type": "embedding_unavailable",
+            "lemonade_unreachable": unreachable,
+            "embedder_busy": busy,
+        }
+        with (
+            patch("gaia.rag.sdk.RAGSDK", return_value=rag),
+            patch("gaia.rag.sdk.RAGConfig"),
+        ):
+            with pytest.raises(RuntimeError) as exc_info:
+                await _index_document(Path("third.md"))
+
+        assert getattr(exc_info.value, "kind", None) == kind
+        assert not isinstance(exc_info.value, UnreadableDocumentError)
+
+
+def test_a_dropped_file_the_model_server_could_not_embed_is_a_503(client):
+    """A drag-and-drop add showed a 500 carrying the raw connection error."""
+    from gaia.ui._chat_helpers import ModelServerIndexError
+
+    async def down(*_args, **_kwargs):
+        raise ModelServerIndexError(
+            "RAG indexing failed for notes.md: HTTPConnectionPool(...) [WinError 10061]",
+            "model_server_down",
+        )
+
+    with patch("gaia.ui.server._index_document", down):
+        resp = client.post(
+            "/api/documents/upload",
+            files={"file": ("notes.md", b"# Notes")},
+            headers={"x-gaia-ui": "1", "x-gaia-client": "agent-ui"},
+        )
+
+    assert resp.status_code == 503, resp.text
+    detail = resp.json()["detail"]
+    assert detail["status"] == "model_server_down"
+    assert "HTTPConnectionPool" not in detail["message"]

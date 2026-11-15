@@ -42,15 +42,17 @@ CLOUD = {
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.setenv("GAIA_GATEWAY_FILE", str(tmp_path / "gateway.json"))
-    monkeypatch.setattr(
-        "gaia.llm.gateway.GATEWAY_STATE_FILE", tmp_path / "gateway.json"
-    )
+    # Its own folder: the unit conftest puts config.json, and its lock, in
+    # tmp_path, and several tests list everything beside gateway.json.
+    gateway_file = tmp_path / "gateway" / "gateway.json"
+    gateway_file.parent.mkdir()
+    monkeypatch.setenv("GAIA_GATEWAY_FILE", str(gateway_file))
+    monkeypatch.setattr("gaia.llm.gateway.GATEWAY_STATE_FILE", gateway_file)
     monkeypatch.setattr(lc, "_CLOUD_TOOL_CALLING", {})
     monkeypatch.setattr(lc, "_TOOL_CALLING_LOADED", False)
     previous = lc._CLOUD_MODELS
     lc.record_cloud_models(CLOUD)
-    yield tmp_path / "gateway.json"
+    yield gateway_file
     lc._CLOUD_MODELS = previous
 
 

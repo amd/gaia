@@ -69,6 +69,11 @@ from uuid import uuid4
 import numpy as np
 
 from gaia.agents.base import turn_metrics
+from gaia.agents.base.checks import (
+    CheckResult,
+    command_check_target,
+    summary_reports_failure,
+)
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.history import MEMORY_CONTEXT_HEADER, frame_user_message
 from gaia.agents.base.memory_privacy import (  # noqa: F401  # pylint: disable=unused-import
@@ -5164,7 +5169,11 @@ class MemoryMixin(ProceduralMemoryMixin):
         failures = getattr(self, "_turn_failures", None)
         if failures is None:
             failures = self._turn_failures = {}
-        failures[operation] = {"args": tool_args, "error": error_msg}
+        failures[operation] = {
+            "args": tool_args,
+            "error": error_msg,
+            "counted": self._check_reported_failures(result),
+        }
 
         call = self._canonical_args(tool_args)
         for lesson in self._workspace_lessons():
@@ -5207,6 +5216,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 self._confirm_lesson(lesson)
                 return
         if failure is None or self._canonical_args(failure["args"]) == call:
+            return
+        if failure.get("counted") and self._same_check(failure["args"], tool_args):
+            # The code changed between the runs, not the check that ran.
             return
 
         difference = self._call_difference(failure["args"], tool_args)
@@ -5339,6 +5351,30 @@ class MemoryMixin(ProceduralMemoryMixin):
         )
 
     @staticmethod
+    def _same_check(before: Any, after: Any) -> bool:
+        """Whether two shell calls ran the same check, output trimming aside."""
+        commands = [
+            args.get("command") if isinstance(args, dict) else None
+            for args in (before, after)
+        ]
+        if not all(isinstance(c, str) for c in commands):
+            return False
+        return command_check_target(commands[0]) == command_check_target(commands[1])
+
+    @staticmethod
+    def _check_reported_failures(result: Any) -> bool:
+        """Whether *result* failed only because the check it ran counted failures.
+
+        Failing tests or lint findings are about the project, not the call.
+        """
+        check = CheckResult.from_result(tool_result_dict(result))
+        return (
+            check is not None
+            and not check.passed
+            and summary_reports_failure(check.summary)
+        )
+
+    @staticmethod
     def _was_refused(result: Any) -> bool:
         """Whether *result*, a dict or a JSON envelope, says the call never ran."""
         data = tool_result_dict(result)
@@ -5367,6 +5403,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             if self._was_refused(result):
                 logger.debug(
                     "[MemoryMixin] not persisting a refusal for '%s': %s",
+                    tool_name,
+                    error_msg[:80],
+                )
+                return
+            if self._check_reported_failures(result):
+                logger.debug(
+                    "[MemoryMixin] not persisting a check's findings for '%s': %s",
                     tool_name,
                     error_msg[:80],
                 )
