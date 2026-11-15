@@ -429,6 +429,49 @@ def test_cold_policy_catalog_failure_is_a_visible_notice(local_only_on, monkeypa
     )
 
 
+def test_unanswering_server_is_a_plain_notice_and_a_logged_error(
+    local_only_on, monkeypatch, caplog
+):
+    """A refused connection is worded for a person; the exception goes to the log."""
+    import logging
+
+    from gaia import config as config_mod
+    from gaia.llm.lemonade_client import LemonadeClientError, record_cloud_models
+
+    config_mod.GAIA_CONFIG_FILE.write_text(
+        json.dumps({"default_model": "collection.router"}), encoding="utf-8"
+    )
+    record_cloud_models({"data": []})
+    raw = (
+        "HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded "
+        "with url: /api/v1/models ([WinError 10061] No connection could be made)"
+    )
+
+    def refused(self, **_kwargs):
+        try:
+            raise requests.exceptions.ConnectionError(raw)
+        except requests.exceptions.ConnectionError as e:
+            raise LemonadeClientError(f"Request failed: {e}") from e
+
+    monkeypatch.setattr(LemonadeClient, "list_models", refused)
+    with caplog.at_level(logging.WARNING):
+        result = local_only.apply_policy("local_ai_only")
+
+    assert result["policy"] == local_only.NetworkPolicy.LOCAL_AI_ONLY
+    [notice] = [n for n in result["notices"] if n["severity"] == "warning"]
+    assert notice["code"] == "saved_models_not_checked"
+    assert notice["cause"] == "model_server_down"
+    assert notice["models"] == ["collection.router"]
+    for shown in (notice["reason"], *result["warnings"]):
+        assert "collection.router" in shown
+        assert "the model server isn't answering" in shown
+        for leak in ("HTTPConnectionPool", "WinError", "Request failed", "("):
+            assert leak not in shown
+    assert "HTTPConnectionPool" in caplog.text
+    saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+    assert saved["default_model"] == "collection.router"
+
+
 def test_known_cloud_default_is_cleared_when_catalog_is_down(
     local_only_on, monkeypatch
 ):

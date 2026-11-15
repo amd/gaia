@@ -2071,6 +2071,29 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    // A down model server showed the raw connection error under the switch.
+    test(`Local only with the model server not answering (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withSettingsPanes(p, {
+            networkPolicy: 'cloud_allowed',
+            policyNotices: [
+                {
+                    code: 'saved_models_not_checked', severity: 'warning', cause: 'model_server_down', models: ['collection.router'],
+                    reason: "couldn't check whether collection.router is a cloud model: Request failed: HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded [WinError 10061]",
+                },
+                { code: 'users_server_keeps_keys', severity: 'info', url: 'http://127.0.0.1:59999' },
+            ],
+        }));
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        await page.locator('.toggle-switch .toggle-track').first().click();
+        const notice = page.locator('.settings-error[role="alert"]');
+        await expect(notice).toBeVisible();
+        await expect(notice).not.toContainText('HTTPConnectionPool');
+        await expect(notice).not.toContainText('WinError');
+        await shot(page, `privacy-local-only-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`Delete all chats asks in a dialog (${locale})`, async ({ page }) => {
         await open(page, '', locale, withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
