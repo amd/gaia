@@ -2760,6 +2760,44 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+// The backend words a down server in English; the popover must word it itself.
+const SERVER_DOWN = (owner: 'gaia' | 'user') => ({
+    ...LOCAL_STATUS, state: 'stopped', model: null, display_name: null, placement: null, ctx_size: null, memory: null, owner,
+    error: `The model server isn't answering at ${LOCAL_STATUS.base_url}. `
+        + (owner === 'gaia' ? 'Restart starts it.' : "GAIA doesn't start a server it doesn't run; start it yourself."),
+    error_detail: `The local model server is not reachable at ${LOCAL_STATUS.base_url} (connection refused).`,
+    error_cause: 'model_server_down',
+});
+
+for (const locale of ['ar', 'en']) {
+    for (const owner of ['gaia', 'user'] as const) {
+        test(`sidebar model-status popover: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
+            await page.locator('.sb-location').click();
+            const alert = page.locator('.popover .model-status .settings-error[role="alert"]');
+            await expect(alert).toBeVisible();
+            await expect(alert.locator('bdi[dir="ltr"]').first()).toHaveText(LOCAL_STATUS.base_url);
+            if (locale === 'ar') await expect(alert).toContainText('خادم النماذج لا يستجيب');
+            await shot(page, `model-status-${locale}-server-down-${owner}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.popover .model-status')).toEqual([]);
+        });
+
+        test(`session panel Runs on: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
+            const row = page.locator('.session-panel .sp-env-row').filter({ has: page.locator('.sp-error') });
+            await row.scrollIntoViewIfNeeded();
+            const error = row.locator('.sp-error');
+            await expect(error).toBeVisible();
+            await expect(error.locator('bdi[dir="ltr"]').first()).toHaveText(LOCAL_STATUS.base_url);
+            if (locale === 'ar') await expect(error).toContainText('خادم النماذج لا يستجيب');
+            await shot(page, `session-panel-runs-on-${locale}-server-down-${owner}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.session-panel .sp-env-row:has(.sp-error)')).toEqual([]);
+        });
+    }
+}
+
 const OPENCODE = 'opencode.big-model';
 
 for (const locale of ['ar', 'en']) {

@@ -500,6 +500,7 @@ def test_status_loaded(client, lemonade):
     assert body["ctx_size"] == 65536
     assert body["memory"]["total_gb"] == 112.0
     assert body["memory"]["model_gb"] > 5
+    assert body["error_cause"] is None
 
 
 def test_status_stopped(client, lemonade):
@@ -508,6 +509,20 @@ def test_status_stopped(client, lemonade):
     assert body["state"] == "stopped"
     assert body["error"].startswith(f"The model server isn't answering at {BASE}.")
     assert "not reachable" in body["error_detail"]
+    assert body["error_cause"] == "model_server_down"
+
+
+def test_status_names_no_cause_for_another_failure(client, lemonade, monkeypatch):
+    """Only the server not answering is worded by the UI; the rest keep their text."""
+
+    def refuse(method, path, payload=None):
+        raise providers.ProviderError("Lemonade answered /health with HTTP 404.", 502)
+
+    monkeypatch.setattr(providers, "_lemonade", refuse)
+    body = client.get("/api/providers/local/status").json()
+    assert body["state"] == "stopped"
+    assert body["error"] == "Lemonade answered /health with HTTP 404."
+    assert body["error_cause"] is None
 
 
 def test_status_idle_and_warming(client, lemonade, monkeypatch):
