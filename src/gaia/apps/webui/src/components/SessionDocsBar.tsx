@@ -110,13 +110,12 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
             <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
                 {visibleDocs.map((d) => {
                     const failed = d.indexing_status === 'failed';
+                    const failedTitle = isServerFailure(d.error_kind) ? 'docsBar.serverTitle' : 'docsBar.failedTitle';
                     return (
                     <span
                         key={d.id}
                         className={`doc-pill${failed ? ' doc-pill-failed' : ''}`}
-                        title={failed
-                            ? t(isServerFailure(d.error_kind) ? 'docsBar.serverTitle' : 'docsBar.failedTitle', { name: d.filename })
-                            : d.filepath || d.filename}
+                        title={failed ? t(failedTitle, { name: d.filename }) : d.filepath || d.filename}
                     >
                         {failed
                             ? <AlertCircle size={9} className="doc-pill-icon" aria-hidden="true" />

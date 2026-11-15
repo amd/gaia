@@ -163,6 +163,32 @@ describe('a file the model server could not embed', () => {
         expect(screen.getByLabelText(/^File path to/)).toHaveValue('/tmp/third.md');
     });
 
+    it('is not counted as a file that could not be read', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [DOWN, BROKEN, GOOD], total: 3, total_size_bytes: 4096, total_chunks: 3 });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('third.md');
+        const stats = document.querySelector('.doc-stats')!;
+        expect(stats).toHaveTextContent('1 document');
+        expect(stats).toHaveTextContent("1 couldn't be read");
+        expect(stats).toHaveTextContent('1 waiting for the model server');
+    });
+
+    it('counts a server-down file in Arabic too', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            mockedApi.listDocuments.mockResolvedValue({ documents: [DOWN], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+            render(<DocumentLibrary />);
+
+            await screen.findByText('third.md');
+            const stats = document.querySelector('.doc-stats')!;
+            expect(stats).toHaveTextContent('بانتظار خادم النماذج: 1');
+            expect(stats).not.toHaveTextContent('تعذّرت قراءتها');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
+    });
+
     it('says so on its row without the connection error', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [DOWN], total: 1, total_size_bytes: 1024, total_chunks: 0 });
         render(<DocumentLibrary />);

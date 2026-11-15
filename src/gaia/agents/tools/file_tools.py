@@ -36,6 +36,7 @@ from gaia.agents.tools.file_edit import (
     after_excerpt,
     apply_unique_replacement,
     file_read_record,
+    masked_secret_refusal,
     read_first_preflight,
     stamp_of,
     turn_of,
@@ -1690,7 +1691,9 @@ class FileSearchToolsMixin:
                     )
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(resolved_path, "overwriting")
+                refusal = reads.refusal(
+                    resolved_path, "overwriting"
+                ) or masked_secret_refusal(resolved_path, {"content": content})
                 if refusal is not None:
                     if path_validator is not None:
                         path_validator.audit_write(
@@ -2081,8 +2084,15 @@ class FileSearchToolsMixin:
                     }
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(resolved_path) or reads.repeat_refusal(
-                    resolved_path, old_content, new_content, turn_of(self)
+                refusal = (
+                    reads.refusal(resolved_path)
+                    or reads.repeat_refusal(
+                        resolved_path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        resolved_path,
+                        {"old_content": old_content, "new_content": new_content},
+                    )
                 )
                 if refusal is not None:
                     return {**refusal, "operation": "edit_file"}

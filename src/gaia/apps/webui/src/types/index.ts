@@ -559,7 +559,7 @@ export interface Settings {
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
     policy_warnings?: string[];
-    policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string }>;
+    policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string; cause?: string | null; models?: string[] | null }>;
 }
 
 /**
@@ -644,7 +644,8 @@ export interface SystemStatus {
     download_progress: DownloadProgress | null;
     // Boot-time initialization tracking
     init_state?: 'initializing' | 'ready' | 'degraded';
-    init_tasks?: Array<{ name: string; status: string }>;
+    /** `step` picks the banner's translated line; `name` is an English log label, never shown. */
+    init_tasks?: Array<{ name: string; step?: string | null; status: string }>;
     /** Priming of a new chat's prompt; never blocks sending. */
     warm_up?: WarmUpStatus | null;
     /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */
@@ -1117,6 +1118,8 @@ export interface LocalModelStatus {
     /** One plain line; `error_detail` carries the raw cause. */
     error: string | null;
     error_detail?: string | null;
+    /** Set when `error` is the server not answering, so the UI words it in its language. */
+    error_cause?: 'model_server_down' | null;
     base_url: string | null;
     /** `gaia` for GAIA's own Lemonade; GAIA asks before reloading on `user` or `remote`. */
     owner: 'gaia' | 'user' | 'remote' | null;

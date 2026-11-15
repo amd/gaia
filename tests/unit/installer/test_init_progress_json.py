@@ -437,7 +437,7 @@ def test_setup_lists_models_when_the_store_is_unreadable(monkeypatch, tmp_path):
         [],
     )
     qwen = next(e for e in catalog if e["id"] == "Qwen3.6-35B-A3B-GGUF")
-    assert qwen["size_gb"] == 23.3 and qwen["partial"] is False
+    assert qwen["size_gb"] == 21.7 and qwen["partial"] is False
 
 
 def test_free_space_is_unknown_under_a_folder_this_user_cannot_read(

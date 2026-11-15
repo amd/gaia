@@ -292,7 +292,8 @@ def read_first_preflight(
     """A ``@tool(preflight=...)`` check: refuse a blind or repeat edit before the prompt.
 
     ``target_of`` maps the call's arguments to the path the tool would change,
-    resolved the way the tool resolves it. The tool body repeats the check,
+    resolved the way the tool resolves it. The tool body repeats every check
+    here (read-first, repeat-edit, masked-secret) just before the write,
     because the file can change while a confirmation prompt waits.
     """
 

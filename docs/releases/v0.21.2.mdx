@@ -74,8 +74,8 @@ The Agent Hub is moving from code toward a real service for browsing and install
 - **Agent UI broke when the hub was unreachable** (PR [#1698](https://github.com/amd/gaia/pull/1698)) — the Agent UI stays usable when the hub can't be reached and nothing is cached.
 - **Backend install failed behind a TLS-inspecting proxy** (PRs [#1575](https://github.com/amd/gaia/pull/1575), [#1694](https://github.com/amd/gaia/pull/1694)) — the network pre-check now trusts system/proxy CAs and honors `HTTPS_PROXY`, and backend install retries with `--native-tls` on a TLS trust failure.
 - **Chat runs died on New Task** (PR [#1656](https://github.com/amd/gaia/pull/1656)) — starting a New Task keeps existing chat runs alive and shows a running indicator.
-- **Forwarded grant agents imported unchecked** (PR [#1674](https://github.com/amd/gaia/pull/1674)) — forwarded grant agents are now validated before import.
-- **API debug logs leaked request bodies** (PR [#1679](https://github.com/amd/gaia/pull/1679)) — API debug request logging is now redacted.
+- **Forwarded grant agents imported unchecked** (PR [#1674](https://github.com/amd/gaia/commit/cb4b0c521a2fe2c19a7937a82a83121b30a113ad)) — forwarded grant agents are now validated before import.
+- **API debug logs leaked request bodies** (PR [#1679](https://github.com/amd/gaia/commit/df5db4abf8d8e1deeab21f57b78569955038e189)) — API debug request logging is now redacted.
 
 ---
 
