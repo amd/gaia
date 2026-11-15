@@ -42,6 +42,8 @@ interface NewChatProps {
     focusRequest?: number;
     /** The flagship isn't installed: the top notice offers it, and a refused send points there while it shows. */
     agentMissing?: boolean;
+    /** The box opens holding a first message the missing agent refused elsewhere (Personalize, setup, files). */
+    agentRefused?: boolean;
 }
 
 /** How often the start screen is asked for again while the assistant is unavailable. */
@@ -187,7 +189,7 @@ function SetupFailed({ error }: { error: string }) {
 }
 
 /** An empty chat: a greeting and the composer over the NPU backdrop. Created on the first message. */
-export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissing = false }: NewChatProps) {
+export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissing = false, agentRefused: heldRefused = false }: NewChatProps) {
     const t = useT();
     const starting = useChatStore((s) => isStarting(s.systemStatus));
     const download = useChatStore((s) => s.systemStatus?.download_progress ?? null);
@@ -196,7 +198,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0, agentMissi
     const remote = useModelStore((s) => !!s.active?.remote);
     const [text, setText] = useSavedDraft(NEW_CHAT_DRAFT_KEY, initialText);
     const [error, setError] = useState<string | null>(null);
-    const [agentRefused, setAgentRefused] = useState(false);
+    const [agentRefused, setAgentRefused] = useState(heldRefused);
     const [sending, setSending] = useState(false);
     const [start, setStart] = useState<StartScreen | null>(null);
     const [startError, setStartError] = useState<string | null>(null);

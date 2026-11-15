@@ -165,6 +165,8 @@ function App() {
     const flagshipMissingRef = useRef(flagshipMissing);
     flagshipMissingRef.current = flagshipMissing;
     const [createError, setCreateError] = useState<string | null>(null);
+    // The New chat box holds a first message the missing agent refused.
+    const [heldForAgent, setHeldForAgent] = useState(false);
     // A task picked at the end of setup that needs the user to finish typing it.
     const [draftText, setDraftText] = useState('');
     const [newChatFocus, setNewChatFocus] = useState(0);
@@ -533,6 +535,7 @@ function App() {
     // A new chat's first message: make the chat, then hand ChatView the text.
     const startChat = useCallback(async (text: string) => {
         setCreateError(null);
+        setHeldForAgent(false);
         if (!(await ensureModel('chat'))) {
             setDraftText(text);
             return false;
@@ -593,6 +596,23 @@ function App() {
         return true;
     }, [addSession, setCurrentSession, setMessages, setPendingPrompt, loadAgents, loadDefaultPermissionMode]);
 
+    // A first message from outside the New chat box, refused for want of the agent:
+    // it waits in that box under the same hint, so "send again" has something to send.
+    const startChatOrHold = useCallback(async (text: string) => {
+        try {
+            return await startChat(text);
+        } catch (err) {
+            if (!(err instanceof FlagshipMissing)) throw err;
+            const saved = readSavedDraft(NEW_CHAT_DRAFT_KEY);
+            const held = saved.trimEnd().endsWith(text) ? saved : [saved, text].filter(Boolean).join('\n\n');
+            writeSavedDraft(NEW_CHAT_DRAFT_KEY, held);
+            setDraftText(held);
+            setHeldForAgent(true);
+            setNewChatSeed((n) => n + 1);
+            return false;
+        }
+    }, [startChat]);
+
     const newChat = useCallback(() => {
         const store = useChatStore.getState();
         const outgoing = store.currentSessionId;
@@ -606,6 +626,7 @@ function App() {
         store.setShowMemoryDashboard(false);
         store.setShowSchedules(false);
         choseNewChatRef.current = true;
+        setHeldForAgent(false);
         setCurrentSession(null);
         setMessages([]);
         setNewChatFocus((n) => n + 1);
@@ -655,12 +676,12 @@ function App() {
             const req = (e as CustomEvent<PersonalizeRequest>).detail;
             useChatStore.getState().closeSettings();
             newChat();
-            startChat(buildPersonalizePrompt(req))
+            startChatOrHold(buildPersonalizePrompt(req))
                 .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
         };
         window.addEventListener(PERSONALIZE_EVENT, onPersonalize);
         return () => window.removeEventListener(PERSONALIZE_EVENT, onPersonalize);
-    }, [newChat, startChat]);
+    }, [newChat, startChatOrHold]);
 
     const finishSetup = useCallback((first?: StartCard) => {
         setSetup({ state: 'ready' });
@@ -671,8 +692,8 @@ function App() {
             setDraftText(first.prompt);
             return;
         }
-        startChat(first.prompt).catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
-    }, [checkSystemStatus, startChat, reloadAgentsAfterSetup]);
+        startChatOrHold(first.prompt).catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+    }, [checkSystemStatus, startChatOrHold, reloadAgentsAfterSetup]);
 
     const leaveLocalSetup = useCallback(() => {
         setSetup({ state: 'ready' });
@@ -819,7 +840,7 @@ function App() {
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
-        <NewChat key={`${newChatSeed}:${draftText}`} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} agentMissing={flagshipMissing} />
+        <NewChat key={`${newChatSeed}:${draftText}`} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} agentMissing={flagshipMissing} agentRefused={heldForAgent} />
     );
 
     return (
@@ -892,7 +913,7 @@ function App() {
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
             {showDocLibrary && <Suspense fallback={null}><DocumentLibrary /></Suspense>}
-            {showFileBrowser && <Suspense fallback={null}><FileBrowser onStartChat={startChat} /></Suspense>}
+            {showFileBrowser && <Suspense fallback={null}><FileBrowser onStartChat={startChatOrHold} /></Suspense>}
             {showNotificationPanel && (
                 <div className="notification-center-popover">
                     <NotificationCenter onClose={() => setShowNotificationPanel(false)} onOpenChat={openChatFromNotification} />

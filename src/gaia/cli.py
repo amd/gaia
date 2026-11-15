@@ -3531,7 +3531,7 @@ afterwards (or `swebench <run_dir>` does, later).
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
-        help="Start TUI control MCP server (drives a running `gaia-tui --control`)",
+        help="Start TUI control MCP server (drives a running `gaia-cli --control`)",
     )
     mcp_tui_parser.add_argument(
         "--host", default="localhost", help="Host to bind to (default: localhost)"
@@ -5223,6 +5223,9 @@ def main():
 
             if args.print_attempts > MAX_ATTEMPTS:
                 parser.error(f"--attempts takes 1 to {MAX_ATTEMPTS}.")
+        # Hardware, health and embedder clients read the server from the environment.
+        if args.base_url:
+            os.environ["LEMONADE_BASE_URL"] = args.base_url
         from gaia.print_mode import run as run_print_mode
 
         sys.exit(
@@ -5317,6 +5320,9 @@ def main():
 
     if args.action == "chat":
         _reject_flagship_only_flags(args)
+        # Hardware, health and embedder clients read the server from the environment.
+        if getattr(args, "base_url", None):
+            os.environ["LEMONADE_BASE_URL"] = args.base_url
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
@@ -11893,7 +11899,7 @@ def handle_mcp_serve(args):
 
 
 def handle_mcp_tui(args):
-    """Start the TUI control MCP server (drives a running `gaia-tui --control`)."""
+    """Start the TUI control MCP server (drives a running `gaia-cli --control`)."""
     log = get_logger(__name__)
 
     try:
@@ -11913,7 +11919,7 @@ def handle_mcp_tui(args):
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
-            print("   Target  : the running `gaia-tui --control` session")
+            print("   Target  : the running `gaia-cli --control` session")
             print(f"   MCP     : http://{args.host}:{args.port}/mcp")
             try:
                 tool_count = len(

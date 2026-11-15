@@ -5,7 +5,7 @@
 
 It answers the Lemonade and OpenAI-compatible endpoints GAIA's clients call --
 health, the model list, load/unload, chat completions (streamed or not) and
-embeddings -- with fixed, well-formed replies, so an installed gaia-tui and its
+embeddings -- with fixed, well-formed replies, so an installed gaia-cli and its
 gaia-agent can complete one real turn on a hosted runner. Every model id it is
 asked about counts as downloaded and loaded.
 

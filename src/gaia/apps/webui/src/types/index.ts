@@ -387,8 +387,8 @@ export interface TurnPerformance {
     /** A null name is tool time measured outside any recorded step. */
     tools: Array<{ name: string | null; seconds: number | null }>;
     loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
-    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). */
-    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported'; usd: number | null };
+    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). `no_reply`: a cloud turn that failed or was stopped before any reply; spending leaves it out. */
+    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported' | 'no_reply'; usd: number | null };
     /** Why a value is unknown, keyed by field. */
     unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
 }
@@ -559,7 +559,7 @@ export interface Settings {
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
     policy_warnings?: string[];
-    policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string }>;
+    policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string; cause?: string | null; models?: string[] | null }>;
 }
 
 /**
@@ -871,6 +871,8 @@ export interface AgentStep {
     result?: string;
     /** Whether this step completed successfully. */
     success?: boolean;
+    /** A finished status the user waited on, such as a download; drawn with the turn (for type='status'). */
+    kept?: boolean;
     /** The user said no to this call, so it never ran (for type='tool'). */
     declined?: boolean;
     /** Nobody answered its permission prompt in time, so it never ran (for type='tool'). */
@@ -1118,6 +1120,8 @@ export interface LocalModelStatus {
     /** One plain line; `error_detail` carries the raw cause. */
     error: string | null;
     error_detail?: string | null;
+    /** Set when `error` is the server not answering, so the UI words it in its language. */
+    error_cause?: 'model_server_down' | null;
     base_url: string | null;
     /** `gaia` for GAIA's own Lemonade; GAIA asks before reloading on `user` or `remote`. */
     owner: 'gaia' | 'user' | 'remote' | null;

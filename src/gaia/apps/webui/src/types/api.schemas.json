@@ -348,6 +348,17 @@
         "title": "Id",
         "type": "integer"
       },
+      "kept": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Kept"
+      },
       "label": {
         "title": "Label",
         "type": "string"
@@ -3576,9 +3587,34 @@
   "PolicyNotice": {
     "description": "Structured Local only notice translated by the Agent UI.",
     "properties": {
+      "cause": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cause"
+      },
       "code": {
         "title": "Code",
         "type": "string"
+      },
+      "models": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Models"
       },
       "reason": {
         "anyOf": [

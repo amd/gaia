@@ -52,15 +52,12 @@ def _discover_subcommands() -> list[tuple[str, ...]]:
 def _discover_console_scripts() -> list[tuple[str, str]]:
     """Return (name, module) for every `gaia-*` console_scripts entry.
 
-    Excludes `gaia` (covered by in-process subcommand walk) and `gaia-cli`
-    (a documented alias of `gaia` with no new signal).
+    Excludes `gaia`, which the in-process subcommand walk covers.
     """
     eps = md.entry_points(group="console_scripts")
     out = []
     for ep in eps:
         if not ep.name.startswith("gaia-"):
-            continue
-        if ep.name == "gaia-cli":
             continue
         module = ep.value.split(":")[0]
         out.append((ep.name, module))

@@ -571,6 +571,17 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the memory chip opens a menu that says what Private does (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.locator('.composer-chip-memory').click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-item')).toHaveCount(2);
+        await shot(page, `memory-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const LONG_TITLES = {
     latin: 'My own typed question Give me a banana bread recipe with walnuts and brown butter',
     arabic: 'سؤالي الذي كتبته بنفسي أعطني وصفة خبز الموز مع الجوز والزبدة البنية',
@@ -1043,6 +1054,44 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withLongPasteAndTable(page: Page): Promise<void> {
+    const paste = Array.from({ length: 200 }, (_, i) => `row ${i + 1}: the quick brown fox`).join('\n');
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `${paste}\nWhich databases fit a team of five?`, created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: [
+                            '## Which one to use', '',
+                            'Pick by where the data lives.', '',
+                            '### Comparison', '',
+                            '| Engine | Monthly cost | When it fits |',
+                            '|---|---|---|',
+                            '| SQLite | 0 | One app, small data, no server to run |',
+                            '| PostgreSQL | 1,200 | Many writers, extensions such as PostGIS |',
+                        ].join('\n'),
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a long paste shows its ending, and a table aligns only its numbers (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongPasteAndTable);
+        await expect(page.locator('.msg-excerpt')).toContainText('Which databases fit a team of five?');
+        const prose = page.locator('.md-table tr').nth(1).locator('td').nth(2);
+        await expect(prose).toHaveCSS('text-align', 'start');
+        await expect(page.locator('.md-table tr').nth(1).locator('td').nth(1)).toHaveClass('is-numeric');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`answer-polish-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
@@ -1428,6 +1477,77 @@ test('document being indexed', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    // The dialog was centred on its content, so its title and path box jumped as rows came and went.
+    test(`the document library stays put as rows arrive, and long names keep their end (${locale})`, async ({ page }) => {
+        const names = [
+            'Quarterly business review for the regional sales team final draft v7 (reviewed by finance).pdf',
+            'مراجعة الأعمال الفصلية لفريق المبيعات الإقليمي المسودة النهائية الإصدار السابع.docx',
+            'garden-notes.txt',
+        ];
+        let listed = false;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: listed
+                ? { documents: names.map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096, chunk_count: 2, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 })), total: 3, total_size_bytes: 1, total_chunks: 1 }
+                : { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 } }));
+        });
+        // Read the top once the panel's slide-in (12px) has landed, or a slow runner measures mid-slide.
+        const settledTop = async () => {
+            const modal = page.locator('.doc-modal');
+            await modal.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+            return (await modal.boundingBox())!.y;
+        };
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.empty-docs')).toBeVisible();
+        const topEmpty = await settledTop();
+        listed = true;
+        // Re-open, which lists again: the same dialog with three rows.
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.doc-modal')).toHaveCount(0);
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-row')).toHaveCount(3);
+        expect(Math.abs((await settledTop()) - topEmpty)).toBeLessThan(1);
+        const tail = page.locator('.doc-name-tail').first();
+        await expect(tail).toHaveText(/finance\)\.pdf$/);
+        await expect(tail).toBeInViewport();
+        // A name in the other script still starts at the UI's own edge.
+        const other = page.locator('.doc-name-split').nth(locale === 'ar' ? 0 : 1);
+        const [textBox, infoBox] = await other.evaluate((el) => {
+            const parts = [...el.children].map((c) => c.getBoundingClientRect());
+            const info = el.closest('.doc-info')!.getBoundingClientRect();
+            return [
+                { left: Math.min(...parts.map((r) => r.left)), right: Math.max(...parts.map((r) => r.right)) },
+                { left: info.left, right: info.right },
+            ];
+        });
+        if (locale === 'ar') expect(Math.abs(textBox.right - infoBox.right)).toBeLessThan(2);
+        else expect(Math.abs(textBox.left - infoBox.left)).toBeLessThan(2);
+        // A long Arabic name ends with ".docx" read left to right, never "docx." at its front.
+        const arabic = page.locator('.doc-name-split').nth(1);
+        const ext = await arabic.evaluate((el) => {
+            const last = el.lastElementChild!;
+            const text = last.firstChild!;
+            const box = (from: number, to: number) => {
+                const r = document.createRange();
+                r.setStart(text, from);
+                r.setEnd(text, to);
+                return r.getBoundingClientRect();
+            };
+            const at = (text.textContent ?? '').lastIndexOf('.');
+            return {
+                text: last.textContent,
+                box: last.getBoundingClientRect(),
+                dot: box(at, at + 1), word: box(at + 1, at + 5),
+            };
+        });
+        expect(ext.dot.right, 'the dot should come before "docx", read left to right').toBeLessThanOrEqual(ext.word.left + 0.5);
+        expect(ext.text).toBe('.docx');
+        // The name runs right to left, so its end, the extension, is its left-most part.
+        const headBox = await arabic.locator('.doc-name-head').boundingBox();
+        expect(ext.box.right).toBeLessThanOrEqual(headBox!.x + 0.5);
+        await shot(page, `documents-${locale}-long-names`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     // A file GAIA couldn't read used to be counted with the readable ones.
     test(`a document library with a file that could not be read (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
@@ -1466,6 +1586,31 @@ for (const locale of ['en', 'ar']) {
         await expect(stats).not.toContainText(locale === 'ar' ? 'تعذّرت قراءتها' : "couldn't be read");
         if (locale === 'ar') expect(await untranslated(page, '.doc-stats', 'bdi')).toEqual([]);
         await shot(page, `documents-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    // The chat's document bar called a server-down file unreadable while the library didn't.
+    test(`the chat's document bar with a file waiting for the model server (${locale})`, async ({ page }) => {
+        const docs = [
+            { id: 'd1', filename: 'third.md', filepath: 'C:/third.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_down', last_error: 'Lemonade Server is not reachable', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+            { id: 'd2', filename: 'broken.pdf', filepath: 'C:/broken.pdf', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'corrupt', last_error: 'Could not read PDF: broken.pdf', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+            { id: 'd3', filename: 'garden-notes.txt', filepath: 'C:/garden-notes.txt', file_size: 7270, chunk_count: 7, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+        ];
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === '/api/documents', (route) =>
+                route.fulfill({ json: { documents: docs, total: docs.length, total_size_bytes: 9318, total_chunks: 7 } }));
+            const sessions = SESSIONS.map((s) => (s.id === ANSWER_SESSION ? { ...s, document_ids: docs.map((d) => d.id) } : s));
+            await p.route((url) => url.pathname === '/api/sessions', (route) =>
+                route.fulfill({ json: { sessions, total: sessions.length } }));
+        });
+        const label = page.locator('.doc-context-label');
+        await expect(label).toBeVisible();
+        // Same split as the library: one waiting for the server, one truly unreadable.
+        await expect(label).toContainText(locale === 'ar' ? 'بانتظار خادم النماذج: 1' : '1 waiting for the model server');
+        await expect(label).toContainText(locale === 'ar' ? 'تعذّرت قراءتها: 1' : "1 couldn't be read");
+        await expect(page.locator('.doc-pill', { hasText: 'third.md' })).toHaveAttribute('title', locale === 'ar' ? /بانتظار خادم النماذج/ : /waiting for GAIA's model server/);
+        if (locale === 'ar') expect(await untranslated(page, '.doc-context-bar', '.doc-pill-name')).toEqual([]);
+        await shot(page, `chat-docs-bar-${locale}-server-down`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -2147,6 +2292,29 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    // A down model server showed the raw connection error under the switch.
+    test(`Local only with the model server not answering (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withSettingsPanes(p, {
+            networkPolicy: 'cloud_allowed',
+            policyNotices: [
+                {
+                    code: 'saved_models_not_checked', severity: 'warning', cause: 'model_server_down', models: ['collection.router'],
+                    reason: "couldn't check whether collection.router is a cloud model: Request failed: HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded [WinError 10061]",
+                },
+                { code: 'users_server_keeps_keys', severity: 'info', url: 'http://127.0.0.1:59999' },
+            ],
+        }));
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        await page.locator('.toggle-switch .toggle-track').first().click();
+        const notice = page.locator('.settings-error[role="alert"]');
+        await expect(notice).toBeVisible();
+        await expect(notice).not.toContainText('HTTPConnectionPool');
+        await expect(notice).not.toContainText('WinError');
+        await shot(page, `privacy-local-only-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`Delete all chats asks in a dialog (${locale})`, async ({ page }) => {
         await open(page, '', locale, withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2708,6 +2876,44 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `model-status-${locale}-${state}`);
             expect(await audit(page)).toEqual([]);
             if (locale === 'ar') expect(await untranslated(page, '.popover .model-status')).toEqual([]);
+        });
+    }
+}
+
+// The backend words a down server in English; the popover must word it itself.
+const SERVER_DOWN = (owner: 'gaia' | 'user') => ({
+    ...LOCAL_STATUS, state: 'stopped', model: null, display_name: null, placement: null, ctx_size: null, memory: null, owner,
+    error: `The model server isn't answering at ${LOCAL_STATUS.base_url}. `
+        + (owner === 'gaia' ? 'Restart starts it.' : "GAIA doesn't start a server it doesn't run; start it yourself."),
+    error_detail: `The local model server is not reachable at ${LOCAL_STATUS.base_url} (connection refused).`,
+    error_cause: 'model_server_down',
+});
+
+for (const locale of ['ar', 'en']) {
+    for (const owner of ['gaia', 'user'] as const) {
+        test(`sidebar model-status popover: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
+            await page.locator('.sb-location').click();
+            const alert = page.locator('.popover .model-status .settings-error[role="alert"]');
+            await expect(alert).toBeVisible();
+            await expect(alert.locator('bdi[dir="ltr"]').first()).toHaveText(LOCAL_STATUS.base_url);
+            if (locale === 'ar') await expect(alert).toContainText('خادم النماذج لا يستجيب');
+            await shot(page, `model-status-${locale}-server-down-${owner}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.popover .model-status')).toEqual([]);
+        });
+
+        test(`session panel Runs on: server not answering, ${owner}'s server (${locale})`, async ({ page }) => {
+            await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await p.route('**/api/providers/local/status', (route) => route.fulfill({ json: SERVER_DOWN(owner) })); });
+            const row = page.locator('.session-panel .sp-env-row').filter({ has: page.locator('.sp-error') });
+            await row.scrollIntoViewIfNeeded();
+            const error = row.locator('.sp-error');
+            await expect(error).toBeVisible();
+            await expect(error.locator('bdi[dir="ltr"]').first()).toHaveText(LOCAL_STATUS.base_url);
+            if (locale === 'ar') await expect(error).toContainText('خادم النماذج لا يستجيب');
+            await shot(page, `session-panel-runs-on-${locale}-server-down-${owner}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.session-panel .sp-env-row:has(.sp-error)')).toEqual([]);
         });
     }
 }
@@ -3370,7 +3576,7 @@ for (const locale of ['ar', 'en']) {
         await open(page, '', locale, async (p) => {
             await withSettingsPanes(p);
             await p.route('**/api/system/status', (route) => route.fulfill({
-                json: { ...SYSTEM_STATUS, lemonade_running: false, model_loaded: null, start_command: 'gaia init', start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.' },
+                json: { ...SYSTEM_STATUS, initialized: false, lemonade_running: false, model_loaded: null, start_command: 'gaia init', start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.' },
             }));
         });
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -3398,6 +3604,46 @@ for (const locale of ['ar', 'en']) {
         const banner = page.locator('.connection-banner');
         await expect(banner.locator('button.connection-banner__retry')).toHaveCount(2);
         await shot(page, `banner-${locale}-not-installed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a chosen server that isn't answering says so in Advanced and Setup (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/system/status', (route) => route.fulfill({
+                json: { ...SYSTEM_STATUS, initialized: true, lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null, start_instruction: "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do." },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const row = page.locator('.status-row--has-hint').first();
+        await expect(row).toBeVisible();
+        await expect(row).not.toContainText(/gaia init|Cloud providers still work/);
+        await expect(page.getByRole('dialog').locator('.settings-card .btn-primary')).toHaveCount(0);
+        await expect(page.locator('.connection-banner')).not.toContainText('gaia init');
+        await shot(page, `advanced-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+        await withSetup(page);
+        await page.getByRole('dialog').locator('[data-section="setup"]').click();
+        await expect(page.locator('.settings-setup-status strong')).not.toHaveText(locale === 'en' ? 'Ready' : 'جاهز');
+        await shot(page, `setup-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`GAIA's own server that isn't answering names no command (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/system/status', (route) => route.fulfill({
+                json: { ...SYSTEM_STATUS, initialized: true, lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null, start_instruction: null },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const card = page.getByRole('dialog').locator('.settings-card').first();
+        await expect(card.locator('.status-row--has-hint')).toHaveCount(2);
+        await expect(card).not.toContainText(/gaia |first message|أول رسالة/);
+        await expect(page.locator('.connection-banner')).not.toContainText(/gaia |run /);
+        await shot(page, `advanced-${locale}-own-server-down`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -3961,32 +4207,97 @@ for (const [locale, theme] of [['ar', 'light'], ['en', 'light'], ['ar', 'dark']]
     });
 }
 
+/** No GAIA agent until the notice installs it; until then a new chat is refused as the backend refuses it. */
+async function withAgentToInstall(page: Page): Promise<void> {
+    let installed = false;
+    await page.route('**/api/agents', (route) => route.fulfill({ json: installed
+        ? { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 }
+        : { agents: [], total: 0 } }));
+    await page.route((url) => url.pathname === '/api/sessions', (route) => (route.request().method() === 'POST'
+        ? route.fulfill({ status: 422, json: { detail: "Unknown agent_type 'gaia'. Registered agent ids: chat." } })
+        : route.fallback()));
+    await page.route('**/api/agents/install', (route) => route.fulfill({ status: 202, json: { id: 'gaia', status: 'running' } }));
+    await page.route('**/api/agents/gaia/install-status', (route) => {
+        installed = true;
+        return route.fulfill({ json: { id: 'gaia', status: 'completed', percent: 100, error: null } });
+    });
+}
+
+/** The refused message waits in the New chat box under the one translated hint, which goes once the notice does. */
+async function expectHintLeavesWithNotice(page: Page, locale: string, entry: string, sent: string | RegExp): Promise<void> {
+    const hint = page.locator('.new-chat-error');
+    await expect(hint).toBeVisible();
+    await expect(hint).toHaveCount(1);
+    if (locale === 'ar') await expect(hint).toContainText(/\p{Script=Arabic}/u);
+    // Personalize, setup and the file browser once put the English sentence in a toast instead.
+    await expect(page.locator('.toast')).toHaveCount(0);
+    await expect(page.locator('.new-chat textarea').first()).toHaveValue(sent);
+    await expect(page.locator('.app-notice')).toBeVisible();
+    await shot(page, `agent-missing-hint-${entry}-${locale}`);
+    expect(await audit(page)).toEqual([]);
+    await page.locator('.app-notice').getByRole('button').click();
+    await expect(page.locator('.app-notice')).toHaveCount(0);
+    await expect(hint).toHaveCount(0);
+    await shot(page, `agent-installed-${entry}-${locale}`);
+}
+
 for (const locale of ['ar', 'en']) {
-    test(`the "install it from the notice above" line leaves with the notice (${locale})`, async ({ page }) => {
-        let installed = false;
-        await open(page, '', locale, async (p) => {
-            await p.route('**/api/agents', (route) => route.fulfill({ json: installed
-                ? { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 }
-                : { agents: [], total: 0 } }));
-            await p.route((url) => url.pathname === '/api/sessions', (route) => (route.request().method() === 'POST'
-                ? route.fulfill({ status: 422, json: { detail: "Unknown agent_type 'gaia'. Registered agent ids: chat." } })
-                : route.fallback()));
-            await p.route('**/api/agents/install', (route) => route.fulfill({ status: 202, json: { id: 'gaia', status: 'running' } }));
-            await p.route('**/api/agents/gaia/install-status', (route) => {
-                installed = true;
-                return route.fulfill({ json: { id: 'gaia', status: 'completed', percent: 100, error: null } });
-            });
+    test.describe(`the "install it from the notice above" line leaves with the notice (${locale})`, () => {
+        test('from the New chat box', async ({ page }) => {
+            await open(page, '', locale, withAgentToInstall);
+            await page.locator('.new-chat textarea').first().fill('Give me a banana bread recipe');
+            await page.keyboard.press('Enter');
+            await expectHintLeavesWithNotice(page, locale, 'new-chat', 'Give me a banana bread recipe');
         });
-        await page.locator('.new-chat textarea').first().fill('Give me a banana bread recipe');
-        await page.keyboard.press('Enter');
-        const hint = page.locator('.new-chat-error');
-        await expect(hint).toBeVisible();
-        if (locale === 'ar') await expect(hint).toContainText(/\p{Script=Arabic}/u);
-        await shot(page, `agent-missing-hint-${locale}`);
-        await page.locator('.app-notice').getByRole('button').click();
-        await expect(page.locator('.app-notice')).toHaveCount(0);
-        await expect(hint).toHaveCount(0);
-        await shot(page, `agent-installed-${locale}`);
+
+        test("from a connector's Personalize", async ({ page }) => {
+            await open(page, '', locale, async (p) => { await withConnectors(p); await withAgentToInstall(p); });
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator('[data-section="connectors"]').click();
+            await expect(page.locator('.connectors-loading')).toHaveCount(0);
+            await page.locator('.connector-tile-header', { hasText: 'Google' }).click();
+            await page.locator('.connector-detail .connector-personalize button').click();
+            await expectHintLeavesWithNotice(page, locale, 'personalize', /^I just connected Google\./);
+        });
+
+        test('from the first task picked at the end of setup', async ({ page }) => {
+            const s = scene('ready');
+            await open(page, '', locale, async (p) => {
+                await withSetup(p, s.answers);
+                await p.route('**/api/onboarding/start', (route) => route.fulfill({ json: {
+                    cards: [{ skill: 'summarize', title: 'Summarize my notes', note: 'From your documents', prompt: 'Summarize the notes in my documents folder.', needs_input: false }],
+                    working_folder: { path: '/home/you', name: 'you', gaia_folder: false, choosable: true },
+                } }));
+                // Setup ends by choosing its chat model.
+                await p.route('**/api/providers/select', (route) => route.fulfill({
+                    json: { provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true },
+                }));
+                await withAgentToInstall(p);
+            });
+            await s.reach(page);
+            await page.locator('.start-card').first().click();
+            await expectHintLeavesWithNotice(page, locale, 'setup-card', 'Summarize the notes in my documents folder.');
+        });
+
+        test("from the file browser's Ask GAIA", async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await withOldFile(p);
+                await p.route('**/api/documents/upload-path', (route) => route.fulfill({ json: {
+                    id: 'd1', filename: OLD_FILE.name, filepath: OLD_FILE.path, file_size: OLD_FILE.size, chunk_count: 40,
+                    indexed_at: OLD_FILE.at, last_accessed_at: null, sessions_using: 0, indexing_status: 'complete',
+                } }));
+                await p.route('**/api/setup/needs/embedding', (route) => route.fulfill({
+                    json: { job: 'embedding', needed: false, model: null, disk_free_gb: null },
+                }));
+                await withAgentToInstall(p);
+            });
+            await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+            await page.getByRole('button', { name: /Browse files/ }).click();
+            await page.locator('.fb-entry').first().click();
+            await page.locator('.fb-action-btn.primary').click();
+            await expect(page.getByRole('dialog')).toHaveCount(0);
+            await expectHintLeavesWithNotice(page, locale, 'files', `Please analyze this document for me: ${OLD_FILE.name}`);
+        });
     });
 }
 
@@ -4037,7 +4348,7 @@ test.describe('labels once left in English are in Arabic', () => {
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page, '', 'ar', withoutFlagship);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
-    await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
+    await expect(page.getByRole('button', { name: /الذاكرة لهذه المحادثة/ })).toContainText(/\p{Script=Arabic}/u);
 });
 
 /** POST /api/chat/send streams `events`, then stays open, as a turn waiting on the user does. */
@@ -4054,6 +4365,42 @@ function streamThenWait(events: unknown[]): void {
         });
         return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
     };
+}
+
+const SPEECH_NPU_PART = [
+    { type: 'tool_start', tool: 'transcribe_media', detail: 'standup.wav' },
+    { type: 'status', phase: 'speech_model_download', message: "Downloading the speech model's NPU part (0.7 GB), no progress shown" },
+];
+const SPEECH_DOWNLOADED = [
+    ...SPEECH_NPU_PART,
+    { type: 'status', phase: 'speech_model_downloaded', message: 'Downloaded the speech model (2.4 GB)' },
+    { type: 'status', phase: 'recording', message: 'Transcribing 14s of audio' },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`the speech model's NPU part says why it has no percent (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_NPU_PART);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.streaming-bubble')).toContainText(/no progress shown|دون عرض للتقدّم/);
+        await shot(page, `speech-npu-part-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a finished speech model download sits above the transcription still running (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_DOWNLOADED);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        const live = page.locator('.streaming-bubble');
+        await expect(live.locator('.flow-done')).toBeVisible();
+        // In time order (#7865): the download finished first, so it is drawn first.
+        const [done, running] = [await live.locator('.flow-done').boundingBox(), await live.locator('.flow-tool.active').first().boundingBox()];
+        expect(done!.y).toBeLessThan(running!.y);
+        await shot(page, `speech-downloaded-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 const PYTHON_PROMPT = [{
@@ -4097,7 +4444,7 @@ for (const locale of ['ar', 'en'] as const) {
         await page.addInitScript(streamThenWait, [{
             type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-always',
             args: { file_path: '/private/tmp/plans/weekly-grocery-plan.md', content: '# Weekly grocery plan\n' },
-            always_scope: 'write_file on files in /private/tmp/plans', always_label: 'writing files in /private/tmp/plans',
+            always_scope: 'changes to files in /private/tmp/plans', always_label: 'changing files in /private/tmp/plans',
         }]);
         await open(page, `#${ANSWER_SESSION}`, locale);
         await page.locator('textarea').first().fill('save my grocery plan');
@@ -4138,8 +4485,15 @@ for (const locale of ['ar', 'en'] as const) {
         const card = page.locator('.perm-card');
         await expect(card).toBeVisible();
         const always = card.locator('.perm-btn').nth(1);
-        await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
-        if (locale === 'en') await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        if (locale === 'en') {
+            await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
+            await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        } else {
+            const title = await always.getAttribute('title');
+            expect(title?.replace(/[\u2066-\u2069]/g, '')).toBe(`تغيير الملفات في ${FOLDER}`);
+            await expect(always).not.toContainText('Documents');
+            expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+        }
         expect(await audit(page)).toEqual([]);
         await shot(page, `permission-folder-${locale}`);
     });

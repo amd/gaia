@@ -171,25 +171,25 @@ func withExecutable(t *testing.T, path, os string) {
 
 func TestDetectKind(t *testing.T) {
 	home := withHome(t)
-	scriptExe := filepath.Join(home, ".gaia", "bin", "gaia-tui")
+	scriptExe := filepath.Join(home, ".gaia", "bin", "gaia-cli")
 
 	withExecutable(t, scriptExe, "linux")
 	if k, err := DetectKind(); err != nil || k != KindScript {
 		t.Errorf("~/.gaia/bin → %q, %v; want script", k, err)
 	}
-	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-tui.exe`, "windows")
+	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-cli.exe`, "windows")
 	if k, _ := DetectKind(); k != KindWindowsSetup {
 		t.Errorf("windows setup install → %q", k)
 	}
-	withExecutable(t, `D:\tools\gaia-tui.exe`, "windows")
+	withExecutable(t, `D:\tools\gaia-cli.exe`, "windows")
 	if _, err := DetectKind(); err == nil {
 		t.Error("an exe outside the setup's folder must not be taken for a setup install")
 	}
-	withExecutable(t, "/usr/local/bin/gaia-tui", "darwin")
+	withExecutable(t, "/usr/local/bin/gaia-cli", "darwin")
 	if k, _ := DetectKind(); k != KindMacPkg {
 		t.Errorf("macOS pkg install → %q", k)
 	}
-	withExecutable(t, filepath.Join(home, "src", "gaia-tui"), "linux")
+	withExecutable(t, filepath.Join(home, "src", "gaia-cli"), "linux")
 	if _, err := DetectKind(); err == nil || !strings.Contains(err.Error(), "cannot update itself") {
 		t.Errorf("a hand-built binary must refuse, got %v", err)
 	}
@@ -197,7 +197,7 @@ func TestDetectKind(t *testing.T) {
 
 func TestNewPlanNeedsAVerifiableInstaller(t *testing.T) {
 	withHome(t)
-	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-tui.exe`, "windows")
+	withExecutable(t, `C:\Programs\GAIA Terminal Hub\gaia-cli.exe`, "windows")
 	setup := Asset{Name: "gaia-0.26.0-win-x64-setup.exe", URL: "https://x/setup.exe"}
 	sums := Asset{Name: installerSums, URL: "https://x/sums"}
 
@@ -215,6 +215,28 @@ func TestNewPlanNeedsAVerifiableInstaller(t *testing.T) {
 	p, err := NewPlan(Release{Tag: "v0.26.0", Assets: []Asset{setup, sums}}, true)
 	if err != nil || p.Kind != KindWindowsSetup || !p.Pin {
 		t.Fatalf("plan = %+v, %v", p, err)
+	}
+}
+
+// A release after the rename carries both names; one from before it only
+// the older one, and switching back to it must still work.
+func TestScriptInstallTakesTheGaiaCliBuildAndElseTheOlderName(t *testing.T) {
+	withScriptInstall(t)
+	sums := Asset{Name: tuiSums}
+	renamed := Asset{Name: "gaia-cli-linux-amd64"}
+	older := Asset{Name: "gaia-linux-amd64"}
+
+	got, err := installFile(Release{Tag: "v0.27.0", Assets: []Asset{older, renamed, sums}}, KindScript)
+	if err != nil || got.Name != renamed.Name {
+		t.Errorf("with both names = %q, %v; want %q", got.Name, err, renamed.Name)
+	}
+	before := Release{Tag: "v0.25.0", Assets: []Asset{older, sums}}
+	got, err = installFile(before, KindScript)
+	if err != nil || got.Name != older.Name {
+		t.Errorf("before the rename = %q, %v; want %q", got.Name, err, older.Name)
+	}
+	if !Installable(before, KindScript) {
+		t.Error("a release from before the rename must stay installable")
 	}
 }
 
@@ -293,7 +315,7 @@ func TestAFailedInstallKeepsThePin(t *testing.T) {
 
 func TestMoveSelfAsideRestoresAMissingBinary(t *testing.T) {
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "gaia-tui.exe")
+	exe := filepath.Join(dir, "gaia-cli.exe")
 	os.WriteFile(exe, []byte("old"), 0o755)
 	prev := executable
 	executable = func() (string, error) { return exe, nil }
