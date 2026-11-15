@@ -437,3 +437,59 @@ class TestUndecodableTextNamesTheFile:
         result = search_tools["analyze_data_file"](str(path))
         assert result["status"] == "error"
         assert "scrambled.csv" in result["error"]
+
+
+SHORT_LOCAL_TEXT = {
+    "argnames": "text, page",
+    "argvalues": [
+        ("مرحبا", "cp1256"),
+        ("المنتج,السعر\nقهوة,5678\nشاي,1234\n", "cp1256"),
+        ("Привет", "cp1251"),
+        ("Привет, мир", "cp1251"),
+        ("Ελληνικά κείμενα", "cp1253"),
+        ("你好", "cp936"),
+    ],
+    "ids": [
+        "arabic-word",
+        "arabic-csv",
+        "russian-word",
+        "russian-phrase",
+        "greek",
+        "chinese",
+    ],
+}
+
+
+class TestShortTextReadsInThisPCsCodePage:
+    """A word or two gives the detector nothing to go on (#8295).
+
+    "مرحبا" came back as cp932 and a three-line Arabic CSV as Mac Cyrillic; a
+    legacy file on a PC is nearly always in that PC's Windows code page.
+    """
+
+    @pytest.mark.parametrize(**SHORT_LOCAL_TEXT)
+    def test_reads_in_the_pcs_code_page(self, monkeypatch, text, page):
+        from gaia.utils import text_decoding
+
+        monkeypatch.setattr(text_decoding, "_ansi_code_page", lambda: page)
+        assert text_decoding.decode_text(text.encode(page)) == (text, page)
+
+    def test_a_western_pc_still_reads_short_accents_as_cp1252(self, monkeypatch):
+        from gaia.utils import text_decoding
+
+        monkeypatch.setattr(text_decoding, "_ansi_code_page", lambda: "cp1252")
+        assert text_decoding.decode_text("café".encode("cp1252")) == ("café", "cp1252")
+
+    def test_off_windows_nothing_changes(self, monkeypatch):
+        from gaia.utils import text_decoding
+
+        monkeypatch.setattr(text_decoding, "_ansi_code_page", lambda: None)
+        assert text_decoding.decode_text("café".encode("cp1252"))[1] == "cp1252"
+
+    @pytest.mark.parametrize(**LEGACY_SAMPLES)
+    def test_long_text_still_follows_the_detector(self, monkeypatch, text, encoding):
+        from gaia.utils import text_decoding
+
+        # A Greek-locale PC must not override a confidently detected file.
+        monkeypatch.setattr(text_decoding, "_ansi_code_page", lambda: "cp1253")
+        assert text_decoding.decode_text(text.encode(encoding))[0] == text

@@ -5,12 +5,14 @@
 A byte-order mark names its codec (UTF-16/UTF-32 from PowerShell 5.1 ``>`` and
 some Notepad saves, UTF-8 with BOM); otherwise UTF-8; otherwise the legacy code
 page charset-normalizer detects (Windows-1256 Arabic, Shift-JIS, GBK,
-Windows-1251…), with CP1252 kept for Western text it reads the same way. The
+Windows-1251…), with CP1252 kept for Western text it reads the same way. Text
+too short to detect (a word or two) reads in this PC's Windows code page. The
 file tools, the Agent UI preview and document Q&A all decode through here, so a
 file reads the same everywhere.
 """
 
 import codecs
+import functools
 import itertools
 import os
 import unicodedata
@@ -43,6 +45,43 @@ SNIFF_BYTES = 1 << 16
 
 #: Fewer non-ASCII bytes than this give detection nothing to go on.
 _TOO_FEW_TO_TELL = 8
+
+
+@functools.lru_cache(maxsize=1)
+def _ansi_code_page() -> Optional[str]:
+    """This PC's Windows ANSI code page (``cp1256`` on Arabic Windows), or None.
+
+    None off Windows and when the code page is UTF-8 (65001).
+    """
+    if os.name != "nt":
+        return None
+    import ctypes
+
+    page = ctypes.windll.kernel32.GetACP()
+    if page == 65001:
+        return None
+    name = f"cp{page}"
+    try:
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
+
+def _local_legacy_encoding(data: bytes) -> Optional[str]:
+    """This PC's ANSI code page when it decodes *data* and isn't the Western one.
+
+    A legacy file on a PC is nearly always in that PC's code page; this settles
+    the short files the detector can only guess at.
+    """
+    page = _ansi_code_page()
+    if page is None or page == "cp1252":
+        return None
+    try:
+        data.decode(page)
+    except UnicodeDecodeError:
+        return None
+    return page
 
 
 def _latin_script_only(text: str) -> bool:
@@ -97,6 +136,11 @@ def detect_encoding(data: bytes, truncated: bool = False) -> str:
         None,
     )
     high = sum(byte >= 0x80 for byte in data)
+    # No language evidence (a word or a few short lines): every guess scores 0.
+    if best is None or not best.coherence:
+        local = _local_legacy_encoding(data)
+        if local is not None:
+            return local
     if best is not None:
         # Latin-script text scores as cp1250/cp775 too, and a handful of bytes
         # ("café") scores as anything: both are Windows ANSI. Another script
