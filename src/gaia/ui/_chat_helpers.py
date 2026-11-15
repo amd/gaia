@@ -3144,15 +3144,19 @@ def _find_last_tool_step(steps: list) -> dict | None:
 
 
 def _denial(event: dict) -> Optional[str]:
-    """``"declined"`` or ``"timedOut"`` for a ``tool_result`` whose call never ran.
+    """Why a ``tool_result``'s call never ran, as the step field that records it.
 
-    A relayed result nests its status in ``data``.
+    ``"declined"`` (the user said no), ``"timedOut"`` (nobody answered) or
+    ``"refused"`` (GAIA's own rule). A relayed result nests these in ``data``.
     """
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     if event.get("status", data.get("status")) != "denied":
         return None
-    timed_out = event.get("timed_out") is True or data.get("timed_out") is True
-    return "timedOut" if timed_out else "declined"
+    if event.get("timed_out") is True or data.get("timed_out") is True:
+        return "timedOut"
+    if event.get("denied_by", data.get("denied_by")) == "policy":
+        return "refused"
+    return "declined"
 
 
 def _needed_model(event: dict) -> Optional[str]:

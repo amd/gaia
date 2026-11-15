@@ -862,6 +862,8 @@ export interface AgentStep {
     declined?: boolean;
     /** Nobody answered its permission prompt in time, so it never ran (for type='tool'). */
     timedOut?: boolean;
+    /** GAIA's own rule stopped this call; nobody was asked (for type='tool'). */
+    refused?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
     /** Plan steps (for type='plan'). */

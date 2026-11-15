@@ -945,6 +945,9 @@ class SSEOutputHandler(OutputHandler):
         # A "denied" call nobody answered is not one the user declined.
         if isinstance(data, dict) and data.get("timed_out") is True:
             event["timed_out"] = True
+        # Nor is one GAIA's own rule stopped.
+        if isinstance(data, dict) and data.get("denied_by") == "policy":
+            event["denied_by"] = "policy"
         # A refusal must not read as a site contacted, relayed or not.
         if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
             event[EXECUTED_KEY] = False
@@ -2944,6 +2947,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         lines = stdout.strip().split("\n") if stdout.strip() else []
         if rc != 0 and data.get("expected_exit"):
             return f"{data['expected_exit']} (exit {rc})"
+        if rc != 0 and isinstance(data.get("exit_code_meaning"), str):
+            # winget reports failure as a bare number and prints to stdout.
+            return f"{data['exit_code_meaning']} (exit {rc})"
         if rc != 0:
             stderr = data.get("stderr", "")
             return f"Command failed (exit {rc})" + (

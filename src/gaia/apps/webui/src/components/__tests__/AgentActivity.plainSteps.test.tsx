@@ -458,7 +458,7 @@ describe('timeline review fixes', () => {
     it('filters a lone call between notes like any other', () => {
         const many = [1, 2, 3, 4, 5, 6].map((i) => call(i, `Reading file: ${i}.txt`, i === 1 ? { success: false } : {}));
         render(<AgentActivity steps={[...many, note(7, 'One more.'), call(8, 'Reading file: last.txt')]} isActive={false} />);
-        fireEvent.click(screen.getByRole('button', { name: /^Read file ×6$/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Read file ×6 \(1 failed\)$/ }));
         expect(screen.getByText('Reading file: last.txt')).toBeInTheDocument();
 
         fireEvent.change(screen.getByLabelText('Filter by status'), { target: { value: 'error' } });

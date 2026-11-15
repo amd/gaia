@@ -1092,6 +1092,16 @@ def test_loop_still_rejects_a_false_save_after_a_denied_write(agent, tmp_path):
     assert "Do not retry that write" in correction
 
 
+def test_a_write_gaias_own_rule_stopped_is_not_reported_as_declined(tmp_path):
+    ledger = _documents_ledger(tmp_path)
+    target = str(tmp_path / "Documents" / "ui_notes.txt")
+    _refuse(ledger, target, {"status": "denied", "denied_by": "policy"})
+    found = gaps(ledger, "Saved! `ui_notes.txt` is in your Documents folder.")
+    assert len(found) == 1
+    assert "was not permitted" in found[0]
+    assert "declined" not in found[0]
+
+
 def test_an_unanswered_prompt_is_not_reported_as_declined(tmp_path):
     ledger = _documents_ledger(tmp_path)
     target = str(tmp_path / "Documents" / "ui_notes.txt")

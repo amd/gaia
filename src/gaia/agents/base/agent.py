@@ -96,6 +96,7 @@ from gaia.agents.base.deliverables import (
 from gaia.agents.base.denied_effects import (
     NETWORK,
     PATH,
+    PROGRAM_NOT_FOUND,
     UNATTENDED_REFUSAL,
     Denial,
     DeniedEffects,
@@ -7723,8 +7724,9 @@ Do NOT wrap conversational replies in JSON.
         if denial.refused:
             # No person said no, so no person is asked to lift it.
             logger.info(
-                "Refused %s: it %s, refused earlier as %s",
+                "Refused %s (%s): it %s, refused earlier as %s",
                 tool_name,
+                command,
                 effect.describe(),
                 denial.rendered,
             )
@@ -7732,6 +7734,8 @@ Do NOT wrap conversational replies in JSON.
                 {
                     **NOT_EXECUTED,
                     "status": "denied",
+                    # GAIA's own rule, so no surface calls it the user's no.
+                    "denied_by": "policy",
                     "blocked_effect": effect.describe(),
                     "declined_call": denial.rendered,
                     "error": (
@@ -7764,8 +7768,9 @@ Do NOT wrap conversational replies in JSON.
         else:
             asked = f"The user was asked about this exact call and replied: {answer!r}."
         logger.info(
-            "Refused %s: it %s, declined earlier as %s",
+            "Refused %s (%s): it %s, declined earlier as %s",
             tool_name,
+            command,
             effect.describe(),
             denial.rendered,
         )
@@ -8333,11 +8338,14 @@ Do NOT wrap conversational replies in JSON.
             # Shell policy refusals only: a tool's own preflight ("read it
             # first") is a step to take, not a no. And one refused command
             # shape is not the whole family — the host or file it aimed at is.
-            # Nor is "nobody was here to approve it" a no.
-            unattended = isinstance(refusal, dict) and refusal.get(UNATTENDED_REFUSAL)
+            # Nor is "nobody was here to approve it" a no, nor "that program
+            # is not installed".
+            not_a_no = isinstance(refusal, dict) and (
+                refusal.get(UNATTENDED_REFUSAL) or refusal.get(PROGRAM_NOT_FOUND)
+            )
             if (
                 ledger is not None
-                and not unattended
+                and not not_a_no
                 and isinstance((tool_args or {}).get("command"), str)
             ):
                 ledger.record(
@@ -8499,9 +8507,10 @@ Do NOT wrap conversational replies in JSON.
                     # "Nothing could ask" is not a no; anything else counts as one.
                     unasked = getattr(self.console, "confirmation_unattended", None)
                     ledger = getattr(self, "_denied_effects", None)
-                    if ledger is not None and not (
-                        callable(unasked) and unasked(tool_name) is True
-                    ):
+                    if callable(unasked) and unasked(tool_name) is True:
+                        # Nobody was asked, so no surface calls it the user's no.
+                        denied["denied_by"] = "policy"
+                    elif ledger is not None:
                         ledger.record(tool_name, tool_args, denied_error)
                 return denied
             # A call approved once runs against this record, and only once.

@@ -489,6 +489,17 @@
         ],
         "title": "Receiptid"
       },
+      "refused": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Refused"
+      },
       "render": {
         "anyOf": [
           {

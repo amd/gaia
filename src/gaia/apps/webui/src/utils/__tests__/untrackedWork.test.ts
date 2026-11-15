@@ -47,10 +47,10 @@ describe('untrackedWarning', () => {
 
     it('says what undo cannot restore, in the singular for one', () => {
         expect(untrackedWarning([py('a')])).toBe(
-            "GAIA ran 1 Python snippet it can't track. If it changed any files, Undo won't restore them.",
+            "GAIA ran 1 Python snippet. Undo only restores files GAIA edited itself, so anything it changed or installed stays.",
         );
         expect(untrackedWarning([py('a'), py('a')], { also: true })).toBe(
-            "GAIA also ran 2 Python snippets it can't track. If they changed any files, Undo won't restore them.",
+            "GAIA also ran 2 Python snippets. Undo only restores files GAIA edited itself, so anything they changed or installed stays.",
         );
     });
 });

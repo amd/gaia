@@ -3916,6 +3916,32 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+const REFUSED_STEPS = [
+    { type: 'tool_start', tool: 'run_shell_command', narration: 'Running git clone' },
+    {
+        type: 'tool_result', success: false, status: 'denied', denied_by: 'policy',
+        summary: 'Not run: this reaches github.com, and `git clone` was refused earlier in this request.',
+    },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a call GAIA blocked is not shown as the user's no (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, REFUSED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('clone the repo');
+        await page.keyboard.press('Enter');
+        const rows = page.locator('.flow-steps.live .flow-tool');
+        await expect(rows).toHaveCount(2);
+        await expect(rows.nth(0)).toHaveClass(/declined/);
+        if (locale === 'en') await expect(rows.nth(0).locator('.flow-tool-label')).toHaveText('Blocked by GAIA: Running command');
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') await expect(rows.nth(0).locator('.flow-tool-label')).toContainText('حظرها GAIA');
+        await shot(page, `refused-step-${locale}`);
+    });
+}
+
 const PATH_PROMPT = [{
     type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
     args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },

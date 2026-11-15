@@ -26,6 +26,15 @@ describe('a declined call', () => {
         expect(updates.timedOut).toBe(true);
     });
 
+    it.each([
+        ['on the event', { status: 'denied', denied_by: 'policy' }],
+        ['in relayed data', { data: { status: 'denied', denied_by: 'policy' } }],
+    ])("is marked refused, not declined, when GAIA's own rule stopped it (%s)", (_where, extra) => {
+        const updates = toolResultUpdates(result(extra as Partial<StreamEvent>));
+        expect(updates.declined).toBeUndefined();
+        expect(updates.refused).toBe(true);
+    });
+
     it('leaves an ordinary failure alone', () => {
         expect(toolResultUpdates(result({ status: 'error' })).declined).toBeUndefined();
     });

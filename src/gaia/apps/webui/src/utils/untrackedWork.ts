@@ -108,7 +108,7 @@ export function untrackedWarning(
 ): string {
     const one = list.length === 1;
     return (
-        `${inChat ? 'In this chat, GAIA' : 'GAIA'} ${also ? 'also ran' : 'ran'} ${describeUntracked(list)} it can't track. ` +
-        `If ${one ? 'it' : 'they'} changed any files, ${undo} won't restore them.`
+        `${inChat ? 'In this chat, GAIA' : 'GAIA'} ${also ? 'also ran' : 'ran'} ${describeUntracked(list)}. ` +
+        `${undo} only restores files GAIA edited itself, so anything ${one ? 'it' : 'they'} changed or installed stays.`
     );
 }
