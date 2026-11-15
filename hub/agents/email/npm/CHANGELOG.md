@@ -175,6 +175,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   events list, so a caller couldn't tell a short calendar from a truncated
   page. The response now also carries `count` and `truncated`.
 
+- **Pre-scan lists now follow the user's sender preferences, so their
+  order changed.** In `prescan()`, priority senders come first and
+  low-priority senders last in `urgent`, `actionable` and `needs_review`.
+  `suggested_archives` runs the other way, low-priority first, so its cap
+  keeps the safest candidates. A host that shows these lists in response
+  order will see the new order (#2777).
+
 - **A daily briefing now tells you how old it is, so a cached one can't be
   shown as this morning's.** `GET /v1/email/briefing` and the agent's own
   `get_briefing` returned the last scheduled run with nothing to say when it
