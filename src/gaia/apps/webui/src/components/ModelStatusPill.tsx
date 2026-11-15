@@ -9,7 +9,7 @@ import { useChatStore } from '../stores/chatStore';
 import { useLogsStore } from '../stores/logsStore';
 import { useModelStore, useInferencePlace, displayModelName, sameModelId, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
 import { ctxLabel } from './modelMeta';
-import { MarkedText, markLtr } from './MarkedText';
+import { LocalStatusError } from './LocalStatusError';
 import { useT, type Translate } from '../i18n/useT';
 import { ref, type MessageKey } from '../i18n/registry';
 import './ModelPicker.css';
@@ -163,11 +163,7 @@ export function ModelStatusPill() {
                             </dl>
                             {s.placement?.warning && <span className="model-status-warning" role="alert">{s.placement.warning}</span>}
                             {s.error && (
-                                <span className="settings-error" role="alert" title={s.error_detail ?? undefined}>
-                                    {s.error_cause === 'model_server_down' && s.base_url
-                                        ? <MarkedText text={t(s.owner === 'gaia' ? 'modelStatus.serverDown.gaia' : 'modelStatus.serverDown.notOurs', { url: markLtr(s.base_url) })} />
-                                        : s.error}
-                                </span>
+                                <span className="settings-error" role="alert" title={s.error_detail ?? undefined}><LocalStatusError status={s} /></span>
                             )}
                             {s.restart_error && <span className="settings-error" role="alert">{s.restart_error}</span>}
                         </>
