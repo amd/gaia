@@ -1266,7 +1266,9 @@ describe('Chat App Integration', () => {
     it('should render error banner with AlertTriangle icon', () => {
       expect(msgContent).toContain('AlertTriangle');
       expect(msgContent).toContain('error-banner');
-      expectTranslated(msgContent, "t('msg.error')", 'msg.error', 'Something went wrong');
+      // A failure GAIA can name is headed with its cause; the rest keep the generic line.
+      expectTranslated(msgContent, ": 'msg.error')", 'msg.error', 'Something went wrong');
+      expect(msgContent).toContain('failedTurn.${failedTurn.kind}.title');
     });
 
     it('should apply error CSS class to error messages', () => {

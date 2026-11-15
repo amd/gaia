@@ -633,7 +633,9 @@ close an idle session) and retry. A `/query` that fails before its run starts
 because the model server is unavailable (for example GAIA's own server can't
 start) also gets `503`, with `detail` worded for the request's `surface`:
 what failed and the fix, never the raw connection error. When that fix is to
-repair GAIA's setup, retrying the same request fails the same way. A
+repair GAIA's setup, retrying the same request fails the same way. A `503`
+whose `detail` says there is no model by that name is not retryable either:
+pick another model. A
 `session_id` can also be evicted from the retention table under an idle
 timeout (**4 hours** without a turn) or an LRU cap on concurrent sessions
 (**100**) — the two knobs that decide when the `503` above can happen at all
