@@ -6219,6 +6219,17 @@ class ShellToolsMixin:
             missing = self._unlisted_program_missing(error, command, working_directory)
             if missing is not None:
                 error = missing
+        else:
+            # A command that needs no approval still has to find its program,
+            # which the user may have installed since this process started.
+            located = self._call_cwd(working_directory)
+            cwd = located[0] if located else self.shell_session.cwd
+            if any(
+                segment and _is_missing_program(segment[0], cwd)
+                for step in steps
+                for segment in step.segments
+            ):
+                program_lookup.refresh_path()
         if error is None:
             return None
         if tool_name == _WAIT_TOOL and error.get("tier") == TIER_CONFIRM_ONCE:

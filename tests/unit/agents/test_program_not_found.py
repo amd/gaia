@@ -379,6 +379,27 @@ def test_a_sign_in_setting_the_user_or_the_command_made_is_kept(monkeypatch, sou
     assert env["GIT_TERMINAL_PROMPT"] == "1"
 
 
+def test_a_command_that_needs_no_approval_still_looks_for_a_new_install(
+    _isolated, installed, monkeypatch
+):
+    """`git --version` is a read nobody approves; a Git the user installed
+    themselves has to be found for it too, without a GAIA restart."""
+    agent = _agent(_isolated)
+    refreshed = []
+    monkeypatch.setattr(
+        program_lookup,
+        "refresh_path",
+        lambda after_install=False: refreshed.append(1) or [],
+    )
+
+    agent.policy_refusal_for_call("run_shell_command", {"command": "git --version"})
+    assert refreshed == [1]
+
+    installed.add("git")
+    agent.policy_refusal_for_call("run_shell_command", {"command": "git --version"})
+    assert refreshed == [1]
+
+
 def test_a_launcher_keeps_the_missing_program_answer(_isolated, installed):
     agent = _agent(_isolated)
 
