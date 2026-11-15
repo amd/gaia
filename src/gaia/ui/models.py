@@ -78,7 +78,8 @@ class SystemStatus(BaseModel):
     # banner long after it stopped existing. ``start_command`` is None on hosts
     # requiring GUI/manual configuration, including service context changes,
     # and on Windows when Command Prompt and PowerShell need different lines.
-    # In those cases start_instruction carries the necessary steps.
+    # In those cases start_instruction carries the necessary steps. Both are
+    # None for GAIA's own server, which GAIA starts by itself.
     start_instruction: Optional[str] = None
     start_command: Optional[str] = None
     # Extended Lemonade info (settings modal)
@@ -668,6 +669,8 @@ class AgentStepResponse(BaseModel):
     # card from history.
     render: Optional[str] = None
     data: Optional[Any] = None
+    # A finished status the user waited on (a download); a reopened chat still shows it.
+    kept: Optional[bool] = None
     # A model the call needed and didn't find; a reopened chat still offers it.
     needsModel: Optional[str] = None
 
@@ -763,7 +766,8 @@ class TurnSummaryLiveData(BaseModel):
 class TurnSummaryCost(BaseModel):
     """What the turn cost."""
 
-    kind: str  # local | estimate | unknown | unreported (priced, no usage sent)
+    # local | estimate | unknown | unreported (priced, no usage sent) | no_reply
+    kind: str
     usd: Optional[float] = None
 
 

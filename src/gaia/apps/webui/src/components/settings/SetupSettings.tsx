@@ -31,6 +31,7 @@ export function SetupSettings() {
     const closeSettings = useChatStore((s) => s.closeSettings);
     const runSetupAgain = useChatStore((s) => s.runSetupAgain);
     const active = useModelStore((s) => s.active);
+    const serverDown = useChatStore((s) => s.systemStatus?.lemonade_running === false);
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [hardware, setHardware] = useState<PreflightReport | null>(null);
     const [gpu, setGpu] = useState<GpuMemoryStatus | null>(null);
@@ -98,8 +99,8 @@ export function SetupSettings() {
             <p className="settings-hint">{t('settings.setup.lede')}</p>
             <div className="settings-setup-status">
                 <span>
-                    <strong>{t('settings.setup.ready')}</strong>
-                    {chatName && <span className="settings-hint"> <bdi>{t('settings.setup.running', { name: chatName })}</bdi></span>}
+                    <strong>{t(serverDown ? 'settings.setup.serverDown' : 'settings.setup.ready')}</strong>
+                    {chatName && !serverDown && <span className="settings-hint"> <bdi>{t('settings.setup.running', { name: chatName })}</bdi></span>}
                 </span>
                 <button type="button" className="btn-secondary" data-testid="setup-run-again" onClick={() => setAsking(true)}>
                     {t('settings.setup.runAgain')}

@@ -33,9 +33,9 @@ beforeEach(() => {
 it('keeps the file extension visible on a long name in the Document library', async () => {
     render(<DocumentLibrary />);
 
+    // The row cuts the middle by width, so the end sits in its own part that is never cut.
     const name = await screen.findByTitle(LONG);
-    expect(name.textContent).toMatch(/…/);
-    expect(name.textContent?.endsWith('.txt')).toBe(true);
+    expect(name.querySelector('.doc-name-tail')?.textContent?.endsWith('.txt')).toBe(true);
 });
 
 it('keeps the file extension visible on a long name in the chat documents bar', () => {

@@ -15,6 +15,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   never read the loading step's "Stopped: N documents were not loaded" result,
   so its user was told nothing. The field is `null` when nothing was left.
 
+- **No "I haven't confirmed this works" line under an answer that already
+  reports the failure.** An answer such as "No, the suite fails: 1 failed",
+  which claims no success, no longer ends with "… 1 of 2 pytest runs didn't
+  pass". A failed lint or build, a blocked check or an unchecked change
+  still gets the line, and `verification` still records every failure.
 - **More attached documents than one conversation searches.** A conversation
   searches at most 100 documents or 10,000 passages at once. With more in
   `documents`, the agent loads up to that limit instead of loading every one
@@ -99,6 +104,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   codec, so a degree sign landed as the cp1252 byte `0xB0`. Scripts now run in
   UTF-8 mode, in the packaged binary too.
 
+- **The terminal UI's executable is `gaia-cli`, not `gaia-tui`.** It is the same
+  rename a full GAIA install makes. The package writes the binary as
+  `gaia-cli[.exe]` in its cache; `npx @amd-gaia/gaia` starts it as before. A
+  `gaia-tui` left in an older cache folder is unused.
+
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
   directory now go in the session context at the start of the first user
@@ -132,7 +142,7 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   (with `--history-file`) keeps a listing beside the session's transcript:
   its title, whether it is running, waiting on a permission prompt, done or
   failed, and each finished turn in readable form. `/sessions` and
-  `gaia-tui --resume` list and reopen sessions from it. Nothing changes for the
+  `gaia-cli --resume` list and reopen sessions from it. Nothing changes for the
   HTTP surface, or for a launch without the flag.
 - **One MCP server with a bad repeat-call declaration no longer takes the
   others down.** An MCP server tool can name the arguments the repeat-call

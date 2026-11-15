@@ -9,7 +9,7 @@ DEST_VOLUME="${3:-/}"
 BIN_DIR="${DEST_VOLUME%/}/usr/local/bin"
 
 # gaia is a link into /usr/local/lib/gaia, which the core component installs first.
-for binary in gaia-tui gaia-agent gaia; do
+for binary in gaia-cli gaia-agent gaia; do
     path="${BIN_DIR}/${binary}"
 
     if [ ! -f "$path" ]; then
@@ -28,8 +28,19 @@ for binary in gaia-tui gaia-agent gaia; do
     fi
 done
 
+# The Terminal UI's name before it became gaia-cli. Installer.app leaves a
+# file an earlier package put down, and this one would start the old version.
+legacy="${BIN_DIR}/gaia-tui"
+if [ -e "$legacy" ] || [ -L "$legacy" ]; then
+    if ! rm -f "$legacy"; then
+        echo "GAIA install failed: could not remove ${legacy}, the Terminal UI's earlier name." >&2
+        echo "Run 'sudo rm ${legacy}', then start GAIA with gaia-cli." >&2
+        exit 1
+    fi
+fi
+
 echo "GAIA Terminal UI installed:"
-echo "  ${BIN_DIR}/gaia-tui"
+echo "  ${BIN_DIR}/gaia-cli"
 echo "  ${BIN_DIR}/gaia-agent"
 echo "  ${BIN_DIR}/gaia"
-echo "Run \`gaia-tui\` to start."
+echo "Run \`gaia-cli\` to start."
