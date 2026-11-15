@@ -38,7 +38,9 @@ _QUOTED_TEXT = re.compile(
 _LEADING_QUOTE = re.compile(r"\s*(?:\"[^\"\n]+\"|“[^”\n]+”|«[^»\n]+»)")
 
 #: A file name or path that opens the text after the colon.
-_LEADING_FILE = re.compile(r"\s*[^\s\"'“«]*[\w)]\.[A-Za-z][A-Za-z0-9]{1,4}(?=\s|$)")
+_LEADING_FILE = re.compile(
+    r"\s*[^\s\"'“«]*[\w)]\.[A-Za-z][A-Za-z0-9]{1,4}(?=[,;.!?]?(?:\s|$))"
+)
 
 #: A plain word, which a path or file name never is.
 _WORD = re.compile(r"[^\W\d_][^\W\d_'’-]*[,.;:!?]*")
@@ -61,6 +63,9 @@ def instruction_part(request: str) -> str:
     if colon and not _TARGET_BEFORE_COLON.search(colon.group()):
         tail = request[colon.end() :]
         quote = _LEADING_QUOTE.match(tail)
+        if quote and not _is_prose(quote.group().strip()[1:-1]):
+            # A quoted file name or path, not text.
+            return request
         if quote:
             # What follows the quoted text is the user's own instruction again.
             rest = tail[quote.end() :]
