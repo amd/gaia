@@ -176,6 +176,8 @@ def run(
     try:
         text = read_prompt(prompt)
         model, route, settings = _route(text, model, base_url)
+        if route is not None:
+            _model_on_disk(model, base_url, setting=_routed_setting(settings, model))
         turn = dict(
             model=model,
             verbose=verbose,
@@ -299,6 +301,13 @@ def _route(text: str, model: Optional[str], base_url: Optional[str]):
     return route.model, route, router.settings
 
 
+def _routed_setting(settings: Any, model: str) -> str:
+    """The hybrid config key that chose *model*, the turn's routed model."""
+    if model == settings.strong_model:
+        return "hybrid_strong_model"
+    return "hybrid_cheap_model"
+
+
 def _cli(text: str) -> str:
     """*text* with the apps' advice swapped for the CLI's commands."""
     from gaia.llm.surface_hints import surface_wording
@@ -350,6 +359,11 @@ def _model_on_disk(
     if client._is_cloud_model(model):  # pylint: disable=protected-access
         return model
     info = client.get_model_info(model)
+    if not info["listed"]:
+        raise PrintModeError(
+            f"{model} isn't a model the model server knows, so gaia -p can't run "
+            f"it. {_missing_model_remedy(model, requested, setting, listed=False)}"
+        )
     if not info["downloaded"]:
         raise PrintModeError(
             f"{model} is not downloaded ({info['size_gb']:.1f} GB), and gaia -p "
@@ -360,7 +374,10 @@ def _model_on_disk(
 
 
 def _missing_model_remedy(
-    model: str, requested: Optional[str], setting: Optional[str] = None
+    model: str,
+    requested: Optional[str],
+    setting: Optional[str] = None,
+    listed: bool = True,
 ) -> str:
     """What makes the next run work, given where *model* came from.
 
@@ -369,7 +386,11 @@ def _missing_model_remedy(
     """
     from gaia.config import GaiaConfig
 
-    download = "or download it from the GAIA app's Settings > Model."
+    download = (
+        "or download it from the GAIA app's Settings > Model."
+        if listed
+        else "or correct the id."
+    )
     if setting:
         return f"Run `gaia config set {setting} <id>` with a model you have, {download}"
     if requested:

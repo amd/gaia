@@ -482,6 +482,7 @@ class _Catalog:
 
     calls: list = []
     downloaded = True
+    listed = True
     cloud = False
 
     def __init__(self, **kwargs):
@@ -493,7 +494,12 @@ class _Catalog:
 
     def get_model_info(self, model):
         _Catalog.calls.append(("get_model_info", model))
-        return {"id": model, "size_gb": 5.6, "downloaded": _Catalog.downloaded}
+        return {
+            "id": model,
+            "size_gb": 5.6,
+            "downloaded": _Catalog.downloaded,
+            "listed": _Catalog.listed,
+        }
 
     def __getattr__(self, name):
         def record(*args, **kwargs):
@@ -517,6 +523,7 @@ def stub_env(monkeypatch):
     monkeypatch.setattr("gaia.cli.initialize_lemonade_for_agent", init)
     _Catalog.calls = []
     _Catalog.downloaded = True
+    _Catalog.listed = True
     _Catalog.cloud = False
     monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient", _Catalog)
 
@@ -759,6 +766,63 @@ def test_a_local_hybrid_classifier_that_is_not_downloaded_is_refused(
     assert "Local-Classifier-GGUF is not downloaded (5.6 GB)" in err
     assert "`gaia config set hybrid_classifier_model <id>`" in err
     assert [c.kwargs["preload"] for c in stub_env.call_args_list] == [False]
+
+
+def test_an_unknown_model_is_called_unknown_not_undownloaded(
+    stub_env, monkeypatch, capsys
+):
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    _Catalog.listed = False
+    assert print_mode.run("q", model="Gemma-4-E4B-typo") == 1
+    err = capsys.readouterr().err
+    assert "Gemma-4-E4B-typo isn't a model the model server knows" in err
+    assert "not downloaded" not in err
+    assert "Settings > Model" not in err
+    assert _StubAgent.instances == []
+
+
+@pytest.mark.parametrize(
+    "routed, setting",
+    [
+        ("Local-Strong-GGUF", "hybrid_strong_model"),
+        ("Local-Cheap-GGUF", "hybrid_cheap_model"),
+    ],
+)
+def test_a_missing_routed_hybrid_model_names_its_setting(
+    stub_env, monkeypatch, capsys, routed, setting
+):
+    from gaia.llm import hybrid
+
+    class _Router:
+        def __init__(self):
+            self.settings = hybrid.HybridSettings(
+                cheap_model="Local-Cheap-GGUF",
+                strong_model="Local-Strong-GGUF",
+                classifier_model="amd.Classifier",
+            )
+
+        def decide(self, text, base_url=None):
+            return hybrid.RouteDecision(
+                model=routed,
+                kind="chat",
+                difficulty=1,
+                stakes="low",
+                reason="test",
+                classified=True,
+                seconds=0.1,
+                policy=self.settings.policy,
+            )
+
+    monkeypatch.setattr(hybrid, "HybridRouter", _Router)
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    assert print_mode.run("q", model="hybrid") == 1
+    err = capsys.readouterr().err
+    assert f"{routed} is not downloaded" in err
+    assert f"`gaia config set {setting} <id>`" in err
+    assert "Pass --model" not in err
+    assert _StubAgent.instances == []
 
 
 def test_a_gateway_model_the_catalog_leaves_out_is_not_called_undownloaded(
@@ -1313,6 +1377,7 @@ def _attempt_doubles(monkeypatch, tmp_path, final_raises=None):
     monkeypatch.setattr(print_mode, "_start_server", lambda m, b, preload=True: None)
     _Catalog.calls = []
     _Catalog.downloaded = True
+    _Catalog.listed = True
     _Catalog.cloud = False
     monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient", _Catalog)
 
