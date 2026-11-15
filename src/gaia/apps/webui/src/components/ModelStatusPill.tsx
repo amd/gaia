@@ -162,7 +162,11 @@ export function ModelStatusPill() {
                             </dl>
                             {s.placement?.warning && <span className="model-status-warning" role="alert">{s.placement.warning}</span>}
                             {s.error && (
-                                <span className="settings-error" role="alert" title={s.error_detail ?? undefined}>{s.error}</span>
+                                <span className="settings-error" role="alert" title={s.error_detail ?? undefined}>
+                                    {s.error_code === 'server_down' && s.base_url
+                                        ? t(s.owner === 'gaia' ? 'modelStatus.error.serverDown.gaia' : 'modelStatus.error.serverDown.external', { url: s.base_url })
+                                        : s.error}
+                                </span>
                             )}
                             {s.restart_error && <span className="settings-error" role="alert">{s.restart_error}</span>}
                         </>

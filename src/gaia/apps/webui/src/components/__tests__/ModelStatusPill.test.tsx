@@ -32,6 +32,7 @@ const LOADED: LocalModelStatus = {
 const STOPPED: LocalModelStatus = {
     ...LOADED, state: 'stopped', model: null, display_name: null, placement: null, ctx_size: null, memory: null,
     error: "The model server isn't answering at http://localhost:13305/api/v1. Restart starts it if GAIA runs it.",
+    error_code: 'server_down',
     error_detail: 'The local model server is not reachable at http://localhost:13305/api/v1 (connection refused).',
 };
 
@@ -213,6 +214,18 @@ describe('ModelStatusPill', () => {
         const dialog = await open();
         fireEvent.click(within(dialog).getByRole('button', { name: /Model settings/ }));
         expect(useChatStore.getState().settingsSection).toBe('model');
+    });
+
+    it('says the server is down in Arabic, keeping the English cause as the hover detail', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.getLocalModelStatus.mockResolvedValue({ ...STOPPED, owner: 'user' });
+        render(<ModelStatusPill />);
+        fireEvent.click(screen.getByRole('button', { name: /محلي · Gemma 4 E4B/ }));
+        const dialog = await screen.findByRole('dialog', { name: /حالة النموذج/ });
+        const line = (await within(dialog).findByText(/خادم النموذج لا يستجيب/)).closest('.settings-error');
+        expect(line?.textContent).toContain('\u2068http://localhost:13305/api/v1\u2069');
+        expect(line?.textContent).toContain('شغّله بنفسك');
+        expect(line).toHaveAttribute('title', expect.stringMatching(/connection refused/));
     });
 
     it('reads in Arabic, with each size kept whole and left to right', async () => {

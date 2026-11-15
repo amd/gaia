@@ -3085,7 +3085,7 @@ async function withServerDown(page: Page): Promise<void> {
             state: 'stopped', active_model: 'fireworks.glm-5', active_display_name: 'glm-5', active_remote: true, model: null,
             display_name: null, placement: null, ctx_size: null, memory: null, memory_error: null,
             error: "The model server isn't answering at http://127.0.0.1:13305/api/v1. Restart starts it.",
-            base_url: 'http://127.0.0.1:13305/api/v1', owner: 'gaia', busy: false, restarting: false, restart_error: null,
+            error_code: 'server_down', base_url: 'http://127.0.0.1:13305/api/v1', owner: 'gaia', busy: false, restarting: false, restart_error: null,
         },
     }));
 }

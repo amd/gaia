@@ -507,6 +507,7 @@ def test_status_stopped(client, lemonade):
     body = client.get("/api/providers/local/status").json()
     assert body["state"] == "stopped"
     assert body["error"].startswith(f"The model server isn't answering at {BASE}.")
+    assert body["error_code"] == "server_down"
     assert "not reachable" in body["error_detail"]
 
 

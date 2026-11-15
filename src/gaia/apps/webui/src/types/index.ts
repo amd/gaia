@@ -1116,6 +1116,8 @@ export interface LocalModelStatus {
     memory_error: string | null;
     /** One plain line; `error_detail` carries the raw cause. */
     error: string | null;
+    /** `server_down`: nothing answers at `base_url`; the UI words it from `owner`. */
+    error_code?: 'server_down' | null;
     error_detail?: string | null;
     base_url: string | null;
     /** `gaia` for GAIA's own Lemonade; GAIA asks before reloading on `user` or `remote`. */
