@@ -3265,7 +3265,7 @@ def _find_last_tool_step(steps: list) -> dict | None:
 
 
 def _denial(event: dict) -> Optional[str]:
-    """``"declined"`` or ``"timedOut"`` for a ``tool_result`` whose call never ran.
+    """``"declined"``, ``"timedOut"`` or ``"autoDeclined"`` for a call that never ran.
 
     A relayed result nests its status in ``data``.
     """
@@ -3273,7 +3273,11 @@ def _denial(event: dict) -> Optional[str]:
     if event.get("status", data.get("status")) != "denied":
         return None
     timed_out = event.get("timed_out") is True or data.get("timed_out") is True
-    return "timedOut" if timed_out else "declined"
+    if timed_out:
+        return "timedOut"
+    if event.get("declined_by", data.get("declined_by")) == "agent":
+        return "autoDeclined"
+    return "declined"
 
 
 def _needed_model(event: dict) -> Optional[str]:
