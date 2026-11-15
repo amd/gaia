@@ -1,8 +1,8 @@
 ---
 name: summarize
-description: Summarize a document, meeting transcript, or email — pick a style that matches what the content actually is, and fold long input forward in sections instead of losing the back half. Use when the user pastes or points at a transcript, email, PDF, or long document and asks for a summary, action items, or key decisions.
+description: Summarize a document, meeting transcript, or email in a style that fits the content, without losing the back half of long input. Use when the user pastes or points at a transcript, email, PDF, or long document and asks for a summary, action items, or key decisions.
 license: MIT
-version: 1.0.4
+version: 1.0.5
 metadata:
   gaia:
     security_tier: community

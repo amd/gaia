@@ -1,8 +1,8 @@
 ---
 name: analyze-recording
-description: Break down a long video or audio recording that is not a meeting — a class, lecture, tutorial, webinar, podcast, interview — from a file or a link such as YouTube, into a timestamped transcript, a structured list of what it contains, and answers about it. Use when the user asks to list every topic, step, tip or recipe in a recording, wants timestamps, chapters or subtitles, or asks what was said and when. For meeting minutes use transcribe-meeting.
+description: Break down a long video or audio recording that is not a meeting — a class, lecture, tutorial, webinar, podcast, interview — from a file or a link such as YouTube, into a timestamped transcript and answers about it. Use when the user asks to list every topic, step, tip or recipe in it, wants timestamps, chapters or subtitles, or asks what was said and when.
 license: MIT
-version: 1.0.0
+version: 1.0.1
 metadata:
   gaia:
     security_tier: community

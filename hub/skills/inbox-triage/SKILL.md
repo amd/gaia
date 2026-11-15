@@ -1,8 +1,8 @@
 ---
 name: inbox-triage
-description: Triage a mailbox — group what arrived, judge what is urgent and what actually needs the user, and say what to do about it. Use when asked to triage or check mail, deal with email, go through the inbox, see what is unread, get a rundown of what came in, find what needs a reply, or work out which messages matter today.
+description: Triage a mailbox — what is urgent, what needs the user, and what to do about it. Use when asked to triage or check mail, deal with email, go through the inbox, see what is unread, get a rundown of what came in, find what needs a reply, or work out which messages matter today.
 license: MIT
-version: 0.2.0
+version: 0.2.1
 metadata:
   gaia:
     security_tier: community

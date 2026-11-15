@@ -1,8 +1,8 @@
 ---
 name: daily-brief
-description: Compose a short briefing from several sources at once — headlines, tracked topics, and the user's own open items — as one digest instead of separate answers. Use when the user asks for a briefing, a digest, a rundown, or "what do I need to know today".
+description: Compose one short digest of headlines, tracked topics and the user's own open items. Use when the user asks for a briefing, a digest, a rundown, or "what do I need to know today".
 license: MIT
-version: 1.0.0
+version: 1.0.1
 metadata:
   gaia:
     security_tier: community

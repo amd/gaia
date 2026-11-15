@@ -1,8 +1,8 @@
 ---
 name: transcribe-meeting
-description: Transcribe and summarize a meeting recording — timestamped, speaker-attributed transcript, then a brief with decisions and action items. Use whenever the user points at an audio or video file (.mp4, .mkv, .mov, .m4a, .mp3, .wav) or a Teams/Zoom transcript export and asks to transcribe it, summarize it, take notes, write minutes, say what was discussed, who said what, what was decided, or what the action items and follow-ups are.
+description: Transcribe and summarize a meeting recording into a speaker-attributed transcript and a brief with decisions and action items. Use when the user points at an audio or video file (.mp4, .mkv, .mov, .m4a, .mp3, .wav) or a Teams/Zoom transcript export and asks to transcribe it, take notes, write minutes, or say who said what and what was decided.
 license: MIT
-version: 1.2.1
+version: 1.2.2
 metadata:
   gaia:
     security_tier: community

@@ -1,8 +1,8 @@
 ---
 name: coding
-description: Work on a codebase — read, search, edit and verify source files. Use when the user asks to fix a bug, add a feature, refactor, explain code, make a test pass, or change anything in a repository. Covers finding the right file, editing safely, and proving the change works before reporting it.
+description: Work on a codebase — read, search, edit and verify source files. Use when the user asks to fix a bug, add a feature, refactor, explain code, make a test pass, or change anything in a repository.
 license: MIT
-version: 0.2.2
+version: 0.2.3
 metadata:
   gaia:
     security_tier: community

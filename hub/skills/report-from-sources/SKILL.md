@@ -1,8 +1,8 @@
 ---
 name: report-from-sources
-description: Build a report, deck, brief, workbook or chart from the user's own files without missing what the sources stress. Use when the user asks to turn documents, spreadsheets or exports into a report, slides, a one-pager, a summary or charts. Uses the newest file per dataset, cites source and period on every figure, and checks every requested item before handing over.
+description: Build a report, deck, brief, one-pager, workbook or charts from the user's own documents, spreadsheets or exports, citing source and period on every figure. Use when the user asks to turn their files into a report, slides, a summary or charts.
 license: MIT
-version: 1.0.0
+version: 1.0.1
 metadata:
   gaia:
     security_tier: community

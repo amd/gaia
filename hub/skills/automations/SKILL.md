@@ -1,8 +1,8 @@
 ---
 name: automations
-description: Reminders, alerts, triggers, summaries and the heartbeat — work GAIA does on its own and reports later. "Remind me at 5pm", "alert me if main breaks", "tell me when a good weather window opens", "summarize my inbox every morning", "check in every 30 minutes", "what are you watching?", "pause that", "stop those updates". Use whenever the user wants something done later, repeatedly, or only when something changes, or wants to see or change what is set up.
+description: Reminders, alerts, triggers, summaries and the heartbeat — work GAIA does on its own and reports later. "Remind me at 5pm", "alert me if main breaks", "summarize my inbox every morning", "check in every 30 minutes", "what are you watching?", "pause that". Use whenever the user wants something done later, repeatedly, or only when something changes, or to see or change what is set up.
 license: MIT
-version: 2.0.0
+version: 2.0.1
 metadata:
   gaia:
     security_tier: community
