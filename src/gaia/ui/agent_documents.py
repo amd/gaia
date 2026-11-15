@@ -97,7 +97,12 @@ def _record_copy(
 
     managed = managed_documents_dir()
     managed.mkdir(parents=True, exist_ok=True)
-    copy = reserve_copy_path(managed, _sanitize_stem(path.stem), path.suffix.lower())
+    copy = reserve_copy_path(
+        managed,
+        _sanitize_stem(path.stem),
+        path.suffix.lower(),
+        taken=lambda p: db.path_held_by_other_content(str(p), file_hash),
+    )
     try:
         shutil.copyfile(path, copy)
     except OSError:

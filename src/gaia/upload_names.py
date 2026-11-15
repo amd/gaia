@@ -11,7 +11,7 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 _ID_CHARS = 12
 _NAME_CHARS = 80
@@ -33,24 +33,62 @@ def upload_copy_stem(original_name: str) -> str:
     return stem or _FALLBACK_NAME
 
 
-def reserve_copy_path(directory: Path, stem: str, ext: str) -> Path:
+# Names Windows maps to a device whatever the extension, compared before the first dot.
+_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"{dev}{n}" for dev in ("COM", "LPT") for n in "0123456789\u00b9\u00b2\u00b3"}
+)
+
+
+def _copy_name(stem: str, ext: str) -> str:
+    """Return ``<stem><ext>``, refusing anything but one plain file name."""
+    name = f"{stem}{ext}"
+    if (
+        not stem
+        or name in (".", "..")
+        or any(c in "/\\:" or ord(c) < 32 for c in name)
+        or name != name.rstrip(" .")
+    ):
+        raise ValueError(f"{name!r} is not a plain file name for a copy")
+    return name
+
+
+def _plain_name_usable(name: str) -> bool:
+    """Whether a copy can go by *name* alone, with no id in front.
+
+    A device name would open the device on Windows, and a name that already
+    looks like ``<id>_<name>`` would be cited without its first part.
+    """
+    device = name.split(".", 1)[0].rstrip(" ").upper()
+    return device not in _DEVICE_NAMES and not _COPY_NAME_RE.fullmatch(name)
+
+
+def reserve_copy_path(
+    directory: Path,
+    stem: str,
+    ext: str,
+    taken: Optional[Callable[[Path], bool]] = None,
+) -> Path:
     """Create an empty file for a new copy and return its path.
 
     The file is ``<stem><ext>`` when that name is free, else ``<id>_<stem><ext>``.
     Creating it exclusively means two uploads never share a name, even at once.
+    *taken* marks names still claimed by something other than a file on disk.
     The caller writes to the path, and removes it if the write fails.
     """
-    candidates = [f"{stem}{ext}"] + [
-        f"{uuid.uuid4().hex[:_ID_CHARS]}_{stem}{ext}" for _ in range(3)
-    ]
+    plain = _copy_name(stem, ext)
+    candidates = [plain] if _plain_name_usable(plain) else []
+    candidates += [f"{uuid.uuid4().hex[:_ID_CHARS]}_{plain}" for _ in range(3)]
     for name in candidates:
         path = directory / name
+        if taken is not None and taken(path):
+            continue
         try:
             os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
         except FileExistsError:
             continue
         return path
-    raise FileExistsError(f"No free name for {stem}{ext} in {directory}")
+    raise FileExistsError(f"No free name for {plain} in {directory}")
 
 
 def place_copy(directory: Path, stem: str, ext: str, content: bytes) -> Path:
@@ -59,8 +97,13 @@ def place_copy(directory: Path, stem: str, ext: str, content: bytes) -> Path:
     A file already stored under the plain name with the same bytes is reused,
     so attaching one file to many chats keeps one copy with the plain name.
     """
-    plain = directory / f"{stem}{ext}"
-    if plain.is_file() and plain.read_bytes() == content:
+    plain = directory / _copy_name(stem, ext)
+    if (
+        _plain_name_usable(plain.name)
+        and plain.is_file()
+        and not plain.is_symlink()
+        and plain.read_bytes() == content
+    ):
         os.utime(plain)  # keep the age-based media prune from taking it
         return plain
     path = reserve_copy_path(directory, stem, ext)

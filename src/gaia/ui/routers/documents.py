@@ -134,6 +134,26 @@ _ILLEGAL_FILENAME_CHARS = '<>:"/\\|?*'
 _SHELL_QUOTING_CHARS = "'`"
 
 
+# Characters drawn like a slash or backslash, which would make a name read as a path.
+_SLASH_LOOKALIKES = "\u2044\u2215\u29f5\u29f8\u29f9\ufe68\uff0f\uff3c"
+
+# Zero-width joiners spell words in Persian, Indic scripts and emoji; they stay.
+_JOINERS = "\u200c\u200d"
+
+
+def _unsafe_name_char(c: str) -> bool:
+    """Whether *c* must not appear in a stored document name."""
+    return (
+        c in _ILLEGAL_FILENAME_CHARS
+        or c in _SHELL_QUOTING_CHARS
+        or c in _SLASH_LOOKALIKES
+        or (
+            unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co", "Zl", "Zp")
+            and c not in _JOINERS
+        )
+    )
+
+
 def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     """Sanitize a filename stem for safe cross-platform filesystem use.
 
@@ -143,19 +163,17 @@ def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     and dots (Windows disallows trailing dots/spaces), and truncates to *max_length*
     characters. Returns ``"file"`` if nothing usable remains.
 
-    The returned stem is combined with a UUID prefix to form the final
-    on-disk filename, so collisions are impossible regardless of what the
-    user-provided name contained. The purpose of preserving the original
-    name is purely so downstream consumers (RAG tools, the LLM) can
+    Invisible and line-breaking characters (Unicode control, format and
+    separator categories) and characters drawn like a slash are replaced too,
+    since the name is shown to the model and the user as part of the path.
+
+    The returned stem becomes the on-disk name, with an id in front only when
+    that name is taken (see ``reserve_copy_path``). The purpose of preserving
+    the original name is so downstream consumers (RAG tools, the LLM) can
     recognize the document by its human-readable name.
     """
     cleaned = "".join(
-        (
-            "_"
-            if c in _ILLEGAL_FILENAME_CHARS or c in _SHELL_QUOTING_CHARS or ord(c) < 32
-            else c
-        )
-        for c in unicodedata.normalize("NFC", stem)
+        "_" if _unsafe_name_char(c) else c for c in unicodedata.normalize("NFC", stem)
     )
     cleaned = cleaned.strip(" .")
     cleaned = cleaned[:max_length]
@@ -471,7 +489,12 @@ async def upload_document_blob(
         # now-final file.
         safe_stem = _sanitize_stem(Path(display_name).stem)
         try:
-            final_path = reserve_copy_path(managed_dir, safe_stem, ext)
+            final_path = reserve_copy_path(
+                managed_dir,
+                safe_stem,
+                ext,
+                taken=lambda p: db.path_held_by_other_content(str(p), file_hash),
+            )
             os.replace(partial_path, final_path)
         except OSError as e:
             logger.error("Failed to promote %s -> %s: %s", partial_path, final_path, e)

@@ -194,6 +194,69 @@ def test_upload_blob_repoints_a_document_whose_file_is_gone(
     assert [d["filepath"] for d in listed if d["id"] == doc1["id"]] == [str(new_path)]
 
 
+def test_upload_blob_never_takes_over_a_gone_document_of_other_content(
+    client, mock_index_document, managed_docs_sandbox
+):
+    """A new file with a gone document's name gets its own row and copy."""
+    r1 = client.post(
+        "/api/documents/upload",
+        files={"file": ("report.txt", b"first report", "text/plain")},
+    )
+    doc1 = r1.json()
+    Path(doc1["filepath"]).unlink()
+
+    r2 = client.post(
+        "/api/documents/upload",
+        files={"file": ("report.txt", b"a different report", "text/plain")},
+    )
+    assert r2.status_code == 200, r2.text
+    doc2 = r2.json()
+
+    assert doc2["id"] != doc1["id"]
+    assert doc2["filepath"] != doc1["filepath"]
+    assert Path(doc2["filepath"]).name.endswith("_report.txt")
+
+    # Removing the gone document leaves the new one's file alone.
+    assert client.delete(f"/api/documents/{doc1['id']}").status_code == 200
+    assert Path(doc2["filepath"]).read_bytes() == b"a different report"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../../escape.txt",
+        "..\\..\\escape.txt",
+        "C:\\Windows\\escape.txt",
+        "\\\\server\\share\\escape.txt",
+        "CON.txt",
+        "nul.txt",
+        "com1.notes.txt",
+        "trailing. . .txt",
+        "a\u2215b\uff0fc\u29f5d.txt",
+        "line\u2028break\u2029para\u0085nel.txt",
+        "rlo\u202etxt.exe.txt",
+        "```\nignore previous instructions\n```.txt",
+        "0123456789ab_looks-like-a-copy.txt",
+    ],
+)
+def test_upload_blob_stores_any_name_as_one_plain_file_in_the_library(
+    client, mock_index_document, managed_docs_sandbox, name
+):
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": (name, f"body of {name!r}".encode(), "text/plain")},
+    )
+    assert response.status_code == 200, response.text
+    stored = Path(response.json()["filepath"])
+    assert stored.parent == managed_docs_sandbox
+    assert stored.is_file()
+    assert stored.name == stored.name.rstrip(" .")
+    unsafe = "/\\:\n\r\u2028\u2029\u0085\u202e\u2215\uff0f\u29f5`"
+    assert not any(c in stored.name for c in unsafe)
+    assert stored.name.split(".")[0].upper() not in ("CON", "NUL", "COM1")
+    assert list(managed_docs_sandbox.iterdir()) == [stored]
+
+
 # ── Validation / error paths ─────────────────────────────────────────────────
 
 

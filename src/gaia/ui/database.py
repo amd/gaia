@@ -1726,6 +1726,15 @@ class ChatDatabase:
 
             return self._enrich_document(dict(row))
 
+    def path_held_by_other_content(self, filepath: str, file_hash: str) -> bool:
+        """Whether a library row for different content still names *filepath*."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM documents WHERE filepath = ? AND file_hash != ? LIMIT 1",
+                (filepath, file_hash),
+            ).fetchone()
+        return row is not None
+
     def _enrich_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         """Add sessions_using count to document dict.
 

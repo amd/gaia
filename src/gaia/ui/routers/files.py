@@ -195,9 +195,9 @@ async def upload_file(file: UploadFile = File(...)):
     """Upload a file to the server.
 
     Accepts multipart form data with a ``file`` field.  The file is saved
-    to ``<GAIA_HOME>/chat/uploads/`` under ``<id>_<name><ext>``: the random ID
-    prevents collisions, and the name lets answers cite the file as the user
-    knows it.
+    to ``<GAIA_HOME>/chat/uploads/`` under ``<name><ext>``, so answers cite
+    the file as the user knows it; ``<id>_<name><ext>`` is used only when that
+    name holds other content.
 
     Constraints:
     - Maximum file size: 20 MB
