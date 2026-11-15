@@ -4675,6 +4675,32 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+// A call GAIA turned down itself, for a request that only asked to translate.
+const AUTO_DECLINED_STEPS = [
+    { type: 'tool_start', tool: 'run_shell_command', narration: 'Running a command' },
+    {
+        type: 'tool_result', success: false, status: 'denied', declined_by: 'agent',
+        summary: 'Not run: the request only asks for text in the reply.',
+    },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a call GAIA turned down itself reads as not needed, not as declined (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, AUTO_DECLINED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('translate "Good morning" to French');
+        await page.keyboard.press('Enter');
+        const row = page.locator('.flow-steps.live .flow-tool').first();
+        await expect(row).toBeVisible();
+        if (locale === 'en') await expect(row.locator('.flow-tool-label')).toHaveText(/^Not run, not needed for this request: /);
+        await expect(row.locator('.flow-tool-label')).not.toContainText('You declined');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `auto-declined-step-${locale}`);
+    });
+}
+
 const PATH_PROMPT = [{
     type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
     args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },
