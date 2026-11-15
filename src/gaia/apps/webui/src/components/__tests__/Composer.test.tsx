@@ -345,3 +345,20 @@ describe('Composer message length (#5716)', () => {
         expect(onSubmit).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('Composer with a refused file', () => {
+    it('does not send until the refused file is removed, and says which one', async () => {
+        mockedApi.uploadFile.mockRejectedValue(new Error('GAIA can\'t read .exe files.'));
+        const onSubmit = vi.fn();
+        render(<Harness initial="Compare them" onSubmit={onSubmit} />);
+        fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['x'], 'thing.exe')] } });
+
+        expect(await screen.findByRole('alert', { name: '' })).toHaveTextContent('Remove thing.exe before sending');
+        expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'Enter' });
+        expect(onSubmit).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remove thing.exe' }));
+        expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+    });
+});

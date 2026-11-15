@@ -436,15 +436,16 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case contractAtLeast(f.contractVersion, 2, 24):
 				var strict struct {
-					Query              string `json:"query"`
-					RunID              string `json:"run_id"`
-					Context            []Turn `json:"context"`
-					Model              string `json:"model"`
-					MaxSteps           int    `json:"max_steps"`
-					CanAnswerQuestions *bool  `json:"can_answer_questions"`
-					SessionID          string `json:"session_id"`
-					Surface            string `json:"surface"`
-					WorkingDirectory   string `json:"working_directory"`
+					Query              string   `json:"query"`
+					RunID              string   `json:"run_id"`
+					Context            []Turn   `json:"context"`
+					Model              string   `json:"model"`
+					MaxSteps           int      `json:"max_steps"`
+					CanAnswerQuestions *bool    `json:"can_answer_questions"`
+					SessionID          string   `json:"session_id"`
+					Surface            string   `json:"surface"`
+					WorkingDirectory   string   `json:"working_directory"`
+					AllowedPaths       []string `json:"allowed_paths"`
 				}
 				derr = dec.Decode(&strict)
 			case contractAtLeast(f.contractVersion, 2, 20):

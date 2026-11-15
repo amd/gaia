@@ -19,6 +19,8 @@ from gaia.skills.link import (
 )
 from gaia.skills.manager import SkillManager
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 CODELOAD = "https://codeload.github.com"
 
 
@@ -148,6 +150,19 @@ def test_a_zip_link_keeps_its_query_because_that_is_the_download_token():
 def test_unreadable_or_insecure_links_are_refused(pasted):
     with pytest.raises(SkillLinkError):
         resolve_link(pasted)
+
+
+@pytest.mark.parametrize("pasted", ["hello world", "my cool skill", "example.com/a/b"])
+def test_plain_words_get_a_paste_a_link_hint_not_an_https_lecture(pasted):
+    with pytest.raises(SkillLinkError) as err:
+        resolve_link(pasted)
+    assert "Paste a full https:// GitHub, skills.sh or .zip link" in str(err.value)
+    assert "unencrypted" not in str(err.value)
+
+
+def test_a_real_http_link_still_gets_the_https_explanation():
+    with pytest.raises(SkillLinkError, match="only https links are accepted"):
+        resolve_link("http://github.com/acme/skills")
 
 
 def _skill_md(name, body="Do the job carefully."):

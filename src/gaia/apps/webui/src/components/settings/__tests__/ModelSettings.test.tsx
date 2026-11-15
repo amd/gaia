@@ -281,7 +281,9 @@ describe('ModelSettings provider keys', () => {
         const card = await openFireworks();
         fireEvent.click(within(card).getByRole('button', { name: 'Remove key' }));
         expect(mockedApi.forgetProviderKey).not.toHaveBeenCalled();
-        fireEvent.click(within(card).getByRole('button', { name: 'Remove' }));
+        const ask = screen.getByRole('alertdialog', { name: 'Remove this key?' });
+        expect(within(ask).getByRole('button', { name: 'Keep' })).toHaveFocus();
+        fireEvent.click(within(ask).getByRole('button', { name: 'Remove key' }));
         await waitFor(() => expect(mockedApi.forgetProviderKey).toHaveBeenCalledWith('fireworks'));
         expect(await within(card).findByRole('status')).toHaveTextContent('Key cleared');
     });
@@ -474,7 +476,7 @@ describe('ModelSettings: an unreachable AMD gateway (#5604)', () => {
         render(<ModelSettings />);
         const tab = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
         expect(tab).toBeDisabled();
-        expect(tab).toHaveAttribute('title', NO_NET);
+        expect(tab).toHaveAttribute('title', "Unavailable: needs AMD's network or VPN.");
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
     });
 

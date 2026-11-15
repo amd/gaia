@@ -203,7 +203,7 @@ def test_local_list_reports_state_device_fit_and_speed(client, lemonade, db):
     assert gemma["placement"]["label"] == "GPU · Vulkan"
     assert gemma["placement"]["source"] == "reported"
     assert gemma["fits"] is True
-    assert gemma["size_gb"] == 5.6
+    assert gemma["size_gb"] == 6.0
     assert gemma["tokens_per_second"] == 38.0
     assert gemma["display_name"] == "Gemma 4 E4B"
     # The large default is offered even before it is downloaded.
@@ -212,6 +212,27 @@ def test_local_list_reports_state_device_fit_and_speed(client, lemonade, db):
     assert body["memory_source"] == "AMD iGPU"
     # 96 + 16 GiB from Lemonade, in the decimal GB the GPU memory pane uses.
     assert body["memory_gb"] == round(112 * GB_PER_GIB, 1)
+
+
+def test_a_model_shows_the_size_setup_shows(client, lemonade):
+    """Lemonade lists Qwen3.6 at 21.7 (GiB); setup says 23.3 GB, and so must the picker."""
+    lemonade.models[1]["downloaded"] = True
+    lemonade.models.append(
+        {
+            "id": "Unknown-To-Gaia-GGUF",
+            "recipe": "llamacpp",
+            "downloaded": True,
+            "size": 4.2,
+            "labels": ["chat"],
+        }
+    )
+    by_id = {m["id"]: m for m in providers._list_models(providers.LOCAL)}
+    assert by_id[LARGE_DEFAULT_MODEL_NAME]["size_gb"] == 23.3
+    assert by_id["Unknown-To-Gaia-GGUF"]["size_gb"] == 4.2
+    body = client.get("/api/providers/local/models").json()
+    shown = {m["id"]: m["size_gb"] for m in body["models"]}
+    assert shown[LARGE_DEFAULT_MODEL_NAME] == 23.3
+    assert shown["Unknown-To-Gaia-GGUF"] == 4.2
 
 
 def test_cloud_list_is_unchanged(client, lemonade):
@@ -479,6 +500,7 @@ def test_status_loaded(client, lemonade):
     assert body["ctx_size"] == 65536
     assert body["memory"]["total_gb"] == 112.0
     assert body["memory"]["model_gb"] > 5
+    assert body["error_cause"] is None
 
 
 def test_status_stopped(client, lemonade):
@@ -487,6 +509,20 @@ def test_status_stopped(client, lemonade):
     assert body["state"] == "stopped"
     assert body["error"].startswith(f"The model server isn't answering at {BASE}.")
     assert "not reachable" in body["error_detail"]
+    assert body["error_cause"] == "model_server_down"
+
+
+def test_status_names_no_cause_for_another_failure(client, lemonade, monkeypatch):
+    """Only the server not answering is worded by the UI; the rest keep their text."""
+
+    def refuse(method, path, payload=None):
+        raise providers.ProviderError("Lemonade answered /health with HTTP 404.", 502)
+
+    monkeypatch.setattr(providers, "_lemonade", refuse)
+    body = client.get("/api/providers/local/status").json()
+    assert body["state"] == "stopped"
+    assert body["error"] == "Lemonade answered /health with HTTP 404."
+    assert body["error_cause"] is None
 
 
 def test_status_idle_and_warming(client, lemonade, monkeypatch):
@@ -814,3 +850,18 @@ def test_free_memory_never_exceeds_the_total(client, lemonade, monkeypatch):
 def test_active_says_where_a_new_chat_runs_before_any_chat(client, lemonade):
     body = client.get("/api/providers/active").json()
     assert body["inference_remote"] is False
+
+
+@pytest.mark.parametrize("models", ["x", ["Unlisted-Dense-30B-GGUF"], None])
+def test_a_malformed_model_list_names_itself_for_an_unregistered_model(
+    client, lemonade, models
+):
+    lemonade.models = models
+    get = client.get("/api/providers/local/context", params={"model": UNREGISTERED})
+    put = client.put(
+        "/api/providers/local/context",
+        json={"model": UNREGISTERED, "ctx_size": 131072},
+    )
+    for resp in (get, put):
+        assert resp.status_code == 502, resp.text
+        assert "model list came back in an unexpected shape" in resp.json()["detail"]

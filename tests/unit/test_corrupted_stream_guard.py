@@ -5,12 +5,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from gaia.llm.lemonade_client import (
-    CorruptedModelOutputError,
+    OUTPUT_CORRUPTED_MESSAGE,
     LemonadeClient,
     LemonadeClientError,
+    ModelOutputCorruptedError,
 )
 from gaia.llm.providers.lemonade import (
-    LemonadeCorruptedOutputError,
+    LemonadeOutputCorruptedError,
     classify_lemonade_exception,
 )
 
@@ -50,30 +51,30 @@ def test_reserved_token_stops_the_stream_before_it_reaches_the_caller():
     chunks = [_content("Hello"), _content("<unused49>"), _content("<unused49>")]
     client, state = _client(chunks)
     seen = []
-    with pytest.raises(CorruptedModelOutputError) as err:
+    with pytest.raises(ModelOutputCorruptedError) as err:
         _drain(client, seen=seen)
     assert [c["choices"][0]["delta"]["content"] for c in seen] == ["Hello"]
-    assert err.value.token == "<unused49>"
+    assert err.value.__cause__.token == "<unused49>"
     assert state["closed"]
     client.unload_model.assert_called_once_with(GEMMA, ignore_if_not_loaded=True)
 
 
 def test_a_token_split_across_chunks_is_still_caught():
     client, _ = _client([_content("<unu"), _content("sed12>")])
-    with pytest.raises(CorruptedModelOutputError):
+    with pytest.raises(ModelOutputCorruptedError):
         _drain(client)
 
 
 def test_reasoning_is_guarded_too():
     chunk = {"choices": [{"delta": {"reasoning_content": "<unused3>"}}]}
     client, _ = _client([chunk])
-    with pytest.raises(CorruptedModelOutputError):
+    with pytest.raises(ModelOutputCorruptedError):
         _drain(client)
 
 
 def test_the_users_own_server_is_never_unloaded():
     client, _ = _client([_content("<unused49>")], users_server=True)
-    with pytest.raises(CorruptedModelOutputError):
+    with pytest.raises(ModelOutputCorruptedError):
         _drain(client)
     client.unload_model.assert_not_called()
 
@@ -81,7 +82,7 @@ def test_the_users_own_server_is_never_unloaded():
 def test_a_failed_unload_still_fails_the_turn_as_corrupted():
     client, _ = _client([_content("<unused49>")])
     client.unload_model.side_effect = LemonadeClientError("server busy")
-    with pytest.raises(CorruptedModelOutputError):
+    with pytest.raises(ModelOutputCorruptedError):
         _drain(client)
 
 
@@ -99,12 +100,12 @@ def test_other_models_are_not_guarded():
 @pytest.mark.parametrize(
     "exc",
     [
-        CorruptedModelOutputError(GEMMA, "<unused49>"),
-        RuntimeError(CorruptedModelOutputError.MESSAGE),
+        ModelOutputCorruptedError(),
+        RuntimeError(OUTPUT_CORRUPTED_MESSAGE),
     ],
 )
 def test_the_agent_gets_a_plain_message(exc):
     classified = classify_lemonade_exception(exc)
-    assert isinstance(classified, LemonadeCorruptedOutputError)
-    assert classified.user_message == CorruptedModelOutputError.MESSAGE
+    assert isinstance(classified, LemonadeOutputCorruptedError)
+    assert classified.user_message == OUTPUT_CORRUPTED_MESSAGE
     assert not classified.retryable

@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 import tempfile
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import List
@@ -26,7 +27,11 @@ from fastapi.responses import FileResponse
 
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
-from .._chat_helpers import UnreadableDocumentError, index_progress
+from .._chat_helpers import (
+    ModelServerIndexError,
+    UnreadableDocumentError,
+    index_progress,
+)
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
 from ..models import (
@@ -154,7 +159,7 @@ def _sanitize_stem(stem: str, max_length: int = 80) -> str:
             if c in _ILLEGAL_FILENAME_CHARS or c in _SHELL_QUOTING_CHARS or ord(c) < 32
             else c
         )
-        for c in stem
+        for c in unicodedata.normalize("NFC", stem)
     )
     cleaned = cleaned.strip(" .")
     cleaned = cleaned[:max_length]
@@ -387,7 +392,8 @@ async def upload_document_blob(
     # Strip any path components the client might have sent (defense in depth;
     # we never use this value as a filesystem path, but it's stored in the
     # db for display and returned to the frontend).
-    display_name = Path(file.filename).name
+    # Composed, so a macOS (decomposed) name matches the one the model writes.
+    display_name = unicodedata.normalize("NFC", Path(file.filename).name)
     ext = Path(display_name).suffix.lower()
 
     # 2. Validate extension against the strict document set
@@ -506,6 +512,18 @@ async def upload_document_blob(
         logger.warning("Uploaded document %s can't be read: %s", display_name, e)
         raise HTTPException(
             status_code=422, detail={"status": e.kind, "message": str(e)}
+        ) from e
+    except ModelServerIndexError as e:
+        _cleanup_temp(final_path)
+        # The connection error stays in the log; the client words the reason.
+        logger.warning("Could not index uploaded document %s: %s", display_name, e)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": e.kind,
+                "message": "GAIA's model server isn't answering, so the "
+                "document couldn't be added. Retry once it's back.",
+            },
         ) from e
     except Exception as e:
         _cleanup_temp(final_path)

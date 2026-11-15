@@ -31,15 +31,16 @@ from ..lemonade_client import (
     DEFAULT_MODEL_NAME,
     FULL_TOOLS_SLOT,
     KV_CACHE_SHARED_PHRASES,
+    OUTPUT_CORRUPTED_MESSAGE,
     CloudContextOverflowError,
     CloudModelUnavailableError,
     CloudProviderDisconnectedError,
-    CorruptedModelOutputError,
     GaiaLemonadeStartError,
     LemonadeAuthError,
     LemonadeClient,
     LemonadeClientError,
     LemonadeServerDownError,
+    ModelOutputCorruptedError,
     active_profile_ctx_size,
     cloud_model_provider,
     is_tool_calling_model,
@@ -431,10 +432,14 @@ class LemonadeStreamCutOffError(LemonadeError):
     )
 
 
-class LemonadeCorruptedOutputError(LemonadeError):
-    """The model streamed garbage; the reply was stopped and never shown."""
+class LemonadeOutputCorruptedError(LemonadeError):
+    """The reply turned into noise and was stopped before it was shown.
 
-    user_message = CorruptedModelOutputError.MESSAGE
+    Not retried automatically: the client unloaded the model, and the user
+    decides whether to send the message again.
+    """
+
+    user_message = OUTPUT_CORRUPTED_MESSAGE
 
 
 class LemonadeModelNotFoundError(LemonadeError):
@@ -940,8 +945,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
-        if isinstance(cur, CorruptedModelOutputError):
-            return LemonadeCorruptedOutputError()
+        if isinstance(cur, ModelOutputCorruptedError):
+            return LemonadeOutputCorruptedError()
         if isinstance(cur, CloudProviderDisconnectedError):
             return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
@@ -956,8 +961,6 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
 
     raw = str(exc)
     text = raw.lower()
-    if CorruptedModelOutputError.MESSAGE in raw:
-        return LemonadeCorruptedOutputError()
     # A CloudDisabledError flattened to text by a wrapper: keep its own words,
     # or a "couldn't read the catalog" refusal reads as a network outage.
     local_only = re.search(r"Local only is on[^\n]*", "\n".join(chain_text))
@@ -997,6 +1000,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     down = _SERVER_DOWN_RE.search(raw)
     if down:
         return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))
+    if OUTPUT_CORRUPTED_MESSAGE.lower() in text:
+        return LemonadeOutputCorruptedError()
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the

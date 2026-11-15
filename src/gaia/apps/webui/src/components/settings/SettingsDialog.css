@@ -84,7 +84,7 @@
     position: absolute;
     top: 14px;
     inset-inline-end: 14px;
-    z-index: 1;
+    z-index: 2;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -98,6 +98,22 @@
 .settings-close:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+}
+
+/* Settings > About: one link per line. */
+.settings-about-links {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    list-style: none;
+}
+
+.settings-about-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    font-size: 13.5px;
 }
 
 /* "Back to Setup" after a Setup row opened another section. */
@@ -145,6 +161,23 @@
     color: var(--text-primary);
     font-size: 18px;
     font-weight: 600;
+}
+
+/* The tab title stays in view, and rows scroll under it rather than under the close button. */
+.settings-scroll > .settings-pane > .settings-pane-title {
+    position: sticky;
+    top: -24px;
+    z-index: 1;
+    margin: -24px -28px 0;
+    padding: 24px 28px 10px;
+    background: var(--bg-primary);
+}
+
+/* Below "Back to Setup" the title must not reach up over the button. */
+.settings-scroll > .settings-back + .settings-pane > .settings-pane-title {
+    top: 0;
+    margin-top: 0;
+    padding-top: 0;
 }
 
 .settings-pane-lede {
@@ -535,6 +568,7 @@
     margin-inline-start: 0;
 }
 
+/* One fact per line, so two never run into each other. */
 .model-chips .settings-more > .model-row-meta {
     display: block;
 }
@@ -863,6 +897,12 @@
 
     .settings-scroll {
         padding: 18px 16px 28px;
+    }
+
+    .settings-scroll > .settings-pane > .settings-pane-title {
+        top: -18px;
+        margin: -18px -16px 0;
+        padding: 18px 16px 10px;
     }
 
     .model-in-use-field {

@@ -17,7 +17,7 @@ it.each([
     ['request_user_input', 'Asked you'],
     ['find_files', 'Found files'],
     ['search_past_conversations', 'Searched past chats'],
-    ['index_documents', 'Indexed documents'],
+    ['index_documents', 'Added documents'],
 ])('names the GAIA agent\'s %s step instead of "Used tool"', (tool, label) => {
     render(<AgentActivity steps={[step(tool)]} isActive={false} />);
 

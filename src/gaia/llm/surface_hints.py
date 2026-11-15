@@ -12,6 +12,7 @@ a whole sentence or a phrase that reads correctly after the swap.
 the Agent UI's setup log swaps for the app's own.
 """
 
+from gaia.llm.hybrid import CLI_HYBRID_SWAPS
 from gaia.llm.local_only import SETTINGS_HINT as CLI_LOCAL_ONLY_HINT
 
 #: How a TUI user picks another model.
@@ -93,6 +94,22 @@ SERVICE_GATEWAY_KEY_HINT = (
     "Run `gaia gateway auth` on the GAIA host with a current AMD LLM gateway key."
 )
 
+#: What a user does when Lemonade has no cloud provider registered yet, so it
+#: refuses a token (#8186). The installer is a terminal command, so the apps
+#: name their own screens instead.
+TUI_GATEWAY_INSTALL_HINT = (
+    "Open /gateway in the TUI to register the gateway, then try again."
+)
+AGENT_UI_GATEWAY_INSTALL_HINT = (
+    "Open Settings > Model and connect the AMD gateway, then try again."
+)
+CLI_GATEWAY_INSTALL_HINT = (
+    "Run `gaia gateway install` to register it, then run `gaia gateway auth` again."
+)
+SERVICE_GATEWAY_INSTALL_HINT = (
+    "Run `gaia gateway install` on the GAIA host, then try again."
+)
+
 #: When GAIA's background service misbehaves. Both apps read it as written.
 APP_RESTART_HINT = "If it keeps happening, close GAIA and open it again."
 CLI_RESTART_HINT = (
@@ -155,6 +172,7 @@ _SWAPS = {
         (TUI_PROVIDER_SETTINGS, AGENT_UI_PROVIDER_SETTINGS),
         (TUI_SETUP_HINT, AGENT_UI_SETUP_HINT),
         (TUI_GATEWAY_KEY_HINT, AGENT_UI_GATEWAY_KEY_HINT),
+        (TUI_GATEWAY_INSTALL_HINT, AGENT_UI_GATEWAY_INSTALL_HINT),
     ),
     "cli": (
         (TUI_MODEL_SWITCH_HINT, CLI_MODEL_SWITCH_HINT),
@@ -162,9 +180,11 @@ _SWAPS = {
         (TUI_PROVIDER_SETTINGS, CLI_PROVIDER_SETTINGS),
         (TUI_SETUP_HINT, CLI_SETUP_HINT),
         (TUI_GATEWAY_KEY_HINT, CLI_GATEWAY_KEY_HINT),
+        (TUI_GATEWAY_INSTALL_HINT, CLI_GATEWAY_INSTALL_HINT),
         (APP_RESTART_HINT, CLI_RESTART_HINT),
         (APP_SERVICE_DOWN_HINT, CLI_SERVICE_DOWN_HINT),
         (APP_WEDGED_SERVER_HINT, CLI_WEDGED_SERVER_HINT),
+        *CLI_HYBRID_SWAPS,
     ),
     "service": (
         (TUI_MODEL_SWITCH_HINT, SERVICE_MODEL_SWITCH_HINT),
@@ -172,9 +192,11 @@ _SWAPS = {
         (TUI_PROVIDER_SETTINGS, SERVICE_PROVIDER_SETTINGS),
         (TUI_SETUP_HINT, SERVICE_SETUP_HINT),
         (TUI_GATEWAY_KEY_HINT, SERVICE_GATEWAY_KEY_HINT),
+        (TUI_GATEWAY_INSTALL_HINT, SERVICE_GATEWAY_INSTALL_HINT),
         (APP_RESTART_HINT, CLI_RESTART_HINT),
         (APP_SERVICE_DOWN_HINT, SERVICE_SERVICE_DOWN_HINT),
         (APP_WEDGED_SERVER_HINT, CLI_WEDGED_SERVER_HINT),
+        *CLI_HYBRID_SWAPS,
     ),
     "tui": (),
 }

@@ -234,6 +234,31 @@ def test_unsafe_or_missing_folders_are_refused(client, session_id, tmp_path, bad
     assert resp.json()["detail"]
 
 
+@pytest.mark.parametrize("bad", ["not-a-folder", "home", "root"])
+def test_the_folder_check_gives_the_reason_adding_it_would(
+    client, session_id, tmp_path, bad
+):
+    """#7996: the desktop folder dialog asks before it adds the chip."""
+    path = {
+        "not-a-folder": str(tmp_path / "missing"),
+        "home": str(Path.home()),
+        "root": Path.home().anchor,
+    }[bad]
+    check = client.post("/api/environment/folders/check", json={"path": path})
+    add = client.post(
+        f"/api/sessions/{session_id}/environment/folders", json={"path": path}
+    )
+    assert check.status_code == 200
+    assert check.json() == {"refusal": add.json()["detail"]}
+
+
+def test_the_folder_check_takes_a_narrow_folder(client, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    resp = client.post("/api/environment/folders/check", json={"path": str(outside)})
+    assert resp.json() == {"refusal": None}
+
+
 def test_a_folder_inside_a_removed_one_is_refused(client, session_id, folder):
     inner = folder / "inner"
     inner.mkdir()

@@ -50,6 +50,11 @@ from openai import OpenAI
 
 from gaia.env import child_env, load_env
 from gaia.llm import call_ledger, stream_watchdog
+from gaia.llm.degenerate_output import (
+    RESERVED_TOKEN_RE,
+    DegenerateOutput,
+    DegenerateOutputGuard,
+)
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -499,10 +504,15 @@ def resolve_default_chat_model() -> str:
     ``~/.gaia/config.json``'s ``default_model`` — which ``gaia init`` sets from
     the hardware — else :data:`DEFAULT_MODEL_NAME`. Every agent resolves the
     same way, so switching agents never evicts the resident model.
+
+    A ``hybrid`` default resolves to its cheap model here: only the flagship
+    agent routes per turn, and it reads ``default_model`` itself.
     """
     from gaia.config import GaiaConfig
+    from gaia.llm.hybrid import start_model
 
-    return GaiaConfig.load().resolve_model(None, DEFAULT_MODEL_NAME)
+    config = GaiaConfig.load()
+    return start_model(config.resolve_model(None, DEFAULT_MODEL_NAME), config)
 
 
 def resolve_chat_model() -> str:
@@ -510,8 +520,10 @@ def resolve_chat_model() -> str:
     Agent UI or TUI, else :func:`resolve_default_chat_model`. May be a cloud model.
     """
     from gaia.config import GaiaConfig
+    from gaia.llm.hybrid import start_model
 
-    return GaiaConfig.load().last_model or resolve_default_chat_model()
+    config = GaiaConfig.load()
+    return start_model(config.last_model, config) or resolve_default_chat_model()
 
 
 #: Default chat models that also read images, so indexing a scan loads no second model.
@@ -3813,10 +3825,6 @@ def _chunk_carries_output(chunk: Any) -> bool:
     return False
 
 
-#: Gemma's reserved vocabulary; a healthy model never emits these.
-_RESERVED_TOKEN_RE = re.compile(r"<unused\d+>")
-
-
 def _reserved_token_in(chunk: Any, tail: str) -> Tuple[Optional[str], str]:
     """The reserved token in *chunk*'s text, if any, and the new text tail.
 
@@ -3832,7 +3840,7 @@ def _reserved_token_in(chunk: Any, tail: str) -> Tuple[Optional[str], str]:
             if not text or not isinstance(text, str):
                 continue
             window = tail + text
-            match = _RESERVED_TOKEN_RE.search(window)
+            match = RESERVED_TOKEN_RE.search(window)
             if match:
                 return match.group(0), window[-16:]
             tail = window[-16:]
@@ -4144,18 +4152,18 @@ class ContextReloadUnverifiedError(LemonadeClientError):
     """Reloads at a larger ``ctx_size`` keep reporting a smaller window."""
 
 
-class CorruptedModelOutputError(LemonadeClientError):
-    """The model streamed a token it can never emit when healthy.
+#: Said when a reply stream turned into noise (``degenerate_output``).
+OUTPUT_CORRUPTED_MESSAGE = (
+    "The model's answer came back corrupted, so GAIA stopped it. "
+    "Send your message again."
+)
 
-    The stream is stopped before that token reaches the caller.
-    """
 
-    MESSAGE = "The model's answer came back corrupted; send your message again."
+class ModelOutputCorruptedError(LemonadeClientError):
+    """A streamed reply turned into noise and was stopped before it was shown."""
 
-    def __init__(self, model: str, token: str):
-        super().__init__(self.MESSAGE)
-        self.model = model
-        self.token = token
+    def __init__(self, message: str = OUTPUT_CORRUPTED_MESSAGE):
+        super().__init__(message)
 
 
 class UsersServerUnchangedError(LemonadeClientError):
@@ -7087,7 +7095,7 @@ class LemonadeClient:
                 )
                 return
 
-            produced = False
+            shown = 0
             guard = "gemma" in model.lower() and not is_cloud_model(model)
             tail = ""
             chunks = self._stream_chat_chunks(
@@ -7108,9 +7116,11 @@ class LemonadeClient:
                         token, tail = _reserved_token_in(chunk, tail)
                         if token:
                             _close_stream(chunks)
-                            self._discard_corrupted_model(model, messages, token)
-                            raise CorruptedModelOutputError(model, token)
-                    produced = True
+                            noise = DegenerateOutput(token, "reserved token")
+                            raise self._corrupted_output(
+                                model, messages, noise, shown
+                            ) from noise
+                    shown += 1
                     yield chunk
             finally:
                 _close_stream(chunks)
@@ -7120,7 +7130,7 @@ class LemonadeClient:
             # announced, never silent: the user is told what happened and why,
             # and the model is remembered so the next turn skips the empty
             # stream entirely.
-            if not produced and is_cloud_model(model):
+            if not shown and is_cloud_model(model):
                 mark_non_streaming(model)
                 self._announced_non_streaming.add(model)
                 self.log.warning(
@@ -7138,39 +7148,6 @@ class LemonadeClient:
                     tools=tools,
                     **kwargs,
                 )
-
-    def _discard_corrupted_model(
-        self, model: str, messages: List[Dict[str, Any]], token: str
-    ) -> None:
-        """Log a corrupted stream and unload the model so the next turn reloads it.
-
-        The user's own server is left alone: GAIA never changes its setup.
-        """
-        prompt_chars = sum(len(str(m.get("content") or "")) for m in messages)
-        self.log.error(
-            "'%s' streamed the reserved token %s; stopped the reply "
-            "(%d messages, %d prompt chars).",
-            model,
-            token,
-            len(messages),
-            prompt_chars,
-        )
-        if self.is_users_server():
-            self.log.warning(
-                "Not unloading '%s' on your own Lemonade Server; unload or "
-                "restart it there if the next reply is corrupted too.",
-                model,
-            )
-            return
-        try:
-            self.unload_model(model, ignore_if_not_loaded=True)
-        except LemonadeClientError as e:
-            self.log.error(
-                "Could not unload '%s' after its corrupted reply, so the next "
-                "turn may reuse the same state: %s",
-                model,
-                e,
-            )
 
     def _chat_completion_as_single_chunk(
         self,
@@ -7439,14 +7416,26 @@ class LemonadeClient:
             # Use the client to stream responses
             self.log.debug(f"Starting streaming chat completion with model: {model}")
             tokens_generated = 0
-            for chunk in self._model_retrier(model, gone_server_waits=True).stream(
+            guard = DegenerateOutputGuard()
+            chunks = self._model_retrier(model, gone_server_waits=True).stream(
                 _open_stream,
                 is_output=_chunk_carries_output,
                 what="Streaming chat completion",
                 state=state,
-            ):
-                tokens_generated += 1
-                yield chunk
+            )
+            try:
+                for chunk in chunks:
+                    for out in guard.feed(chunk):
+                        tokens_generated += 1
+                        yield out
+                for out in guard.flush():
+                    tokens_generated += 1
+                    yield out
+            except DegenerateOutput as noise:
+                chunks.close()
+                raise self._corrupted_output(
+                    model, messages, noise, tokens_generated
+                ) from noise
 
             self.log.debug(
                 f"Completed streaming chat completion. Generated {tokens_generated} tokens."
@@ -7454,6 +7443,8 @@ class LemonadeClient:
             if tokens_generated and self.cloud_model_provider(model):
                 _remember_cloud_availability(model, ok=True)
 
+        except ModelOutputCorruptedError:
+            raise
         except openai.AuthenticationError as e:
             if self.cloud_model_provider(model):
                 if _own_key_refused(getattr(e, "body", None)):
@@ -7505,6 +7496,50 @@ class LemonadeClient:
             )
         finally:
             self._record_retries(state)
+
+    def _corrupted_output(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        noise: DegenerateOutput,
+        chunks_shown: int,
+    ) -> ModelOutputCorruptedError:
+        """Log a reply that turned into noise and unload the model that sent it.
+
+        The noise outlived new conversations on the same loaded model, so the
+        next message must get a freshly loaded one.
+        """
+        chars = sum(len(str(m.get("content") or "")) for m in messages)
+        self.log.error(
+            "%s's reply turned into noise (%s %r) after %d chunk(s); stopped it. "
+            "Request: %d messages, %d chars (~%d tokens).",
+            model,
+            noise.reason,
+            noise.token[:40],
+            chunks_shown,
+            len(messages),
+            chars,
+            chars // 4,
+        )
+        if self.cloud_model_provider(model) or is_cloud_model(model):
+            return ModelOutputCorruptedError()
+        if self.is_users_server():
+            self.log.error(
+                "Left %s loaded: GAIA does not unload models on your own "
+                "Lemonade Server. Unload or reload it there if this repeats.",
+                model,
+            )
+            return ModelOutputCorruptedError()
+        try:
+            self.unload_model(model, ignore_if_not_loaded=True)
+        except LemonadeClientError as e:
+            self.log.error(
+                "Could not unload %s after its corrupted reply, so the next "
+                "message may reuse the same state: %s",
+                model,
+                e,
+            )
+        return ModelOutputCorruptedError()
 
     @guard_inference()
     def completions(

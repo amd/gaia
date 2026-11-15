@@ -59,6 +59,10 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.vlm_client import VLMExtractionError
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
+from gaia.rag.html_utils import HTML_EXTENSIONS, extract_html_text
+from gaia.rag.normalize import search_form
+from gaia.rag.pdf_tables import looks_tabular, tables_as_rows
+from gaia.rag.pdf_utils import pdf_parse_limits
 from gaia.rag.text_units import (
     SENTENCE_BREAK,
     estimate_tokens,
@@ -667,7 +671,7 @@ def _open_state(file_path: str) -> Optional[str]:
         return "unreadable"
 
 
-def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+def _split_at_whitespace(text: str, max_chars: int) -> List[str]:
     """Split *text* into pieces of at most *max_chars*, dropping nothing but whitespace.
 
     Breaks at the last newline, else the last space, in the back half of each
@@ -692,6 +696,23 @@ def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str
     if rest:
         pieces.append(rest)
     return pieces
+
+
+def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+    """Split *text* into pieces whose embedded form is at most *max_chars* long.
+
+    The embedder reads :func:`search_form`, which a ligature such as U+FDFA
+    lengthens, so a piece that grows past the limit is cut finer.
+    """
+    fitted = []
+    for piece in _split_at_whitespace(text, max_chars):
+        size = max_chars
+        parts = [piece]
+        while size > 1 and any(len(search_form(p)) > max_chars for p in parts):
+            size = max(1, size * 3 // 4)
+            parts = _split_at_whitespace(piece, size)
+        fitted.extend(parts)
+    return fitted
 
 
 def default_rag_cache_dir() -> str:
@@ -975,6 +996,8 @@ class RAGSDK:
         self.file_content_keys = {}
         # {file_path: (_stat_key, ns it was taken)} of those same bytes
         self.file_stat_keys = {}
+        # A load pushed a document out to fit under max_total_chunks.
+        self._evicted_for_size = False
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -1555,17 +1578,18 @@ class RAGSDK:
             numpy array of embeddings with shape (num_texts, embedding_dim)
         """
 
+        # Documents and queries are embedded in one search form; NFKC also turns
+        # no-break spaces, which can exceed one token per character, into spaces.
+        safe_texts = [search_form(text) for text in texts]
         # Chunks are cut to fit, so a longer text here is a caller bug that
         # the embedder would answer with a 500.
-        oversized = [len(t) for t in texts if len(t) > EMBED_MAX_CHARS]
+        oversized = [len(t) for t in safe_texts if len(t) > EMBED_MAX_CHARS]
         if oversized:
             raise ValueError(
                 f"{len(oversized)}/{len(texts)} texts exceed the embedder's "
                 f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
                 "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
-        # No-break spaces in extracted tables can exceed one token per character.
-        safe_texts = [text.replace("\u00a0", " ") for text in texts]
 
         all_embeddings = []
 
@@ -1783,6 +1807,7 @@ class RAGSDK:
         Falls back to ``_encode_texts`` on a miss. Stored/doc-chunk vectors
         are persisted elsewhere; this targets repeated *query* embeds only.
         """
+        query = search_form(query)
         if len(query) > EMBED_MAX_CHARS:
             self.log.warning(
                 f"Search query is {len(query)} chars; only the first "
@@ -1807,7 +1832,49 @@ class RAGSDK:
         ext = Path(file_path).suffix.lower()
         return ext if ext else ".unknown"
 
+    def _page_tables_as_rows(self, page, page_num: int, text: str, header):
+        """``text`` with the page's tables as header-named rows (see pdf_tables)."""
+        try:
+            layout = page.extract_text(extraction_mode="layout") or ""
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            # pypdf's layout mode fails on some fonts; the plain text is still whole.
+            self.log.warning(
+                "Page %d: table rows not rebuilt, layout extraction failed: %s",
+                page_num,
+                e,
+            )
+            return text, header
+        return tables_as_rows(text, layout, header)
+
     def _extract_text_from_pdf(self, pdf_path: str) -> tuple:
+        """:meth:`_read_pdf_text` under :func:`pdf_parse_limits`.
+
+        pypdf parses lazily, so the whole read, not just the open, runs under them.
+        """
+        try:
+            from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+                LimitReachedError,
+            )
+        except ImportError:  # pragma: no cover - PyPDF2 has no such limit
+            LimitReachedError = ()  # type: ignore[assignment,misc]
+
+        try:
+            with pdf_parse_limits():
+                return self._read_pdf_text(pdf_path)
+        except LimitReachedError as e:
+            file_name = Path(pdf_path).name
+            self.log.error(f"PDF past GAIA's parsing limits {pdf_path}: {e}")
+            raise PDFExtractionError(
+                f"Could not read PDF: {file_name}\n"
+                "Reason: the file is too complex for GAIA to read safely "
+                f"(pypdf: {e}).\n"
+                "Suggestions:\n"
+                "  1. Print it to a new PDF (Print, then 'Save as PDF' or "
+                "'Microsoft Print to PDF') and index the new file\n"
+                "  2. Or split it into smaller PDFs and index those"
+            ) from e
+
+    def _read_pdf_text(self, pdf_path: str) -> tuple:
         """
         Extract text from PDF file with VLM for images (always enabled if available).
 
@@ -1946,6 +2013,7 @@ class RAGSDK:
             unavailable = self._vision_unavailable(vlm_available)
             degraded_pages = []
             page_warnings = {}
+            table_header = None
             attempts = _VisionAttempts(
                 file_name, vlm.vlm_model if vlm else self.config.vlm_model
             )
@@ -1956,6 +2024,10 @@ class RAGSDK:
 
                 # Step 1: Extract text with pypdf
                 pypdf_text = normalize_arabic_pdf_text(extract_pdf_page_text(page))
+                if looks_tabular(pypdf_text):
+                    pypdf_text, table_header = self._page_tables_as_rows(
+                        page, i, pypdf_text, table_header
+                    )
 
                 # Step 2: Check for images
                 has_imgs = False
@@ -3194,6 +3266,23 @@ These positions indicate where to split the text."""
         )
         return text, num_chapters
 
+    def _extract_text_from_html(self, html_path: str) -> str:
+        """A web page's readable text, without its markup, scripts or embedded JSON."""
+        try:
+            with self._safe_open(html_path, "rb") as f:
+                markup = f.read()
+            text = extract_html_text(html_path, markup)
+        except Exception as e:
+            self._log_read_failure(
+                e, html_path, f"Error reading HTML file {html_path}: {e}"
+            )
+            raise
+        self.log.info(
+            f"🌐 Extracted {len(text):,} characters of text from "
+            f"{len(markup):,} bytes of HTML"
+        )
+        return text
+
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
         Extract text from file based on type.
@@ -3263,6 +3352,10 @@ These positions indicate where to split the text."""
 
         elif file_type in UNSUPPORTED_DOCUMENTS:
             raise ValueError(unsupported_document_message(file_path, file_type))
+
+        elif file_type in HTML_EXTENSIONS:
+            metadata["html_text"] = True
+            return self._extract_text_from_html(file_path), metadata
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in CODE_EXTENSIONS:
@@ -3537,7 +3630,7 @@ These positions indicate where to split the text."""
         fitted = []
         split = pieces = 0
         for chunk in chunks:
-            if len(chunk) <= EMBED_MAX_CHARS:
+            if len(search_form(chunk)) <= EMBED_MAX_CHARS:
                 fitted.append(chunk)
                 continue
             parts = split_for_embedding(chunk)
@@ -3593,13 +3686,13 @@ These positions indicate where to split the text."""
     def _vectors_path(self, chunks: List[str]) -> str:
         """Where the embeddings of *chunks* under the current embedder are kept.
 
-        The name binds the vectors to the embedding model and the exact chunk
-        text, so different text never reads them and the same text, indexed
+        The name binds the vectors to the embedding model and the chunk text as
+        embedded, so different text never reads them and the same text, indexed
         again from a new temp copy, adds no second file.
         """
         digest = hashlib.sha256(self.config.embedding_model.encode("utf-8"))
         for chunk in chunks:
-            digest.update(b"\x1e" + chunk.encode("utf-8"))
+            digest.update(b"\x1e" + search_form(chunk).encode("utf-8"))
         return os.path.join(
             self.config.cache_dir, f"vectors_{digest.hexdigest()[:24]}.npy"
         )
@@ -3829,6 +3922,7 @@ These positions indicate where to split the text."""
 
                 # Remove from indexed files
                 self.indexed_files.discard(file_path)
+                self._evicted_for_size = False
 
                 # Clean up LRU tracking
                 if file_path in self.file_access_times:
@@ -4043,6 +4137,8 @@ These positions indicate where to split the text."""
                 )
                 break
             evicted_files.append(path)
+        if evicted_files:
+            self._evicted_for_size = True
 
         # Check indexed files limit
         while (
@@ -4068,6 +4164,27 @@ These positions indicate where to split the text."""
             or len(self.indexed_files) <= self.config.max_indexed_files
         )
         return chunks_ok and files_ok, evicted_files
+
+    def full_by(self) -> Optional[str]:
+        """Which limit stops the index taking one more document without pushing one out.
+
+        ``"size"`` once its passages reach ``max_total_chunks``, or a load had
+        to push a document out to fit under it; ``"files"`` at
+        ``max_indexed_files`` documents; None while there is room.
+        """
+        with self._state_lock:
+            files = len(self.indexed_files)
+            chunks = len(self.chunks)
+            evicted_for_size = self._evicted_for_size
+        if evicted_for_size or 0 < self.config.max_total_chunks <= chunks:
+            return "size"
+        if 0 < self.config.max_indexed_files <= files:
+            return "files"
+        return None
+
+    def is_full(self) -> bool:
+        """True when indexing one more document would push out one already held."""
+        return self.full_by() is not None
 
     def _has_indexing_capacity(self, replacing: Optional[str] = None) -> bool:
         """Check if there is capacity to index another document.
@@ -4349,6 +4466,10 @@ These positions indicate where to split the text."""
 
                 if self._images_readable_now(cached_metadata):
                     raise _ImagesReadableNow()
+                if file_type in HTML_EXTENSIONS and not cached_metadata.get(
+                    "html_text"
+                ):
+                    raise ValueError("cached HTML was indexed as raw markup")
 
                 # Check if cache might be missing VLM content
                 # If metadata doesn't have VLM info, it's an old cache

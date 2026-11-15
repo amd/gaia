@@ -15,6 +15,34 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
+#: Prefix of the loop's answer checks (grounding, completion, edits, ...).
+CHECK_TAG = "[check:"
+
+
+def without_superseded_drafts(turn: list[dict]) -> list[dict]:
+    """*turn* without its answer checks and the draft answers they replaced.
+
+    The user never saw either. Replayed in a later turn they read as a question
+    still being worked on, and the model answers it again instead of the new one.
+    """
+    kept: list[dict] = []
+    for message in turn:
+        content = message.get("content")
+        if (
+            message.get("role") == "user"
+            and isinstance(content, str)
+            and content.startswith(CHECK_TAG)
+        ):
+            if (
+                kept
+                and kept[-1].get("role") == "assistant"
+                and not kept[-1].get("tool_calls")
+            ):
+                kept.pop()
+            continue
+        kept.append(message)
+    return kept
+
 
 class TurnMessages(list):
     """Keep the original evidence when overflow recovery shrinks model input."""
@@ -53,7 +81,7 @@ class TurnMessages(list):
                 )
             pending.clear()
 
-        for message in deepcopy(self.recorded):
+        for message in without_superseded_drafts(deepcopy(self.recorded)):
             if message.get("role") != "tool":
                 close_pending()
             if message.get("tool_calls"):
@@ -464,7 +492,8 @@ def transcript_turns(messages: list[dict]) -> list[list[dict]]:
         elif role in ("assistant", "autonomous"):
             recorded = message.get("model_messages")
             if recorded is not None:
-                turns.append(recorded)
+                # Turns saved before checks were dropped at record time.
+                turns.append(without_superseded_drafts(recorded))
             elif role == "assistant" and pending is not None:
                 turns.append(
                     [pending, {"role": "assistant", "content": message["content"]}]

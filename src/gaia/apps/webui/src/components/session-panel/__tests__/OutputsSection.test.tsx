@@ -66,7 +66,7 @@ describe('OutputsSection', () => {
         expect(r[1]).toHaveTextContent('Image');
         expect(r[2]).toHaveTextContent('Memory saved');
         expect(r[3]).toHaveTextContent('Scheduled task');
-        expect(r[4]).toHaveTextContent('Indexed document');
+        expect(r[4]).toHaveTextContent('Added document');
         // Added from the document bar, not by a turn: nothing to jump to.
         expect(within(r[4]).queryByRole('button', { name: /Go to the turn/ })).not.toBeInTheDocument();
     });

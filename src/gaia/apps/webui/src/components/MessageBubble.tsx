@@ -32,7 +32,7 @@ import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import { dropAnswerDrafts } from '../utils/answerDrafts';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
-    type CitationIndex, type FoundPage, type LibraryDoc,
+    type CitationIndex, type CitedDoc, type FoundPage,
 } from '../utils/citations';
 import './MessageBubble.css';
 
@@ -899,8 +899,16 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
+                            {!message.stats?.retried && message.stats?.route?.model && (
+                                <span className="msg-stats-route" title={t('msg.route', { reason: message.stats.route.reason ?? '' })}>
+                                    {displayModelName(message.stats.route.model)}
+                                </span>
+                            )}
                             <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError || Boolean(endedBy))} />
                         </div>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && message.stats?.route?.degraded && message.stats.route.notice && (
+                        <div className="msg-route-notice" role="status">{message.stats.route.notice}</div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
                         <TurnChanges sessionId={message.session_id} messageId={message.id} />
@@ -1086,7 +1094,7 @@ function linkifyFilePaths(text: string): React.ReactNode {
 const CitationContext = createContext<CitationIndex>(buildCitationIndex([]));
 
 /** A cited library document; opens at `page` (the first page cited after it, when there is one). */
-function CitationLink({ doc, page, t }: { doc: LibraryDoc; page?: number; t: Translate }) {
+function CitationLink({ doc, page, t }: { doc: CitedDoc; page?: number; t: Translate }) {
     return (
         <a
             className="citation-link"
@@ -1094,17 +1102,17 @@ function CitationLink({ doc, page, t }: { doc: LibraryDoc; page?: number; t: Tra
             target="_blank"
             rel="noopener noreferrer"
             dir="ltr"
-            title={page ? t('citation.openPage', { page }) : t('citation.open', { name: doc.filename })}
+            title={page ? t('citation.openPage', { page }) : t('citation.open', { name: doc.label })}
             data-doc-id={doc.id}
             data-page={page}
         >
             <FileText size={12} className="citation-icon" aria-hidden="true" />
-            {doc.filename}
+            {doc.label}
         </a>
     );
 }
 
-function PageLink({ doc, page, label, t }: { doc: LibraryDoc; page: number; label: string; t: Translate }) {
+function PageLink({ doc, page, label, t }: { doc: CitedDoc; page: number; label: string; t: Translate }) {
     return (
         <a
             className="citation-page"
@@ -1131,14 +1139,14 @@ function leadingPages(index: CitationIndex, text: string): FoundPage[] {
  * path linked as before. `carried` is a document named just before this run
  * (in inline code), whose pages may open the run.
  */
-function citeText(text: string, index: CitationIndex, t: Translate, carried: LibraryDoc | null): React.ReactNode {
+function citeText(text: string, index: CitationIndex, t: Translate, carried: CitedDoc | null): React.ReactNode {
     // A filename that ends a longer path stays inside that path's chip.
     const paths = findFilePaths(text);
     const citations = findCitations(index, text).filter(
         (c) => !paths.some((p) => p.start < c.start && c.start < p.start + p.path.length),
     );
     const parts: Array<{ start: number; end: number; node: React.ReactNode }> = [];
-    const addPages = (doc: LibraryDoc, pages: FoundPage[], offset: number) => {
+    const addPages = (doc: CitedDoc, pages: FoundPage[], offset: number) => {
         for (const pg of pages) {
             const start = offset + pg.start;
             const end = offset + pg.end;
@@ -1166,7 +1174,7 @@ function citeText(text: string, index: CitationIndex, t: Translate, carried: Lib
 }
 
 /** The library document an inline-code span names (a filename or a path to one), or null. */
-function inlineCodeDoc(index: CitationIndex, children: React.ReactNode): LibraryDoc | null {
+function inlineCodeDoc(index: CitationIndex, children: React.ReactNode): CitedDoc | null {
     return typeof children === 'string' ? docForToken(index, children) : null;
 }
 
@@ -1180,7 +1188,7 @@ function Linkified({ children }: { children?: React.ReactNode }) {
     const index = useContext(CitationContext);
     const t = useT();
     const items = React.Children.toArray(children);
-    let carried: LibraryDoc | null = null;
+    let carried: CitedDoc | null = null;
     const out = items.map((child, i) => {
         if (typeof child === 'string') {
             const node = citeText(child, index, t, carried);

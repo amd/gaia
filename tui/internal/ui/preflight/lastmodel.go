@@ -73,7 +73,11 @@ func readLastModel(p hostProbe) (LastModel, error) {
 
 // WriteLastModel saves provider and model together.
 func WriteLastModel(provider, model string) (string, error) {
-	if lemonade.LocalOnly() && (provider != "local" || lemonade.IsCloudID(model)) {
+	if lemonade.IsHybridID(model) {
+		if err := lemonade.HybridLocalOnlyRefusal(); err != nil {
+			return "", err
+		}
+	} else if lemonade.LocalOnly() && (provider != "local" || lemonade.IsCloudID(model)) {
 		return "", fmt.Errorf("Local only is on, so %s isn't saved as your model. %s",
 			model, lemonade.LocalOnlyHint)
 	}

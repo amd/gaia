@@ -1072,6 +1072,7 @@ class _ExecutingAgent(_Gated):
     _resolve_tool_name = _Base._resolve_tool_name
     _execution_tool_registry = _Base._execution_tool_registry
     _fold_tool_usage = _Base._fold_tool_usage
+    _prompted_call_key = _Base.__dict__["_prompted_call_key"]
     current_plan = None
     current_step = 0
     debug = False
@@ -1118,7 +1119,7 @@ def test_a_call_outside_the_policy_is_asked_with_its_risk_note():
 def test_a_permitted_ungranted_call_still_reaches_the_prompt():
     """The reordering must not swallow the modal for calls that can run."""
     agent = _ExecutingAgent()
-    agent._execute_tool("run_shell_command", {"command": "pwd"})
+    agent._execute_tool("run_shell_command", {"command": "git status"})
     assert [name for name, _ in agent.console.asked] == ["run_shell_command"]
 
 
@@ -2030,7 +2031,14 @@ def test_make_has_no_policy_and_that_is_the_decision():
 
 @pytest.mark.parametrize(
     "command",
-    ["git status", "git log --oneline -10", "git diff HEAD", "git show HEAD"],
+    [
+        "git status",
+        "git log --oneline -10",
+        "git diff HEAD",
+        "git show HEAD",
+        "git blame f.py",
+        "git blame -L 1,5 f.py",
+    ],
 )
 def test_the_read_only_git_floor_survives_without_any_skill(command):
     assert (
@@ -2053,7 +2061,7 @@ def test_the_old_whitelist_holes_are_closed(command, why_now):
     assert error is not None, f"still open: {why_now}"
 
 
-@pytest.mark.parametrize("command", ["git commit -m x", "git add .", "git blame f.py"])
+@pytest.mark.parametrize("command", ["git commit -m x", "git add .", "git shortlog -s"])
 def test_a_write_without_the_grant_asks_the_user(command):
     error = ShellToolsMixin._validate_command("git", shlex.split(command), command)
     assert error is not None
@@ -2063,7 +2071,7 @@ def test_a_write_without_the_grant_asks_the_user(command):
 
 def test_the_floor_widens_to_the_full_policy_once_granted():
     granted = frozenset({"git"})
-    for command in ("git blame f.py", "git commit -m x", "git stash push"):
+    for command in ("git shortlog -s", "git commit -m x", "git stash push"):
         assert (
             ShellToolsMixin._validate_command(
                 "git", shlex.split(command), command, granted_binaries=granted

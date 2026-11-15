@@ -60,8 +60,10 @@ Three things are wider on purpose:
 
 `ChatAgent` and `GaiaAgent` create one scratch directory per agent that has a
 file-writing tool, name it in the system prompt, and delete it when the agent is
-cleaned up (`GaiaAgent.close()`). The `chat` profile has no file-writing tools, so
-it gets none.
+cleaned up (`GaiaAgent.close()`). A process that exits without that cleanup still
+removes the scratch directories it holds, and the first agent in a process removes
+`gaia-scratch-*` directories no run has written to for a day. The `chat` profile
+has no file-writing tools, so it gets none.
 
 <Warning>
   Only a validator built **without** an `allowed_paths` argument reads or writes the

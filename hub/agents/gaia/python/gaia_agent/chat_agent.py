@@ -4,6 +4,7 @@
 Chat Agent - Interactive chat with RAG and file search capabilities.
 """
 
+import ast
 import dataclasses
 import errno
 import functools
@@ -17,7 +18,17 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Set
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Collection,
+    Dict,
+    FrozenSet,
+    List,
+    Optional,
+    Set,
+)
 
 from gaia.config import gaia_home
 from gaia.logger import get_logger
@@ -61,7 +72,13 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import before_change, note_untracked
+from gaia.agents.base.file_snapshots import (
+    SnapshotError,
+    before_change,
+    note_folder_changes,
+    note_untracked,
+    watch_script_folders,
+)
 from gaia.agents.base.goal_store import GOAL_OUTCOMES
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
@@ -103,8 +120,11 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import (
+    _forget_evicted,
+    attached_not_loaded,
     documents_failed_indexing,
     documents_still_indexing,
+    not_loaded_note,
 )
 from gaia.agents.tools.workspace_paths import (
     _resolve_target,
@@ -211,20 +231,88 @@ NOTIFY_DESKTOP_PS_SCRIPT = (
     f"[string]$env:{NOTIFY_TITLE_ENV_VAR})"
 )
 
-# ``run_python`` puts the project root on PYTHONPATH, so ``import gaia``
-# resolves far enough to fail on the symbol instead of the package — and the
-# raw ImportError reads as a typo worth retrying rather than the wrong path.
-_GAIA_TOOL_IMPORT_PATTERN = re.compile(
-    r"^[ \t]*(?:from[ \t]+gaia(?:\.[\w.]+)?[ \t]+import[ \t]+.*"
-    r"|import[ \t]+gaia(?:\.[\w.]+)?(?![\w.]).*)$",
-    re.MULTILINE,
-)
+
+def _imports_gaia_tools(code: str, tool_names: Collection[str]) -> Optional[str]:
+    """The line that reaches for one of the agent's tools through ``gaia``.
+
+    Tools are bound to the running agent, never attributes of the ``gaia``
+    package, so ``from gaia import write_file`` cannot work in a subprocess and
+    its bare ImportError reads as a typo worth retrying. Importing a project's
+    own modules -- ``from gaia.agents.base import claims`` in a GAIA checkout --
+    is ordinary Python and is not refused.
+    """
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return None  # Python reports it, with the line.
+    lines = (code or "").splitlines()
+    package_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0:
+            if node.module == "gaia" and any(
+                alias.name in tool_names for alias in node.names
+            ):
+                return lines[node.lineno - 1].strip()
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "gaia" or (
+                    alias.name.startswith("gaia.") and alias.asname is None
+                ):
+                    package_names.add(alias.asname or "gaia")
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in package_names
+            and node.attr in tool_names
+        ):
+            return lines[node.lineno - 1].strip()
+    return None
 
 
-def _imports_gaia_tools(code: str) -> Optional[str]:
-    """The offending line when a snippet tries to import GAIA itself."""
-    match = _GAIA_TOOL_IMPORT_PATTERN.search(code or "")
-    return match.group(0).strip() if match else None
+_MISSING_IMPORT = re.compile(r"cannot import name '(\w+)' from '(gaia(?:\.[\w.]+)?)'")
+
+
+def _tool_import_hint(stderr: str, tool_names: Collection[str]) -> Optional[str]:
+    """What to do when a run failed importing a tool's name from ``gaia``."""
+    match = _MISSING_IMPORT.search(stderr or "")
+    if not match or match.group(1) not in tool_names:
+        return None
+    return (
+        f"`{match.group(1)}` is one of your tools, not part of `{match.group(2)}`: "
+        "call it directly as a tool instead of importing it."
+    )
+
+
+def _project_import_paths(project: os.PathLike | str) -> List[str]:
+    """What a snippet run in *project* needs on ``PYTHONPATH`` to import it.
+
+    The root for a flat layout, and ``src/`` too when it holds a package, so a
+    ``src/``-layout checkout imports its own code rather than an installed copy.
+    """
+    root = Path(project)
+    paths = [str(root)]
+    src = root / "src"
+    if not src.is_dir():
+        return paths
+    try:
+        children = list(src.iterdir())
+    except OSError as e:
+        # Running anyway would import an installed copy in place of the project.
+        raise OSError(
+            f"Could not list {src} to put the project's src/ layout on the import "
+            f"path: {e}. Check the folder's permissions."
+        ) from e
+    if any((child / "__init__.py").is_file() for child in children):
+        paths.append(str(src))
+    return paths
+
+
+def _with_project_paths(env: Dict[str, str], project: os.PathLike | str) -> None:
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join(
+        _project_import_paths(project) + ([existing] if existing else [])
+    )
 
 
 #: The line in a Python tool's docstring that :func:`_lists_script_libraries` fills.
@@ -353,33 +441,42 @@ def _python_run_result(
     return result
 
 
+def _record_folder_changes(watch) -> Optional[str]:
+    """Record what a script added to the folders it names; a note if that failed."""
+    try:
+        note_folder_changes(watch)
+    except SnapshotError as e:
+        logger.error("Could not record the files a script added: %s", e)
+        return f"Undo won't remove the files this added: {e}"
+    return None
+
+
 def _python_script_run_context(
     script: Path, project_dir: os.PathLike | str | None
 ) -> tuple[Path, Dict[str, str]]:
     """Working directory and environment for running *script* as a subprocess.
 
-    A script under *project_dir* runs from it with it on ``PYTHONPATH``, so
-    ``tests/test_x.py`` can import the project's packages. Anything else — and
-    every run with no project at all, where *project_dir* is ``None`` — runs
-    from its own folder with the environment unchanged.
-
-    Only flat-layout projects become importable this way: a ``src/`` layout
-    needs ``src/`` on the path, which this does not add.
+    A script under *project_dir* runs from it with it -- and its ``src/``, for
+    a ``src/`` layout -- on ``PYTHONPATH``, so ``tests/test_x.py`` can import
+    the project's packages. Anything else, and every run with no project at
+    all (*project_dir* is ``None``), runs from its own folder with the
+    environment unchanged.
     """
     script = Path(script).resolve()
     # A frozen build relaunches itself: reuse its unpacked bundle (~2 s, not ~25 s).
     env = child_env(relaunch_self=True)
     # The tools decode the output as UTF-8; the locale codec can't print a ✓.
     env["PYTHONIOENCODING"] = "utf-8"
+    # Files it writes with a bare open() are UTF-8, like the file tools write.
+    env["PYTHONUTF8"] = "1"
+    # A timed-out run still returns what it printed before the kill.
+    env.setdefault("PYTHONUNBUFFERED", "1")
     if project_dir is None:
         return script.parent, env
     project = Path(project_dir).resolve()
     if not script.is_relative_to(project):
         return script.parent, env
-    existing = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = (
-        os.pathsep.join([str(project), existing]) if existing else str(project)
-    )
+    _with_project_paths(env, project)
     return project, env
 
 
@@ -564,6 +661,9 @@ class ChatAgentConfig:
     # any built-in or registered Chat instance.
     namespaced_agent_id: Optional[str] = None
 
+
+# Names listed of the attached documents the index does not hold; the rest are counted.
+_NOT_LOADED_SHOWN = 30
 
 # Added to the per-turn document list only when a document is not in Latin script.
 _CROSS_LANGUAGE_NOTE = (
@@ -771,6 +871,8 @@ class ChatAgent(
         self.observers = []
         self.file_handlers = []  # Track FileChangeHandler instances for telemetry
         self.indexed_files = set()
+        # Every document attached to the chat, held in the index or not.
+        self.attached_documents: List[str] = []
 
         # Initialize file system index service (optional)
         self._fs_index = None
@@ -952,6 +1054,8 @@ class ChatAgent(
             if loaded:
                 self.current_session = loaded
                 for doc_path in loaded.indexed_documents:
+                    if self.rag.is_full():
+                        break
                     if doc_path not in self.indexed_files and os.path.exists(doc_path):
                         try:
                             real = os.path.realpath(doc_path)
@@ -960,6 +1064,9 @@ class ChatAgent(
                             ) or self._is_path_allowed(real):
                                 result = self.rag.index_document(real)
                                 if result.get("success"):
+                                    _forget_evicted(
+                                        self.indexed_files, result.get("evicted", [])
+                                    )
                                     self.indexed_files.add(doc_path)
                                     logger.info(
                                         "Restored indexed doc from prior turn: %s",
@@ -1010,6 +1117,14 @@ class ChatAgent(
             lines.append(f"[Indexed documents: {', '.join(entries)}]")
             if any(s and s != ["Latin"] for s in scripts.values()):
                 lines.append(_CROSS_LANGUAGE_NOTE)
+        not_loaded = attached_not_loaded(self, self.rag)
+        if not_loaded:
+            shown = ", ".join(Path(fp).name for fp in not_loaded[:_NOT_LOADED_SHOWN])
+            more = len(not_loaded) - _NOT_LOADED_SHOWN
+            lines.append(
+                f"[{not_loaded_note(len(not_loaded), self.rag)} Not searched: "
+                f"{shown}{f', and {more} more' if more > 0 else ''}]"
+            )
         pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
         if pending:
             lines.append(
@@ -1038,8 +1153,22 @@ class ChatAgent(
 
     def get_memory_dynamic_context(self) -> str:
         """Per-turn context, plus which documents are indexed right now."""
-        parts = (super().get_memory_dynamic_context(), self._indexed_documents_line())
+        parts = (
+            super().get_memory_dynamic_context(),
+            self._indexed_documents_line(),
+            self._mcp_dropped_line(),
+        )
         return "\n".join(part for part in parts if part)
+
+    def _mcp_dropped_line(self) -> str:
+        """The MCP notice the user saw, so the model doesn't say a server isn't set up."""
+        notice = getattr(self, "_mcp_dropped_notice", None)
+        if not notice:
+            return ""
+        return (
+            "MCP servers the user set up that have no tools this session "
+            f"(the user was shown this): {notice}"
+        )
 
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
 
@@ -2323,9 +2452,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             return
         if self._mcp_manager is None:
             if self._mcp_unavailable_error:
+                # The error is already a sentence; wrapping it doubled its brackets.
                 self._set_mcp_dropped_notice(
-                    "Your MCP servers are unavailable this session: GAIA's MCP "
-                    f"client could not start ({self._mcp_unavailable_error})."
+                    "Your MCP servers are unavailable this session. "
+                    f"{self._mcp_unavailable_error.rstrip()}"
                 )
             return
         try:
@@ -2600,6 +2730,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         note_untracked("execute_python_file", str(p))
                     # The script's own output folders first: the search is bounded.
                     watch = watch_folders(*folders_named_in(source), run_dir, project)
+                    named = None
+                    if writes:
+                        try:
+                            # A file the script moves or renames can be put back.
+                            named = watch_script_folders(
+                                folders_named_in(source), "execute_python_file"
+                            )
+                        except SnapshotError as e:
+                            return {
+                                "status": "error",
+                                "error": f"Not run: {e}",
+                                "has_errors": True,
+                                "executed": False,
+                            }
                     started = time.time()
                     try:
                         job = run_python_job(
@@ -2614,7 +2758,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("execute_python_file", str(p))
+                        _record_folder_changes(named)
                         raise
+                    undo_note = _record_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2637,7 +2783,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             retain_excerpt(self, r.stdout, 8000),
                             retain_excerpt(self, r.stderr, 2000),
                             time.monotonic() - start,
-                            finished_job_note(job),
+                            " ".join(
+                                n for n in (finished_job_note(job), undo_note) if n
+                            )
+                            or None,
                         ),
                         check_from_python_run(
                             " ".join([file_path, args]).strip(),
@@ -2685,7 +2834,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-                offending = _imports_gaia_tools(code)
+                tool_names = set(_TOOL_REGISTRY) | set(
+                    getattr(self, "_tools_registry", None) or ()
+                )
+                offending = _imports_gaia_tools(code, tool_names)
                 if offending:
                     return {
                         "status": "error",
@@ -2776,11 +2928,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 env = child_env(relaunch_self=True)
                 env["PYTHONIOENCODING"] = "utf-8"
+                env["PYTHONUTF8"] = "1"
+                env.setdefault("PYTHONUNBUFFERED", "1")
                 if project:
-                    existing = env.get("PYTHONPATH")
-                    env["PYTHONPATH"] = (
-                        os.pathsep.join([project, existing]) if existing else project
-                    )
+                    _with_project_paths(env, project)
 
                 # Temp keeps the snippet out of the workspace. Its own folder,
                 # because a script's folder comes first on sys.path and any
@@ -2797,6 +2948,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 started = time.time()
                 start = time.monotonic()
                 try:
+                    named = None
+                    if writes:
+                        try:
+                            # A file the snippet moves or renames can be put back.
+                            named = watch_script_folders(
+                                folders_named_in(code), "run_python"
+                            )
+                        except SnapshotError as e:
+                            return {
+                                "status": "error",
+                                "error": f"Not run: {e}",
+                                "has_errors": True,
+                                "executed": False,
+                            }
                     try:
                         job = run_python_job(
                             cmd,
@@ -2810,7 +2975,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("run_python", detail)
+                        _record_folder_changes(named)
                         raise
+                    undo_note = _record_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2836,7 +3003,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         logger.warning(
                             "run_python: could not remove %s: %s", snippet_dir, e
                         )
-                notes = [finished_job_note(job)]
+                notes = [finished_job_note(job), undo_note]
                 if moved_from is not None:
                     notes.append(
                         f"The working folder {moved_from} no longer exists, so "
@@ -2850,6 +3017,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "resolve there, so use absolute paths for the user's "
                         "files."
                     )
+                notes.append(_tool_import_hint(r.stderr, tool_names))
                 result = _python_run_result(
                     r,
                     r.stdout[:8000],
@@ -3757,7 +3925,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         )
 
     def _index_documents(self, documents: List[str]) -> List[str]:
-        """Index initial documents and return any user-facing failure messages."""
+        """Index the chat's attached documents; return user-facing failure messages.
+
+        Stops loading once the index is full rather than push out documents it
+        just loaded: the rest stay attached, are named to the model as not
+        searched, and load one at a time through ``query_specific_file``.
+        """
+        self.attached_documents = list(documents)
         failures = []
         for doc in documents:
             doc_name = os.path.basename(doc)
@@ -3766,10 +3940,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     # Naming a file to index is the grant to read it; a folder is never granted.
                     if os.path.isfile(doc):
                         self.path_validator.add_allowed_path(doc)
+                    if self.rag.is_full():
+                        continue
                     logger.info(f"Indexing document: {doc}")
                     result = self.rag.index_document(doc)
 
                     if result.get("success"):
+                        _forget_evicted(self.indexed_files, result.get("evicted", []))
                         self.indexed_files.add(doc)
                         logger.info(
                             f"Successfully indexed: {doc} ({result.get('num_chunks', 0)} chunks)"
