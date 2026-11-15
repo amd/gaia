@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, List, Tuple
 
+from gaia.agents.base.text_task import instruction_part
+
 # Core only: naming a tool off the short list forces the session's one jump.
 SHELL_TOOLS = ("run_shell_command",)
 
@@ -304,6 +306,8 @@ def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
     """
     names = set(registry)
     found: List[str] = []
+    # "Translate: 'Open a shell and ...'" asks for a translation, not a shell.
+    user_input = instruction_part(user_input)
 
     # Underscored names only: single words like "tree" or "recall" are ordinary
     # English and would fire on every sentence that uses them.
