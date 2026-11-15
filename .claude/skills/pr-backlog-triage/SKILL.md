@@ -57,11 +57,14 @@ first. That agent:
 When the maintainer asks to land a backlog of bug fixes fast, merge a PR without the fast
 lane's verifier pass once **all** of these hold; the review bot's approval stands in for it:
 
-- it's a bug fix (`fix…` title), not a draft, and **mergeable**; conflicts mean merging
-  `main` in first;
+- it's a bug fix (`fix…` title), not a draft, and **mergeable** with no conflicts. A
+  conflict beyond a mechanical keep-both in tests, locale files or a CHANGELOG sends it to a
+  separate verifier, because whoever resolves it can't also merge it;
 - the product-code change is small, **~300 lines or fewer**. Tests, docs, CHANGELOG and
   eval scenarios don't count toward the size;
-- the review bot's **latest verdict approves** (`Approve` or `Approve with suggestions`);
+- the review bot's **latest verdict approves** (`Approve` or `Approve with suggestions`),
+  and every comment is addressed: each 🟡 it raised (including `Follow-up:` items) is fixed
+  or filed, and no human review thread is open;
 - no check is still running, and every **failing check is unrelated**:
   - an infra lane: setup journeys, installers, hardware;
   - a network or rate-limit failure on a non-test job (a test job that didn't run is
@@ -73,8 +76,8 @@ lane's verifier pass once **all** of these hold; the review bot's approval stand
 
 Hold anything that breaks a condition, touches security or permission gating, or is
 LLM-behaviour-affecting (item 5 of the dispatch list; it still needs eval evidence). Those
-get a full verifier pass. An outside contributor's PR gets its line-by-line security review
-before it can take this lane.
+get a full verifier pass, and security ones are held for human sign-off (item 9). An outside
+contributor's PR gets its line-by-line security review before it can take this lane.
 A bot "Approve" doesn't clear a PR you've already held for a known blocker; keep a hold list
 and check it first. A held contributor PR once merged on the bot's approval alone and
 shipped a known bug.
@@ -117,6 +120,11 @@ Keep the backlog moving:
 - **Cap local pytest at `-n 4`** when several agents share one PC.
 - **Approving a fork's CI run:** read the head diff first. If it touches `.github/` or an
   installer, flag it to the maintainer instead of approving.
+- **A clean push gets no new verdict.** The bot's per-push re-review is silent unless it finds
+  a regression, so an old "Request changes" stays the latest; remove and re-add `ready_for_ci`
+  to get a fresh one.
+- **Diff a merge from `main` against `origin/main`** for every file it touched, so a bad
+  resolution can't silently revert another PR's tests.
 
 ## Per-PR subagent dispatch
 

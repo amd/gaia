@@ -32,6 +32,8 @@ A PR is **ready** only when all four hold:
 
 The bar is strict by default and the **user** sets any waiver ("bug-only PRs, force-complete
 if comments are addressed"). A model never relaxes it on its own.
+The express lane in [`pr-backlog-triage`](../pr-backlog-triage/SKILL.md) is one such
+user-set waiver of the verifier, and applies only when the user asks for it.
 
 Authority: merge when the user has asked to complete PRs into `main`. Pushing a fix onto a
 PR branch is part of completing it. RC and final tags follow [`gaia-release`](../gaia-release/SKILL.md),
