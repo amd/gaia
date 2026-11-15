@@ -3098,6 +3098,25 @@ def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
 _SENTENCE_BREAK_RE = re.compile(r"(?<!e\.g)(?<!i\.e)\.\s+(?=[A-Z])")
 
 
+_CAUSE_CHARS = 300
+
+
+def _clip_cause(text: str, limit: int = _CAUSE_CHARS) -> str:
+    """*text* cut to *limit* at a sentence end, else a word, marked with "…".
+
+    The full error stays in the failure record; this is the line the user reads.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    sentence = max(head.rfind(". "), head.rfind(".\n"))
+    if sentence >= limit // 2:
+        return head[: sentence + 1]
+    word = head.rfind(" ")
+    return (head[:word] if word > 0 else head).rstrip(" ,;:") + "…"
+
+
 def _split_cause_and_advice(message: str) -> Tuple[str, Optional[str]]:
     """Split a provider's error message into what happened and what to do."""
     text = message.strip()
@@ -10395,7 +10414,7 @@ Do NOT wrap conversational replies in JSON.
         if typed_msg:
             cause, advice = _split_cause_and_advice(typed_msg)
         else:
-            cause, advice = str(exc).strip()[:300] or type(exc).__name__, None
+            cause, advice = _clip_cause(str(exc)) or type(exc).__name__, None
         server_down = self._model_server_down(exc)
         if server_down:
             self._turn_model_retries["server_down"] = True
@@ -10448,7 +10467,8 @@ Do NOT wrap conversational replies in JSON.
         if label and label.lower() in cause.lower():
             label = None  # the cause already names it
         opening = headline or f"The model {what} at step {steps_taken}"
-        detail = f" {label + ': ' if label else ''}{cause}." if cause else ""
+        end = "" if cause.endswith("…") else "."
+        detail = f" {label + ': ' if label else ''}{cause}{end}" if cause else ""
         lines = [f"{opening}, so this request is unfinished.{detail}"]
         tools_used = Counter(
             msg["name"]
