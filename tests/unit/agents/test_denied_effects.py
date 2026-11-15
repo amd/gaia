@@ -905,9 +905,9 @@ def test_a_policy_refusal_records_the_host_not_the_command(tmp_path):
 
 
 BLANKET_REFUSAL = (
-    "Not run: `{cmd}` needs your approval, and this run approves automatically "
-    "only commands that are safe unattended — run the request interactively to "
-    "approve it, or turn on full access."
+    "Not run: `{cmd}` needs your approval, and this run can only approve "
+    "commands that are safe to run unattended. Run the request interactively "
+    "to approve it, or turn on full access."
 )
 
 

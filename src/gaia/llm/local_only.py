@@ -264,6 +264,8 @@ def apply_policy(value: str) -> Dict[str, Any]:
                 "code": "saved_models_not_checked",
                 "severity": "warning",
                 "reason": str(e),
+                "cause": "model_server_down" if e.server_down else None,
+                "models": e.models,
             }
         )
         result["warnings"].append(f"Saved models were not checked: {e}")
@@ -309,12 +311,36 @@ class SavedModelsNotCheckedError(RuntimeError):
     """Lemonade's catalog couldn't say whether a saved dotted id is a cloud model.
 
     ``cleared`` lists the ids that were cleared anyway, because they are cloud
-    models without asking Lemonade.
+    models without asking Lemonade. ``models`` lists the ids left unchecked, and
+    ``server_down`` says the catalog read failed because nothing answered.
     """
 
-    def __init__(self, message: str, cleared: List[Tuple[str, str]]):
+    def __init__(
+        self,
+        message: str,
+        cleared: List[Tuple[str, str]],
+        models: Optional[List[str]] = None,
+        server_down: bool = False,
+    ):
         super().__init__(message)
         self.cleared = cleared
+        self.models = list(models or [])
+        self.server_down = server_down
+
+
+def _server_not_answering(error: BaseException) -> bool:
+    """True when *error* comes from a connection that failed or timed out."""
+    import requests
+
+    from gaia.llm.lemonade_choice import _causes
+
+    return any(
+        isinstance(
+            cause,
+            (requests.exceptions.ConnectionError, requests.exceptions.Timeout),
+        )
+        for cause in _causes(error)
+    )
 
 
 #: config.json keys that can hold a model id GAIA runs or restores.
@@ -377,13 +403,34 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
                     cleared.append((key, model))
         except LemonadeClientError as e:
             save()
-            unchecked = ", ".join(
+            models = list(
                 dict.fromkeys(m for k, m in ambiguous if (k, m) not in cleared)
             )
+            unchecked = ", ".join(models)
+            log.warning(
+                "Local only: couldn't check whether %s is a cloud model: %s",
+                unchecked,
+                e,
+                exc_info=True,
+            )
+            down = _server_not_answering(e)
+            many = len(models) > 1
+            what = "are cloud models" if many else "is a cloud model"
+            kept = "they are" if many else "it is"
+            if down:
+                message = (
+                    f"couldn't check whether {unchecked} {what} because the "
+                    f"model server isn't answering, so {kept} still saved. Turn "
+                    "Local only on again once the model server is back to check "
+                    + ("them" if many else "it")
+                )
+            else:
+                message = (
+                    f"couldn't check whether {unchecked} {what}, so {kept} "
+                    f"still saved: {e}"
+                )
             raise SavedModelsNotCheckedError(
-                f"couldn't check whether {unchecked} is a cloud model, so it is "
-                f"still saved: {e}",
-                list(cleared),
+                message, list(cleared), models=models, server_down=down
             ) from e
 
     save()

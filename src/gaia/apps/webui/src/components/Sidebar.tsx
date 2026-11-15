@@ -596,7 +596,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             onChange={(e) => setQuery(e.target.value)}
                             onKeyDown={onSearchKey}
                             {...CLAIMS_ESCAPE}
-                            placeholder={t('sidebar.search')}
+                            placeholder={t.bare('sidebar.search')}
                             aria-label={t.hint(t('sidebar.search'), formatShortcut('Mod+K'))}
                             aria-controls="sb-chat-list"
                             aria-activedescendant={picked ? resultRowId(picked.id) : undefined}

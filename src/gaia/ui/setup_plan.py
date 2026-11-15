@@ -110,8 +110,8 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
     """Each default chat model, and whether this PC and its Lemonade can run it.
 
     Judged as :func:`recommend_default_chat_model` judges them (registry size,
-    the server's version, then the memory free now); the size shown is
-    :func:`model_choice.download_size_gb`'s.
+    the server's version, then the memory free now); the size shown is the
+    server's catalog size.
     """
     from gaia.llm.lemonade_client import (
         DEFAULT_MODEL_LADDER,
@@ -157,9 +157,7 @@ def _options(client, capacity) -> List[Dict[str, Any]]:
         options.append(
             {
                 "id": model_id,
-                "size_gb": model_choice.download_size_gb(
-                    model_id, catalog.get(model_id)
-                ),
+                "size_gb": catalog.get(model_id, size),
                 "fits": fits,
                 "reason": reason,
             }
@@ -441,9 +439,9 @@ def _catalog(
     for model_id in order:
         entry = entry_for(model_id)
         downloaded = bool(entry.get("downloaded")) if entry else False
-        full = model_choice.download_size_gb(
-            model_id, entry.get("size") if entry else None
-        )
+        full = entry.get("size") if entry else None
+        if not isinstance(full, (int, float)):
+            full = _registry_size(model_id)
         partial_gb = 0.0 if downloaded else round((on_disk.get(model_id) or 0) / 1e9, 2)
         remaining: Optional[float] = (
             0.0 if downloaded else remaining_download_gb(full, on_disk.get(model_id))
@@ -951,8 +949,8 @@ def remove_model(model_id: str) -> float:
             f"{model_id} was removed, but GAIA could not record it as skipped, so "
             f"the next setup downloads it again: {e}"
         ) from e
-    size = model_choice.download_size_gb(model_id, entry.get("size"))
-    return round(size, 1) if size is not None else 0.0
+    size = entry.get("size")
+    return round(float(size), 1) if isinstance(size, (int, float)) else 0.0
 
 
 def _download_entry(model_id: str):

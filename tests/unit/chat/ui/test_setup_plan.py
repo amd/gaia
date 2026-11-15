@@ -73,9 +73,8 @@ class _FakeLemonade:
             "data": [
                 {"id": m, "downloaded": m in self.downloaded, "size": size}
                 for m, size in (
-                    # Lemonade's GiB; the plan shows GAIA's GB (23.3, 5.97).
-                    (LARGE_DEFAULT_MODEL_NAME, 21.7),
-                    (DEFAULT_MODEL_NAME, 5.56),
+                    (LARGE_DEFAULT_MODEL_NAME, 23.3),
+                    (DEFAULT_MODEL_NAME, 5.6),
                     (DEFAULT_EMBEDDING_MODEL.removeprefix("user."), 0.3),
                 )
             ]
@@ -238,7 +237,7 @@ def test_use_mine_on_a_big_pc_names_the_large_model_and_its_real_size(running):
     assert plan["recommended_model"] == LARGE_DEFAULT_MODEL_NAME
     # The hardware's pick keeps Gemma beside it for images: what gaia init pulls.
     assert set(_plan_ids(plan)) >= {LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME}
-    assert plan["download_gb"] == pytest.approx(round(23.3 + 5.97 + 0.33, 1))
+    assert plan["download_gb"] == pytest.approx(23.3 + 5.6 + 0.3)
     assert plan["memory_gb"] == round(96 * GB_PER_GIB)
 
 
@@ -257,11 +256,10 @@ def test_options_say_which_models_fit(running):
     assert options[DEFAULT_MODEL_NAME]["fits"] is True
 
 
-def test_options_show_gaias_size_not_lemonades_gib(running):
+def test_options_show_the_catalog_size(running):
     running(BIG_GPU)
     options = {o["id"]: o for o in sp.build_plan()["options"]}
-    assert options[DEFAULT_MODEL_NAME]["size_gb"] == 5.97
-    assert options[LARGE_DEFAULT_MODEL_NAME]["size_gb"] == 23.3
+    assert options[DEFAULT_MODEL_NAME]["size_gb"] == 5.6
 
 
 def test_picking_the_smaller_model_saves_it_and_drops_the_large_download(
@@ -445,7 +443,7 @@ def test_switching_to_gaias_own_changes_the_plan(lemonade_target, monkeypatch):
     own = sp.build_plan()
     assert mine["chat_model"]["downloaded"] is True
     assert own["chat_model"]["downloaded"] is None
-    assert own["lemonade"]["url"] != mine["lemonade"]["url"]
+    assert own["download_gb"] > mine["download_gb"]
 
 
 def test_picking_a_model_before_gaias_own_runs_says_to_start_setup(lemonade_target):
@@ -626,7 +624,7 @@ def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
     plan = sp.build_plan()
     gemma = _entry(plan, DEFAULT_MODEL_NAME)
     assert gemma["roles"] == ["chat", "vision"] and gemma["recommended"]
-    assert gemma["selected"] and gemma["size_gb"] == pytest.approx(5.97)
+    assert gemma["selected"] and gemma["size_gb"] == pytest.approx(5.6)
     assert "images" in gemma["if_skipped"]
     qwen = _entry(plan, LARGE_DEFAULT_MODEL_NAME)
     assert not qwen["recommended"] and not qwen["selected"]
@@ -696,7 +694,7 @@ def test_disk_short_for_the_selection_is_a_warning_to_confirm(flm_box):
     flm_box(downloaded=(), free_gb=2.0)
     plan = sp.build_plan()
     assert plan["disk"] == {"path": "D:/hub", "free_gb": 2.0, "source": "lemonade"}
-    assert "Free 4.3 GB" in plan["disk_warning"]
+    assert "Free 3.9 GB" in plan["disk_warning"]
     warning = sp.run_disk_warning()
     assert warning["drop"] == [DEFAULT_MODEL_NAME]
     assert warning["need_gb"] == plan["download_gb"]
@@ -708,7 +706,7 @@ def test_remove_deletes_only_on_request_and_keeps_it_from_coming_back(
     flm_box, config_file
 ):
     fake = flm_box(downloaded=(FLM, DEFAULT_MODEL_NAME))
-    assert sp.remove_model(DEFAULT_MODEL_NAME) == 6.0
+    assert sp.remove_model(DEFAULT_MODEL_NAME) == 5.6
     assert fake.deleted == [DEFAULT_MODEL_NAME]
     assert json.loads(config_file.read_text())["skipped_models"] == [DEFAULT_MODEL_NAME]
     with pytest.raises(sp.SetupPlanError, match="not downloaded"):
@@ -730,7 +728,7 @@ def test_skip_and_remove_endpoints(client, flm_box):
     r = client.post(
         "/api/setup/models/remove", json={"model_id": DEFAULT_MODEL_NAME}, headers=UI
     )
-    assert r.status_code == 200 and r.json()["freed_gb"] == 6.0
+    assert r.status_code == 200 and r.json()["freed_gb"] == 5.6
 
 
 def test_remove_endpoint_refuses_a_model_that_is_downloading(
@@ -962,7 +960,7 @@ def test_plan_counts_a_model_downloaded_beside_the_profile(flm_box):
     sp.choose_chat_model(FLM)
     plan = sp.build_plan(extra_models=[DEFAULT_MODEL_NAME])
     assert DEFAULT_MODEL_NAME in [m["id"] for m in plan["models"]]
-    assert plan["download_gb"] == pytest.approx(round(5.97 + 0.33, 1))
+    assert plan["download_gb"] == pytest.approx(5.6 + 0.3)
 
 
 def test_without_a_server_each_action_says_what_it_could_not_do(no_server):

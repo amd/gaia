@@ -2106,8 +2106,9 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         "memory": None,
         "memory_error": None,
         "error": None,
-        "error_code": None,
         "error_detail": None,
+        # "model_server_down" lets the UI word that failure in its own language.
+        "error_cause": None,
         "base_url": None,
         "owner": None,
         "busy": False,
@@ -2122,8 +2123,6 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         system_info = _read_system_info()
     except ProviderError as e:
         down = e.status == 503 and view["base_url"]
-        # The UI words a known code in its own language; `error` stays the English line.
-        view["error_code"] = "server_down" if down else None
         view["error"] = (
             f"The model server isn't answering at {view['base_url']}. "
             + (
@@ -2135,6 +2134,7 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
             else str(e)
         )
         view["error_detail"] = str(e)
+        view["error_cause"] = "model_server_down" if down else None
         return view
     entry = _chat_entry(health)
     warming = warmup.warm_up_status().get("state") == warmup.WARMING

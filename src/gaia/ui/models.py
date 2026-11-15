@@ -286,6 +286,8 @@ class InitTaskInfo(BaseModel):
     """Summary of a boot-time initialization task (embedded in SystemStatus)."""
 
     name: str
+    # The UI shows banner.boot.<step> in the user's language, never ``name``.
+    step: Optional[str] = None
     status: str  # pending | running | done | failed
 
 
@@ -309,6 +311,9 @@ class PolicyNotice(BaseModel):
     severity: Literal["info", "warning"]
     url: Optional[str] = None
     reason: Optional[str] = None
+    # "model_server_down" when nothing answered; the UI words that itself.
+    cause: Optional[str] = None
+    models: Optional[List[str]] = None
 
 
 class SettingsResponse(BaseModel):

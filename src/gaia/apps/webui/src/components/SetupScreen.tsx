@@ -1318,7 +1318,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                             spellCheck={false}
                                             value={key}
                                             onChange={(e) => setKey(e.target.value)}
-                                            placeholder={savedKey ? t('setup.key.placeholder') : t('setup.key.placeholderNew')}
+                                            placeholder={savedKey ? t.bare('setup.key.placeholder') : t.bare('setup.key.placeholderNew')}
                                         />
                                         <button type="button" className="btn-secondary setup-key-show" aria-label={t(showKey ? 'setup.key.hide' : 'setup.key.show')} title={t(showKey ? 'setup.key.hide' : 'setup.key.show')} onClick={() => setShowKey((s) => !s)}>
                                             {showKey ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}

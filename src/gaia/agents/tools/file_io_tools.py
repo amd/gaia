@@ -33,6 +33,7 @@ from gaia.agents.tools.file_edit import (
     after_excerpt,
     apply_unique_replacement,
     file_read_record,
+    masked_secret_refusal,
     read_first_preflight,
     stamp_of,
     turn_of,
@@ -740,7 +741,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path, "overwriting")
+                refusal = reads.refusal(
+                    file_path, "overwriting"
+                ) or masked_secret_refusal(file_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -878,8 +881,15 @@ class FileIOToolsMixin:
                     return _directory_path_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path) or reads.repeat_refusal(
-                    file_path, old_content, new_content, turn_of(self)
+                refusal = (
+                    reads.refusal(file_path)
+                    or reads.repeat_refusal(
+                        file_path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        file_path,
+                        {"old_content": old_content, "new_content": new_content},
+                    )
                 )
                 if refusal is not None:
                     return refusal
@@ -1179,7 +1189,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path, "overwriting")
+                refusal = reads.refusal(
+                    file_path, "overwriting"
+                ) or masked_secret_refusal(file_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1285,7 +1297,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(path, "overwriting")
+                refusal = reads.refusal(path, "overwriting") or masked_secret_refusal(
+                    path, {"content": content}
+                )
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1436,8 +1450,14 @@ class FileIOToolsMixin:
                     return missing_file_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(path) or reads.repeat_refusal(
-                    path, old_content, new_content, turn_of(self)
+                refusal = (
+                    reads.refusal(path)
+                    or reads.repeat_refusal(
+                        path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        path, {"old_content": old_content, "new_content": new_content}
+                    )
                 )
                 if refusal is not None:
                     return refusal
@@ -1638,7 +1658,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(gaia_path, "overwriting")
+                refusal = reads.refusal(
+                    gaia_path, "overwriting"
+                ) or masked_secret_refusal(gaia_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1758,7 +1780,9 @@ class FileIOToolsMixin:
                     return _directory_path_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path)
+                refusal = reads.refusal(file_path) or masked_secret_refusal(
+                    file_path, {"new_implementation": new_implementation}
+                )
                 if refusal is not None:
                     path_validator.audit_write(
                         "edit",

@@ -32,7 +32,7 @@ const LOADED: LocalModelStatus = {
 const STOPPED: LocalModelStatus = {
     ...LOADED, state: 'stopped', model: null, display_name: null, placement: null, ctx_size: null, memory: null,
     error: "The model server isn't answering at http://localhost:13305/api/v1. Restart starts it if GAIA runs it.",
-    error_code: 'server_down',
+    error_cause: 'model_server_down',
     error_detail: 'The local model server is not reachable at http://localhost:13305/api/v1 (connection refused).',
 };
 
@@ -222,7 +222,7 @@ describe('ModelStatusPill', () => {
         render(<ModelStatusPill />);
         fireEvent.click(screen.getByRole('button', { name: /محلي · Gemma 4 E4B/ }));
         const dialog = await screen.findByRole('dialog', { name: /حالة النموذج/ });
-        const line = (await within(dialog).findByText(/خادم النموذج لا يستجيب/)).closest('.settings-error');
+        const line = (await within(dialog).findByText(/خادم النماذج لا يستجيب/)).closest('.settings-error');
         expect(line?.textContent).toContain('\u2068http://localhost:13305/api/v1\u2069');
         expect(line?.textContent).toContain('شغّله بنفسك');
         expect(line).toHaveAttribute('title', expect.stringMatching(/connection refused/));
@@ -249,5 +249,52 @@ describe('ModelStatusPill', () => {
         expect(stripIsolates(cloud)).toMatch(/^تستخدم الرسائل الجديدة DeepSeek V4 في السحابة\. النموذج المحلي أدناه\./);
         expect(within(dialog).getByRole('button', { name: /إعدادات النموذج/ })).toBeInTheDocument();
         expect(within(dialog).getByRole('button', { name: /إعادة التشغيل/ })).toHaveAttribute('title', expect.stringMatching(/^\u2067?إعادة تحميل النموذج/));
+    });
+
+    describe('with the model server not answering', () => {
+        const URL = 'http://localhost:13305/api/v1';
+        // What the backend sends: an English line, and the cause the UI words itself.
+        const down = (owner: LocalModelStatus['owner']): LocalModelStatus => ({
+            ...STOPPED, owner, error_cause: 'model_server_down',
+            error: `The model server isn't answering at ${URL}. `
+                + (owner === 'gaia' ? 'Restart starts it.' : "GAIA doesn't start a server it doesn't run; start it yourself."),
+        });
+
+        async function alertFor(status: LocalModelStatus, locale: 'en' | 'ar') {
+            useChatStore.setState({ locale });
+            mockedApi.getLocalModelStatus.mockResolvedValue(status);
+            render(<ModelStatusPill />);
+            fireEvent.click(screen.getByRole('button', { name: locale === 'ar' ? /محلي · Gemma 4 E4B/ : /Local · Gemma 4 E4B/ }));
+            const dialog = await screen.findByRole('dialog', { name: locale === 'ar' ? /حالة النموذج/ : 'Model status' });
+            const alert = (await within(dialog).findAllByRole('alert'))[0];
+            expect(alert).toHaveAttribute('title', expect.stringMatching(/connection refused|not reachable/));
+            return alert;
+        }
+
+        it.each([
+            ['gaia', "The model server isn't answering at http://localhost:13305/api/v1. Restart starts it."],
+            ['user', "The model server isn't answering at http://localhost:13305/api/v1. GAIA doesn't start a server it doesn't run; start it yourself."],
+        ] as const)('says so in English for a %s server', async (owner, line) => {
+            const alert = await alertFor(down(owner), 'en');
+            expect(stripIsolates(alert.textContent ?? '')).toBe(line);
+            expect(alert.querySelector('bdi[dir="ltr"]')).toHaveTextContent(URL);
+        });
+
+        it.each([
+            ['gaia', 'خادم النماذج لا يستجيب على http://localhost:13305/api/v1. اضغط «إعادة التشغيل» لتشغيله.'],
+            ['user', 'خادم النماذج لا يستجيب على http://localhost:13305/api/v1. لا يشغّل GAIA خادمًا لا يديره، فشغّله بنفسك.'],
+        ] as const)('says so in Arabic for a %s server, the address left to right', async (owner, line) => {
+            const alert = await alertFor(down(owner), 'ar');
+            const gloss = alert.querySelector('.i18n-gloss')?.textContent ?? '';
+            const own = stripIsolates((alert.textContent ?? '').replace(gloss, '')).trim();
+            expect(own).toBe(line);
+            expect(alert.querySelector('bdi[dir="ltr"]')).toHaveTextContent(URL);
+        });
+
+        it('keeps the backend\'s own words for any other failure', async () => {
+            const other: LocalModelStatus = { ...STOPPED, error: 'Lemonade answered /health with HTTP 404.', error_cause: null };
+            const alert = await alertFor(other, 'ar');
+            expect(alert).toHaveTextContent('Lemonade answered /health with HTTP 404.');
+        });
     });
 });
