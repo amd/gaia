@@ -665,13 +665,6 @@ class AgentLoop:
                 logger.error("AgentLoop tick execution failed: %s", exc, exc_info=True)
                 result_holder["error"] = str(exc)
             finally:
-                if fresh_agent is not None:
-                    try:
-                        fresh_agent.close()
-                    except Exception as exc:  # noqa: BLE001 — logged, tick still ends
-                        logger.warning(
-                            "AgentLoop: closing the tick's agent failed: %s", exc
-                        )
                 try:
                     # Here, not after the wait: a run that outlives its timeout
                     # still cost.
@@ -684,6 +677,14 @@ class AgentLoop:
                         )
                 finally:
                     sse_handler.signal_done()
+                    # After done: a slow MCP server stopping must not delay the tick.
+                    if fresh_agent is not None:
+                        try:
+                            fresh_agent.close()
+                        except Exception as exc:  # noqa: BLE001 — logged, tick ended
+                            logger.warning(
+                                "AgentLoop: closing the tick's agent failed: %s", exc
+                            )
 
         def _billed_model() -> Optional[str]:
             """The model the tick ran on; a hybrid tick bills its route's model."""

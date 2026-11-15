@@ -8,6 +8,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Closing an agent stops the MCP servers it started.** Each server is a
+  process tree (`uvx`, `uv`, the server), and it used to outlive the agent:
+  an agent built for one request left its servers running for good.
 - **No "I haven't confirmed this works" line under an answer that already
   reports the failure.** An answer such as "No, the suite fails: 1 failed",
   which claims no success, no longer ends with "… 1 of 2 pytest runs didn't
