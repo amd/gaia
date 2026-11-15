@@ -61,6 +61,9 @@ _FOLLOWUP_GRACE_SECONDS = 10.0
 # and the wait after the first such run (doubled after each one after it).
 GOAL_MAX_TRIES = 3
 GOAL_FIRST_RETRY_SECONDS = 300
+# Runs in a row that end asking to check back later before the goal is marked
+# stalled. They aren't tries, so without this only the hourly cap stopped them.
+GOAL_MAX_CHECK_BACKS = 10
 # How much of a run's answer a goal keeps as its reason.
 _GOAL_NOTE_CHARS = 300
 
@@ -448,8 +451,13 @@ class AgentLoop:
         elif outcome == "failed":
             store.end_goal(goal.id, "failed", note)
         elif directive.get("directive") == "scheduled":
-            # Checking back later is progress, not a failed try.
-            store.defer_goal(goal.id, int(directive.get("wake_in_seconds") or 0), note)
+            # Checking back later is progress, not a failed try, up to a point.
+            store.defer_goal(
+                goal.id,
+                int(directive.get("wake_in_seconds") or 0),
+                note,
+                max_check_backs=GOAL_MAX_CHECK_BACKS,
+            )
         else:
             store.record_unfinished_run(
                 goal.id,
@@ -520,7 +528,8 @@ class AgentLoop:
             "loop knows what to do next: goal_outcome='done' once that goal is "
             "achieved, or goal_outcome='failed' with the reason when it cannot "
             "be done. To check back on work still under way, use state "
-            "'scheduled'. Any other stop counts as one of "
+            f"'scheduled'; after {GOAL_MAX_CHECK_BACKS} check-backs in a row the "
+            "goal is marked stalled. Any other stop counts as one of "
             f"{GOAL_MAX_TRIES} tries, after which the goal fails."
         )
 
