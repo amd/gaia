@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from gaia.env import child_env
+from gaia.llm.surface_hints import APP_OTHER_SERVER_START_HINT
 
 log = logging.getLogger(__name__)
 
@@ -353,10 +354,7 @@ def server_down_advice(base_url: Optional[str] = None) -> str:
 
 
 #: A server the user pointed GAIA at, that GAIA can't find installed here.
-OTHER_SERVER_START_HINT = (
-    "GAIA doesn't run this model server, so it can't start it. Start it the "
-    "way you usually do."
-)
+OTHER_SERVER_START_HINT = f"{APP_OTHER_SERVER_START_HINT}."
 
 
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
