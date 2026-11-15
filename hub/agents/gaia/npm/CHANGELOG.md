@@ -8,12 +8,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
-- **A model server GAIA doesn't run is no longer called "not installed".** When
-  that server stopped answering, a run's `error` ended with this machine's
-  start instruction, which on a PC with no Lemonade of its own read "Lemonade
-  Server is not installed. Run `gaia init`". The `error` now says the model
-  server didn't answer: send the message again, and if it keeps failing the
-  server is its owner's to start, with no command.
+- **The Agent UI no longer calls a model server GAIA doesn't run "not
+  installed".** When that server stopped answering, a run's `error` ended with
+  this machine's start instruction, which on a PC with no Lemonade of its own
+  read "Lemonade Server is not installed. Run `gaia init`". The `error` now says
+  the model server didn't answer: send the message again, and if it keeps
+  failing the server is its owner's to start. For a `/query` with `surface:
+  "agent_ui"` it names no command; the TUI and other callers still get this
+  machine's start instruction.
 - **A model name the server doesn't list fails with a plain reason.** A
   `/query` for a model id outside the model server's catalog answered 500 with
   the raw preload error and a restart command. It now answers 503 saying there

@@ -1600,33 +1600,36 @@ def model_server_failure(exc: BaseException) -> Optional[Any]:
     return classify_lemonade_exception(exc)
 
 
-def model_server_message(typed: Any) -> str:
+def model_server_message(typed: Any, surface: str = "tui") -> str:
     """*typed*'s user message; a lost server GAIA doesn't run is its owner's to start.
 
-    The daemon restarts GAIA's own server. No start command for the other: an
-    app shows this text, and the host's install says nothing of a server
-    reached by address.
+    The daemon restarts GAIA's own server. For the other, a terminal gets this
+    machine's start instruction; the Agent UI never names a command.
     """
-    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+    from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
     from gaia.llm.providers.lemonade import (
         LemonadeNetworkError,
         LemonadeServerUnreachableError,
     )
     from gaia.llm.surface_hints import APP_OTHER_SERVER_START_HINT
 
-    if (
-        isinstance(typed, LemonadeNetworkError)
+    if not isinstance(typed, LemonadeNetworkError) or gaia_runs_lemonade():
+        return typed.user_message
+    app = surface == "agent_ui"
+    if isinstance(typed, LemonadeServerUnreachableError):
         # That one already says to start the server.
-        and not isinstance(typed, LemonadeServerUnreachableError)
-        and not gaia_runs_lemonade()
-    ):
-        # Also a running server whose request failed, so sending again comes first.
-        return (
-            "The model server didn't answer. It may be loading or briefly busy, "
-            "so send your message again. If it keeps failing, it may have "
-            f"stopped. {APP_OTHER_SERVER_START_HINT}."
-        )
-    return typed.user_message
+        if app:
+            return typed.user_message
+        return f"{typed.user_message} {describe_start_hint().instruction}"
+    hint = (
+        f"{APP_OTHER_SERVER_START_HINT}." if app else describe_start_hint().instruction
+    )
+    # Also a running server whose request failed, so sending again comes first.
+    return (
+        "The model server didn't answer. It may be loading or briefly busy, "
+        "so send your message again. If it keeps failing, it may have "
+        f"stopped. {hint}"
+    )
 
 
 def _terminal_error(exc: BaseException) -> Dict[str, Any]:

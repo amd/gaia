@@ -66,7 +66,7 @@ def test_the_sidecar_never_names_a_command_or_a_missing_install(
     stdio = pytest.importorskip("gaia_agent.stdio")
     monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
 
-    message = stdio.model_server_message(failure)
+    message = stdio.model_server_message(failure, "agent_ui")
 
     assert "not installed" not in message
     assert "`" not in message and "gaia init" not in message
@@ -78,7 +78,7 @@ def test_the_sidecar_says_a_server_that_refuses_is_not_answering(monkeypatch):
     stdio = pytest.importorskip("gaia_agent.stdio")
     monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
 
-    message = stdio.model_server_message(LemonadeServerUnreachableError())
+    message = stdio.model_server_message(LemonadeServerUnreachableError(), "agent_ui")
 
     assert "model server isn't answering" in message
 
@@ -89,13 +89,51 @@ def test_a_failed_request_to_a_running_server_says_to_send_again_first(monkeypat
     stdio = pytest.importorskip("gaia_agent.stdio")
     monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
 
-    message = stdio.model_server_message(LemonadeNetworkError())
+    message = stdio.model_server_message(LemonadeNetworkError(), "agent_ui")
 
     assert "isn't answering" not in message
     assert "send your message again" in message
     assert "If it keeps failing" in message
     assert message.index("send your message again") < message.index("Start it")
     assert message.endswith(f"{APP_OTHER_SERVER_START_HINT}.")
+
+
+@pytest.mark.parametrize("surface", ["tui", "cli", "service"])
+@pytest.mark.parametrize(
+    "failure", [LemonadeNetworkError(), LemonadeServerUnreachableError()]
+)
+def test_a_terminal_gets_the_hosts_start_instruction_for_a_server_gaia_cant_own(
+    monkeypatch, failure, surface
+):
+    stdio = pytest.importorskip("gaia_agent.stdio")
+    resolved = "Run: lemond ./ --port 13399"
+    monkeypatch.setattr(
+        lemonade_launcher,
+        "describe_start_hint",
+        lambda *a, **k: lemonade_launcher.StartHint(
+            instruction=resolved, command="lemond"
+        ),
+    )
+    monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
+
+    message = stdio.model_server_message(failure, surface)
+
+    assert message.endswith(resolved)
+    assert APP_OTHER_SERVER_START_HINT not in message
+
+
+def test_gaias_own_server_gets_no_start_instruction_on_a_terminal(monkeypatch):
+    stdio = pytest.importorskip("gaia_agent.stdio")
+    monkeypatch.setattr(
+        lemonade_launcher,
+        "describe_start_hint",
+        lambda *a, **k: lemonade_launcher.StartHint(instruction="Run: lemond"),
+    )
+    monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: True)
+
+    message = stdio.model_server_message(LemonadeNetworkError(), "tui")
+
+    assert message == LemonadeNetworkError.user_message
 
 
 class _RelayedFailure(_StreamAgent):
