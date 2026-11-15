@@ -495,6 +495,43 @@ def test_a_sidecar_flagship_is_loaded_but_never_built(monkeypatch, caplog):
     assert not any(r.exc_info for r in caplog.records)
 
 
+def test_a_sidecar_flagship_on_hybrid_loads_the_cheap_model(monkeypatch):
+    """Lemonade has no model called hybrid; loading it failed the pick."""
+    from gaia.agents.registry import AgentRegistry
+    from gaia.llm import hybrid, lemonade_client
+    from gaia.ui import _chat_helpers as chat
+
+    registry = AgentRegistry()
+    registry.register_sidecar("gaia", "GAIA", [])
+    monkeypatch.setattr(chat, "_agent_registry", registry)
+    monkeypatch.setattr(warmup, "preload_skip_reason", lambda: None)
+    monkeypatch.setattr(warmup, "new_chat_model", lambda db, registry: ("hybrid", None))
+    monkeypatch.setattr(
+        hybrid,
+        "start_model",
+        lambda m, *a, **k: "gemma4-it-e4b-FLM" if m == "hybrid" else m,
+    )
+    monkeypatch.setattr(
+        lemonade_client.LemonadeClient,
+        "get_model_info",
+        lambda self, name: {"id": name, "downloaded": True},
+    )
+    monkeypatch.setattr(
+        lemonade_client.LemonadeClient,
+        "get_status",
+        lambda self, **k: lemonade_client.LemonadeStatus(
+            running=True, loaded_models=[]
+        ),
+    )
+    monkeypatch.setattr(warmup, "_device_for", lambda client, model: "npu")
+    loaded = []
+    monkeypatch.setattr(
+        chat, "_maybe_load_expected_model", lambda model, **k: loaded.append(model)
+    )
+    warmup._warm_new_chat_prefix(_EmptyDb())
+    assert loaded == ["gemma4-it-e4b-FLM"]
+
+
 def test_a_sidecar_flagships_load_stops_for_a_turn_on_another_model(monkeypatch):
     from gaia.agents.registry import AgentRegistry
     from gaia.llm import lemonade_client

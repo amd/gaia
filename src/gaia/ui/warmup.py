@@ -376,7 +376,12 @@ def _warm_new_chat_prefix(
         logger.info("Warm-up skipped: %s %s", model_id, reason)
         return None
     if relayed:
-        return _load_for_relayed_chat(client, model_id, note_target, cancel)
+        from gaia.llm.hybrid import start_model
+
+        # Hybrid is routed per turn; a load outside one is its cheap model.
+        return _load_for_relayed_chat(
+            client, start_model(model_id), note_target, cancel
+        )
 
     _set_phase("building")
     with chat.writing_tool_registry():

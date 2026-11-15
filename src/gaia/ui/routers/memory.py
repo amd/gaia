@@ -1550,7 +1550,18 @@ def stream_inference(include_browser: bool = Query(False)):
             # default when that pick is a cloud one, since this data stays local.
             model = resolve_default_chat_model()
             try:
-                picked = resolve_chat_model()
+                from gaia.llm.hybrid import HybridConfigError, start_model
+
+                try:
+                    picked = start_model(resolve_chat_model())
+                except HybridConfigError as e:
+                    # The default stays local and on disk; say why the pick wasn't used.
+                    logger.warning(
+                        "Profile inference uses %s: the hybrid setting can't be read (%s)",
+                        model,
+                        e,
+                    )
+                    picked = model
                 if (
                     picked != model
                     and _runs_on_this_pc(picked)

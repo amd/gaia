@@ -2402,6 +2402,32 @@ class TestStreamInferenceModel:
         assert resp.status_code == 200
         create.assert_called_once_with(model="gemma4-it-e4b-FLM")
 
+    def test_a_hybrid_pick_runs_on_its_cheap_model(self, client, tmp_path):
+        with patch(
+            "gaia.llm.hybrid.start_model",
+            side_effect=lambda m, *a, **k: "gemma4-it-e4b-FLM" if m == "hybrid" else m,
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="Gemma-4-E4B-it-GGUF", picked="hybrid"
+            )
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="gemma4-it-e4b-FLM")
+
+    def test_a_broken_hybrid_setting_leaves_inference_on_the_default(
+        self, client, tmp_path
+    ):
+        from gaia.llm.hybrid import HybridConfigError
+
+        with patch(
+            "gaia.llm.hybrid.start_model",
+            side_effect=HybridConfigError("no cheap model"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="Gemma-4-E4B-it-GGUF", picked="hybrid"
+            )
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="Gemma-4-E4B-it-GGUF")
+
     def test_a_cloud_pick_leaves_inference_on_the_local_default(self, client, tmp_path):
         resp, create = self._stream(
             client,
