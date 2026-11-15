@@ -216,7 +216,9 @@ class _PersonMustApprove:
             UNATTENDED_REFUSAL: True,
         }
 
-    def prompt_args_of(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def prompt_args_of(
+        self, args: Dict[str, Any]  # pylint: disable=unused-argument
+    ) -> Dict[str, Any]:
         """Mark the prompt so pre-approval does not answer it."""
         return {NEEDS_PERSON_ARG: True} if self._preapproved() else {}
 
