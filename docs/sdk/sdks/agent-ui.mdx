@@ -2212,10 +2212,12 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   <Accordion title="GET /api/memory/stream-inference">
     SSE stream of LLM-assisted profile inference over the discovery findings
     — each `insight` event is a candidate fact awaiting approval. It runs on
-    the machine's default local chat model (`default_model` in
-    `~/.gaia/config.json`), never the chat's cloud model; a cloud
-    `default_model`, or a local one that isn't downloaded yet, ends the stream
-    with an `error` event rather than a download.
+    the local model chat runs now (the last pick, its cheap model for
+    `hybrid`), so no second chat model loads; when that pick is a cloud model
+    or isn't downloaded, it runs on the machine's default local chat model
+    (`default_model` in `~/.gaia/config.json`), never the chat's cloud model.
+    A cloud `default_model`, or a local one that isn't downloaded yet, ends
+    the stream with an `error` event rather than a download.
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-discovery">
@@ -3096,7 +3098,10 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   <Accordion title="DELETE /api/providers/local/custom/{model_id}">
     Remove a model the user added: delete it from Lemonade if it was
     downloaded, forget it, and clear `default_model` / `last_model` if either
-    named it. Returns `{"removed", "display_name", "cleared"}`. **404** for a
+    named it. When it was the custom model in use, chat goes back to the
+    model picked under Model (as clearing `custom_model` does), that model is
+    saved as `last_model`, and a local one starts loading at once. Returns
+    `{"removed", "display_name", "cleared"}`. **404** for a
     model the user didn't add; **502** when Lemonade refuses the delete, and
     the model stays in the list.
   </Accordion>
