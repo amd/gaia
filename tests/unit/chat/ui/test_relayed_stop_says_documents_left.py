@@ -91,7 +91,8 @@ def test_a_stopped_load_ends_its_step_with_the_count(left, said):
     assert results[0]["tool"] == "index_documents"
     assert results[0]["success"] is False
     assert said in results[0]["summary"]
-    assert "load with your next message" in results[0]["summary"]
+    # A full index loads the rest only on request, so no timing is promised.
+    assert "next message" not in results[0]["summary"]
     # The step is closed before the turn says it was cancelled.
     kinds = [e.get("type") for e in events]
     assert kinds.index("tool_result") < len(kinds) - 1

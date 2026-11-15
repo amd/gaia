@@ -643,9 +643,10 @@ def _emit_documents_left(handler: Any, left: int, profile: RelayProfile) -> None
     """Close the open document-loading step with how many Stop left unloaded.
 
     Stop closes the stream before the sidecar's own closing line can arrive.
+    When they load depends on whether the index filled, which a count can't say.
     """
     noun = "1 document was" if left == 1 else f"{left} documents were"
-    message = f"Stopped: {noun} not loaded. They load with your next message."
+    message = f"Stopped: {noun} not loaded."
     _dispatch_one(
         handler,
         {
