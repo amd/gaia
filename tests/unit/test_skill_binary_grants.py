@@ -494,7 +494,7 @@ def test_a_bare_binary_name_matches_the_grant(token):
         "~/bin/gh",
     ],
 )
-def test_a_path_spelled_binary_never_matches_the_grant(token):
+def test_a_path_spelled_binary_never_matches_the_grant(token, gh_on_path):
     """`./gh` is a file the caller chose, not the CLI the skill declared.
 
     Matching it would let a granted skill run any executable it can name `gh`.
@@ -573,15 +573,6 @@ def test_the_python_m_spelling_of_a_missing_binary_is_refused_the_same_way(
     assert error is not None
     assert "not installed here" in error["error"]
     assert BINARY_POLICIES["pytest"].substitute in error["error"]
-
-
-@pytest.fixture(name="gh_on_path")
-def _gh_on_path(monkeypatch):
-    """The missing-grant answer is what these tests check, so the binary must
-    look installed — otherwise the not-installed refusal answers first."""
-    monkeypatch.setattr(
-        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
-    )
 
 
 #: Grant syntax a user cannot act on. It belongs in the log, never in the text
