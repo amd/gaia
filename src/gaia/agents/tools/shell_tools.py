@@ -5293,17 +5293,49 @@ def _path_has_relative_entry() -> bool:
 def _program_on_path(name: str, cwd: str) -> Optional[str]:
     """Where PATH alone finds program *name*: never *cwd*, never a relative entry."""
     here = os.path.normcase(os.path.realpath(cwd))
+    # cmd.exe never runs a PATH file that has no extension.
+    suffixes = _program_suffixes()[1:]
+    if os.path.splitext(name)[1].lower() in suffixes:
+        suffixes = ["", *suffixes]
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry or not os.path.isabs(entry):
             continue
         if os.path.normcase(os.path.realpath(entry)) == here:
             continue
-        # cmd.exe never runs a PATH file that has no extension.
-        for suffix in _program_suffixes()[1:]:
+        for suffix in suffixes:
             candidate = os.path.join(entry, name + suffix)
             if os.path.isfile(candidate):
                 return candidate
     return None
+
+
+#: What Windows starts without a shell; a ``.bat`` or ``.cmd`` needs cmd.exe.
+_DIRECT_PROGRAM_SUFFIXES = (".exe", ".com")
+
+
+def _pin_argv_program(argv: list, cwd: str) -> list:
+    """*argv* with its bare program replaced by the file PATH alone finds.
+
+    For a Windows run with no shell, which would otherwise look in GAIA's own
+    program folder and current folder before PATH. A granted command runs the
+    program PATH finds, never one in the working folder.
+    """
+    name = argv[0]
+    if re.search(r"[\\/]", name):
+        return argv
+    program = _program_on_path(name, cwd)
+    if program is None:
+        raise FileNotFoundError(
+            f"'{name}' was not found on PATH. Install it, or add the folder "
+            "that holds it to PATH."
+        )
+    if not program.lower().endswith(_DIRECT_PROGRAM_SUFFIXES):
+        raise FileNotFoundError(
+            f"'{name}' on PATH is {program}, which Windows starts only through "
+            "cmd.exe, and this command runs without a shell. Run it from a "
+            "terminal instead."
+        )
+    return [program, *argv[1:]]
 
 
 #: The leading program word of one cmd.exe pipe piece.
@@ -5645,6 +5677,10 @@ def _run_step(
                 "with findstr on named files."
             )
         exec_cmd = [program, *exec_cmd[1:]]
+    elif not use_shell and os.name == "nt":
+        # Every segment, so a pipeline's later programs are pinned as well.
+        segments = [_pin_argv_program(segment, cwd) for segment in segments]
+        exec_cmd = [part for segment in segments for part in segment]
     listed_only = False
     if use_shell:
         # The step's own text, to preserve quoting (critical for PowerShell).
