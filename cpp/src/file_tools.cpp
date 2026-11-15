@@ -12,6 +12,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -675,6 +676,60 @@ json FileIOTools::doFileRead(const json& args) {
         if ((ext == ".csv" || ext == ".tsv") && totalLines > 20) {
             out["note"] = "To total, count or compare this data, read the file by its path in a script "
                           "(pandas.read_csv or the csv module). Don't paste its rows into a command.";
+        }
+        // policy_v1.md beside policy_v2.md, or terms_2024.md beside terms_2026.txt: a small
+        // model answers from whichever it opened first.
+        static const std::set<std::string> kDocuments = {".md", ".txt", ".pdf", ".docx", ".html", ".htm", ".rst"};
+        auto series = [](const fs::path& file, long& number) -> std::string {
+            std::string ext = file.extension().u8string();
+            for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (!kDocuments.count(ext)) return "";
+            std::string stem = file.stem().u8string();
+            for (auto& c : stem) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            size_t digits = stem.size();
+            while (digits && std::isdigit(static_cast<unsigned char>(stem[digits - 1]))) --digits;
+            const std::string num = stem.substr(digits);
+            if (num.empty() || num.size() > 6) return "";
+            const bool versioned = digits && stem[digits - 1] == 'v';
+            const bool year = num.size() == 4 && (num.compare(0, 2, "19") == 0 || num.compare(0, 2, "20") == 0);
+            if (!versioned && !year) return "";
+            const std::string key = stem.substr(0, versioned ? digits - 1 : digits);
+            if (key.empty() || std::isalnum(static_cast<unsigned char>(key.back()))) return "";
+            number = std::stol(num);
+            return key;
+        };
+        long mine = 0;
+        const fs::path self = fs::u8path(path);
+        const std::string key = series(self, mine);
+        if (!key.empty()) {
+            std::error_code ec;
+            long latest = mine, previous = -1;
+            std::string later, earlier;
+            int budget = 500;
+            for (fs::directory_iterator it(self.parent_path(), ec), end; it != end && !ec && budget-- > 0;
+                 it.increment(ec)) {
+                long theirs = 0;
+                if (!it->is_regular_file(ec) || series(it->path(), theirs) != key) continue;
+                if (theirs > latest) {
+                    latest = theirs;
+                    later = it->path().filename().u8string();
+                } else if (theirs < mine && theirs > previous) {
+                    previous = theirs;
+                    earlier = it->path().filename().u8string();
+                }
+            }
+            if (later.empty() && !earlier.empty()) {
+                const std::string note = earlier + " in the same folder looks like an earlier version of this "
+                                         "document. Read it too: if the two give different figures, tell the user "
+                                         "which one this version replaces, since they may be relying on the old one.";
+                out["note"] = out.contains("note") ? out["note"].get<std::string>() + " " + note : note;
+            }
+            if (!later.empty()) {
+                const std::string note = later + " in the same folder looks like a later version of this document. "
+                                         "Read it too: where the two disagree, the later one applies unless the "
+                                         "user asked about this one, and say that this one is superseded.";
+                out["note"] = out.contains("note") ? out["note"].get<std::string>() + " " + note : note;
+            }
         }
         return out;
     } catch (const std::exception& e) {

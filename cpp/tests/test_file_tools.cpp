@@ -96,6 +96,30 @@ TEST_F(FileToolsTest, FileRead_OneRepeatedCharacterIsDescribedNotReturned) {
     EXPECT_EQ(ranged.value("note", "").find("no real content"), std::string::npos);
 }
 
+TEST_F(FileToolsTest, FileRead_ALaterVersionBesideTheFileIsPointedOut) {
+    ToolInfo tool = FileIOTools::fileRead();
+    const std::string v1 = writeFile("pricing_policy_v1.md", "Discount limit: 15%\n");
+    writeFile("pricing_policy_v2.md", "Discount limit: 12%\n");
+    const std::string old = writeFile("terms_2024.md", "Net 30\n");
+    const std::string current = writeFile("terms_2026.txt", "Net 45\n");
+    EXPECT_NE(tool.callback({{"path", v1}}).value("note", "").find("pricing_policy_v2.md"), std::string::npos);
+    EXPECT_NE(tool.callback({{"path", old}}).value("note", "").find("terms_2026.txt"), std::string::npos);
+    const std::string newest = tool.callback({{"path", current}}).value("note", "");
+    EXPECT_NE(newest.find("terms_2024.md"), std::string::npos) << newest;
+    EXPECT_NE(newest.find("earlier version"), std::string::npos) << newest;
+
+    // Dated notes, data files and unrelated names are not versions of one document.
+    const std::string roundup = writeFile("news_2026-09.md", "a\n");
+    writeFile("news_2026-10.md", "b\n");
+    const std::string data = writeFile("sales_2024.csv", "a,b\n1,2\n");
+    writeFile("sales_2025.csv", "a,b\n3,4\n");
+    const std::string lone = writeFile("v1.md", "x\n");
+    writeFile("v2.md", "y\n");
+    for (const std::string& p : {roundup, data, lone}) {
+        EXPECT_FALSE(tool.callback({{"path", p}}).contains("note")) << p;
+    }
+}
+
 TEST_F(FileToolsTest, FileRead_WithLineRange) {
     std::string path = writeFile("lines.txt", "AAA\nBBB\nCCC\nDDD\nEEE\n");
 
