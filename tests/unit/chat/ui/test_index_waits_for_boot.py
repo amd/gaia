@@ -68,10 +68,12 @@ async def test_indexing_starts_only_after_the_server_check(monkeypatch, tmp_path
     doc = Path(tmp_path / "notes.txt")
     doc.write_text("hello", encoding="utf-8")
 
-    task = asyncio.create_task(helpers._index_document(doc))
+    task = asyncio.create_task(helpers._index_document(doc, progress_key="doc-1"))
     try:
         await asyncio.sleep(0.6)
         assert started == []
+        # The library row says why it hasn't started, instead of looking stalled.
+        assert helpers.INDEX_PROGRESS.get("doc-1", {}).get("phase") == "starting"
         release.set()
         with pytest.raises(Exception):
             await asyncio.wait_for(task, 30)

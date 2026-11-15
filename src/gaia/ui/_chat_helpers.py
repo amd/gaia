@@ -6386,8 +6386,19 @@ async def _index_document(
 
     # At launch GAIA's own model server is still starting; embedding now fails.
     boot = dispatch.BOOT_QUEUE
-    if boot is not None:
-        await boot.wait_for_step("check_server", _BOOT_SERVER_WAIT_S)
+    if boot is not None and boot.step_pending("check_server"):
+        if progress_key is not None:
+            INDEX_PROGRESS[progress_key] = {
+                "phase": "starting",
+                "done": 0,
+                "total": None,
+            }
+        try:
+            await boot.wait_for_step("check_server", _BOOT_SERVER_WAIT_S)
+        except asyncio.CancelledError:
+            if progress_key is not None:
+                INDEX_PROGRESS.pop(progress_key, None)
+            raise
 
     name = display_name or filepath.name
     stop = threading.Event()

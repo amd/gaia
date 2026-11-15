@@ -95,6 +95,13 @@ class DispatchQueue:
     def get_job(self, job_id: str) -> Optional[Job]:
         return self._jobs.get(job_id)
 
+    def step_pending(self, step: str) -> bool:
+        """Whether the job for *step* is still pending or running."""
+        return any(
+            j.step == step and j.status in (JobStatus.PENDING, JobStatus.RUNNING)
+            for j in self._jobs.values()
+        )
+
     async def wait_for_step(self, step: str, timeout: float) -> Optional[JobStatus]:
         """Wait while the job for *step* is pending or running; its status, or None.
 
