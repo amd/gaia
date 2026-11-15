@@ -2594,6 +2594,27 @@ def test_a_granted_command_runs_the_program_on_path(
 
 
 @_windows_only
+def test_a_switch_style_sort_in_a_no_shell_pipe_is_windows_own(
+    tmp_path, monkeypatch, planted_gh
+):
+    """GNU sort earlier on PATH would read /r as a path."""
+    _printing_exe(tmp_path / "bin" / "gh.exe", "gh from PATH")
+    _printing_exe(tmp_path / "bin" / "sort.exe", "sort from PATH")
+    monkeypatch.setenv(
+        "PATH", str(tmp_path / "bin") + os.pathsep + os.environ.get("PATH", "")
+    )
+
+    result = _captured_shell_tool(_Gated("gh"))(
+        command="NO_COLOR=1 gh issue list --repo amd/gaia | sort /r",
+        working_directory=str(planted_gh),
+    )
+
+    assert result.get("return_code") == 0, result
+    assert "gh from PATH" in result["stdout"]
+    assert "sort from PATH" not in result["stdout"]
+
+
+@_windows_only
 def test_a_granted_command_missing_from_path_is_not_run_from_the_working_folder(
     tmp_path, monkeypatch, planted_gh
 ):

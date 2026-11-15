@@ -5678,8 +5678,16 @@ def _run_step(
             )
         exec_cmd = [program, *exec_cmd[1:]]
     elif not use_shell and os.name == "nt":
-        # Every segment, so a pipeline's later programs are pinned as well.
-        segments = [_pin_argv_program(segment, cwd) for segment in segments]
+        # Every segment, so a pipeline's later programs are pinned as well. A
+        # /x-switch find or sort is Windows' own, never a GNU one earlier on PATH.
+        segments = [
+            (
+                [_system32_tool(segment[0].lower().removesuffix(".exe")), *segment[1:]]
+                if _wants_windows_tool(segment)
+                else _pin_argv_program(segment, cwd)
+            )
+            for segment in segments
+        ]
         exec_cmd = [part for segment in segments for part in segment]
     listed_only = False
     if use_shell:
