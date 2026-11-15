@@ -2831,7 +2831,7 @@ def _credential_globs() -> List[str]:
 
 
 def _grep_exclusion_patterns() -> List[str]:
-    """grep's exclude patterns for every credential file, one per line of its file."""
+    """grep's exclude patterns for every credential file, one ``--exclude`` each."""
     return [_case_folded_glob(glob) for glob in _credential_globs()]
 
 
@@ -2944,14 +2944,21 @@ def _search_plan(command: str, steps: list) -> Optional[Tuple[list, str]]:
 def _searched_as_argv(step: "_Step", plan: Optional[Tuple[list, str]], cwd: str):
     """*step* to run: as argv with the credential exclusions when *plan* says so.
 
-    A grep whose tree, from *cwd*, holds no credential file gets none.
+    A grep that follows no links, over a tree in *cwd* with no credential
+    file, gets none: the tree check does not descend linked folders.
     """
     if plan is None:
         yield step
         return
     argv, flavor = plan
     words = _credential_exclusions(flavor)
-    if flavor == "grep" and _bulk_read_credential(argv, cwd) is None:
+    parsed = _search_roots(argv)[2]
+    if (
+        flavor == "grep"
+        and parsed is not None
+        and not parsed["follows"]
+        and _bulk_read_credential(argv, cwd) is None
+    ):
         words = []
     yield dataclasses.replace(step, segments=[[*argv, *words]], argv_only=True)
 

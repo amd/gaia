@@ -715,7 +715,7 @@ def test_planted_names_never_turn_into_arguments(home, popen_calls):
         "grep -rn TODO src",
         "grep -rl --include=a.py TODO src",
         "egrep -rn TODO src",
-        "grep -Rn TODO src",
+        "grep -rn TODO src/a.py src",
     ],
 )
 def test_a_clean_tree_grep_gets_no_extra_arguments(home, popen_calls, command):
@@ -726,6 +726,40 @@ def test_a_clean_tree_grep_gets_no_extra_arguments(home, popen_calls, command):
     args, kwargs = popen_calls[0]
     assert not kwargs.get("shell")
     assert _added_words(args, command) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -Rn TODO src",
+        "grep -rn --dereference-recursive TODO src",
+        "grep -rRn TODO src",
+    ],
+)
+def test_a_grep_that_follows_links_keeps_the_exclusions_in_a_clean_tree(
+    home, popen_calls, command
+):
+    """The tree check does not descend linked folders; grep -R does."""
+    _run(home, command)
+
+    args, kwargs = popen_calls[0]
+    assert not kwargs.get("shell")
+    assert _added_words(args, command) == GREP_EXCLUSIONS
+
+
+def test_a_credential_file_behind_a_followed_folder_link_stays_out(home, popen_calls):
+    other = home / "proj" / "other"
+    other.mkdir()
+    (other / ".env").write_text("TOKEN=guess-me\n")
+    try:
+        os.symlink(other, home / "proj" / "src" / "link", target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a symlink here: {exc}")
+
+    _run(home, "grep -Rn guess src")
+
+    args, _ = popen_calls[0]
+    assert _added_words(args, "grep -Rn guess src") == GREP_EXCLUSIONS
 
 
 @pytest.mark.parametrize("command", ["rg -n TODO src", "git grep -n TODO -- src"])
