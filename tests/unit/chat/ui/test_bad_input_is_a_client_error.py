@@ -10,6 +10,7 @@ SQLite's integer range raised OverflowError; an unknown provider name on
 """
 
 import errno
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -81,9 +82,9 @@ def _posix_too_long(*_args, **_kwargs):
 @pytest.mark.parametrize(
     "method, url, body",
     [
-        ("post", "/api/environment/folders/check", {"path": "C:\gaia-test\long"}),
-        ("post", "/api/files/open", {"path": "C:\gaia-test\long"}),
-        ("post", "/api/documents/upload-path", {"filepath": "C:\gaia-test\long.txt"}),
+        ("post", "/api/environment/folders/check", {"path": r"C:\gaia-test\long"}),
+        ("post", "/api/files/open", {"path": r"C:\gaia-test\long"}),
+        ("post", "/api/documents/upload-path", {"filepath": r"C:\gaia-test\long.txt"}),
     ],
     ids=["folder-check", "open-file", "document-by-path"],
 )
@@ -95,6 +96,16 @@ def test_a_path_too_long_for_posix_is_refused_too(
     assert r.status_code in (200, 400)
     if r.status_code == 200:
         assert "is not a path this PC can open" in r.json()["refusal"]
+
+
+def test_a_too_long_path_that_resolves_is_refused_at_the_symlink_check(
+    client, monkeypatch
+):
+    # Python 3.12 on POSIX: resolve() swallows ENAMETOOLONG, is_symlink() raises it.
+    monkeypatch.setattr("pathlib.Path.is_symlink", _posix_too_long)
+    r = client.post("/api/files/open", json={"path": str(Path.home() / "long.txt")})
+    assert r.status_code == 400
+    assert "Invalid path" in r.json()["detail"]
 
 
 @pytest.mark.parametrize(

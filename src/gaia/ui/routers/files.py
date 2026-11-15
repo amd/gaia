@@ -490,10 +490,13 @@ async def open_file_or_folder(request: OpenFileRequest):
             raise HTTPException(
                 status_code=400, detail="Symbolic links are not supported"
             )
+        exists = resolved.exists()
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied")
+    except OSError as e:  # POSIX resolve() lets a too-long path through
+        raise HTTPException(status_code=400, detail=f"Invalid path: {e}") from e
 
-    if not resolved.exists():
+    if not exists:
         raise HTTPException(status_code=404, detail="Path not found")
 
     if request.launch:
