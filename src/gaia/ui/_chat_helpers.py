@@ -5708,7 +5708,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 turn_summary = _turn_summary(
                     sse_handler, result_holder.get("agent"), request.message, None
                 )
-                # No reply text: spending leaves this turn out, so its cost is none.
+                # No reply text: spending leaves this turn out.
                 spending.mark_no_reply(turn_summary)
                 msg_id = db.add_message(
                     request.session_id,
