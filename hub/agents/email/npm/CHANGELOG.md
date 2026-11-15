@@ -6,6 +6,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **With two mailboxes connected, `prescan()` now orders by sender preference
+  across both (#3623).** Each mailbox used to be sorted on its own and the
+  results joined, so the archive list could keep one mailbox's priority
+  senders and drop the other's low-priority ones.
 - **Warnings are marked as warnings.** A `status` event that warns the user now
   carries `level: "warning"`, so a client can show it rather than treat it as
   progress.

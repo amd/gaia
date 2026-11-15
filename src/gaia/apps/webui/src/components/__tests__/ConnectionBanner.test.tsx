@@ -137,7 +137,7 @@ describe('the model server is down', () => {
     it('never invents a start command the backend did not give', () => {
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(screen.getByText(/The model server isn't running/)).toBeInTheDocument();
+        expect(screen.getByText(/The model server isn't answering/)).toBeInTheDocument();
         expect(container.querySelector('code')).toBeNull();
         expect(container).not.toHaveTextContent('lemonade-server serve');
     });
@@ -146,7 +146,7 @@ describe('the model server is down', () => {
         const install = 'Lemonade Server is not installed. Run `gaia init` to install it, or set LEMONADE_SERVER_PATH to an existing install.';
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null, start_instruction: install } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(container).toHaveTextContent("The model server isn't running. Set up models on this PC");
+        expect(container).toHaveTextContent("The model server isn't answering. Set up models on this PC");
         expect(container).not.toHaveTextContent('gaia init');
         expect(container).not.toHaveTextContent('stopped');
     });
@@ -174,14 +174,13 @@ describe('the model server is down', () => {
         expect(container).toHaveTextContent("The model server isn't answering.");
         expect(container).not.toHaveTextContent('Lemonade');
         expect(container).toHaveTextContent('may be busy');
-        expect(container).not.toHaveTextContent("isn't running");
         expect(container).toHaveTextContent('If it stays this way, restart it:');
         expect(container.querySelector('code')?.textContent).toBe('/usr/bin/lemond');
     });
 
     it.each([
         ['hung', { lemonade_error: 'Lemonade health query failed' }, 'خادم النماذج لا يستجيب', 'فأعد تشغيله'],
-        ['stopped', {}, 'خادم النماذج لا يعمل', 'لتشغيله يدويًا'],
+        ['stopped', {}, 'خادم النماذج لا يستجيب', 'لتشغيله يدويًا'],
     ])('reads in Arabic when the model server is %s, the command kept left to right', (_, extra, message, hint) => {
         useChatStore.setState({ locale: 'ar', systemStatus: {
             lemonade_running: false, start_command: '/usr/bin/lemond', ...extra,
@@ -223,6 +222,31 @@ describe('context window too small', () => {
         expect(screen.getByText(/LLM context window is too small/)).toBeInTheDocument();
         expect(screen.getByText(/Settings → Advanced/)).toBeInTheDocument();
         expect(container.querySelector('code')).toBeNull();
+    });
+});
+
+describe('a failed model download', () => {
+    const healthy = {
+        lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF', model_downloaded: true, expected_model_loaded: true,
+        context_size_sufficient: true,
+    };
+    const progress = (state: 'downloading' | 'error') => ({
+        state, model_name: 'Gemma-4-E4B-it-GGUF', percent: 40, file: null, file_index: 1, total_files: 1,
+        downloaded_bytes: 0, total_bytes: 0, message: state === 'error' ? 'disk full' : undefined,
+    });
+
+    it('goes away when dismissed, and a later failure shows again', () => {
+        useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus });
+        const { rerender } = render(<ConnectionBanner />);
+        expect(screen.getByRole('alert')).toHaveTextContent('failed');
+        fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+        expect(screen.queryByRole('alert')).toBeNull();
+
+        act(() => { useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('downloading') } as SystemStatus }); });
+        rerender(<ConnectionBanner />);
+        act(() => { useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus }); });
+        rerender(<ConnectionBanner />);
+        expect(screen.getByRole('alert')).toHaveTextContent('failed');
     });
 });
 

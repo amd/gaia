@@ -859,6 +859,40 @@ class TestPlainUserCopy:
             f"The details are in this log folder: {log_dir}"
         ]
 
+    def test_a_server_that_could_not_start_reads_like_the_outage_bar(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """No raw server log lines and no "won't help": the daemon starts it again."""
+        from gaia.llm.providers.lemonade import LemonadeEngineStartError
+
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path))
+        raw = (
+            "Embedded Lemonade exited immediately (exit code 4294967295) on port "
+            "51539. Lemonade said: [error] architecture_defaults.json missing"
+        )
+        detail = LemonadeEngineStartError(
+            reason=raw, log_file=tmp_path / "daemon.log"
+        ).user_message
+
+        class _P:
+            agent_id = "gaia"
+
+            def query_stream(self, body, **kw):
+                return iter([{"type": "error", "detail": detail}])
+
+        handler = _FakeSSEHandler()
+        with caplog.at_level("WARNING"):
+            relay_module.relay_query(
+                handler, _P(), query="q", context=[], profile=GAIA_PROFILE
+            )
+
+        errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert [e["content"] for e in errors] == [
+            relay_module.ENGINE_START_FAILED_MESSAGE
+        ]
+        assert errors[0]["content"].startswith("The model server isn't answering")
+        assert "architecture_defaults.json" in caplog.text
+
     def test_relay_replaces_the_daemons_api_wording(self, tmp_path, monkeypatch):
         """The daemon's synthetic crash frame names an HTTP endpoint for API
         callers; a chat user gets the profile's plain copy instead."""

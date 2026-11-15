@@ -43,7 +43,7 @@ def test_documents_every_populated_top_level_directory():
         for d in INSTALLER_DIR.iterdir()
         if d.is_dir() and any(p for p in d.iterdir() if not p.name.startswith("."))
     )
-    # Trailing slash: a bare substring match would let "gaia-tui" (the binary
+    # Trailing slash: a bare substring match would let "gaia-cli" (the binary
     # name) count as documenting the "tui" directory without ever naming it.
     undocumented = [d for d in subdirs if f"{d}/" not in text]
     assert not undocumented, (
