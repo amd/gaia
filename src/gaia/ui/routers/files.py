@@ -137,10 +137,10 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
         )
 
     stem = upload_copy_stem(name)[:_MEDIA_NAME_CHARS].rstrip("._-")
-    dest_path = reserve_copy_path(upload_root, stem, ext)
-    unique_name = dest_path.name
+    dest_path: Optional[Path] = None
     file_size = 0
     try:
+        dest_path = reserve_copy_path(upload_root, stem, ext)
         with dest_path.open("wb") as out:
             async for chunk in request.stream():
                 file_size += len(chunk)
@@ -157,13 +157,15 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
         dest_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="The upload was cancelled.") from e
     except OSError as e:
-        dest_path.unlink(missing_ok=True)
-        logger.error("Could not save recording %s: %s", unique_name, e)
+        if dest_path is not None:
+            dest_path.unlink(missing_ok=True)
+        logger.error("Could not save recording %s: %s", name, e)
         raise HTTPException(
             status_code=507,
             detail=f"Could not save this recording: {e}. Check that the drive "
             f"holding {upload_root} has room for it.",
         ) from e
+    unique_name = dest_path.name
 
     if file_size == 0:
         dest_path.unlink(missing_ok=True)
