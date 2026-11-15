@@ -66,6 +66,7 @@ from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.text_decoding import TRIED_ENCODINGS, decode_text
 from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
@@ -1904,17 +1905,15 @@ class FileSearchToolsMixin:
             else:
                 # CSV or TSV
                 delimiter = "\t" if ext == ".tsv" else ","
-                # Try multiple encodings
-                content = None
-                for encoding in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
-                    try:
-                        with open(file_path, "r", encoding=encoding, newline="") as f:
-                            content = f.read()
-                        break
-                    except (UnicodeDecodeError, UnicodeError):
-                        continue
-                if content is None:
-                    error = "Could not decode file with any supported encoding (utf-8, latin-1, cp1252)"
+                try:
+                    with open(file_path, "rb") as f:
+                        content = decode_text(f.read())[0]
+                except UnicodeDecodeError as exc:
+                    error = (
+                        f"Could not decode {file_path} as text "
+                        f"(tried {TRIED_ENCODINGS}): {exc.reason}. "
+                        "Re-save it as UTF-8 CSV and try again."
+                    )
                     return [], [], error, None
 
                 try:
@@ -2477,23 +2476,12 @@ class FileSearchToolsMixin:
                 result["is_text"] = is_text
 
                 if is_text:
-                    # Read content for preview
-                    file_content = None
-                    used_encoding = None
-                    bom_codec = text_encoding(fp)
-                    # latin-1 accepts any bytes, so a BOM-marked or CP1252 file decodes by its codec.
-                    for encoding in (
-                        (bom_codec,)
-                        if bom_codec != "utf-8"
-                        else ("utf-8", "utf-8-sig", "latin-1", "cp1252")
-                    ):
-                        try:
-                            with open(fp, "r", encoding=encoding) as f:
-                                file_content = f.read()
-                            used_encoding = encoding
-                            break
-                        except (UnicodeDecodeError, UnicodeError):
-                            continue
+                    try:
+                        file_content, used_encoding = read_text(fp)
+                    except UnicodeDecodeError as exc:
+                        file_content = None
+                        result["encoding"] = "unknown"
+                        result["preview"] = f"[Could not decode: {exc.reason}]"
 
                     if file_content is not None:
                         lines = file_content.splitlines()
@@ -2524,9 +2512,6 @@ class FileSearchToolsMixin:
                                 result["csv_row_count"] = max(0, len(lines) - 1)
                             except Exception as e:
                                 logger.debug(f"Could not parse CSV structure: {e}")
-                    else:
-                        result["encoding"] = "unknown"
-                        result["preview"] = "[Could not decode file content]"
                 else:
                     result["encoding"] = "binary"
                     result["preview"] = (
