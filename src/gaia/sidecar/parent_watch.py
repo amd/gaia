@@ -16,6 +16,7 @@ import logging
 import os
 import signal
 import threading
+import time
 from typing import Callable, Mapping, Optional
 
 import psutil
@@ -29,12 +30,19 @@ POLL_S = 5.0
 #: Seconds the graceful shutdown gets before the process exits outright.
 GRACE_S = 30.0
 
+_lock = threading.Lock()
+_watcher: Optional[threading.Thread] = None
+
 
 def _identity(pid: int) -> Optional[float]:
-    """The process's start time, so a reused pid isn't taken for the daemon."""
+    """The process's start time, so a reused pid isn't taken for the daemon.
+
+    None when no such process exists. ``psutil.AccessDenied`` propagates: a
+    process we may not inspect is not a process that is gone.
+    """
     try:
         return psutil.Process(pid).create_time()
-    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return None
 
 
@@ -53,9 +61,13 @@ def start(
 ) -> Optional[threading.Thread]:
     """Watch the daemon named in *env*; the thread, or None when there is none.
 
+    Starts one watcher per process: a later call returns the running one.
+
     Raises:
         ValueError: ``GAIA_DAEMON_PID`` is set but is not a pid.
+        psutil.AccessDenied: the daemon's process can't be inspected.
     """
+    global _watcher
     raw = (env if env is not None else os.environ).get(DAEMON_PID_ENV_VAR)
     if not raw:
         return None
@@ -66,24 +78,29 @@ def start(
             f"{DAEMON_PID_ENV_VAR}={raw!r} is not a process id; the GAIA daemon "
             "sets it when it starts this agent, so unset it to run standalone."
         ) from e
-    born = _identity(pid)
+    with _lock:
+        if _watcher is not None and _watcher.is_alive():
+            return _watcher
+        born = _identity(pid)
 
-    def _watch() -> None:
-        while True:
-            if born is None or _identity(pid) != born:
-                logger.warning(
-                    "The GAIA daemon (pid %s) that started this agent is gone; "
-                    "shutting down so nothing is left running without it.",
-                    pid,
-                )
-                on_gone()
-                return
-            stop.wait(poll_s)
-            if stop.is_set():
-                return
+        def _watch() -> None:
+            while True:
+                try:
+                    gone = born is None or _identity(pid) != born
+                except psutil.AccessDenied:
+                    gone = False  # it exists; we just may not inspect it now
+                if gone:
+                    logger.warning(
+                        "The GAIA daemon (pid %s) that started this agent is gone; "
+                        "shutting down so nothing is left running without it.",
+                        pid,
+                    )
+                    on_gone()
+                    return
+                time.sleep(poll_s)
 
-    stop = threading.Event()
-    thread = threading.Thread(target=_watch, name="gaia-daemon-watch", daemon=True)
-    thread.stop = stop  # type: ignore[attr-defined]
-    thread.start()
-    return thread
+        _watcher = threading.Thread(
+            target=_watch, name="gaia-daemon-watch", daemon=True
+        )
+        _watcher.start()
+        return _watcher

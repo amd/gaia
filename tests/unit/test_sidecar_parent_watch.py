@@ -17,6 +17,12 @@ from gaia.daemon.constants import DAEMON_PID_ENV_VAR
 from gaia.sidecar import parent_watch
 
 
+@pytest.fixture(autouse=True)
+def _fresh_watcher(monkeypatch):
+    # One watcher per process: each test starts from none.
+    monkeypatch.setattr(parent_watch, "_watcher", None)
+
+
 def _sleeper():
     return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
 
@@ -78,3 +84,27 @@ def test_the_daemon_hands_its_pid_to_the_sidecars_it_spawns(tmp_path, monkeypatc
     with pytest.raises(SidecarSpawnError):
         m._spawn_process(["sidecar"], {}, 9127)
     assert calls[0]["env"][DAEMON_PID_ENV_VAR] == str(os.getpid())
+
+
+def test_a_second_start_returns_the_running_watcher():
+    daemon = _sleeper()
+    try:
+        env = {DAEMON_PID_ENV_VAR: str(daemon.pid)}
+        first = parent_watch.start(env=env, poll_s=0.1, on_gone=lambda: None)
+        assert parent_watch.start(env=env, poll_s=0.1, on_gone=lambda: None) is first
+    finally:
+        daemon.kill()
+        daemon.wait()
+
+
+def test_a_daemon_it_may_not_inspect_is_an_error_not_gone(monkeypatch):
+    import psutil
+
+    def denied(_pid):
+        raise psutil.AccessDenied(4242)
+
+    monkeypatch.setattr(parent_watch.psutil, "Process", denied)
+    gone = threading.Event()
+    with pytest.raises(psutil.AccessDenied):
+        parent_watch.start(env={DAEMON_PID_ENV_VAR: "4242"}, on_gone=gone.set)
+    assert not gone.is_set()
