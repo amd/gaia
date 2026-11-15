@@ -334,6 +334,21 @@ class TestWindowsAnsiTextReadsAsText:
         )
         assert file_encoding(path) == "cp1252"
 
+    @pytest.mark.parametrize("utf8_early", [True, False], ids=["in-head", "past-head"])
+    def test_utf8_file_with_one_late_bad_byte_is_refused_not_garbled(
+        self, tmp_path, utf8_early
+    ):
+        from gaia.utils.text_decoding import file_encoding
+
+        # cp1252 would decode it, turning every "café" into "cafÃ©".
+        accent = "café\n".encode("utf-8")
+        plain = b"plain line\n" * (SNIFF_BYTES // 8)
+        body = accent + plain if utf8_early else plain + accent + plain
+        path = tmp_path / "notes.txt"
+        path.write_bytes(body + b"broken \xe9 byte\n")
+        with pytest.raises(UnicodeDecodeError, match="re-save the file as UTF-8"):
+            file_encoding(path)
+
 
 def _legacy_file(tmp_path, text, encoding, name="notes.csv"):
     path = tmp_path / name

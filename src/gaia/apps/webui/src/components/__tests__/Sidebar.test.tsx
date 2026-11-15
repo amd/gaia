@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
 import { useChatStore } from '../../stores/chatStore';
@@ -139,6 +139,21 @@ describe('Sidebar', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Confirm delete Tax questions' }));
         await waitFor(() => expect(mockedApi.deleteSession).toHaveBeenCalledExactlyOnceWith('c'));
         await waitFor(() => expect(screen.queryByText('Tax questions')).not.toBeInTheDocument());
+    });
+
+    it('keeps the delete confirmation while the pointer rests on it', () => {
+        // Reverting under the pointer swaps the wide label for Pin, so the confirming click pins.
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const button = screen.getByRole('button', { name: 'Delete Tax questions' });
+        fireEvent.pointerEnter(button);
+        fireEvent.click(button);
+        act(() => { vi.advanceTimersByTime(10_000); });
+        expect(screen.getByRole('button', { name: 'Confirm delete Tax questions' })).toBeInTheDocument();
+
+        fireEvent.pointerLeave(button);
+        act(() => { vi.advanceTimersByTime(3_000); });
+        expect(screen.getByRole('button', { name: 'Delete Tax questions' })).toBeInTheDocument();
     });
 
     it('shows a chat still holding messages to send, and flags one that failed', () => {

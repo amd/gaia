@@ -947,6 +947,9 @@ class SSEOutputHandler(OutputHandler):
         # A "denied" call nobody answered is not one the user declined.
         if isinstance(data, dict) and data.get("timed_out") is True:
             event["timed_out"] = True
+        # Nor is one GAIA turned down itself without showing a prompt.
+        if isinstance(data, dict) and data.get("declined_by") == "agent":
+            event["declined_by"] = "agent"
         # A refusal must not read as a site contacted, relayed or not.
         if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
             event[EXECUTED_KEY] = False

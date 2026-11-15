@@ -139,7 +139,11 @@ from gaia.agents.base.python_scope import python_scope_refusal
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
 from gaia.agents.base.task_lessons import attach as attach_task_lessons
-from gaia.agents.base.text_task import instruction_part
+from gaia.agents.base.text_task import (
+    TEXT_ONLY_DECLINE,
+    hands_over_text_only,
+    instruction_part,
+)
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
@@ -8841,6 +8845,25 @@ Do NOT wrap conversational replies in JSON.
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # Handed-over text asks for no command or file change; a person
+            # asked to approve one would only be pressing Deny.
+            if hands_over_text_only(
+                str(
+                    getattr(self, "_original_user_input", None)
+                    or getattr(self, "_current_query", "")
+                    or ""
+                )
+            ):
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
+                return {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "declined_by": "agent",
+                    "error": TEXT_ONLY_DECLINE,
+                }
             # Re-asking an unanswered prompt would hold the chat for another timeout.
             call_key = (
                 getattr(self, "_turn_seq", 0),
