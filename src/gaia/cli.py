@@ -7548,6 +7548,8 @@ def handle_knowledge_command(args):
         print("Run 'gaia knowledge --help' for more information")
         return
 
+    import requests
+
     from gaia.web.tavily import (
         BudgetConfig,
         TavilyBudgetExceeded,
@@ -7585,6 +7587,14 @@ def handle_knowledge_command(args):
         sys.exit(1)
     except TavilyConfigError as e:
         print(f"❌ {e}")
+        sys.exit(1)
+    except requests.exceptions.RequestException as e:
+        # A dropped or blocked connection is the user's network, not a crash.
+        print(
+            "❌ Could not reach the web search service: the connection failed "
+            "or timed out. Check your internet connection, then try again.\n"
+            f"   Detail: {type(e).__name__}"
+        )
         sys.exit(1)
     finally:
         client.close()

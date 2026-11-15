@@ -224,3 +224,28 @@ def test_usage_action_omits_always_zero_session_figure(_seeded_usage, capsys):
     out = capsys.readouterr().out
     assert "Credits used: 7 total (cap: 5)" in out
     assert "this session" not in out
+
+
+@pytest.mark.parametrize("action", ["search", "extract"])
+def test_a_dropped_connection_is_a_plain_error_not_a_traceback(action, capsys):
+    """A frozen build printed a traceback and 'Failed to execute script' here."""
+    import requests
+
+    def _reset(*a, **k):
+        raise requests.exceptions.ConnectionError(
+            "('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))"
+        )
+
+    if action == "search":
+        _FakeTavilyClient.on_search = _reset
+    else:
+        _FakeTavilyClient.on_extract = _reset
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_knowledge_command(_knowledge_args(action))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "Could not reach the web search service" in out
+    assert "Check your internet connection" in out
+    assert "Traceback" not in out
