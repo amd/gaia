@@ -558,21 +558,52 @@ def test_a_binary_that_is_not_installed_is_not_blamed_on_a_missing_skill(monkeyp
     assert BINARY_POLICIES["gh"].install_hint in error["error"]
 
 
-def test_the_python_m_spelling_of_a_missing_binary_is_refused_the_same_way(
-    monkeypatch,
-):
-    """`python -m pytest` is judged as `pytest`, so an absent pytest refuses it
-    too — and the model needs the substitute, not a skill-reload hint."""
-    monkeypatch.setattr("gaia.agents.tools.shell_tools.shutil.which", lambda _n: None)
-
-    error = ShellToolsMixin._validate_command(
-        "python",
-        ["python", "-m", "pytest", "-q", "tests/"],
-        "python -m pytest -q tests/",
+def _shell_finds_only(monkeypatch, *names):
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools.shutil.which",
+        lambda name: f"/usr/bin/{name}" if name in names else None,
     )
+
+
+@pytest.mark.parametrize("launcher", ["python", "python3", "py"])
+def test_python_m_pytest_is_not_refused_for_a_missing_pytest_executable(
+    monkeypatch, launcher
+):
+    """`python -m pytest` starts python, which is installed; pytest.exe being
+    off PATH (any venv that is not activated) says nothing about it."""
+    _shell_finds_only(monkeypatch, launcher)
+
+    command = f"{launcher} -m pytest -q tests/"
+    error = ShellToolsMixin._validate_command(launcher, shlex.split(command), command)
     assert error is not None
-    assert "not installed here" in error["error"]
-    assert BINARY_POLICIES["pytest"].substitute in error["error"]
+    assert error["tier"] == TIER_CONFIRM
+    assert "not installed" not in error["error"]
+
+
+def test_python_m_pytest_names_the_missing_interpreter(monkeypatch):
+    _shell_finds_only(monkeypatch, "python", "pytest")
+
+    command = "python3 -m pytest -q tests/"
+    error = ShellToolsMixin._validate_command("python3", shlex.split(command), command)
+    assert error is not None
+    assert error["tier"] == TIER_REFUSE
+    assert error["error"].startswith("Command 'python3' cannot run:")
+    assert "`python3` is not installed here (not on PATH)" in error["error"]
+    assert "pytest" not in error["error"]
+
+
+def test_python_m_pytest_by_full_path_is_not_refused_as_not_installed(
+    monkeypatch, tmp_path
+):
+    """A path-spelled interpreter is not looked up on PATH at all."""
+    _shell_finds_only(monkeypatch)
+    interpreter = str(tmp_path / "venv" / "python")
+
+    command = f"{interpreter} -m pytest -q tests/"
+    error = ShellToolsMixin._validate_command(
+        interpreter.lower(), [interpreter, "-m", "pytest", "-q", "tests/"], command
+    )
+    assert error is None or "not installed" not in error["error"]
 
 
 @pytest.fixture(name="gh_on_path")

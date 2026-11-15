@@ -7360,6 +7360,7 @@ class ShellToolsMixin:
         granted_binaries: frozenset = frozenset(),
         bypass_gates: bool = False,
         _unwrapped: bool = False,
+        _spelled: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -7375,6 +7376,8 @@ class ShellToolsMixin:
                 True the read-only policy is replaced wholesale by
                 ``DEVELOPER_COMMANDS`` (#3374); the default path below is left
                 exactly as it was.
+            _spelled: How the program was typed, when this call judges the
+                bare program behind a path or ``.exe`` spelling.
 
         Returns None if the command is allowed, or an error dict if blocked.
 
@@ -7408,7 +7411,7 @@ class ShellToolsMixin:
             # A refusal follows the program, not its spelling; what it would
             # merely ask about still asks, as the unlisted spelling below.
             behind = ShellToolsMixin._validate_command(
-                program, [program, *cmd_parts[1:]], command
+                program, [program, *cmd_parts[1:]], command, _spelled=cmd_parts[0]
             )
             if behind is not None and behind.get("tier") != TIER_CONFIRM:
                 return behind
@@ -7474,9 +7477,24 @@ class ShellToolsMixin:
             if decision.outcome != REFUSE:
                 return None
             tier = TIER_REFUSE
-            if not granted and shutil.which(policy.binary) is None:
+            # `python -m pytest` starts python, so python is what must exist; a
+            # path spelling is not a PATH lookup, and the launch reports it.
+            runs = policy.binary
+            if policy_parts[0] != cmd_parts[0]:
+                runs = _spelled or cmd_parts[0]
+            missing = not re.search(r"[\\/]", runs) and shutil.which(runs) is None
+            if not granted and missing:
                 # Not installed is not "load the skill": reloading cannot fix it.
-                message = f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                if runs == policy.binary:
+                    message = (
+                        f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                    )
+                else:
+                    message = (
+                        f"Command '{runs}' cannot run: `{runs}` is not installed "
+                        "here (not on PATH). Use a Python that is, or name the "
+                        "interpreter by its full path."
+                    )
                 hint = "Do not retry this command or reload the skill."
             elif granted_decision.outcome == REFUSE:
                 # Outside what GAIA's checks cover, grant or no grant. The user
