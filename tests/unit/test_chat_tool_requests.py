@@ -148,6 +148,13 @@ def test_a_mail_question_asks_for_the_read_tools(message):
         "can you mail me the receipt?",
         "send me an email about the lease",
         "draft an email about the lease",
+        # Files, data sources, code, and contact details, not the mailbox.
+        "read the emails.txt file",
+        "write a python script that reads emails from a csv",
+        "list all emails in this spreadsheet",
+        "search the logs for emails",
+        "write a regex that validates any email",
+        "my email is foo@bar.com",
         # "Write to me" is mail, but as a command it asks the assistant to write.
         "write to me when you land",
         "write me a poem",

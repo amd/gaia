@@ -48,12 +48,7 @@ _SPEECH_NAMED = re.compile(
     r"\b(?:aloud|out\s+loud|text[- ]to[- ]speech|into\s+speech)\b", re.IGNORECASE
 )
 
-# Mail questions: "did my landlord email me?" scored just under the jump bar,
-# so the read tools never loaded (#8219). Plain "mail" also means post and
-# armour, so it needs a mailbox term or a reading verb; "email address" and
-# other technical senses are not a mailbox question, and "email me the report"
-# asks to send, so a direct object after "me" is not a read either. "Write to
-# me" is how mail arrives for people who have not switched to "email me".
+# Mail questions can score under the retrieval bar, so their intent is matched here.
 MAIL_REQUEST_TOOLS = (
     "check_mailbox_access",
     "list_inbox",
@@ -68,28 +63,40 @@ _NOT_MAIL_TECH = (
     r"|servers?|clients?|protocols?|headers?|signatures?|domains?|hosts?"
     r"|marketing|campaigns?|aliases?|lists?|filters?|rules?)\b)"
 )
+# Filenames, data sources, and contact details are not mailbox questions.
+_NOT_MAIL_DATA = (
+    r"(?!\.\w)"
+    r"(?!\s+is\b)"
+    r"(?!\s+(?:in|from|on|to|into|inside)\s+"
+    r"(?:a|an|the|this|that|my|your|our|their)?\s*"
+    r"(?:csv|spreadsheets?|sheets?|workbooks?|files?|logs?|databases?|dbs?"
+    r"|tables?|datasets?|data|json|yaml|xml|text|folders?|director(?:y|ies)"
+    r"|scripts?|code|regex(?:es)?|formulas?|columns?|rows?|cells?)\b)"
+)
 _MAIL_NAMED = re.compile(
     _MAILBOX_NOUN + r"|\b(?:e-?mail|e-?mailed|mail|mailed)\s+(?:me|us)\b"
     r"(?!\s+(?:at\b|(?:the|a|an|my|your|our|their|his|her|this|that|these"
     r"|those)\s+\w+|(?:an?\s+|the\s+)?(?:package|parcel|letter|box)\b))"
     r"|\b(?:write|writes|wrote|written|writing)\s+to\s+(?:me|us)\b"
-    r"|\b(?:my|your|our|any|all|new|unread|recent|latest|old)\s+"
+    r"|\b(?:my|your|our|all|new|unread|recent|latest|old)\s+"
     + _MAIL_NOUN
     + _NOT_MAIL_TECH
+    + _NOT_MAIL_DATA
     + r"|\b(?:check|read|scan|search|list|open|view|review|sort|triage|summarize"
     r"|show|look\s+(?:at|in|into|through)|go\s+through|clean\s+(?:up|out)|clear)\b"
-    r"[^.?!\n]{0,40}?"
+    r"\s+(?:(?:the|a|an|my|your|our|their|his|her|all|any|some|new|unread"
+    r"|recent|latest|old|me|us)\s+){0,2}"
     + _MAIL_NOUN
     + _NOT_MAIL_TECH
+    + _NOT_MAIL_DATA
     + r"|"
     + _MAIL_NOUN
+    + _NOT_MAIL_DATA
     + r"\s+(?:from|about|regarding|saying|says|said|containing|contains"
     r"|contain|messages?|threads?|conversations?|notifications?)\b",
     re.IGNORECASE,
 )
-# A message that opens with a compose verb asks the assistant to write, not to
-# read. It still needs the mailbox when it names one: a draft of what is in the
-# inbox has to read the inbox first.
+# A compose request asks the assistant to write unless it names the mailbox.
 _COMPOSE_OPENING = re.compile(
     r"^\s*(?:(?:please|pls|kindly)\s+)?"
     r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
