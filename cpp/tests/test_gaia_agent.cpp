@@ -586,23 +586,23 @@ TEST(GaiaAgentTest, ACompactModelGetsFewerToolsAndNoProseToolList) {
     ASSERT_TRUE(compact.compactFeatures()) << "Gemma 4 E4B is a compact model";
     GaiaAgent agent(compact, optionsFor(w));
     agent.processQuery("hello");
-    const json small = json::parse(mock.receivedBodies().back());
-    const auto smallTools = toolNamesIn(small);
-    EXPECT_FALSE(has(smallTools, "git_status"));
-    EXPECT_FALSE(has(smallTools, "search_code"));
-    EXPECT_FALSE(has(smallTools, "env_inspect"));
-    EXPECT_TRUE(has(smallTools, "bash_execute"));
-    EXPECT_TRUE(has(smallTools, "file_read"));
-    EXPECT_EQ(small["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
+    const json compactBody = json::parse(mock.receivedBodies().back());
+    const auto compactTools = toolNamesIn(compactBody);
+    EXPECT_FALSE(has(compactTools, "git_status"));
+    EXPECT_FALSE(has(compactTools, "search_code"));
+    EXPECT_FALSE(has(compactTools, "env_inspect"));
+    EXPECT_TRUE(has(compactTools, "bash_execute"));
+    EXPECT_TRUE(has(compactTools, "file_read"));
+    EXPECT_EQ(compactBody["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
 
     AgentConfig full = compact;
     full.featureTier = "full";
     agent.setConfig(full);
     agent.processQuery("hello again");
-    const json big = json::parse(mock.receivedBodies().back());
-    EXPECT_TRUE(has(toolNamesIn(big), "git_status")) << "the tier follows the config each turn";
-    EXPECT_NE(big["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
-    EXPECT_GT(big.dump().size(), small.dump().size() + 4000);
+    const json fullBody = json::parse(mock.receivedBodies().back());
+    EXPECT_TRUE(has(toolNamesIn(fullBody), "git_status")) << "the tier follows the config each turn";
+    EXPECT_NE(fullBody["messages"][0]["content"].get<std::string>().find("AVAILABLE TOOLS"), std::string::npos);
+    EXPECT_GT(fullBody.dump().size(), compactBody.dump().size() + 4000);
 }
 
 TEST(GaiaAgentTest, FeatureTierIsValidatedAndRoundTrips) {
