@@ -15,6 +15,7 @@ import codecs
 import functools
 import itertools
 import os
+import re
 import unicodedata
 from typing import Optional, Tuple, Union
 
@@ -45,6 +46,12 @@ SNIFF_BYTES = 1 << 16
 
 #: Fewer non-ASCII bytes than this give detection nothing to go on.
 _TOO_FEW_TO_TELL = 8
+#: Up to about a sentence: past this, a zero score (common for CJK) is not a guess.
+_SHORT_TEXT = 64
+
+
+#: A non-ASCII character directly beside an ASCII letter or digit.
+_GLUED_TO_ASCII = re.compile(r"[A-Za-z0-9][^\x00-\x7f]|[^\x00-\x7f][A-Za-z0-9]")
 
 
 @functools.lru_cache(maxsize=1)
@@ -78,9 +85,17 @@ def _local_legacy_encoding(data: bytes) -> Optional[str]:
     if page is None or page == "cp1252":
         return None
     try:
-        data.decode(page)
+        local = data.decode(page)
     except UnicodeDecodeError:
         return None
+    # "cafй", "12Ђ": a local letter glued to ASCII is Western text read wrong.
+    if _GLUED_TO_ASCII.search(local):
+        try:
+            western = data.decode("cp1252")
+        except UnicodeDecodeError:
+            western = None
+        if western is not None and _latin_script_only(western):
+            return None
     return page
 
 
@@ -137,7 +152,7 @@ def detect_encoding(data: bytes, truncated: bool = False) -> str:
     )
     high = sum(byte >= 0x80 for byte in data)
     # No language evidence (a word or a few short lines): every guess scores 0.
-    if best is None or not best.coherence:
+    if high < _SHORT_TEXT and (best is None or not best.coherence):
         local = _local_legacy_encoding(data)
         if local is not None:
             return local
