@@ -1,0 +1,73 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Installs the ONE Claude Code CLI version the eval workflows run, and fails if
+# the `claude` on PATH afterwards is any other version.
+#
+# The CLI drives and judges every eval scenario, so a CLI release changes the
+# measuring instrument. Bump `version` in its own PR, after a dispatched
+# eval_flagship.yml passes on it.
+#
+# Callers must not override `version`: tests/unit/test_claude_cli_pin.py holds
+# every eval workflow to this default. Requires actions/setup-node first.
+
+name: 'Install the pinned Claude Code CLI'
+description: 'npm-install the Claude Code CLI at the eval pin and verify that exact version is on PATH'
+
+inputs:
+  version:
+    description: 'Claude Code CLI version (the eval pin; do not override)'
+    required: false
+    default: '2.1.322'
+
+runs:
+  using: composite
+  steps:
+    - name: Install the Claude CLI (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        CLI_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        npm install -g "@anthropic-ai/claude-code@${CLI_VERSION}"
+        if ! got="$(claude --version 2>&1)"; then
+          echo "::error::claude was installed but does not run: ${got}. WHERE TO LOOK: the npm install output above and \`command -v claude\` ($(command -v claude || echo none))."
+          exit 1
+        fi
+        if ! grep -Eq "(^|[[:space:]])${CLI_VERSION//./\\.}([[:space:]]|$)" <<<"$got"; then
+          echo "::error::Wanted Claude Code CLI ${CLI_VERSION}, but the claude on PATH ($(command -v claude)) reports: ${got}. Another install is ahead of npm's global bin on PATH. Remove it from the runner, or put npm's prefix first."
+          exit 1
+        fi
+        echo "Claude Code CLI ${got} at $(command -v claude)"
+
+    - name: Install the Claude CLI (Windows)
+      if: runner.os == 'Windows'
+      shell: powershell
+      env:
+        CLI_VERSION: ${{ inputs.version }}
+      run: |
+        $ErrorActionPreference = "Stop"
+        $want = $env:CLI_VERSION
+        npm install -g "@anthropic-ai/claude-code@$want"
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "::error::npm install of @anthropic-ai/claude-code@$want failed. WHERE TO LOOK: the npm output above."
+          exit 1
+        }
+        # Native stderr under "Stop" is a terminating error in PowerShell 5.1, so
+        # read it as text. Preset 1: a claude that never launches cannot pass.
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = 1
+        $got = (& claude --version 2>&1 | ForEach-Object { "$_" } | Out-String).Trim()
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = "Stop"
+        $where = (Get-Command claude -ErrorAction SilentlyContinue).Source
+        if ($code -ne 0) {
+          Write-Host "::error::claude was installed but does not run (exit $code): $got. WHERE TO LOOK: the npm output above; claude on PATH is $where."
+          exit 1
+        }
+        if ($got -notmatch ('(^|\s)' + [regex]::Escape($want) + '(\s|$)')) {
+          Write-Host "::error::Wanted Claude Code CLI $want, but the claude on PATH ($where) reports: $got. Another install is ahead of npm's global bin on PATH. Remove it from the runner, or put npm's prefix first."
+          exit 1
+        }
+        Write-Host "Claude Code CLI $got at $where"

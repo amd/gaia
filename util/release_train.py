@@ -56,6 +56,10 @@ _UTIL = str(Path(__file__).resolve().parent)
 if _UTIL not in sys.path:
     sys.path.insert(0, _UTIL)
 
+from gh_retry import (  # noqa: E402  pylint: disable=wrong-import-position
+    RateLimitWaitExceeded,
+    run_command,
+)
 from release_tag import (  # noqa: E402  pylint: disable=wrong-import-position
     ReleaseTag,
     parse_tag,
@@ -238,23 +242,20 @@ SHORT_LIVED_ARTIFACTS = (
     "flagship-npm",
 )
 GH_TIMEOUT_S = 300
+# A spent API budget refills within the hour; wait for it at most that long.
+GH_RATE_LIMIT_WAIT_S = 3600
 
 
 def _gh_lines(args: list[str]) -> list[dict]:
     """``gh api --paginate ... --jq`` output, one JSON object per line."""
     try:
-        done = subprocess.run(
-            ["gh", *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-            timeout=GH_TIMEOUT_S,
-        )
+        done = run_command(["gh", *args], GH_RATE_LIMIT_WAIT_S, timeout=GH_TIMEOUT_S)
     except subprocess.TimeoutExpired as e:
         raise VerifyError(
             f"`gh {' '.join(args)}` did not finish in {GH_TIMEOUT_S} s; re-run the job."
         ) from e
+    except RateLimitWaitExceeded as e:
+        raise VerifyError(str(e)) from e
     if done.returncode != 0:
         raise VerifyError(
             f"`gh {' '.join(args)}` failed: {done.stderr.strip()}. A rate limit "

@@ -62,7 +62,8 @@ function costText(summary: TurnSummary, t: Translate = tEn, stopped = false): st
     if (cost.kind === 'unreported') return t(stopped ? 'rail.costUnreportedStopped' : 'rail.costUnreported');
     if (cost.kind === 'estimate' && typeof cost.usd === 'number') {
         const usd = cost.usd < 0.01 ? cost.usd.toFixed(4) : cost.usd.toFixed(2);
-        return t('rail.costAbout', { usd });
+        // The "$" rides inside the value so the bidi isolate keeps it left of the digits in Arabic.
+        return t('rail.costAbout', { usd: `$${usd}` });
     }
     return t(summary.model ? 'rail.costUnknownModel' : 'rail.costUnknown');
 }
@@ -162,7 +163,7 @@ function SourcesSection({ summary }: { summary: TurnSummary }) {
                         <li key={d.path} className="side-rail-item">
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
-                                <span className="side-rail-name" title={d.name} dir="auto">{d.name}</span>
+                                <span className="side-rail-name" title={d.name} dir="ltr">{d.name}</span>
                                 <span className="side-rail-meta">
                                     {t.compose((say) => documentMeta(say, d.pages, count))}
                                 </span>

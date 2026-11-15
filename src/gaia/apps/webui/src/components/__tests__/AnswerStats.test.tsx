@@ -59,6 +59,12 @@ describe('answerSummary', () => {
         expect(answerSummary(16_000, undefined, 'interrupted')).toBe('Interrupted after 16 s');
     });
 
+    it('claims no first word for a failed turn', () => {
+        const cloud = { ...stats, time_to_first_token: 0.4, place: 'via Fireworks AI' };
+        expect(answerSummary(1_000, cloud, 'failed')).toBe('Failed after 1 s via Fireworks AI');
+        expect(answerSummary(undefined, { ...cloud, place: undefined }, 'failed')).toBeNull();
+    });
+
     it('says only where an unfinished turn ran when its time is unknown', () => {
         const cloud = { ...stats, time_to_first_token: 0, place: 'via Fireworks AI' };
         expect(answerSummary(undefined, cloud, 'stopped')).toBe('Ran via Fireworks AI');
@@ -82,6 +88,15 @@ describe('AnswerStats', () => {
         expect(screen.getByText(line('First token 1012 ms'))).toBeInTheDocument();
         expect(screen.getByText(line('68 → 510 tokens'))).toBeInTheDocument();
         expect(screen.getByText(line('38.1 tokens/s'))).toBeInTheDocument();
+    });
+
+    it('leaves the first token out of a failed turn\'s exact numbers', () => {
+        render(<AnswerStats latencyMs={1_000} stats={{ ...stats, place: 'via Fireworks AI' }} ended="failed" />);
+        const summary = screen.getByRole('button', { name: 'Failed after 1 s via Fireworks AI' });
+        expect(summary.getAttribute('title')).not.toContain('First token');
+        fireEvent.click(summary);
+        expect(screen.queryByText(line('First token 1012 ms'))).not.toBeInTheDocument();
+        expect(screen.getByText(line('Total time 1.0 s'))).toBeInTheDocument();
     });
 
     it('renders nothing with nothing measured', () => {

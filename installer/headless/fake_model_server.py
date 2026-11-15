@@ -382,6 +382,9 @@ class LoopbackServer(ThreadingHTTPServer):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "FakeLemonade/1"
+    #: Set per request; ``send_response`` logs the request once, then clears it.
+    _unrecorded = False
+    _request_body: Optional[Dict[str, Any]] = None
 
     def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003 - stdlib name
         sys.stderr.write("[fake-lemonade] " + fmt % args + "\n")
@@ -417,8 +420,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _refuse(self, status: int, message: str, body: Dict[str, Any]) -> None:
-        self._record(body, status)
         self._json(status, {"error": {"message": message}})
+
+    def send_response(self, code: int, message: Optional[str] = None) -> None:
+        # Log before any reply byte leaves, so a client that has its answer
+        # always finds its request in the log.
+        if self._unrecorded:
+            self._unrecorded = False
+            self._record(self._request_body, code)
+        super().send_response(code, message)
 
     def _record(self, body: Optional[Dict[str, Any]], status: int) -> None:
         _log(
@@ -434,6 +444,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── GET ──
     def do_GET(self) -> None:  # noqa: N802 - stdlib name
+        self._request_body, self._unrecorded = None, True
         path = self._path()
         if path == "/health":
             with _lock:
@@ -477,17 +488,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/system-info":
             self._json(200, _system_info())
         else:
-            self._record(None, 404)
             self._json(
                 404, {"error": {"message": f"fake server has no GET {self.path}"}}
             )
-            return
-        self._record(None, 200)
 
     # ── POST ──
     def do_POST(self) -> None:  # noqa: N802 - stdlib name
         path = self._path()
         body = self._body()
+        self._request_body, self._unrecorded = body, True
         model = body.get("model") or body.get("model_name")
         if path in _NEEDS_A_DOWNLOADED_MODEL and not _is_downloaded(model):
             self._refuse(404, f"{model} is not downloaded", body)
@@ -497,7 +506,6 @@ class Handler(BaseHTTPRequestHandler):
             if problem:
                 self._refuse(400, problem, body)
                 return
-            self._record(body, 200)
             self._pull(body, str(model))
             return
         if path == "/load":
@@ -584,12 +592,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path in ("/params", "/uninstall"):
             self._json(200, {"status": "success"})
         else:
-            self._record(body, 404)
             self._json(
                 404, {"error": {"message": f"fake server has no POST {self.path}"}}
             )
-            return
-        self._record(body, 200)
 
     def _pcm(self) -> None:
         """A quarter second of a 440 Hz tone, as Lemonade's ``pcm`` format sends it."""

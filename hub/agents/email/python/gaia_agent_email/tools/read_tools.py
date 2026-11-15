@@ -22,6 +22,7 @@ import inspect
 import json
 import re
 import time
+import unicodedata
 from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -48,6 +49,7 @@ from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
 from gaia_agent_email.tools.llm_triage import make_llm_classifier  # noqa: F401
+from gaia_agent_email.tools.lookalikes import ASCII_FOLD, LOOKALIKES
 from gaia_agent_email.tools.triage_condense import condense_triage_result
 
 # Read-only reuse of the existing automated-sender signal for needs_review's
@@ -128,9 +130,149 @@ class EnvelopeBudgetExceeded(RuntimeError):
     """
 
 
+# Characters that don't break a run of ``<`` or ``>``. Mirrors core's
+# ``gaia.agents.base.untrusted_text.fence_run_invisible``, which this package's
+# minimum amd-gaia predates; a test asserts the two agree on every code point.
+_FENCE_RUN_INVISIBLE_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
+_FENCE_RUN_VISIBLE = frozenset("\t\n")
+_FENCE_RUN_INVISIBLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x2800, 0x2800),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+_BODY_MARKER_NAMES = ("UNTRUSTED_EMAIL_BODY_START", "UNTRUSTED_EMAIL_BODY_END")
+MARKER_NAME_REMOVED = "[fence marker removed]"
+
+
+def fence_run_invisible(char: str) -> bool:
+    """True for a character that doesn't break a run of ``<`` or ``>``."""
+    if char in _FENCE_RUN_VISIBLE:
+        return False
+    if unicodedata.category(char) in _FENCE_RUN_INVISIBLE_CATEGORIES:
+        return True
+    point = ord(char)
+    return any(low <= point <= high for low, high in _FENCE_RUN_INVISIBLE_RANGES)
+
+
+def _fence_side(char: str) -> str:
+    """``<`` or ``>`` for a character that reads as one, in any width; else ""."""
+    if char in "<>":
+        return char
+    folded = unicodedata.normalize("NFKC", char)
+    return folded if folded in ("<", ">") else ""
+
+
+def _neutralize_fence_runs(body: str) -> str:
+    """*body* with each run of 3+ ``<`` (or ``>``) look-alikes cut to two ASCII.
+
+    Invisible characters inside a run don't break it, so no marker can be
+    spelled from what is left, whatever its case, width or padding.
+    """
+    out: List[str] = []
+    start = 0
+    while start < len(body):
+        side = _fence_side(body[start])
+        if not side:
+            out.append(body[start])
+            start += 1
+            continue
+        count, last, at = 0, start, start
+        while at < len(body):
+            if _fence_side(body[at]) == side:
+                count, last = count + 1, at
+            elif not fence_run_invisible(body[at]):
+                break
+            at += 1
+        out.append(side * 2 if count >= 3 else body[start : last + 1])
+        start = last + 1
+    return "".join(out)
+
+
+def _marker_letters(char: str) -> str:
+    """The ASCII letters and digits *char* reads as, for comparing marker names.
+
+    NFKC folds width, NFD then splits a precomposed accented letter (``É``)
+    into its base letter and a combining mark, which is dropped so the base
+    letter survives the ASCII filter below the same way an already-decomposed
+    accented letter does. The UTS #39 table maps other look-alikes (Cyrillic,
+    Greek, Cherokee and so on) to the letters they imitate, and the ASCII fold
+    makes ``m`` and ``rn``, or ``I``, ``l`` and ``1``, compare equal.
+    """
+    decomposed = unicodedata.normalize("NFD", unicodedata.normalize("NFKC", char))
+    base = "".join(c for c in decomposed if not unicodedata.combining(c))
+    mapped = "".join(LOOKALIKES.get(c, c) for c in base)
+    return "".join(
+        ASCII_FOLD.get(c, c) for c in mapped.casefold() if c.isascii() and c.isalnum()
+    )
+
+
+def _skeleton(name: str) -> str:
+    return "".join(_marker_letters(char) for char in name)
+
+
+def neutralize_marker_names(text: str, names: Tuple[str, ...]) -> str:
+    """*text* with every spelling of a fence marker's name replaced.
+
+    Names are compared on ASCII letters and digits alone, after width and case
+    fold and with Unicode look-alikes read as the letters they imitate, so
+    brackets of any shape, spacing, line breaks or another script's letters
+    can't rebuild one.
+    """
+    targets = [_skeleton(name) for name in names]
+    while True:
+        letters: List[str] = []
+        origin: List[int] = []
+        for at, char in enumerate(text):
+            for folded in _marker_letters(char):
+                letters.append(folded)
+                origin.append(at)
+        skeleton = "".join(letters)
+        spans = []
+        for target in targets:
+            found = skeleton.find(target)
+            while found != -1:
+                spans.append((origin[found], origin[found + len(target) - 1] + 1))
+                found = skeleton.find(target, found + len(target))
+        if not spans:
+            return text
+        out: List[str] = []
+        cursor = 0
+        for begin, end in sorted(spans):
+            if begin < cursor:
+                continue
+            out.append(text[cursor:begin])
+            out.append(MARKER_NAME_REMOVED)
+            cursor = end
+        out.append(text[cursor:])
+        text = "".join(out)
+
+
 def wrap_untrusted_body(body: str) -> str:
-    """Wrap a body in the untrusted-input delimiter pair."""
-    return f"{UNTRUSTED_BODY_OPEN}\n{body}\n{UNTRUSTED_BODY_CLOSE}"
+    """Wrap a body in the untrusted-input delimiter pair.
+
+    Fence-like runs and any spelling of a marker's name are cut first, so the
+    body can't close the fence early.
+    """
+    body = neutralize_marker_names(body, _BODY_MARKER_NAMES)
+    return (
+        f"{UNTRUSTED_BODY_OPEN}\n{_neutralize_fence_runs(body)}\n"
+        f"{UNTRUSTED_BODY_CLOSE}"
+    )
 
 
 def _truncate(text: str, limit: int) -> tuple[str, int]:
@@ -3021,22 +3163,28 @@ class ReadToolsMixin:
               - a sender / brand name → ``from:netflix`` (e.g. "the Netflix
                 promo" → ``from:netflix``)
               - words expected in the subject → ``subject:invoice``
-              - status / recency → ``is:unread``, ``newer_than:7d``,
-                ``label:promotions``
+              - status / recency → ``is:unread``, ``newer_than:7d`` (on
+                Gmail, ``label:promotions`` also works for a category)
 
-            On an Outlook-only mailbox, only ``from:``, ``subject:``,
-            ``is:unread``, ``is:read``, ``newer_than:``, and ``older_than:``
-            are supported; any other operator (``label:``, ``has:``,
+            On Outlook, only ``from:``, ``subject:``, ``is:unread``,
+            ``is:read``, ``newer_than:``, and ``older_than:`` are supported,
+            and one query cannot combine the first two with the rest: Graph
+            rejects a search that mixes a from:/subject:/text term with an
+            unread, read, or recency filter, so run
+            ``"from:boss@example.com"`` and ``"is:unread newer_than:7d"`` as
+            two separate searches. Any other operator (``label:``, ``has:``,
             ``after:``, ``before:``, ``in:``, ``is:starred``, ...) raises an
             error naming the unsupported operator instead of matching
             nothing silently.
 
-            Combine them: ``"from:boss@example.com is:unread newer_than:7d"``.
-            Date operators require ``YYYY/MM/DD`` — e.g. ``after:2026/07/01
-            before:2026/07/08``, never ``after:July 1``. If a bare phrase is
-            passed and returns nothing, the tool retries once as an operator
-            query automatically, but forming the operator query yourself is
-            more reliable.
+            On Gmail, combine them freely:
+            ``"from:boss@example.com is:unread newer_than:7d"``. Gmail date
+            operators require ``YYYY/MM/DD``, e.g. ``after:2026/07/01
+            before:2026/07/08`` and never ``after:July 1``. On Outlook, use
+            the ``newer_than:`` / ``older_than:`` durations instead. If a bare
+            phrase is passed and returns nothing, the tool retries once as an
+            operator query automatically, but forming the operator query
+            yourself is more reliable.
 
             By DEFAULT (``include_bodies`` omitted/``None``) this AUTO-DECIDES
             from ``query`` (#3773): a pure filter query (only ``from:``/

@@ -36,6 +36,7 @@ from gaia.agents.tools.file_edit import (
     after_excerpt,
     apply_unique_replacement,
     file_read_record,
+    masked_secret_refusal,
     read_first_preflight,
     stamp_of,
     turn_of,
@@ -64,6 +65,7 @@ from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_defaul
 from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
 from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
@@ -1689,7 +1691,9 @@ class FileSearchToolsMixin:
                     )
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(resolved_path, "overwriting")
+                refusal = reads.refusal(
+                    resolved_path, "overwriting"
+                ) or masked_secret_refusal(resolved_path, {"content": content})
                 if refusal is not None:
                     if path_validator is not None:
                         path_validator.audit_write(
@@ -2080,8 +2084,15 @@ class FileSearchToolsMixin:
                     }
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(resolved_path) or reads.repeat_refusal(
-                    resolved_path, old_content, new_content, turn_of(self)
+                refusal = (
+                    reads.refusal(resolved_path)
+                    or reads.repeat_refusal(
+                        resolved_path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        resolved_path,
+                        {"old_content": old_content, "new_content": new_content},
+                    )
                 )
                 if refusal is not None:
                     return {**refusal, "operation": "edit_file"}
@@ -2639,6 +2650,19 @@ class FileSearchToolsMixin:
                         }
 
                 supported_extensions = {".csv", ".tsv", ".xlsx", ".xls"}
+                if fp.suffix.lower() in IMAGE_EXTENSIONS:
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"{fp.name} is an image, not a spreadsheet. If it is "
+                            "attached or indexed, search its text with "
+                            "query_documents. To look at it, call "
+                            "answer_question_about_image with image_path set to "
+                            f"{fp} and question set to what the user asked."
+                        ),
+                        "has_errors": True,
+                        "operation": "analyze_data_file",
+                    }
                 if fp.suffix.lower() not in supported_extensions:
                     return {
                         "status": "error",

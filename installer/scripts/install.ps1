@@ -534,7 +534,31 @@ function Install-FlagshipAgent {
         $resolved = Resolve-HubArtifact -AgentId $FLAGSHIP_AGENT_ID -Filename $filename -Label "GAIA agent"
     }
     $ok = Install-VerifiedBinary -Resolved $resolved -Filename $filename -DestName "gaia-agent.exe" -Label "GAIA agent" -Optional
-    return [bool]$ok
+    if (-not $ok) { return $false }
+    return [bool](Write-AgentInstallRecord -Resolved $resolved)
+}
+
+# Record the verified agent's version and SHA-256 beside it. GAIA's background
+# service starts this copy only when it still matches this record.
+function Write-AgentInstallRecord {
+    param([Parameter(Mandatory)][hashtable]$Resolved)
+
+    $record = "$GAIA_BIN\gaia-agent.install.json"
+    $json = [ordered]@{
+        id      = $FLAGSHIP_AGENT_ID
+        version = [string]$Resolved.Version
+        sha256  = $Resolved.Sha256.ToLower()
+    } | ConvertTo-Json
+    try {
+        # No BOM: Windows PowerShell's UTF8 encoding writes one.
+        [IO.File]::WriteAllText($record, $json, (New-Object System.Text.UTF8Encoding $false))
+    }
+    catch {
+        Write-GaiaError "Installed the GAIA agent, but could not write its install record $record`: $_"
+        Write-Host "  Fix:  check you can write to $GAIA_BIN, then re-run this installer." -ForegroundColor $COLOR_YELLOW
+        return $false
+    }
+    return $true
 }
 
 # The user environment key Add-ToPath edits. Tests point it at a scratch key.

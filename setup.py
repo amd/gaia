@@ -36,6 +36,7 @@ setup(
         "gaia.llm",
         "gaia.llm.providers",
         "gaia.audio",
+        "gaia.automations",
         "gaia.chat",
         "gaia.schedule",
         "gaia.daemon",
@@ -84,6 +85,7 @@ setup(
         "gaia.apps.webui",
         "gaia.messaging",
         "gaia.messaging.slack",
+        "gaia.messaging.discord",
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
@@ -129,6 +131,8 @@ setup(
         # get_connection_with_tls_context but has no such hook, so the SNI
         # would silently revert to the pinned IP.
         "requests>=2.32.3",
+        # RAG detects Windows-1256 / Shift-JIS / GBK text files with it.
+        "charset-normalizer>=3.0",
         # <1.0: openai checks any imported httpx for httpx.Timeout, which the
         # 1.0 pre-releases removed, so `pip install --pre` broke every chat turn.
         "httpx>=0.27.0,<1.0",
@@ -154,6 +158,9 @@ setup(
         "tomli>=2.0.0; python_version < '3.11'",
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
+        # The Discord bridge is set up from the TUI and Agent UI, whose installs
+        # never add extras; it needs only aiohttp (already core) and audioop-lts on 3.13+.
+        "discord.py>=2.7,<3",
         "tavily-python>=0.5.0",
         # Gateway Claude models (amd.Claude-*) call the gateway's Anthropic
         # route through this SDK, so a base install can pick one. 0.49 is the
@@ -217,7 +224,7 @@ setup(
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pypdfium2>=5.0.0,<6",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
             "openpyxl>=3.1.0",
@@ -290,7 +297,7 @@ setup(
         "eval": [
             "bs4",
             "numpy>=2.0,<2.3.0",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             "reportlab",
             # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
             "tiktoken>=0.7.0,<1.0.0",
@@ -323,7 +330,7 @@ setup(
             # PDF rendering and image extraction (PDFium; Apache-2.0/BSD-3).
             # PyMuPDF is AGPL-3.0 and must not come back.
             "pypdfium2>=5.0.0,<6",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,
             # and this is the extra `gaia init --profile chat` installs. Without

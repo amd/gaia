@@ -381,6 +381,7 @@ class TestRunnerFire:
     def test_fire_routes_agent_output_to_sink(self, mocker):
         mock_sdk_cls = mocker.patch(_AGENT_SDK)
         mocker.patch(_AGENT_CONFIG)
+        mocker.patch.object(runner, "resolve_model", return_value="m")
         mock_sdk_cls.return_value.send.return_value.text = "agent says hi"
         mock_dispatch = mocker.patch.object(runner.sinks, "dispatch")
 
@@ -398,6 +399,7 @@ class TestRunnerFire:
     def test_fire_passes_sink_args_to_dispatch(self, mocker):
         mock_sdk_cls = mocker.patch(_AGENT_SDK)
         mocker.patch(_AGENT_CONFIG)
+        mocker.patch.object(runner, "resolve_model", return_value="m")
         mock_sdk_cls.return_value.send.return_value.text = "out"
         mock_dispatch = mocker.patch.object(runner.sinks, "dispatch")
 

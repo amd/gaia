@@ -31,6 +31,8 @@ from ..lemonade_client import (
     DEFAULT_MODEL_NAME,
     FULL_TOOLS_SLOT,
     KV_CACHE_SHARED_PHRASES,
+    OUTPUT_CORRUPTED_MESSAGE,
+    CloudContextOverflowError,
     CloudModelUnavailableError,
     CloudProviderDisconnectedError,
     GaiaLemonadeStartError,
@@ -38,6 +40,7 @@ from ..lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     LemonadeServerDownError,
+    ModelOutputCorruptedError,
     active_profile_ctx_size,
     cloud_model_provider,
     is_tool_calling_model,
@@ -427,6 +430,16 @@ class LemonadeStreamCutOffError(LemonadeError):
         "before the model finished. Send the message again. If it keeps "
         "happening, check the model server or gateway log for dropped streams."
     )
+
+
+class LemonadeOutputCorruptedError(LemonadeError):
+    """The reply turned into noise and was stopped before it was shown.
+
+    Not retried automatically: the client unloaded the model, and the user
+    decides whether to send the message again.
+    """
+
+    user_message = OUTPUT_CORRUPTED_MESSAGE
 
 
 class LemonadeModelNotFoundError(LemonadeError):
@@ -932,10 +945,15 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
+        if isinstance(cur, ModelOutputCorruptedError):
+            return LemonadeOutputCorruptedError()
         if isinstance(cur, CloudProviderDisconnectedError):
             return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
+        if isinstance(cur, CloudContextOverflowError):
+            # A hosted model has no wrong-size load to fix: never reloadable.
+            return LemonadeContextOverflowError()
         if isinstance(cur, CloudDisabledError):
             return LemonadeLocalOnlyError(user_message=str(cur))
         chain_text.append(str(cur))
@@ -982,6 +1000,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     down = _SERVER_DOWN_RE.search(raw)
     if down:
         return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))
+    if OUTPUT_CORRUPTED_MESSAGE.lower() in text:
+        return LemonadeOutputCorruptedError()
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the

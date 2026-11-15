@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from gaia.ui._chat_helpers import _declined_call
+from gaia.ui._chat_helpers import _denial
 from gaia.ui.models import AgentStepResponse
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import SUMMARY_VIEW_KEYS
@@ -36,29 +36,29 @@ def test_a_declined_result_says_so():
 
     assert event["status"] == "denied"
     assert "timed_out" not in event
-    assert _declined_call(event)
+    assert _denial(event) == "declined"
 
 
 def test_an_unanswered_prompt_is_not_a_decline():
     event = _result_event({**DENIED, "timed_out": True})
 
     assert event["timed_out"] is True
-    assert not _declined_call(event)
+    assert _denial(event) == "timedOut"
 
 
 @pytest.mark.parametrize(
-    "event, declined",
+    "event, denial",
     [
-        ({"type": "tool_result", "data": {"status": "denied"}}, True),
+        ({"type": "tool_result", "data": {"status": "denied"}}, "declined"),
         (
             {"type": "tool_result", "data": {"status": "denied", "timed_out": True}},
-            False,
+            "timedOut",
         ),
-        ({"type": "tool_result", "status": "error"}, False),
+        ({"type": "tool_result", "status": "error"}, None),
     ],
 )
-def test_a_relayed_result_is_read_from_its_data(event, declined):
-    assert _declined_call(event) is declined
+def test_a_relayed_result_is_read_from_its_data(event, denial):
+    assert _denial(event) == denial
 
 
 def test_the_relay_carries_the_timeout_flag():
@@ -69,3 +69,9 @@ def test_a_saved_step_keeps_its_declined_flag():
     step = AgentStepResponse(id=1, type="tool", label="Using run_python", declined=True)
 
     assert step.model_dump()["declined"] is True
+
+
+def test_a_saved_step_keeps_its_timed_out_flag():
+    step = AgentStepResponse(id=1, type="tool", label="Using run_python", timedOut=True)
+
+    assert step.model_dump()["timedOut"] is True

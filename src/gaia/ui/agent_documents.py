@@ -97,7 +97,12 @@ def _record_copy(
 
     managed = managed_documents_dir()
     managed.mkdir(parents=True, exist_ok=True)
-    copy = reserve_copy_path(managed, _sanitize_stem(path.stem), path.suffix.lower())
+    copy = reserve_copy_path(
+        managed,
+        _sanitize_stem(path.stem),
+        path.suffix.lower(),
+        taken=lambda p: db.path_held_by_other_content(str(p), file_hash),
+    )
     try:
         shutil.copyfile(path, copy)
     except OSError:
@@ -113,6 +118,19 @@ def _record_copy(
         file_mtime=file_stat.st_mtime,
     )
     return doc, True
+
+
+def _is_other_file(doc: Dict[str, Any], path: Path) -> bool:
+    """Whether the library row *doc* matched *path* by content but is another file.
+
+    GAIA's own copies are skipped: one is usually this file's copy from an
+    earlier turn, and the copy notice already named it.
+    """
+    stored = doc.get("filepath") or ""
+    if not stored or Path(os.path.realpath(stored)) == path:
+        return False
+    managed = Path(os.path.realpath(managed_documents_dir()))
+    return managed not in Path(os.path.realpath(stored)).parents
 
 
 def add_indexed_documents(
@@ -149,6 +167,12 @@ def add_indexed_documents(
                     f"{path.name} is outside the folders your documents are read "
                     f"from, so your documents hold a copy of it. Changes to "
                     f"{path} won't reach the copy."
+                )
+            elif _is_other_file(doc, path):
+                result.notices.append(
+                    f"{path.name} has the same content as {doc['filepath']}, "
+                    f"which is already in your documents, so this chat uses "
+                    f"that file."
                 )
             continue
         logger.warning("Agent-indexed %s not added to the library: %s", path, reason)

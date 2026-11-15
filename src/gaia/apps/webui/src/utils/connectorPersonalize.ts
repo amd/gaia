@@ -47,6 +47,7 @@ export function buildPersonalizePrompt({ connectorId, displayName }: Personalize
     return [
         `I just connected ${displayName}. Get to know me from ${personalizeSource(connectorId, displayName)}.`,
         'Read only — do not send, delete, label or change anything.',
+        'If you have no tools that read it, or they fail, tell me you couldn\'t reach it and stop. Never guess or count what it holds.',
         '1. Skim the recent items and work out who I deal with most, what I work on, recurring meetings or threads, and what keeps landing on my plate.',
         '2. Save the durable facts to memory (people, projects, preferences, routines). Skip one-off details and anything sensitive like passwords, codes or financial numbers.',
         '3. Recommend up to five automations you could run for me on a schedule, each with what it does, how often, and why it fits what you saw.',

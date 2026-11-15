@@ -529,10 +529,15 @@ func formatMemoryContextCounts(contexts []client.MemoryContext) string {
 	return strings.Join(parts, " · ")
 }
 
-// formatMemoryTimestamp trims an ISO 8601 timestamp
-// ("2026-08-13T14:22:05.123456-07:00") to "2026-08-13 14:22" — enough to
-// judge how stale an entry is without the noise of seconds/timezone offset.
+// formatMemoryTimestamp renders an RFC 3339 timestamp in the local zone as
+// "2026-08-13 14:22". Agents differ in which zone they stamp (gaiacpp writes
+// UTC "Z", the Python agent local time with an offset), so the offset must be
+// honoured, not sliced off. A value with no offset carries no zone to convert
+// from and is shown as stored.
 func formatMemoryTimestamp(ts string) string {
+	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return t.Local().Format("2006-01-02 15:04")
+	}
 	if len(ts) < 16 {
 		return ts
 	}

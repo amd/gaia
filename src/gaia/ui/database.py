@@ -1726,6 +1726,15 @@ class ChatDatabase:
 
             return self._enrich_document(dict(row))
 
+    def path_held_by_other_content(self, filepath: str, file_hash: str) -> bool:
+        """Whether a library row for different content still names *filepath*."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM documents WHERE filepath = ? AND file_hash != ? LIMIT 1",
+                (filepath, file_hash),
+            ).fetchone()
+        return row is not None
+
     def _enrich_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         """Add sessions_using count to document dict.
 
@@ -2021,6 +2030,18 @@ class ChatDatabase:
                 "output_tokens, usd) VALUES (?, ?, ?, ?, ?, ?)",
                 (month, model, provider, input_tokens, output_tokens, usd),
             )
+
+    def cloud_spend_since(self, since: datetime) -> List[Dict]:
+        """Every cloud turn recorded at or after the aware instant *since*."""
+        # Rows are SQLite's UTC "YYYY-MM-DD HH:MM:SS", so the bound is written alike.
+        bound = since.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT model, provider, input_tokens, output_tokens, usd "
+                "FROM cloud_spend WHERE created_at >= ? ORDER BY id",
+                (bound,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def cloud_spend_for_month(self, month: str) -> List[Dict]:
         """Every cloud turn recorded in *month* (``YYYY-MM``)."""

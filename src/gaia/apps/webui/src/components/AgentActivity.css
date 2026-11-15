@@ -272,7 +272,21 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    min-width: 0;
+    /* Takes only what the label leaves, so the page's site name is never the part that gets cut. */
+    flex: 1 1 0;
+    min-width: 12ch;
+}
+
+/* A step that needs a model offers it right under the row. */
+.flow-tool-offer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-block: 2px 6px;
+    margin-inline-start: 20px;
+    font-size: 13px;
+    color: var(--text-secondary);
 }
 
 .flow-tool-raw {

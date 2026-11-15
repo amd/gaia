@@ -72,6 +72,19 @@ describe('FolderPicker', () => {
         expect(onPick).toHaveBeenCalledWith('/home/u/.ssh');
     });
 
+    it('says why a folder cannot be used and disables Use this folder', async () => {
+        const why = "GAIA can't be given /home/u: it is your home directory. Pick a narrower folder.";
+        vi.mocked(api.browseFiles).mockResolvedValue({ ...listing([folder('Documents')]), folder_refusal: why });
+        const onPick = vi.fn();
+        render(<FolderPicker onPick={onPick} onClose={vi.fn()} />);
+
+        expect(await screen.findByText(why)).toBeInTheDocument();
+        const use = screen.getByRole('button', { name: 'Use this folder' });
+        expect(use).toBeDisabled();
+        fireEvent.click(use);
+        expect(onPick).not.toHaveBeenCalled();
+    });
+
     it('starts with hidden folders tucked away each time it opens', async () => {
         vi.mocked(api.browseFiles).mockResolvedValue(listing([folder('.config'), folder('Documents')]));
         const { unmount } = render(<FolderPicker onPick={vi.fn()} onClose={vi.fn()} />);

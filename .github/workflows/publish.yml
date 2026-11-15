@@ -428,7 +428,8 @@ jobs:
     name: Tagged commit passed CI
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    # The 80-minute CI wait, plus up to an hour for a spent API budget to reset.
+    timeout-minutes: 150
     permissions:
       contents: read
       actions: write   # read the commit's runs; dispatch the missing ones
@@ -1396,7 +1397,8 @@ jobs:
     # Drop this when the report becomes the --strict gate.
     continue-on-error: true
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Its gh calls may wait up to an hour for the shared API budget to reset.
+    timeout-minutes: 75
     permissions:
       contents: read
       actions: read   # the dry run's manifest artifact

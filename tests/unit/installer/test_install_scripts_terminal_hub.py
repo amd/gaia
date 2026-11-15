@@ -1293,6 +1293,136 @@ def test_ps1_a_tampered_agent_fails_the_install(tmp_path, fake_hub):
     assert not (bin_dir / "gaia-agent.exe").exists()
 
 
+# ── #7187: the daemon starts the agent the installer placed ────────────────
+#
+# A fresh home laid out by the real install functions, then the daemon's own
+# user-mode resolve and `gaia init --check`'s agent test, run as the frozen
+# gaia in that bin dir with no source-checkout lock -- an installed GAIA.
+
+
+def _as_installed_gaia(monkeypatch, tmp_path, gaia_dir: Path, exe: str) -> None:
+    from gaia.daemon.sidecars import platform as plat
+
+    monkeypatch.setenv("GAIA_HOME", str(gaia_dir))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-path"))
+    monkeypatch.setattr(
+        plat, "default_lock_path", lambda agent_id="email": tmp_path / "no.lock"
+    )
+    monkeypatch.setattr("gaia.frozen.is_frozen", lambda: True)
+    monkeypatch.setattr(sys, "executable", str(gaia_dir / "bin" / exe))
+
+
+def _daemon_spawn_argv():
+    from gaia.daemon.sidecars.manager import AgentSidecarManager
+    from gaia.daemon.sidecars.spec import builtin_specs
+
+    manager = AgentSidecarManager(builtin_specs()["gaia"], mode="user")
+    argv, _ = manager.build_spawn_command(port=9321)
+    return argv, manager.installed_binary_version
+
+
+def _check_counts_agent():
+    from gaia.installer.init_command import _agent_ready_for_check
+
+    return _agent_ready_for_check("gaia")
+
+
+# install.ps1 places gaia-agent.exe; only a Windows daemon looks for that name.
+windows_only = pytest.mark.skipif(
+    sys.platform != "win32", reason="install.ps1 only installs on Windows"
+)
+
+
+def _ps1_install_agent(tmp_path, base_url):
+    """install.ps1's Install-FlagshipAgent, writing into the profile's ~/.gaia/bin."""
+    result, _ = _run_ps1(
+        tmp_path,
+        base_url,
+        '$GAIA_BIN = Join-Path $env:USERPROFILE ".gaia\\bin"\n'
+        '$ok = Install-FlagshipAgent; Write-Host "FLAGSHIP=$ok"',
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "FLAGSHIP=True" in result.stdout
+    return tmp_path / "profile" / ".gaia"
+
+
+@needs_powershell
+@windows_only
+def test_daemon_starts_the_agent_install_ps1_placed(tmp_path, fake_hub, monkeypatch):
+    gaia_dir = _ps1_install_agent(tmp_path, fake_hub.base)
+    agent = gaia_dir / "bin" / "gaia-agent.exe"
+    _as_installed_gaia(monkeypatch, tmp_path, gaia_dir, "gaia.exe")
+
+    argv, version = _daemon_spawn_argv()
+
+    assert Path(argv[0]) == agent
+    assert version == HUB_VERSION
+    assert _check_counts_agent() is True
+
+
+@needs_powershell
+@windows_only
+def test_daemon_refuses_an_agent_replaced_after_install_ps1(
+    tmp_path, fake_hub, monkeypatch
+):
+    from gaia.daemon.sidecars.errors import SidecarSpawnError
+
+    gaia_dir = _ps1_install_agent(tmp_path, fake_hub.base)
+    (gaia_dir / "bin" / "gaia-agent.exe").write_bytes(b"MZ swapped in later")
+    _as_installed_gaia(monkeypatch, tmp_path, gaia_dir, "gaia.exe")
+
+    with pytest.raises(SidecarSpawnError) as exc_info:
+        _daemon_spawn_argv()
+    msg = str(exc_info.value)
+    assert "does not match the SHA-256 its installer recorded" in msg
+    assert "gaia init" in msg
+    assert _check_counts_agent() is False
+
+
+@needs_powershell
+@windows_only
+def test_an_rc_pin_records_the_candidates_agent_version(
+    tmp_path, fake_hub, monkeypatch
+):
+    result, _ = _run_ps1(
+        tmp_path,
+        fake_hub.base,
+        '$GAIA_BIN = Join-Path $env:USERPROFILE ".gaia\\bin"\n'
+        "$pin = Resolve-Pin; $ok = Install-FlagshipAgent -Pin $pin; "
+        'Write-Host "FLAGSHIP=$ok"',
+        tag=RC_TAG,
+    )
+    assert "FLAGSHIP=True" in result.stdout, result.stdout + result.stderr
+    gaia_dir = tmp_path / "profile" / ".gaia"
+    _as_installed_gaia(monkeypatch, tmp_path, gaia_dir, "gaia.exe")
+
+    _, version = _daemon_spawn_argv()
+
+    assert version == RC_AGENT_VERSION
+
+
+@posix_only
+@needs_curl
+def test_daemon_starts_the_agent_install_sh_placed(tmp_path, fake_hub, monkeypatch):
+    result, _, agent = _run_bootstrap(tmp_path, fake_hub.base)
+    assert "FLAGSHIP_INSTALLED=1" in result.stdout, result.stdout + result.stderr
+    gaia_dir = tmp_path / "home" / ".gaia"
+    _as_installed_gaia(monkeypatch, tmp_path, gaia_dir, "gaia")
+
+    argv, version = _daemon_spawn_argv()
+
+    assert Path(argv[0]) == agent
+    assert version == HUB_VERSION
+    assert _check_counts_agent() is True
+
+    agent.write_bytes(b"#!/bin/sh\necho swapped\n")
+    from gaia.daemon.sidecars.errors import SidecarSpawnError
+
+    with pytest.raises(SidecarSpawnError, match="does not match"):
+        _daemon_spawn_argv()
+    assert _check_counts_agent() is False
+
+
 # ── a pinned release: core, terminal and agent from the same release ───────
 
 

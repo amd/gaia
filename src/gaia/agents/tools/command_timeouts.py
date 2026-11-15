@@ -25,7 +25,8 @@ class default. Five classes, no hidden heuristics, table below.
 +----------------+---------+------------------------------------------------+
 | ``script``     |   600 s | a script run by an interpreter — ``python      |
 |                |         | x.py``, ``python -m pkg``, ``python -c``,      |
-|                |         | node, Rscript, bash/pwsh scripts, ``./x.sh``   |
+|                |         | node, Rscript, bash/pwsh scripts, ``./x.sh``,  |
+|                |         | ``gaia discord``                               |
 +----------------+---------+------------------------------------------------+
 | ``default``    |    30 s | everything else — the read-only allowlist      |
 |                |         | (ls, cat, grep, stat, git status …)            |
@@ -269,7 +270,9 @@ _SUBCOMMAND_CLASS: Dict[str, Dict[str, TimeoutClass]] = {
     "choco": {"install": BUILD, "upgrade": BUILD},
     "winget": {"install": BUILD, "upgrade": BUILD},
     "scoop": {"install": BUILD, "update": BUILD},
-    "gaia": {"eval": TEST, "test": TEST, "init": BUILD},
+    # ``gaia discord`` imports GAIA (10-15 s on a busy PC) and asks gh for its
+    # token, so the 30 s default kills it before it writes anything.
+    "gaia": {"eval": TEST, "test": TEST, "init": BUILD, "discord": SCRIPT},
 }
 
 # ``npm run <script>`` / ``pnpm run`` / ``yarn run`` — the script name decides.

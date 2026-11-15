@@ -60,6 +60,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null, systemStatus: null,
         backendConnected: true, showMemoryDashboard: false, showSchedules: false, settingsSection: null,
+        setupAgain: false,
     });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
 });
@@ -148,6 +149,21 @@ describe('a set-up install whose model server is down at launch', () => {
         await advance(0);
 
         expect(text()).toContain('First-run setup');
+    });
+
+    it('a model list in the wrong shape keeps the chats and says so, without offering setup (#8058)', async () => {
+        mocked.checkSetup.mockResolvedValue({
+            ...SERVER_DOWN, model_list_unread: true,
+            reasons: ["Could not read the model list from http://127.0.0.1:9/api/v1: it isn't in the expected shape"],
+        });
+        render(<App />);
+        await advance(0);
+
+        expect(text()).not.toContain('First-run setup');
+        expect(text()).toContain('Harbor plans');
+        expect(text()).toContain("its list of models came back in a shape GAIA can't read");
+        expect(text()).not.toContain(NOTICE);
+        expect(screen.queryByRole('button', { name: 'Open setup' })).not.toBeInTheDocument();
     });
 
     it('a set-up PC missing something other than the server still gets setup', async () => {

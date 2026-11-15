@@ -196,6 +196,7 @@ def tick(chat, monkeypatch):
     monkeypatch.setitem(sys.modules, "gaia_agent", fake_pkg)
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
     monkeypatch.setattr(AgentLoop, "_get_actionable_goals", lambda self: [])
+    monkeypatch.setattr(AgentLoop, "_settle_goal", staticmethod(lambda *a: None))
 
     loop = AgentLoop()
     loop._db = chat.db
