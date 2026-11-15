@@ -483,6 +483,12 @@ cursor. `EmailSearchResponse` returns `count`, a list of `EmailSearchResultItem`
 `EmailAddress` objects), and `next_page_token`. Fetch the full body via the triage
 path.
 
+On an Outlook mailbox a `query` supports a plain phrase, `from:`, `subject:`,
+`is:unread`/`is:read`, and `newer_than:`/`older_than:` durations. Any other
+`is:` value (such as `is:starred`), `after:`, `before:`, `newer:`, `older:`,
+`label:`, `has:`, and `in:` are rejected with an error, as is one query that
+mixes `from:`/`subject:`/phrase terms with `is:`/`newer_than:`/`older_than:`.
+
 ### Mailbox actions — archive & phishing-quarantine (#1779)
 
 Mutating actions are gated by a single-use confirmation-token handshake, mirroring
