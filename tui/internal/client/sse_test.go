@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -791,6 +792,64 @@ func TestSSEClientTranscriptFallsBackToStreamedTokens(t *testing.T) {
 }
 
 // --- terminal-event contract -------------------------------------------------
+
+// A daemon killed mid-answer resets the connection; the user gets the plain
+// service-stopped message, not the socket error.
+func TestSSEClientConnectionDroppedMidRunSaysTheServiceStopped(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reset bool
+	}{{"reset", true}, {"cut short", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+				frame(w, `{"type":"token","delta":"half an ans"}`)
+				flush()
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Errorf("hijack the stream: %v", err)
+					return
+				}
+				if tcp, ok := conn.(*net.TCPConn); ok && tc.reset {
+					_ = tcp.SetLinger(0)
+				}
+				_ = conn.Close()
+			}
+
+			c := f.client(t)
+			defer c.Close()
+
+			ch, err := c.Send(context.Background(), "triage")
+			if err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+			got := collect(t, ch)
+
+			last, ok := got[len(got)-1].(event.CanonicalErrorEvent)
+			if !ok {
+				t.Fatalf("last event = %T, want a CanonicalErrorEvent (%v)", got[len(got)-1], typeNames(got))
+			}
+			if last.Detail != event.ServiceStoppedDetail {
+				t.Errorf("detail = %q, want the plain service-stopped message", last.Detail)
+			}
+			if last.RawDetail == "" {
+				t.Error("the socket error must be kept for the log")
+			}
+			if last.Status != http.StatusBadGateway || last.Source != "tui" {
+				t.Errorf("status/source = %d/%q, want 502/tui", last.Status, last.Source)
+			}
+		})
+	}
+}
+
+func TestConnectionDroppedIgnoresOtherErrors(t *testing.T) {
+	if connectionDropped(nil) || connectionDropped(context.Canceled) || connectionDropped(fmt.Errorf("bad frame")) {
+		t.Fatal("only a broken connection counts as the service stopping")
+	}
+	if !connectionDropped(fmt.Errorf("read: %w", io.ErrUnexpectedEOF)) {
+		t.Fatal("a cut-short body is a broken connection")
+	}
+}
 
 // A stream that ends without final/error is a FAILURE, not an empty success.
 func TestSSEClientStreamWithoutTerminalEventIsAnError(t *testing.T) {

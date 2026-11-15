@@ -22,6 +22,11 @@ const AgentStoppedDetail = "GAIA stopped unexpectedly while answering. Anything 
 const AgentStoppedBeforeAnswerDetail = "GAIA stopped unexpectedly before it could answer. " +
 	"Send your message again."
 
+// ServiceStoppedDetail is what the user sees when the connection to GAIA's
+// background service breaks mid-answer. The next message restarts the service.
+const ServiceStoppedDetail = "GAIA's background service stopped while answering. Anything it had " +
+	"already written is kept above. Send your message again."
+
 // ParseCanonicalEvent parses one canonical `/query` SSE data payload.
 //
 // It never returns an error, by design: the contract's receiving-end rules

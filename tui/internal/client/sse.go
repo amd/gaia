@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -598,12 +600,21 @@ func (s *SSEClient) consume(
 			Status: http.StatusServiceUnavailable,
 			Source: "tui",
 		})
+	case connectionDropped(reader.Err()):
+		s.opts.Logf("sse: the '%s' query stream broke mid-run: %v", s.agentID, reader.Err())
+		emit(event.CanonicalErrorEvent{
+			Type:      event.CanonicalTypeError,
+			Detail:    event.ServiceStoppedDetail,
+			RawDetail: reader.Err().Error(),
+			Status:    http.StatusBadGateway,
+			Source:    "tui",
+		})
 	case reader.Err() != nil:
 		emit(event.CanonicalErrorEvent{
 			Type: event.CanonicalTypeError,
 			Detail: fmt.Sprintf(
-				"the '%s' query stream failed mid-run: %v. Check `gaia daemon status`",
-				s.agentID, reader.Err()),
+				"the '%s' query stream failed mid-run: %s. Check `gaia daemon status`",
+				s.agentID, strings.TrimRight(reader.Err().Error(), ".")),
 			Status: http.StatusBadGateway,
 			Source: "tui",
 		})
@@ -633,6 +644,16 @@ func (s *SSEClient) consume(
 			s.mu.Unlock()
 		}
 	}()
+}
+
+// connectionDropped reports a read error from the connection to the daemon
+// breaking (reset, abort, cut-short body), as when the daemon is killed.
+func connectionDropped(err error) bool {
+	if err == nil {
+		return false
+	}
+	var opErr *net.OpError
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &opErr)
 }
 
 func (s *SSEClient) readTimeoutDetail(d time.Duration) string {
