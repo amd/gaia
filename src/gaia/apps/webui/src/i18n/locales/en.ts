@@ -2391,6 +2391,7 @@ export const enMessages = {
     'settings.advanced.notInstalledHint': 'GAIA needs it for every chat, cloud ones too. Setup installs it for you.',
     'settings.advanced.notRunningHint': 'Chats wait until it is back, cloud ones too. It normally starts on its own.',
     'settings.advanced.queryFailed': 'Could not query it: {reason}',
+    'settings.advanced.customModelInvalid': 'A model ID is a single line of up to 256 characters.',
     'settings.advanced.noneLoaded': 'None loaded',
     'settings.advanced.loadsFirst': 'None loaded yet — it loads with the first message.',
     'settings.advanced.loadsWhenBack': 'It loads once the model server is back.',
