@@ -14,6 +14,13 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   Server is not installed. Run `gaia init`". The `error` now says the model
   server didn't answer: send the message again, and if it keeps failing the
   server is its owner's to start, with no command.
+- **Cancel says how many attached documents were left unloaded.**
+  `POST /v1/gaia/query/{run_id}/cancel` now returns `documents_left` when it
+  stops the loading of the turn's attached documents, including for a cancel
+  that lands just after the run ended. A host that closes the stream on Stop
+  never read the loading step's "Stopped: N documents were not loaded" result,
+  so its user was told nothing. The field is `null` when nothing was left.
+
 - **No "I haven't confirmed this works" line under an answer that already
   reports the failure.** An answer such as "No, the suite fails: 1 failed",
   which claims no success, no longer ends with "… 1 of 2 pytest runs didn't

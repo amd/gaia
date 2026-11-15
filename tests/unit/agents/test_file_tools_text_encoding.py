@@ -14,8 +14,10 @@ import pytest
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
-from gaia.agents.tools.text_files import MATCH_EXCERPT_CHARS, match_excerpt
+from gaia.agents.tools.text_files import MATCH_EXCERPT_CHARS, match_excerpt, read_text
 from gaia.security import PathValidator
+from gaia.utils.text_decoding import SNIFF_BYTES
+from tests.fixtures.legacy_text import LEGACY_SAMPLES, UNDECODABLE
 
 SECRET = "Le code d'accès du coffre est 7731-Ω."
 NEEDLE = "NEEDLE=ORCHID-93"
@@ -28,7 +30,12 @@ def search_tools():
         FileSearchToolsMixin().register_file_search_tools()
         yield {
             name: _TOOL_REGISTRY[name]["function"]
-            for name in ("read_file", "search_file_content", "get_file_info")
+            for name in (
+                "read_file",
+                "search_file_content",
+                "get_file_info",
+                "analyze_data_file",
+            )
         }
     finally:
         _TOOL_REGISTRY.clear()
@@ -259,8 +266,8 @@ class TestWindowsAnsiTextReadsAsText:
 
     @pytest.mark.parametrize(
         "data",
-        [b"caf\xe9 \x81 is undefined in cp1252", b"caf\xe9\x00\x01\x02"],
-        ids=["undefined-byte", "control-bytes"],
+        [bytes(range(128, 256)) * 8, b"caf\xe9\x00\x01\x02"],
+        ids=["no-encoding-fits", "control-bytes"],
     )
     def test_bytes_that_are_not_cp1252_text_stay_binary(
         self, search_tools, data, tmp_path
@@ -274,5 +281,144 @@ class TestWindowsAnsiTextReadsAsText:
         from gaia.agents.tools import text_files
 
         path = tmp_path / "long.txt"
-        path.write_bytes(b"a" * (text_files._SNIFF_BYTES - 1) + "€".encode("utf-8"))
+        path.write_bytes(b"a" * (SNIFF_BYTES - 1) + "€".encode("utf-8"))
         assert text_files.text_encoding(path) == "utf-8"
+
+    def test_a_western_character_past_the_sniff_limit_still_reads(self, tmp_path):
+        from gaia.agents.tools import text_files
+
+        path = tmp_path / "long.log"
+        text = "plain line\n" * (SNIFF_BYTES // 8) + "café costs 5 €\n"
+        path.write_bytes(text.encode("cp1252"))
+
+        assert text_files.read_text(path) == (text, "cp1252")
+
+    def test_cyrillic_names_in_an_english_csv_are_not_windows_ansi(self, tmp_path):
+        from gaia.agents.tools import text_files
+
+        path = tmp_path / "orders.csv"
+        text = "".join(
+            f"{i},customer,{'Иванов Петров' if i % 10 == 0 else 'John Smith'},"
+            "2024-01-01,order shipped ok\n"
+            for i in range(800)
+        )
+        path.write_bytes(text.encode("cp1251"))
+
+        assert text_files.read_text(path) == (text, "cp1251")
+
+    def test_search_matches_a_coloured_log_with_an_accent(self, search_tools, tmp_path):
+        path = tmp_path / "app.log"
+        path.write_bytes(b"\x1b[32mINFO\x1b[0m caf\xe9 opened\nERROR disk full\n")
+        result = search_tools["search_file_content"]("ERROR", directory=str(tmp_path))
+        assert [(m["line"], m["content"]) for m in result["matches"]] == [
+            (2, "ERROR disk full")
+        ]
+
+    def test_text_ending_in_a_dos_eof_marker_reads(self, tmp_path):
+        from gaia.agents.tools import text_files
+
+        path = tmp_path / "old.txt"
+        path.write_bytes("Menü für Café\n".encode("cp1252") + b"\x1a")
+        assert text_files.read_text(path) == ("Menü für Café\n\x1a", "cp1252")
+
+    def test_late_non_utf8_byte_is_judged_on_a_bounded_window(self, tmp_path):
+        from gaia.utils.text_decoding import file_encoding
+
+        # The NUL far past the accent is outside the window, so it can't be read.
+        path = tmp_path / "huge.log"
+        path.write_bytes(
+            b"plain line\n" * (SNIFF_BYTES // 8)
+            + "café costs 5 €\n".encode("cp1252")
+            + b"plain line\n" * (SNIFF_BYTES // 4)
+            + b"\x00"
+        )
+        assert file_encoding(path) == "cp1252"
+
+
+def _legacy_file(tmp_path, text, encoding, name="notes.csv"):
+    path = tmp_path / name
+    path.write_bytes(text.encode(encoding))
+    return path
+
+
+@pytest.mark.parametrize(**LEGACY_SAMPLES)
+class TestLegacyCodePagesReadAsText:
+    """Windows-1256, Shift-JIS, GBK and Windows-1251 came back as mojibake (#8040)."""
+
+    def test_read_text(self, tmp_path, text, encoding):
+        content, used = read_text(_legacy_file(tmp_path, text, encoding))
+        assert content == text
+        assert used not in ("utf-8", "cp1252")
+
+    @pytest.mark.parametrize("tools", ["search_tools", "io_tools"])
+    def test_read_file(self, request, tools, tmp_path, text, encoding):
+        path = _legacy_file(tmp_path, text, encoding)
+        read_file = request.getfixturevalue(tools)["read_file"]
+        result = read_file(str(path))
+        assert result["status"] == "success"
+        assert result["content"] == text
+        assert read_file(str(path), offset=4, limit=10)["content"] == text[4:14]
+
+    def test_search_file_content(self, search_tools, tmp_path, text, encoding):
+        path = _legacy_file(tmp_path, text, encoding)
+        line = text.splitlines()[2]
+        word = line.split(",")[1]
+        result = search_tools["search_file_content"](word, directory=str(path.parent))
+        assert [(m["line"], m["content"]) for m in result["matches"]] == [(3, line)]
+
+    def test_search_code(self, io_tools, tmp_path, text, encoding):
+        path = _legacy_file(tmp_path, text, encoding)
+        line = text.splitlines()[2]
+        result = io_tools["search_code"](
+            directory=str(path.parent),
+            pattern=line.split(",")[1],
+            file_extension=".csv",
+        )
+        assert result["results"][0]["matches"] == [{"line": 3, "content": line}]
+
+    def test_get_file_info(self, search_tools, tmp_path, text, encoding):
+        result = search_tools["get_file_info"](
+            str(_legacy_file(tmp_path, text, encoding))
+        )
+        assert result["preview"] == text.rstrip("\n")
+        assert result["csv_columns"] == text.splitlines()[0].split(",")
+
+    def test_analyze_data_file(self, search_tools, tmp_path, text, encoding):
+        result = search_tools["analyze_data_file"](
+            str(_legacy_file(tmp_path, text, encoding))
+        )
+        assert result["status"] == "success", result
+        assert result["columns"] == text.splitlines()[0].split(",")
+        assert result["row_count"] == 3
+
+    def test_a_character_cut_at_the_sniff_limit(self, tmp_path, text, encoding):
+        """The 64 KB sniff can split a double-byte character; detection still holds."""
+        body = text.encode(encoding)
+        for pad in range(4):
+            path = tmp_path / f"long{pad}.txt"
+            data = b"x" * pad + body * (SNIFF_BYTES // len(body) + 2)
+            path.write_bytes(data)
+            assert read_text(path)[0] == data.decode(encoding)
+
+
+class TestUndecodableTextNamesTheFile:
+    def test_read_text_raises_naming_the_file(self, tmp_path):
+        path = tmp_path / "scrambled.txt"
+        path.write_bytes(UNDECODABLE)
+        with pytest.raises(UnicodeDecodeError, match="scrambled.txt"):
+            read_text(path)
+
+    def test_get_file_info_says_it_cannot_decode(self, search_tools, tmp_path):
+        path = tmp_path / "scrambled.txt"
+        path.write_bytes(UNDECODABLE)
+        result = search_tools["get_file_info"](str(path))
+        assert result["encoding"] == "unknown"
+        assert "Could not decode" in result["preview"]
+        assert "scrambled.txt" in result["preview"]
+
+    def test_analyze_data_file_says_it_cannot_decode(self, search_tools, tmp_path):
+        path = tmp_path / "scrambled.csv"
+        path.write_bytes(UNDECODABLE)
+        result = search_tools["analyze_data_file"](str(path))
+        assert result["status"] == "error"
+        assert "scrambled.csv" in result["error"]
