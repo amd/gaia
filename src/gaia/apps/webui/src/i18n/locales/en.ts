@@ -1015,6 +1015,8 @@ export const enMessages = {
     'docs.notAddedServer': '{name} couldn\'t be added: GAIA\'s model server isn\'t answering. Retry on its row once it\'s back.',
     'docs.unreadable.one': '{n} couldn\'t be read',
     'docs.unreadable.other': '{n} couldn\'t be read',
+    'docs.serverWaiting.one': '{n} waiting for the model server',
+    'docs.serverWaiting.other': '{n} waiting for the model server',
     'docsBar.count.one': '{n} document',
     'docsBar.count.other': '{n} documents',
     'docsBar.failed.one': '{n} couldn\'t be read',

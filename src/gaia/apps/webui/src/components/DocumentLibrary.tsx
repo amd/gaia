@@ -19,7 +19,7 @@ import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
-import { serverFailureText } from '../utils/documentFailure';
+import { isServerFailure, serverFailureText } from '../utils/documentFailure';
 import './DocumentLibrary.css';
 
 /** Split a stored indexing error into a one-line summary and the rest. */
@@ -295,7 +295,10 @@ export function DocumentLibrary() {
     const shownDocs = documents.filter((d) => d.id !== pendingRemoval?.id);
     const shownCount = shownDocs.length;
     const totalSize = shownDocs.reduce((sum, d) => sum + d.file_size, 0);
-    const unreadableCount = shownDocs.filter((d) => d.indexing_status === 'failed').length;
+    const failedDocs = shownDocs.filter((d) => d.indexing_status === 'failed');
+    // A file that failed only because the model server was down isn't unreadable.
+    const serverWaitCount = failedDocs.filter((d) => isServerFailure(d.error_kind)).length;
+    const unreadableCount = failedDocs.length - serverWaitCount;
 
     /** Attach a document where the user chose, and say where it went. */
     const attachToTarget = useCallback(async (docId: string, filename: string) => {
@@ -870,9 +873,12 @@ export function DocumentLibrary() {
                     {/* Stats */}
                     {shownCount > 0 && (
                         <div className="doc-stats">
-                            <span>{t.plural('docs.count', shownCount - unreadableCount)}</span>
+                            <span>{t.plural('docs.count', shownCount - failedDocs.length)}</span>
                             {unreadableCount > 0 && (
                                 <span className="doc-stats-failed">{t.plural('docs.unreadable', unreadableCount)}</span>
+                            )}
+                            {serverWaitCount > 0 && (
+                                <span className="doc-stats-failed doc-stats-server">{t.plural('docs.serverWaiting', serverWaitCount)}</span>
                             )}
                             <span>&middot;</span>
                             <bdi dir="ltr">{formatSize(totalSize)}</bdi>

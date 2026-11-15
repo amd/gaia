@@ -1015,6 +1015,8 @@ const messages: Messages = {
     'docs.notAddedServer': 'تعذّرت إضافة {name}: خادم النماذج في GAIA لا يستجيب. أعد المحاولة من صفّه عندما يعود.',
     'docs.unreadable.one': 'تعذّرت قراءتها: {n}',
     'docs.unreadable.other': 'تعذّرت قراءتها: {n}',
+    'docs.serverWaiting.one': 'بانتظار خادم النماذج: {n}',
+    'docs.serverWaiting.other': 'بانتظار خادم النماذج: {n}',
     'docsBar.count.one': 'المستندات: {n}',
     'docsBar.count.other': 'المستندات: {n}',
     'docsBar.failed.one': 'تعذّرت قراءتها: {n}',

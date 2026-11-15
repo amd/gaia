@@ -1389,6 +1389,11 @@ for (const locale of ['en', 'ar']) {
         await expect(row).toBeVisible();
         await expect(row).not.toContainText('HTTPConnectionPool');
         if (locale === 'ar') expect(await untranslated(page, '.doc-failure', 'bdi')).toEqual([]);
+        // The count above the list agrees with the row: the file isn't unreadable.
+        const stats = page.locator('.doc-stats');
+        await expect(stats.locator('.doc-stats-server')).toBeVisible();
+        await expect(stats).not.toContainText(locale === 'ar' ? 'تعذّرت قراءتها' : "couldn't be read");
+        if (locale === 'ar') expect(await untranslated(page, '.doc-stats', 'bdi')).toEqual([]);
         await shot(page, `documents-${locale}-server-down`);
         expect(await audit(page)).toEqual([]);
     });
