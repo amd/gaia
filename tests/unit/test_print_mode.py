@@ -735,6 +735,32 @@ def test_a_missing_default_model_names_default_model(stub_env, monkeypatch, caps
     assert "last_model" not in err
 
 
+def test_a_local_hybrid_classifier_that_is_not_downloaded_is_refused(
+    stub_env, monkeypatch, capsys
+):
+    from gaia.llm import hybrid
+
+    class _Router:
+        def __init__(self):
+            self.settings = hybrid.HybridSettings(
+                cheap_model="amd.Cheap",
+                strong_model="amd.Strong",
+                classifier_model="Local-Classifier-GGUF",
+            )
+
+        def decide(self, text, base_url=None):
+            raise AssertionError("the classifier must not run")
+
+    monkeypatch.setattr(hybrid, "HybridRouter", _Router)
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    assert print_mode.run("q", model="hybrid") == 1
+    err = capsys.readouterr().err
+    assert "Local-Classifier-GGUF is not downloaded (5.6 GB)" in err
+    assert "`gaia config set hybrid_classifier_model <id>`" in err
+    assert [c.kwargs["preload"] for c in stub_env.call_args_list] == [False]
+
+
 def test_a_gateway_model_the_catalog_leaves_out_is_not_called_undownloaded(
     stub_env, monkeypatch
 ):

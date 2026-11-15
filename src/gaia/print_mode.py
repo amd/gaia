@@ -278,7 +278,10 @@ def _route(text: str, model: Optional[str], base_url: Optional[str]):
     if not is_hybrid_model(_resolve_model(model)):
         return model, None, None
     router = HybridRouter()
-    detected = _start_server(router.settings.classifier_model, base_url)
+    classifier = _model_on_disk(
+        router.settings.classifier_model, base_url, setting="hybrid_classifier_model"
+    )
+    detected = _start_server(classifier, base_url)
     route = router.decide(text, base_url=base_url or detected)
     label = (
         f"{route.kind}, difficulty {route.difficulty}, {route.stakes} stakes"
@@ -322,11 +325,14 @@ def _resolve_model(model: Optional[str]) -> Optional[str]:
     return model
 
 
-def _model_on_disk(model: Optional[str], base_url: Optional[str]) -> str:
+def _model_on_disk(
+    model: Optional[str], base_url: Optional[str], setting: Optional[str] = None
+) -> str:
     """The model this run uses, refused unless it can answer without a download.
 
     Unset means the model the Agent UI and TUI reopen on. A headless run never
-    downloads a model on its own: that is gigabytes nobody agreed to.
+    downloads a model on its own: that is gigabytes nobody agreed to. *setting*
+    names the config key that chose *model*, for the refusal's remedy.
     """
     from gaia.llm.lemonade_client import (
         LemonadeClient,
@@ -347,12 +353,15 @@ def _model_on_disk(model: Optional[str], base_url: Optional[str]) -> str:
     if not info["downloaded"]:
         raise PrintModeError(
             f"{model} is not downloaded ({info['size_gb']:.1f} GB), and gaia -p "
-            f"does not download models. {_missing_model_remedy(model, requested)}"
+            f"does not download models. "
+            f"{_missing_model_remedy(model, requested, setting)}"
         )
     return model
 
 
-def _missing_model_remedy(model: str, requested: Optional[str]) -> str:
+def _missing_model_remedy(
+    model: str, requested: Optional[str], setting: Optional[str] = None
+) -> str:
     """What makes the next run work, given where *model* came from.
 
     The order is ``--model``, then ``last_model``, then ``default_model``, so a
@@ -361,6 +370,8 @@ def _missing_model_remedy(model: str, requested: Optional[str]) -> str:
     from gaia.config import GaiaConfig
 
     download = "or download it from the GAIA app's Settings > Model."
+    if setting:
+        return f"Run `gaia config set {setting} <id>` with a model you have, {download}"
     if requested:
         return f"Pass --model with a model you have, {download}"
     if GaiaConfig.load().last_model == model:
