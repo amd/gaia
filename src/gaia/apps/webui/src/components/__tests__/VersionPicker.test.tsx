@@ -118,6 +118,23 @@ describe('VersionPicker', () => {
         expect(screen.getAllByText(/updates are paused/i).length).toBeGreaterThan(0);
     });
 
+    it('on a Mac links the picked version to its release page instead of installing it', async () => {
+        const user = userEvent.setup();
+        const bridge = makeUpdaterBridge();
+        vi.stubGlobal('gaiaUpdater', bridge);
+        render(<VersionPicker onClose={() => {}} manualInstall />);
+
+        await waitFor(() => screen.getByText('0.20.0'));
+        await user.click(screen.getByRole('button', { name: /0\.20\.0/i }));
+
+        const link = screen.getByRole('link', { name: /open the release page/i });
+        expect(link).toHaveAttribute('href', 'https://github.com/amd/gaia/releases/tag/v0.20.0');
+        expect(screen.getByText(/can't install a version itself on this mac/i)).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /install & restart/i })).toBeNull();
+        expect(screen.queryByText(/updates are paused/i)).toBeNull();
+        expect(bridge.installVersion).not.toHaveBeenCalled();
+    });
+
     it('does not steal focus from the focused control when the view changes', async () => {
         const user = userEvent.setup();
         render(<VersionPicker onClose={() => {}} />);

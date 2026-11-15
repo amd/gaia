@@ -17,7 +17,7 @@ it.each([
     ['request_user_input', 'Asked you'],
     ['find_files', 'Found files'],
     ['search_past_conversations', 'Searched past chats'],
-    ['index_documents', 'Indexed documents'],
+    ['index_documents', 'Added documents'],
 ])('names the GAIA agent\'s %s step instead of "Used tool"', (tool, label) => {
     render(<AgentActivity steps={[step(tool)]} isActive={false} />);
 
@@ -118,6 +118,28 @@ it('says the user declined a call, not that it failed, even with a narration', (
     expect(screen.getByText('You declined: Running Python')).toBeInTheDocument();
     expect(screen.queryByText(/failed|denied by the user/)).toBeNull();
     expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
+});
+
+it('says a call nobody answered timed out and never ran', () => {
+    const timedOut: AgentStep = {
+        ...step('run_shell_command', false, false), timedOut: true, narration: 'Running ls',
+        result: "Nobody answered the confirmation for 'run_shell_command' within 600 s, so it did not run.",
+    };
+    const { container } = render(<AgentActivity steps={[timedOut]} isActive={false} />);
+
+    expect(screen.getByText('Timed out, nothing ran: Running command')).toBeInTheDocument();
+    expect(screen.queryByText(/failed|declined|Nobody answered/)).toBeNull();
+    expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
+});
+
+it('names a timed-out call in a folded summary, not as a decline', () => {
+    const steps: AgentStep[] = [
+        { ...step('read_file'), id: 1, detail: 'a' },
+        { ...step('run_shell_command', false, false), id: 2, timedOut: true },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Read file, a step timed out$/ })).toBeInTheDocument();
 });
 
 it('names a declined call in a folded summary', () => {

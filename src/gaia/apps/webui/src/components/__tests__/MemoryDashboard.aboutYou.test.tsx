@@ -155,6 +155,18 @@ describe('What GAIA knows about you', () => {
         await waitFor(() => expect(mockedApi.editKnowledge).toHaveBeenCalledWith('k2', { content: 'Lives in Edmonton' }));
     });
 
+    it('Enter that picks an IME candidate does not save the edit', async () => {
+        await renderAbout();
+
+        fireEvent.click(within(itemRow('Lives in Calgary')).getByRole('button', { name: /Edit/ }));
+        const box = screen.getByRole('textbox', { name: 'Edit memory' });
+        fireEvent.change(box, { target: { value: 'にほ' } });
+        fireEvent.keyDown(box, { key: 'Enter', isComposing: true });
+
+        expect(mockedApi.editKnowledge).not.toHaveBeenCalled();
+        expect(screen.getByRole('textbox', { name: 'Edit memory' })).toBeInTheDocument();
+    });
+
     it('adds something the user types', async () => {
         await renderAbout();
 
@@ -169,6 +181,13 @@ describe('What GAIA knows about you', () => {
         }));
     });
 
+    it('uses a placeholder short enough to read in the add box', async () => {
+        await renderAbout();
+
+        const placeholder = screen.getByRole('textbox', { name: /Something GAIA should know/ }).getAttribute('placeholder') ?? '';
+        expect(placeholder).toBe('Tell GAIA something about you');
+    });
+
     it('hides a sensitive item until asked, and never prints it when forgotten', async () => {
         await renderAbout();
 
@@ -177,6 +196,20 @@ describe('What GAIA knows about you', () => {
 
         expect(await screen.findByText(/Forgotten: a sensitive memory/)).toBeInTheDocument();
         expect(screen.queryByText(/Bank PIN/)).not.toBeInTheDocument();
+    });
+
+    it('keeps a sensitive item hidden from its edit button until it is shown', async () => {
+        await renderAbout();
+
+        const edit = screen.getByRole('button', { name: 'Edit: sensitive memory' });
+        expect(edit).toBeDisabled();
+        fireEvent.click(edit);
+        expect(screen.queryByRole('textbox', { name: 'Edit memory' })).not.toBeInTheDocument();
+        expect(screen.queryByDisplayValue(/Bank PIN/)).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: /Sensitive — show/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'Edit: Bank PIN hint is the dog' }));
+        expect(screen.getByRole('textbox', { name: 'Edit memory' })).toHaveValue('Bank PIN hint is the dog');
     });
 
     it('says so when it has nothing yet', async () => {

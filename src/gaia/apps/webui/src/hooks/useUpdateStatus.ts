@@ -47,6 +47,10 @@ export interface UpdateState {
     previousVersion?: string | null;
     /** The app opened but its backend never came up. */
     startFailed?: boolean;
+    /** This build can't install updates itself (macOS): offer `downloadUrl` instead. */
+    manualInstall?: boolean;
+    /** The release page of the offered update, or null. */
+    downloadUrl?: string | null;
     /** The renderer couldn't read the status at all; the cause is in the log. */
     readFailed?: boolean;
 }

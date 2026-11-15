@@ -324,6 +324,47 @@ class TestEnsureModelPulled:
                 on_percent=lambda _p: None
             )
 
+    def test_a_model_already_on_disk_is_not_pulled(self, monkeypatch):
+        wire = Wire(
+            monkeypatch,
+            [
+                catalog(
+                    {
+                        "id": "Whisper-Base",
+                        "labels": ["transcription"],
+                        "downloaded": True,
+                    }
+                )
+            ],
+        )
+        client = LemonadeASRClient(base_url=BASE, model="Whisper-Base")
+        assert client.ensure_model() is False
+        assert len(wire.requests) == 1
+
+    def test_is_loaded_reads_the_models_lemonade_holds(self, monkeypatch):
+        health = FakeResponse(
+            body={"all_models_loaded": [{"model_name": "Whisper-Base"}]}
+        )
+        wire = Wire(monkeypatch, [health, FakeResponse(body={})])
+        assert LemonadeASRClient(base_url=BASE, model="Whisper-Base").is_loaded()
+        assert not LemonadeASRClient(base_url=BASE, model="Whisper-Base").is_loaded()
+        assert wire.requests[0].url == f"{BASE}/health"
+
+    def test_load_posts_the_model_by_name(self, monkeypatch):
+        """A built-in is loaded by name, the same way a transcription would load it."""
+        wire = Wire(monkeypatch, [FakeResponse(body={"status": "success"})])
+        LemonadeASRClient(base_url=BASE, model="Whisper-Base").load()
+        assert wire.requests[0].url == f"{BASE}/load"
+        assert wire.json_body(0) == {"model_name": "Whisper-Base"}
+
+    def test_a_failed_load_raises_the_speech_error(self, monkeypatch):
+        Wire(
+            monkeypatch,
+            [FakeResponse(status_code=500, body={"error": {"message": "no NPU"}})],
+        )
+        with pytest.raises(LemonadeASRError, match="no NPU"):
+            LemonadeASRClient(base_url=BASE, model="Whisper-Base").load()
+
     def test_unknown_model_lists_the_ones_that_exist(self, monkeypatch):
         Wire(
             monkeypatch,

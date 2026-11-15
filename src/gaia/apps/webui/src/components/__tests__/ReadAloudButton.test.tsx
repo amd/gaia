@@ -67,4 +67,10 @@ describe('Read aloud on a reply', () => {
         expect(alert.textContent).toContain("the model server isn't answering");
         expect(alert.textContent).toContain('Lemonade is down');
     });
+
+    it('tells the user a code-only reply has nothing to read', () => {
+        useReadAloudStore.setState({ error: { messageId: 's1:7', kind: 'nothing', detail: '' } });
+        render(<MessageBubble message={base} />);
+        expect(screen.getByRole('alert').textContent).toContain('nothing to read aloud here');
+    });
 });

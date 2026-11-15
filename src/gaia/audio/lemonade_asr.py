@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional
 
 import requests
 
-from gaia.audio.lemonade_service import LemonadeAudioService
+from gaia.audio.lemonade_service import MODEL_PULL_TIMEOUT, LemonadeAudioService
 from gaia.logger import get_logger
 from gaia.tool_cancellation import run_cancellable
 
@@ -543,19 +543,50 @@ class LemonadeASRClient(LemonadeAudioService):
         self,
         say: Optional[Callable[[str], None]] = None,
         on_percent: Optional[Callable[[int], None]] = None,
-    ) -> None:
+    ) -> bool:
         """Make the transcription model servable, pulling it if it is not yet.
 
         Lemonade would pull it inside the first request instead, which leaves a
         live caller waiting on a download it was never told about. *on_percent*
         receives the download's progress.
 
+        Returns:
+            ``True`` when this call downloaded the model.
+
         Raises:
             ConnectionError: Lemonade Server is not reachable.
             LemonadeASRError: The model is not in this server's catalog, or the
                 pull failed.
         """
-        self.ensure_model_pulled("transcription", say=say, on_percent=on_percent)
+        return self.ensure_model_pulled("transcription", say=say, on_percent=on_percent)
+
+    def is_loaded(self) -> bool:
+        """Whether Lemonade already holds the transcription model in memory."""
+        health = self._get_json(f"{self.base_url}/health", what="health check")
+        return any(
+            isinstance(entry, dict) and entry.get("model_name") == self.model
+            for entry in health.get("all_models_loaded") or []
+        )
+
+    def load(self) -> None:
+        """Load the transcription model now, outside any transcription request.
+
+        A first load can fetch more files — on an NPU, the encoder's compiled
+        cache — which Lemonade does at load time and reports no progress for.
+
+        Raises:
+            ConnectionError: Lemonade Server is not reachable.
+            LemonadeASRError: Lemonade refused or failed the load.
+        """
+        with self._slot_lease():
+            run_cancellable(
+                lambda: self._post_json(
+                    f"{self.base_url}/load",
+                    {"model_name": self.model},
+                    what=f"load of {self.model}",
+                    timeout=MODEL_PULL_TIMEOUT,
+                )
+            )
 
     def transcribe(
         self,

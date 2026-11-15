@@ -97,9 +97,6 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
     "src/gaia/agents/registry.py": {
         "terminal command": (1, "amd/gaia#7338"),
     },
-    "src/gaia/agents/tools/browser_tools.py": {
-        "terminal command": (1, "amd/gaia#7338"),
-    },
     "src/gaia/agents/tools/document_text.py": {
         "pip": (2, "amd/gaia#7338"),
     },

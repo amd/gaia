@@ -58,3 +58,22 @@ def test_a_wait_is_capped_below_the_watchdog(ask, asked, waited):
     )
 
     assert console.asked[-1]["timeout_seconds"] == waited
+
+
+def test_no_question_channel_never_answers_with_the_default(ask):
+    """Over Discord a "delete these 28 files?" came back "cancel" in 0 ms and
+    the model told the user they had cancelled; the list was never shown."""
+    from gaia_agent.chat_agent import NO_QUESTION_CHANNEL
+
+    entry, console = ask
+    console.answers_questions = False
+
+    reply = entry["function"](
+        message="Delete these 28 files?",
+        choices=["yes, delete them", "cancel"],
+        default_if_no_response="cancel",
+    )
+
+    assert reply == NO_QUESTION_CHANNEL
+    assert reply.startswith("__NO_RESPONSE__") and "cancel" not in reply
+    assert console.asked == [], "nobody is there to be asked"

@@ -42,6 +42,37 @@ export const SAFE_DISALLOWED_ELEMENTS: ReadonlyArray<string> = [
 /** A chat attachment the composer linked: one plain file name, no path. */
 const UPLOAD_URL_RE = /^\/api\/files\/uploads\/([A-Za-z0-9][A-Za-z0-9._-]*)$/;
 
+/** One attachment link the composer appends to a sent message. */
+export interface AttachmentLink {
+    name: string;
+    markdown: string;
+}
+
+const ATTACHMENT_LINE_RE = /^!?\[([^\]\n]*)\]\(\/api\/files\/uploads\/[A-Za-z0-9][A-Za-z0-9._-]*\)$/;
+
+/**
+ * Splits a sent message into the typed text and the attachment links the
+ * composer wrote after it (`text`, a blank line, then one link per line).
+ */
+export function splitAttachmentLinks(content: string): { text: string; links: AttachmentLink[] } {
+    const lines = content.split('\n');
+    let start = lines.length;
+    while (start > 0 && ATTACHMENT_LINE_RE.test(lines[start - 1])) start--;
+    if (start === lines.length || (start > 0 && lines[start - 1] !== '')) return { text: content, links: [] };
+    const links = lines.slice(start).map((line) => {
+        const m = ATTACHMENT_LINE_RE.exec(line)!;
+        return { name: m[1], markdown: line };
+    });
+    return { text: lines.slice(0, Math.max(0, start - 1)).join('\n'), links };
+}
+
+/** Puts attachment links back after edited text, the way the composer wrote them. */
+export function joinAttachmentLinks(text: string, links: AttachmentLink[]): string {
+    if (links.length === 0) return text;
+    const block = links.map((l) => l.markdown).join('\n');
+    return text ? `${text}\n\n${block}` : block;
+}
+
 /**
  * URL transformer for ReactMarkdown's `urlTransform` prop.
  * Returns the URL untouched if its scheme is in the allow list, otherwise

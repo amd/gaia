@@ -21,6 +21,13 @@ _PATH_TOKEN = re.compile(
     r"(?<![\w@/\\])[\w\-]+\.[A-Za-z][A-Za-z0-9]{0,5}\b"
 )
 
+#: "Translate this sentence: <text>": after the colon is text to work on, so
+#: a path inside it is part of the sentence, not a file to open.
+_TEXT_TASK = re.compile(
+    r"^\s*(?:please\s+)?(?:translate|rephrase|reword|paraphrase|proofread)\b[^:\n]*:",
+    re.IGNORECASE,
+)
+
 LOOK_FIRST_PROMPT = (
     "You answered without opening anything, but the request is about {paths} "
     "in the workspace. Look with your tools first (search for it if that exact "
@@ -36,7 +43,11 @@ def named_workspace_paths(request: str, root: str) -> List[str]:
     """
     root_real = os.path.realpath(root)
     found: List[str] = []
-    for token in _PATH_TOKEN.findall(request or ""):
+    request = request or ""
+    text_task = _TEXT_TASK.match(request)
+    if text_task:
+        request = request[: text_task.end()]
+    for token in _PATH_TOKEN.findall(request):
         token = token.rstrip(".")
         if not token or token in found:
             continue

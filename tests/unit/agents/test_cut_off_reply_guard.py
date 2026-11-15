@@ -270,7 +270,7 @@ def test_repeated_cut_offs_end_with_an_honest_failure(agent):
     result = agent.process_query("Fix gfx90a PR testing", max_steps=20)
 
     assert len(sent) == _MAX_CUT_OFF_CONTINUATIONS + 1
-    assert _final(result) == _CUT_OFF_FAILURE_ANSWER
+    assert _final(result).startswith(_CUT_OFF_FAILURE_ANSWER)
 
 
 def test_cut_off_on_the_last_step_is_an_honest_failure(agent):
@@ -279,7 +279,80 @@ def test_cut_off_on_the_last_step_is_an_honest_failure(agent):
     result = agent.process_query("Fix gfx90a PR testing", max_steps=1)
 
     assert len(sent) == 1
-    assert _final(result) == _CUT_OFF_FAILURE_ANSWER
+    assert _final(result).startswith(_CUT_OFF_FAILURE_ANSWER)
+
+
+def _cut_off_after_work(agent, usage):
+    """One edit, then every reply cut off: the long-horizon run's shape."""
+    _register_edit_file(agent)
+    edit = json.loads(EDIT_CALL)
+    edit["thought"] = "Rows 1-200 checked: 3 are short."
+    replies = [(json.dumps(edit), "tool_calls")] + [(TR8319_CB_REPLY, "length")] * (
+        _MAX_CUT_OFF_CONTINUATIONS + 1
+    )
+    sent = _stub_chat(agent, *replies)
+    agent.chat.send_messages.side_effect = _with_usage(
+        agent.chat, agent.chat.send_messages.side_effect, usage
+    )
+    agent.console.print_final_answer = MagicMock()
+    return sent
+
+
+def _with_usage(chat, send, usage):
+    """Replies carry *usage*, and each call is timed as the chat SDK times it."""
+
+    def _send(*args, **kwargs):
+        resp = send(*args, **kwargs)
+        resp.stats = dict(usage)
+        chat.llm_call_sink(
+            {
+                "seconds": 1.0,
+                "finish_reason": resp.finish_reason,
+                "completion_tokens": usage.get("completion_tokens"),
+            }
+        )
+        return resp
+
+    return _send
+
+
+def test_the_give_up_speaks_in_app_terms(agent):
+    _cut_off_after_work(agent, {})
+
+    result = agent.process_query("Inventory every file", max_steps=20)
+
+    answer = _final(result)
+    assert "max_tokens" not in answer
+    assert "output-token limit" not in answer
+    assert "smaller parts" in answer
+
+
+def test_the_give_up_keeps_what_was_done(agent):
+    _cut_off_after_work(agent, {})
+
+    result = agent.process_query("Inventory every file", max_steps=20)
+
+    answer = _final(result)
+    assert "edit_file: 1x" in answer
+    # The model's last finished words, so its progress isn't lost; never the
+    # cut-off fragments themselves.
+    assert "Rows 1-200 checked: 3 are short." in answer
+    assert "Now I understand the structure." not in answer
+
+
+def test_the_give_up_is_shown_with_the_turns_token_counts(agent):
+    usage = {"prompt_tokens": 30000, "completion_tokens": 8192}
+    _cut_off_after_work(agent, usage)
+
+    result = agent.process_query("Inventory every file", max_steps=20)
+
+    calls = _MAX_CUT_OFF_CONTINUATIONS + 2
+    agent.console.print_final_answer.assert_called_once()
+    printed = agent.console.print_final_answer.call_args
+    assert printed.kwargs["input_tokens"] == 30000 * calls
+    assert printed.kwargs["total_tokens"] == 8192 * calls
+    assert result["input_tokens"] == 30000 * calls
+    assert result["model_failed"] is True
 
 
 def test_repeated_cut_offs_fail_the_turn_and_the_live_gate(agent):

@@ -101,6 +101,15 @@ describe("a packaged app's bundled core", () => {
     expect(load().installer.isBackendCurrent()).toBe(true);
   });
 
+  test("a fresh install stays current once first-run setup installs the agent", () => {
+    const { installer, files, spawn, state } = load();
+    expect(installer.isBackendCurrent()).toBe(true);
+    expect(state()).toMatchObject({ state: "ready", version: "0.25.4-rc.3" });
+    files.set("/fixture/.gaia/agents/gaia/.installed", "{}");
+    expect(installer.isBackendCurrent()).toBe(true);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   test("still updates an installed agent through the core", async () => {
     const { installer, spawn } = load({ flagship: true });
     await installer.ensureBackend({ isPackaged: true });

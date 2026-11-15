@@ -311,6 +311,7 @@ class TestOffline:
         )
 
 
+@pytest.mark.usefixtures("pip_available")
 class TestInstall:
     def test_uses_the_installer_that_fits_this_environment(self):
         with (

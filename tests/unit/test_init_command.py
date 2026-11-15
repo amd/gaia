@@ -1363,6 +1363,50 @@ class TestCheckSetupStatus(unittest.TestCase):
             "http://localhost:51234/api/v1",
         )
 
+    def test_unreadable_model_list_is_a_server_problem_not_missing_models(self):
+        """#8058: a model list in the wrong shape made a finished install read
+        as first-run setup, with every downloaded model "not downloaded"."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        with (
+            self._embedded(self._running()),
+            patch.object(LemonadeClient, "health_check", return_value={}),
+            patch.object(
+                LemonadeClient,
+                "_send_request",
+                return_value={"object": "list", "data": "x"},
+            ) as send,
+        ):
+            status = check_setup_status(profile="chat")
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "server")
+        self.assertTrue(status.model_list_unread)
+        self.assertFalse(any("not downloaded" in r for r in status.reasons))
+        self.assertIn("expected shape", status.reasons[0])
+        self.assertEqual(status.to_json()["model_list_unread"], True)
+        self.assertTrue(send.call_args.args[1].endswith("/models?show_all=true"))
+
+    def test_a_server_gone_before_its_model_list_is_not_a_bad_list(self):
+        """Dying between /health and /models is an outage, not a bad list."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        with (
+            self._embedded(self._running()),
+            patch.object(LemonadeClient, "health_check", return_value={}),
+            patch.object(
+                LemonadeClient,
+                "_send_request",
+                side_effect=LemonadeClientError("connection refused"),
+            ),
+        ):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "server")
+        self.assertFalse(status.model_list_unread)
+
     AGENT_MISSING = "The GAIA agent is not installed -- run: gaia init"
 
     def _check_with_models(self, profile="gaia", have=True, **kwargs):
@@ -1516,12 +1560,27 @@ class TestCheckSetupStatus(unittest.TestCase):
         name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
         return gaia_home() / "bin" / name
 
-    def _install_terminal_agent(self, mode=0o755):
-        """What install.sh / install.ps1 leave: the agent in GAIA's bin dir, no sentinel."""
+    def _install_terminal_agent(self, mode=0o755, record=True):
+        """What install.sh / install.ps1 leave: the agent in GAIA's bin dir and
+        its install record beside it, no sentinel."""
+        import hashlib
+        import json
+
         path = self._terminal_agent_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"\x7fELF")
         path.chmod(mode)
+        if record:
+            (path.parent / "gaia-agent.install.json").write_text(
+                json.dumps(
+                    {
+                        "id": "gaia",
+                        "version": "0.3.9",
+                        "sha256": hashlib.sha256(b"\x7fELF").hexdigest(),
+                    }
+                ),
+                encoding="utf-8",
+            )
         return path
 
     def test_terminal_installer_agent_is_ready(self):
@@ -1535,6 +1594,32 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertFalse(status.agent_missing)
         self.assertEqual(status.reasons, [])
         self.assertEqual(status.warnings, [])
+
+    def test_terminal_installer_agent_without_a_record_is_not_ready(self):
+        """#7187: the daemon cannot verify a copy with no install record, so the
+        check must not count it either."""
+        self._remove_flagship()
+        self._install_terminal_agent(record=False)
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
+
+    def test_a_tampered_terminal_installer_agent_is_not_ready(self):
+        self._remove_flagship()
+        self._install_terminal_agent().write_bytes(b"\x7fELF-replaced")
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
+
+    def test_a_corrupt_terminal_install_record_is_not_ready(self):
+        self._remove_flagship()
+        path = self._install_terminal_agent()
+        (path.parent / "gaia-agent.install.json").write_text("{not json")
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
 
     def test_terminal_installer_agent_never_asks_the_hub(self):
         self._remove_flagship()
@@ -1564,7 +1649,7 @@ class TestCheckSetupStatus(unittest.TestCase):
     def _frozen_at(self, directory):
         """Run the check as the frozen gaia in *directory*."""
         name = "gaia.exe" if sys.platform == "win32" else "gaia"
-        frozen = patch("gaia.installer.init_command.is_frozen", return_value=True)
+        frozen = patch("gaia.frozen.is_frozen", return_value=True)
         exe = patch.object(sys, "executable", str(directory / name))
         frozen.start()
         exe.start()

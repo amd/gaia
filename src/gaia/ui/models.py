@@ -286,6 +286,8 @@ class InitTaskInfo(BaseModel):
     """Summary of a boot-time initialization task (embedded in SystemStatus)."""
 
     name: str
+    # The UI shows banner.boot.<step> in the user's language, never ``name``.
+    step: Optional[str] = None
     status: str  # pending | running | done | failed
 
 
@@ -309,6 +311,9 @@ class PolicyNotice(BaseModel):
     severity: Literal["info", "warning"]
     url: Optional[str] = None
     reason: Optional[str] = None
+    # "model_server_down" when nothing answered; the UI words that itself.
+    cause: Optional[str] = None
+    models: Optional[List[str]] = None
 
 
 class SettingsResponse(BaseModel):
@@ -639,6 +644,8 @@ class AgentStepResponse(BaseModel):
     success: Optional[bool] = None
     # The user said no to this call; a reload must not show it as failed.
     declined: Optional[bool] = None
+    # Nobody answered its prompt in time; it never ran either.
+    timedOut: Optional[bool] = None
     active: bool = False
     planSteps: Optional[List[str]] = None
     planNarrations: Optional[List[str]] = None
@@ -661,6 +668,19 @@ class AgentStepResponse(BaseModel):
     # card from history.
     render: Optional[str] = None
     data: Optional[Any] = None
+    # A model the call needed and didn't find; a reopened chat still offers it.
+    needsModel: Optional[str] = None
+
+
+class TurnRouteResponse(BaseModel):
+    """The model a ``hybrid`` turn was routed to, and why."""
+
+    model: str
+    reason: str = ""
+    # True once the classifier has failed several turns in a row.
+    degraded: bool = False
+    # A one-line warning for the user when ``degraded``; empty otherwise.
+    notice: str = ""
 
 
 class InferenceStatsResponse(BaseModel):
@@ -680,6 +700,8 @@ class InferenceStatsResponse(BaseModel):
     retried: Optional[bool] = None
     # Where the turn was answered, as the footer says it: "on your GPU", "via Fireworks AI".
     place: Optional[str] = None
+    # Set on a ``hybrid`` session's turns.
+    route: Optional[TurnRouteResponse] = None
 
 
 class TurnSummaryPage(BaseModel):
@@ -807,6 +829,7 @@ class DocumentResponse(BaseModel):
     # Set with last_error when retrying can't help until the file is fixed:
     # "corrupted", "encrypted", "empty" (no extractable text), "empty_file"
     # (nothing to index) or "unsupported_workbook" (.xls or password-protected).
+    # "model_server_down" / "model_server_busy": the file is fine; retry later.
     error_kind: Optional[str] = None
 
 
@@ -860,6 +883,8 @@ class BrowseResponse(BaseModel):
     parent_path: Optional[str] = None
     entries: List[FileEntry]
     quick_links: List[QuickLink] = Field(default_factory=list)
+    # Why a chat can't be given this folder (home, a drive root, ...); None if it can.
+    folder_refusal: Optional[str] = None
 
 
 # ── Folder Indexing ────────────────────────────────────────────────────────
@@ -879,6 +904,8 @@ class IndexFolderResponse(BaseModel):
     failed: int = 0
     # Files in the folder that aren't a type GAIA indexes.
     skipped: int = 0
+    # Images in the folder: GAIA reads them only when picked one by one.
+    skipped_images: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 

@@ -1056,6 +1056,25 @@ func TestAServerThatStopsAnsweringIsAFaultNotAStep(t *testing.T) {
 	}
 }
 
+// #8058: setup cannot fix a server that sends its model list in the wrong shape.
+func TestAnUnreadableModelListIsNotASetupFix(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) {
+		return jsonStub(t, 1, `{"ready": false, "stage": "server", "model_list_unread": true, "reasons": ["Could not read the model list"], "models": []}`), nil
+	})
+
+	row := modelRow(localRunner{})
+
+	if row.FirstRun || row.State != StateFailed {
+		t.Fatalf("an unreadable model list rendered as a first-run step: %+v", row)
+	}
+	if row.Fix == FixRunSetup || strings.Contains(row.Line, "not answering") {
+		t.Errorf("row offers setup for a server that answers: %+v", row)
+	}
+	if !strings.Contains(row.Line, "model list") {
+		t.Errorf("line = %q, want it to name the model list", row.Line)
+	}
+}
+
 // A system Lemonade the TUI cannot start itself must not get GAIA's private one
 // started beside it.
 func TestAutoStartLeavesASystemInstallAlone(t *testing.T) {

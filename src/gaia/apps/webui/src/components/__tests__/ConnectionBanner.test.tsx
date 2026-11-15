@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { ErrorNotice } from '../settings/ErrorNotice';
 import { useChatStore } from '../../stores/chatStore';
@@ -64,13 +64,44 @@ describe('a model picked from the list', () => {
 });
 
 describe('the start-up banner', () => {
-    it('names the boot task that is running', () => {
-        useChatStore.setState({ systemStatus: {
-            lemonade_running: true, init_state: 'initializing',
-            init_tasks: [{ name: 'Checking LLM server', status: 'done' }, { name: 'Loading AI model', status: 'running' }],
-        } as SystemStatus });
+    const booting = (step: string | undefined, name: string) => useChatStore.setState({ systemStatus: {
+        lemonade_running: true, init_state: 'initializing',
+        init_tasks: [{ name: 'Checking LLM server', step: 'check_server', status: 'done' }, { name, step, status: 'running' }],
+    } as SystemStatus });
+
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    it.each([
+        ['check_server', 'Checking LLM server', 'Checking the model server', 'جارٍ فحص خادم النماذج'],
+        ['load_libraries', 'Loading ML libraries', 'Getting document search ready', 'جارٍ تجهيز البحث في المستندات'],
+        ['load_model', 'Loading AI model', 'Loading the model', 'جارٍ تحميل النموذج'],
+    ])('names the %s step in the interface language, not the server\'s label', (step, name, en, ar) => {
+        booting(step, name);
+        const { unmount } = render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent(en);
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
         render(<ConnectionBanner />);
-        expect(screen.getByRole('status')).toHaveTextContent('Loading AI model');
+        expect(screen.getByRole('status')).toHaveTextContent(ar);
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
+    });
+
+    it.each([
+        ['an unknown step', 'warm_flux_capacitor', 'Warming the flux capacitor'],
+        ['no step at all', undefined, 'Loading AI model'],
+    ])('reads as getting GAIA ready for %s, never the server\'s label', (_, step, name) => {
+        booting(step, name);
+        const { unmount } = render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent('Getting GAIA ready');
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent('جارٍ تجهيز GAIA');
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
     });
 
     it('never says it is loading once every boot task has finished', () => {
@@ -140,11 +171,45 @@ describe('the model server is down', () => {
             lemonade_running: false, lemonade_error: 'Lemonade health query failed', start_command: '/usr/bin/lemond',
         } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(container).toHaveTextContent('The model server is not answering (Lemonade health query failed)');
+        expect(container).toHaveTextContent("The model server isn't answering.");
+        expect(container).not.toHaveTextContent('Lemonade');
         expect(container).toHaveTextContent('may be busy');
         expect(container).not.toHaveTextContent("isn't running");
         expect(container).toHaveTextContent('If it stays this way, restart it:');
         expect(container.querySelector('code')?.textContent).toBe('/usr/bin/lemond');
+    });
+
+    it.each([
+        ['hung', { lemonade_error: 'Lemonade health query failed' }, 'خادم النماذج لا يستجيب', 'فأعد تشغيله'],
+        ['stopped', {}, 'خادم النماذج لا يعمل', 'لتشغيله يدويًا'],
+    ])('reads in Arabic when the model server is %s, the command kept left to right', (_, extra, message, hint) => {
+        useChatStore.setState({ locale: 'ar', systemStatus: {
+            lemonade_running: false, start_command: '/usr/bin/lemond', ...extra,
+        } as SystemStatus });
+        try {
+            const { container } = render(<ConnectionBanner />);
+            expect(container).toHaveTextContent(message);
+            expect(container).toHaveTextContent(hint);
+            const code = container.querySelector('code');
+            expect(code?.textContent).toBe('/usr/bin/lemond');
+            expect(code).toHaveAttribute('dir', 'ltr');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
+    });
+});
+
+describe('a model server that listens but never answers', () => {
+    it('does not offer local setup or name a setup command, since the server is installed', () => {
+        useChatStore.setState({ systemStatus: {
+            lemonade_running: false, lemonade_error: 'Lemonade did not answer in time',
+            start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
+        } as SystemStatus });
+        const { container } = render(<ConnectionBanner />);
+        expect(container).toHaveTextContent("The model server isn't answering.");
+        expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
+        expect(container).not.toHaveTextContent('Set up models on this PC');
+        expect(container).not.toHaveTextContent('gaia init');
     });
 });
 

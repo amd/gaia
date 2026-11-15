@@ -43,6 +43,10 @@ MIN_SCENARIOS_PER_SKILL = 2
 #: ~4.2 min/scenario, so covering all sixteen at two scenarios each would add
 #: over two hours to a suite already being split for length.
 DEFERRED: dict[str, str] = {
+    "automations": (
+        "Runs later through a delivery channel; its store, runner, CLI and policy "
+        "are unit-tested."
+    ),
     "calculators": (
         "The card does the math in the client; a skill scenario needs a judge "
         "that reads the card payload rather than the short reply."

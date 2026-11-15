@@ -27,10 +27,12 @@ from gaia.agents.base.tool_grants import grant_scope
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
+from .. import session_environment
 from .._chat_helpers import (
     _set_provisional_title,
     _spawn_background,
     model_context_messages,
+    refuse_unstreamed_sidecar_chat,
     stuck_producer,
     turn_takes_the_line,
 )
@@ -110,6 +112,8 @@ async def send_message(
     request.agent_type = flagship_only(
         http_request, request.agent_type, session.get("agent_type") or "chat"
     )
+    if not request.stream:
+        refuse_unstreamed_sidecar_chat(request.agent_type)
 
     # ── Per-session lock ─────────────────────────────────────────────
     # setdefault is atomic: safe under concurrent requests for the same session
@@ -426,6 +430,7 @@ async def _confirm_relayed_tool(
             ),
         )
     proxy = handler.active_relay_proxy
+    path_access = handler.relay_path_access(request.confirm_id)
     try:
         # Off the event loop: this is an HTTP round trip to the sidecar.
         delivered = await run_in_threadpool(
@@ -440,6 +445,8 @@ async def _confirm_relayed_tool(
         ) from exc
     if not delivered:
         raise stale
+    if request.approved and path_access:
+        session_environment.note_approved_path(request.session_id, path_access)
     if always:
         try:
             await run_in_threadpool(relayed_grants.refresh, proxy, request.session_id)
@@ -950,19 +957,34 @@ async def retry_with(
     http_request: Request,
     db: ChatDatabase = Depends(get_db),
 ):
-    """Answer the latest question again on another local model, to compare.
+    """Answer the latest question again on another model, to compare.
 
+    The other model runs on this PC, or at the cloud service that gave the
+    answer: the chat has already gone there, so nothing new leaves the PC.
     The answer is held until ``/api/chat/retry-with/choose`` keeps one.
     """
     from gaia.llm.lemonade_client import LemonadeClientError, resolve_ctx_size
+    from gaia.llm.local_only import cloud_blocked
 
-    from .._chat_helpers import _runs_on_this_pc
+    from .._chat_helpers import _runs_on_this_pc, _ui_cloud_provider
 
     sid = request.session_id
     if not db.get_session(sid):
         raise HTTPException(status_code=404, detail="Session not found")
+    record = db.get_message_record(sid, request.message_id)
+    cloud = _ui_cloud_provider(request.model)
+    answered_by = ((record or {}).get("inference_stats") or {}).get("model")
+    same_cloud = bool(cloud and answered_by) and cloud == _ui_cloud_provider(
+        answered_by
+    )
+    if same_cloud and cloud_blocked():
+        raise HTTPException(
+            status_code=400,
+            detail="Local only is on, so Retry with… can't use a cloud model. "
+            "Turn it off in Settings › Privacy, or pick a model on this PC.",
+        )
     try:
-        local = await asyncio.to_thread(_runs_on_this_pc, request.model)
+        local = same_cloud or await asyncio.to_thread(_runs_on_this_pc, request.model)
     except LemonadeClientError as exc:
         logger.error(
             "Retry with: couldn't check %s runs locally: %s", request.model, exc
@@ -976,14 +998,14 @@ async def retry_with(
     if not local:
         raise HTTPException(
             status_code=400,
-            detail="Retry with… compares models on this PC; pick a local model.",
+            detail="Retry with… compares models on this PC or at the cloud "
+            "service that answered; pick one of those.",
         )
     if db.latest_message_id(sid) != request.message_id:
         raise HTTPException(
             status_code=409,
             detail="Only the latest answer can be retried with another model.",
         )
-    record = db.get_message_record(sid, request.message_id)
     if record is None or record["role"] != "assistant":
         raise HTTPException(
             status_code=409, detail="Only an answer from GAIA can be retried."
@@ -1012,7 +1034,7 @@ async def retry_with(
                 earlier, question, resolve_ctx_size(request.model)
             )
             result = await asyncio.to_thread(
-                answer_retry.answer_with, request.model, messages
+                answer_retry.answer_with, request.model, messages, cloud=same_cloud
             )
         except answer_retry.RetryError as exc:
             raise HTTPException(status_code=exc.status, detail=str(exc)) from exc

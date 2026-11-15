@@ -609,7 +609,7 @@ class TestRelayedToolResult:
         )
         [step] = ui.events
         assert step["success"] is True
-        assert step["summary"].startswith("Found 2 file(s)")
+        assert step["summary"].startswith("Found 2 files")
 
     def test_full_tool_data_with_an_error_status_is_a_failure(self):
         ui = _FakeSSEHandler()

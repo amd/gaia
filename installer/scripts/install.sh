@@ -626,6 +626,17 @@ install_flagship_agent() {
         echo "  The GAIA Terminal UI still works; re-run this installer to retry."
         return 0
     fi
+    # GAIA's background service starts this copy only when it still matches
+    # the version and SHA-256 recorded beside it.
+    _record="$GAIA_BIN/gaia-agent.install.json"
+    if ! printf '{"id": "%s", "version": "%s", "sha256": "%s"}\n' \
+            "$FLAGSHIP_AGENT_ID" "$version" "$want" > "$_record.tmp" ||
+            ! mv -f "$_record.tmp" "$_record"; then
+        rm -f "$_record.tmp"
+        print_warning "Installed the GAIA agent, but could not write its install record $_record."
+        echo "  Fix:  check you can write to $GAIA_BIN, then re-run this installer."
+        return 0
+    fi
     # Read by show_next_steps: every path above this line leaves the machine
     # without an agent, and the closing banner must not promise one.
     FLAGSHIP_INSTALLED=1

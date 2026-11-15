@@ -60,7 +60,9 @@ export function Composer({
     // What is sent: the text plus a link for each attached file.
     const sentLength = attachments.compose(value.trim()).length;
     const tooLong = sentLength > MAX_MESSAGE_CHARS;
-    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong;
+    // A refused file would silently vanish on send, so it must be removed first.
+    const refusedNames = attachments.attachments.filter((a) => a.error).map((a) => a.name).join(', ');
+    const canSend = !disabled && (!streaming || queueWhileStreaming) && !attachments.uploading && hasContent && !tooLong && !refusedNames;
 
     const shownPlaceholder = disabledReason || placeholder || t('composer.placeholder');
 
@@ -120,7 +122,7 @@ export function Composer({
                             {a.isImage && a.url
                                 ? <img src={a.url} alt="" className="composer-attachment-thumb" />
                                 : <Icon size={14} aria-hidden="true" />}
-                            <span className="composer-attachment-name" title={a.name} dir="auto">{middleTruncate(a.name)}</span>
+                            <span className="composer-attachment-name" title={a.name} dir="ltr">{middleTruncate(a.name)}</span>
                             {a.uploading && (
                                 <span className="composer-attachment-state">
                                     {a.progress === undefined
@@ -162,6 +164,9 @@ export function Composer({
                     {t('composer.tooLong', { sent: sentLength.toLocaleString(), max: MAX_MESSAGE_CHARS.toLocaleString() })}
                     {' '}{t('composer.tooLongHint')}
                 </p>
+            )}
+            {refusedNames && hasContent && (
+                <p className="composer-limit-error" role="alert">{t('composer.removeRefused', { names: refusedNames })}</p>
             )}
             <div className="composer-row">
                 <div className="composer-row-left">
