@@ -11,9 +11,10 @@ file reads the same everywhere.
 """
 
 import codecs
+import itertools
 import os
 import unicodedata
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 from charset_normalizer import from_bytes
 
@@ -33,7 +34,8 @@ TRIED_ENCODINGS = (
 )
 
 # Bytes legacy code pages map to control characters text never holds; NUL marks binary.
-_CONTROL_BYTES = frozenset(range(32)) - {9, 10, 12, 13}
+# ESC (ANSI colour codes in logs) and SUB (DOS end-of-file) do turn up in real text.
+_CONTROL_BYTES = frozenset(range(32)) - {9, 10, 12, 13, 26, 27}
 
 #: How much of a file :func:`file_encoding` reads to decide.
 SNIFF_BYTES = 1 << 16
@@ -147,22 +149,39 @@ def file_encoding(path: Union[str, os.PathLike]) -> str:
         try:
             encoding = detect_encoding(head, truncated=truncated)
             # An ASCII head says nothing about the accented word on line 9,000.
-            if truncated and encoding == "utf-8" and not _rest_is_utf8(stream, head):
-                stream.seek(0)
-                encoding = detect_encoding(stream.read())
+            if truncated and encoding == "utf-8":
+                bad = _first_non_utf8(stream, head)
+                if bad is not None:
+                    encoding = detect_encoding(*_window_at(stream, bad))
         except UnicodeDecodeError as exc:
             raise name_file(exc, path) from exc
     return encoding
 
 
-def _rest_is_utf8(stream, head: bytes) -> bool:
-    """Whether *head* plus the rest of *stream* decodes as UTF-8."""
+def _first_non_utf8(stream, head: bytes) -> Optional[int]:
+    """Offset of the first byte in *head* plus the rest of *stream* that isn't UTF-8."""
     decoder = codecs.getincrementaldecoder("utf-8")()
-    try:
-        decoder.decode(head)
-        for chunk in iter(lambda: stream.read(1 << 20), b""):
-            decoder.decode(chunk)
-        decoder.decode(b"", final=True)
-    except UnicodeDecodeError:
-        return False
-    return True
+    chunks = itertools.chain((head,), iter(lambda: stream.read(1 << 20), b""))
+    consumed = 0
+    for chunk in itertools.chain(chunks, (b"",)):
+        # exc.start counts from the bytes the decoder held back from the last chunk.
+        pending = len(decoder.getstate()[0])
+        try:
+            decoder.decode(chunk, final=not chunk)
+        except UnicodeDecodeError as exc:
+            return consumed - pending + exc.start
+        consumed += len(chunk)
+    return None
+
+
+def _window_at(stream, offset: int) -> Tuple[bytes, bool]:
+    """``(bytes, truncated)``: up to :data:`SNIFF_BYTES` from the line holding *offset*."""
+    start = max(0, offset - SNIFF_BYTES // 2)
+    stream.seek(start)
+    window = stream.read(SNIFF_BYTES)
+    truncated = bool(stream.read(1))
+    if start:
+        # Start on a line boundary so a double-byte character isn't split.
+        newline = window.rfind(b"\n", 0, offset - start)
+        window = window[newline + 1 :]
+    return window, truncated

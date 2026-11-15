@@ -306,6 +306,34 @@ class TestWindowsAnsiTextReadsAsText:
 
         assert text_files.read_text(path) == (text, "cp1251")
 
+    def test_search_matches_a_coloured_log_with_an_accent(self, search_tools, tmp_path):
+        path = tmp_path / "app.log"
+        path.write_bytes(b"\x1b[32mINFO\x1b[0m caf\xe9 opened\nERROR disk full\n")
+        result = search_tools["search_file_content"]("ERROR", directory=str(tmp_path))
+        assert [(m["line"], m["content"]) for m in result["matches"]] == [
+            (2, "ERROR disk full")
+        ]
+
+    def test_text_ending_in_a_dos_eof_marker_reads(self, tmp_path):
+        from gaia.agents.tools import text_files
+
+        path = tmp_path / "old.txt"
+        path.write_bytes("Menü für Café\n".encode("cp1252") + b"\x1a")
+        assert text_files.read_text(path) == ("Menü für Café\n\x1a", "cp1252")
+
+    def test_late_non_utf8_byte_is_judged_on_a_bounded_window(self, tmp_path):
+        from gaia.utils.text_decoding import file_encoding
+
+        # The NUL far past the accent is outside the window, so it can't be read.
+        path = tmp_path / "huge.log"
+        path.write_bytes(
+            b"plain line\n" * (SNIFF_BYTES // 8)
+            + "café costs 5 €\n".encode("cp1252")
+            + b"plain line\n" * (SNIFF_BYTES // 4)
+            + b"\x00"
+        )
+        assert file_encoding(path) == "cp1252"
+
 
 def _legacy_file(tmp_path, text, encoding, name="notes.csv"):
     path = tmp_path / name
