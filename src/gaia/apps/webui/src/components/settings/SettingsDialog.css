@@ -762,7 +762,8 @@
     color: var(--text-primary);
 }
 
-.settings-more[open] {
+/* Flex open or closed: a display change on opening would skip the grow-open ease. */
+.settings-more {
     display: flex;
     flex-direction: column;
     gap: 3px;

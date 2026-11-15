@@ -684,6 +684,10 @@ textarea:focus-visible {
         transition-duration: 0.01ms !important;
         scroll-behavior: auto !important;
     }
+    /* A section's grow-open ease lives on this pseudo-element, which * doesn't reach. */
+    *::details-content {
+        transition-duration: 0.01ms !important;
+    }
     [data-theme="dark"] #root::after {
         display: none;
     }
