@@ -359,6 +359,17 @@
         "title": "Id",
         "type": "integer"
       },
+      "kept": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Kept"
+      },
       "label": {
         "title": "Label",
         "type": "string"
