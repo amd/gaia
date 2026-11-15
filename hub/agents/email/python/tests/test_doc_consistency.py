@@ -191,3 +191,33 @@ def test_npm_spec_states_the_contract_version():
         f"schema version split: contract.py = {version}, "
         f"npm/SPEC.md says {match.group(1)}. Update the SPEC.md intro too."
     )
+
+
+# ---------------------------------------------------------------------------
+# Outlook search — every operator the translator rejects is documented (#3588)
+# ---------------------------------------------------------------------------
+
+
+def _outlook_rejected_operators() -> list:
+    from gaia_agent_email.outlook_query import _UNSUPPORTED_OPERATOR_RE
+
+    match = re.search(r"\(\?P<op>([a-z|]+)\)", _UNSUPPORTED_OPERATOR_RE.pattern)
+    assert match, "_UNSUPPORTED_OPERATOR_RE no longer has a plain <op> alternation"
+    return match.group(1).split("|")
+
+
+@pytest.mark.parametrize(
+    "doc", [_NPM_SPEC, _CONTRACT_DOC], ids=["npm/SPEC.md", "CONTRACT.md"]
+)
+def test_search_docs_name_every_operator_outlook_rejects(doc):
+    """An integrator reading the search reference must see Outlook's limits.
+
+    The SPEC said "Gmail search semantics" with no backend caveat while
+    Outlook raised on eight operators.
+    """
+    text = doc.read_text(encoding="utf-8")
+    missing = [op for op in _outlook_rejected_operators() if f"`{op}:" not in text]
+    assert not missing, (
+        f"{doc.name} does not name the Outlook-rejected search operators "
+        f"{missing}; list them in the inbox-search section."
+    )

@@ -513,6 +513,14 @@ with a per-message fetch, so the cap bounds that fan-out. To page, pass the
 response's `next_page_token` back as the request's `page_token`. Each `messages[]`
 item:
 
+**Outlook mailboxes accept fewer operators.** On an Outlook mailbox a `query`
+supports a plain phrase, `from:`, `subject:`, `is:unread`/`is:read`, and
+`newer_than:`/`older_than:` durations (e.g. `newer_than:7d`). These operators
+are rejected with an error rather than run: any other `is:` value (such as
+`is:starred`), `after:`, `before:`, `newer:`, `older:`, `label:`, `has:`, and
+`in:`. One Outlook query also cannot mix `from:`/`subject:`/phrase terms with
+`is:`/`newer_than:`/`older_than:`; split it into two searches.
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | `string` | Provider message id (opaque) — pass to the agent/triage path to read in full. |
