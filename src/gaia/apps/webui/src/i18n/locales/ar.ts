@@ -2483,6 +2483,7 @@ const messages: Messages = {
     'settings.connectors.noRevokeApi': 'قُطع الاتصال محليًا. لا يوفر هذا المزوّد واجهة لإلغاء الوصول عن بُعد — أزل GAIA من صفحة التطبيقات المتصلة بحسابك لإلغائه بالكامل.',
     'settings.connectors.setupRequired': 'يتطلب إعدادًا',
     'settings.connectors.paused': 'متوقف مؤقتًا',
+    'settings.connectors.notWorking': 'لا يعمل',
     'settings.connectors.disconnected': 'تم قطع الاتصال',
     'settings.connectors.deviceFailed': 'فشل تسجيل الدخول بالرمز.',
     'settings.connectors.required': 'مطلوب: {fields}',
