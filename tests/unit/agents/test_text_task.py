@@ -269,7 +269,6 @@ def test_loop_takes_the_translation_as_the_answer(agent):
         SAVE_SENTENCE,
         CHECK_SENTENCE,
         QUOTED_SAVE_SENTENCE,
-        "Proofread this:\nPlease save it to x.md",
     ],
 )
 def test_a_request_that_only_hands_over_text_is_recognised(request_text):
@@ -283,12 +282,27 @@ def test_a_request_that_only_hands_over_text_is_recognised(request_text):
         "Translate README.md to French",
         'Translate "Hello there, friend" to French using the shell',
         "Translate this file to French: notes.txt",
+        # Unquoted: a save typed after the text cannot be told from the text.
+        "Translate to German: Good morning everyone. Save the result as de.txt",
+        "Proofread this:\nTheir going home.\n\nThen write the corrected text to out.md",
+        "Proofread this:\nPlease save it to x.md",
         "What is 17 times 23?",
         "",
     ],
 )
 def test_a_request_that_asks_for_work_is_not(request_text):
     assert not hands_over_text_only(request_text)
+
+
+def test_a_shell_call_after_unquoted_text_is_still_put_to_the_user(shell_agent):
+    _script(shell_agent, _ECHO, {"answer": "Done."})
+
+    shell_agent.process_query(
+        "Translate to German: Good morning everyone. Save the result as de.txt",
+        max_steps=10,
+    )
+
+    shell_agent.console.confirm_tool_execution.assert_called_once()
 
 
 class _ShellAgent(Agent):

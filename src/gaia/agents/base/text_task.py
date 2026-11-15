@@ -95,11 +95,18 @@ TEXT_ONLY_DECLINE = (
 
 
 def hands_over_text_only(request: str) -> bool:
-    """Whether *request* asks only for text work on text it supplies itself.
+    """Whether *request* asks only for text work on quoted text it supplies.
 
     False for any request whose own instruction names a file, a save or a
-    command: that work was asked for.
+    command: that work was asked for. False too when the text is not quoted:
+    a save typed after it cannot be told from the text, so the user is asked.
     """
     request = request or ""
+    colon = _TEXT_AFTER_COLON.match(request)
+    quoted = (
+        _LEADING_QUOTE.match(request[colon.end() :])
+        if colon and not _TARGET_BEFORE_COLON.search(colon.group())
+        else _QUOTED_TEXT.match(request)
+    )
     asked = instruction_part(request)
-    return asked != request and not _ASKS_FOR_WORK.search(asked)
+    return bool(quoted) and asked != request and not _ASKS_FOR_WORK.search(asked)
