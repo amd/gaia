@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.28"`                  |
+| Contract version   | `API_VERSION = "2.29"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -321,7 +321,7 @@ attached to the conversation. Send the whole set on every turn. Before the turn
 runs, the agent indexes the ones it has not indexed yet, so a file attached
 mid-conversation is read on the next turn, and drops from the session's index
 any file an earlier turn sent that this one leaves out, so a detached or deleted
-file is no longer searched. Send an empty list when none are attached. Each path is granted as that exact
+file is no longer searched. Send an empty list when none are attached. A conversation searches at most 100 documents or 10,000 passages at once: past that the rest are granted but not loaded, the `index_documents` step says how many and which limit was reached, and the agent loads one when asked about it by name. Each path is granted as that exact
 file, never its folder. A relative path is a `422`. A missing file, a folder, or
 a secret the path policy refuses is reported as not indexed in the turn's
 `index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
@@ -517,6 +517,10 @@ empty `final` and sends no `token` after the cancel, so a host keeps the text
 the `token` events already delivered. Answer text the model produced but the
 stream had not yet sent when the cancel landed is discarded with the
 half-written tail.
+
+A session on the `hybrid` model id gets `final.route` (contract ≥ 2.29): the
+turn's routing decision, with `model` naming the concrete model it ran on. Bill
+and label the turn by `route.model`, not by `hybrid`.
 
 `final` carries `context` (contract ≥ 2.21): what the next model call holds
 if the caller pushes this turn back as history — the same payload the Agent
@@ -771,6 +775,13 @@ The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models,
 grouped by provider, with `(default)` beside the configured default model;
 `/model <id>` switches the live client while preserving conversation and skills.
+A session built on the `hybrid` model id picks a cheap or strong model before
+each turn and runs the whole turn on it; once the classifier sent a turn to the
+strong model the session stays there until `/clear`. A classifier failure runs
+that one turn on the strong model without pinning the session.
+After 3 failed classifications in a row the turn prints a warning notice with
+the fix. `/model <id>` turns routing off. `process_query`'s result then carries a `route` record (see the
+gateway guide's Hybrid model section).
 The switch reply is one line naming the model, where it runs, and, for a cloud
 model, that messages and anything read from files or memory are sent there.
 Cloud IDs (`fireworks.*`, `amd.*`) route through Lemonade without local model

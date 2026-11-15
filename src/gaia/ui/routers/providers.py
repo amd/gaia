@@ -29,6 +29,7 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from gaia.llm.hybrid import HybridConfigError, is_hybrid_model
 from gaia.llm.local_only import (
     blocked_reason,
     cloud_blocked,
@@ -172,22 +173,44 @@ def _lemonade(
 
 
 def _cloud_error(
-    provider: str, status: int, body: Dict[str, Any], echo_body: bool = True
+    provider: str,
+    status: int,
+    body: Dict[str, Any],
+    echo_body: bool = True,
+    *,
+    install: bool = False,
 ) -> ProviderError:
-    """*echo_body* False for calls that carried a key: Lemonade may echo the request."""
+    """*echo_body* False for calls that carried a key: Lemonade may echo the request.
+
+    *install* is set for ``POST /install``, where a 404 means the endpoint is
+    missing and the version hint is always right. On the auth routes a 404 can
+    also mean the provider was never registered, which needs a registration hint.
+    """
     name = _NAMES[provider]
     if status in (401, 403):
         return ProviderError(f"{name} rejected the key. Check it and try again.", 401)
+    detail = body.get("error")
+    detail = detail if isinstance(detail, dict) else {}
+    message = detail.get("message")
+    error_type = detail.get("type")
     if status == 404:
         from gaia.llm.lemonade_launcher import describe_upgrade_hint
         from gaia.version import LEMONADE_MIN_VERSION
 
-        return ProviderError(
-            "This Lemonade cannot register cloud providers, so it is older than "
-            f"v{LEMONADE_MIN_VERSION}, the oldest version GAIA supports. "
-            f"{describe_upgrade_hint()}",
-            409,
-        )
+        if not install and isinstance(message, str) and "is not installed" in message:
+            return ProviderError(
+                f"Lemonade has no cloud provider registered for {name}, so it "
+                "cannot accept a key yet. Open Settings > Model and connect it "
+                "again, then try again.",
+                409,
+            )
+        if install or not error_type or error_type == "not_found":
+            return ProviderError(
+                "This Lemonade cannot register cloud providers, so it is older than "
+                f"v{LEMONADE_MIN_VERSION}, the oldest version GAIA supports. "
+                f"{describe_upgrade_hint()}",
+                409,
+            )
     if status == 409:
         from gaia.llm.cloud_keys import env_var_for
 
@@ -197,8 +220,7 @@ def _cloud_error(
             "the key blank to keep using it.",
             409,
         )
-    detail = (body.get("error") or {}) if isinstance(body.get("error"), dict) else {}
-    message = (detail.get("message") if echo_body else None) or f"HTTP {status}"
+    message = (message if echo_body else None) or f"HTTP {status}"
     return ProviderError(f"Lemonade could not configure {name}: {message}.", 502)
 
 
@@ -480,6 +502,7 @@ def _suggested_local_models() -> set:
 
 def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str, Any]]:
     """Chat models for *provider*; *offer_optional* adds the optional ones that fit."""
+    from gaia.installer import model_choice
     from gaia.llm.lemonade_client import (
         NPU_MODEL_LADDER,
         _model_ids_match,
@@ -531,7 +554,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                 "downloaded": bool(m.get("downloaded")) or is_cloud,
                 "labels": list(m.get("labels") or []),
                 "recipe": m.get("recipe"),
-                "size_gb": m.get("size"),
+                "size_gb": model_choice.download_size_gb(model_id, m.get("size")),
                 "rank": ranked[0] if ranked else None,
                 "note": ranked[1].note if ranked else None,
                 "evidence": ranked[1].evidence if ranked else None,
@@ -554,7 +577,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                     "labels": [],
                     "recipe": (req.recipe if req else None)
                     or ("flm" if runs_on_npu(model_id) else None),
-                    "size_gb": req.size_gb if req else None,
+                    "size_gb": model_choice.download_size_gb(model_id, None),
                     "rank": None,
                     "note": None,
                     "evidence": None,
@@ -657,7 +680,8 @@ def cloud_provider_name(model_id: str) -> Optional[str]:
     provider = provider_of(model_id)
     if provider != LOCAL:
         return _NAMES[provider]
-    return _ui_cloud_provider(model_id)
+    cloud = _ui_cloud_provider(model_id)
+    return _NAMES.get(cloud, cloud) if cloud else None
 
 
 def _is_cloud_model(model_id: str) -> bool:
@@ -689,13 +713,15 @@ def model_label(model_id: str) -> str:
     cloud = cloud_provider_name(model_id)
     if cloud is None:
         return f"{model_id} · local"
-    return f"{model_id.split('.', 1)[1].rsplit('/', 1)[-1]} · {cloud}"
+    return f"{display_name(model_id)} · {cloud}"
 
 
 def display_name(model_id: str) -> str:
     """The name a person reads: friendly for local models, bare for cloud ones."""
     from ..local_models import friendly_name
 
+    if is_hybrid_model(model_id):
+        return "Hybrid"
     if cloud_provider_name(model_id) is None:
         return friendly_name(model_id)
     return model_id.split(".", 1)[1].rsplit("/", 1)[-1]
@@ -710,7 +736,9 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
     try:
         # The model a new chat starts on, so the chip never names another.
         model = chosen or resolved_default_model()
-    except GaiaConfigError as e:
+        _learn_cloud_models(model)
+        cloud = cloud_provider_name(model)
+    except (GaiaConfigError, HybridConfigError) as e:
         # A new chat cannot start either; say why rather than name a model.
         return {
             "provider": LOCAL,
@@ -722,8 +750,6 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
             "is_default": True,
             "config_error": str(e),
         }
-    _learn_cloud_models(model)
-    cloud = cloud_provider_name(model)
     return {
         # The provider tab; ``local`` for a cloud provider GAIA has no tab for.
         "provider": provider_of(model),
@@ -1077,7 +1103,7 @@ def _install(provider: str, body: "ConnectRequest") -> None:
         },
     )
     if status >= 400:
-        raise _cloud_error(provider, status, result)
+        raise _cloud_error(provider, status, result, install=True)
 
 
 # Can restore and persist the last model, so a cross-site GET must not reach it.
@@ -2081,6 +2107,8 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         "memory_error": None,
         "error": None,
         "error_detail": None,
+        # "model_server_down" lets the UI word that failure in its own language.
+        "error_cause": None,
         "base_url": None,
         "owner": None,
         "busy": False,
@@ -2106,6 +2134,7 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
             else str(e)
         )
         view["error_detail"] = str(e)
+        view["error_cause"] = "model_server_down" if down else None
         return view
     entry = _chat_entry(health)
     warming = warmup.warm_up_status().get("state") == warmup.WARMING
