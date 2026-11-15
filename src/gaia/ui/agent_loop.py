@@ -641,6 +641,9 @@ class AgentLoop:
                         agent = fresh_agent = GaiaAgent(config)
                     _helpers._register_agent_memory_ops(agent)
                     agent.console = sse_handler
+                    # The tick's input is GAIA's own goal prompt, not the user's words;
+                    # a queued extraction would also keep this throwaway agent alive.
+                    agent._auto_extract_enabled = False
 
                 _helpers._restore_model_history(agent, db, session_id, tick_prompt)
 

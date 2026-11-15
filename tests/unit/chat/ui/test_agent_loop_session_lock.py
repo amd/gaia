@@ -245,6 +245,8 @@ async def test_tick_without_a_cached_agent_builds_the_flagship(env, monkeypatch)
     assert len(agent.calls) == 1
     # Nothing caches it, so its MCP servers would outlive the tick.
     assert agent.closed
+    # A queued memory extraction of GAIA's own prompt would keep it alive.
+    assert agent._auto_extract_enabled is False
 
 
 async def test_cancelling_an_inflight_goal_stops_its_background_tick(env):
