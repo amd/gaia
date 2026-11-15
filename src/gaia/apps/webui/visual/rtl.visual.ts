@@ -2832,8 +2832,8 @@ const untranslatedAttributes = (page: Page): Promise<string[]> =>
 
 for (const locale of ['ar', 'en']) {
     test.describe(`scheduled tasks (${locale})`, () => {
-        const openSchedules = async (page: Page, schedules?: unknown[]) => {
-            await open(page, '', locale, (p) => withSchedules(p, schedules));
+        const openSchedules = async (page: Page, schedules?: unknown[], theme: 'light' | 'dark' = 'light') => {
+            await open(page, '', locale, (p) => withSchedules(p, schedules), theme);
             await page.locator('.sb').getByRole('button', { name: locale === 'ar' ? /المهام المجدولة/ : /Scheduled tasks/ }).click();
             await expect(page.locator('.schedule-modal')).toBeVisible();
         };
@@ -2907,6 +2907,25 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.schedule-parsed-hint')).toHaveCount(0);
             await check(page, 'form-arabic-input');
         });
+
+        // Delete turned into "Confirm?" in place: a double-click deleted, and Escape closed the panel.
+        for (const theme of ['light', 'dark'] as const) {
+            test(`deleting a schedule asks in a dialog (${theme})`, async ({ page }) => {
+                await openSchedules(page, undefined, theme);
+                await page.locator('.schedule-card').first().locator('.btn-sm.danger').click();
+                const ask = page.getByRole('alertdialog');
+                await expect(ask).toBeVisible();
+                await expect(ask).toContainText('Morning brief');
+                await expect(ask.locator('.btn-secondary')).toBeFocused();
+                await shot(page, `schedules-${locale}-delete-ask-${theme}`);
+                expect(await audit(page)).toEqual([]);
+                if (locale === 'ar') expect(await untranslated(page, '.confirm-sheet', 'bdi')).toEqual([]);
+                await page.keyboard.press('Escape');
+                await expect(ask).toHaveCount(0);
+                await expect(page.locator('.schedule-modal')).toBeVisible();
+                await expect(page.locator('.schedule-card')).toHaveCount(SCHEDULE_ROWS.length);
+            });
+        }
     });
 }
 
