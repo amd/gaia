@@ -6,6 +6,9 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **The sidecar stops when the GAIA daemon that started it is killed.** It
+  used to keep running until the next daemon started; it now notices within
+  seconds and shuts down normally.
 - **With two mailboxes connected, `prescan()` now orders by sender preference
   across both (#3623).** Each mailbox used to be sorted on its own and the
   results joined, so the archive list could keep one mailbox's priority

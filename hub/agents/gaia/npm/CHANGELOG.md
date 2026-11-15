@@ -8,6 +8,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **The agent stops when the GAIA daemon that started it is killed.** It used
+  to keep running, holding memory and a port, until the next daemon started.
+  It now notices within seconds and shuts down normally.
 - **Cancel says how many attached documents were left unloaded.**
   `POST /v1/gaia/query/{run_id}/cancel` now returns `documents_left` when it
   stops the loading of the turn's attached documents, including for a cancel
