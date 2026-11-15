@@ -271,6 +271,17 @@
         "title": "Active",
         "type": "boolean"
       },
+      "autoDeclined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Autodeclined"
+      },
       "commandOutput": {
         "anyOf": [
           {

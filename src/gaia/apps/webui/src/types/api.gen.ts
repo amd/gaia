@@ -238,6 +238,7 @@ export interface AgentListResponse {
  */
 export interface AgentStepResponse {
   active?: boolean;
+  autoDeclined?: boolean | null;
   commandOutput?: CommandOutputResponse | null;
   currentStep?: number | null;
   data?: unknown;

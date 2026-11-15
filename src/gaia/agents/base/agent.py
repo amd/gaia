@@ -8854,7 +8854,12 @@ Do NOT wrap conversational replies in JSON.
                     or ""
                 )
             ):
-                return {**NOT_EXECUTED, "status": "denied", "error": TEXT_ONLY_DECLINE}
+                return {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "declined_by": "agent",
+                    "error": TEXT_ONLY_DECLINE,
+                }
             # Re-asking an unanswered prompt would hold the chat for another timeout.
             call_key = (
                 getattr(self, "_turn_seq", 0),

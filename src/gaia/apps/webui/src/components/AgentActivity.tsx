@@ -184,6 +184,7 @@ function toolFallbackLabel(step: AgentStep, t: Translate): string {
     return step.active
         ? say(t, meta.activeLabel)
         : step.timedOut ? t('tool.timedOut', { label: meta.activeLabel })
+        : step.autoDeclined ? t('tool.autoDeclined', { label: meta.activeLabel })
         : step.declined ? t('tool.declined', { label: meta.activeLabel })
         : step.success === false ? t('tool.failed', { label: meta.activeLabel })
         : unfinished ? t('tool.unfinished', { label: meta.activeLabel }) : say(t, meta.label);
@@ -196,7 +197,7 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     // GAIA writes this row itself, so it can say it in the UI's language.
     if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
     // A present-tense narration would read as if a call that never ran had run.
-    if ((step.declined || step.timedOut) && !step.active) return toolFallbackLabel(step, t);
+    if ((step.declined || step.timedOut || step.autoDeclined) && !step.active) return toolFallbackLabel(step, t);
     return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
 }
 
@@ -461,6 +462,7 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
         let label: MessageRef;
         let failedLabel: MessageRef | undefined;
         if (row.type === 'tool' && row.timedOut) label = ref('activity.timedOut');
+        else if (row.type === 'tool' && row.autoDeclined) label = ref('activity.autoDeclined');
         else if (row.type === 'tool' && row.declined) label = ref('activity.youDeclined');
         else if (row.type === 'tool') {
             const meta = getToolMeta(row.tool, row);
@@ -683,7 +685,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                 >
                                     {failed
                                         ? <AlertCircle size={13} className="agent-icon-error" />
-                                        : visible.some((r) => r.type === 'tool' && r.declined)
+                                        : visible.some((r) => r.type === 'tool' && (r.declined || r.autoDeclined))
                                             ? <Ban size={13} className="flow-steps-done" />
                                             : <CheckCircle2 size={13} className="flow-steps-done" />}
                                     <span className="flow-steps-text">{stepsSummary(visible, t)}</span>
@@ -918,7 +920,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const line = waiting ? t('activity.waiting') : live || toolRowText(step, t);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
-    const notRun = (!!step.declined || !!step.timedOut) && !step.active;
+    const notRun = (!!step.declined || !!step.timedOut || !!step.autoDeclined) && !step.active;
     // A missing vision model is said by the offer under the row, not by the tool's raw error.
     const failure = step.success === false && step.result && !notRun && !step.needsModel ? failureText(step, t) : '';
     const timing = waiting
