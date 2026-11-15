@@ -125,6 +125,33 @@ def test_moving_a_file_out_of_the_folder_is_refused(home, tmp_path, move_expr):
     assert not (home / "work" / "out.txt").exists()
 
 
+@pytest.mark.parametrize(
+    "change_expr",
+    [
+        "os.rename('notes.txt', os.path.join(HOME, '.keys', 'planted'))",
+        "os.replace('notes.txt', os.path.join(HOME, '.keys', 'id_decoy'))",
+        "shutil.copyfile('notes.txt', os.path.join(HOME, '.keys', 'id_decoy'))",
+        "os.link('notes.txt', os.path.join(HOME, '.keys', 'planted'))",
+        "os.symlink(os.path.abspath('notes.txt'), os.path.join(HOME, '.keys', 'planted'))",
+        "os.remove(os.path.join(HOME, '.keys', 'id_decoy'))",
+        "os.unlink(os.path.join(HOME, '.keys', 'id_decoy'))",
+        "shutil.rmtree(os.path.join(HOME, '.keys'))",
+    ],
+)
+def test_changing_what_the_folder_holds_is_refused(home, tmp_path, change_expr):
+    code = f"""
+        import os, shutil
+        HOME = {str(home)!r}
+        {change_expr}
+        """
+    run = _run(code, home, tmp_path)
+    assert run.returncode == 1
+    assert "PermissionError" in run.stderr
+    assert sorted(p.name for p in (home / ".keys").iterdir()) == ["id_decoy"]
+    assert (home / ".keys" / "id_decoy").read_text() == "SECRET-BYTES"
+    assert (home / "work" / "notes.txt").read_text() == "plain"
+
+
 def test_copying_a_hard_link_into_the_folder_is_refused(home, tmp_path):
     link = home / "work" / "hl.txt"
     os.link(home / ".keys" / "id_decoy", link)
@@ -139,16 +166,17 @@ def test_copying_a_hard_link_into_the_folder_is_refused(home, tmp_path):
     assert not (home / "work" / "out.txt").exists()
 
 
-def test_other_files_move_and_copy_as_usual(home, tmp_path):
+def test_other_files_move_copy_and_delete_as_usual(home, tmp_path):
     code = """
         import os, shutil
         shutil.copyfile('notes.txt', 'copy.txt')
         os.rename('notes.txt', 'renamed.txt')
+        os.remove('copy.txt')
         """
     run = _run(code, home, tmp_path)
     assert run.returncode == 0, run.stderr
     assert (home / "work" / "renamed.txt").read_text() == "plain"
-    assert (home / "work" / "copy.txt").read_text() == "plain"
+    assert not (home / "work" / "copy.txt").exists()
 
 
 def test_other_files_open_as_usual(home, tmp_path):

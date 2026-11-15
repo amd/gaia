@@ -309,21 +309,24 @@ def guarded_open_refusal(
     return None
 
 
-#: Audit events that copy or give a file a name outside its folder; args[0] is
-#: the source. Windows copies through CopyFile2, which raises no "open" event.
-_MOVE_EVENTS = frozenset(
-    {
-        "os.rename",
-        "os.link",
-        "shutil.copyfile",
-        "shutil.copytree",
-        "_winapi.CopyFile2",
-    }
-)
+#: Audit events that copy, move, link or delete files, with how many of their
+#: leading args are paths. Windows copies through CopyFile2, which raises no
+#: "open" event.
+_MOVE_EVENTS: Dict[str, int] = {
+    "os.rename": 2,
+    "os.link": 2,
+    "os.symlink": 2,
+    "shutil.copyfile": 2,
+    "shutil.copytree": 2,
+    "_winapi.CopyFile2": 2,
+    "os.remove": 1,
+    "os.rmdir": 1,
+    "shutil.rmtree": 1,
+}
 
 
 def guarded_move_refusal(path: object, folders: Sequence[str]) -> Optional[str]:
-    """Why copying, moving or linking *path* is refused: it is in or holds *folders*."""
+    """Why changing *path* is refused: it is in, or holds, one of *folders*."""
     if isinstance(path, int) or path is None:
         return None
     try:
@@ -352,15 +355,18 @@ def guard_folders(folders: Sequence[str]) -> None:
     def hook(event: str, args: tuple) -> None:
         if not args:
             return
-        if event in _MOVE_EVENTS:
-            # Copied or moved out, it would open under a name the folder check misses.
-            why = guarded_move_refusal(args[0], folders) or guarded_open_refusal(
-                args[0], folders, ids
+        paths = _MOVE_EVENTS.get(event)
+        if paths:
+            # Copied or moved out, a file would open under a name the folder
+            # check misses; moved in or deleted, the folder itself changes.
+            why = guarded_open_refusal(args[0], folders, ids) or next(
+                filter(None, (guarded_move_refusal(p, folders) for p in args[:paths])),
+                None,
             )
             if why:
                 raise PermissionError(
-                    f"GAIA does not let scripts copy, move or link this file: {why}. "
-                    "Do it yourself if you need to."
+                    "GAIA does not let scripts copy, move, link or delete this "
+                    f"file: {why}. Do it yourself if you need to."
                 )
             return
         if event != "open":
