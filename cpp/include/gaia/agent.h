@@ -325,6 +325,12 @@ protected:
         return std::nullopt;
     }
 
+    /// What is still untrue in the answer given after a send-back, in words for the
+    /// user. It is added under that answer; nullopt adds nothing.
+    virtual std::optional<std::string> unresolvedClaims(const std::string& /*answer*/) {
+        return std::nullopt;
+    }
+
     /// Called once as a query starts, before its first model call. Override to
     /// capture what the system prompt should hold fixed for the whole query.
     virtual void onTurnStart() {}

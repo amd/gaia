@@ -1845,18 +1845,30 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     int malformedStreak = 0;
     std::string stopReason;  // why the loop ended without an answer: loop | empty
     bool answerReviewed = false;
+    bool answerSentBack = false;
     // One chance for the agent to send a final answer back (reviewFinalAnswer).
     auto reviewOnce = [&](const std::string& answer) -> std::optional<Message> {
         if (answerReviewed || stepsTaken >= stepsLimit) return std::nullopt;
         answerReviewed = true;
         std::optional<std::string> note = reviewFinalAnswer(answer);
         if (!note) return std::nullopt;
+        answerSentBack = true;
         if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
         console_->printWarning("Answer sent back: " + *note);
         Message m;
         m.role = MessageRole::USER;
         m.content = "[Check before answering] " + *note;
         return m;
+    };
+    // The answer after a send-back is final; what it still gets wrong is told to the user.
+    auto withUnresolved = [&](std::string answer) {
+        if (!answerSentBack) return answer;
+        const std::optional<std::string> still = unresolvedClaims(answer);
+        if (!still || still->empty()) return answer;
+        if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"unresolved", *still}});
+        // Streamed text is already on screen; otherwise the note prints with the answer.
+        if (config_.streaming && !config_.structuredEvents) console_->printWarning(*still);
+        return answer + "\n\n" + *still;
     };
 
     while (stepsTaken < stepsLimit && finalAnswer.empty()) {
@@ -2234,7 +2246,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 messages.push_back(*pushback);
                 continue;
             }
-            finalAnswer = parsed.answer.value();
+            finalAnswer = withUnresolved(parsed.answer.value());
             if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
@@ -2316,7 +2328,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 messages.push_back(*pushback);
                 continue;
             }
-            finalAnswer = response;
+            finalAnswer = withUnresolved(response);
             if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
@@ -2357,7 +2369,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                     reply.role = MessageRole::ASSISTANT;
                     reply.content = text;
                     messages.push_back(reply);
-                    finalAnswer = text;
+                    finalAnswer = withUnresolved(text);
                     if (!cfg.streaming || cfg.structuredEvents) {
                         console_->printFinalAnswer(finalAnswer, totalUsage);
                     }

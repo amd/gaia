@@ -133,6 +133,21 @@ void GaiaAgent::registerTools() {
                     why = unquotedHostileName(args["command"].get<std::string>(), names);
                 }
                 if (why.empty()) why = pastedDataRefusal(args["command"].get<std::string>(), options_.workspaceRoots);
+#ifdef _WIN32
+                const bool posixShell = !BashTools::detectShell().empty();
+#else
+                const bool posixShell = true;
+#endif
+                if (why.empty() && posixShell) {
+                    std::string ran;  // the shell session keeps what earlier commands exported
+                    for (const auto& c : turnToolCalls()) {
+                        if (c.name == "bash_execute" && c.args.is_object() && c.args.contains("command") &&
+                            c.args["command"].is_string()) {
+                            ran += c.args["command"].get<std::string>() + "\n";
+                        }
+                    }
+                    why = shellExpandedScriptRefusal(args["command"].get<std::string>(), ran);
+                }
                 if (why.empty()) {
                     std::vector<CallSeen> earlier;
                     for (const auto& c : turnToolCalls()) earlier.push_back({c.name, c.args, c.output});
@@ -770,7 +785,7 @@ std::optional<std::string> GaiaAgent::unopenedFilesNote(const std::string& answe
                                                         const std::vector<CallSeen>& calls) {
     static const std::regex absent(
         R"(\b(?:not (?:found|mentioned|stated|specified|listed|included|provided|given|covered|available)\b)"
-        R"(|(?:does(?:n't| not)|do(?:n't| not)|did(?:n't| not)) (?:mention|contain|include|say|specify|state|list|cover|exist)\b)"
+        R"(|(?:does(?:n't| not)|do(?:n't| not)|did(?:n't| not)) (?:mention|contain|include|say|specify|state|list|cover|exist|find|locate|see)\b)"
         R"(|no (?:information|mention|record|details?|data|reference) (?:about|of|on|for|regarding)\b)"
         R"(|(?:could(?:n't| not)|was unable to|unable to|cannot|can't) (?:find|locate|determine|confirm)\b)"
         R"(|(?:is|are) (?:missing|absent)\b))",
@@ -832,7 +847,7 @@ std::optional<std::string> GaiaAgent::handBackNote(const std::string& answer, co
         std::regex::icase);
     // The work is not done yet, as opposed to an optional extra after a finished answer.
     static const std::regex undone(
-        R"(\b(?:haven't|have not|didn't|did not|not yet|before i|could not|couldn't|wasn't able)\b)",
+        R"(\b(?:haven't|have not|didn't|did not|not yet|before i|could not|couldn't|wasn't able|i (?:still )?need to)\b)",
         std::regex::icase);
     static const std::regex namesFile(R"(\w\.[a-z][a-z0-9]{1,3}\b)", std::regex::icase);
     const std::string plain = plainPunctuation(answer, "-");
@@ -936,6 +951,67 @@ std::string GaiaAgent::pastedDataRefusal(const std::string& command, const std::
                        "path inside the script instead (for example pandas.read_csv or the csv module), or write the "
                        "script to a .py file with file_write and run it.";
             }
+        }
+    }
+    return "";
+}
+
+std::string GaiaAgent::shellExpandedScriptRefusal(const std::string& command, const std::string& earlier) {
+    static const std::string interpreter = R"((?:^|[\s;&|(])(?:python3?|py|node|perl|ruby)(?:\.exe)?\s)";
+    static const std::regex inlineScript(interpreter + R"([^|;&\n"]*?(?:-[A-Za-z]*[cep]|--eval)\s*")");
+    static const std::regex hereScript(interpreter + R"([^|;&\n]*?<<-?\s*([A-Za-z_]\w*)[^\n]*\n)");
+
+    // The spans of command the shell expands as script text.
+    std::vector<std::pair<size_t, size_t>> scripts;
+    for (auto it = std::sregex_iterator(command.begin(), command.end(), inlineScript); it != std::sregex_iterator();
+         ++it) {
+        const size_t from = static_cast<size_t>(it->position(0) + it->length(0));
+        size_t to = from;
+        while (to < command.size() && command[to] != '"') to += command[to] == '\\' ? 2 : 1;
+        scripts.emplace_back(from, std::min(to, command.size()));
+    }
+    for (auto it = std::sregex_iterator(command.begin(), command.end(), hereScript); it != std::sregex_iterator();
+         ++it) {
+        const size_t from = static_cast<size_t>(it->position(0) + it->length(0));
+        const size_t close = command.find("\n" + (*it)[1].str(), from ? from - 1 : 0);
+        scripts.emplace_back(from, close == std::string::npos ? command.size() : close);
+    }
+    if (scripts.empty()) return "";
+
+    // Shell text only: an assignment inside the script is the script's, not the shell's.
+    std::string shellText = command;
+    for (const auto& span : scripts) {
+        std::fill(shellText.begin() + static_cast<std::ptrdiff_t>(span.first),
+                  shellText.begin() + static_cast<std::ptrdiff_t>(span.second), ' ');
+    }
+    shellText += "\n" + earlier;
+
+    for (const auto& span : scripts) {
+        for (size_t i = span.first; i + 1 < span.second; ++i) {
+            if (command[i] == '\\') { ++i; continue; }
+            if (command[i] != '$') continue;
+            size_t at = i + 1;
+            const bool braced = command[at] == '{';
+            if (braced) ++at;
+            size_t end = at;
+            while (end < span.second &&
+                   (std::isalnum(static_cast<unsigned char>(command[end])) || command[end] == '_')) ++end;
+            const std::string name = command.substr(at, end - at);
+            if (name.empty() || std::isdigit(static_cast<unsigned char>(name[0]))) continue;
+            // HOME, PATH and the like are the shell's to fill in, and so is a variable the turn set.
+            const bool envStyle = std::all_of(name.begin(), name.end(), [](unsigned char c) {
+                return std::isupper(c) || std::isdigit(c) || c == '_';
+            });
+            const bool plainBrace = !braced || (end < command.size() && command[end] == '}');
+            if (envStyle && plainBrace) continue;
+            const std::regex sets("(^|[\\s;&|(])(?:(?:export\\s+|local\\s+)?" + name + "=|for\\s+" + name +
+                                  "\\s|read\\s+(?:-\\w+\\s+)*" + name + "\\b)");
+            if (std::regex_search(shellText, sets)) continue;
+            const std::string seen = command.substr(i, std::min<size_t>(end + (braced ? 1 : 0), i + 40) - i);
+            return "This command was not run. The shell expands the script before it runs, so " + seen +
+                   " becomes the shell's variable (empty unless you set it) and the script would write a blank "
+                   "where the value belongs. Save the script to a .py file with file_write and run that file; "
+                   "or write \\$ for a literal dollar sign.";
         }
     }
     return "";
@@ -1068,7 +1144,111 @@ std::string GaiaAgent::guardedFileReason(const fs::path& path) {
     return "";
 }
 
+namespace {
+
+std::string wordBefore(const std::string& text, size_t pos) {
+    while (pos && (text[pos - 1] == ' ' || text[pos - 1] == '*' || text[pos - 1] == '`')) --pos;
+    size_t start = pos;
+    while (start && std::isalpha(static_cast<unsigned char>(text[start - 1]))) --start;
+    std::string w = text.substr(start, pos - start);
+    std::transform(w.begin(), w.end(), w.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return w;
+}
+
+std::string wordAfter(const std::string& text, size_t pos) {
+    while (pos < text.size() && text[pos] == ' ') ++pos;
+    size_t end = pos;
+    while (end < text.size() && std::isalpha(static_cast<unsigned char>(text[end]))) ++end;
+    std::string w = text.substr(pos, end - pos);
+    std::transform(w.begin(), w.end(), w.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return w;
+}
+
+// Whole-number parts of the numbers in text, three digits or more, thousands commas dropped.
+// With claimsOnly, numbers that aren't amounts are left out: years, counts of rows or words,
+// row and page references, and digits inside a name (report_2024.md, v1200).
+std::set<std::string> figuresIn(const std::string& text, bool claimsOnly) {
+    static const std::set<std::string> yearLead = {
+        "in", "of", "for", "since", "during", "year", "by", "until", "from", "to", "and", "fy",
+        "january", "february", "march", "april", "may", "june", "july", "august", "september",
+        "october", "november", "december", "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep",
+        "sept", "oct", "nov", "dec"};
+    static const std::set<std::string> counted = {
+        "words", "characters", "chars", "rows", "lines", "bytes", "kb", "mb", "duplicates", "entries",
+        "records", "items", "files", "columns", "steps", "tests", "pages", "tokens"};
+    static const std::set<std::string> reference = {
+        "row", "rows", "line", "lines", "page", "pages", "step", "port", "id", "ticket", "issue",
+        "ext", "extension", "code", "error"};
+    auto digit = [&text](size_t k) { return k < text.size() && std::isdigit(static_cast<unsigned char>(text[k])); };
+    std::set<std::string> out;
+    for (size_t i = 0; i < text.size();) {
+        if (!digit(i)) { ++i; continue; }
+        const size_t start = i;
+        std::string digits;
+        bool grouped = false;
+        while (digit(i)) digits += text[i++];
+        // 2,000 is one figure; "rows 1,2,3" is three.
+        while (digits.size() <= 3 + (grouped ? digits.size() : 0) && i < text.size() && text[i] == ',' &&
+               digit(i + 1) && digit(i + 2) && digit(i + 3) && !digit(i + 4)) {
+            digits.append(text, i + 1, 3);
+            i += 4;
+            grouped = true;
+        }
+        if (i < text.size() && text[i] == '.' && digit(i + 1)) {  // 2,000.00 and 2000 are the same figure
+            ++i;
+            while (digit(i)) ++i;
+        }
+        if (digits.size() < 3) continue;
+        if (!claimsOnly) { out.insert(digits); continue; }
+        const char before = start ? text[start - 1] : ' ';
+        const char after = i < text.size() ? text[i] : ' ';
+        const bool joined = before == '-' && start > 1 && std::isalnum(static_cast<unsigned char>(text[start - 2]));
+        const bool partOfName = std::isalpha(static_cast<unsigned char>(before)) || before == '_' || before == '.' ||
+                                before == '/' || before == '\\' || before == '#' || before == ':' || joined ||
+                                std::isalpha(static_cast<unsigned char>(after)) || after == '_' || after == ':';
+        const std::string lead = wordBefore(text, start);
+        const bool year = digits.size() == 4 && !grouped && before != '$' &&
+                          (digits.compare(0, 2, "19") == 0 || digits.compare(0, 2, "20") == 0) &&
+                          (yearLead.count(lead) || after == '-' || after == '/');
+        if (partOfName || year || reference.count(lead) || counted.count(wordAfter(text, i))) continue;
+        out.insert(digits);
+    }
+    return out;
+}
+
+}  // namespace
+
+std::optional<std::string> GaiaAgent::unsavedFiguresNote(const std::string& answer, const std::string& request,
+                                                         const std::string& saved) {
+    // Figures the answer says it took out of a file are rightly absent from it.
+    static const std::regex removal(R"(\b(removed|deleted|dropped|stripped|excluded|filtered out)\b)",
+                                    std::regex::icase);
+    if (std::regex_search(answer, removal)) return std::nullopt;
+    const std::set<std::string> given = figuresIn(request, false);
+    const std::set<std::string> held = figuresIn(saved, false);
+    std::vector<std::string> absent;
+    for (const auto& f : figuresIn(answer, true)) {
+        if (given.count(f)) continue;
+        if (held.count(f)) return std::nullopt;  // the file holds what the answer quotes
+        absent.push_back(f);
+    }
+    if (absent.size() < 2) return std::nullopt;
+    std::string list;
+    for (size_t i = 0; i < absent.size() && i < 4; ++i) list += (list.empty() ? "" : ", ") + absent[i];
+    return "Your answer gives figures (" + list + ") but the file you saved holds none of them. Read the "
+           "file back, write the missing figures into it, and give your whole answer again; or say "
+           "plainly that the file doesn't contain them.";
+}
+
 std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answer) {
+    return reviewAnswer(answer, false);
+}
+
+std::optional<std::string> GaiaAgent::unresolvedClaims(const std::string& answer) {
+    return reviewAnswer(answer, true);
+}
+
+std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bool factsOnly) {
     std::error_code ec;
     std::vector<fs::path> roots;
     for (const auto& r : options_.workspaceRoots) roots.emplace_back(fs::u8path(r));
@@ -1089,46 +1269,101 @@ std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answe
     };
 
     // A script's bare-named output lands beside the input the request named.
-    auto writtenBesideNamedInput = [&](const fs::path& name) {
+    auto writtenBesideNamedInput = [&](const fs::path& name) -> std::optional<fs::path> {
         const auto run = std::find_if(calls.begin(), calls.end(), [](const ToolCallRecord& c) {
             return c.name == "bash_execute" && c.succeeded;
         });
-        if (run == calls.end()) return false;
+        if (run == calls.end()) return std::nullopt;
         for (const auto& named : requestPaths(turnRequest())) {
             const fs::path input = fs::u8path(native(named));
             for (const fs::path& folder : {input, input.parent_path()}) {
                 const fs::path candidate = folder / name;
                 if (!fs::is_regular_file(candidate, ec)) continue;
                 const auto written = fs::last_write_time(candidate, ec);
-                if (!ec && written >= run->started) return true;
+                if (!ec && written >= run->started) return candidate;
             }
         }
-        return false;
+        return std::nullopt;
     };
 
-    auto exists = [&](std::string p) {
+    // Where a file the answer names is, when it is under the working folders.
+    auto locate = [&](std::string p) -> std::optional<fs::path> {
         p = native(std::move(p));
         const fs::path path(p);
-        if (path.is_absolute()) return fs::exists(path, ec);
+        if (path.is_absolute()) return fs::exists(path, ec) ? std::optional<fs::path>(path) : std::nullopt;
         const std::string name = path.filename().string();
         for (const auto& root : roots) {
-            if (fs::exists(root / path, ec)) return true;
-            // Mentioned by bare name but written into a subfolder.
+            if (fs::exists(root / path, ec)) return root / path;
             fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
-            int budget = 20000;  // a huge workspace is not searched exhaustively
+            int budget = 20000;
             for (; it != end && !ec && budget-- > 0; it.increment(ec)) {
                 if (it.depth() > 5) { it.disable_recursion_pending(); continue; }
-                if (it->path().filename() == name) return true;
+                if (it->path().filename() == name) return it->path();
             }
         }
-        return !path.has_parent_path() && writtenBesideNamedInput(path);
+        return std::nullopt;
+    };
+
+    auto exists = [&](const std::string& p) {
+        if (locate(p)) return true;
+        const fs::path path(native(p));
+        return !path.has_parent_path() && writtenBesideNamedInput(path).has_value();
+    };
+
+    // The path a write tool was given this turn for a file of this name: the copy to compare.
+    auto writtenThisTurn = [&](const std::string& p) -> std::optional<fs::path> {
+        const fs::path name = fs::u8path(native(p)).filename();
+        for (auto c = calls.rbegin(); c != calls.rend(); ++c) {
+            if (!c->succeeded || (c->name != "file_write" && c->name != "file_edit")) continue;
+            if (!c->args.is_object() || !c->args.contains("path") || !c->args["path"].is_string()) continue;
+            const fs::path written = fs::u8path(c->args["path"].get<std::string>());
+            if (written.filename() != name) continue;
+            if (written.is_absolute()) return written;
+            for (const auto& root : roots) {
+                if (fs::exists(root / written, ec)) return root / written;
+            }
+        }
+        return std::nullopt;
     };
 
     std::vector<std::string> notes;
 
     std::vector<std::string> missing;
+    std::string savedText;
+    bool comparable = true;  // every saved file is a small text file this check can read
     for (const auto& f : claimedFiles(answer)) {
-        if (!exists(f)) missing.push_back(f);
+        if (!exists(f)) {
+            missing.push_back(f);
+            continue;
+        }
+        static const std::regex textFile(R"(\.(md|txt|csv|tsv|json|html|yaml|yml|xml)$)", std::regex::icase);
+        auto at = writtenThisTurn(f);
+        if (!at) at = locate(f);
+        if (!at && !fs::path(native(f)).has_parent_path()) at = writtenBesideNamedInput(fs::path(native(f)));
+        std::string text;
+        if (at && std::regex_search(f, textFile) && fs::file_size(*at, ec) <= 200000 && !ec) {
+            std::ifstream in(*at, std::ios::binary);
+            if (in) text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        // An unreadable, empty-on-read or UTF-16 file can't be compared, so nothing is claimed about it.
+        if (text.empty() || textKind(text.substr(0, 4096)) != TextKind::Utf8) {
+            comparable = false;
+            continue;
+        }
+        savedText += text + '\n';
+    }
+    if (factsOnly) {
+        std::string list;
+        for (const auto& m : missing) list += (list.empty() ? "" : ", ") + m;
+        if (!list.empty()) {
+            return "Note from GAIA: the answer says " + list + (missing.size() == 1 ? " was" : " were") +
+                   " saved, but no such file exists in the working folders.";
+        }
+        if (comparable && !savedText.empty() && unsavedFiguresNote(answer, turnRequest(), savedText)) {
+            return std::string("Note from GAIA: the saved file does not contain the figures given in this "
+                               "answer. Open the file before relying on it.");
+        }
+        return std::nullopt;
     }
     if (!missing.empty()) {
         std::string list;
@@ -1193,6 +1428,9 @@ std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answe
         }
         if (auto note = handBackNote(answer, seen)) notes.push_back(*note);
         if (auto note = uncomputedFiguresNote(answer, seen)) notes.push_back(*note);
+        if (missing.empty() && comparable && !savedText.empty()) {
+            if (auto note = unsavedFiguresNote(answer, turnRequest(), savedText)) notes.push_back(*note);
+        }
         if (auto note = injectionNote(answer, seen)) notes.push_back(*note);
     }
 

@@ -65,6 +65,7 @@ protected:
 
     /// Sends an answer back once when it says a file was saved that doesn't exist.
     std::optional<std::string> reviewFinalAnswer(const std::string& answer) override;
+    std::optional<std::string> unresolvedClaims(const std::string& answer) override;
 
     /// Lists the working folder once, so every model call of the turn shows it as it began.
     void onTurnStart() override;
@@ -102,6 +103,12 @@ public:
     /// instead of reading the file. "" when it doesn't.
     static std::string pastedDataRefusal(const std::string& command, const std::vector<std::string>& roots);
 
+    /// Why command must not run: an inline script the shell expands (python -c "...", or an
+    /// unquoted heredoc) uses ${name} or $name, which a POSIX shell replaces, usually with
+    /// nothing, before the script runs. "" when it doesn't, or when command or earlier (the
+    /// turn's previous shell commands) sets that variable.
+    static std::string shellExpandedScriptRefusal(const std::string& command, const std::string& earlier = "");
+
     /// Why command must not run: the last three shell commands began the same way and printed
     /// the same output. "" otherwise.
     static std::string repeatedCommandRefusal(const std::string& command, const std::vector<CallSeen>& calls);
@@ -123,7 +130,17 @@ public:
     static std::optional<std::string> uncomputedFiguresNote(const std::string& answer,
                                                             const std::vector<CallSeen>& calls);
 
+    /// The answer gives two or more figures as saved, and saved (the text of the files it
+    /// says it wrote) holds none of them. Figures the request itself gave don't count.
+    static std::optional<std::string> unsavedFiguresNote(const std::string& answer,
+                                                         const std::string& request,
+                                                         const std::string& saved);
+
 private:
+    /// The answer checks. With factsOnly, just what can be read off the disk (a saved file
+    /// that isn't there, figures the saved file lacks), worded for the user.
+    std::optional<std::string> reviewAnswer(const std::string& answer, bool factsOnly);
+
     /// OS, working directory and date, appended to the system prompt.
     std::string systemContext() const;
 
