@@ -9,6 +9,10 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **`CONTRACT.md` now documents `GET /v1/email/briefing` (#3625).** The
+  briefing endpoint and its `cache_age_seconds`/`stale` fields were missing
+  from the reference, and the `2.14` history row now names the four response
+  fields that shipped under it without a version bump.
 - **Sender preferences now order a pre-scan across every connected mailbox
   (#3623).** With two mailboxes, each was sorted on its own and the results
   were joined in connection order, so the archive list could keep the first
