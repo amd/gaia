@@ -72,6 +72,7 @@ from gaia.agents.base.skill_suggester import (
     render_suggestion,
     suggest_env_override,
 )
+from gaia.agents.base.text_task import instruction_part
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
@@ -700,6 +701,9 @@ class GaiaAgent(
             return []
         if getattr(self, "_memory_store", None) is None:
             logger.debug("[skills] no suggestions: memory store (embedder) is off")
+            return []
+        # Text handed over to translate or reword needs no skill, whatever it says.
+        if instruction_part(user_input) != (user_input or ""):
             return []
         return suggester.suggest(
             user_input,
