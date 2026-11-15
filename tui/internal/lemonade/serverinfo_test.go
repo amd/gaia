@@ -118,6 +118,7 @@ func TestServerInfoSurvivesAMissingSystemInfo(t *testing.T) {
 	}))
 	defer s.Close()
 	t.Setenv("GAIA_HOME", t.TempDir())
+	t.Setenv("GAIA_CONFIG_FILE", filepath.Join(t.TempDir(), "config.json"))
 
 	info, err := New(s.URL).ServerInfo(context.Background())
 	if err != nil {
