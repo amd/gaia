@@ -8,6 +8,8 @@ Provides shell command execution capabilities for file operations and system que
 
 import base64
 import binascii
+import contextlib
+import dataclasses
 import fnmatch
 import ipaddress
 import logging
@@ -475,6 +477,12 @@ NOTE_UNINSPECTABLE = (
 )
 NOTE_PUSH = "Sends your commits to the remote repository."
 NOTE_CREDENTIAL = "Prints your GitHub sign-in token into the conversation."
+
+#: Told to the model whenever a search ran with credential files left out.
+SKIPPED_CREDENTIALS_NOTE = (
+    "Credential files (.env, secrets.json, *.pem, *.key and the like) are left "
+    "out of recursive searches; their contents cannot be searched."
+)
 
 
 def outside_note(path: str) -> str:
@@ -2583,8 +2591,8 @@ _SEARCH_FLAVORS = {
         "known_short": "abcdefhilmnoqrsuvwxyzABCDEFGHILPRTUVZ0123456789",
         "recursive_short": "rR",
         "recursive_long": ("recursive", "dereference-recursive"),
-        "hidden_short": "hz",
-        "hidden_long": ("no-filename", "null-data"),
+        "follow_short": "R",
+        "follow_long": ("dereference-recursive",),
         "always_recursive": False,
     },
     "rg": {
@@ -2594,8 +2602,8 @@ _SEARCH_FLAVORS = {
         "known_short": "0123456789aABcCdeEfFgHhiIjlLmMnNopqrsStTuUvVwxz.",
         "recursive_short": "",
         "recursive_long": (),
-        "hidden_short": "Ip",
-        "hidden_long": ("no-filename", "heading", "pretty", "json", "null-data"),
+        "follow_short": "L",
+        "follow_long": ("follow",),
         "always_recursive": True,
     },
     "git": {
@@ -2605,8 +2613,8 @@ _SEARCH_FLAVORS = {
         "known_short": "aiIvwcElLnoqHhzefABCFGPWpOm0123456789",
         "recursive_short": "",
         "recursive_long": (),
-        "hidden_short": "h",
-        "hidden_long": ("heading",),
+        "follow_short": "",
+        "follow_long": (),
         "always_recursive": True,
     },
 }
@@ -2637,15 +2645,18 @@ def _parse_grep(args: list, flavor: str = "grep") -> dict:
     ``files`` holds the operands searched; the pattern operand is not one, so
     ``grep .env .gitignore`` searches ``.gitignore`` only. ``pattern_files``
     are the ``-f`` files the patterns come from. ``unknown`` is set when an
-    option is one this check does not know, so what it does to the output
-    is unknown too.
+    option is one this check does not know, so what it does is unknown too.
+    ``dangling`` is set when the last option still wants its value, so a word
+    added after it would become that value. ``follows`` is set when the
+    search follows the links it meets inside a folder.
     """
     spec = _SEARCH_FLAVORS[flavor]
     table = spec["long"]
     parsed: dict = {
         "recursive": spec["always_recursive"],
-        "names_hidden": False,
+        "follows": False,
         "unknown": False,
+        "dangling": False,
         "includes": [],
         "excludes": [],
         "pattern_files": [],
@@ -2667,14 +2678,17 @@ def _parse_grep(args: list, flavor: str = "grep") -> dict:
                 parsed["unknown"] = True
                 continue
             if table.get(name) and not eq:
+                parsed["dangling"] = index >= len(args)
                 value = args[index] if index < len(args) else ""
                 index += 1
             if name in spec["recursive_long"] or (
                 name == "directories" and value == "recurse"
             ):
                 parsed["recursive"] = True
-            if name in spec["hidden_long"]:
-                parsed["names_hidden"] = True
+            if name in spec["follow_long"]:
+                parsed["follows"] = True
+            elif name == "no-follow":
+                parsed["follows"] = False
             if name in ("regexp", "file"):
                 pattern_given = True
                 if name == "file":
@@ -2692,12 +2706,13 @@ def _parse_grep(args: list, flavor: str = "grep") -> dict:
                     parsed["unknown"] = True
                 if flag in spec["recursive_short"]:
                     parsed["recursive"] = True
-                if flag in spec["hidden_short"]:
-                    parsed["names_hidden"] = True
+                if flag in spec["follow_short"]:
+                    parsed["follows"] = True
                 if flag in spec["value_short"]:
                     pattern_given = pattern_given or flag in "ef"
                     value = arg[offset + 1 :]
                     if not value:
+                        parsed["dangling"] = index >= len(args)
                         value = args[index] if index < len(args) else ""
                         index += 1
                     if flag == "f":
@@ -2716,28 +2731,31 @@ def _parse_grep(args: list, flavor: str = "grep") -> dict:
     return parsed
 
 
-def _grep_roots(args: list, flavor: str = "grep") -> Tuple[list, bool]:
-    """``(roots, names_shown)`` for a recursive search; no roots when not recursive.
+def _grep_roots(
+    args: list, flavor: str = "grep", fed: bool = False
+) -> Tuple[list, dict]:
+    """``(roots, parsed)`` for a recursive search; no roots when not recursive.
 
-    Each root is ``(root, includes, excludes)``. *names_shown* is whether every
-    output line is known to start with the name of the file it came from.
+    Each root is ``(root, includes, excludes)``; *parsed* is :func:`_parse_grep`'s.
+    *fed* marks a search given its files on stdin by ``xargs``, which may be
+    any file under the folder, so it counts as recursive.
     """
     parsed = _parse_grep(args, flavor)
-    if not parsed["recursive"]:
-        return [], True
+    if not parsed["recursive"] and not fed:
+        return [], parsed
     roots = [
         (root, parsed["includes"], parsed["excludes"])
         for root in parsed["files"] or ["."]
     ]
-    return roots, not (parsed["names_hidden"] or parsed["unknown"])
+    return roots, parsed
 
 
 #: git's own options that take a value, before its subcommand.
 _GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
 
 
-def _git_grep_roots(args: list) -> Tuple[list, bool]:
-    """:func:`_grep_roots` for ``git [options] grep ...``; no roots for another subcommand."""
+def _git_grep_args(args: list) -> Optional[Tuple[str, list]]:
+    """``(base, grep_args)`` for ``git [options] grep ...``; None for another subcommand."""
     base = ""
     index = 0
     while index < len(args):
@@ -2750,13 +2768,236 @@ def _git_grep_roots(args: list) -> Tuple[list, bool]:
             continue
         if arg.startswith("-"):
             continue
-        if arg != "grep":
-            return [], True
-        roots, names_shown = _grep_roots(args[index:], "git")
-        if base:
-            roots = [(os.path.join(base, r), inc, exc) for r, inc, exc in roots]
-        return roots, names_shown
-    return [], True
+        return (base, args[index:]) if arg == "grep" else None
+    return None
+
+
+def _search_roots(command: list, fed: bool = False) -> Tuple[str, list, Optional[dict]]:
+    """``(flavor, roots, parsed)`` when *command* is a recursive grep, rg or git grep.
+
+    Each root is ``(root, includes, excludes)``. *flavor* is "" and *roots*
+    empty for any other command. *fed* is :func:`_grep_roots`'s.
+    """
+    if not command:
+        return "", [], None
+    program = _interpreter_name(command[0])
+    if program in _GREP_PROGRAMS:
+        flavor, base, args = "grep", "", command[1:]
+    elif program == "rg":
+        flavor, base, args = "rg", "", command[1:]
+    elif program == "git":
+        found = _git_grep_args(command[1:])
+        if found is None:
+            return "", [], None
+        flavor, (base, args) = "git", found
+    else:
+        return "", [], None
+    roots, parsed = _grep_roots(args, flavor, fed)
+    if not roots:
+        return "", [], None
+    if base:
+        roots = [(os.path.join(base, r), inc, exc) for r, inc, exc in roots]
+    return flavor, roots, parsed
+
+
+def _searches_in(command: list) -> list:
+    """``(flavor, roots, parsed, fed)`` for each search *command* may run.
+
+    Run directly or behind launchers (``env``, ``timeout``, ``xargs``...),
+    under every reading of their options. *fed* marks one behind ``xargs``.
+    """
+    found = []
+    for start in [0, *command_starts(command)]:
+        fed = any(_interpreter_name(word) == "xargs" for word in command[:start])
+        flavor, roots, parsed = _search_roots(command[start:], fed)
+        if roots:
+            found.append((flavor, roots, parsed, fed))
+    return found
+
+
+def _case_folded_glob(glob: str) -> str:
+    """*glob* matching any letter case: ``.env`` -> ``.[eE][nN][vV]``."""
+    return "".join(
+        f"[{char.lower()}{char.upper()}]" if char.isalpha() else char for char in glob
+    )
+
+
+def _credential_globs() -> List[str]:
+    """A glob for every credential file name and extension the read tools refuse."""
+    from gaia import security
+
+    names = sorted({name.lower() for name in security.SENSITIVE_FILE_NAMES})
+    return names + [f"*{ext}" for ext in sorted(security.SENSITIVE_EXTENSIONS)]
+
+
+def _grep_exclusion_patterns() -> List[str]:
+    """grep's exclude patterns for every credential file, one per line of its file."""
+    return [_case_folded_glob(glob) for glob in _credential_globs()]
+
+
+def _credential_exclusions(flavor: str, exclude_file: str = "") -> List[str]:
+    """The arguments that keep every credential file out of a *flavor* search.
+
+    They go after the user's own: in grep and rg the last matching
+    include/exclude wins, and an exclude pathspec only ever narrows git's.
+    grep reads its patterns from *exclude_file*: Git for Windows' grep
+    wildcard-expands the arguments it is given, so a pattern there could be
+    replaced by a file name planted to match it.
+    """
+    if flavor == "grep":
+        if not exclude_file:
+            raise ValueError("grep's credential exclusions need an exclude file")
+        return [f"--exclude-from={exclude_file}"]
+    globs = _credential_globs()
+    if flavor == "rg":
+        return [f"--iglob=!{glob}" for glob in globs]
+    return [f":(top,exclude,icase,glob)**/{glob}" for glob in globs]
+
+
+def _rewritable_search(segment: list) -> str:
+    """The flavor of the recursive search *segment* is, if exclusions can go at its end.
+
+    "" unless *segment* is itself a grep, rg or git grep (no launcher in
+    front), and the exclusions cannot be misread: no option this check does
+    not know, no ``--`` that would make them operands, no last option still
+    waiting for its value, and no POSIX argument order, where grep stops
+    reading options at its first operand.
+    """
+    found = _searches_in(segment)
+    flavor, roots, parsed = _search_roots(segment)
+    if len(found) != 1 or not roots or parsed is None:
+        return ""
+    if parsed["unknown"] or parsed["dangling"]:
+        return ""
+    if flavor in ("grep", "rg") and "--" in segment:
+        return ""
+    if flavor == "grep" and (
+        "POSIXLY_CORRECT" in os.environ or _greps_expand_arguments()
+    ):
+        return ""
+    return flavor
+
+
+def _greps_expand_arguments() -> bool:
+    """Whether grep wildcard-expands its own arguments, quoted ones included.
+
+    Git for Windows' grep does, so a planted file name can turn any word
+    into ``--`` and the exclusions into operands. There a recursive grep is
+    refused over credential files; rg and git grep do not expand.
+    """
+    return os.name == "nt"
+
+
+#: What a POSIX shell acts on outside quotes.
+_SHELL_ACTIVE = frozenset("#$`*?[]{}~<>|&;()!\n\r")
+
+
+def _needs_shell(text: str) -> bool:
+    """Whether *text* uses anything a shell would act on, so its words are not plain argv.
+
+    Comments, expansions, globs, redirections and operators outside quotes,
+    and ``$`` or a backtick inside double quotes, all count. On Windows a
+    ``%``, a ``^`` or a backslash before a quote does too: cmd.exe and the
+    Windows argument rules read those differently from the words checked here.
+    """
+    windows = _pipe_dialect() == "cmd"
+    if windows and (re.search(r'\\"', text) or any(c in text for c in "%^")):
+        return True
+    quote = ""
+    for char in text:
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif quote == '"':
+            if char == '"':
+                quote = ""
+            elif char in "$`":
+                return True
+        elif char in "'\"":
+            quote = char
+        elif char in _SHELL_ACTIVE:
+            return True
+    return bool(quote)
+
+
+def _search_plan(command: str, steps: list) -> Optional[Tuple[list, str]]:
+    """``(argv, flavor)`` when *command* is one grep, rg or git grep to run excluded.
+
+    None for any other line. :func:`_searched_as_argv` runs it with no shell
+    and the exclusions appended, so nothing re-reads the words: a line using
+    any shell feature (a pipe, ``&&``, ``;``, a redirection, a comment, an
+    expansion, a glob, an assignment) or an ``@file`` word, which Git for
+    Windows' grep expands into more arguments, gets None, and the path check
+    refuses it when the tree it searches holds a credential file.
+    """
+    if len(steps) != 1 or len(steps[0].segments) != 1:
+        return None
+    step = steps[0]
+    if any(step.envs or ()) or any(step.stderr_modes or ()) or _needs_shell(command):
+        return None
+    segment = step.segments[0]
+    if any(word.startswith("@") for word in segment):
+        return None
+    flavor = _rewritable_search(segment)
+    if not flavor:
+        return None
+    return list(segment), flavor
+
+
+@contextlib.contextmanager
+def _searched_as_argv(step: "_Step", plan: Optional[Tuple[list, str]]):
+    """*step* to run: as argv with the credential exclusions when *plan* says so.
+
+    grep's patterns go in a file of their own in the system temp folder,
+    outside the workspace, removed once the step has run.
+    """
+    if plan is None:
+        yield step
+        return
+    argv, flavor = plan
+    exclude_file = ""
+    if flavor == "grep":
+        handle, exclude_file = tempfile.mkstemp(prefix="gaia-exclude-", suffix=".txt")
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as out:
+            out.write("\n".join(_grep_exclusion_patterns()) + "\n")
+        if _WILDCARD.search(exclude_file):
+            os.unlink(exclude_file)
+            raise RuntimeError(
+                f"The temp folder path {exclude_file!r} has a wildcard character, "
+                "so grep would expand it. Set TEMP/TMPDIR to a plain path."
+            )
+    try:
+        words = _credential_exclusions(flavor, exclude_file)
+        yield dataclasses.replace(step, segments=[[*argv, *words]], argv_only=True)
+    finally:
+        if exclude_file:
+            os.unlink(exclude_file)
+
+
+#: A git object name: an abbreviated or full hash, which may name a blob.
+_GIT_OBJECT_ID = re.compile(r"[0-9a-fA-F]{4,64}")
+
+
+def _git_object_reads(command: list) -> Tuple[Optional[str], bool]:
+    """``(operand, unknown)`` for the git objects a ``git grep`` in *command* searches.
+
+    *operand* is a ``<rev>:<path>`` operand whose path names a credential
+    file: git greps that blob whole, past any exclusion. *unknown* is set
+    when an operand is an object hash or ``^{blob}``, whose content cannot
+    be judged from here.
+    """
+    unknown = False
+    for flavor, _, parsed, _ in _searches_in(command):
+        if flavor != "git" or parsed is None:
+            continue
+        for operand in parsed["files"]:
+            rev, colon, path = operand.partition(":")
+            if colon and rev and not re.fullmatch(r"[A-Za-z]", rev):
+                name = re.split(r"[\\/]", path.rstrip("\\/"))[-1]
+                if name and _credential_file_name(name):
+                    return operand, unknown
+            if _GIT_OBJECT_ID.fullmatch(operand) or "^{blob}" in operand:
+                unknown = True
+    return None, unknown
 
 
 def _findstr_parse(args: list) -> Tuple[bool, list, list]:
@@ -2836,139 +3077,106 @@ def _split_commands(words: list) -> list:
     return list(zip(commands, piped))
 
 
-#: Filters that pass each line through whole, so its file-name prefix survives.
-_LINE_KEEPERS = frozenset(
-    {"head", "tail", "sort", "wc", "less", "more", "findstr"} | _GREP_PROGRAMS
-)
+def _bulk_read_roots(words: list, rewritten: bool = False) -> list:
+    """``(spec, includes, excludes, tree, links_only)`` for each folder-wide read in *words*.
 
+    A recursive search reads every file under its root (*tree*); a reader
+    given a wildcard reads every match in one folder. Each spec is a folder
+    or a folder/glob.
 
-def _redirects_stdout(command: list) -> bool:
-    """Whether *command* sends its output to a file instead of back to the tool."""
-    return any(re.match(r"1?>", word) is not None for word in command)
-
-
-#: head's and tail's long options; both take a unique prefix of one.
-_HEAD_TAIL_LONG = {
-    "bytes": True,
-    "lines": True,
-    "follow": False,
-    "retry": False,
-    "pid": True,
-    "sleep-interval": True,
-    "max-unchanged-stats": True,
-    "quiet": False,
-    "silent": False,
-    "verbose": False,
-    "zero-terminated": False,
-    "help": False,
-    "version": False,
-}
-
-
-def _keeps_lines(command: list) -> bool:
-    """Whether *command*, fed lines on stdin, prints each one whole or not at all.
-
-    An option this check does not know could change that, so it says no.
-    """
-    if not command:
-        return False
-    program = _interpreter_name(command[0])
-    if program not in _LINE_KEEPERS or _redirects_stdout(command):
-        return False
-    args = command[1:]
-    if program in _GREP_PROGRAMS:
-        if _parse_grep(args)["unknown"]:
-            return False
-        for arg in args:
-            if arg == "--":
-                break
-            if arg.startswith("--"):
-                written = arg[2:].partition("=")[0]
-                if _long_option(written, _GREP_LONG, True) == "only-matching":
-                    return False
-            elif arg.startswith("-") and "o" in re.split(r"[efmABCdD]", arg[1:])[0]:
-                return False
-        return True
-    if program in ("head", "tail"):
-        for arg in args:
-            if arg.startswith("--"):
-                written = arg[2:].partition("=")[0]
-                name = _long_option(written, _HEAD_TAIL_LONG, True)
-                if name is None or (program == "tail" and name == "bytes"):
-                    return False
-            elif program == "tail" and re.match(r"-[a-z]*c", arg):
-                return False
-    return True
-
-
-def _bulk_read_roots(words: list, shown: bool = False) -> list:
-    """``(spec, includes, excludes, named)`` for every folder or wildcard *words* reads.
-
-    A recursive search reads every file under its root; a reader given a
-    wildcard reads every match. Each spec is a folder or a folder/glob.
-
-    *named* marks a recursive search whose every output line comes back with
-    its file name in front: lines from a credential file are masked on the
-    way back (``credential_shapes.mask_credential_file_lines``), so only a
-    link that hides one behind an ordinary name refuses it. *shown* says
-    whether what *words* prints comes back with each line whole.
+    With *rewritten*, the first command is a search that skips credential
+    files by name already, so only a link hiding one under another name
+    counts (*links_only*): in its root folder, and through its whole tree
+    when it follows links.
     """
     commands = _split_commands(words)
-    # Whether each command's output comes back: nothing after it in its
-    # pipeline but line keepers, and nothing sent to a file.
-    reaches = [False] * len(commands)
-    downstream_ok = shown
-    for index in range(len(commands) - 1, -1, -1):
-        command, piped = commands[index]
-        if not piped:
-            downstream_ok = shown
-        reaches[index] = downstream_ok and not _redirects_stdout(command)
-        downstream_ok = reaches[index] and _keeps_lines(command)
     roots: list = []
-    masked: set = set()
+    searches: set = set()
     for index, (command, _) in enumerate(commands):
         if not command:
             continue
-        program = _interpreter_name(command[0])
-        if program in _GREP_PROGRAMS:
-            found, names_shown = _grep_roots(command[1:])
-        elif program == "rg":
-            found, names_shown = _grep_roots(command[1:], "rg")
-        elif program == "git":
-            found, names_shown = _git_grep_roots(command[1:])
-        elif program == "findstr":
-            found, names_shown = _findstr_roots(command[1:]), True
-        else:
+        found = _searches_in(command)
+        found += [
+            ("findstr", _findstr_roots(command[start + 1 :]), None, False)
+            for start in [0, *command_starts(command)]
+            if _interpreter_name(command[start]) == "findstr"
+        ]
+        found = [search for search in found if search[1]]
+        if not found:
             continue
-        shown_whole = bool(found) and reaches[index] and names_shown
-        if shown_whole:
-            masked.add(index)
-        roots.extend((*root, shown_whole) for root in found)
-    search = _select_string_roots(words)
-    last = max((i for i, (c, _) in enumerate(commands) if c), default=-1)
-    tail = [w.lower() for w in commands[last][0]] if last >= 0 else []
-    if (
-        search
-        and reaches[last]
-        and any(w in _SELECT_STRING for w in tail)
-        and "-raw" not in tail
-    ):
-        # The whole pipeline feeding the search: 'gci -r | sls x'.
-        index = last
-        while index >= 0 and (index == last or commands[index][1]):
-            masked.add(index)
-            index -= 1
-        roots.extend((*root, True) for root in search)
-    else:
-        roots.extend((*root, False) for root in search)
+        searches.add(index)
+        for _, search_roots, parsed, _ in found:
+            if not (rewritten and index == 0 and parsed is not None):
+                roots.extend((*root, True, False) for root in search_roots)
+                continue
+            roots.extend((*root, False, True) for root in search_roots)
+            if parsed["follows"]:
+                roots.extend((*root, True, True) for root in search_roots)
+    for command, _ in commands:
+        if not command:
+            continue
+        roots.extend(
+            (spec, [], [], True, False) for spec in _other_search_roots(command)
+        )
+        # An @file word can add any operand, so the current folder counts too.
+        if _git_object_reads(command)[1] or (
+            any(word.startswith("@") for word in command) and _searches_in(command)
+        ):
+            roots.append((".", [], [], True, False))
+    roots.extend((*root, True, False) for root in _select_string_roots(words))
     if any(_interpreter_name(w) in _CONTENT_READERS for w in words):
         roots.extend(
-            (word, [], [], False)
+            (word, [], [], False, False)
             for index, (command, _) in enumerate(commands)
-            if index not in masked
+            if index not in searches
             for word in command
             if not word.startswith("-") and _WILDCARD.search(word)
         )
+    return roots
+
+
+#: Search tools that walk a folder tree themselves, with no exclusions from here.
+_TREE_SEARCHERS = frozenset(
+    {"rgrep", "ugrep", "ug", "ag", "ack", "ack-grep", "sift", "pt"}
+)
+
+#: find's actions that run a command on every file it finds.
+_FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+
+#: fd's options that run a command on every file it finds.
+_FD_EXEC = ("-x", "-X", "--exec", "--exec-batch")
+
+
+def _other_search_roots(command: list) -> list:
+    """Folders a tree-walking tool *command* runs reads every file under.
+
+    ``rgrep``, ``ugrep``, ``ag``, ``ack``, ``sift``, ``busybox grep -r``,
+    ``fd -x``/``-X`` and ``find -exec`` cannot be given the exclusions, so
+    their trees are checked whole. Their option grammars are not parsed:
+    every operand counts as a folder, and the current folder always does.
+    """
+    roots: list = []
+    for start in [0, *command_starts(command)]:
+        program = _interpreter_name(command[start])
+        args = command[start + 1 :]
+        if (
+            program == "busybox"
+            and args
+            and _interpreter_name(args[0]) in _GREP_PROGRAMS
+        ):
+            roots.extend(root for root, _, _ in _grep_roots(args[1:])[0])
+        elif program in _TREE_SEARCHERS or (
+            program in ("fd", "fdfind")
+            and any(a.split("=")[0] in _FD_EXEC for a in args)
+        ):
+            roots.extend([".", *(a for a in args if not a.startswith("-"))])
+        elif program == "find" and _FIND_EXEC & set(args):
+            starts = []
+            for arg in args:
+                if arg.startswith("-") or arg in ("(", "!"):
+                    break
+                starts.append(arg)
+            roots.extend(starts or ["."])
     return roots
 
 
@@ -3502,20 +3710,36 @@ def _human_only_refusal(command: str, spelled: str) -> Dict[str, Any]:
     }
 
 
-def _bulk_read_credential(
-    argv: list, cwd: str, downstream: Optional[list] = None
-) -> Optional[str]:
-    """A credential file directly inside a folder *argv* reads as a whole, or None.
+#: Entries checked in a searched tree before the search is refused as too large.
+_TREE_CHECK_LIMIT = 100_000
 
-    Only the folder's own entries are listed, never a whole tree, so a
-    credential file in a subfolder is not found here. *downstream* are the
-    commands *argv*'s output is piped through, which decide whether a
-    recursive search's lines come back with their file names on them.
+#: What :func:`_bulk_read_credential` found: a read of the file, a search over
+#: a tree holding it, or a tree too large to check.
+_BULK_READ, _BULK_SEARCH, _BULK_TOO_LARGE = "read", "search", "too_large"
+_BULK_UNKNOWN = "unknown"
+
+#: What a shell expands in a word that no check here can work out first.
+_UNRESOLVED_EXPANSION = re.compile(r"`|\$\(|\$\{|\$[A-Za-z_]|%[^%]+%")
+
+
+def _bulk_read_credential(
+    argv: list, cwd: str, rewritten: bool = False
+) -> Optional[Tuple[str, str]]:
+    """``(path, kind)`` for a credential file a folder-wide read in *argv* takes in, or None.
+
+    A recursive search's whole tree is checked; a wildcard read's folder only.
+    *rewritten* says *argv* itself runs as :func:`_search_plan`, which keeps
+    credential files out. *kind* is one of ``_BULK_*``; for
+    ``_BULK_TOO_LARGE`` and ``_BULK_UNKNOWN``, *path* is the folder that
+    could not be checked.
     """
-    shown = all(_keeps_lines(command) for command in downstream or ())
-    for words in _command_word_lists(argv):
-        for spec, includes, excludes, named in _bulk_read_roots(words, shown):
+    for number, words in enumerate(_command_word_lists(argv)):
+        for spec, includes, excludes, tree, links_only in _bulk_read_roots(
+            words, rewritten and number == 0
+        ):
             spec = os.path.expandvars(os.path.expanduser(spec))
+            if tree and _UNRESOLVED_EXPANSION.search(spec):
+                return spec, _BULK_UNKNOWN
             try:
                 base = Path(cwd).joinpath(spec)
                 if base.is_dir():
@@ -3524,14 +3748,103 @@ def _bulk_read_credential(
                     folder, pattern = base.parent, base.name.lower()
                 else:
                     continue
-                entries = list(os.scandir(folder))
             except (OSError, ValueError) as exc:
                 logger.debug("Cannot list %r for the credential check: %s", spec, exc)
                 continue
+            if tree:
+                found, complete = _tree_credential(
+                    folder, pattern, includes, excludes, links_only
+                )
+                if not complete:
+                    return str(folder), _BULK_TOO_LARGE
+                if found is not None:
+                    return found, _BULK_READ if links_only else _BULK_SEARCH
+                continue
+            try:
+                entries = list(os.scandir(folder))
+            except OSError as exc:
+                logger.debug("Cannot list %r for the credential check: %s", spec, exc)
+                continue
             for entry in entries:
-                if _bulk_entry_is_credential(entry, pattern, includes, excludes, named):
-                    return entry.path
+                if _bulk_entry_is_credential(
+                    entry, pattern, includes, excludes, links_only
+                ):
+                    return entry.path, _BULK_READ
     return None
+
+
+def _tree_credential(
+    folder: Path,
+    pattern: Optional[str],
+    includes: list,
+    excludes: list,
+    links_only: bool,
+) -> Tuple[Optional[str], bool]:
+    """``(credential, complete)`` for a recursive search of *folder*.
+
+    *pattern* is matched against file names at every depth and against the
+    folders directly in *folder*, which covers both findstr's reading of a
+    wildcard and grep's. Links to folders are not followed. *complete* is
+    False when the tree holds more than :data:`_TREE_CHECK_LIMIT` entries.
+    """
+    # A path glob or an empty one is not read as narrowing the search.
+    usable_includes = [g.lower() for g in includes if g and not re.search(r"[\\/]", g)]
+    seen = 0
+    stack = [(str(folder), pattern is None, True)]
+    while stack:
+        current, matched, top = stack.pop()
+        try:
+            with os.scandir(current) as listing:
+                entries = list(listing)
+        except OSError as exc:
+            logger.debug("Cannot list %r for the credential check: %s", current, exc)
+            continue
+        seen += len(entries)
+        if seen > _TREE_CHECK_LIMIT:
+            return None, False
+        for entry in entries:
+            hit = matched or fnmatch.fnmatchcase(entry.name.lower(), pattern or "*")
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append((entry.path, hit if top else matched, False))
+                    continue
+            except OSError as exc:
+                logger.debug("Cannot stat %r for the credential check: %s", entry, exc)
+                continue
+            if hit and _searched_file_is_credential(
+                entry, usable_includes, excludes, links_only
+            ):
+                return entry.path, True
+    return None, True
+
+
+def _searched_file_is_credential(
+    entry: os.DirEntry, includes: list, excludes: list, links_only: bool
+) -> bool:
+    """Whether a search that reaches *entry* reads a credential file there.
+
+    An exclude is matched case-sensitively, the way grep does, so it is never
+    read as skipping more than the search will.
+    """
+    name = entry.name
+    if includes and not any(fnmatch.fnmatchcase(name.lower(), g) for g in includes):
+        return False
+    if any(fnmatch.fnmatchcase(name, g) for g in excludes):
+        return False
+    target = ""
+    try:
+        if entry.is_symlink():
+            real = os.path.realpath(entry.path)
+            if os.path.isdir(real):
+                return False
+            target = os.path.basename(real)
+    except OSError as exc:
+        logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
+        return False
+    disguised = bool(target) and _credential_file_name(target)
+    if links_only:
+        return disguised and not _credential_file_name(name)
+    return disguised or _credential_file_name(name)
 
 
 def _bulk_entry_is_credential(
@@ -3539,12 +3852,12 @@ def _bulk_entry_is_credential(
     pattern: Optional[str],
     includes: list,
     excludes: list,
-    named: bool = False,
+    links_only: bool = False,
 ) -> bool:
     """Whether a folder-wide read of *entry*'s folder reads it as a credential.
 
-    With *named*, a credential file under its own name is masked in the
-    output instead, so only a link to one under another name counts.
+    With *links_only*, a credential file under its own name is skipped by the
+    read already, so only a link to one under another name counts.
     """
     name = entry.name.lower()
     if pattern and not fnmatch.fnmatchcase(name, pattern):
@@ -3560,7 +3873,7 @@ def _bulk_entry_is_credential(
     except OSError as exc:
         logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
         return False
-    if named:
+    if links_only:
         return not _credential_file_name(name) and _credential_file_name(
             os.path.basename(real)
         )
@@ -3582,9 +3895,55 @@ def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]
         ),
         "has_errors": True,
         "hint": (
-            "Ask the user to open the file themselves. A recursive search of a "
-            "folder that holds one runs when each line keeps its file name (no "
-            "-h, cut or sed after it); or name the files to search."
+            "Ask the user to open the file themselves. rg and git grep (and "
+            "grep -r outside Windows) skip credential files on their own; or "
+            "name the files to search."
+        ),
+    }
+
+
+def _search_refusal(command: str, path: str, kind: str) -> Dict[str, Any]:
+    """The hard refusal for a recursive search that cannot leave credential files out.
+
+    No tier: neither an approval nor full access lifts it.
+    """
+    searchers, windows_note = "grep -r, rg or git grep", ""
+    if _greps_expand_arguments():
+        searchers = "rg or git grep"
+        windows_note = (
+            " grep on Windows expands wildcards in its own arguments, so a "
+            "recursive grep cannot skip them: use rg or git grep instead."
+        )
+    if kind == _BULK_UNKNOWN:
+        reason = (
+            f"which folder '{path}' names is only known once a shell expands "
+            "it, so it cannot be checked for credential files"
+        )
+    elif kind == _BULK_TOO_LARGE:
+        reason = (
+            f"'{path}' holds too many files to check for credential files "
+            "(.env, *.pem, ...)"
+        )
+    else:
+        reason = (
+            f"the folder it searches holds '{path}', which holds credentials, "
+            "keys or secrets"
+        )
+    return {
+        **NOT_EXECUTED,
+        "status": "error",
+        "error": (
+            f"Access denied: '{command}' is a recursive search that cannot skip "
+            f"files holding credentials, keys or secrets, and {reason}. "
+            "Credential files never take part "
+            "in a search, even with full access or after approval."
+        ),
+        "has_errors": True,
+        "hint": (
+            f"Search specific files by name, or run {searchers} on its own: "
+            "no pipe, chaining, redirection, '--', @file or script around it, "
+            "and any wildcard or ~ quoted. Run that way, it skips credential "
+            f"files by itself.{windows_note}"
         ),
     }
 
@@ -4145,6 +4504,8 @@ class _Step:
     stderr_modes: tuple = ()
     shell_text: str = ""
     envs: tuple = ()
+    #: Run as argv with no shell, whatever the platform: see ``_search_plan``.
+    argv_only: bool = False
 
     @property
     def is_cd(self) -> bool:
@@ -5276,13 +5637,24 @@ def _run_step(
     # Bypass mode needs a shell off Windows too: the operators it unblocks ARE
     # the shell. A redirect is a token to the walk above and a file write to sh,
     # so an argv run would pass '>' to the program as an operand.
+    argv_only = step.argv_only
     use_shell = (
-        (os.name == "nt" or bypass)
+        not argv_only
+        and (os.name == "nt" or bypass)
         and not lone_granted_segment
         and not any(step.envs or ())
     )
 
     exec_cmd = [part for segment in segments for part in segment]
+    if argv_only and os.name == "nt" and not re.search(r"[\\/]", exec_cmd[0]):
+        # By PATH alone, never from cwd.
+        program = _program_on_path(exec_cmd[0], cwd)
+        if program is None:
+            raise FileNotFoundError(
+                f"'{exec_cmd[0]}' was not found on PATH. Install it, or search "
+                "with findstr on named files."
+            )
+        exec_cmd = [program, *exec_cmd[1:]]
     listed_only = False
     if use_shell:
         # The step's own text, to preserve quoting (critical for PowerShell).
@@ -6343,6 +6715,7 @@ class ShellToolsMixin:
                 outside,
             )
         granted = shell_granted_binaries(self)
+        searchable = _search_plan(command, steps) is not None
         walk_cwd = cwd
         for step in steps:
             if refusal is not None:
@@ -6355,7 +6728,7 @@ class ShellToolsMixin:
                 if refusal is not None:
                     break
             refusal = self._path_traversal_refusal(
-                step, step_cwd, granted, outside
+                step, step_cwd, granted, outside, searchable
             ) or self._git_path_refusal(step.segments, step_cwd, outside)
         if refusal is not None:
             return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
@@ -6394,7 +6767,9 @@ class ShellToolsMixin:
         # the folders no approval may open.
         unscanned: list = []
         for step in steps:
-            refusal = self._path_traversal_refusal(step, cwd, frozenset(), unscanned)
+            refusal = self._path_traversal_refusal(
+                step, cwd, frozenset(), unscanned, searchable=False
+            )
             if refusal is not None:
                 return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
         return error, steps
@@ -6604,7 +6979,12 @@ class ShellToolsMixin:
         return resolved, None
 
     def _path_traversal_refusal(
-        self, step: _Step, cwd: str, granted: frozenset, outside: Optional[list] = None
+        self,
+        step: _Step,
+        cwd: str,
+        granted: frozenset,
+        outside: Optional[list] = None,
+        searchable: Optional[bool] = None,
     ) -> Optional[Dict[str, Any]]:
         """Refuse an argument that resolves outside the allowed paths.
 
@@ -6620,10 +7000,13 @@ class ShellToolsMixin:
         inside the allowed paths, and so is reading a credential file
         (``PathValidator.is_read_blocked``): a reader, copy source, upload or ``<``
         given it or a link to it, or a wildcard over the folder it sits in.
-        A recursive search of that folder runs when each line it prints comes
-        back with its file name, which is how lines from the credential file
-        are masked. ``rm``, ``mv``, ``git add``, a copy's destination, an
-        ``openssl -out`` file, a search pattern and ``sed -i`` still run.
+        A line that is one grep, rg or git grep runs as argv with credential
+        files excluded (:func:`_search_plan`); *searchable* says this step is
+        that line, and when None it is judged as if it were the whole line.
+        Any other recursive search is refused when the tree it searches holds
+        one, and so is a ``git grep`` of a credential file's blob. ``rm``,
+        ``mv``, ``git add``, a copy's destination, an ``openssl -out`` file, a
+        search pattern and ``sed -i`` still run.
 
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
@@ -6655,18 +7038,27 @@ class ShellToolsMixin:
                 )
                 if refusal:
                     return refusal
-        for position, seg in enumerate(segments):
+        if searchable is None:
+            searchable = _search_plan(step.text, [step]) is not None
+        for seg in segments:
             if not any(seg is kept for kept in scanned):
                 continue
             argv = policy_argv(seg)
             read = _credential_read(argv, cwd)
             if read is not None:
                 return _credential_refusal("Argument", read[0], read[1])
-            credential = _bulk_read_credential(
-                argv, cwd, [policy_argv(s) for s in segments[position + 1 :]]
-            )
-            if credential is not None:
-                return _credential_refusal("Command", " ".join(argv), credential)
+            for words in _command_word_lists(argv):
+                for command, _ in _split_commands(words):
+                    blob = _git_object_reads(command)[0]
+                    if blob is not None:
+                        return _credential_refusal("Argument", blob, blob)
+            found = _bulk_read_credential(argv, cwd, searchable)
+            if found is None:
+                continue
+            path, kind = found
+            if kind == _BULK_READ:
+                return _credential_refusal("Command", " ".join(argv), path)
+            return _search_refusal(" ".join(argv), path, kind)
         return None
 
     def _path_candidate_refusal(
@@ -7814,8 +8206,12 @@ class ShellToolsMixin:
                         if error:
                             return error
 
+                # Run with no shell, so the exclusions are words nothing re-reads.
+                search_plan = _search_plan(command, steps)
                 for step, step_cwd in zip(steps, step_cwds):
-                    error = self._path_traversal_refusal(step, step_cwd, granted)
+                    error = self._path_traversal_refusal(
+                        step, step_cwd, granted, searchable=search_plan is not None
+                    )
                     if error:
                         return error
                     error = self._git_path_refusal(step.segments, step_cwd)
@@ -7913,19 +8309,21 @@ class ShellToolsMixin:
                         )
                         continue
                     try:
-                        result = _run_step(
-                            step,
-                            step_cwd,
-                            max(deadline - time.monotonic(), 0),
-                            # A gh read runs with nobody asked, so it runs as argv
-                            # like a skill grant: cmd.exe never re-reads its line.
-                            shell_granted_binaries(self),
-                            # Waiting in short slices is what lets a Stop kill
-                            # the command while it is still running, rather
-                            # than half an hour later when its budget expires.
-                            self._communicate_or_cancel,
-                            bypass,
-                        )
+                        with _searched_as_argv(step, search_plan) as run_step:
+                            result = _run_step(
+                                run_step,
+                                step_cwd,
+                                max(deadline - time.monotonic(), 0),
+                                # A gh read runs with nobody asked, so it runs as
+                                # argv like a skill grant: cmd.exe never re-reads
+                                # its line.
+                                shell_granted_binaries(self),
+                                # Waiting in short slices is what lets a Stop
+                                # kill the command while it is still running,
+                                # not when its budget expires.
+                                self._communicate_or_cancel,
+                                bypass,
+                            )
                     except subprocess.TimeoutExpired as exc:
                         # Truncated here too: a command killed at 30 minutes has
                         # printed far more than one killed at 30 seconds, and
@@ -8092,10 +8490,15 @@ class ShellToolsMixin:
                     "output_truncated": truncated,
                     "steps": ran,
                 }
+                notes = []
                 moved = getattr(self, "_shell_cwd_note", None)
                 if moved:
                     self._shell_cwd_note = None
-                    outcome["note"] = moved
+                    notes.append(moved)
+                if search_plan is not None:
+                    notes.append(SKIPPED_CREDENTIALS_NOTE)
+                if notes:
+                    outcome["note"] = " ".join(notes)
                 if failure:
                     outcome["error"] = failure
                 elif last_answer:
