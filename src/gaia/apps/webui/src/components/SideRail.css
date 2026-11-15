@@ -79,7 +79,7 @@
     text-decoration: none;
 }
 
-/* A flex item's bare text never gets an ellipsis, so the title needs its own box. */
+/* A flex item's bare text can't fade where it's cut, so the title needs its own box. */
 .side-rail-link-text {
     min-width: 0;
     overflow: hidden;

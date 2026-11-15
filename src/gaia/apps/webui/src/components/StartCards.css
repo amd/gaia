@@ -101,7 +101,7 @@
 .start-card-part + .start-card-part {
     margin-inline-start: 0.3em;
 }
-/* Inline, so a long English half ends in an ellipsis rather than vanishing whole. */
+/* Inline, so a long English half is cut at its end rather than vanishing whole. */
 .start-card-note .start-card-part .i18n-gloss {
     display: inline;
 }

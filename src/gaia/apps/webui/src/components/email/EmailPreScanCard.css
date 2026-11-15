@@ -106,7 +106,7 @@
 
 .email-pre-scan__row-text {
     flex: 1;
-    min-width: 0; /* allow ellipsis on overflow */
+    min-width: 0; /* let overflow fade */
     display: flex;
     flex-direction: column;
     gap: 2px;

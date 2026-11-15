@@ -294,7 +294,7 @@
     animation: fade-cut-inline both;
     animation-timeline: scroll(self inline);
 }
-/* dir="auto" gives each title its own text order, so the ellipsis lands at the
+/* dir="auto" gives each title its own text order, so the fade lands at the
  * end of its own text. The row, not the title, decides the side it sits on. */
 .sb-row-main:dir(rtl) .sb-row-title {
     text-align: right;
@@ -346,9 +346,6 @@
     .sb-dot.is-running { animation: none; }
 }
 
-.sb-row.is-unread .sb-row-title {
-    color: var(--text-primary);
-}
 
 /* ── Search results ── */
 .sb-row.is-kbd-active {
