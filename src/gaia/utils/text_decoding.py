@@ -34,6 +34,9 @@ TRIED_ENCODINGS = (
 # Bytes legacy code pages map to control characters text never holds; NUL marks binary.
 _CONTROL_BYTES = frozenset(range(32)) - {9, 10, 12, 13}
 
+#: Fewer than one non-ASCII byte in this many is Windows ANSI, the old default.
+_SPARSE_RATIO = 200
+
 #: How much of a file :func:`file_encoding` reads to decide.
 SNIFF_BYTES = 1 << 16
 
@@ -67,11 +70,15 @@ def detect_encoding(data: bytes, truncated: bool = False) -> str:
             "text", data, 0, len(data), "control bytes: not a text file"
         )
 
-    matches = from_bytes(data)
     try:
         cp1252_text = data.decode("cp1252")
     except UnicodeDecodeError:
         cp1252_text = None
+    high = sum(byte >= 0x80 for byte in data)
+    # A stray accent in an ASCII log gives detection nothing to go on.
+    if cp1252_text is not None and high * _SPARSE_RATIO < len(data):
+        return "cp1252"
+    matches = from_bytes(data)
     # Short Western text scores as cp1250/cp775 too; keep cp1252 when it reads the same.
     if cp1252_text is not None and any(str(m) == cp1252_text for m in matches):
         return "cp1252"
@@ -79,7 +86,6 @@ def detect_encoding(data: bytes, truncated: bool = False) -> str:
     if best is not None:
         return best.encoding
     # Symbol-heavy Western text ("12€ — 15€") the detector can't place.
-    high = sum(byte >= 0x80 for byte in data)
     if cp1252_text is not None and high <= sum(0x20 < byte < 0x80 for byte in data):
         return "cp1252"
     raise UnicodeDecodeError(
