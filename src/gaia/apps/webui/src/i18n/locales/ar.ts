@@ -209,6 +209,8 @@ const messages: Messages = {
     'newChat.docs.attachIt': 'إرفاقه',
     'newChat.docs.attachAll': 'إرفاق المستندات كلها ({n})',
     'newChat.docs.choose': 'اختيار',
+    'newChat.docs.hidden': '+{n} أخرى',
+    'newChat.docs.fewer': 'عرض أقل',
 
     // مجلدات المحادثة الجديدة
     'folderChip.add': 'إضافة مجلد',
@@ -391,6 +393,7 @@ const messages: Messages = {
     'msg.stoppedError': 'تم الإيقاف. أبلغ GAIA عن خطأ أثناء الإيقاف: {error}',
     'msg.about': 'حول هذه الإجابة',
     'msg.timestamp': 'وقت الرسالة',
+    'msg.route': 'اختاره التوجيه الهجين. {reason}',
 
     // The line under an answer: how long it took and where it ran
     'answer.answeredIn': 'اكتملت الإجابة خلال {time}',
@@ -928,6 +931,8 @@ const messages: Messages = {
     'docs.retryTitle': 'إعادة محاولة الفهرسة',
     'docs.retryTitleFix': 'إعادة محاولة الفهرسة (أصلح الملف أولًا، وإلا فستفشل مجددًا)',
     'docs.retryAria': 'إعادة محاولة فهرسة {name}',
+    'docs.serverDown': 'خادم النماذج في GAIA لا يستجيب، لذا تعذّرت إضافة هذا الملف. أعد المحاولة عندما يعود.',
+    'docs.serverBusy': 'خادم النماذج في GAIA مشغول بعمل آخر ولم يستجب في الوقت المحدد. أعد المحاولة بعد قليل.',
     'docs.noReason': 'لم يسجّل GAIA السبب. أعد المحاولة لترى الخطأ.',
     'docs.cancelled': 'أُلغيت',
     'docs.missing': 'الملف مفقود',
@@ -1007,6 +1012,7 @@ const messages: Messages = {
     'docs.openFolderFailed': 'تعذّر فتح المجلد الذي يحتوي {name}: {error}',
     'docs.dismissError': 'إغلاق الخطأ',
     'docs.notAdded': 'تعذّرت إضافة {name}: لا يستطيع GAIA قراءته. السبب وزر إعادة المحاولة في صفّه أدناه.',
+    'docs.notAddedServer': 'تعذّرت إضافة {name}: خادم النماذج في GAIA لا يستجيب. أعد المحاولة من صفّه عندما يعود.',
     'docs.unreadable.one': 'تعذّرت قراءتها: {n}',
     'docs.unreadable.other': 'تعذّرت قراءتها: {n}',
     'docsBar.count.one': 'المستندات: {n}',
@@ -1019,6 +1025,8 @@ const messages: Messages = {
     'docsBar.remove': 'إزالة {name} من هذه المحادثة',
     'docsBar.more': '+{n} أخرى',
     'docsBar.less': 'عرض أقل',
+    'docsBar.pastCap': 'لا يُبحث في كل مستندات هذه المحادثة البالغ عددها {n} في المرة الواحدة: تبحث المحادثة في {limit} مستند على الأكثر. اسأل عن ملف باسمه للبحث فيه.',
+    'docsBar.pastSize': 'لا يُبحث في كل مستندات هذه المحادثة البالغ عددها {n} في المرة الواحدة: فهي طويلة، وتبحث المحادثة في {passages} مقطع على الأكثر. اسأل عن ملف باسمه للبحث فيه.',
     'docsBar.failedTitle': 'تعذّرت قراءة {name}. افتح مكتبة المستندات لمعرفة السبب وإعادة المحاولة.',
     'docs.removed': 'أُزيل {name} من مكتبتك. الملف على جهازك لم يُمسّ.',
     'docs.undo': 'تراجع',

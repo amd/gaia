@@ -816,7 +816,8 @@ approving runs that exact line once, and the next one asks again.
 ```
 
 A few stay refused with no prompt: a PowerShell `-EncodedCommand` or a line
-with invisible or line-break characters (the prompt couldn't show what runs), a
+with invisible characters or a carriage return (the prompt couldn't show what runs),
+a command of several lines on Windows (the command prompt runs only the first), a
 line whose quoting GAIA can't split the way the shell would, a line its checks
 don't cover that also deletes or discards work (`git push --force`, `git reset
 --hard`, `git clean`, `rm` outside the project), a granted CLI's actions that
@@ -846,7 +847,7 @@ giving up on something you never saw.
 
 | Mode | What asks first |
 |---|---|
-| `ask` (default) | Every shell command, Python run and file write |
+| `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python still ask. File edits inside the folder you started GAIA in run without asking. Hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on your `PATH`, and a file that would stand in for a real program on Windows (`git.bat`) still ask. Started from your home folder or a drive root, nothing is auto-accepted |
 | `full access` | Nothing — see below |
 

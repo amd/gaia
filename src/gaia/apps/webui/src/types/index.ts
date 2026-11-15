@@ -297,6 +297,18 @@ export interface InferenceStats {
     retried?: boolean | null;
     /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
     place?: string | null;
+    /** Set on a `hybrid` chat's turns: the model the turn was routed to, and why. */
+    route?: TurnRoute | null;
+}
+
+/** The model a `hybrid` turn was routed to (`inference_stats.route`). */
+export interface TurnRoute {
+    model: string;
+    reason?: string;
+    /** True once the router's classifier has failed several turns in a row. */
+    degraded?: boolean;
+    /** The warning to show while `degraded`; empty otherwise. */
+    notice?: string;
 }
 
 /** Estimated tokens the next model call holds, by kind (GET /api/chat/context). */
