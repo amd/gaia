@@ -67,6 +67,7 @@ class TestAvailability:
         assert "requests.get" not in body
 
 
+@pytest.mark.usefixtures("pip_available")
 class TestInstallFailures:
     """A failed setup must say what to run by hand."""
 

@@ -147,11 +147,26 @@
     background: var(--bg-secondary);
     transition: all var(--duration) var(--ease);
     flex-shrink: 0;
-    width: 100%;
     text-align: start;
 }
-.doc-context-expanded {
+.doc-context-expanded,
+.doc-context-bar:has(> .doc-context-past-cap) {
     flex-wrap: wrap;
+}
+.doc-context-past-cap {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    color: var(--text-primary);
+}
+.doc-context-icon-warn {
+    color: var(--danger);
+}
+.doc-context-past-cap-text {
+    min-width: 0;
+    white-space: normal;
 }
 .doc-context-icon {
     flex-shrink: 0;

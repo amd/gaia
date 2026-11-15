@@ -107,6 +107,7 @@
 }
 .connector-status.ok { color: var(--accent-green); }
 .connector-status.idle { color: var(--text-muted); }
+.connector-status.failed { color: var(--danger); }
 /*
  * "Disabled" pill (#1004) — distinct from .idle.
  *

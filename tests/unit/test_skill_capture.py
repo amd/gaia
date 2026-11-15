@@ -37,6 +37,8 @@ from gaia.skills.errors import SkillNotFoundError, SkillValidationError
 from gaia.skills.lock import SOURCE_CAPTURED, SkillLock
 from tests.unit.skills_helpers import isolated_manager
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 BODY_MARKER = "ZZ-CAPTURE-BODY-MARKER-ZZ"
 
 

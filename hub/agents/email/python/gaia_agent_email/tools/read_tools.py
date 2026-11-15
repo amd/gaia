@@ -49,6 +49,7 @@ from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
 from gaia_agent_email.tools.llm_triage import make_llm_classifier  # noqa: F401
+from gaia_agent_email.tools.lookalikes import ASCII_FOLD, LOOKALIKES
 from gaia_agent_email.tools.triage_condense import condense_triage_result
 
 # Read-only reuse of the existing automated-sender signal for needs_review's
@@ -202,26 +203,59 @@ def _neutralize_fence_runs(body: str) -> str:
     return "".join(out)
 
 
+#: "LATIN SMALL LETTER O WITH STROKE", "LATIN LETTER SMALL CAPITAL E": the letter.
+_LATIN_LETTER_NAME = re.compile(
+    r"LATIN (?:(?:SMALL|CAPITAL) LETTER|LETTER SMALL CAPITAL) ([A-Z])(?: WITH .+)?\Z"
+)
+
+
+def _latin_base(char: str) -> str:
+    """The plain letter a non-ASCII Latin letter is a form of, else *char*."""
+    if char.isascii():
+        return char
+    named = _LATIN_LETTER_NAME.match(unicodedata.name(char, ""))
+    return named.group(1) if named else char
+
+
+def _marker_letters(char: str) -> str:
+    """The ASCII letters and digits *char* reads as, for comparing marker names.
+
+    NFKC folds width, NFD then splits a precomposed accented letter (``É``)
+    into its base letter and a combining mark, which is dropped so the base
+    letter survives the ASCII filter below the same way an already-decomposed
+    accented letter does. A Latin letter Unicode never splits (``Ø``, ``Ł``,
+    small capital ``ᴇ``) is read by its name. The UTS #39 table maps other look-alikes (Cyrillic,
+    Greek, Cherokee and so on) to the letters they imitate, and the ASCII fold
+    makes ``m`` and ``rn``, or ``I``, ``l`` and ``1``, compare equal.
+    """
+    decomposed = unicodedata.normalize("NFD", unicodedata.normalize("NFKC", char))
+    base = "".join(c for c in decomposed if not unicodedata.combining(c))
+    mapped = "".join(LOOKALIKES.get(c) or _latin_base(c) for c in base)
+    return "".join(
+        ASCII_FOLD.get(c, c) for c in mapped.casefold() if c.isascii() and c.isalnum()
+    )
+
+
 def _skeleton(name: str) -> str:
-    folded = unicodedata.normalize("NFKC", name).casefold()
-    return "".join(c for c in folded if c.isascii() and c.isalnum())
+    return "".join(_marker_letters(char) for char in name)
 
 
 def neutralize_marker_names(text: str, names: Tuple[str, ...]) -> str:
     """*text* with every spelling of a fence marker's name replaced.
 
     Names are compared on ASCII letters and digits alone, after width and case
-    fold, so brackets of any shape, spacing, or line breaks can't rebuild one.
+    fold and with Unicode look-alikes read as the letters they imitate, so
+    brackets of any shape, spacing, line breaks or another script's letters
+    can't rebuild one.
     """
     targets = [_skeleton(name) for name in names]
     while True:
         letters: List[str] = []
         origin: List[int] = []
         for at, char in enumerate(text):
-            for folded in unicodedata.normalize("NFKC", char).casefold():
-                if folded.isascii() and folded.isalnum():
-                    letters.append(folded)
-                    origin.append(at)
+            for folded in _marker_letters(char):
+                letters.append(folded)
+                origin.append(at)
         skeleton = "".join(letters)
         spans = []
         for target in targets:
