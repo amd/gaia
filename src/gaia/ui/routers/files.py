@@ -29,6 +29,7 @@ from starlette.requests import ClientDisconnect
 from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
 from gaia.env import child_env
 from gaia.upload_names import upload_copy_name
+from gaia.utils.text_decoding import file_encoding
 from gaia.utils.user_folders import documents_dir
 
 from .. import generated_media, session_environment
@@ -880,45 +881,45 @@ async def preview_file(path: str, lines: int = 50):
     if ext in TEXT_EXTENSIONS or (
         stat.st_size < 1_000_000 and _looks_like_text(resolved)
     ):
-        for encoding in ("utf-8", "latin-1", "cp1252"):
-            try:
-                import itertools
+        try:
+            import itertools
 
-                preview = []
-                total_lines = 0
-                with open(resolved, "r", encoding=encoding) as f:
-                    # Read only the first N lines for preview
-                    for line in itertools.islice(f, lines):
-                        preview.append(line.rstrip("\n\r")[:500])
-                    # Count remaining lines without loading into memory
-                    total_lines = len(preview)
-                    for _ in f:
-                        total_lines += 1
-                result["is_text"] = True
-                result["encoding"] = encoding
-                result["total_lines"] = total_lines
-                result["preview_lines"] = preview
+            encoding = file_encoding(resolved)
+            preview = []
+            total_lines = 0
+            with open(resolved, "r", encoding=encoding) as f:
+                # Read only the first N lines for preview
+                for line in itertools.islice(f, lines):
+                    preview.append(line.rstrip("\n\r")[:500])
+                # Count remaining lines without loading into memory
+                total_lines = len(preview)
+                for _ in f:
+                    total_lines += 1
+            result["is_text"] = True
+            result["encoding"] = encoding
+            result["total_lines"] = total_lines
+            result["preview_lines"] = preview
 
-                # CSV/TSV specific info
-                if ext in (".csv", ".tsv"):
-                    import csv as csv_mod
+            # CSV/TSV specific info
+            if ext in (".csv", ".tsv"):
+                import csv as csv_mod
 
-                    delimiter = "\t" if ext == ".tsv" else ","
-                    try:
-                        with open(resolved, "r", encoding=encoding) as cf:
-                            reader = csv_mod.reader(cf, delimiter=delimiter)
-                            header = next(reader, None)
-                            if header:
-                                result["columns"] = header
-                                row_count = sum(1 for _ in reader)
-                                result["row_count"] = row_count
-                    except (OSError, csv_mod.Error, UnicodeError) as exc:
-                        logger.warning(
-                            "CSV preview of %s has no column info: %s", resolved, exc
-                        )
-                break
-            except (UnicodeDecodeError, UnicodeError):
-                continue
+                delimiter = "\t" if ext == ".tsv" else ","
+                try:
+                    with open(resolved, "r", encoding=encoding) as cf:
+                        reader = csv_mod.reader(cf, delimiter=delimiter)
+                        header = next(reader, None)
+                        if header:
+                            result["columns"] = header
+                            row_count = sum(1 for _ in reader)
+                            result["row_count"] = row_count
+                except (OSError, csv_mod.Error, UnicodeError) as exc:
+                    logger.warning(
+                        "CSV preview of %s has no column info: %s", resolved, exc
+                    )
+        except UnicodeDecodeError as exc:
+            # The browser shows a file it cannot decode as binary.
+            logger.warning("No text preview of %s: %s", resolved, exc.reason)
 
     return FilePreviewResponse(**result)
 
