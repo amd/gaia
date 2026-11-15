@@ -42,13 +42,24 @@ _LEADING_FILE = re.compile(
     r"\s*[^\s\"'“«]*[\w)]\.[A-Za-z][A-Za-z0-9]{1,4}(?=[,;.!?]?(?:\s|$))"
 )
 
+#: A file name in the instruction itself: the text to work on is that file.
+_NAMES_FILE = re.compile(r"[\w)]\.[A-Za-z][A-Za-z0-9]{1,4}(?=[\s,;:]|$)")
+
 #: A plain word, which a path or file name never is.
 _WORD = re.compile(r"[^\W\d_][^\W\d_'’-]*[,.;:!?]*")
 
+#: "Quarterly Sales Report.docx": words, but a file name.
+_ENDS_IN_EXTENSION = re.compile(r"\.[A-Za-z][A-Za-z0-9]{1,4}$")
+
 
 def _is_prose(text: str) -> bool:
-    """Whether quoted *text* is a sentence, not a quoted file name or path."""
+    """Whether *text* is a sentence, not a file name or path."""
     return sum(1 for word in text.split() if _WORD.fullmatch(word)) >= 2
+
+
+def _is_quoted_prose(text: str) -> bool:
+    """Whether quoted *text* is a sentence, not a quoted file name or path."""
+    return not _ENDS_IN_EXTENSION.search(text.strip()) and _is_prose(text)
 
 
 def instruction_part(request: str) -> str:
@@ -60,10 +71,14 @@ def instruction_part(request: str) -> str:
     """
     request = request or ""
     colon = _TEXT_AFTER_COLON.match(request)
-    if colon and not _TARGET_BEFORE_COLON.search(colon.group()):
+    if (
+        colon
+        and not _TARGET_BEFORE_COLON.search(colon.group())
+        and not _NAMES_FILE.search(colon.group())
+    ):
         tail = request[colon.end() :]
         quote = _LEADING_QUOTE.match(tail)
-        if quote and not _is_prose(quote.group().strip()[1:-1]):
+        if quote and not _is_quoted_prose(quote.group().strip()[1:-1]):
             # A quoted file name or path, not text.
             return request
         if quote:
@@ -75,7 +90,7 @@ def instruction_part(request: str) -> str:
             return request
         return request[: colon.end()]
     quoted = _QUOTED_TEXT.match(request)
-    if quoted and _is_prose(
+    if quoted and _is_quoted_prose(
         quoted.group("a") or quoted.group("b") or quoted.group("c")
     ):
         return request[: quoted.start("quote")] + request[quoted.end("quote") :]
