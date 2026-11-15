@@ -510,8 +510,7 @@ token is involved. Both `query` and `labels` are optional: a `query` searches **
 mail** (Gmail search semantics), `labels` filter to those labels, and with **neither**
 it lists the INBOX. `max_results` is `1–100` (default `25`); each match is hydrated
 with a per-message fetch, so the cap bounds that fan-out. To page, pass the
-response's `next_page_token` back as the request's `page_token`. Each `messages[]`
-item:
+response's `next_page_token` back as the request's `page_token`.
 
 **Outlook mailboxes accept fewer operators.** On an Outlook mailbox a `query`
 supports a plain phrase, `from:`, `subject:`, `is:unread`/`is:read`, and
@@ -520,6 +519,8 @@ are rejected with an error rather than run: any other `is:` value (such as
 `is:starred`), `after:`, `before:`, `newer:`, `older:`, `label:`, `has:`, and
 `in:`. One Outlook query also cannot mix `from:`/`subject:`/phrase terms with
 `is:`/`newer_than:`/`older_than:`; split it into two searches.
+
+Each `messages[]` item:
 
 | Field | Type | Notes |
 |-------|------|-------|

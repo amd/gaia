@@ -216,7 +216,12 @@ def test_search_docs_name_every_operator_outlook_rejects(doc):
     Outlook raised on eight operators.
     """
     text = doc.read_text(encoding="utf-8")
-    missing = [op for op in _outlook_rejected_operators() if f"`{op}:" not in text]
+    # Only the paragraph that lists what Outlook rejects: a stray `in:` elsewhere
+    # in the doc must not satisfy the check.
+    at = text.find("rejected with an error")
+    assert at != -1, f"{doc.name} no longer says which operators Outlook rejects"
+    rejected = text[text.rfind("\n\n", 0, at) : text.find("\n\n", at)]
+    missing = [op for op in _outlook_rejected_operators() if f"`{op}:" not in rejected]
     assert not missing, (
         f"{doc.name} does not name the Outlook-rejected search operators "
         f"{missing}; list them in the inbox-search section."
