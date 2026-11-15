@@ -943,8 +943,8 @@ def action_findings(
 _SHELL = r"(?:shell|terminal|command[- ]line|bash|powershell|cmd)"
 _SHELL_REQUEST = re.compile(
     rf"\b(?:use|using|with)\s+(?:your|the)\s+{_SHELL}\b"
-    # "In the shell, run: dir"
-    rf"|\b(?:in|from)\s+(?:your|the|a)\s+{_SHELL}\b[^.?!\n]{{0,20}}\b(?:run|execute)\b"
+    # "In the shell, run: dir", but not "In the terminal, can I run it?"
+    rf"|\b(?:in|from)\s+(?:your|the|a)\s+{_SHELL}[\s,:]+(?:please\s+)?(?:run|execute)\b"
     # The shell tool named outright.
     r"|\buse\s+(?:the\s+)?run_shell_command\b",
     re.IGNORECASE,
@@ -958,7 +958,8 @@ _RUN = r"(?:run|execute)(?:\s+|(?=:))(?:exactly\b\s*)?"
 _SPELLED_OUT = (
     r"[`\"']"
     r"|(?:(?:this|the\s+following)\b\s*(?:exact\s+)?(?:commands?\s*)?)?:"
-    r"|[\w.\-]+\s+(?:--?|/)[A-Za-z?]"
+    # Not "Run the -v flag" or "Run me -through".
+    r"|(?!(?:a|an|the|it|me|us|them|this|that)\b)[\w.\-]+\s+(?:--?|/)[A-Za-z?]"
 )
 _COMMAND_REQUEST = re.compile(
     rf"\A\s*(?:(?:please|now|then|ok(?:ay)?)[\s,]+)*{_RUN}"
