@@ -249,3 +249,24 @@ def test_a_dropped_connection_is_a_plain_error_not_a_traceback(action, capsys):
     assert "Could not reach the web search service" in out
     assert "Check your internet connection" in out
     assert "Traceback" not in out
+
+
+def test_a_server_error_is_not_blamed_on_the_users_connection(capsys):
+    """A 5xx from the service means the network worked; say what happened."""
+    import requests
+
+    response = requests.Response()
+    response.status_code = 503
+
+    def _server_error(*a, **k):
+        raise requests.exceptions.HTTPError("503 Server Error", response=response)
+
+    _FakeTavilyClient.on_search = _server_error
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_knowledge_command(_knowledge_args("search"))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "answered with 503" in out
+    assert "Check your internet connection" not in out

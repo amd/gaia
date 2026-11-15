@@ -7588,12 +7588,20 @@ def handle_knowledge_command(args):
     except TavilyConfigError as e:
         print(f"❌ {e}")
         sys.exit(1)
-    except requests.exceptions.RequestException as e:
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
         # A dropped or blocked connection is the user's network, not a crash.
         print(
             "❌ Could not reach the web search service: the connection failed "
             "or timed out. Check your internet connection, then try again.\n"
             f"   Detail: {type(e).__name__}"
+        )
+        sys.exit(1)
+    except requests.exceptions.HTTPError as e:
+        # The service answered with an error: the network is fine.
+        status = getattr(e.response, "status_code", None) or "an error"
+        print(
+            f"❌ The web search service answered with {status}. "
+            "It may be down for a moment; try again later."
         )
         sys.exit(1)
     finally:
