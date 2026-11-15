@@ -169,6 +169,13 @@ class _ClearHistory:
     """Queue sentinel: the turn loop (which owns the agent) performs the clear."""
 
 
+def _reset_hybrid_route(agent: Any) -> None:
+    """A cleared conversation forgets hybrid's sticky escalation too."""
+    reset = getattr(agent, "reset_hybrid_route", None)
+    if callable(reset):
+        reset()
+
+
 #: ``cancel`` stops the running turn but not the process, so loaded skills,
 #: "always" grants, history and full access all survive it.
 CONTROL_CANCEL = "cancel"
@@ -987,7 +994,40 @@ def switch_model(
 
     *on_status* receives a plain-language line while the switch waits for
     GAIA's model server to come back after a restart.
+
+    A session started on ``hybrid`` (see :mod:`gaia.llm.hybrid`) stops routing
+    here: the user picked *target* by name. *target* ``hybrid`` starts routing,
+    on the cheap model until the next turn's route says otherwise.
     """
+    from gaia.llm.hybrid import (
+        HYBRID_MODEL_ID,
+        HybridRouter,
+        check_local_only,
+        is_hybrid_model,
+    )
+
+    if is_hybrid_model(target):
+        if not hasattr(agent, "reset_hybrid_route"):
+            raise RuntimeError(
+                "hybrid routing runs only in the GAIA agent. Pick a concrete "
+                "model with /model <id>, or switch to the GAIA agent first."
+            )
+        router = HybridRouter()
+        check_local_only(router.settings)
+        switch_concrete_model(agent, router.settings.cheap_model, on_status)
+        agent.hybrid_router = router
+        agent.last_route = None
+        return HYBRID_MODEL_ID
+    display = switch_concrete_model(agent, target, on_status)
+    if getattr(agent, "hybrid_router", None) is not None:
+        agent.hybrid_router = None
+    return display
+
+
+def switch_concrete_model(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]] = None
+) -> str:
+    """:func:`switch_model` to a model by name, leaving hybrid routing as it is."""
     from gaia.llm.lemonade_client import cloud_model_provider
     from gaia.llm.local_only import SETTINGS_HINT, cloud_blocked
 
@@ -1221,6 +1261,18 @@ def run_model_command(agent: Any, query: str, out) -> None:
 
     logger.info("switched model to %s (%s)", arg, display)
     _write(_model_state_event(agent), out)
+    router = getattr(agent, "hybrid_router", None)
+    if router is not None:
+        settings = router.settings
+        _write(
+            {
+                "type": "final",
+                "answer": f"Switched to **hybrid**: each turn runs on "
+                f"`{settings.cheap_model}` or `{settings.strong_model}`.",
+            },
+            out,
+        )
+        return
     # Pass the live client's classifier, as the system prompt does — the id
     # prefix knows only two providers, so a runtime-discovered one would be
     # called local here while the prompt calls it cloud.
@@ -1945,6 +1997,7 @@ def dispatch_query(
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
         agent.conversation_history.clear()
+        _reset_hybrid_route(agent)
         loader = getattr(agent, "tool_loader", None)
         if loader is not None:
             loader.reset_session()
@@ -2157,6 +2210,7 @@ def main(argv: Optional[list] = None) -> int:
             history = getattr(agent, "conversation_history", None)
             if history is not None:
                 history.clear()
+            _reset_hybrid_route(agent)
             if index is not None:
                 guarded(index, index.cleared)
             logger.info("conversation history cleared by host /clear")

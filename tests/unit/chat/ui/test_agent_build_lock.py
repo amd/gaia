@@ -40,7 +40,9 @@ class _Agent:
         self.cache_index_result = cache_index_result or {"success": True}
         self.lock_free_during_index = None
         self.indexed_files = set()
-        self.rag = SimpleNamespace(index_document=self._index_document)
+        self.rag = SimpleNamespace(
+            index_document=self._index_document, is_full=lambda: False
+        )
         self.console = None
         self.conversation_history = []
         self.model_id = "M-GGUF"
