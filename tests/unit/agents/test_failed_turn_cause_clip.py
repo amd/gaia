@@ -72,3 +72,10 @@ def test_a_word_cut_reply_has_no_full_stop_after_the_ellipsis(agent):
 
     assert "word…" in answer
     assert "…." not in answer
+
+
+def test_the_closing_summary_note_never_ends_mid_word(agent):
+    note = agent._closing_failure_note(RuntimeError(LEMONADE), "The summary")
+
+    assert "Check t" not in note.rsplit("`user.Phi-4-Mini-GGUF`.", 1)[-1]
+    assert note.endswith("`user.Phi-4-Mini-GGUF`.")

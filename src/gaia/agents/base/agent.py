@@ -15837,7 +15837,7 @@ Do NOT wrap conversational replies in JSON.
             return f"{subject} couldn't be written. {classified.user_message}"
         return (
             f"{subject} couldn't be written: "
-            f"{(str(exc).strip()[:300] or type(exc).__name__)}"
+            f"{(_clip_cause(str(exc)) or type(exc).__name__)}"
         )
 
     def _dedup_mutation_call(
