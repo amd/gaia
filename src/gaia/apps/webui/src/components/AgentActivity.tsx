@@ -751,10 +751,12 @@ function FlowWarning({ step }: { step: AgentStep }) {
 }
 
 function FlowDone({ step }: { step: AgentStep }) {
+    const t = useT();
     return (
         <div className="flow-done" role="status">
             <Check size={13} aria-hidden="true" />
-            <span>{step.label}</span>
+            {/* Saved in English; translated when drawn so a reopened chat follows the language. */}
+            <span>{localizeLiveStatus(t, step.label)}</span>
         </div>
     );
 }

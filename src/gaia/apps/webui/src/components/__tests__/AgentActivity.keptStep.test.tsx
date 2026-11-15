@@ -21,7 +21,7 @@ function transcribeCall(id: number): AgentStep {
 
 describe('a download the user waited on', () => {
     beforeEach(() => {
-        useChatStore.setState({ agentSteps: [] });
+        useChatStore.setState({ agentSteps: [], locale: 'en' });
     });
 
     it('stays in the steps of its turn once it ends, without a warning icon', () => {
@@ -48,5 +48,19 @@ describe('a download the user waited on', () => {
 
         expect(screen.getByText(DONE)).toBeInTheDocument();
         expect(container.querySelector('.flow-warning')).toBeNull();
+    });
+
+    it('follows the chosen language when a saved turn is reopened', () => {
+        useChatStore.setState({ locale: 'ar' });
+        const saved: AgentStep[] = [
+            { id: 1, type: 'status', label: DONE, active: false, success: true, kept: true, timestamp: 1 },
+            transcribeCall(2),
+        ];
+
+        const { container } = render(<AgentActivity steps={saved} isActive={false} running={false} />);
+        fireEvent.click(container.querySelector('.flow-steps-summary') as Element);
+
+        const done = container.querySelector('.flow-done') as Element;
+        expect(done.textContent).toContain('تم تنزيل نموذج الكلام');
     });
 });

@@ -43,6 +43,11 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     if (label === 'Loading the speech model') return t('live.speechModelLoading');
     m = /^Downloaded the speech model \(([\d.]+) GB\)$/.exec(label);
     if (m) return t('live.speechModelDone', { size: m[1] });
+    // Lemonade's catalog doesn't always give a size.
+    if (label === 'Downloading the speech model, one time') return t('live.speechModelStartNoSize');
+    m = /^Downloading the speech model, one time — (\d+)%$/.exec(label);
+    if (m) return t('live.speechModelPercentNoSize', { percent: m[1] });
+    if (label === 'Downloaded the speech model') return t('live.speechModelDoneNoSize');
     m = /^Downloading (\S+)$/.exec(label);
     if (m) return t('live.downloadingModel', { model: m[1] });
     return label;

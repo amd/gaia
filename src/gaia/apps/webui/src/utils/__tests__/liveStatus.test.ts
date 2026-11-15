@@ -62,6 +62,19 @@ describe('localizeLiveStatus', () => {
         expect(ar(running)).toContain('نموذج الكلام');
     });
 
+    it('says the speech model download in the chosen language when no size is known', () => {
+        const lines = [
+            'Downloading the speech model, one time',
+            'Downloading the speech model, one time — 37%',
+            'Downloaded the speech model',
+        ];
+        for (const label of lines) {
+            expect(localizeLiveStatus(tEn, label)).toBe(label);
+            expect(ar(label)).toContain('نموذج الكلام');
+        }
+        expect(ar(lines[1])).toContain('37%');
+    });
+
     it('says the NPU part of the speech model in the chosen language', () => {
         const percent = 'Downloading the speech model, one time — 37% of 1.6 GB, then 0.7 GB for the NPU';
         const npu = "Downloading the speech model's NPU part (0.7 GB), no progress shown";
