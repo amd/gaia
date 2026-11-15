@@ -333,6 +333,41 @@ def test_active_skill_enables_extraction_but_general_knowledge_does_not(tmp_path
     assert exhaustive_request("Enumerate every function in code.py")
 
 
+def _whole_read(text):
+    return {
+        "status": "success",
+        "content": text,
+        "line_count": len(text.splitlines()),
+        "size_bytes": len(text.encode()),
+    }
+
+
+def test_a_short_file_read_whole_owes_no_extraction(tmp_path):
+    query = "Read every .txt file in the folder and list each file with its code."
+    state = ExtractionLedger(query, str(tmp_path))
+    state.activate_skill("Extract every item from each source document.")
+    assert state.enabled
+
+    state.observe(
+        "read_file", {"file_path": "site_1.txt"}, _whole_read("Code: unit-48-zebra.")
+    )
+
+    assert not state.gaps()
+
+
+def test_a_long_or_partial_read_still_owes_extraction(tmp_path):
+    query = "Read every .txt file in the folder and list each file with its code."
+    state = ExtractionLedger(query, str(tmp_path))
+    state.activate_skill("Extract every item from each source document.")
+
+    state.observe("read_file", {"file_path": "long.txt"}, _whole_read("item\n" * 2000))
+    partial = {**_whole_read("Code: unit-48-zebra."), "total_lines": 900}
+    state.observe("read_file", {"file_path": "part.txt"}, partial)
+
+    gaps = " ".join(state.gaps())
+    assert "long.txt" in gaps and "part.txt" in gaps
+
+
 @pytest.mark.parametrize(
     "query",
     [
