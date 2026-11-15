@@ -110,7 +110,11 @@ export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
                 <>
                     <SourcesSection summary={summary} />
                     <FilesSection summary={summary} />
-                    <ThisTurnSection summary={summary} stopped={state.kind === 'turn' && !!state.turn.stopState} />
+                    <ThisTurnSection
+                        summary={summary}
+                        stopped={state.kind === 'turn' && !!state.turn.stopState}
+                        alone={(summary.pages ?? []).length === 0 && (summary.documents ?? []).length === 0 && (summary.files ?? []).length === 0}
+                    />
                 </>
             ))}
         </div>
@@ -283,42 +287,42 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
     );
 }
 
-function ThisTurnSection({ summary, stopped }: { summary: TurnSummary; stopped: boolean }) {
+function ThisTurnSection({ summary, stopped, alone }: { summary: TurnSummary; stopped: boolean; alone: boolean }) {
     const t = useT();
     useModelNames();
     const { model } = summary;
     const sites = summary.sites ?? [];
     const usedDocs = (summary.documents ?? []).length > 0;
-    return (
-        <Section title={t('rail.thisTurn')}>
-            <dl className="side-rail-facts">
-                <dt>{t('rail.model')}</dt>
-                <dd>
-                    {model ? (
-                        <span className={`side-rail-where${model.remote ? ' remote' : ''}`}>
-                            {model.remote ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
-                            {model.remote ? t('rail.cloudModel', { name: model.provider_name }) : t('rail.thisPc')}
-                        </span>
-                    ) : (
-                        <span className="side-rail-where">{t('rail.notReported')}</span>
-                    )}
-                    {model?.name && <span className="side-rail-meta" title={model.name} dir="ltr">{displayModelName(model.name)}</span>}
-                </dd>
-                {usedDocs && (
-                    <>
-                        <dt>{t('rail.documents')}</dt>
-                        <dd>
-                            {model?.remote
-                                ? t('rail.docsSent', { provider: model.provider_name })
-                                : t(model ? 'rail.docsLocal' : 'rail.docsSearched')}
-                        </dd>
-                    </>
+    const facts = (
+        <dl className="side-rail-facts">
+            <dt>{t('rail.model')}</dt>
+            <dd>
+                {model ? (
+                    <span className={`side-rail-where${model.remote ? ' remote' : ''}`}>
+                        {model.remote ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
+                        {model.remote ? t('rail.cloudModel', { name: model.provider_name }) : t('rail.thisPc')}
+                    </span>
+                ) : (
+                    <span className="side-rail-where">{t('rail.notReported')}</span>
                 )}
-                <dt>{t('rail.websites')}</dt>
-                <dd>{sites.length > 0 ? <span dir="ltr">{sites.join(', ')}</span> : t('rail.noSites')}</dd>
-                <dt>{t('rail.cost')}</dt>
-                <dd>{costText(summary, t, stopped)}</dd>
-            </dl>
-        </Section>
+                {model?.name && <span className="side-rail-meta" title={model.name} dir="ltr">{displayModelName(model.name)}</span>}
+            </dd>
+            {usedDocs && (
+                <>
+                    <dt>{t('rail.documents')}</dt>
+                    <dd>
+                        {model?.remote
+                            ? t('rail.docsSent', { provider: model.provider_name })
+                            : t(model ? 'rail.docsLocal' : 'rail.docsSearched')}
+                    </dd>
+                </>
+            )}
+            <dt>{t('rail.websites')}</dt>
+            <dd>{sites.length > 0 ? <span dir="ltr">{sites.join(', ')}</span> : t('rail.noSites')}</dd>
+            <dt>{t('rail.cost')}</dt>
+            <dd>{costText(summary, t, stopped)}</dd>
+        </dl>
     );
+    // Alone under "This answer", a second heading only repeats it.
+    return alone ? facts : <Section title={t('rail.thisTurn')}>{facts}</Section>;
 }
