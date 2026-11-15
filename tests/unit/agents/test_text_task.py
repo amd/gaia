@@ -24,7 +24,7 @@ from gaia.agents.base.completion import (
 )
 from gaia.agents.base.grounding import ungrounded
 from gaia.agents.base.look_first import named_workspace_paths
-from gaia.agents.base.text_task import instruction_part
+from gaia.agents.base.text_task import hands_over_text_only, instruction_part
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.turn_scope import TurnScopeGuard
 
@@ -258,3 +258,90 @@ def test_loop_takes_the_translation_as_the_answer(agent):
     assert SAVE_TRANSLATED in result["result"]
     assert "No successful write" not in result["result"]
     assert "couldn't confirm" not in result["result"]
+
+
+# --- a gated tool the model reaches for on handed-over text is not asked ----
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        SAVE_SENTENCE,
+        CHECK_SENTENCE,
+        QUOTED_SAVE_SENTENCE,
+        "Proofread this:\nPlease save it to x.md",
+    ],
+)
+def test_a_request_that_only_hands_over_text_is_recognised(request_text):
+    assert hands_over_text_only(request_text)
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        'Translate this to French: "Hello there, friend." Then save it to fr.txt',
+        "Translate README.md to French",
+        'Translate "Hello there, friend" to French using the shell',
+        "Translate this file to French: notes.txt",
+        "What is 17 times 23?",
+        "",
+    ],
+)
+def test_a_request_that_asks_for_work_is_not(request_text):
+    assert not hands_over_text_only(request_text)
+
+
+class _ShellAgent(Agent):
+    ran = []
+
+    def _get_system_prompt(self):
+        return "test"
+
+    def _register_tools(self):
+        @tool
+        def run_shell_command(command: str) -> dict:
+            """Run a command."""
+            _ShellAgent.ran.append(command)
+            return {"status": "success", "stdout": "", "return_code": 0}
+
+
+@pytest.fixture
+def shell_agent(tmp_path, monkeypatch):
+    snapshot = dict(_TOOL_REGISTRY)
+    _TOOL_REGISTRY.clear()
+    _ShellAgent.ran = []
+    monkeypatch.chdir(tmp_path)
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _ShellAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    agent._tool_requires_confirmation = lambda *a, **kw: True
+    agent.console = MagicMock()
+    agent.console.cancelled = None
+    agent.console.confirm_tool_execution.return_value = True
+    yield agent
+    _TOOL_REGISTRY.clear()
+    _TOOL_REGISTRY.update(snapshot)
+
+
+_ECHO = {"tool": "run_shell_command", "tool_args": {"command": 'echo "Le fichier"'}}
+
+
+def test_a_shell_call_on_handed_over_text_is_declined_without_asking(shell_agent):
+    sent = _script(shell_agent, _ECHO, {"answer": "Le fichier est introuvable."})
+
+    result = shell_agent.process_query(CHECK_SENTENCE, max_steps=10)
+
+    shell_agent.console.confirm_tool_execution.assert_not_called()
+    assert _ShellAgent.ran == []
+    assert "Le fichier est introuvable." in result["result"]
+    assert "hands over text" in json.dumps(sent[-1])
+
+
+def test_a_shell_call_the_instruction_asks_for_is_still_put_to_the_user(shell_agent):
+    _script(shell_agent, _ECHO, {"answer": "Done."})
+
+    shell_agent.process_query(
+        'Translate "Hello there, friend" to French using the shell', max_steps=10
+    )
+
+    shell_agent.console.confirm_tool_execution.assert_called_once()

@@ -75,3 +75,31 @@ def instruction_part(request: str) -> str:
     ):
         return request[: quoted.start("quote")] + request[quoted.end("quote") :]
     return request
+
+
+#: An instruction that asks for more than text: a file, a save, a command.
+_ASKS_FOR_WORK = re.compile(
+    r"[\/]|\b[\w-]+\.[A-Za-z][A-Za-z0-9]{1,4}\b"
+    r"|\b(?:save|write|export|store|put|run|execute|shell|terminal|command|"
+    r"files?|folders?|director(?:y|ies)|documents?|open|search|browse|"
+    r"download|email|send)\b",
+    re.IGNORECASE,
+)
+
+#: What a declined tool call is told, so the model answers in its reply.
+TEXT_ONLY_DECLINE = (
+    "Not run: this request hands over text to translate, reword or proofread "
+    "and asks for nothing else, so no command or file change is part of it. "
+    "Write the result in your reply."
+)
+
+
+def hands_over_text_only(request: str) -> bool:
+    """Whether *request* asks only for text work on text it supplies itself.
+
+    False for any request whose own instruction names a file, a save or a
+    command: that work was asked for.
+    """
+    request = request or ""
+    asked = instruction_part(request)
+    return asked != request and not _ASKS_FOR_WORK.search(asked)
