@@ -571,6 +571,17 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the memory chip opens a menu that says what Private does (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.locator('.composer-chip-memory').click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-item')).toHaveCount(2);
+        await shot(page, `memory-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const LONG_TITLES = {
     latin: 'My own typed question Give me a banana bread recipe with walnuts and brown butter',
     arabic: 'سؤالي الذي كتبته بنفسي أعطني وصفة خبز الموز مع الجوز والزبدة البنية',
@@ -1534,6 +1545,77 @@ test('document being indexed', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    // The dialog was centred on its content, so its title and path box jumped as rows came and went.
+    test(`the document library stays put as rows arrive, and long names keep their end (${locale})`, async ({ page }) => {
+        const names = [
+            'Quarterly business review for the regional sales team final draft v7 (reviewed by finance).pdf',
+            'مراجعة الأعمال الفصلية لفريق المبيعات الإقليمي المسودة النهائية الإصدار السابع.docx',
+            'garden-notes.txt',
+        ];
+        let listed = false;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: listed
+                ? { documents: names.map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096, chunk_count: 2, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 })), total: 3, total_size_bytes: 1, total_chunks: 1 }
+                : { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 } }));
+        });
+        // Read the top once the panel's slide-in (12px) has landed, or a slow runner measures mid-slide.
+        const settledTop = async () => {
+            const modal = page.locator('.doc-modal');
+            await modal.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+            return (await modal.boundingBox())!.y;
+        };
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.empty-docs')).toBeVisible();
+        const topEmpty = await settledTop();
+        listed = true;
+        // Re-open, which lists again: the same dialog with three rows.
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.doc-modal')).toHaveCount(0);
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-row')).toHaveCount(3);
+        expect(Math.abs((await settledTop()) - topEmpty)).toBeLessThan(1);
+        const tail = page.locator('.doc-name-tail').first();
+        await expect(tail).toHaveText(/finance\)\.pdf$/);
+        await expect(tail).toBeInViewport();
+        // A name in the other script still starts at the UI's own edge.
+        const other = page.locator('.doc-name-split').nth(locale === 'ar' ? 0 : 1);
+        const [textBox, infoBox] = await other.evaluate((el) => {
+            const parts = [...el.children].map((c) => c.getBoundingClientRect());
+            const info = el.closest('.doc-info')!.getBoundingClientRect();
+            return [
+                { left: Math.min(...parts.map((r) => r.left)), right: Math.max(...parts.map((r) => r.right)) },
+                { left: info.left, right: info.right },
+            ];
+        });
+        if (locale === 'ar') expect(Math.abs(textBox.right - infoBox.right)).toBeLessThan(2);
+        else expect(Math.abs(textBox.left - infoBox.left)).toBeLessThan(2);
+        // A long Arabic name ends with ".docx" read left to right, never "docx." at its front.
+        const arabic = page.locator('.doc-name-split').nth(1);
+        const ext = await arabic.evaluate((el) => {
+            const last = el.lastElementChild!;
+            const text = last.firstChild!;
+            const box = (from: number, to: number) => {
+                const r = document.createRange();
+                r.setStart(text, from);
+                r.setEnd(text, to);
+                return r.getBoundingClientRect();
+            };
+            const at = (text.textContent ?? '').lastIndexOf('.');
+            return {
+                text: last.textContent,
+                box: last.getBoundingClientRect(),
+                dot: box(at, at + 1), word: box(at + 1, at + 5),
+            };
+        });
+        expect(ext.dot.right, 'the dot should come before "docx", read left to right').toBeLessThanOrEqual(ext.word.left + 0.5);
+        expect(ext.text).toBe('.docx');
+        // The name runs right to left, so its end, the extension, is its left-most part.
+        const headBox = await arabic.locator('.doc-name-head').boundingBox();
+        expect(ext.box.right).toBeLessThanOrEqual(headBox!.x + 0.5);
+        await shot(page, `documents-${locale}-long-names`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     // A file GAIA couldn't read used to be counted with the readable ones.
     test(`a document library with a file that could not be read (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
@@ -4334,7 +4416,7 @@ test.describe('labels once left in English are in Arabic', () => {
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page, '', 'ar', withoutFlagship);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
-    await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
+    await expect(page.getByRole('button', { name: /الذاكرة لهذه المحادثة/ })).toContainText(/\p{Script=Arabic}/u);
 });
 
 /** POST /api/chat/send streams `events`, then stays open, as a turn waiting on the user does. */
@@ -4351,6 +4433,42 @@ function streamThenWait(events: unknown[]): void {
         });
         return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
     };
+}
+
+const SPEECH_NPU_PART = [
+    { type: 'tool_start', tool: 'transcribe_media', detail: 'standup.wav' },
+    { type: 'status', phase: 'speech_model_download', message: "Downloading the speech model's NPU part (0.7 GB), no progress shown" },
+];
+const SPEECH_DOWNLOADED = [
+    ...SPEECH_NPU_PART,
+    { type: 'status', phase: 'speech_model_downloaded', message: 'Downloaded the speech model (2.4 GB)' },
+    { type: 'status', phase: 'recording', message: 'Transcribing 14s of audio' },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`the speech model's NPU part says why it has no percent (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_NPU_PART);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.streaming-bubble')).toContainText(/no progress shown|دون عرض للتقدّم/);
+        await shot(page, `speech-npu-part-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a finished speech model download sits above the transcription still running (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_DOWNLOADED);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        const live = page.locator('.streaming-bubble');
+        await expect(live.locator('.flow-done')).toBeVisible();
+        // In time order (#7865): the download finished first, so it is drawn first.
+        const [done, running] = [await live.locator('.flow-done').boundingBox(), await live.locator('.flow-tool.active').first().boundingBox()];
+        expect(done!.y).toBeLessThan(running!.y);
+        await shot(page, `speech-downloaded-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 const PYTHON_PROMPT = [{
@@ -4394,7 +4512,7 @@ for (const locale of ['ar', 'en'] as const) {
         await page.addInitScript(streamThenWait, [{
             type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-always',
             args: { file_path: '/private/tmp/plans/weekly-grocery-plan.md', content: '# Weekly grocery plan\n' },
-            always_scope: 'write_file on files in /private/tmp/plans', always_label: 'writing files in /private/tmp/plans',
+            always_scope: 'changes to files in /private/tmp/plans', always_label: 'changing files in /private/tmp/plans',
         }]);
         await open(page, `#${ANSWER_SESSION}`, locale);
         await page.locator('textarea').first().fill('save my grocery plan');
@@ -4435,8 +4553,15 @@ for (const locale of ['ar', 'en'] as const) {
         const card = page.locator('.perm-card');
         await expect(card).toBeVisible();
         const always = card.locator('.perm-btn').nth(1);
-        await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
-        if (locale === 'en') await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        if (locale === 'en') {
+            await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
+            await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        } else {
+            const title = await always.getAttribute('title');
+            expect(title?.replace(/[\u2066-\u2069]/g, '')).toBe(`تغيير الملفات في ${FOLDER}`);
+            await expect(always).not.toContainText('Documents');
+            expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+        }
         expect(await audit(page)).toEqual([]);
         await shot(page, `permission-folder-${locale}`);
     });

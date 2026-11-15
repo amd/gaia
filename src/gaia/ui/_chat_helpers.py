@@ -307,6 +307,10 @@ _IDLE_POLL_SECONDS = 0.2
 # How long an ended turn waits for its agent thread before freeing the model.
 _PRODUCER_STOP_GRACE_SECONDS = 5.0
 
+#: Status phases kept in a turn's saved steps: work the user waited on
+#: (``SPEECH_MODEL_DOWNLOADED_PHASE`` in ``audio_tools.py``).
+_RECORDED_PHASES = frozenset({"speech_model_downloaded"})
+
 # Chats whose stopped turn left its agent thread running (session_id -> thread).
 _stopping_sessions: dict[str, threading.Thread] = {}
 
@@ -3279,8 +3283,8 @@ def _needed_model(event: dict) -> Optional[str]:
     return needed if isinstance(needed, str) and needed else None
 
 
-def _insert_skill_step(steps: list, step: dict) -> None:
-    """Put a skill step before the running tool call that brought the skill in."""
+def _insert_before_running_call(steps: list, step: dict) -> None:
+    """Put a step before the running tool call it happened inside (a skill it loaded, a download)."""
     for i in range(len(steps) - 1, -1, -1):
         if steps[i].get("type") == "tool":
             if steps[i].get("active"):
@@ -5303,7 +5307,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 elif event_type == "skill_use" and event.get("how") != "model":
                     # A load_skill call is already its own step.
                     step_id += 1
-                    _insert_skill_step(
+                    _insert_before_running_call(
                         captured_steps,
                         {
                             "id": step_id,
@@ -5426,6 +5430,25 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "success": False,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
+                    )
+                elif (
+                    event_type == "status"
+                    and event.get("phase") in _RECORDED_PHASES
+                    and event.get("message")
+                ):
+                    step_id += 1
+                    # It finished inside the running call; saved above that call's row.
+                    _insert_before_running_call(
+                        captured_steps,
+                        {
+                            "id": step_id,
+                            "type": "status",
+                            "label": event["message"],
+                            "active": False,
+                            "success": True,
+                            "kept": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        },
                     )
                 elif event_type == "agent_error" and _echoes_failed_tool(
                     event, captured_steps
@@ -5760,6 +5783,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # A relayed turn ran on the model it sent; with none, the sidecar picked.
                 relayed_location=turn_location if model_id else None,
             )
+            if spending.never_answered(
+                turn_failed and not turn_replied, inference_stats
+            ):
+                spending.mark_no_reply(turn_summary)
 
             model_messages = result_holder.get("model_messages")
             if turn_cancelled:
@@ -5884,6 +5911,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 turn_summary = _turn_summary(
                     sse_handler, result_holder.get("agent"), request.message, None
                 )
+                # No reply text: spending leaves this turn out.
+                spending.mark_no_reply(turn_summary)
                 msg_id = db.add_message(
                     request.session_id,
                     "assistant",

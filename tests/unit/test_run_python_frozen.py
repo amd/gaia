@@ -92,8 +92,12 @@ def _spawn(**finished):
 # ---------------------------------------------------------------------------
 
 
-def test_from_source_the_interpreter_runs_the_script():
-    assert python_command("s.py", ["a", "b"]) == [sys.executable, "s.py", "a", "b"]
+def test_from_source_the_interpreter_runs_the_script_through_the_runner():
+    cmd = python_command("s.py", ["a", "b"])
+
+    assert cmd[:2] == [sys.executable, "-c"]
+    assert "run_python_file" in cmd[2]
+    assert cmd[3:] == ["s.py", "a", "b"]
 
 
 def test_frozen_the_binary_is_asked_for_its_runner_mode(frozen):
