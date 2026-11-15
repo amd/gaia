@@ -23,6 +23,11 @@ const BROKEN: Document = {
     indexing_status: 'failed', error_kind: 'corrupt', last_error: 'Could not read PDF: broken.pdf',
 };
 
+const DOWN: Document = {
+    ...BROKEN, id: 'doc-down', filename: 'third.md', filepath: '/home/user/docs/third.md',
+    error_kind: 'model_server_down', last_error: 'Lemonade Server is not reachable',
+};
+
 const BROWSE: BrowseResponse = {
     current_path: '/home/user/docs',
     parent_path: '/home/user',
@@ -55,6 +60,14 @@ describe('a dropped file GAIA could not read', () => {
         expect(failures).toEqual([{ name: 'broken.pdf', stage: 'unreadable', error: 'Could not read PDF: broken.pdf' }]);
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
         expect(useChatStore.getState().sessions[0].document_ids).toEqual([]);
+    });
+
+    it('is reported as waiting on the model server when that was the problem', async () => {
+        mockedApi.uploadDocumentBlob.mockResolvedValue(DOWN);
+        const failures = await addDroppedFiles('sess-1', [new File(['# notes'], 'third.md')]);
+
+        expect(failures).toEqual([{ name: 'third.md', stage: 'server', error: 'Lemonade Server is not reachable' }]);
+        expect(mockedApi.attachDocument).not.toHaveBeenCalled();
     });
 });
 
@@ -90,5 +103,30 @@ describe('the chat bar holding only a document that failed', () => {
         const { container } = render(<SessionDocsBar sessionId="sess-1" onDetachFailed={() => {}} />);
 
         expect(container.querySelector('.doc-context-bar')).toHaveAttribute('aria-label', "1 couldn't be read");
+    });
+
+    it('counts a server-down file apart from an unreadable one', () => {
+        useChatStore.setState({ sessions: [{ ...chat, document_ids: ['doc-broken', 'doc-down'] }], documents: [BROKEN, DOWN] });
+        const { container } = render(<SessionDocsBar sessionId="sess-1" onDetachFailed={() => {}} />);
+
+        expect(container.querySelector('.doc-context-bar'))
+            .toHaveAttribute('aria-label', "1 couldn't be read · 1 waiting for the model server");
+        const pill = container.querySelector('.doc-pill-failed[title^="third.md"]');
+        expect(pill?.getAttribute('title')).toContain("waiting for GAIA's model server");
+        expect(pill?.getAttribute('title')).not.toContain("couldn't be read");
+    });
+
+    it('says a server-down file is waiting in Arabic too', () => {
+        useChatStore.setState({ locale: 'ar', sessions: [{ ...chat, document_ids: ['doc-down'] }], documents: [DOWN] });
+        try {
+            const { container } = render(<SessionDocsBar sessionId="sess-1" onDetachFailed={() => {}} />);
+
+            const bar = container.querySelector('.doc-context-bar');
+            expect(bar?.getAttribute('aria-label')).toContain('بانتظار خادم النماذج: 1');
+            expect(container.querySelector('.doc-pill-failed')?.getAttribute('title')).toContain('خادم النماذج');
+            expect(bar?.textContent).not.toContain('تعذّرت قراءتها');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
     });
 });

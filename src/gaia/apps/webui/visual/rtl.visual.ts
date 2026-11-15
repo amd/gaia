@@ -1018,6 +1018,22 @@ async function withManyDocuments(page: Page): Promise<void> {
     );
 }
 
+/** A chat holding one unreadable file and one that failed while the model server was down. */
+const FAILED_DOCS = [
+    { id: 'bar-broken', filename: 'broken.pdf', filepath: 'C:/broken.pdf', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'corrupt', last_error: 'Could not read PDF: broken.pdf', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+    { id: 'bar-down', filename: 'third.md', filepath: 'C:/third.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_down', last_error: 'Lemonade Server is not reachable', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+];
+
+async function withFailedDocuments(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === '/api/documents', (route) =>
+        route.fulfill({ json: { documents: FAILED_DOCS, total: 2, total_size_bytes: 2048, total_chunks: 0 } }),
+    );
+    const sessions = SESSIONS.map((s) => (s.id === ANSWER_SESSION ? { ...s, document_ids: FAILED_DOCS.map((d) => d.id) } : s));
+    await page.route((url) => url.pathname === '/api/sessions', (route) =>
+        route.fulfill({ json: { sessions, total: sessions.length } }),
+    );
+}
+
 /** A path with no spaces, longer than the column; its chip made the whole chat scroll sideways. */
 const LONG_PATH = `C:\\reports\\${'a_very_long_segment_'.repeat(9)}.pdf`;
 
@@ -1045,6 +1061,21 @@ for (const locale of ['ar', 'en']) {
         expect(box!.x + box!.width).toBeLessThanOrEqual(bar!.x + bar!.width);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath(`docs-past-cap-${locale}.png`) });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    // The chat's bar called a server-down file unreadable while the library said it was waiting.
+    test(`a chat's document bar counts a server-down file as waiting (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailedDocuments);
+        const label = page.locator('.doc-context-label');
+        await expect(label).toContainText(locale === 'ar' ? 'بانتظار خادم النماذج: 1' : '1 waiting for the model server');
+        await expect(label).toContainText(locale === 'ar' ? 'تعذّرت قراءتها: 1' : "1 couldn't be read");
+        const pill = page.locator('.doc-pill-failed', { hasText: 'third.md' });
+        await expect(pill).not.toHaveAttribute('title', locale === 'ar' ? /تعذّرت قراءة/ : /couldn't be read/);
+        if (locale === 'ar') expect(await untranslated(page, '.doc-context-bar', '.doc-pill-name')).toEqual([]);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`docs-bar-server-down-${locale}.png`) });
     });
 }
 
