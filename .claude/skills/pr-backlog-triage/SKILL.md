@@ -54,8 +54,8 @@ first. That agent:
 
 ## Express lane for low-risk bug fixes
 
-When the maintainer asks to land a backlog of bug fixes fast, merge a PR without a full
-review once **all** of these hold:
+When the maintainer asks to land a backlog of bug fixes fast, merge a PR without the fast
+lane's verifier pass once **all** of these hold; the review bot's approval stands in for it:
 
 - it's a bug fix (`fix…` title), not a draft, and **mergeable**; conflicts mean merging
   `main` in first;
@@ -64,14 +64,17 @@ review once **all** of these hold:
 - the review bot's **latest verdict approves** (`Approve` or `Approve with suggestions`);
 - no check is still running, and every **failing check is unrelated**:
   - an infra lane: setup journeys, installers, hardware;
-  - a network or rate-limit failure;
+  - a network or rate-limit failure on a non-test job (a test job that didn't run is
+    re-run, never skipped);
   - a known flake;
-  - a failing test in code the PR doesn't touch.
+  - a failing test that fails the same way on bare `origin/main`.
 
   Read the log to decide; never judge by the job name alone.
 
-Hold anything that breaks a condition, and anything that touches security, permission
-gating, prompts or tool schemas. Those get a full verifier pass.
+Hold anything that breaks a condition, touches security or permission gating, or is
+LLM-behaviour-affecting (item 5 of the dispatch list; it still needs eval evidence). Those
+get a full verifier pass. An outside contributor's PR gets its line-by-line security review
+before it can take this lane.
 A bot "Approve" doesn't clear a PR you've already held for a known blocker; keep a hold list
 and check it first. A held contributor PR once merged on the bot's approval alone and
 shipped a known bug.
@@ -79,13 +82,12 @@ shipped a known bug.
 Keep the backlog moving:
 
 - **Approve waiting CI runs** on every open PR's current head. Skip superseded runs, which
-  only burn quota. For a fork, read the head diff first: approve unless it touches
-  `.github/` or an installer.
+  only burn quota. Forks follow the approval rule in "Infra realities".
 - **Mark bot drafts ready** when they pass the same bar. Close a bot draft whose fix
   already landed on `main`, or that a maintainer PR covers.
 - **Fix `main` before the PRs.** When the same test fails on many unrelated PRs, it's broken
-  on `main`. Fix it once, with a self-merge allowed for a `main`-breakage fix, then merge
-  `main` into the held PRs so CI re-runs against the fix.
+  on `main`. Fix it once and have a separate verifier merge it ahead of the batch, then
+  merge `main` into the held PRs so CI re-runs against the fix.
 - **On a maintainer fork, merge `main` in;** never rebase or force-push. Several PRs that
   edit the same docs paragraph will keep conflicting; order their sentences once so each
   later merge only adds.
