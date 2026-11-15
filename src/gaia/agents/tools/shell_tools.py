@@ -6176,59 +6176,78 @@ class ShellToolsMixin:
     ) -> Dict[str, Any]:
         """A confirmable command's block, re-explained for an unasked run.
 
-        Fails closed: nobody can answer the prompt this command needs. The
-        user-facing text is one plain sentence naming what they can do; which
-        switch made the run unattended goes to the log.
+        Fails closed: nobody can answer the prompt this command needs. When a
+        safe route exists the text leads with it and says plainly that nobody
+        refused the command; a run with no route falls back to offering
+        approval. Which switch made the run unattended goes to the log.
         """
         note = str(error.get("risk_note") or "").rstrip(".")
         needs = f"`{command}` needs your approval" + (f" ({note})" if note else "")
         hard = _hard_target(command)
+        final = _final_even_unattended(command)
+        route = "" if final else self._unattended_routes(command)
         if hard:
             why = "it reaches a cloud-metadata address or a protected folder"
             plain = (
                 f"Not run: `{command}` reaches {hard}, which stays off limits "
                 "whatever anyone approves. Tell the user it was not done."
             )
-        elif getattr(self, "console", None) is None:
-            why = "this run has no console to show the confirmation prompt on"
-            plain = (
-                f"Not run: {needs}, and nothing in this "
-                "run can ask you — start the request from the GAIA terminal UI "
-                "or Agent UI to approve it there."
-            )
         else:
-            why = (
-                "this run pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS or "
-                "auto_approve_gated_tools), which does not extend to commands "
-                "outside the no-prompt list"
-            )
-            plain = (
-                f"Not run: {needs}, and this run "
-                "approves automatically only commands that are safe unattended "
-                "— run the request interactively to approve it, or turn on full "
-                "access."
-            )
+            if getattr(self, "console", None) is None:
+                why = "this run has no console to show the confirmation prompt on"
+                paused = "nothing in this run can ask you"
+                approve = (
+                    "start the request from the GAIA terminal UI or Agent UI "
+                    "to approve it there"
+                )
+            else:
+                why = (
+                    "this run pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS or "
+                    "auto_approve_gated_tools), which does not extend to "
+                    "commands outside the no-prompt list"
+                )
+                paused = (
+                    "this run can only approve commands that are safe to run "
+                    "unattended"
+                )
+                approve = (
+                    "run the request interactively to approve it, or turn on "
+                    "full access"
+                )
+            if route:
+                plain = (
+                    f"Not run: {needs}, and {paused}. Nobody said no: this is "
+                    f"not a refusal. Finish the task with {route}."
+                )
+            elif final:
+                plain = f"Not run: {needs}, and {paused}. To run it, {approve}."
+            else:
+                plain = (
+                    f"Not run: {needs}, and {paused}. Tell the user the exact "
+                    f"command so they can run it themselves, or {approve}."
+                )
         logger.info("Refused %r because %s: %s", command, why, error.get("error"))
         # A missing-grant hint assumes a prompt; a one-time line's hint says
         # how to write it so that it needs none, which still holds here.
         once = error.get("tier") == TIER_CONFIRM_ONCE
         dropped = ("examples",) if once else ("hint", "examples")
         unasked = {key: value for key, value in error.items() if key not in dropped}
-        if _final_even_unattended(command):
+        if final:
             return {**unasked, "tier": TIER_REFUSE, "error": plain}
         return {
             **unasked,
             "tier": TIER_REFUSE,
-            "error": f"{plain} {self._unattended_routes(command)}",
+            "error": plain,
             UNATTENDED_REFUSAL: True,
         }
 
     def _unattended_routes(self, command: str) -> str:
-        """One sentence naming the routes this run takes without anyone approving.
+        """The safe route this run takes without anyone approving, if any.
 
-        A line that changes files is pointed at the file tools, which keep to
-        the allowed folders; run_python is offered for computation and for
-        reads that stay inside them.
+        Returned as a phrase for "finish the task with": the file tools for a
+        line that changes files, run_python for computation and for reads that
+        stay inside the allowed folders, and a no-prompt command. Empty when
+        no registered tool can do the job.
         """
         tools = getattr(self, "_tools_registry", None) or {}
         asks = getattr(self, "_tool_requires_confirmation", None)
@@ -6241,8 +6260,8 @@ class ShellToolsMixin:
         if _changes_files(command):
             writers = [name for name in ("write_file", "edit_file") if runs(name)]
             if not writers:
-                return "Tell the user the exact command so they can run it themselves."
-            return f"Use {' or '.join(writers)} to create or change files instead."
+                return ""
+            return f"{' or '.join(writers)} to create or change files"
         readers = [name for name in ("read_file", "browse_directory") if runs(name)]
         routes = [f"{' or '.join(readers)} to read or list files"] if readers else []
         if runs("run_python") and (
@@ -6252,8 +6271,8 @@ class ShellToolsMixin:
         shown = "`dir` or `findstr`" if os.name == "nt" else "`ls` or `grep`"
         routes.append(f"a no-prompt command such as {shown}")
         if len(routes) == 1:
-            return f"Use {routes[0]} instead."
-        return f"Use {', '.join(routes[:-1])}, or {routes[-1]} instead."
+            return routes[0]
+        return f"{', '.join(routes[:-1])}, or {routes[-1]}"
 
     def _reads_stay_inside(self, command: str) -> bool:
         """Whether every path *command* reads really lies in the allowed folders.

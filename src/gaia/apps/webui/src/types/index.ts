@@ -559,7 +559,7 @@ export interface Settings {
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
     policy_warnings?: string[];
-    policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string }>;
+    policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string; cause?: string | null; models?: string[] | null }>;
 }
 
 /**
@@ -1118,6 +1118,8 @@ export interface LocalModelStatus {
     /** One plain line; `error_detail` carries the raw cause. */
     error: string | null;
     error_detail?: string | null;
+    /** Set when `error` is the server not answering, so the UI words it in its language. */
+    error_cause?: 'model_server_down' | null;
     base_url: string | null;
     /** `gaia` for GAIA's own Lemonade; GAIA asks before reloading on `user` or `remote`. */
     owner: 'gaia' | 'user' | 'remote' | null;

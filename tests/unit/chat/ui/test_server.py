@@ -1493,6 +1493,8 @@ class TestNetworkPolicySetting:
                 "severity": "warning",
                 "url": None,
                 "reason": "server refused",
+                "cause": None,
+                "models": None,
             }
         ]
 
@@ -1515,6 +1517,8 @@ class TestNetworkPolicySetting:
                 "severity": "info",
                 "url": "http://127.0.0.1:1234",
                 "reason": None,
+                "cause": None,
+                "models": None,
             }
         ]
 
