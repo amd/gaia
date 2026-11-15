@@ -1102,6 +1102,7 @@ export const enMessages = {
     'rail.costAbout': 'About {usd} at list price',
     'rail.costUnknownModel': 'Not known for this model',
     'rail.costUnknown': 'Not known',
+    'rail.costNoReply': 'Not counted: no reply came',
     'rail.costUnreported': 'Not reported for this answer',
     'rail.costUnreportedStopped': 'Not reported, as the answer was stopped',
     'env.title': 'Folders and access',
