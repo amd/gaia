@@ -834,6 +834,77 @@ func TestSSEClientConnectionCutMidStreamSaysGaiaStopped(t *testing.T) {
 	}
 }
 
+// Cut before any answer text (mid tool call): nothing is "kept above".
+func TestSSEClientConnectionCutBeforeAnyTextSaysSoBeforeAnswering(t *testing.T) {
+	f := newFakeRelay(t)
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"working"}`)
+		flush()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack the stream: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}
+
+	c := f.client(t)
+	defer c.Close()
+
+	ch, err := c.Send(context.Background(), "triage")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	got := collect(t, ch)
+	if len(got) == 0 {
+		t.Fatal("expected events")
+	}
+	last, ok := got[len(got)-1].(event.CanonicalErrorEvent)
+	if !ok {
+		t.Fatalf("last event = %T, want a CanonicalErrorEvent (%v)", got[len(got)-1], typeNames(got))
+	}
+	if last.Detail != event.AgentStoppedBeforeAnswerDetail {
+		t.Errorf("detail = %q, want the stopped-before-answering message", last.Detail)
+	}
+}
+
+// The daemon's "agent crashed" frame keeps "kept above" only when text came first.
+func TestSSEClientDaemonCrashFrameMatchesWhatWasStreamed(t *testing.T) {
+	crash := `{"type":"error","source":"daemon_relay","detail":"agent 'gaia' stream ended unexpectedly"}`
+	for _, tc := range []struct {
+		name   string
+		frames []string
+		want   string
+	}{
+		{"before any text", []string{`{"type":"status","message":"working"}`, crash}, event.AgentStoppedBeforeAnswerDetail},
+		{"after some text", []string{`{"type":"token","delta":"half"}`, crash}, event.AgentStoppedDetail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+				for _, fr := range tc.frames {
+					frame(w, fr)
+				}
+				flush()
+			}
+			c := f.client(t)
+			defer c.Close()
+			ch, err := c.Send(context.Background(), "triage")
+			if err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+			got := collect(t, ch)
+			last, ok := got[len(got)-1].(event.CanonicalErrorEvent)
+			if !ok {
+				t.Fatalf("last event = %T, want a CanonicalErrorEvent (%v)", got[len(got)-1], typeNames(got))
+			}
+			if last.Detail != tc.want {
+				t.Errorf("detail = %q, want %q", last.Detail, tc.want)
+			}
+		})
+	}
+}
+
 // A stream that ends without final/error is a FAILURE, not an empty success.
 func TestSSEClientStreamWithoutTerminalEventIsAnError(t *testing.T) {
 	f := newFakeRelay(t)
