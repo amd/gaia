@@ -10,7 +10,7 @@
 ;                shortcuts and uninstaller -- because electron-updater
 ;                re-runs exactly that file to update the app. A second owner here
 ;                would be duplicated by the first auto-update.
-;   Terminal     gaia-tui + gaia-agent, PATH, Windows Terminal profile, shortcuts,
+;   Terminal     gaia-cli + gaia-agent, PATH, Windows Terminal profile, shortcuts,
 ;                shown as "GAIA Terminal UI", installed under gaia-tui ids. An
 ;                install an earlier setup made under the "Terminal Hub" ids is
 ;                moved onto them on upgrade (MigrateLegacyInstall).
@@ -37,7 +37,7 @@
 ; Build:
 ;   makensis -DVERSION=<x.y.z, or x.y.z-rc.N for a release candidate> \
 ;            -DVERSION_QUAD=<x.y.z.0, VERSION's four-integer form> \
-;            -DPAYLOAD_DIR=<dir with gaia-tui.exe, gaia-agent.exe, LICENSE.md, core\> \
+;            -DPAYLOAD_DIR=<dir with gaia-cli.exe, gaia-agent.exe, LICENSE.md, core\> \
 ;            -DICON=<path to gaia.ico> \
 ;            -DFONTS_DIR=<dir staged by installer/tui/fetch_fonts.py> \
 ;            -DAGENT_UI_SETUP=<path to gaia-agent-ui-<v>-x64-setup.exe> \
@@ -57,7 +57,7 @@ Unicode true
   !error "VERSION_QUAD is required: -DVERSION_QUAD=<x.y.z.0>, the four integers Windows stores the version as"
 !endif
 !ifndef PAYLOAD_DIR
-  !error "PAYLOAD_DIR is required: the directory holding gaia-tui.exe, gaia-agent.exe, LICENSE.md and core\ (the frozen gaia)"
+  !error "PAYLOAD_DIR is required: the directory holding gaia-cli.exe, gaia-agent.exe, LICENSE.md and core\ (the frozen gaia)"
 !endif
 !ifndef ICON
   !error "ICON is required: -DICON=src/gaia/img/gaia.ico"
@@ -82,7 +82,7 @@ Unicode true
 !define PRODUCT_URL       "https://amd-gaia.ai"
 !define DOCS_URL          "https://amd-gaia.ai/docs"
 !define UNINST_KEY        "Software\Microsoft\Windows\CurrentVersion\Uninstall\gaia-tui"
-; Where the terminal is installed and which fonts are ours; read by gaia-tui's
+; Where the terminal is installed and which fonts are ours; read by gaia-cli's
 ; self-updater (tui/internal/update/setupdir_windows.go).
 !define SETTINGS_KEY      "Software\GAIA\gaia-tui"
 
@@ -94,7 +94,9 @@ Unicode true
 !define LEGACY_FONTS_KEY    "${LEGACY_SETTINGS_KEY}\Fonts"
 !define LEGACY_DEFAULT_DIR  "$LOCALAPPDATA\Programs\GAIA Terminal Hub"
 
-!define TUI_EXE           "gaia-tui.exe"
+!define TUI_EXE           "gaia-cli.exe"
+; The terminal's exe before it became gaia-cli: an upgrade removes it.
+!define LEGACY_TUI_EXE    "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
 ; The frozen gaia core; its _internal folder sits beside it.
 !define CORE_EXE          "gaia.exe"
@@ -108,7 +110,7 @@ Unicode true
 !define UI_EXE            "gaia-desktop.exe"
 !define UI_SETUP_NAME     "gaia-agent-ui-setup.exe"
 
-; The developer build (installer/nsis/gaia.nsi) puts its own gaia-tui on PATH
+; The developer build (installer/nsis/gaia.nsi) puts its own gaia-cli on PATH
 ; under its own "GAIA" Installed-apps entry, so beside this setup there would be
 ; two of each. Setup refuses rather than guess which copy the user wants.
 !define DEV_SETTINGS_KEY  "Software\AMD\GAIA"
@@ -168,7 +170,7 @@ VIAddVersionKey "LegalCopyright"  "Copyright (C) 2025-2026 ${PRODUCT_PUBLISHER}"
 !insertmacro GetSize
 
 ; What the shortcuts and the Finish page launch: wt.exe with the GAIA profile
-; when Windows Terminal is present, gaia-tui.exe directly otherwise.
+; when Windows Terminal is present, gaia-cli.exe directly otherwise.
 Var LaunchExe
 Var LaunchArgs
 ; Where the desktop app landed, read back from electron-builder's own key.
@@ -202,7 +204,7 @@ Var LegacyDir
 
 ; The folder choice is the terminal's; the desktop app's setup picks its own.
 !define MUI_PAGE_CUSTOMFUNCTION_PRE DirectoryPre
-!define MUI_DIRECTORYPAGE_TEXT_TOP "Setup will install the GAIA terminal (gaia-tui) in the following folder. The desktop app installs to its own folder."
+!define MUI_DIRECTORYPAGE_TEXT_TOP "Setup will install the GAIA terminal (gaia-cli) in the following folder. The desktop app installs to its own folder."
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShow
@@ -364,7 +366,7 @@ FunctionEnd
 ; its own Section line.
 
 ; Windows refuses write access to a running image, so `File` over a live
-; gaia-tui.exe fails mid-extraction and leaves a half-written install -- and
+; gaia-cli.exe fails mid-extraction and leaves a half-written install -- and
 ; under /S there is no dialog to notice it. Opening for append is the same test
 ; the extractor would make, one step before anything has been changed.
 Function AbortIfRunning
@@ -395,7 +397,7 @@ wait_for_file:
   ; /SD IDCANCEL: a silent install must fail rather than block on an invisible
   ; dialog, and must fail HERE, with the previous install still intact.
   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
-    "GAIA is still running, so Setup cannot replace $R8.$\r$\n$\r$\nClose GAIA - quit gaia-tui and the desktop app (including its icon in the notification area), and end any gaia-agent left behind - then click Retry.$\r$\n$\r$\nNothing has been changed; your existing installation is intact." \
+    "GAIA is still running, so Setup cannot replace $R8.$\r$\n$\r$\nClose GAIA - quit gaia-cli and the desktop app (including its icon in the notification area), and end any gaia-agent left behind - then click Retry.$\r$\n$\r$\nNothing has been changed; your existing installation is intact." \
     /SD IDCANCEL IDRETRY retry
   SetErrorLevel ${EXIT_RUNNING}
   Abort "GAIA is running. Close it and run Setup again - nothing was changed."
@@ -448,7 +450,7 @@ Section "GAIA Terminal UI (terminal)" SecMain
   File "${PAYLOAD_DIR}\${TUI_EXE}"
   File "${PAYLOAD_DIR}\${AGENT_EXE}"
   File "${PAYLOAD_DIR}\LICENSE.md"
-  ; The frozen gaia core: gaia.exe and its _internal folder, beside gaia-tui so
+  ; The frozen gaia core: gaia.exe and its _internal folder, beside gaia-cli so
   ; the terminal UI and PATH both find it. An update's files replace all of it.
   RMDir /r "$INSTDIR\_internal"
   File /r "${PAYLOAD_DIR}\core\*.*"
@@ -456,6 +458,7 @@ Section "GAIA Terminal UI (terminal)" SecMain
   File "${FONTS_DIR}\${FONT_LICENSE}"
 
   ; After the new files land, so a failed extraction leaves the old install.
+  Delete "$INSTDIR\${LEGACY_TUI_EXE}"
   Call MigrateLegacyInstall
   WriteRegStr HKCU "${SETTINGS_KEY}" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "${SETTINGS_KEY}" "Version"    "${VERSION}"
@@ -522,6 +525,7 @@ Function MigrateLegacyInstall
   ${AndIf} $LegacyDir != $INSTDIR
     DetailPrint "Moving GAIA Terminal UI from $LegacyDir to $INSTDIR."
     Delete "$LegacyDir\${TUI_EXE}"
+    Delete "$LegacyDir\${LEGACY_TUI_EXE}"
     Delete "$LegacyDir\${AGENT_EXE}"
     Delete "$LegacyDir\${CORE_EXE}"
     RMDir /r "$LegacyDir\_internal"
@@ -765,14 +769,14 @@ Section "-Terminal profile" SecTerminalProfile
     DetailPrint "Could not write the Windows Terminal profile to ${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}."
     ; /SD IDOK, or a silent install blocks forever on a dialog nobody can see.
     MessageBox MB_OK|MB_ICONEXCLAMATION \
-      "GAIA is installed, but Setup could not write its Windows Terminal profile to:$\r$\n$\r$\n${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}$\r$\n$\r$\nThe shortcuts will run gaia-tui in the default console instead. Check that folder is writable, then run Setup again." \
+      "GAIA is installed, but Setup could not write its Windows Terminal profile to:$\r$\n$\r$\n${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}$\r$\n$\r$\nThe shortcuts will run gaia-cli in the default console instead. Check that folder is writable, then run Setup again." \
       /SD IDOK
   ${Else}
     DetailPrint "Added the GAIA profile to Windows Terminal (${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE})."
   ${EndIf}
 
   ; ── Shortcuts ──
-  ; cobra's Explorer guard is disabled in gaia-tui (tui/internal/cli/root.go);
+  ; cobra's Explorer guard is disabled in gaia-cli (tui/internal/cli/root.go);
   ; left at its default, a shortcut that runs it directly would print "This is
   ; a command line tool" and exit, because a shortcut launches via Explorer.
   Call FindWindowsTerminal
@@ -786,9 +790,9 @@ Section "-Terminal profile" SecTerminalProfile
     StrCpy $LaunchArgs ""
     ${If} $R0 == ""
       ; Explicit, not a fallback: the console host cannot load a WT profile.
-      DetailPrint "Windows Terminal is not installed - shortcuts run gaia-tui in the default console, without the GAIA font and colours. Install Windows Terminal and re-run Setup to use the GAIA profile."
+      DetailPrint "Windows Terminal is not installed - shortcuts run gaia-cli in the default console, without the GAIA font and colours. Install Windows Terminal and re-run Setup to use the GAIA profile."
     ${Else}
-      DetailPrint "Shortcuts run gaia-tui in the default console because the Windows Terminal profile could not be written."
+      DetailPrint "Shortcuts run gaia-cli in the default console because the Windows Terminal profile could not be written."
     ${EndIf}
   ${EndIf}
   ; Shortcuts under the old name would sit beside the new ones after an upgrade.
@@ -806,7 +810,7 @@ SectionEnd
   ; /SD IDOK, or a silent install (/S, GPO, SCCM) blocks forever on a dialog
   ; nobody can see.
   MessageBox MB_OK|MB_ICONEXCLAMATION \
-    "GAIA is installed, but Setup could not safely update your PATH: it is longer than the 1023 characters this installer can hold, and rewriting it would lose the rest.$\r$\n$\r$\nAdd this folder to your PATH by hand to run gaia-tui from any terminal:$\r$\n$\r$\n$INSTDIR" \
+    "GAIA is installed, but Setup could not safely update your PATH: it is longer than the 1023 characters this installer can hold, and rewriting it would lose the rest.$\r$\n$\r$\nAdd this folder to your PATH by hand to run gaia-cli from any terminal:$\r$\n$\r$\n$INSTDIR" \
     /SD IDOK
 !macroend
 
@@ -860,7 +864,7 @@ SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecUI} "GAIA Agent UI, the desktop app: a window with chat, your documents and files, and every tool call shown as it runs. Adds a GAIA shortcut to the desktop and Start menu."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "GAIA Terminal UI (gaia-tui): the same agent in your terminal, on your PATH, with a GAIA profile for Windows Terminal. Adds a GAIA Terminal UI shortcut to the desktop and Start menu."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "GAIA Terminal UI (gaia-cli): the same agent in your terminal, on your PATH, with a GAIA profile for Windows Terminal. Adds a GAIA Terminal UI shortcut to the desktop and Start menu."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 !macro RefuseUsage MSG
@@ -935,11 +939,16 @@ Function .onInit
   ${If} $R0 == ""
     ReadRegStr $R0 HKCU "${DEV_UNINST_KEY}" "InstallLocation"
   ${EndIf}
+  ; A developer build from before the terminal became gaia-cli has gaia-tui.exe.
   ${If} $R0 != ""
-  ${AndIf} ${FileExists} "$R0\gaia-tui.exe"
+  ${AndIfNot} ${FileExists} "$R0\${TUI_EXE}"
+  ${AndIfNot} ${FileExists} "$R0\${LEGACY_TUI_EXE}"
+    StrCpy $R0 ""
+  ${EndIf}
+  ${If} $R0 != ""
     ; /SD IDOK: under /S the exit code is the message.
     MessageBox MB_OK|MB_ICONSTOP \
-      "A GAIA developer build is installed (Installed apps: GAIA).$\r$\n$\r$\nInstalled beside it, GAIA would have two gaia-tui programs on your PATH and two GAIA entries in Installed apps. Uninstall it from Settings > Apps > Installed apps, then run Setup again.$\r$\n$\r$\nNothing was installed." \
+      "A GAIA developer build is installed (Installed apps: GAIA).$\r$\n$\r$\nInstalled beside it, GAIA would have two gaia-cli programs on your PATH and two GAIA entries in Installed apps. Uninstall it from Settings > Apps > Installed apps, then run Setup again.$\r$\n$\r$\nNothing was installed." \
       /SD IDOK
     SetErrorLevel ${EXIT_CONFLICT}
     Quit
@@ -1065,6 +1074,8 @@ Function Preflight
     StrCpy $R7 "$INSTDIR"
     StrCpy $R8 "${TUI_EXE}"
     Call AbortIfRunning
+    StrCpy $R8 "${LEGACY_TUI_EXE}"
+    Call AbortIfRunning
     StrCpy $R8 "${AGENT_EXE}"
     Call AbortIfRunning
     StrCpy $R8 "${CORE_EXE}"
@@ -1075,6 +1086,8 @@ Function Preflight
       Call StopLegacyDaemon
       StrCpy $R7 "$LegacyDir"
       StrCpy $R8 "${TUI_EXE}"
+      Call AbortIfRunning
+      StrCpy $R8 "${LEGACY_TUI_EXE}"
       Call AbortIfRunning
       StrCpy $R8 "${AGENT_EXE}"
       Call AbortIfRunning
@@ -1149,6 +1162,7 @@ FunctionEnd
 Section "Uninstall"
   Call un.StopDaemon
   Delete "$INSTDIR\${TUI_EXE}"
+  Delete "$INSTDIR\${LEGACY_TUI_EXE}"
   Delete "$INSTDIR\${AGENT_EXE}"
   Delete "$INSTDIR\${CORE_EXE}"
   RMDir /r "$INSTDIR\_internal"

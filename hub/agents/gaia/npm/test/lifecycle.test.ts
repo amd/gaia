@@ -546,7 +546,7 @@ describe("resolve*Path", () => {
   });
 
   it("returns the path once the binary is present and matches the lock", () => {
-    const { full, lock } = stage("a verified gaia-tui");
+    const { full, lock } = stage("a verified gaia-cli");
     expect(resolveTuiPath({ resourcesDir: tmp, lock })).toBe(full);
   });
 

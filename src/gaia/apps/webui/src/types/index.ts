@@ -1118,6 +1118,8 @@ export interface LocalModelStatus {
     /** One plain line; `error_detail` carries the raw cause. */
     error: string | null;
     error_detail?: string | null;
+    /** Set when `error` is the server not answering, so the UI words it in its language. */
+    error_cause?: 'model_server_down' | null;
     base_url: string | null;
     /** `gaia` for GAIA's own Lemonade; GAIA asks before reloading on `user` or `remote`. */
     owner: 'gaia' | 'user' | 'remote' | null;

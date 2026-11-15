@@ -501,6 +501,10 @@ function ConnectorTile({
         if (connector.type === 'mcp_server' && connector.enabled === false) {
             return <span className="connector-status disabled">{t('settings.connectors.paused')}</span>;
         }
+        // A server that won't start is not working, whatever was saved for it.
+        if (check?.state === 'failed' && !check.slow) {
+            return <span className="connector-status failed" role="status">{t('settings.connectors.notWorking')}</span>;
+        }
         return (
             <span className="connector-status ok">
                 <CheckCircle2 size={12} />
