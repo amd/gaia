@@ -12,6 +12,7 @@ file reads the same everywhere.
 
 import codecs
 import os
+import unicodedata
 from typing import Tuple, Union
 
 from charset_normalizer import from_bytes
@@ -34,11 +35,21 @@ TRIED_ENCODINGS = (
 # Bytes legacy code pages map to control characters text never holds; NUL marks binary.
 _CONTROL_BYTES = frozenset(range(32)) - {9, 10, 12, 13}
 
-#: Fewer than one non-ASCII byte in this many is Windows ANSI, the old default.
-_SPARSE_RATIO = 200
-
 #: How much of a file :func:`file_encoding` reads to decide.
 SNIFF_BYTES = 1 << 16
+
+
+#: Fewer non-ASCII bytes than this give detection nothing to go on.
+_TOO_FEW_TO_TELL = 8
+
+
+def _latin_script_only(text: str) -> bool:
+    """Whether every non-ASCII letter in *text* is a Latin one."""
+    return all(
+        unicodedata.name(char, "").startswith("LATIN")
+        for char in text
+        if ord(char) > 127 and char.isalpha()
+    )
 
 
 def detect_encoding(data: bytes, truncated: bool = False) -> str:
@@ -74,16 +85,24 @@ def detect_encoding(data: bytes, truncated: bool = False) -> str:
         cp1252_text = data.decode("cp1252")
     except UnicodeDecodeError:
         cp1252_text = None
+    # A BOM-less UTF-16/32 guess on a few bytes is noise.
+    best = next(
+        (
+            m
+            for m in from_bytes(data)
+            if not m.encoding.startswith(("utf_16", "utf_32"))
+        ),
+        None,
+    )
     high = sum(byte >= 0x80 for byte in data)
-    # A stray accent in an ASCII log gives detection nothing to go on.
-    if cp1252_text is not None and high * _SPARSE_RATIO < len(data):
-        return "cp1252"
-    matches = from_bytes(data)
-    # Short Western text scores as cp1250/cp775 too; keep cp1252 when it reads the same.
-    if cp1252_text is not None and any(str(m) == cp1252_text for m in matches):
-        return "cp1252"
-    best = matches.best()
     if best is not None:
+        # Latin-script text scores as cp1250/cp775 too, and a handful of bytes
+        # ("café") scores as anything: both are Windows ANSI. Another script
+        # (Cyrillic names in an English CSV) is the detector's call.
+        if cp1252_text is not None and (
+            high < _TOO_FEW_TO_TELL or _latin_script_only(str(best))
+        ):
+            return "cp1252"
         return best.encoding
     # Symbol-heavy Western text ("12€ — 15€") the detector can't place.
     if cp1252_text is not None and high <= sum(0x20 < byte < 0x80 for byte in data):

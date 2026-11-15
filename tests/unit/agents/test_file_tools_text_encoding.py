@@ -293,6 +293,19 @@ class TestWindowsAnsiTextReadsAsText:
 
         assert text_files.read_text(path) == (text, "cp1252")
 
+    def test_cyrillic_names_in_an_english_csv_are_not_windows_ansi(self, tmp_path):
+        from gaia.agents.tools import text_files
+
+        path = tmp_path / "orders.csv"
+        text = "".join(
+            f"{i},customer,{'Иванов Петров' if i % 10 == 0 else 'John Smith'},"
+            "2024-01-01,order shipped ok\n"
+            for i in range(800)
+        )
+        path.write_bytes(text.encode("cp1251"))
+
+        assert text_files.read_text(path) == (text, "cp1251")
+
 
 def _legacy_file(tmp_path, text, encoding, name="notes.csv"):
     path = tmp_path / name
