@@ -97,12 +97,16 @@ def render_suggestion(names: Sequence[str]) -> str:
 
     It goes into the user's message, never the system prompt: the system prompt
     has to stay byte-identical from turn to turn for the server's prompt cache.
+
+    A near miss scores as high as a real match, so the line offers the names
+    and leaves the decision to the model.
     """
     if not names:
         return ""
     return (
-        "Skills that match this request and are not loaded yet: "
-        f"{', '.join(names)} — load them with load_skill before starting."
+        "Skills that may fit this request and are not loaded yet: "
+        f"{', '.join(names)} — use load_skill for the ones that cover what was "
+        "asked and ignore the rest."
     )
 
 
