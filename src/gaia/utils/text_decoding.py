@@ -111,14 +111,33 @@ def name_file(
 
 
 def file_encoding(path: Union[str, os.PathLike]) -> str:
-    """The codec to open *path* as text with, judged on its first 64 KB.
+    """The codec to open *path* as text with: its first 64 KB decide, the rest confirms UTF-8.
 
     Raises:
         UnicodeDecodeError: no text encoding fits; the message names *path*.
     """
     with open(path, "rb") as stream:
         head = stream.read(SNIFF_BYTES)
+        truncated = len(head) == SNIFF_BYTES
+        try:
+            encoding = detect_encoding(head, truncated=truncated)
+            # An ASCII head says nothing about the accented word on line 9,000.
+            if truncated and encoding == "utf-8" and not _rest_is_utf8(stream, head):
+                stream.seek(0)
+                encoding = detect_encoding(stream.read())
+        except UnicodeDecodeError as exc:
+            raise name_file(exc, path) from exc
+    return encoding
+
+
+def _rest_is_utf8(stream, head: bytes) -> bool:
+    """Whether *head* plus the rest of *stream* decodes as UTF-8."""
+    decoder = codecs.getincrementaldecoder("utf-8")()
     try:
-        return detect_encoding(head, truncated=len(head) == SNIFF_BYTES)
-    except UnicodeDecodeError as exc:
-        raise name_file(exc, path) from exc
+        decoder.decode(head)
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            decoder.decode(chunk)
+        decoder.decode(b"", final=True)
+    except UnicodeDecodeError:
+        return False
+    return True

@@ -284,6 +284,15 @@ class TestWindowsAnsiTextReadsAsText:
         path.write_bytes(b"a" * (SNIFF_BYTES - 1) + "€".encode("utf-8"))
         assert text_files.text_encoding(path) == "utf-8"
 
+    def test_a_western_character_past_the_sniff_limit_still_reads(self, tmp_path):
+        from gaia.agents.tools import text_files
+
+        path = tmp_path / "long.log"
+        text = "plain line\n" * (SNIFF_BYTES // 8) + "café costs 5 €\n"
+        path.write_bytes(text.encode("cp1252"))
+
+        assert text_files.read_text(path) == (text, "cp1252")
+
 
 def _legacy_file(tmp_path, text, encoding, name="notes.csv"):
     path = tmp_path / name
