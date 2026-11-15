@@ -105,6 +105,9 @@ async def send_message(
        from having overlapping requests that would corrupt conversation
        state.
     """
+    # A blank message would still run a whole turn and store an empty exchange.
+    if not request.message.strip():
+        raise HTTPException(status_code=422, detail="The message is empty.")
     # Verify session exists
     session = db.get_session(request.session_id)
     if not session:

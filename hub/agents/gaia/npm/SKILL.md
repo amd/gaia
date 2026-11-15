@@ -372,6 +372,9 @@ Rules a client must respect:
 - **Cancel with `POST /v1/gaia/query/{run_id}/cancel`.** It returns
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
+  When the cancel stops the turn's attached documents from loading, the reply
+  also has `documents_left`: how many were not loaded. Show it, since a stream
+  you closed never delivers that step's result.
   Dropping the HTTP connection also cancels the run. A run stopped mid-answer
   ends with an empty `final`, and no `token` follows the cancel, so keep the
   text the `token` events already delivered. Text not yet sent when the
@@ -814,7 +817,8 @@ loop on `/v1/gaia/init` — it will report ready. Wait for a running turn to
 finish (or close an idle session) and retry the same `/query`. A 503 whose
 `detail` says the model server or GAIA's AI engine couldn't start is not
 a busy slot: show the user that `detail`, which names the fix, instead of
-retrying.
+retrying. Neither is a 503 whose `detail` says there is no model by that name:
+it never succeeds on retry, so pick another model.
 
 **Three more refusals are yours to avoid**, each naming its fix in `detail`
 (SPEC §5.2 has the reasoning):

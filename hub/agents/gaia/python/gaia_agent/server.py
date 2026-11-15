@@ -394,6 +394,15 @@ class QueryRequest(_Strict):
 class QueryCancelResponse(_Strict):
     run_id: str
     cancelled: bool
+    documents_left: Optional[int] = Field(
+        default=None,
+        description=(
+            "How many of the turn's attached documents the cancel left "
+            "unloaded. null when the run was not loading documents or had "
+            "loaded them all. The stream a host closes on cancel never carries "
+            "the loading step's result, so this is where the count comes from."
+        ),
+    )
 
 
 class QueryRespondRequest(_Strict):
@@ -555,6 +564,34 @@ class ToolsResponse(_Strict):
     tools: List[ToolView]
 
 
+class _DocumentLoad:
+    """How far a turn's attached documents have loaded, read in step with Stop."""
+
+    def __init__(self, total: int, cancel: Optional[threading.Event]) -> None:
+        self.total = total
+        self._started = 0
+        self._cancel = cancel
+        self._lock = threading.Lock()
+
+    def start_next(self) -> bool:
+        """Count the next document as started, unless the run was stopped."""
+        with self._lock:
+            if self._cancel is not None and self._cancel.is_set():
+                return False
+            self._started += 1
+            return True
+
+    def end_early(self) -> None:
+        """Count the rest as handled: a full index, not Stop, left them unloaded."""
+        with self._lock:
+            self._started = self.total
+
+    def left(self) -> int:
+        """Documents not started. Final once the cancel flag is set."""
+        with self._lock:
+            return self.total - self._started
+
+
 class _QueryRun:
     """One in-flight run: the agent, its output handler, and its cancel flag."""
 
@@ -579,6 +616,14 @@ class _QueryRun:
         self.query = ""
         self.pushed: List[Dict[str, Any]] = []
         self.received_turns: Optional[List[List[Dict[str, Any]]]] = None
+        #: The turn's attached documents, while and after they load.
+        self.document_load: Optional[_DocumentLoad] = None
+
+    def documents_left(self) -> Optional[int]:
+        """Attached documents a cancel left unloaded, or None when there are none."""
+        load = self.document_load
+        left = load.left() if load is not None else 0
+        return left if left > 0 and self.cancel_event.is_set() else None
 
 
 class DuplicateRunError(RuntimeError):
@@ -601,10 +646,12 @@ _MAX_FINISHED = 256
 _MISSING = object()
 
 
-def _remember_bounded(store: Dict[str, None], key: str, cap: int) -> None:
+def _remember_bounded(
+    store: Dict[str, Optional[int]], key: str, cap: int, value: Optional[int] = None
+) -> None:
     """Record ``key`` as the newest entry, dropping the oldest past ``cap``."""
     store.pop(key, None)  # re-insert at the end, so this is the newest
-    store[key] = None
+    store[key] = value
     while len(store) > cap:
         store.pop(next(iter(store)))
 
@@ -617,9 +664,9 @@ class _RunRegistry:
         #: run_ids cancelled before their ``/query`` registered. Insertion
         #: ordered, so the oldest is the one evicted at the cap.
         self._precancelled: Dict[str, None] = {}
-        #: run_ids whose run has already ended. Same shape, and the reason
-        #: ``cancel`` does not tombstone them.
-        self._finished: Dict[str, None] = {}
+        #: run_ids whose run has already ended, and the reason ``cancel`` does
+        #: not tombstone them. Each keeps the documents a cancel left unloaded.
+        self._finished: Dict[str, Optional[int]] = {}
         self._lock = threading.Lock()
 
     def add(self, run: _QueryRun) -> bool:
@@ -669,12 +716,21 @@ class _RunRegistry:
                 _remember_bounded(self._precancelled, run_id, _MAX_PRECANCELLED)
             return False
 
+    def documents_left(self, run_id: str) -> Optional[int]:
+        """Attached documents a cancel of *run_id* left unloaded, live or just ended."""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is not None:
+                return run.documents_left()
+            return self._finished.get(run_id)
+
     def remove(self, run_id: str) -> None:
         """Retire a finished run, remembering the id so a late cancel knows it
         ended rather than treating it as one that has yet to start."""
         with self._lock:
-            self._runs.pop(run_id, None)
-            _remember_bounded(self._finished, run_id, _MAX_FINISHED)
+            run = self._runs.pop(run_id, None)
+            left = run.documents_left() if run is not None else None
+            _remember_bounded(self._finished, run_id, _MAX_FINISHED, left)
 
 
 _registry = _RunRegistry()
@@ -721,7 +777,8 @@ def _start_failure(exc: BaseException, surface: str) -> HTTPException:
     typed = model_server_failure(exc)
     if typed is None:
         return HTTPException(
-            status_code=500, detail=f"Failed to start the query run: {exc}"
+            status_code=500,
+            detail=surface_wording(f"Failed to start the query run: {exc}", surface),
         )
     logger.warning("%s /query could not start: %s", AGENT_ID, exc)
     # Not the caller's fault and not a bug: the model server is unavailable.
@@ -945,7 +1002,9 @@ def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
     agent.rebuild_system_prompt()
 
 
-def _index_attached_documents(agent: Any, documents: List[str], handler: Any) -> None:
+def _index_attached_documents(
+    agent: Any, documents: List[str], handler: Any, run: Optional[_QueryRun] = None
+) -> None:
     """Index the documents the caller attached to this conversation (>= 2.16).
 
     Grants each as that exact file, never its folder: the scope an in-process
@@ -953,7 +1012,8 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     session pays only for documents attached since its last turn. Loading
     stops once the index is full; the rest stay attached and load on request.
     A document attached on an earlier turn and left out of *documents* is
-    dropped.
+    dropped. *run* is told how far the load got, so its cancel can report
+    what was left.
     """
     _drop_detached_documents(agent, documents)
     agent.attached_documents = list(documents)
@@ -965,13 +1025,16 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
         # Already said when the index filled; the model is told every turn.
         _grant_unloaded(agent, pending)
         return
+    # Set before the step opens, so a Stop that lands now still gets its count.
+    load = _DocumentLoad(len(pending), getattr(agent, "_cancel_event", None))
+    if run is not None:
+        run.document_load = load
     handler.print_tool_usage(_ATTACH_TOOL)
     handler.pretty_print_json(
         {"documents": [Path(d).name for d in pending]}, title="Arguments"
     )
     rag = agent.rag
     lines: List[str] = []
-    cancel = getattr(agent, "_cancel_event", None)
     stopped = False
     filled = False
     left = 0
@@ -981,8 +1044,8 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     loaded_line: Dict[str, int] = {}
     for position, doc in enumerate(pending):
         # Stop ends the loading here; what is left stays attached for later.
-        if cancel is not None and cancel.is_set():
-            left = len(pending) - position
+        if not load.start_next():
+            left = load.left()
             stop_index = position
             stop_line = len(lines)
             lines.append(
@@ -994,6 +1057,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             break
         if rag is not None and rag.is_full():
             filled = True
+            load.end_early()
             break
         name = Path(doc).name
         reason = (
@@ -1890,7 +1954,7 @@ async def query(request: QueryRequest):
 
     def _process() -> None:
         if request.documents is not None:
-            _index_attached_documents(agent, request.documents, handler)
+            _index_attached_documents(agent, request.documents, handler, run)
         if request.turns is not None and hasattr(agent, "conversation_history"):
             # Sizing them can ask the model server for its window: never on the loop.
             agent.conversation_history = _history_from_turns(
@@ -2194,7 +2258,12 @@ async def cancel_query(run_id: str) -> QueryCancelResponse:
     cancelled: the caller mints ``run_id`` before it POSTs ``/query``, which
     makes cancel-arrives-first a real ordering, not a hypothetical one.
     """
-    return QueryCancelResponse(run_id=run_id, cancelled=_registry.cancel(run_id))
+    cancelled = _registry.cancel(run_id)
+    return QueryCancelResponse(
+        run_id=run_id,
+        cancelled=cancelled,
+        documents_left=_registry.documents_left(run_id),
+    )
 
 
 DEFAULT_HOST = "127.0.0.1"

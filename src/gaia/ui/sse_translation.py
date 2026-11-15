@@ -124,6 +124,8 @@ SUMMARY_VIEW_KEYS = (
     "needs_model",
     # Set on a "denied" call nobody answered, so it isn't shown as the user's no.
     "timed_out",
+    # "agent" on a "denied" call GAIA turned down itself, with no prompt shown.
+    "declined_by",
     # False on a call refused before it ran, so a relayed refusal contacted nothing.
     "executed",
     "summary_truncated",

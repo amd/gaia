@@ -348,12 +348,24 @@ class SettingsUpdateRequest(BaseModel):
 
     custom_model: Optional[str] = Field(
         None,
+        max_length=256,
         description=(
             "HuggingFace model ID to use instead of the default model. "
             "Example: huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated. "
             "Set to empty string or null to clear the override."
         ),
     )
+
+    @field_validator("custom_model")
+    @classmethod
+    def _one_line_model_id(cls, value: Optional[str]) -> Optional[str]:
+        # It is sent to the model server and logged on every turn.
+        if value and any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise ValueError(
+                "A model ID is a single line: remove the line break or control character."
+            )
+        return value
+
     context_size: Optional[int] = Field(
         None,
         description=(
@@ -647,6 +659,8 @@ class AgentStepResponse(BaseModel):
     declined: Optional[bool] = None
     # Nobody answered its prompt in time; it never ran either.
     timedOut: Optional[bool] = None
+    # GAIA turned this call down itself; no prompt was shown, so not the user's no.
+    autoDeclined: Optional[bool] = None
     active: bool = False
     planSteps: Optional[List[str]] = None
     planNarrations: Optional[List[str]] = None
