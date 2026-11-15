@@ -426,6 +426,38 @@ def test_a_full_access_chat_asks_once_for_a_one_time_line(repo):
     assert (repo / "ran.txt").read_text() == "x"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="cmd.exe runs only the first line")
+def test_a_full_access_chat_asks_for_a_heredoc_and_runs_every_line(repo):
+    command = "cat <<'EOF' > hd_notes.txt\nhello heredoc\nEOF"
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result, events = _drive(
+        agent, handler, _shell(command, repo), on_prompt=_answer(handler)
+    )
+
+    [request] = _prompts(events)
+    [wire] = CanonicalTranslator(run_id="r", agent_id="gaia").translate(request)
+    assert wire["summary"].startswith(command + "\n")
+    assert result["status"] == "success", result
+    assert (repo / "hd_notes.txt").read_text() == "hello heredoc\n"
+
+
+def test_a_full_access_chat_refuses_a_heredoc_hiding_a_delete(repo):
+    command = "cat <<'EOF' > out.txt\nhello\nEOF\nrm -rf a.txt"
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result, events = _drive(
+        agent, handler, _shell(command, repo), on_prompt=_answer(handler)
+    )
+
+    assert _prompts(events) == []
+    assert result["status"] == "error" and result["executed"] is False
+    assert (repo / "a.txt").exists()
+    assert not (repo / "out.txt").exists()
+
+
 def test_a_full_access_chat_runs_a_safe_command_unasked(repo):
     handler = _full_access_chat()
     agent = _agent(handler)

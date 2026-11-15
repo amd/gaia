@@ -407,3 +407,41 @@ def test_a_read_only_script_leaves_no_warning(tools, tmp_path, project):
         "lines = open('incidents.log').read().splitlines()\nprint(len(lines))\n"
     )
     assert _run(tools, tmp_path, "execute_python_file", file_path=str(script)) == []
+
+
+def test_files_a_snippet_moves_and_renames_come_back_on_undo(tools, tmp_path, project):
+    inbox = project / "inbox"
+    inbox.mkdir()
+    for i in range(5):
+        (inbox / f"scan_{i}.txt").write_text(f"invoice {i}")
+    before = sorted(p.name for p in inbox.iterdir())
+    code = textwrap.dedent(f"""
+        # file the invoices by year
+        from pathlib import Path
+        inbox = Path(r"{inbox}")
+        year = inbox / "invoices" / "2024"
+        year.mkdir(parents=True)
+        for p in inbox.glob("scan_*.txt"):
+            p.rename(year / ("invoice-" + p.stem[5:] + ".txt"))
+        """)
+    (turn,) = _run(tools, tmp_path, "run_python", code=code)
+    assert not list(inbox.glob("scan_*.txt"))
+
+    fs.restore_turn(SID, turn["turn_id"], root=tmp_path)
+
+    assert sorted(p.name for p in inbox.iterdir()) == before
+    assert (inbox / "scan_3.txt").read_text() == "invoice 3"
+
+
+def test_a_folder_with_a_locked_file_still_runs_the_snippet(tools, tmp_path, project):
+    folder = project / "locked"
+    folder.mkdir()
+    (folder / "busy.txt").write_text("in use")
+    code = f"open(r'{folder / 'out.txt'}', 'w').write('x')"
+    with patch.object(
+        fs.TurnRecorder, "capture_folder_files", return_value=False
+    ) as capture:
+        (turn,) = _run(tools, tmp_path, "run_python", code=code)
+    capture.assert_called()
+    assert (folder / "out.txt").read_text() == "x"
+    assert turn["incomplete"] is True

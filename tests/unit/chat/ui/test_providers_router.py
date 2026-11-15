@@ -763,6 +763,37 @@ def test_active_names_a_cloud_model_only_lemonade_lists_as_cloud(
     assert body["display_name"] == "big-model"
 
 
+def test_active_names_hybrid_as_a_cloud_model(client, lemonade, keys, db):
+    db.set_setting("custom_model", "hybrid")
+
+    body = client.get("/api/providers/active").json()
+
+    assert body["model"] == "hybrid"
+    assert body["remote"] is True
+    assert body["inference_remote"] is True
+    assert body["downloaded"] is None
+    assert body["provider_name"] == "AMD LLM Gateway"
+    assert body["display_name"] == "Hybrid"
+    assert body["label"] == "Hybrid · AMD LLM Gateway"
+
+
+def test_active_reports_unusable_hybrid_settings(
+    client, lemonade, keys, db, monkeypatch
+):
+    from gaia.llm import hybrid
+
+    def broken(*_a, **_k):
+        raise hybrid.HybridConfigError("hybrid_cheap_model must name a model")
+
+    monkeypatch.setattr(hybrid.HybridSettings, "load", classmethod(broken))
+    db.set_setting("custom_model", "hybrid")
+
+    body = client.get("/api/providers/active").json()
+
+    assert body["model"] is None
+    assert "hybrid_cheap_model" in body["config_error"]
+
+
 def test_active_reads_the_catalog_to_name_a_cloud_model_on_a_cold_start(
     client, lemonade, keys, db, monkeypatch
 ):
@@ -1353,6 +1384,68 @@ def test_connect_old_lemonade_409(client, lemonade, keys):
     assert resp.status_code == 409
     assert "oldest version GAIA supports" in resp.json()["detail"]
     assert "cloud/auth" not in lemonade.paths()
+
+
+def test_connect_unregistered_provider_names_settings_not_a_command(
+    client, lemonade, keys
+):
+    lemonade.answers[("POST", "cloud/auth")] = (
+        404,
+        {
+            "error": {
+                "message": (
+                    "Cloud provider 'fireworks' is not installed. Call POST "
+                    "/v1/install with backend=cloud, provider, and base_url first."
+                ),
+                "type": "invalid_request",
+            }
+        },
+    )
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert "no cloud provider registered" in detail
+    assert "Settings > Model" in detail
+    assert "connect it again" in detail
+    assert "older than" not in detail
+    assert "gaia gateway install" not in detail
+    assert "TUI" not in detail
+    assert "/gateway" not in detail
+
+
+def test_connect_install_404_with_the_marker_keeps_the_version_hint(
+    client, lemonade, keys
+):
+    lemonade.answers[("POST", "install")] = (
+        404,
+        {
+            "error": {
+                "message": (
+                    "Cloud provider 'fireworks' is not installed. Call POST "
+                    "/v1/install with backend=cloud, provider, and base_url first."
+                ),
+                "type": "invalid_request",
+            }
+        },
+    )
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert "oldest version GAIA supports" in detail
+    assert "no cloud provider registered" not in detail
+    assert "cloud/auth" not in lemonade.paths()
+
+
+def test_cloud_error_other_404_keeps_lemonades_detail():
+    err = providers._cloud_error(
+        "fireworks",
+        404,
+        {"error": {"message": "provider is misconfigured", "type": "invalid_request"}},
+    )
+    assert err.status == 502
+    assert "provider is misconfigured" in str(err)
+    assert "oldest version GAIA supports" not in str(err)
+    assert "no cloud provider registered" not in str(err)
 
 
 def test_connect_never_echoes_lemonade_errors_about_the_key(

@@ -209,6 +209,8 @@ export const enMessages = {
     'newChat.docs.attachIt': 'Attach it',
     'newChat.docs.attachAll': 'Attach all {n}',
     'newChat.docs.choose': 'Choose',
+    'newChat.docs.hidden': '+{n} more',
+    'newChat.docs.fewer': 'Show fewer',
 
     // The new chat's folders
     'folderChip.add': 'Add a folder',
@@ -391,6 +393,7 @@ export const enMessages = {
     'msg.stoppedError': 'Stopped. GAIA reported an error while stopping: {error}',
     'msg.about': 'About this answer',
     'msg.timestamp': 'Message timestamp',
+    'msg.route': 'Picked by hybrid. {reason}',
 
     // The line under an answer: how long it took and where it ran
     'answer.answeredIn': 'Answered in {time}',
@@ -928,6 +931,8 @@ export const enMessages = {
     'docs.retryTitle': 'Retry indexing',
     'docs.retryTitleFix': 'Retry indexing (fix the file first, or this fails again)',
     'docs.retryAria': 'Retry indexing {name}',
+    'docs.serverDown': 'GAIA\'s model server isn\'t answering, so this file couldn\'t be added. Retry once it\'s back.',
+    'docs.serverBusy': 'GAIA\'s model server is busy with other work and didn\'t answer in time. Retry in a moment.',
     'docs.noReason': 'GAIA didn\'t record why. Retry to see the error.',
     'docs.cancelled': 'Cancelled',
     'docs.missing': 'File missing',
@@ -1007,6 +1012,7 @@ export const enMessages = {
     'docs.openFolderFailed': 'Couldn\'t open the folder for {name}: {error}',
     'docs.dismissError': 'Dismiss error',
     'docs.notAdded': '{name} couldn\'t be added: GAIA can\'t read it. Why, and Retry, are on its row below.',
+    'docs.notAddedServer': '{name} couldn\'t be added: GAIA\'s model server isn\'t answering. Retry on its row once it\'s back.',
     'docs.unreadable.one': '{n} couldn\'t be read',
     'docs.unreadable.other': '{n} couldn\'t be read',
     'docsBar.count.one': '{n} document',
@@ -1019,6 +1025,8 @@ export const enMessages = {
     'docsBar.remove': 'Remove {name} from this chat',
     'docsBar.more': '+{n} more',
     'docsBar.less': 'show less',
+    'docsBar.pastCap': 'Not all {n} documents in this chat are searched at once: a chat searches up to {limit} documents. Ask about a file by name to search it.',
+    'docsBar.pastSize': 'Not all {n} documents in this chat are searched at once: they are long, and a chat searches up to {passages} passages. Ask about a file by name to search it.',
     'docsBar.failedTitle': '{name} couldn\'t be read. Open the document library to see why and retry.',
     'docs.removed': 'Removed {name} from your library. The file on your PC is untouched.',
     'docs.undo': 'Undo',
