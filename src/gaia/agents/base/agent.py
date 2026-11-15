@@ -8854,6 +8854,10 @@ Do NOT wrap conversational replies in JSON.
                     or ""
                 )
             ):
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
                 return {
                     **NOT_EXECUTED,
                     "status": "denied",

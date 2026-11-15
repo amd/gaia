@@ -391,6 +391,25 @@ def test_a_call_declined_without_asking_is_marked_as_gaias_decline(shell_agent):
     assert result["declined_by"] == "agent"
 
 
+def test_a_call_declined_without_asking_drops_its_prepared_preview(shell_agent):
+    forgotten = []
+
+    class _Preflight:
+        def __call__(self, tool_args):
+            return None  # nothing to refuse
+
+        @staticmethod
+        def forget(tool_args):
+            forgotten.append(tool_args)
+
+    shell_agent._tools_registry["run_shell_command"]["preflight"] = _Preflight()
+    _script(shell_agent, _ECHO, {"answer": "Le fichier est introuvable."})
+
+    shell_agent.process_query(CHECK_SENTENCE, max_steps=10)
+
+    assert forgotten == [_ECHO["tool_args"]]
+
+
 def test_a_call_the_user_declines_is_not_marked_as_gaias(shell_agent):
     shell_agent.console.confirm_tool_execution.return_value = False
     _script(shell_agent, _ECHO, {"answer": "Not run."})
