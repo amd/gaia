@@ -18,6 +18,7 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from unittest.mock import patch
@@ -641,11 +642,37 @@ def test_an_answer_to_a_different_prompt_is_not_consent(repo):
 # ---------------------------------------------------------------------------
 
 
+def _python_runs(name: str) -> bool:
+    # Run the PATH match, not the bare name: Windows would find the venv's
+    # python beside this interpreter before searching PATH at all.
+    found = shutil.which(name)
+    if found is None:
+        return False
+    try:
+        probe = subprocess.run([found, "-c", ""], capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
 def _python() -> str:
-    for name in ("python", "python3"):
-        if shutil.which(name):
+    """A ``python`` name the shell tool can really run from this test's PATH.
+
+    Windows' "python" can be the Store alias stub, which only prints "Python
+    was not found". Then this interpreter's folder goes first on PATH; the
+    autouse ``_restore_environ`` fixture undoes that after the test.
+    """
+    names = ("python", "python3")
+    for name in names:
+        if _python_runs(name):
             return name
-    pytest.skip("needs a python on PATH")
+    os.environ["PATH"] = os.pathsep.join(
+        [os.path.dirname(sys.executable), os.environ.get("PATH", "")]
+    )
+    for name in names:
+        if _python_runs(name):
+            return name
+    pytest.skip(f"no runnable python on PATH, nor beside {sys.executable}")
 
 
 ONCE_CASES = [

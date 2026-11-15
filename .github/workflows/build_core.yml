@@ -6,7 +6,7 @@
 #
 # Callers pack it so a user's PC never installs a Python package:
 #   build-installers.yml  the desktop app (resources/core)
-#   tui_installers.yml    the terminal .pkg / .deb / .rpm (beside gaia-tui)
+#   tui_installers.yml    the terminal .pkg / .deb / .rpm (beside gaia-cli)
 #   windows_setup.yml     the Windows setup's terminal component
 # Each passes its own artifact_prefix and only the platforms it packs, so two
 # callers in one run never upload the same artifact name. Dispatch it on its

@@ -76,7 +76,7 @@ async function advance(ms: number) {
 }
 
 const text = () => document.body.textContent ?? '';
-const NOTICE = "GAIA's model server isn't answering, so it can't reply yet. Your chats are still here.";
+const NOTICE = "The model server isn't answering, so GAIA can't reply yet. Your chats are still here.";
 
 describe('a set-up install whose model server is down at launch', () => {
     it('shows the chats and says the model server is not answering', async () => {

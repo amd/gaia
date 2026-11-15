@@ -5290,20 +5290,60 @@ def _path_has_relative_entry() -> bool:
     return False
 
 
+#: A program spelled with a folder or a drive (``.\gh``, ``C:gh``), not a bare name.
+_PATH_SPELLING = re.compile(r"[\\/:]")
+
+
 def _program_on_path(name: str, cwd: str) -> Optional[str]:
     """Where PATH alone finds program *name*: never *cwd*, never a relative entry."""
+    # A drive or folder in the name would make the join below ignore PATH.
+    if _PATH_SPELLING.search(name):
+        return None
     here = os.path.normcase(os.path.realpath(cwd))
+    # cmd.exe never runs a PATH file that has no extension.
+    suffixes = _program_suffixes()[1:]
+    if os.path.splitext(name)[1].lower() in suffixes:
+        suffixes = ["", *suffixes]
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry or not os.path.isabs(entry):
             continue
         if os.path.normcase(os.path.realpath(entry)) == here:
             continue
-        # cmd.exe never runs a PATH file that has no extension.
-        for suffix in _program_suffixes()[1:]:
+        for suffix in suffixes:
             candidate = os.path.join(entry, name + suffix)
             if os.path.isfile(candidate):
                 return candidate
     return None
+
+
+#: What Windows starts without a shell; a ``.bat`` or ``.cmd`` needs cmd.exe.
+_DIRECT_PROGRAM_SUFFIXES = (".exe", ".com")
+
+
+def _pin_argv_program(argv: list, cwd: str) -> list:
+    """*argv* with its bare program replaced by the file PATH alone finds.
+
+    For a Windows run with no shell, which would otherwise look in GAIA's own
+    program folder and current folder before PATH. A granted command runs the
+    program PATH finds, never one in the working folder.
+    """
+    name = argv[0]
+    # A folder or drive spelling runs as typed: no grant matches it, so it was asked.
+    if _PATH_SPELLING.search(name):
+        return argv
+    program = _program_on_path(name, cwd)
+    if program is None:
+        raise FileNotFoundError(
+            f"'{name}' was not found on PATH. Install it, or add the folder "
+            "that holds it to PATH."
+        )
+    if not program.lower().endswith(_DIRECT_PROGRAM_SUFFIXES):
+        raise FileNotFoundError(
+            f"'{name}' on PATH is {program}, which Windows starts only through "
+            "cmd.exe, and this command runs without a shell. Run it from a "
+            "terminal instead."
+        )
+    return [program, *argv[1:]]
 
 
 #: The leading program word of one cmd.exe pipe piece.
@@ -5636,7 +5676,7 @@ def _run_step(
     )
 
     exec_cmd = [part for segment in segments for part in segment]
-    if argv_only and os.name == "nt" and not re.search(r"[\\/]", exec_cmd[0]):
+    if argv_only and os.name == "nt" and not _PATH_SPELLING.search(exec_cmd[0]):
         # By PATH alone, never from cwd.
         program = _program_on_path(exec_cmd[0], cwd)
         if program is None:
@@ -5645,6 +5685,18 @@ def _run_step(
                 "with findstr on named files."
             )
         exec_cmd = [program, *exec_cmd[1:]]
+    elif not use_shell and os.name == "nt":
+        # Every segment, so a pipeline's later programs are pinned as well. A
+        # /x-switch find or sort is Windows' own, never a GNU one earlier on PATH.
+        segments = [
+            (
+                [_system32_tool(segment[0].lower().removesuffix(".exe")), *segment[1:]]
+                if _wants_windows_tool(segment)
+                else _pin_argv_program(segment, cwd)
+            )
+            for segment in segments
+        ]
+        exec_cmd = [part for segment in segments for part in segment]
     listed_only = False
     if use_shell:
         # The step's own text, to preserve quoting (critical for PowerShell).
@@ -7379,6 +7431,7 @@ class ShellToolsMixin:
         granted_binaries: frozenset = frozenset(),
         bypass_gates: bool = False,
         _unwrapped: bool = False,
+        _spelled: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -7394,6 +7447,8 @@ class ShellToolsMixin:
                 True the read-only policy is replaced wholesale by
                 ``DEVELOPER_COMMANDS`` (#3374); the default path below is left
                 exactly as it was.
+            _spelled: How the program was typed, when this call judges the
+                bare program behind a path or ``.exe`` spelling.
 
         Returns None if the command is allowed, or an error dict if blocked.
 
@@ -7427,7 +7482,7 @@ class ShellToolsMixin:
             # A refusal follows the program, not its spelling; what it would
             # merely ask about still asks, as the unlisted spelling below.
             behind = ShellToolsMixin._validate_command(
-                program, [program, *cmd_parts[1:]], command
+                program, [program, *cmd_parts[1:]], command, _spelled=cmd_parts[0]
             )
             if behind is not None and behind.get("tier") != TIER_CONFIRM:
                 return behind
@@ -7493,9 +7548,24 @@ class ShellToolsMixin:
             if decision.outcome != REFUSE:
                 return None
             tier = TIER_REFUSE
-            if not granted and shutil.which(policy.binary) is None:
+            # `python -m pytest` starts python, so python is what must exist; a
+            # path spelling is not a PATH lookup, and the launch reports it.
+            runs = policy.binary
+            if policy_parts[0] != cmd_parts[0]:
+                runs = _spelled or cmd_parts[0]
+            missing = not re.search(r"[\\/]", runs) and shutil.which(runs) is None
+            if not granted and missing:
                 # Not installed is not "load the skill": reloading cannot fix it.
-                message = f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                if runs == policy.binary:
+                    message = (
+                        f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                    )
+                else:
+                    message = (
+                        f"Command '{runs}' cannot run: `{runs}` is not installed "
+                        "here (not on PATH). Use a Python that is, or name the "
+                        "interpreter by its full path."
+                    )
                 hint = "Do not retry this command or reload the skill."
             elif granted_decision.outcome == REFUSE:
                 # Outside what GAIA's checks cover, grant or no grant. The user
