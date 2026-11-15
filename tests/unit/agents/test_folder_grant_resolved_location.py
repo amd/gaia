@@ -49,7 +49,7 @@ def _scope(path):
 
 
 def _folder_key(folder):
-    return f"write_file:{folder.as_posix()}/*"
+    return f"file_change:{folder.as_posix()}/*"
 
 
 def _covered(path, folder):

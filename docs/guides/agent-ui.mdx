@@ -525,8 +525,8 @@ system settings, the dots hold still.
   private the button is filled and shows a crossed-out eye, the same eye that
   marks the chat in the sidebar, and a click turns private off. A private chat
   isn't saved to memory and can't change or erase what is already there. To
-  keep a new chat's first message out too, turn on
-  **Private** next to the message box before you send it.
+  keep a new chat's first message out too, open the **Remember across chats: on** chip next to
+  the message box and choose **Private chat** before you send it.
 - **While GAIA works** the reply builds up as a timeline. Short notes GAIA
   writes before a tool call ("I'll check the forecast first") appear in full,
   each step shows as one line with its own timer, and live reasoning scrolls
@@ -790,9 +790,11 @@ The question appears above the message box with three answers:
 
 - **Allow once**
 - **Always allow** the same kind of action in this chat. For a host-resolved
-  file write, this covers files in that folder; unresolved or safety-sensitive
-  paths stay exact and continue to prompt (e.g. *writing notes.md*), and so
-  does a file whose real location is outside that folder
+  file write or edit, this covers changes to files in that folder: writing,
+  editing, and a plain rename that keeps the file in the folder. Unresolved or
+  safety-sensitive paths stay exact and continue to prompt (e.g. *writing
+  notes.md*), and so do a subfolder, a file whose real location is outside the
+  folder, and a move out of it
 - **Deny**
 
 When the same question comes back after you allowed it once, the prompt says
