@@ -284,12 +284,17 @@ def set_loop_state(
 **How a goal run ends (#7995).** A tick works on the first actionable goal.
 `goal_outcome="done"` completes it and `"failed"` fails it, with `reason` as
 its note. A run that stops with state `"scheduled"` holds the goal until
-its wake time without counting a try. Any other run that reports neither,
+its wake time without counting a try; the 10th such run in a row fails it
+with "Stalled: checked back 10 times in a row without finishing" and the last
+reason, and a run that stops any other way ends the streak (#8171). Any other
+run that reports neither,
 including one that hits the tick timeout, is counted: the goal waits 5 minutes,
 then 10, before it is run again (`GoalStore.retry_at`), and the third such
 run fails it with "Stopped after 3 tries without finishing" and the last
 run's reason or answer. A goal that can't be done therefore stops instead of
-being re-run every tick.
+being re-run every tick. Queuing a goal again from any other status starts a
+fresh count of both tries and check-backs, so a user who fixes the blocker
+gets the full three tries and ten check-backs.
 
 **Spending.** A goal run on a cloud model is added to the month's cloud
 spending like a chat turn, including a run that failed after the model

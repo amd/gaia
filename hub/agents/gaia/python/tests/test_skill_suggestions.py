@@ -161,8 +161,9 @@ def test_the_line_joins_this_turns_context(monkeypatch):
     context = _with_turn_context(monkeypatch, agent, "sum up this spreadsheet")
     assert context.splitlines() == [
         "Current time: now",
-        "Skills that match this request and are not loaded yet: summarize, "
-        "data-explore — load them with load_skill before starting.",
+        "Skills that may fit this request and are not loaded yet: summarize, "
+        "data-explore — use load_skill for the ones that cover what was asked "
+        "and ignore the rest.",
     ]
     assert agent.skill_suggester.calls[0][0] == "sum up this spreadsheet"
 

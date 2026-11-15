@@ -10,6 +10,7 @@ inherited by agents that need file manipulation capabilities.
 
 import ast
 import difflib
+import json
 import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -32,12 +33,16 @@ from gaia.agents.tools.file_edit import (
     after_excerpt,
     apply_unique_replacement,
     file_read_record,
+    masked_secret_refusal,
     read_first_preflight,
     stamp_of,
     turn_of,
 )
+from gaia.agents.tools.file_outline import outline_entries, render_outline
 from gaia.agents.tools.path_access import (
+    locked_file_error,
     missing_file_error,
+    read_permission_error,
     read_refusal,
     readable_entry,
 )
@@ -322,6 +327,57 @@ def _line_window(
     return window
 
 
+def _outlined_if_oversized(host: Any, result: Dict[str, Any]) -> Optional[Dict]:
+    """A whole-file read too large for one tool result, as an outline plus its head.
+
+    ``None`` when the result fits the host's tool-result cap, the host has no
+    cap, or not even the first line fits; the caller's result stands then.
+    """
+    budget = getattr(host, "_truncation_budget", None)
+    if not callable(budget):
+        return None
+    threshold, target = budget()
+    if len(json.dumps(result, ensure_ascii=False, default=str)) <= threshold:
+        return None
+    # A file this turn wrote keeps the archived form: its pages prove a read-back.
+    evidence = getattr(host, "_completion_evidence", None)
+    files = getattr(evidence, "files", None) or {}
+    if files:
+        item = files.get(evidence.key(result["file_path"]))
+        if item is not None and item.written:
+            return None
+    content = result["content"]
+    lines = content.splitlines()
+    outline = render_outline(
+        outline_entries(content, str(result.get("file_type") or "")), target // 3
+    )
+    base = {k: v for k, v in result.items() if k not in ("content", "symbols")}
+    room = target - len(json.dumps(base, ensure_ascii=False)) - len(outline) - 600
+    while room >= 200:
+        window = _line_window(lines, 1, None, room)
+        end = window["end_line"]
+        shown = {
+            **base,
+            "outline": outline,
+            **{k: v for k, v in window.items() if k != "note"},
+            "note": (
+                f"Too large for one result ({len(content):,} chars, {len(lines)} "
+                f"lines): this is lines 1-{end}"
+                + (
+                    " and an outline of the whole file with line numbers"
+                    if outline
+                    else ""
+                )
+                + ". Read the part you need with start_line/end_line (up to "
+                f"{MAX_READ_LINES} lines per call); search_file_content finds a name."
+            ),
+        }
+        if len(json.dumps(shown, ensure_ascii=False, default=str)) <= target:
+            return shown
+        room //= 2
+    return None
+
+
 _PATH_VALIDATOR_HINT = "Set self.path_validator = <PathValidator instance>."
 _PATH_VALIDATOR_DOC_ANCHOR = "docs/spec/file-io-tools-mixin.mdx#host-agent-contract"
 
@@ -474,6 +530,9 @@ class FileIOToolsMixin:
                     return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
+                locked = locked_file_error(file_path)
+                if locked:
+                    return locked
 
                 unreadable = index_only_error(file_path)
                 if unreadable:
@@ -615,8 +674,13 @@ class FileIOToolsMixin:
                 else:
                     result["file_type"] = ext[1:] if ext else "text"
 
-                return result
+                return _outlined_if_oversized(self, result) or result
 
+            except PermissionError as e:
+                return read_permission_error(file_path) or {
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
@@ -677,7 +741,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path, "overwriting")
+                refusal = reads.refusal(
+                    file_path, "overwriting"
+                ) or masked_secret_refusal(file_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -815,8 +881,15 @@ class FileIOToolsMixin:
                     return _directory_path_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path) or reads.repeat_refusal(
-                    file_path, old_content, new_content, turn_of(self)
+                refusal = (
+                    reads.refusal(file_path)
+                    or reads.repeat_refusal(
+                        file_path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        file_path,
+                        {"old_content": old_content, "new_content": new_content},
+                    )
                 )
                 if refusal is not None:
                     return refusal
@@ -1116,7 +1189,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path, "overwriting")
+                refusal = reads.refusal(
+                    file_path, "overwriting"
+                ) or masked_secret_refusal(file_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1222,7 +1297,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(path, "overwriting")
+                refusal = reads.refusal(path, "overwriting") or masked_secret_refusal(
+                    path, {"content": content}
+                )
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1373,8 +1450,14 @@ class FileIOToolsMixin:
                     return missing_file_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(path) or reads.repeat_refusal(
-                    path, old_content, new_content, turn_of(self)
+                refusal = (
+                    reads.refusal(path)
+                    or reads.repeat_refusal(
+                        path, old_content, new_content, turn_of(self)
+                    )
+                    or masked_secret_refusal(
+                        path, {"old_content": old_content, "new_content": new_content}
+                    )
                 )
                 if refusal is not None:
                     return refusal
@@ -1575,7 +1658,9 @@ class FileIOToolsMixin:
                     return {**NOT_EXECUTED, "status": "error", "error": reason}
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(gaia_path, "overwriting")
+                refusal = reads.refusal(
+                    gaia_path, "overwriting"
+                ) or masked_secret_refusal(gaia_path, {"content": content})
                 if refusal is not None:
                     path_validator.audit_write(
                         "write",
@@ -1695,7 +1780,9 @@ class FileIOToolsMixin:
                     return _directory_path_error(file_path)
 
                 reads = file_read_record(self)
-                refusal = reads.refusal(file_path)
+                refusal = reads.refusal(file_path) or masked_secret_refusal(
+                    file_path, {"new_implementation": new_implementation}
+                )
                 if refusal is not None:
                     path_validator.audit_write(
                         "edit",

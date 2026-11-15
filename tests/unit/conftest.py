@@ -34,6 +34,29 @@ def python_with_pip(tmp_path_factory):
     return str(env_dir / bin_dir / Path(sys.executable).name)
 
 
+@pytest.fixture
+def pip_available(monkeypatch):
+    """Make ``python -m pip`` the installer, as on a dev box with pip.
+
+    GAIA's own installer builds a pip-less venv, where the product stops at
+    "Cannot install Python packages" before a mocked install is reached. A test
+    that patches ``_pip_available`` itself still wins: its patch comes later.
+    """
+    monkeypatch.setattr("gaia.agents.install_hints._pip_available", lambda: True)
+
+
+@pytest.fixture
+def gh_on_path(monkeypatch):
+    """Make every binary the shell tool looks up, ``gh`` included, look installed.
+
+    Without it a machine with no ``gh`` gets the "not installed here" refusal
+    before the behaviour a test checks.
+    """
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+
+
 class _OsNamed:
     """``os`` as one module sees it, with only ``name`` overridden."""
 
@@ -215,6 +238,22 @@ def _session_gaia_home(tmp_path_factory):
 def _isolate_gaia_home(_session_gaia_home, monkeypatch):
     """Re-applied per test: a test that reloads ``gaia.config`` drops the patch."""
     _patch_default_gaia_home(monkeypatch, _session_gaia_home)
+
+
+@pytest.fixture
+def user_terminal(monkeypatch):
+    """Run the test as the user's terminal, not an agent tool or its child.
+
+    Trust-changing skill calls refuse under an agent's marker, and pytest
+    inherits it when GAIA runs this suite. Opt in per module with
+    ``pytestmark = pytest.mark.usefixtures("user_terminal")``.
+    """
+    from gaia.skills import human_only
+
+    monkeypatch.delenv(human_only.AGENT_CHILD_ENV, raising=False)
+    token = human_only._IN_AGENT_TOOL.set(False)
+    yield
+    human_only._IN_AGENT_TOOL.reset(token)
 
 
 _DAEMON_SPAWN_MESSAGE = (
@@ -467,14 +506,22 @@ def _program(token) -> str:
     return name[:-4] if name.endswith(".exe") else name
 
 
+def _normalized(path) -> str:
+    return os.path.normcase(os.path.realpath(str(path)))
+
+
+# Read once at startup: tests rebind tempfile.tempdir, so the live value can
+# point anywhere by the time a fake binary is checked.
+_TEST_TEMP_ROOTS = [_normalized(tempfile.gettempdir())]
+
+
 def _is_test_fixture(path) -> bool:
-    """True for a file under the temp dir: a fake binary a test made itself."""
+    """True for a file under a test-owned temp dir: a fake binary a test made."""
     try:
-        resolved = os.path.normcase(os.path.realpath(str(path)))
+        resolved = _normalized(path)
     except (OSError, ValueError):
         return False
-    tmp = os.path.normcase(os.path.realpath(tempfile.gettempdir()))
-    return resolved.startswith(tmp + os.sep)
+    return any(resolved.startswith(root + os.sep) for root in _TEST_TEMP_ROOTS)
 
 
 def _lemonade_process_name(pid) -> "str | None":
@@ -537,11 +584,14 @@ def _check_kill(pid) -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _forbid_real_lemonade_all_session():
+def _forbid_real_lemonade_all_session(tmp_path_factory):
     """Refuse spawning or killing a real Lemonade for the whole unit session."""
     import subprocess
 
     import psutil
+
+    # --basetemp can put tmp_path outside the system temp dir.
+    _TEST_TEMP_ROOTS.append(_normalized(tmp_path_factory.getbasetemp()))
 
     real_execute_child = subprocess.Popen._execute_child
     real_kill = os.kill
