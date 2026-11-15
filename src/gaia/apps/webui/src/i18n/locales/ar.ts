@@ -2510,7 +2510,7 @@ const messages: Messages = {
     'guide.microsoft.pasteBody': 'تجده في صفحة Overview للتطبيق. اترك Client Secret فارغًا.',
     'guide.microsoftWork.registerBody': 'انقر New registration وسمّه GAIA واختر Accounts in this organizational directory only.',
     'guide.microsoftWork.paste': 'الصق المعرّفين أدناه',
-    'guide.microsoftWork.pasteBody': 'انسخ Application (client) ID وDirectory (tenant) ID من صفحة Overview للتطبيق.',
+    'guide.microsoftWork.pasteBody': 'انسخ Application (client) ID من صفحة Overview للتطبيق، وكذلك Directory (tenant) ID إن كان التطبيق لمؤسسة واحدة. اترك Client Secret فارغًا.',
     'guide.github.token': 'أنشئ رمزًا في GitHub',
     'guide.github.tokenBody': 'يفتح الرابط GitHub والخيارات الصحيحة محددة. انقر Generate token وانسخه، فلن يظهر إلا مرة واحدة.',
     'guide.github.tokenLink': 'أنشئ الرمز',

@@ -2510,7 +2510,7 @@ export const enMessages = {
     'guide.microsoft.pasteBody': 'It is on the app’s Overview page. Leave Client Secret empty.',
     'guide.microsoftWork.registerBody': 'Click New registration, name it GAIA, and choose Accounts in this organizational directory only.',
     'guide.microsoftWork.paste': 'Paste the IDs below',
-    'guide.microsoftWork.pasteBody': 'Copy the Application (client) ID and Directory (tenant) ID from the app’s Overview page.',
+    'guide.microsoftWork.pasteBody': 'Copy the Application (client) ID and, for a single-organization app, the Directory (tenant) ID from the app’s Overview page. Leave Client Secret empty.',
     'guide.github.token': 'Create a GitHub token',
     'guide.github.tokenBody': 'The link opens GitHub with the right boxes ticked. Click Generate token and copy it; GitHub shows it only once.',
     'guide.github.tokenLink': 'Create token',
