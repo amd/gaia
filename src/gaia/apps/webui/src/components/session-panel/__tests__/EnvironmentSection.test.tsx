@@ -9,6 +9,7 @@ import { EnvironmentSection } from '../EnvironmentSection';
 import { OfflineNotice } from '../OfflineNotice';
 import { PermissionModeChip } from '../../PermissionModeChip';
 import { useChatStore } from '../../../stores/chatStore';
+import { stripIsolates } from '../../../i18n/registry';
 import { announceMobileAccess } from '../../../utils/mobileAccessEvents';
 import { ENV, resetPanelState, SID, stubPanelApi } from './testUtils';
 
@@ -66,6 +67,55 @@ describe('Runs on', () => {
         rerender(<EnvironmentSection sessionId={SID} busy />);
         rerender(<EnvironmentSection sessionId={SID} busy={false} />);
         await waitFor(() => expect(mocked.getLocalModelStatus).toHaveBeenCalledTimes(2));
+    });
+
+    describe('with the model server not answering', () => {
+        const URL = 'http://localhost:13305/api/v1';
+        const STOPPED = {
+            state: 'stopped', active_model: 'Gemma-4-E4B-it-GGUF', active_display_name: 'Gemma 4 E4B', active_remote: false,
+            model: null, display_name: null, placement: null, ctx_size: null, memory: null, memory_error: null,
+            error_detail: `The local model server is not reachable at ${URL} (connection refused).`,
+            base_url: URL, busy: false, restarting: false, restart_error: null,
+        };
+        // What the backend sends: an English line, and the cause the UI words itself.
+        const down = (owner: 'gaia' | 'user') => ({
+            ...STOPPED, owner, error_cause: 'model_server_down',
+            error: `The model server isn't answering at ${URL}. `
+                + (owner === 'gaia' ? 'Restart starts it.' : "GAIA doesn't start a server it doesn't run; start it yourself."),
+        });
+        afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+        async function rowError(status: object, locale: 'en' | 'ar') {
+            useChatStore.setState({ locale });
+            mocked.getLocalModelStatus.mockResolvedValue(status as never);
+            const { container } = render(<EnvironmentSection sessionId={SID} busy={false} />);
+            await waitFor(() => expect(container.querySelector('.sp-env-row .sp-error')).not.toBeNull());
+            return container.querySelector('.sp-env-row .sp-error') as HTMLElement;
+        }
+
+        it.each([
+            ['gaia', `The model server isn't answering at ${URL}. Restart starts it.`],
+            ['user', `The model server isn't answering at ${URL}. GAIA doesn't start a server it doesn't run; start it yourself.`],
+        ] as const)('says so in English for a %s server', async (owner, line) => {
+            const el = await rowError(down(owner), 'en');
+            expect(stripIsolates(el.textContent ?? '')).toBe(line);
+            expect(el.querySelector('bdi[dir="ltr"]')).toHaveTextContent(URL);
+        });
+
+        it.each([
+            ['gaia', `خادم النماذج لا يستجيب على ${URL}. اضغط «إعادة التشغيل» لتشغيله.`],
+            ['user', `خادم النماذج لا يستجيب على ${URL}. لا يشغّل GAIA خادمًا لا يديره، فشغّله بنفسك.`],
+        ] as const)('says so in Arabic for a %s server, the address left to right', async (owner, line) => {
+            const el = await rowError(down(owner), 'ar');
+            const gloss = el.querySelector('.i18n-gloss')?.textContent ?? '';
+            expect(stripIsolates((el.textContent ?? '').replace(gloss, '')).trim()).toBe(line);
+            expect(el.querySelector('bdi[dir="ltr"]')).toHaveTextContent(URL);
+        });
+
+        it("keeps the backend's own words for any other failure", async () => {
+            const el = await rowError({ ...STOPPED, owner: 'gaia', error: 'Lemonade answered /health with HTTP 404.', error_cause: null }, 'ar');
+            expect(el).toHaveTextContent('Lemonade answered /health with HTTP 404.');
+        });
     });
 });
 

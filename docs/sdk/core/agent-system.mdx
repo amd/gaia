@@ -1207,6 +1207,12 @@ Cleanup claims likewise need concrete paths observed disappearing during the
 turn; a general statement that everything was cleaned up is not proof. A claimed
 path that is absent and untouched already agrees with the claim, and removal from
 an index or list is not a file deletion.
+An answer that says it read every one of N files ("I read the actual content of
+every one", "I opened all 40 files") is compared with the files this turn's
+calls were given to read, not counting files it wrote. When fewer than half
+were opened, the answer is kept and a closing note says how many were, including
+on a turn that ends at the step limit or on an error. After a
+script or an indexer ran, any file may have been read, so the claim stands.
 
 The loop offers one bounded correction for missing artifact evidence. That
 correction reopens the turn, so writing the output, running the script that
@@ -1415,7 +1421,9 @@ The framework retains entries with exact source quotations and character spans,
 checks the source fingerprint again before completion, and appends the accumulated
 inventory to the final answer. A final model summary cannot drop retained entries.
 Ambiguous evidence keeps both entries and marks the possible repeat rather than
-dropping one. Reading every page without extracting an inventory is insufficient.
+dropping one. Reading every page without extracting an inventory is insufficient,
+with one exception: a file the request did not name, that `read_file` returned whole
+and that fits in one extraction page, owes no extraction pass.
 
 `save_extracted_items(file_path)` exports the retained inventory as JSON, CSV, or
 readable text, using the existing write permission gate. JSON records carry each

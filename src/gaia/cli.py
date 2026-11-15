@@ -5225,6 +5225,9 @@ def main():
 
             if args.print_attempts > MAX_ATTEMPTS:
                 parser.error(f"--attempts takes 1 to {MAX_ATTEMPTS}.")
+        # Hardware, health and embedder clients read the server from the environment.
+        if args.base_url:
+            os.environ["LEMONADE_BASE_URL"] = args.base_url
         from gaia.print_mode import run as run_print_mode
 
         sys.exit(
@@ -5319,6 +5322,9 @@ def main():
 
     if args.action == "chat":
         _reject_flagship_only_flags(args)
+        # Hardware, health and embedder clients read the server from the environment.
+        if getattr(args, "base_url", None):
+            os.environ["LEMONADE_BASE_URL"] = args.base_url
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):

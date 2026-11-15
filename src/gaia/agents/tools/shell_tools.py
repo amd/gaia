@@ -2831,23 +2831,20 @@ def _credential_globs() -> List[str]:
 
 
 def _grep_exclusion_patterns() -> List[str]:
-    """grep's exclude patterns for every credential file, one per line of its file."""
+    """grep's exclude patterns for every credential file, one ``--exclude`` each."""
     return [_case_folded_glob(glob) for glob in _credential_globs()]
 
 
-def _credential_exclusions(flavor: str, exclude_file: str = "") -> List[str]:
+def _credential_exclusions(flavor: str) -> List[str]:
     """The arguments that keep every credential file out of a *flavor* search.
 
     They go after the user's own: in grep and rg the last matching
     include/exclude wins, and an exclude pathspec only ever narrows git's.
-    grep reads its patterns from *exclude_file*: Git for Windows' grep
-    wildcard-expands the arguments it is given, so a pattern there could be
-    replaced by a file name planted to match it.
+    grep gets one ``--exclude`` per pattern, which GNU and BSD (macOS) grep
+    both take; it runs as argv, so no shell expands them.
     """
     if flavor == "grep":
-        if not exclude_file:
-            raise ValueError("grep's credential exclusions need an exclude file")
-        return [f"--exclude-from={exclude_file}"]
+        return [f"--exclude={pattern}" for pattern in _grep_exclusion_patterns()]
     globs = _credential_globs()
     if flavor == "rg":
         return [f"--iglob=!{glob}" for glob in globs]
@@ -2944,33 +2941,26 @@ def _search_plan(command: str, steps: list) -> Optional[Tuple[list, str]]:
 
 
 @contextlib.contextmanager
-def _searched_as_argv(step: "_Step", plan: Optional[Tuple[list, str]]):
+def _searched_as_argv(step: "_Step", plan: Optional[Tuple[list, str]], cwd: str):
     """*step* to run: as argv with the credential exclusions when *plan* says so.
 
-    grep's patterns go in a file of their own in the system temp folder,
-    outside the workspace, removed once the step has run.
+    A grep that follows no links, over a tree in *cwd* with no credential
+    file, gets none: the tree check does not descend linked folders.
     """
     if plan is None:
         yield step
         return
     argv, flavor = plan
-    exclude_file = ""
-    if flavor == "grep":
-        handle, exclude_file = tempfile.mkstemp(prefix="gaia-exclude-", suffix=".txt")
-        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as out:
-            out.write("\n".join(_grep_exclusion_patterns()) + "\n")
-        if _WILDCARD.search(exclude_file):
-            os.unlink(exclude_file)
-            raise RuntimeError(
-                f"The temp folder path {exclude_file!r} has a wildcard character, "
-                "so grep would expand it. Set TEMP/TMPDIR to a plain path."
-            )
-    try:
-        words = _credential_exclusions(flavor, exclude_file)
-        yield dataclasses.replace(step, segments=[[*argv, *words]], argv_only=True)
-    finally:
-        if exclude_file:
-            os.unlink(exclude_file)
+    words = _credential_exclusions(flavor)
+    parsed = _search_roots(argv)[2]
+    if (
+        flavor == "grep"
+        and parsed is not None
+        and not parsed["follows"]
+        and _bulk_read_credential(argv, cwd) is None
+    ):
+        words = []
+    yield dataclasses.replace(step, segments=[[*argv, *words]], argv_only=True)
 
 
 #: A git object name: an abbreviated or full hash, which may name a blob.
@@ -6142,59 +6132,78 @@ class ShellToolsMixin:
     ) -> Dict[str, Any]:
         """A confirmable command's block, re-explained for an unasked run.
 
-        Fails closed: nobody can answer the prompt this command needs. The
-        user-facing text is one plain sentence naming what they can do; which
-        switch made the run unattended goes to the log.
+        Fails closed: nobody can answer the prompt this command needs. When a
+        safe route exists the text leads with it and says plainly that nobody
+        refused the command; a run with no route falls back to offering
+        approval. Which switch made the run unattended goes to the log.
         """
         note = str(error.get("risk_note") or "").rstrip(".")
         needs = f"`{command}` needs your approval" + (f" ({note})" if note else "")
         hard = _hard_target(command)
+        final = _final_even_unattended(command)
+        route = "" if final else self._unattended_routes(command)
         if hard:
             why = "it reaches a cloud-metadata address or a protected folder"
             plain = (
                 f"Not run: `{command}` reaches {hard}, which stays off limits "
                 "whatever anyone approves. Tell the user it was not done."
             )
-        elif getattr(self, "console", None) is None:
-            why = "this run has no console to show the confirmation prompt on"
-            plain = (
-                f"Not run: {needs}, and nothing in this "
-                "run can ask you — start the request from the GAIA terminal UI "
-                "or Agent UI to approve it there."
-            )
         else:
-            why = (
-                "this run pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS or "
-                "auto_approve_gated_tools), which does not extend to commands "
-                "outside the no-prompt list"
-            )
-            plain = (
-                f"Not run: {needs}, and this run "
-                "approves automatically only commands that are safe unattended "
-                "— run the request interactively to approve it, or turn on full "
-                "access."
-            )
+            if getattr(self, "console", None) is None:
+                why = "this run has no console to show the confirmation prompt on"
+                paused = "nothing in this run can ask you"
+                approve = (
+                    "start the request from the GAIA terminal UI or Agent UI "
+                    "to approve it there"
+                )
+            else:
+                why = (
+                    "this run pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS or "
+                    "auto_approve_gated_tools), which does not extend to "
+                    "commands outside the no-prompt list"
+                )
+                paused = (
+                    "this run can only approve commands that are safe to run "
+                    "unattended"
+                )
+                approve = (
+                    "run the request interactively to approve it, or turn on "
+                    "full access"
+                )
+            if route:
+                plain = (
+                    f"Not run: {needs}, and {paused}. Nobody said no: this is "
+                    f"not a refusal. Finish the task with {route}."
+                )
+            elif final:
+                plain = f"Not run: {needs}, and {paused}. To run it, {approve}."
+            else:
+                plain = (
+                    f"Not run: {needs}, and {paused}. Tell the user the exact "
+                    f"command so they can run it themselves, or {approve}."
+                )
         logger.info("Refused %r because %s: %s", command, why, error.get("error"))
         # A missing-grant hint assumes a prompt; a one-time line's hint says
         # how to write it so that it needs none, which still holds here.
         once = error.get("tier") == TIER_CONFIRM_ONCE
         dropped = ("examples",) if once else ("hint", "examples")
         unasked = {key: value for key, value in error.items() if key not in dropped}
-        if _final_even_unattended(command):
+        if final:
             return {**unasked, "tier": TIER_REFUSE, "error": plain}
         return {
             **unasked,
             "tier": TIER_REFUSE,
-            "error": f"{plain} {self._unattended_routes(command)}",
+            "error": plain,
             UNATTENDED_REFUSAL: True,
         }
 
     def _unattended_routes(self, command: str) -> str:
-        """One sentence naming the routes this run takes without anyone approving.
+        """The safe route this run takes without anyone approving, if any.
 
-        A line that changes files is pointed at the file tools, which keep to
-        the allowed folders; run_python is offered for computation and for
-        reads that stay inside them.
+        Returned as a phrase for "finish the task with": the file tools for a
+        line that changes files, run_python for computation and for reads that
+        stay inside the allowed folders, and a no-prompt command. Empty when
+        no registered tool can do the job.
         """
         tools = getattr(self, "_tools_registry", None) or {}
         asks = getattr(self, "_tool_requires_confirmation", None)
@@ -6207,8 +6216,8 @@ class ShellToolsMixin:
         if _changes_files(command):
             writers = [name for name in ("write_file", "edit_file") if runs(name)]
             if not writers:
-                return "Tell the user the exact command so they can run it themselves."
-            return f"Use {' or '.join(writers)} to create or change files instead."
+                return ""
+            return f"{' or '.join(writers)} to create or change files"
         readers = [name for name in ("read_file", "browse_directory") if runs(name)]
         routes = [f"{' or '.join(readers)} to read or list files"] if readers else []
         if runs("run_python") and (
@@ -6218,8 +6227,8 @@ class ShellToolsMixin:
         shown = "`dir` or `findstr`" if os.name == "nt" else "`ls` or `grep`"
         routes.append(f"a no-prompt command such as {shown}")
         if len(routes) == 1:
-            return f"Use {routes[0]} instead."
-        return f"Use {', '.join(routes[:-1])}, or {routes[-1]} instead."
+            return routes[0]
+        return f"{', '.join(routes[:-1])}, or {routes[-1]}"
 
     def _reads_stay_inside(self, command: str) -> bool:
         """Whether every path *command* reads really lies in the allowed folders.
@@ -8309,7 +8318,7 @@ class ShellToolsMixin:
                         )
                         continue
                     try:
-                        with _searched_as_argv(step, search_plan) as run_step:
+                        with _searched_as_argv(step, search_plan, step_cwd) as run_step:
                             result = _run_step(
                                 run_step,
                                 step_cwd,
