@@ -299,6 +299,9 @@ def test_a_request_that_only_hands_over_text_is_recognised(request_text):
         'Translate this to French: "Hello there, friend." Then paste it into my notes',
         'Translate this to French: "Hello there, friend." and post it on Slack',
         'Translate this to French: "Hello there, friend." then speak it aloud',
+        # A quoted file name is a file to read, not text.
+        'Translate "Quarterly Sales Report.docx" to French',
+        'Translate this: "Quarterly Sales Report.docx"',
         "What is 17 times 23?",
         "",
     ],
