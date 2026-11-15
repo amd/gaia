@@ -22,7 +22,7 @@ Included demos:
 | C++ Compiler | C++17 support | MSVC 2019+ or GCC 9+ |
 | Git | any | Required by CMake FetchContent |
 
-> **Windows**: Install [Visual Studio 2022](https://visualstudio.microsoft.com/) (Desktop C++ workload) or the standalone [Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022). CMake is bundled with Visual Studio, or install it separately from [cmake.org](https://cmake.org/download/).
+> **Windows**: Install [Visual Studio 2022](https://visualstudio.microsoft.com/) (Desktop C++ workload) or the standalone [Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022). CMake is bundled with Visual Studio, or install it separately from [CMake releases](https://github.com/Kitware/CMake/releases).
 
 ### 2. LLM Server (Lemonade)
 

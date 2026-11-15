@@ -103,11 +103,11 @@ public:
     /// instead of reading the file. "" when it doesn't.
     static std::string pastedDataRefusal(const std::string& command, const std::vector<std::string>& roots);
 
-    /// Why command must not run: an inline script the shell expands (python -c "...", or an
-    /// unquoted heredoc) uses ${name} or $name, which a POSIX shell replaces, usually with
-    /// nothing, before the script runs. "" when it doesn't, or when command or earlier (the
-    /// turn's previous shell commands) sets that variable.
-    static std::string shellExpandedScriptRefusal(const std::string& command, const std::string& earlier = "");
+    /// command with a backslash put before each ${name} or $name that a POSIX shell would
+    /// replace, usually with nothing, inside an inline script it expands (python -c "...", or an
+    /// unquoted heredoc). Unchanged when there is none, or when command or earlier (the turn's
+    /// previous shell commands) sets that variable.
+    static std::string keepScriptDollars(const std::string& command, const std::string& earlier = "");
 
     /// Why command must not run: the last three shell commands began the same way and printed
     /// the same output. "" otherwise.

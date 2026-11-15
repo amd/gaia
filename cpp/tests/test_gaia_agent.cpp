@@ -537,12 +537,27 @@ TEST(GaiaAgentTest, ASaveStillClaimedAfterTheSendBackIsCorrectedForTheUser) {
     UnconfinedRun t;
     t.mock.pushResponse(shellCall("echo done"));
     t.mock.pushResponse(answer("Done: I created recon_tables.xlsx."));
+    t.mock.pushResponse(answer("I will create it now. File created: recon_tables.xlsx."));
     t.mock.pushResponse(answer("I have now created recon_tables.xlsx."));
     json r = t.run("Read " + (t.kx / "reconciliation.md").string() + " and make recon_tables.xlsx from it.");
     const std::string result = r["result"];
     EXPECT_EQ(result.rfind("I have now created recon_tables.xlsx.", 0), 0u) << result;
     EXPECT_NE(result.find("no such file exists"), std::string::npos) << result;
-    EXPECT_EQ(t.mock.receivedBodies().size(), 3u) << "the answer is sent back once, not twice";
+    ASSERT_EQ(t.mock.receivedBodies().size(), 4u) << "one send-back, then one push to call the tool";
+    EXPECT_NE(t.mock.receivedBodies()[3].find("called no tool"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, ASaveMadeAfterThePushLeavesNoNote) {
+    UnconfinedRun t;
+    const fs::path out = t.kx / "summary.md";
+    t.mock.pushResponse(shellCall("echo done"));
+    t.mock.pushResponse(answer("Done: I wrote summary.md."));
+    t.mock.pushResponse(answer("I will write it now. File created: summary.md."));
+    t.mock.pushResponse(shellCall("echo Recon > \"" + out.generic_string() + "\""));
+    t.mock.pushResponse(answer("summary.md is written."));
+    json r = t.run("Read " + (t.kx / "reconciliation.md").string() + " and write summary.md beside it.");
+    EXPECT_EQ(r["result"], "summary.md is written.") << r.dump();
+    EXPECT_TRUE(fs::exists(out));
 }
 
 TEST(GaiaAgentTest, ASavedFileWithoutTheFiguresTheAnswerGivesIsSentBack) {
@@ -722,6 +737,8 @@ TEST(GaiaAgentTest, ASearchThatFoundNothingIsNotACheckOfEachFile) {
     EXPECT_NE(note->find("misc_notes.txt"), std::string::npos) << *note;
     const std::vector<GaiaAgent::CallSeen> grep = {{"bash_execute", {{"command", "grep -ri 'X200 warranty' ."}}}};
     EXPECT_TRUE(GaiaAgent::unopenedFilesNote("It is not stated anywhere.", {w.path}, grep));
+    EXPECT_TRUE(GaiaAgent::unopenedFilesNote(
+        "I searched the indexed documents, but no relevant passages were found in the files.", {w.path}, phrase));
     EXPECT_TRUE(GaiaAgent::unopenedFilesNote(
         "I did not find any files containing the phrase \"X200 warranty\". Could you clarify where I should look?",
         {w.path}, phrase));
@@ -1184,17 +1201,18 @@ TEST(GaiaAgentSavedFigures, CountsReferencesAndRemovalsAreNotClaimsAboutContents
     EXPECT_TRUE(GaiaAgent::unsavedFiguresNote("Saved net.md: change -1,200 and -340.", "Write net.md", "Net:\n"));
 }
 
-TEST(GaiaAgentShellExpansion, AnInlineScriptWhoseDollarTheShellWouldEatIsRefused) {
+TEST(GaiaAgentShellExpansion, AnInlineScriptKeepsTheDollarTheShellWouldEat) {
     const std::string blanked =
         "python -c \"\nt = {'Travel': 2000}\nwith open('summary.md', 'w') as f:\n"
         "    for k, v in t.items():\n        f.write(f'| {k} | ${v:.2f} |\\n')\n\"";
-    const std::string why = GaiaAgent::shellExpandedScriptRefusal(blanked);
-    EXPECT_NE(why.find("${v"), std::string::npos) << why;
-    EXPECT_NE(why.find("file_write"), std::string::npos);
-    EXPECT_FALSE(GaiaAgent::shellExpandedScriptRefusal("python3 -c \"print(f'Total: $total')\"").empty());
-    EXPECT_FALSE(GaiaAgent::shellExpandedScriptRefusal("cd data && python -c \"print('${amount}')\"").empty());
+    const std::string fixed = GaiaAgent::keepScriptDollars(blanked);
+    EXPECT_NE(fixed.find("| \\${v:.2f} |"), std::string::npos) << fixed;
+    EXPECT_EQ(fixed.size(), blanked.size() + 1);
+    EXPECT_EQ(GaiaAgent::keepScriptDollars("python3 -c \"print(f'Total: $total, $tax')\""),
+              "python3 -c \"print(f'Total: \\$total, \\$tax')\"");
     // The script's own loop or assignment doesn't make the name a shell variable.
     for (const char* blanked2 : {
+             "cd data && python -c \"print('${amount}')\"",
              "python -c \"for v in d.values(): print(f'${v:.2f}')\"",
              "python -c \"t = 5\nif t == 5: print(f'${t}')\"",
              "python -c \"print(1)\" && python -c \"print(f'${v}')\"",
@@ -1202,7 +1220,9 @@ TEST(GaiaAgentShellExpansion, AnInlineScriptWhoseDollarTheShellWouldEatIsRefused
              "node -e \"const x = 1; console.log(`${x}`)\"",
              "perl -ne \"print $count\" data.txt",
          }) {
-        EXPECT_NE(GaiaAgent::shellExpandedScriptRefusal(blanked2), "") << blanked2;
+        const std::string out = GaiaAgent::keepScriptDollars(blanked2);
+        EXPECT_EQ(out.size(), std::string(blanked2).size() + 1) << blanked2;
+        EXPECT_NE(out.find("\\$"), std::string::npos) << blanked2;
     }
 }
 
@@ -1221,10 +1241,19 @@ TEST(GaiaAgentShellExpansion, DollarsTheShellIsMeantToFillOrNeverSeesAreLeftAlon
              "python3 - <<'EOF'\nprint(f'${total:.2f}')\nEOF",
              "export rate=5 && python -c \"print($rate * 2)\"",
          }) {
-        EXPECT_EQ(GaiaAgent::shellExpandedScriptRefusal(fine), "") << fine;
+        EXPECT_EQ(GaiaAgent::keepScriptDollars(fine), fine) << fine;
+    }
+    for (const char* shells : {
+             "while read -r name amount; do python -c \"print('$amount')\"; done < f.csv",
+             "python -c \"print('${name:-world}', '${path%/*}')\"",
+             "python run.py --name \"$name\" --source \"$src\"",
+             "python3 - <<-EOF\n\tprint(1)\n\tEOF\necho \"$out\"",
+         }) {
+        EXPECT_EQ(GaiaAgent::keepScriptDollars(shells), shells) << shells;
     }
     // A variable an earlier command of the turn exported is still set in the shell session.
-    EXPECT_EQ(GaiaAgent::shellExpandedScriptRefusal("python -c \"print($rate * 2)\"", "export rate=5\n"), "");
+    EXPECT_EQ(GaiaAgent::keepScriptDollars("python -c \"print($rate * 2)\"", "export rate=5\n"),
+              "python -c \"print($rate * 2)\"");
 }
 
 TEST(GaiaAgentTest, AClaimStillUntrueWhenStepsRunOutIsNotedOnTheClosingAnswer) {

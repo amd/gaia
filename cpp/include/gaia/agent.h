@@ -26,6 +26,7 @@
 #include "lemonade_client.h"
 #include "mcp_client.h"
 #include "mcp_registry.h"
+#include "process.h"
 #include "security.h"
 #include "skill_sets.h"
 #include "tool_registry.h"
@@ -124,6 +125,10 @@ public:
     /// Set the confirmation callback for CONFIRM-policy tools.
     /// Delegates to ToolRegistry::setConfirmCallback().
     void setToolConfirmCallback(ToolConfirmCallback cb);
+
+    /// Give up the NPU until this agent's next model call. A confirm callback calls it
+    /// before it waits on a person, so other agents aren't held up meanwhile.
+    void releaseNpu() { npuTurnLock_.reset(); }
 
     /// Set the default policy for local tools registered without an explicit policy.
     /// Delegates to ToolRegistry::setDefaultPolicy(). Affects only tools
@@ -445,6 +450,8 @@ private:
     // Concurrency guard — Agent is NOT re-entrant. A second processQuery
     // call on the same Agent (from any thread) throws std::runtime_error.
     std::atomic<bool> inFlight_{false};
+    /// The NPU, kept from a turn's first model call to its end.
+    std::unique_ptr<MachineLock> npuTurnLock_;
 
     // Cancel flag — set by requestCancel(), checked between loop steps.
     // Reset at the start of each processQuery().

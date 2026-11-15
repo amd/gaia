@@ -153,7 +153,10 @@ Agent::Agent(const AgentConfig& config)
 
     // Auto-install terminal confirm callback for interactive agents
     if (!config_.silentMode) {
-        tools_.setConfirmCallback(makeStdinConfirmCallback());
+        tools_.setConfirmCallback([this, ask = makeStdinConfirmCallback()](const std::string& tool, const json& args) {
+            releaseNpu();
+            return ask(tool, args);
+        });
     }
 
     // System prompt will be composed lazily
@@ -632,18 +635,26 @@ bool runsOnNpu(const std::string& modelId, const std::string& recipe) {
 
 Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
                                 const AgentConfig& cfg, bool allowTools) {
-    // Two agents on the NPU at once each run several times slower than in turn. Taken
-    // before the load, so one agent can't swap the NPU's model under another's reply.
-    std::optional<MachineLock> npuLock;
-    if (runsOnNpu(cfg.modelId, lemonade_.recipeOf(cfg.modelId))) {
-        npuLock.emplace("npu");
-        if (!npuLock->acquire(0)) {
-            console_->printWarning("Another agent is using the NPU; waiting for its model call to finish.");
-            while (!npuLock->acquire(200)) {
+    // Two agents on the NPU at once each run several times slower than in turn, and taking
+    // turns per request still makes each re-read its whole prompt. So the NPU is kept for
+    // the turn. Taken before the load, so one agent can't swap the model under another's reply.
+    if (!(npuTurnLock_ && npuTurnLock_->held()) && runsOnNpu(cfg.modelId, lemonade_.recipeOf(cfg.modelId))) {
+        auto lock = std::make_unique<MachineLock>("npu");
+        if (!lock->acquire(0)) {
+            console_->printWarning("Another agent is using the NPU; waiting for its turn to finish.");
+            while (!lock->acquire(200)) {
                 if (cancelRequested()) throw std::runtime_error("Cancelled while waiting for the NPU");
             }
         }
+        npuTurnLock_ = std::move(lock);
     }
+    // Outside a turn the lock lasts this one call.
+    struct NpuRelease {
+        Agent& agent;
+        ~NpuRelease() {
+            if (!agent.inFlight_.load()) agent.npuTurnLock_.reset();
+        }
+    } npuRelease{*this};
 
     // Re-check before every request: another client can reload the model at a smaller ctx mid-turn.
     if (!cfg.modelId.empty()) {
@@ -1751,6 +1762,10 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
     // Re-entrancy guard (RAII — releases on any exit path incl. exceptions).
     InFlightGuard guard(inFlight_);
+    struct NpuTurnRelease {
+        std::unique_ptr<MachineLock>& lock;
+        ~NpuTurnRelease() { lock.reset(); }
+    } npuTurnRelease{npuTurnLock_};
     // A cancel ends a shell command a tool is running, not only the next step.
     CommandCancelScope stopCommands([this] { return cancelRequested(); });
     turnToolCalls_.clear();
@@ -1846,9 +1861,25 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     std::string stopReason;  // why the loop ended without an answer: loop | empty
     bool answerReviewed = false;
     bool answerSentBack = false;
-    // One chance for the agent to send a final answer back (reviewFinalAnswer).
+    bool claimPushed = false;
+    // One chance for the agent to send a final answer back (reviewFinalAnswer), and one
+    // more push when the answer after it still claims work that isn't there.
     auto reviewOnce = [&](const std::string& answer) -> std::optional<Message> {
-        if (answerReviewed || stepsTaken >= stepsLimit) return std::nullopt;
+        if (stepsTaken >= stepsLimit) return std::nullopt;
+        if (answerReviewed) {
+            if (!answerSentBack || claimPushed) return std::nullopt;
+            claimPushed = true;
+            const std::optional<std::string> still = unresolvedClaims(answer);
+            if (!still || still->empty()) return std::nullopt;
+            if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *still}});
+            console_->printWarning("Answer sent back: " + *still);
+            Message m;
+            m.role = MessageRole::USER;
+            m.content = "[Not done yet] " + *still +
+                        " Your last reply said it was done but called no tool, so nothing changed. Call the tool "
+                        "that does it now (file_write saves a file), then give your whole answer again.";
+            return m;
+        }
         answerReviewed = true;
         std::optional<std::string> note = reviewFinalAnswer(answer);
         if (!note) return std::nullopt;

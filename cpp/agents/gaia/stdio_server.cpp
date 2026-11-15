@@ -613,6 +613,7 @@ ToolConfirmResult StdioServer::confirm(const std::string& tool, const json& args
     pendingConfirmId_ = confirmId;
     decision_.clear();
     lock.unlock();
+    agent_.releaseNpu();
     write(event);
     lock.lock();
     const bool answered = decisionCv_.wait_for(lock, kOrphanedConfirmTimeout, [this] {

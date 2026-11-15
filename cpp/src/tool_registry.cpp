@@ -239,6 +239,7 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
         }
     }
 
+    if (argRewrite_) argRewrite_(*tool, effectiveArgs);
     if (preCheck_) {
         if (auto refused = preCheck_(*tool, effectiveArgs)) return *refused;
     }

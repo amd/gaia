@@ -25,8 +25,14 @@ namespace gaia {
 /// result and the tool doesn't run (e.g. internet off for this chat).
 using ToolPreCheck = std::function<std::optional<json>(const ToolInfo& tool, const json& args)>;
 
+/// Runs before the pre-check and may correct the arguments the tool will get.
+using ToolArgRewrite = std::function<void(const ToolInfo& tool, json& args)>;
+
 class GAIA_API ToolRegistry {
 public:
+    /// Install (or clear, with {}) the argument correction.
+    void setArgRewrite(ToolArgRewrite rewrite) { argRewrite_ = std::move(rewrite); }
+
     /// Install (or clear, with {}) the pre-confirmation check.
     void setPreCheck(ToolPreCheck check) { preCheck_ = std::move(check); }
 
@@ -129,6 +135,7 @@ public:
 
 private:
     ToolPreCheck preCheck_;
+    ToolArgRewrite argRewrite_;
     std::map<std::string, ToolInfo> tools_;
     ToolConfirmCallback confirmCallback_;
     ToolPolicy defaultPolicy_ = ToolPolicy::ALLOW;

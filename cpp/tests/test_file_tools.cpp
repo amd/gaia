@@ -72,6 +72,30 @@ TEST_F(FileToolsTest, FileRead_BasicContent) {
     EXPECT_TRUE(content.find("line3") != std::string::npos);
 }
 
+TEST_F(FileToolsTest, FileRead_OneRepeatedCharacterIsDescribedNotReturned) {
+    ToolInfo tool = FileIOTools::fileRead();
+    json result = tool.callback({{"path", writeFile("report.txt", std::string(4000, 'D'))}});
+    EXPECT_FALSE(result.contains("error"));
+    EXPECT_LT(result["content"].get<std::string>().size(), 40u);
+    EXPECT_NE(result["note"].get<std::string>().find("no real content"), std::string::npos);
+
+    json large = tool.callback({{"path", writeFile("big.txt", std::string(40000, 'D'))}});
+    EXPECT_NE(large.value("note", "").find("first 32 KB"), std::string::npos) << large.dump().substr(0, 300);
+    std::string column;
+    for (int i = 0; i < 1500; ++i) column += "0\n";
+    EXPECT_FALSE(tool.callback({{"path", writeFile("column.txt", column)}}).contains("note"));
+
+    // Real text, a short run, and a ranged read come back as they are.
+    json prose = tool.callback({{"path", writeFile("prose.txt", std::string(3000, 'a') + " then a sentence.")}});
+    EXPECT_FALSE(prose.contains("note"));
+    json brief = tool.callback({{"path", writeFile("rule.txt", std::string(200, '-'))}});
+    EXPECT_EQ(brief["content"].get<std::string>().size(), 200u);
+    std::string rows;
+    for (int i = 0; i < 600; ++i) rows += "0,0\n";
+    json ranged = tool.callback({{"path", writeFile("zeros.csv", rows)}, {"start_line", 1}, {"end_line", 5}});
+    EXPECT_EQ(ranged.value("note", "").find("no real content"), std::string::npos);
+}
+
 TEST_F(FileToolsTest, FileRead_WithLineRange) {
     std::string path = writeFile("lines.txt", "AAA\nBBB\nCCC\nDDD\nEEE\n");
 

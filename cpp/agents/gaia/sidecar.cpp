@@ -507,6 +507,7 @@ private:
         if (!s.workingDirectory.empty()) ev["prompt_context"] = {{"working_directory", s.workingDirectory}};
         run->push(ev);
         // Other chats may run while this one waits for its user.
+        if (s.agent) s.agent->releaseNpu();
         if (s.turnLock) s.turnLock->unlock();
         std::string d;
         bool answered = false;

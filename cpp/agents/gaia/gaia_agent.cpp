@@ -115,6 +115,24 @@ void GaiaAgent::registerTools() {
     }
     if (skills_ && !skills_->skills().empty()) skills_->registerTools(toolRegistry());
     if (memory_) memory_->registerTools(toolRegistry());
+    // The model means the script's own $; the shell would blank it and the script would still exit 0.
+    toolRegistry().setArgRewrite([this](const ToolInfo& tool, json& args) {
+        if (tool.name != "bash_execute" || !args.is_object() || !args.contains("command") ||
+            !args["command"].is_string()) {
+            return;
+        }
+#ifdef _WIN32
+        if (BashTools::detectShell().empty()) return;  // cmd and PowerShell don't expand $name in quotes this way
+#endif
+        std::string ran;  // the shell session keeps what earlier commands exported
+        for (const auto& c : turnToolCalls()) {
+            if (c.name == "bash_execute" && c.args.is_object() && c.args.contains("command") &&
+                c.args["command"].is_string()) {
+                ran += c.args["command"].get<std::string>() + "\n";
+            }
+        }
+        args["command"] = keepScriptDollars(args["command"].get<std::string>(), ran);
+    });
     toolRegistry().setPreCheck([this, ws](const ToolInfo& tool, const json& args) -> std::optional<json> {
         if (auto refusal = switchRefusal(tool, args)) return refusal;
         if (!ws) return std::nullopt;
@@ -133,24 +151,16 @@ void GaiaAgent::registerTools() {
                     why = unquotedHostileName(args["command"].get<std::string>(), names);
                 }
                 if (why.empty()) why = pastedDataRefusal(args["command"].get<std::string>(), options_.workspaceRoots);
-#ifdef _WIN32
-                const bool posixShell = !BashTools::detectShell().empty();
-#else
-                const bool posixShell = true;
-#endif
-                if (why.empty() && posixShell) {
-                    std::string ran;  // the shell session keeps what earlier commands exported
-                    for (const auto& c : turnToolCalls()) {
-                        if (c.name == "bash_execute" && c.args.is_object() && c.args.contains("command") &&
-                            c.args["command"].is_string()) {
-                            ran += c.args["command"].get<std::string>() + "\n";
-                        }
-                    }
-                    why = shellExpandedScriptRefusal(args["command"].get<std::string>(), ran);
-                }
                 if (why.empty()) {
                     std::vector<CallSeen> earlier;
-                    for (const auto& c : turnToolCalls()) earlier.push_back({c.name, c.args, c.output});
+                    for (const auto& c : turnToolCalls()) {
+                        json ranArgs = c.args;  // compare what ran, with the same dollars kept
+                        if (c.name == "bash_execute" && ranArgs.is_object() && ranArgs.contains("command") &&
+                            ranArgs["command"].is_string()) {
+                            ranArgs["command"] = keepScriptDollars(ranArgs["command"].get<std::string>());
+                        }
+                        earlier.push_back({c.name, ranArgs, c.output});
+                    }
                     why = repeatedCommandRefusal(args["command"].get<std::string>(), earlier);
                 }
             }
@@ -788,7 +798,8 @@ std::optional<std::string> GaiaAgent::unopenedFilesNote(const std::string& answe
         R"(|(?:does(?:n't| not)|do(?:n't| not)|did(?:n't| not)) (?:mention|contain|include|say|specify|state|list|cover|exist|find|locate|see)\b)"
         R"(|no (?:information|mention|record|details?|data|reference) (?:about|of|on|for|regarding)\b)"
         R"(|(?:could(?:n't| not)|was unable to|unable to|cannot|can't) (?:find|locate|determine|confirm)\b)"
-        R"(|(?:is|are) (?:missing|absent)\b))",
+        R"(|(?:is|are) (?:missing|absent)\b)"
+        R"(|no (?:[\w-]+ ){1,3}(?:was|were) found\b|found (?:nothing|no [\w-]+)\b))",
         std::regex::icase);
     // A turn that never looked at the folder was a question about the world, not the files.
     if (std::none_of(calls.begin(), calls.end(),
@@ -956,10 +967,10 @@ std::string GaiaAgent::pastedDataRefusal(const std::string& command, const std::
     return "";
 }
 
-std::string GaiaAgent::shellExpandedScriptRefusal(const std::string& command, const std::string& earlier) {
+std::string GaiaAgent::keepScriptDollars(const std::string& command, const std::string& earlier) {
     static const std::string interpreter = R"((?:^|[\s;&|(])(?:python3?|py|node|perl|ruby)(?:\.exe)?\s)";
-    static const std::regex inlineScript(interpreter + R"([^|;&\n"]*?(?:-[A-Za-z]*[cep]|--eval)\s*")");
-    static const std::regex hereScript(interpreter + R"([^|;&\n]*?<<-?\s*([A-Za-z_]\w*)[^\n]*\n)");
+    static const std::regex inlineScript(interpreter + R"((?:[^|;&\n"]*?\s)?(?:-[A-Za-z]*[cep]|--eval)\s*")");
+    static const std::regex hereScript(interpreter + R"([^|;&\n]*?<<(-?)\s*([A-Za-z_]\w*)[^\n]*\n)");
 
     // The spans of command the shell expands as script text.
     std::vector<std::pair<size_t, size_t>> scripts;
@@ -973,10 +984,24 @@ std::string GaiaAgent::shellExpandedScriptRefusal(const std::string& command, co
     for (auto it = std::sregex_iterator(command.begin(), command.end(), hereScript); it != std::sregex_iterator();
          ++it) {
         const size_t from = static_cast<size_t>(it->position(0) + it->length(0));
-        const size_t close = command.find("\n" + (*it)[1].str(), from ? from - 1 : 0);
+        // The closing line is the delimiter alone; <<- lets tabs come before it.
+        const std::string delimiter = (*it)[2].str();
+        size_t close = std::string::npos;
+        for (size_t line = from; line < command.size();) {
+            size_t text = line;
+            if ((*it)[1].length()) {
+                while (text < command.size() && command[text] == '\t') ++text;
+            }
+            const size_t eol = std::min(command.find('\n', text), command.size());
+            if (command.compare(text, eol - text, delimiter) == 0) {
+                close = line;
+                break;
+            }
+            line = eol + 1;
+        }
         scripts.emplace_back(from, close == std::string::npos ? command.size() : close);
     }
-    if (scripts.empty()) return "";
+    if (scripts.empty()) return command;
 
     // Shell text only: an assignment inside the script is the script's, not the shell's.
     std::string shellText = command;
@@ -986,6 +1011,7 @@ std::string GaiaAgent::shellExpandedScriptRefusal(const std::string& command, co
     }
     shellText += "\n" + earlier;
 
+    std::vector<size_t> blanked;  // each $ the shell would turn into nothing
     for (const auto& span : scripts) {
         for (size_t i = span.first; i + 1 < span.second; ++i) {
             if (command[i] == '\\') { ++i; continue; }
@@ -1004,17 +1030,23 @@ std::string GaiaAgent::shellExpandedScriptRefusal(const std::string& command, co
             });
             const bool plainBrace = !braced || (end < command.size() && command[end] == '}');
             if (envStyle && plainBrace) continue;
+            // ${name:-default}, ${name%suffix} and the like are shell syntax, not a format.
+            if (braced && end < command.size()) {
+                const char op = command[end] == ':' && end + 1 < command.size() ? command[end + 1] : command[end];
+                if (std::strchr("-=+?%#/", op)) continue;
+            }
             const std::regex sets("(^|[\\s;&|(])(?:(?:export\\s+|local\\s+)?" + name + "=|for\\s+" + name +
-                                  "\\s|read\\s+(?:-\\w+\\s+)*" + name + "\\b)");
+                                  "\\s|read\\s+(?:-\\w+\\s+)*(?:\\w+\\s+)*" + name + "\\b)");
             if (std::regex_search(shellText, sets)) continue;
-            const std::string seen = command.substr(i, std::min<size_t>(end + (braced ? 1 : 0), i + 40) - i);
-            return "This command was not run. The shell expands the script before it runs, so " + seen +
-                   " becomes the shell's variable (empty unless you set it) and the script would write a blank "
-                   "where the value belongs. Save the script to a .py file with file_write and run that file; "
-                   "or write \\$ for a literal dollar sign.";
+            blanked.push_back(i);
+            i = end ? end - 1 : i;
         }
     }
-    return "";
+    std::sort(blanked.begin(), blanked.end());
+    blanked.erase(std::unique(blanked.begin(), blanked.end()), blanked.end());
+    std::string fixed = command;
+    for (auto at = blanked.rbegin(); at != blanked.rend(); ++at) fixed.insert(*at, 1, '\\');
+    return fixed;
 }
 
 std::string GaiaAgent::repeatedCommandRefusal(const std::string& command, const std::vector<CallSeen>& calls) {

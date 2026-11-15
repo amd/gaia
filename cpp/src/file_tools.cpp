@@ -634,6 +634,34 @@ json FileIOTools::doFileRead(const json& args) {
                                  "error beside it that says why, and report the figure as unknown."}};
         }
 
+        // Thousands of one repeated character send a small model into a runaway reply.
+        // Long lines only: a column of one value per line is data.
+        if (startLine <= 0 && endLine <= 0) {
+            static const std::string kCut = "\n... [output truncated at 32 KB]";
+            std::string dense;
+            const size_t shown = truncated && content.size() >= kCut.size() ? content.size() - kCut.size() : content.size();
+            for (size_t i = 0; i < shown; ++i) {
+                if (!std::isspace(static_cast<unsigned char>(content[i]))) dense.push_back(content[i]);
+            }
+            constexpr size_t kMinRepeated = 1000, kMaxUnit = 4, kMinLine = 200;
+            const bool longLines = dense.size() / static_cast<size_t>(std::max(1, totalLines)) >= kMinLine;
+            for (size_t unit = 1; unit <= kMaxUnit && longLines && dense.size() >= kMinRepeated; ++unit) {
+                bool repeats = true;
+                for (size_t i = unit; i < dense.size() && repeats; ++i) repeats = dense[i] == dense[i - unit];
+                if (!repeats) continue;
+                const std::string span = truncated ? "the first 32 KB of its " + std::to_string(totalBytes) + " bytes are"
+                                                   : "its " + std::to_string(totalBytes) + " bytes are";
+                return json{{"content", dense.substr(0, unit * 8) + "..."},
+                            {"lines", totalLines},
+                            {"path", path},
+                            {"truncated", true},
+                            {"content_hash", shortHash(hash)},
+                            {"note", "This file holds no real content: " + span + " \"" + dense.substr(0, unit) +
+                                         "\" repeated, with nothing else but whitespace. Tell the user that; "
+                                         "there is nothing in it to summarize or quote."}};
+            }
+        }
+
         json out{
             {"content", content},
             {"lines", totalLines},
