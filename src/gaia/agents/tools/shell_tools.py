@@ -2835,19 +2835,16 @@ def _grep_exclusion_patterns() -> List[str]:
     return [_case_folded_glob(glob) for glob in _credential_globs()]
 
 
-def _credential_exclusions(flavor: str, exclude_file: str = "") -> List[str]:
+def _credential_exclusions(flavor: str) -> List[str]:
     """The arguments that keep every credential file out of a *flavor* search.
 
     They go after the user's own: in grep and rg the last matching
     include/exclude wins, and an exclude pathspec only ever narrows git's.
-    grep reads its patterns from *exclude_file*: Git for Windows' grep
-    wildcard-expands the arguments it is given, so a pattern there could be
-    replaced by a file name planted to match it.
+    grep gets one ``--exclude`` per pattern, which GNU and BSD (macOS) grep
+    both take; it runs as argv, so no shell expands them.
     """
     if flavor == "grep":
-        if not exclude_file:
-            raise ValueError("grep's credential exclusions need an exclude file")
-        return [f"--exclude-from={exclude_file}"]
+        return [f"--exclude={pattern}" for pattern in _grep_exclusion_patterns()]
     globs = _credential_globs()
     if flavor == "rg":
         return [f"--iglob=!{glob}" for glob in globs]
@@ -2944,33 +2941,19 @@ def _search_plan(command: str, steps: list) -> Optional[Tuple[list, str]]:
 
 
 @contextlib.contextmanager
-def _searched_as_argv(step: "_Step", plan: Optional[Tuple[list, str]]):
+def _searched_as_argv(step: "_Step", plan: Optional[Tuple[list, str]], cwd: str):
     """*step* to run: as argv with the credential exclusions when *plan* says so.
 
-    grep's patterns go in a file of their own in the system temp folder,
-    outside the workspace, removed once the step has run.
+    A grep whose tree, from *cwd*, holds no credential file gets none.
     """
     if plan is None:
         yield step
         return
     argv, flavor = plan
-    exclude_file = ""
-    if flavor == "grep":
-        handle, exclude_file = tempfile.mkstemp(prefix="gaia-exclude-", suffix=".txt")
-        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as out:
-            out.write("\n".join(_grep_exclusion_patterns()) + "\n")
-        if _WILDCARD.search(exclude_file):
-            os.unlink(exclude_file)
-            raise RuntimeError(
-                f"The temp folder path {exclude_file!r} has a wildcard character, "
-                "so grep would expand it. Set TEMP/TMPDIR to a plain path."
-            )
-    try:
-        words = _credential_exclusions(flavor, exclude_file)
-        yield dataclasses.replace(step, segments=[[*argv, *words]], argv_only=True)
-    finally:
-        if exclude_file:
-            os.unlink(exclude_file)
+    words = _credential_exclusions(flavor)
+    if flavor == "grep" and _bulk_read_credential(argv, cwd) is None:
+        words = []
+    yield dataclasses.replace(step, segments=[[*argv, *words]], argv_only=True)
 
 
 #: A git object name: an abbreviated or full hash, which may name a blob.
@@ -8309,7 +8292,7 @@ class ShellToolsMixin:
                         )
                         continue
                     try:
-                        with _searched_as_argv(step, search_plan) as run_step:
+                        with _searched_as_argv(step, search_plan, step_cwd) as run_step:
                             result = _run_step(
                                 run_step,
                                 step_cwd,
