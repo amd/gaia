@@ -91,6 +91,11 @@ _ASKS_FOR_WORK = re.compile(
     re.IGNORECASE,
 )
 
+#: All that may follow the quoted text: a target language and an end mark.
+_ONLY_A_LANGUAGE = re.compile(
+    r"\s*(?:(?:in)?to\s+[^\W\d_]+)?\s*[.!?]?\s*", re.IGNORECASE
+)
+
 #: What a declined tool call is told, so the model answers in its reply.
 TEXT_ONLY_DECLINE = (
     "Not run: this request hands over text to translate, reword or proofread "
@@ -103,15 +108,19 @@ def hands_over_text_only(request: str) -> bool:
     """Whether *request* asks only for text work on quoted text it supplies.
 
     False for any request whose own instruction names a file, a save or a
-    command: that work was asked for. False too when the text is not quoted:
-    a save typed after it cannot be told from the text, so the user is asked.
+    command: that work was asked for. False too when the text is not quoted,
+    or when anything but a target language follows the quote: that may be
+    work no word list foresees, so the user is asked.
     """
     request = request or ""
     colon = _TEXT_AFTER_COLON.match(request)
-    quoted = (
-        _LEADING_QUOTE.match(request[colon.end() :])
-        if colon and not _TARGET_BEFORE_COLON.search(colon.group())
-        else _QUOTED_TEXT.match(request)
-    )
+    if colon and not _TARGET_BEFORE_COLON.search(colon.group()):
+        quote = _LEADING_QUOTE.match(request[colon.end() :])
+        after = request[colon.end() + quote.end() :] if quote else None
+    else:
+        quote = _QUOTED_TEXT.match(request)
+        after = request[quote.end("quote") :] if quote else None
+    if after is None or not _ONLY_A_LANGUAGE.fullmatch(after):
+        return False
     asked = instruction_part(request)
-    return bool(quoted) and asked != request and not _ASKS_FOR_WORK.search(asked)
+    return asked != request and not _ASKS_FOR_WORK.search(asked)

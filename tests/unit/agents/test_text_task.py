@@ -272,6 +272,7 @@ def test_loop_takes_the_translation_as_the_answer(agent):
         SAVE_SENTENCE,
         CHECK_SENTENCE,
         QUOTED_SAVE_SENTENCE,
+        'Translate this: "Hello there, friend." into Spanish!',
     ],
 )
 def test_a_request_that_only_hands_over_text_is_recognised(request_text):
@@ -289,6 +290,10 @@ def test_a_request_that_only_hands_over_text_is_recognised(request_text):
         "Translate to German: Good morning everyone. Save the result as de.txt",
         "Proofread this:\nTheir going home.\n\nThen write the corrected text to out.md",
         "Proofread this:\nPlease save it to x.md",
+        # Work after the quote that no word list foresees is still asked about.
+        'Translate this to French: "Hello there, friend." Then paste it into my notes',
+        'Translate this to French: "Hello there, friend." and post it on Slack',
+        'Translate this to French: "Hello there, friend." then speak it aloud',
         "What is 17 times 23?",
         "",
     ],
