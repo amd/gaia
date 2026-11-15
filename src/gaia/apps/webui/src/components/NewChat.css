@@ -190,6 +190,19 @@
     list-style: none;
 }
 
+/* Opened in full, the list scrolls in its own box so the composer stays on screen. */
+.new-chat-doc-list.is-expanded {
+    max-height: min(30vh, 220px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.new-chat-doc-toggle {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
+}
+
 .new-chat-doc {
     display: inline-flex;
     align-items: center;

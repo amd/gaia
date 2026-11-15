@@ -394,7 +394,10 @@ The capture lifecycle separates **instructions** from **code**:
 
 The deferral exists because a pasted body only reaches the *prompt*, while
 `tools.py` is imported into the agent's own **process** — so code-trust is a
-terminal, human step (`promote`), never a chat approval. Trust binds to the
+terminal, human step (`promote`), never a chat approval. Promote, install,
+import, trust, relock, keygen and publish refuse to run inside an agent's tool
+or in any process one started, so no approval prompt or command spelling can
+stand in for that step. Trust binds to the
 audited bytes: editing a promoted skill re-defers its code, and a failed
 re-promote revokes the earlier trust. An instruction-only capture has nothing
 to defer and simply loads.

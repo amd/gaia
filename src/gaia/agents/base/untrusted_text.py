@@ -11,6 +11,7 @@ from __future__ import annotations
 import unicodedata
 from typing import List, Tuple
 
+from gaia.agents.base.lookalikes import ASCII_FOLD, LOOKALIKES
 from gaia.agents.base.person_approval import is_hidden, is_variation_selector
 
 # The same fence for a short field in a JSON result, such as an event title.
@@ -67,29 +68,39 @@ def _without_fence_runs(text: str) -> str:
 MARKER_NAME_REMOVED = "[fence marker removed]"
 
 
-def _skeleton(name: str) -> str:
+def _marker_letters(char: str) -> str:
+    """The ASCII letters and digits *char* reads as, for comparing marker names.
+
+    NFKC folds width, the UTS #39 table maps other look-alikes (Cyrillic, Greek,
+    Cherokee and so on) to the letters they imitate, and the ASCII fold makes
+    ``m`` and ``rn``, or ``I``, ``l`` and ``1``, compare equal.
+    """
+    mapped = "".join(LOOKALIKES.get(c, c) for c in unicodedata.normalize("NFKC", char))
     return "".join(
-        c
-        for c in unicodedata.normalize("NFKC", name).casefold()
-        if c.isascii() and c.isalnum()
+        ASCII_FOLD.get(c, c) for c in mapped.casefold() if c.isascii() and c.isalnum()
     )
+
+
+def _skeleton(name: str) -> str:
+    return "".join(_marker_letters(char) for char in name)
 
 
 def neutralize_marker_names(text: str, names: Tuple[str, ...]) -> str:
     """*text* with every spelling of a fence marker's name replaced.
 
     Names are compared on ASCII letters and digits alone, after width and case
-    fold, so brackets of any shape, spacing, or line breaks can't rebuild one.
+    fold and with Unicode look-alikes read as the letters they imitate, so
+    brackets of any shape, spacing, line breaks or another script's letters
+    can't rebuild one.
     """
     targets = [_skeleton(name) for name in names]
     while True:
         letters: List[str] = []
         origin: List[int] = []
         for at, char in enumerate(text):
-            for folded in unicodedata.normalize("NFKC", char).casefold():
-                if folded.isascii() and folded.isalnum():
-                    letters.append(folded)
-                    origin.append(at)
+            for folded in _marker_letters(char):
+                letters.append(folded)
+                origin.append(at)
         skeleton = "".join(letters)
         spans = []
         for target in targets:

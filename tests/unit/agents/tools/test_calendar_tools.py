@@ -1114,6 +1114,11 @@ class TestConnectionErrors:
             "kind": "connect_account",
             "providers": ["google", "microsoft"],
             "agent_id": "installed:gaia",
+            # The calendar asks for calendar access, not mail.
+            "scopes": {
+                "google": ["https://www.googleapis.com/auth/calendar.events"],
+                "microsoft": ["https://graph.microsoft.com/Calendars.ReadWrite"],
+            },
         }
         assert "Connect button" in result["error"]
         assert "never give or run a terminal command" in result["error"]
