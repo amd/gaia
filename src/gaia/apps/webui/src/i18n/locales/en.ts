@@ -2483,6 +2483,7 @@ export const enMessages = {
     'settings.connectors.noRevokeApi': "Disconnected locally. This provider has no API to revoke access remotely — remove GAIA from your account's connected-apps page if you want to fully revoke it.",
     'settings.connectors.setupRequired': 'Setup required',
     'settings.connectors.paused': 'Paused',
+    'settings.connectors.notWorking': 'Not working',
     'settings.connectors.disconnected': 'Disconnected',
     'settings.connectors.deviceFailed': 'Device sign-in failed.',
     'settings.connectors.required': 'Required: {fields}',

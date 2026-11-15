@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { ConnectorRow } from '../../types';
 
 vi.mock('../../services/api', () => ({
@@ -320,6 +320,10 @@ describe('MCP connector configure panel', () => {
             await screen.findByText("Slack didn't start. Check the token, then save it again."),
         ).toBeInTheDocument();
         expect(screen.getByText('Authentication failed - check your Slack tokens')).toBeInTheDocument();
+        // The header must not go on saying Connected above the failure.
+        const tile = document.querySelector('[data-connector-id="mcp-slack"]') as HTMLElement;
+        expect(within(tile).getByText('Not working')).toBeInTheDocument();
+        expect(within(tile).queryByText('Connected')).not.toBeInTheDocument();
     });
 
     it('does not blame the token when the server was only slow to start', async () => {
@@ -336,6 +340,8 @@ describe('MCP connector configure panel', () => {
 
         expect(await screen.findByText(/Slack took too long to start/)).toBeInTheDocument();
         expect(screen.queryByText(/Check the token/)).not.toBeInTheDocument();
+        // Slow is not broken: the header keeps saying Connected.
+        expect(screen.queryByText('Not working')).not.toBeInTheDocument();
     });
 
     it('clears the check result when the server is turned off', async () => {
