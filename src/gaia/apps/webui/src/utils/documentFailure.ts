@@ -3,6 +3,11 @@
 
 import type { Translate } from '../i18n/useT';
 
+/** True when a document failed because the model server, not the file, was the problem. */
+export function isServerFailure(kind: string | null | undefined): boolean {
+    return kind === 'model_server_down' || kind === 'model_server_busy';
+}
+
 /**
  * Why a document failed when the model server, not the file, was the problem,
  * or null for any other failure. The connection error stays in the log.
