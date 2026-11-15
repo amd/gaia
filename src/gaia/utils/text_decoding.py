@@ -150,28 +150,45 @@ def file_encoding(path: Union[str, os.PathLike]) -> str:
             encoding = detect_encoding(head, truncated=truncated)
             # An ASCII head says nothing about the accented word on line 9,000.
             if truncated and encoding == "utf-8":
-                bad = _first_non_utf8(stream, head)
+                bad, saw_utf8 = _first_non_utf8(stream, head)
                 if bad is not None:
+                    if saw_utf8:
+                        # Real UTF-8 came first: cp1252 would garble all of it.
+                        raise UnicodeDecodeError(
+                            "utf-8",
+                            b"",
+                            0,
+                            1,
+                            f"UTF-8 except for a damaged byte at offset {bad}; "
+                            "re-save the file as UTF-8",
+                        )
                     encoding = detect_encoding(*_window_at(stream, bad))
         except UnicodeDecodeError as exc:
             raise name_file(exc, path) from exc
     return encoding
 
 
-def _first_non_utf8(stream, head: bytes) -> Optional[int]:
-    """Offset of the first byte in *head* plus the rest of *stream* that isn't UTF-8."""
+def _first_non_utf8(stream, head: bytes) -> Tuple[Optional[int], bool]:
+    """``(offset, saw_utf8)``: the first byte of *head* plus the rest of *stream* that
+    isn't UTF-8, and whether multibyte UTF-8 came before it."""
     decoder = codecs.getincrementaldecoder("utf-8")()
     chunks = itertools.chain((head,), iter(lambda: stream.read(1 << 20), b""))
     consumed = 0
+    saw_utf8 = False
     for chunk in itertools.chain(chunks, (b"",)):
         # exc.start counts from the bytes the decoder held back from the last chunk.
         pending = len(decoder.getstate()[0])
         try:
-            decoder.decode(chunk, final=not chunk)
+            text = decoder.decode(chunk, final=not chunk)
         except UnicodeDecodeError as exc:
-            return consumed - pending + exc.start
+            start = max(0, exc.start - pending)
+            return (
+                consumed - pending + exc.start,
+                saw_utf8 or not chunk[:start].isascii(),
+            )
+        saw_utf8 = saw_utf8 or not text.isascii()
         consumed += len(chunk)
-    return None
+    return None, saw_utf8
 
 
 def _window_at(stream, offset: int) -> Tuple[bytes, bool]:
