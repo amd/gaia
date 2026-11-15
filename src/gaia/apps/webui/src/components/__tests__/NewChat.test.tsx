@@ -46,7 +46,7 @@ describe('NewChat and the document library', () => {
     it('says a new chat cannot search the library until documents are attached', async () => {
         render(<NewChat onSend={vi.fn()} />);
 
-        expect(await screen.findByText(/2 documents in your library. Attach the ones to search here./)).toBeInTheDocument();
+        expect(await screen.findByText(/2 documents in your library. Attach the ones you want to search here./)).toBeInTheDocument();
     });
 
     it('attaches the whole library to the chat it creates', async () => {
