@@ -63,6 +63,10 @@ export function PrivacySettings() {
                     if (notice.code === 'runtime_keys_not_dropped') {
                         return t('settings.privacy.runtimeKeysNotDropped', { reason: notice.reason ?? '' });
                     }
+                    if (notice.code === 'saved_models_not_checked' && notice.cause === 'model_server_down' && notice.models?.length) {
+                        // The connection error is in the server log; the user needs what to do.
+                        return t.plural('settings.privacy.savedModelNotCheckedServerDown', notice.models.length, { models: notice.models.join(', ') });
+                    }
                     if (notice.code === 'saved_models_not_checked') {
                         return t('settings.privacy.savedModelsNotChecked', { reason: notice.reason ?? '' });
                     }

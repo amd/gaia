@@ -111,6 +111,16 @@ const audit = (page: Page): Promise<string[]> =>
                 problems.push(`icon squeezed to ${box.width.toFixed(1)}px: ${label(el.parentElement!)}`);
             }
 
+            // A clamped block puts its "…" at the end of its own direction, so that must be its words' direction.
+            if (style.getPropertyValue('-webkit-line-clamp') !== 'none' && el.scrollHeight > el.clientHeight + 1) {
+                const first = (el.textContent ?? '').match(/[A-Za-z؀-ۿ]/)?.[0];
+                const want = first && (arabic.test(first) ? 'rtl' : 'ltr');
+                if (want && style.direction !== want) problems.push(`clamped ${want} text is cut at the wrong end: ${label(el)}`);
+                // Aligned to its end, the last line's "…" lands past the edge and is clipped: "preparation a."
+                const toEnd = style.textAlign === 'end' || style.textAlign === (style.direction === 'rtl' ? 'left' : 'right');
+                if (toEnd) problems.push(`clamped text aligned to its end hides its "…": ${label(el)}`);
+            }
+
             const text = el.textContent?.trim() ?? '';
             if (el.querySelector(':scope > :not(i18n-label)') || !text) continue;
 
@@ -250,6 +260,8 @@ const audit = (page: Page): Promise<string[]> =>
             const r = button.getBoundingClientRect();
             if (r.left < -1 || r.right > window.innerWidth + 1) problems.push(`button runs off the window: ${label(button)}`);
             if (button.scrollWidth > button.clientWidth + 1) problems.push(`label spills out of its button: ${label(button)}`);
+            // A label that wraps inside a fixed-height button spills out above and below it.
+            if (button.scrollHeight > button.clientHeight + 1) problems.push(`label spills out of its button's height: ${label(button)}`);
             // A filled button whose words reach its edge reads as text spilling out of a pill.
             if (button.textContent?.trim() && rgb(getComputedStyle(button).backgroundColor)[3] > 0) {
                 const text = visibleTextBox(button);
@@ -270,6 +282,24 @@ const audit = (page: Page): Promise<string[]> =>
                 if (r.right > textLeft + 1 && r.left < textRight - 1 && r.bottom > box.top && r.top < box.bottom) {
                     problems.push(`icon sits on a field's text: ${label(input)}`);
                 }
+            }
+        }
+
+        // A one-line field's hint is read whole: cut mid-word it says something else, or nothing.
+        for (const input of document.querySelectorAll<HTMLInputElement>('input[placeholder]')) {
+            if (!shown(input) || input.value) continue;
+            const hint = getComputedStyle(input, '::placeholder');
+            paint.font = `${hint.fontStyle} ${hint.fontWeight} ${hint.fontSize} ${hint.fontFamily}`;
+            const s = getComputedStyle(input);
+            const room = input.clientWidth - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+            const need = paint.measureText(input.placeholder.replace(/[⁦-⁩]/g, '')).width;
+            if (need > room + 1) problems.push(`placeholder cut off (${Math.round(need)}px in ${Math.round(room)}px): "${input.placeholder.slice(0, 40)}"`);
+        }
+        // A placeholder mixing Arabic and Latin inside brackets shows them reordered: "(daily-summary (مثل".
+        for (const field of document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input[placeholder], textarea[placeholder]')) {
+            const own = field.placeholder.split('⁩ ⁦(')[0];
+            if (shown(field) && document.documentElement.dir === 'rtl' && arabic.test(own) && /[()]/.test(own)) {
+                problems.push(`brackets in an Arabic placeholder: "${own.slice(0, 40)}"`);
             }
         }
 
@@ -539,6 +569,47 @@ for (const locale of ['en', 'ar']) {
         const overlap = Math.min(editBox.x + editBox.width, actionsBox.x + actionsBox.width) - Math.max(editBox.x, actionsBox.x);
         expect(overlap, 'pin and delete cover the name being typed').toBeLessThanOrEqual(0);
     });
+}
+
+const LONG_TITLES = {
+    latin: 'My own typed question Give me a banana bread recipe with walnuts and brown butter',
+    arabic: 'سؤالي الذي كتبته بنفسي أعطني وصفة خبز الموز مع الجوز والزبدة البنية',
+};
+
+for (const locale of ['ar', 'en']) {
+    for (const [script, title] of Object.entries(LONG_TITLES)) {
+        // The hover buttons once covered a Latin title's start in Arabic: "ed question Give m…".
+        test(`a hovered ${script} chat title keeps its start in view and its "…" at its end (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route((url) => url.pathname === '/api/sessions', (route) => (route.request().method() === 'GET'
+                    ? route.fulfill({ json: { sessions: [{ ...SESSIONS[1], title }], total: 1 } })
+                    : route.fallback()));
+            });
+            const row = page.locator('.sb-row').first();
+            await row.hover();
+            await expect(row.locator('.sb-row-delete')).toBeVisible();
+            await shot(page, `sidebar-row-hover-${script}-${locale}`);
+            const m = await row.evaluate((li) => {
+                const el = li.querySelector('.sb-row-title')!;
+                const box = el.getBoundingClientRect();
+                const actions = li.querySelector('.sb-row-actions')!.getBoundingClientRect();
+                const range = document.createRange();
+                range.setStart(el.firstChild!, 0);
+                range.setEnd(el.firstChild!, 1);
+                const first = range.getBoundingClientRect();
+                return {
+                    direction: getComputedStyle(el).direction,
+                    cut: el.scrollWidth > el.clientWidth,
+                    overlap: Math.min(box.right, actions.right) - Math.max(box.left, actions.left),
+                    firstShown: first.left >= box.left - 1 && first.right <= box.right + 1,
+                };
+            });
+            expect(m.direction, 'the title reads in its own direction').toBe(script === 'latin' ? 'ltr' : 'rtl');
+            expect(m.cut, 'the title is long enough to be cut').toBe(true);
+            expect(m.firstShown, "the title's first letter is in view").toBe(true);
+            expect(m.overlap, 'rename, pin and delete cover the title').toBeLessThanOrEqual(0);
+        });
+    }
 }
 
 for (const locale of ['ar', 'en']) {
@@ -2076,6 +2147,29 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    // A down model server showed the raw connection error under the switch.
+    test(`Local only with the model server not answering (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withSettingsPanes(p, {
+            networkPolicy: 'cloud_allowed',
+            policyNotices: [
+                {
+                    code: 'saved_models_not_checked', severity: 'warning', cause: 'model_server_down', models: ['collection.router'],
+                    reason: "couldn't check whether collection.router is a cloud model: Request failed: HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded [WinError 10061]",
+                },
+                { code: 'users_server_keeps_keys', severity: 'info', url: 'http://127.0.0.1:59999' },
+            ],
+        }));
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        await page.locator('.toggle-switch .toggle-track').first().click();
+        const notice = page.locator('.settings-error[role="alert"]');
+        await expect(notice).toBeVisible();
+        await expect(notice).not.toContainText('HTTPConnectionPool');
+        await expect(notice).not.toContainText('WinError');
+        await shot(page, `privacy-local-only-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`Delete all chats asks in a dialog (${locale})`, async ({ page }) => {
         await open(page, '', locale, withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2929,6 +3023,52 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const LONG_ENGLISH = 'Run a short personal check-in that picks up where the last one left off, following up on what the user said they would do, '
+    + 'asking what changed since then, noting anything new worth remembering, comparing it with last week, listing what moved and what stalled, '
+    + 'naming anything surprising, and finishing with a single sentence I could read aloud at the Monday team meeting without any preparation at all.';
+
+/** Every clamped block on screen that cut its text, and the direction it reads in. */
+const clampedBlocks = (page: Page): Promise<string[]> =>
+    page.evaluate(() => [...document.querySelectorAll('body *')]
+        .filter((el) => getComputedStyle(el).getPropertyValue('-webkit-line-clamp') !== 'none' && el.checkVisibility() && el.scrollHeight > el.clientHeight + 1)
+        .map((el) => `${String(el.className).split(' ')[0]} ${getComputedStyle(el).direction}`));
+
+// "…one left off, following up" and "preparation a.": English clamped as if it were Arabic.
+test.describe('clamped English in Arabic ends with its own "…"', () => {
+    test('a skill description', async ({ page }) => {
+        await open(page, '', 'ar', async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/skills', (route) => route.fulfill({
+                json: { skills: [{ name: 'check-in', source: 'agent-bundled', description: LONG_ENGLISH, version: '1.0.0', always_on: false }], invalid: {} },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        await expect(page.locator('.skill-row-more')).toBeVisible();
+        await shot(page, 'clamped-skill-ar');
+        expect(await clampedBlocks(page)).toContain('skill-row-desc ltr');
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test('a schedule prompt', async ({ page }) => {
+        await open(page, '', 'ar', (p) => withSchedules(p, [{ ...SCHEDULE_ROW, id: 's9', name: 'qa-far-future', prompt: LONG_ENGLISH }]));
+        await page.locator('.sb').getByRole('button', { name: /المهام المجدولة/ }).click();
+        await expect(page.locator('.schedule-card-prompt')).toBeVisible();
+        await shot(page, 'clamped-schedule-ar');
+        expect(await clampedBlocks(page)).toContain('schedule-card-prompt ltr');
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test('an automation prompt', async ({ page }) => {
+        await open(page, '', 'ar', (p) => withAutomations(p, [{ ...AUTOMATIONS[0], prompt: LONG_ENGLISH }]));
+        await openAutomations(page);
+        await expect(page.locator('.automation-detail')).toBeVisible();
+        await shot(page, 'clamped-automation-ar');
+        expect(await clampedBlocks(page)).toContain('automation-detail ltr');
+        expect(await audit(page)).toEqual([]);
+    });
+});
+
 const LOG_LINES = [
     { text: '2026-11-04 10:05:37.798 [Info] (main) Starting Lemonade Server...', severity: 'info', tag: 'main' },
     { text: '2026-11-04 10:05:37.799 [Info] (main)   Cache dir: C:\\Users\\you\\.gaia\\lemonade\\cache', severity: 'info', tag: 'main' },
@@ -3468,6 +3608,7 @@ for (const locale of ['ar', 'en']) {
                 const s = scene(name);
                 await open(page, '', locale, (p) => withSetup(p, s.answers));
                 await s.reach(page);
+                await shot(page, `setup-${locale}-${name}-390`);
                 expect(await audit(page)).toEqual([]);
             });
         }
@@ -3815,6 +3956,106 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 }
+
+for (const [locale, theme] of [['ar', 'light'], ['en', 'light'], ['ar', 'dark']] as const) {
+    // At 390 px its buttons once kept their width and squeezed the sentence to one word a line, 1,437 px tall.
+    test(`the model-server-down notice wraps its buttons under its words on a phone (${locale}, ${theme})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/setup/check*', (route) => route.fulfill({
+                json: { ready: false, stage: 'server', initialized: true, steps: [] },
+            }));
+        }, theme);
+        const notice = page.locator('.app-notice');
+        await expect(notice.getByRole('button')).toHaveCount(2);
+        await shot(page, `server-down-notice-390-${locale}-${theme}`);
+        const m = await notice.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            const words = el.querySelector(':scope > span')!.getBoundingClientRect();
+            const buttons = [...el.querySelectorAll('button')].map((b) => b.getBoundingClientRect());
+            return { height: box.height, wordsShare: words.width / box.width, below: buttons.every((b) => b.top >= words.bottom - 1) };
+        });
+        expect(m.height, 'the notice hides the chat').toBeLessThan(200);
+        expect(m.wordsShare, 'the words get most of the row').toBeGreaterThan(0.6);
+        expect(m.below, 'the buttons sit under the words').toBe(true);
+        // The closed drawer waits off screen by design; this test is about the notice.
+        await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the "install it from the notice above" line leaves with the notice (${locale})`, async ({ page }) => {
+        let installed = false;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/agents', (route) => route.fulfill({ json: installed
+                ? { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 }
+                : { agents: [], total: 0 } }));
+            await p.route((url) => url.pathname === '/api/sessions', (route) => (route.request().method() === 'POST'
+                ? route.fulfill({ status: 422, json: { detail: "Unknown agent_type 'gaia'. Registered agent ids: chat." } })
+                : route.fallback()));
+            await p.route('**/api/agents/install', (route) => route.fulfill({ status: 202, json: { id: 'gaia', status: 'running' } }));
+            await p.route('**/api/agents/gaia/install-status', (route) => {
+                installed = true;
+                return route.fulfill({ json: { id: 'gaia', status: 'completed', percent: 100, error: null } });
+            });
+        });
+        await page.locator('.new-chat textarea').first().fill('Give me a banana bread recipe');
+        await page.keyboard.press('Enter');
+        const hint = page.locator('.new-chat-error');
+        await expect(hint).toBeVisible();
+        if (locale === 'ar') await expect(hint).toContainText(/\p{Script=Arabic}/u);
+        await shot(page, `agent-missing-hint-${locale}`);
+        await page.locator('.app-notice').getByRole('button').click();
+        await expect(page.locator('.app-notice')).toHaveCount(0);
+        await expect(hint).toHaveCount(0);
+        await shot(page, `agent-installed-${locale}`);
+    });
+}
+
+const arabicText = /\p{Script=Arabic}/u;
+
+test.describe('labels once left in English are in Arabic', () => {
+    test('the phone sidebar button', async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', 'ar');
+        await expect(page.locator('.sidebar-toggle')).toHaveAttribute('aria-label', arabicText);
+    });
+
+    test("the featured skills library's tooltip", async ({ page }) => {
+        await open(page, '', 'ar', withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        const chip = page.locator('.skill-link-chip');
+        await expect(chip).toHaveAttribute('title', arabicText);
+        // The English description belongs in the bracketed English half only.
+        const aria = (await chip.getAttribute('aria-label')) ?? '';
+        expect(aria.split('Engineering workflows').length - 1).toBeLessThanOrEqual(1);
+    });
+
+    test("the AMD gateway's offline tooltip", async ({ page }) => {
+        await open(page, '', 'ar', async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            await p.route(/\/api\/providers(\?|$)/, (route) => route.fulfill({ json: { providers: [
+                { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC.' },
+                { id: 'amd', name: 'AMD LLM Gateway', remote: true, privacy_notice: '', network: { reachable: false, detail: "Can't reach llm-api.amd.com. It needs AMD's network or VPN" } },
+            ] } }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="model"]').click();
+        await expect(page.getByRole('radio', { name: /AMD/ })).toHaveAttribute('title', arabicText);
+    });
+
+    test("a memory's context and source in the Advanced table", async ({ page }) => {
+        await openMemory(page, 'ar');
+        await memoryTab(page, /Advanced/);
+        await expect(page.locator('.mem-knowledge-table tbody tr').first()).toBeVisible();
+        const english = await page.locator('.mem-knowledge-table tbody tr').evaluateAll((rows) => rows
+            .flatMap((row) => [row.children[2], row.children[5]].map((cell) => cell?.textContent?.trim() ?? ''))
+            .filter((text) => !/[؀-ۿ]/.test(text)));
+        expect(english, 'context and source cells left in English').toEqual([]);
+    });
+});
 
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page, '', 'ar', withoutFlagship);

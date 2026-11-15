@@ -322,7 +322,7 @@ export function ModelSettings() {
                         className={`provider-tab${chosen === p.id ? ' is-active' : ''}${offline(p) || blocked(p) ? ' is-disabled' : ''}`}
                         onClick={() => setChosen(p.id)}
                         disabled={(offline(p) || blocked(p)) && chosen !== p.id}
-                        title={blocked(p) ? t('settings.privacy.localOnlyBlocked') : offline(p) ? p.network?.detail ?? undefined : undefined}
+                        title={blocked(p) ? t('settings.privacy.localOnlyBlocked') : offline(p) ? t('setup.key.gatewayOff') : undefined}
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
                         <span>{providerName(t, p)}</span>

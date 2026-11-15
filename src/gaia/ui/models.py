@@ -311,6 +311,9 @@ class PolicyNotice(BaseModel):
     severity: Literal["info", "warning"]
     url: Optional[str] = None
     reason: Optional[str] = None
+    # "model_server_down" when nothing answered; the UI words that itself.
+    cause: Optional[str] = None
+    models: Optional[List[str]] = None
 
 
 class SettingsResponse(BaseModel):
