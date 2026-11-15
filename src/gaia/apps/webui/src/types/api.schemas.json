@@ -2371,6 +2371,17 @@
       "status": {
         "title": "Status",
         "type": "string"
+      },
+      "step": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Step"
       }
     },
     "required": [

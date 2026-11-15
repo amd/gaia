@@ -17,7 +17,7 @@ import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
 import { ref, type MessageKey } from '../i18n/registry';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
-import { MemoryDashboardAboutYou } from './MemoryDashboardAboutYou';
+import { MEMORY_SOURCE_KEYS, MemoryDashboardAboutYou } from './MemoryDashboardAboutYou';
 import './MemoryDashboard.css';
 
 // ── Type definitions ─────────────────────────────────────────────────────
@@ -286,6 +286,8 @@ const ROLE_KEYS: Record<string, MessageKey> = { user: 'mem.role.user', assistant
 const DOMAIN_KEYS: Record<string, MessageKey> = {
     work: 'mem.domain.work', technical: 'mem.domain.technical', personal: 'mem.domain.personal', general: 'mem.domain.general',
 };
+
+const CONTEXT_KEYS: Record<string, MessageKey> = { ...DOMAIN_KEYS, global: 'mem.context.global' };
 
 /** A server-side code in the user's language; one the UI has no words for stays as sent. */
 function Code({ value, keys }: { value: string; keys: Record<string, MessageKey> }) {
@@ -1539,7 +1541,7 @@ export function MemoryDashboard() {
                                         aria-label={t('mem.knowledge.filterContext')}>
                                         <option value="">{t.bare('mem.knowledge.allContexts')}</option>
                                         {contexts.map(c => (
-                                            <option key={c} value={c}>{c}</option>
+                                            <option key={c} value={c}>{CONTEXT_KEYS[c] ? t.bare(CONTEXT_KEYS[c]) : c}</option>
                                         ))}
                                     </select>
                                     <select className="mem-filter-select" value={kEntity}
@@ -1558,7 +1560,7 @@ export function MemoryDashboard() {
                                         )}
                                         <input className="mem-filter-search"
                                             type="text"
-                                            placeholder={t('mem.knowledge.searchPlaceholder')}
+                                            placeholder={t.bare('mem.knowledge.searchPlaceholder')}
                                             value={kSearch}
                                             onChange={e => handleSearchChange(e.target.value)}
                                             aria-label={t('mem.knowledge.search')}
@@ -1726,7 +1728,7 @@ export function MemoryDashboard() {
                                                                 </div>
                                                             </td>
                                                             <td>
-                                                                <bdi className="mem-date-cell">{entry.context}</bdi>
+                                                                <span className="mem-date-cell"><Code value={entry.context} keys={CONTEXT_KEYS} /></span>
                                                             </td>
                                                             <td>
                                                                 {entry.entity ? (
@@ -1749,7 +1751,7 @@ export function MemoryDashboard() {
                                                                 </div>
                                                             </td>
                                                             <td>
-                                                                <bdi className="mem-date-cell">{entry.source || '\u2014'}</bdi>
+                                                                <span className="mem-date-cell">{entry.source ? <Code value={entry.source} keys={MEMORY_SOURCE_KEYS} /> : '\u2014'}</span>
                                                             </td>
                                                             <td>
                                                                 <span className="mem-date-cell" title={formatDateFull(entry.updated_at, dateLocale(t))}>
@@ -1975,7 +1977,7 @@ export function MemoryDashboard() {
                                                             <div className="mem-temporal-text"><bdi>{item.content}</bdi></div>
                                                             <div className="mem-temporal-date">
                                                                 {t(overdue ? 'mem.upcoming.overdue' : 'mem.upcoming.due', { when: formatRelativeDate(item.due_at, t) })}
-                                                                {item.context !== 'global' && <> {'\u00B7'} <bdi>{item.context}</bdi></>}
+                                                                {item.context !== 'global' && <> {'\u00B7'} <Code value={item.context} keys={CONTEXT_KEYS} /></>}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -2000,7 +2002,7 @@ export function MemoryDashboard() {
                                     <Search size={13} className="search-icon" />
                                     <input
                                         type="text"
-                                        placeholder={t('mem.conv.searchPlaceholder')}
+                                        placeholder={t.bare('mem.conv.searchPlaceholder')}
                                         value={convSearch}
                                         onChange={e => handleConvSearchChange(e.target.value)}
                                         aria-label={t('mem.conv.search')}

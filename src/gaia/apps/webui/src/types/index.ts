@@ -644,7 +644,8 @@ export interface SystemStatus {
     download_progress: DownloadProgress | null;
     // Boot-time initialization tracking
     init_state?: 'initializing' | 'ready' | 'degraded';
-    init_tasks?: Array<{ name: string; status: string }>;
+    /** `step` picks the banner's translated line; `name` is an English log label, never shown. */
+    init_tasks?: Array<{ name: string; step?: string | null; status: string }>;
     /** Priming of a new chat's prompt; never blocks sending. */
     warm_up?: WarmUpStatus | null;
     /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */
