@@ -9,6 +9,12 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Sender preferences now order a pre-scan across every connected mailbox
+  (#3623).** With two mailboxes, each was sorted on its own and the results
+  were joined in connection order, so the archive list could keep the first
+  mailbox's priority senders and drop the second's low-priority ones. The
+  merged lists are now sorted together before their caps.
+
 - **The search guidance no longer teaches Outlook queries that Microsoft
   Graph rejects (#3587).** The `search_messages` description and the agent's
   SEARCH prompt now say `label:` and `after:`/`before:` are Gmail-only, and

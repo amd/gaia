@@ -226,3 +226,25 @@ def test_search_docs_name_every_operator_outlook_rejects(doc):
         f"{doc.name} does not name the Outlook-rejected search operators "
         f"{missing}; list them in the inbox-search section."
     )
+
+
+@pytest.mark.parametrize(
+    "doc, row_start",
+    [
+        ("SPEC.md", "| `GET /v1/email/calendar/events` |"),
+        ("SKILL.md", "| `listCalendarEvents(opts?)` |"),
+    ],
+)
+def test_npm_calendar_listing_row_mentions_truncation(doc, row_start):
+    """The calendar-listing row must tell integrators the page can be partial.
+
+    The response gained ``count``/``truncated`` (#2664) while both npm docs
+    still described a bare ``events`` list.
+    """
+    text = (_NPM_ROOT / doc).read_text(encoding="utf-8")
+    rows = [line for line in text.splitlines() if line.startswith(row_start)]
+    assert len(rows) == 1, f"npm/{doc} has no single {row_start!r} row"
+    assert "`truncated`" in rows[0], (
+        f"npm/{doc}'s calendar-listing row never mentions `truncated`, so an "
+        "integrator can't tell a partial page from the whole window."
+    )

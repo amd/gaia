@@ -155,7 +155,7 @@ def hub_unreachable_message(
 # Hub to install. Its wheel is source-install only (#2240).
 HUB_INSTALL_AGENTS = frozenset({"gaia"})
 
-# The agent the Agent UI and gaia-tui talk to. Profiles that don't install it
+# The agent the Agent UI and gaia-cli talk to. Profiles that don't install it
 # say so in their completion message and name `gaia init`, which installs it.
 FLAGSHIP_AGENT_ID = "gaia"
 
@@ -187,7 +187,7 @@ INIT_PROFILES = {
         "models": ["Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~6 GB",
         "min_context_size": 32768,
-        # [ui] is [rag] plus the daemon, which gaia-tui, `gaia hub install`
+        # [ui] is [rag] plus the daemon, which gaia-cli, `gaia hub install`
         # and `gaia chat --ui` all need.
         "pip_extras": ["ui"],
     },
@@ -1674,23 +1674,32 @@ class InitCommand:
             self.events.line_open = True
 
     @staticmethod
-    def _tui_installed() -> bool:
-        """True if gaia-tui is on PATH or in GAIA's own bin dir."""
-        if shutil.which("gaia-tui") is not None:
-            return True
+    def _tui_command() -> Optional[str]:
+        """The Terminal UI's command if it is on PATH or in GAIA's own bin dir.
+
+        It is ``gaia-cli``; an install from before that name has ``gaia-tui``.
+        """
         from gaia.config import gaia_home
 
-        name = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
-        if (gaia_home() / "bin" / name).is_file():
-            return True
-        if sys.platform != "win32":
-            return False
-        install_dir = InitCommand._nsis_install_dir()
-        return install_dir is not None and (install_dir / name).is_file()
+        suffix = ".exe" if sys.platform == "win32" else ""
+        install_dir = (
+            InitCommand._nsis_install_dir() if sys.platform == "win32" else None
+        )
+        for command in ("gaia-cli", "gaia-tui"):
+            if shutil.which(command) is not None:
+                return command
+            if (gaia_home() / "bin" / f"{command}{suffix}").is_file():
+                return command
+            if (
+                install_dir is not None
+                and (install_dir / f"{command}{suffix}").is_file()
+            ):
+                return command
+        return None
 
     @staticmethod
     def _nsis_install_dir() -> Optional[Path]:
-        """Where the Windows installer put gaia-tui.exe (installer/nsis/gaia.nsi)."""
+        """Where the Windows installer put gaia-cli.exe (installer/nsis/gaia.nsi)."""
         import winreg
 
         try:
@@ -3724,7 +3733,7 @@ class InitCommand:
         """What to tell the user when no chat agent is installed, else None.
 
         Every profile gets the same supported remedy, `gaia init`, which
-        installs the flagship when it is missing: the Agent UI and gaia-tui list
+        installs the flagship when it is missing: the Agent UI and gaia-cli list
         no agent without it (#2972).
         """
         if self._is_hub_agent_available(FLAGSHIP_AGENT_ID):
@@ -4012,9 +4021,10 @@ class InitCommand:
         # The flagship is a downloaded BINARY, so the remedy is `gaia init`,
         # never a pip install from a git checkout.
         agent_note = self._agent_install_note()
-        has_tui = self._tui_installed()
+        tui_command = self._tui_command()
+        has_tui = tui_command is not None
         tui_install_note = (
-            f"Terminal UI (gaia-tui) ships with the installer -- run: {_INSTALLER_HINT}"
+            f"Terminal UI (gaia-cli) ships with the installer -- run: {_INSTALLER_HINT}"
         )
         installs_flagship = self._profile_installs_flagship()
         agent_missing = agent_note is not None
@@ -4056,7 +4066,7 @@ class InitCommand:
             elif self.profile in ("gaia", "npu"):
                 if has_tui:
                     self.console.print(
-                        "    [cyan]gaia-tui[/cyan]                             Start the GAIA agent (terminal UI)"
+                        f"    [cyan]{tui_command:<37}[/cyan]Start the GAIA agent (terminal UI)"
                     )
                 self.console.print(
                     "    [cyan]gaia chat --ui[/cyan]                       Launch the Agent UI (browser-based)"
@@ -4134,7 +4144,7 @@ class InitCommand:
             elif self.profile in ("gaia", "npu"):
                 if has_tui:
                     self._print(
-                        "    gaia-tui                             # Start the GAIA agent (terminal UI)"
+                        f"    {tui_command:<37}# Start the GAIA agent (terminal UI)"
                     )
                 self._print(
                     "    gaia chat --ui                       # Launch the Agent UI (browser-based)"

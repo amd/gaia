@@ -4,7 +4,7 @@
     {
       "guid": "{6b5d7d70-4ed6-471b-b773-f1cafc56246f}",
       "name": "GAIA",
-      "commandline": "\"__GAIA_INSTDIR__\\gaia-tui.exe\"",
+      "commandline": "\"__GAIA_INSTDIR__\\gaia-cli.exe\"",
       "icon": "__GAIA_INSTDIR__\\gaia.ico",
       "startingDirectory": "%USERPROFILE%",
       "tabTitle": "GAIA",
