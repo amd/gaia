@@ -59,7 +59,8 @@ lane's verifier pass once **all** of these hold; the review bot's approval stand
 
 - it's a bug fix (`fix…` title), not a draft, and **mergeable** with no conflicts. A
   conflict beyond a mechanical keep-both in tests, locale files or a CHANGELOG sends it to a
-  separate verifier, because whoever resolves it can't also merge it;
+  separate verifier, because whoever resolves it can't also merge it. The same holds for any
+  commit the merging agent pushed: an agent that changed the PR never takes this lane;
 - the product-code change is small, **~300 lines or fewer**. Tests, docs, CHANGELOG and
   eval scenarios don't count toward the size;
 - the review bot's **latest verdict approves** (`Approve` or `Approve with suggestions`),
