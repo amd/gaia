@@ -2583,6 +2583,11 @@ export const enMessages = {
     'banner.pickLoad.lostTrack': "GAIA couldn't check on the load: {reason}",
     'banner.pickLoad.startFailed': "GAIA couldn't start the load: {reason}",
     'banner.dismiss': 'Dismiss',
+    // Start-up steps, keyed by the backend's init_tasks[].step; the banner adds animated dots.
+    'banner.boot.check_server': 'Checking the model server',
+    'banner.boot.load_libraries': 'Getting document search ready',
+    'banner.boot.load_model': 'Loading the model',
+    'banner.boot.generic': 'Getting GAIA ready',
 
     // The update chip
 

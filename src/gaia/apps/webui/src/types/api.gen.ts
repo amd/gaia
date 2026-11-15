@@ -763,6 +763,7 @@ export interface TurnRouteResponse {
 export interface InitTaskInfo {
   name: string;
   status: string;
+  step?: string | null;
 }
 /**
  * Body for ``POST /api/agents/install``.

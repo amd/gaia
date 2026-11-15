@@ -2584,6 +2584,10 @@ const messages: Messages = {
     'banner.pickLoad.lostTrack': 'تعذّر على GAIA متابعة التحميل: {reason}',
     'banner.pickLoad.startFailed': 'تعذّر على GAIA بدء التحميل: {reason}',
     'banner.dismiss': 'إغلاق',
+    'banner.boot.check_server': 'جارٍ فحص خادم النماذج',
+    'banner.boot.load_libraries': 'جارٍ تجهيز البحث في المستندات',
+    'banner.boot.load_model': 'جارٍ تحميل النموذج',
+    'banner.boot.generic': 'جارٍ تجهيز GAIA',
 
     // The update chip
 
