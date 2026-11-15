@@ -600,6 +600,8 @@ def _parse_event_dt(value: str) -> datetime:
     if not text:
         raise ValueError("empty datetime value")
     normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    # Graph emits 7-digit (100 ns) fractions; py3.10 fromisoformat caps at 6.
+    normalized = re.sub(r"(\.\d{6})\d+", r"\1", normalized)
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
@@ -701,10 +703,11 @@ def detect_calendar_conflicts_impl(
     Queries ``cal.list_events`` for the candidate window (so the live
     Calendar backend can filter server-side) and independently applies the
     half-open overlap test to every returned event — correct whether or not
-    the backend pre-filtered. Events whose times can't be parsed are skipped.
+    the backend pre-filtered. Events whose times can't be parsed are listed
+    in ``unreadable`` (``id``/``summary``) rather than silently dropped.
 
     Returns ``{"has_conflict": bool, "conflicts": [...], "candidate": {...},
-    "truncated": bool}`` where each conflict carries ``id``, ``summary``,
+    "truncated": bool, "unreadable": [...]}`` where each conflict carries ``id``, ``summary``,
     ``start``, ``end``. ``truncated`` is derived from the provider's own
     continuation token (never from ``len(items)``, which can't tell a full
     last page from a clipped one): when it is True the window was only
@@ -736,9 +739,13 @@ def detect_calendar_conflicts_impl(
         # otherwise read as "free".
         truncated = bool(data.get("nextPageToken"))
         conflicts: List[Dict[str, Any]] = []
+        unreadable: List[Dict[str, Any]] = []
         for ev in data.get("items", []):
             window = _event_window(ev)
             if window is None:
+                unreadable.append(
+                    {"id": ev.get("id"), "summary": ev.get("summary", "")}
+                )
                 continue
             ev_start, ev_end = window
             if intervals_overlap(candidate_start, candidate_end, ev_start, ev_end):
@@ -757,12 +764,14 @@ def detect_calendar_conflicts_impl(
         st["result_summary"] = {
             "conflict_count": len(conflicts),
             "truncated": truncated,
+            "unreadable_count": len(unreadable),
         }
         return {
             "has_conflict": bool(conflicts),
             "conflicts": conflicts,
             "candidate": {"start": start_iso, "end": end_iso},
             "truncated": truncated,
+            "unreadable": unreadable,
         }
 
 
@@ -1358,6 +1367,11 @@ class CalendarToolsMixin:
             partially checked: with ``has_conflict`` false, say the slot
             could NOT be verified and offer to check a narrower window —
             never call it free.
+
+            ``data.unreadable`` lists events (``id``/``summary``) whose
+            times couldn't be read. When it is non-empty, name those
+            meetings and say they could not be checked — never call the
+            slot free on their account.
             """
             try:
                 return _envelope_ok(

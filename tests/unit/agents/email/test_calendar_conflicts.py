@@ -282,6 +282,37 @@ class TestDetectCalendarConflictsImpl:
         )
         ids = [c["id"] for c in out["conflicts"]]
         assert ids == ["good"]
+        assert out["unreadable"] == [{"id": "bad", "summary": "broken"}]
+
+    def test_unreadable_event_is_reported_even_when_slot_otherwise_free(
+        self, fake_calendar
+    ):
+        fake_calendar.events["bad"] = {
+            "id": "bad",
+            "summary": "broken",
+            "start": {"dateTime": "not-a-timestamp"},
+            "end": {"dateTime": "also-bad"},
+        }
+        out = detect_calendar_conflicts_impl(
+            fake_calendar,
+            start_iso="2026-05-06T14:00:00Z",
+            end_iso="2026-05-06T15:00:00Z",
+        )
+        assert out["has_conflict"] is False
+        assert out["unreadable"] == [{"id": "bad", "summary": "broken"}]
+
+    def test_graph_seven_digit_fraction_is_parsed_as_a_conflict(self, fake_calendar):
+        # Microsoft Graph emits 100 ns fractions; py3.10 fromisoformat rejects them.
+        fake_calendar.events["outlook"] = _event(
+            "outlook", "2026-05-06T14:30:00.0000000", "2026-05-06T15:30:00.0000000"
+        )
+        out = detect_calendar_conflicts_impl(
+            fake_calendar,
+            start_iso="2026-05-06T14:00:00Z",
+            end_iso="2026-05-06T15:00:00Z",
+        )
+        assert [c["id"] for c in out["conflicts"]] == ["outlook"]
+        assert out["unreadable"] == []
 
     def test_backend_error_propagates_never_silent_no_conflict(self):
         # Fail-loud: a backend that raises must surface the error, not return
