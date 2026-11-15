@@ -30,6 +30,8 @@ from gaia.skills.migrate import install_migrated, migrate_text
 from gaia.skills.naming import skill_directory, validated_skill_name
 from tests.unit.skills_helpers import isolated_manager
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 #: The shapes that survive ``root / name`` as a real directory outside the root.
 #: ``../x`` is included because it only failed before by not existing.
 ESCAPING_NAMES = [".", "..", "../x", "..\\x", "sub/nested"]

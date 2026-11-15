@@ -105,13 +105,6 @@ def _assert_reads_as_refused(result: dict) -> None:
     assert "run it themselves" in text
 
 
-@pytest.fixture(name="gh_on_path")
-def _gh_on_path(monkeypatch):
-    monkeypatch.setattr(
-        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
-    )
-
-
 @pytest.mark.parametrize("command", IRREVERSIBLE_GH)
 @pytest.mark.parametrize("granted", [("gh",), ()], ids=["granted", "ungranted"])
 def test_an_irreversible_gh_command_is_refused_without_a_prompt(

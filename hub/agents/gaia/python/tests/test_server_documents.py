@@ -42,6 +42,9 @@ class _Rag:
         self.indexed.append(path)
         return {"success": True, "num_chunks": 3}
 
+    def is_full(self):
+        return False
+
 
 class _DocAgent:
     """Stands in for GaiaAgent's document surface and records each turn."""

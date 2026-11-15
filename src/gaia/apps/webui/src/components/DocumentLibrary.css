@@ -83,8 +83,9 @@
 /* The hint sits close above the form it describes. */
 .path-hint { margin: 0 0 6px; }
 .path-icon { color: var(--text-muted); flex-shrink: 0; }
+/* Wide enough for the example path, so it reads whole; the buttons wrap first. */
 .path-input {
-    flex: 1 1 200px;
+    flex: 1 1 290px;
     min-inline-size: 0;
     padding: 9px 14px;
     border: 1px solid var(--border);
