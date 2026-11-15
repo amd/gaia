@@ -1389,6 +1389,11 @@ for (const locale of ['en', 'ar']) {
         await expect(row).toBeVisible();
         await expect(row).not.toContainText('HTTPConnectionPool');
         if (locale === 'ar') expect(await untranslated(page, '.doc-failure', 'bdi')).toEqual([]);
+        // The count above the list agrees with the row: the file isn't unreadable.
+        const stats = page.locator('.doc-stats');
+        await expect(stats.locator('.doc-stats-server')).toBeVisible();
+        await expect(stats).not.toContainText(locale === 'ar' ? 'تعذّرت قراءتها' : "couldn't be read");
+        if (locale === 'ar') expect(await untranslated(page, '.doc-stats', 'bdi')).toEqual([]);
         await shot(page, `documents-${locale}-server-down`);
         expect(await audit(page)).toEqual([]);
     });
@@ -2827,8 +2832,8 @@ const untranslatedAttributes = (page: Page): Promise<string[]> =>
 
 for (const locale of ['ar', 'en']) {
     test.describe(`scheduled tasks (${locale})`, () => {
-        const openSchedules = async (page: Page, schedules?: unknown[]) => {
-            await open(page, '', locale, (p) => withSchedules(p, schedules));
+        const openSchedules = async (page: Page, schedules?: unknown[], theme: 'light' | 'dark' = 'light') => {
+            await open(page, '', locale, (p) => withSchedules(p, schedules), theme);
             await page.locator('.sb').getByRole('button', { name: locale === 'ar' ? /المهام المجدولة/ : /Scheduled tasks/ }).click();
             await expect(page.locator('.schedule-modal')).toBeVisible();
         };
@@ -2902,6 +2907,25 @@ for (const locale of ['ar', 'en']) {
             await expect(page.locator('.schedule-parsed-hint')).toHaveCount(0);
             await check(page, 'form-arabic-input');
         });
+
+        // Delete turned into "Confirm?" in place: a double-click deleted, and Escape closed the panel.
+        for (const theme of ['light', 'dark'] as const) {
+            test(`deleting a schedule asks in a dialog (${theme})`, async ({ page }) => {
+                await openSchedules(page, undefined, theme);
+                await page.locator('.schedule-card').first().locator('.btn-sm.danger').click();
+                const ask = page.getByRole('alertdialog');
+                await expect(ask).toBeVisible();
+                await expect(ask).toContainText('Morning brief');
+                await expect(ask.locator('.btn-secondary')).toBeFocused();
+                await shot(page, `schedules-${locale}-delete-ask-${theme}`);
+                expect(await audit(page)).toEqual([]);
+                if (locale === 'ar') expect(await untranslated(page, '.confirm-sheet', 'bdi')).toEqual([]);
+                await page.keyboard.press('Escape');
+                await expect(ask).toHaveCount(0);
+                await expect(page.locator('.schedule-modal')).toBeVisible();
+                await expect(page.locator('.schedule-card')).toHaveCount(SCHEDULE_ROWS.length);
+            });
+        }
     });
 }
 
@@ -3259,6 +3283,29 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `banner-${locale}-not-installed`);
         expect(await audit(page)).toEqual([]);
     });
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const running of [...SYSTEM_STATUS.init_tasks, { name: 'Warming the flux capacitor', step: 'warm_flux_capacitor' }]) {
+        test(`the start-up banner says "${running.step}" in the interface language, not the server's label (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route('**/api/system/status', (route) => route.fulfill({
+                    json: {
+                        ...SYSTEM_STATUS, init_state: 'initializing', model_loaded: null,
+                        init_tasks: SYSTEM_STATUS.init_tasks.map((task) => ({ ...task, status: task.step === running.step ? 'running' : 'done' }))
+                            .concat(SYSTEM_STATUS.init_tasks.some((task) => task.step === running.step) ? [] : [{ ...running, status: 'running' }]),
+                    },
+                }));
+            });
+            const banner = page.locator('.connection-banner--init');
+            await expect(banner).toBeVisible();
+            await expect(banner).not.toContainText(running.name);
+            await expect(banner).not.toContainText(/LLM|ML librar|AI model|AI system/);
+            await shot(page, `startup-${running.step}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.connection-banner')).toEqual([]);
+        });
+    }
 }
 
 const MODEL_SERVER_STATES = [

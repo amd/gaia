@@ -1015,6 +1015,8 @@ export const enMessages = {
     'docs.notAddedServer': '{name} couldn\'t be added: GAIA\'s model server isn\'t answering. Retry on its row once it\'s back.',
     'docs.unreadable.one': '{n} couldn\'t be read',
     'docs.unreadable.other': '{n} couldn\'t be read',
+    'docs.serverWaiting.one': '{n} waiting for the model server',
+    'docs.serverWaiting.other': '{n} waiting for the model server',
     'docsBar.count.one': '{n} document',
     'docsBar.count.other': '{n} documents',
     'docsBar.failed.one': '{n} couldn\'t be read',
@@ -2584,6 +2586,11 @@ export const enMessages = {
     'banner.pickLoad.lostTrack': "GAIA couldn't check on the load: {reason}",
     'banner.pickLoad.startFailed': "GAIA couldn't start the load: {reason}",
     'banner.dismiss': 'Dismiss',
+    // Start-up steps, keyed by the backend's init_tasks[].step; the banner adds animated dots.
+    'banner.boot.check_server': 'Checking the model server',
+    'banner.boot.load_libraries': 'Getting document search ready',
+    'banner.boot.load_model': 'Loading the model',
+    'banner.boot.generic': 'Getting GAIA ready',
 
     // The update chip
 
@@ -2978,7 +2985,12 @@ export const enMessages = {
     'schedules.card.pause': 'Pause',
     'schedules.card.resume': 'Resume',
     'schedules.card.delete': 'Delete',
-    'schedules.card.confirmDelete': 'Confirm?',
+    'schedules.delete.ask': 'Delete the schedule "{name}"?',
+    'schedules.delete.what': "It won't run again, and the run history shown here is deleted. This can't be undone.",
+    'schedules.delete.chatStays': 'Its chat stays, with the answers from past runs.',
+    'schedules.delete.runStops': 'The run in progress stops now.',
+    'schedules.delete.confirm': 'Delete schedule',
+    'schedules.delete.cancel': 'Cancel',
     'schedules.history': 'Execution history',
     'schedules.historyLoading': 'Loading...',
     'schedules.historyEmpty': 'No executions yet',

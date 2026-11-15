@@ -7,6 +7,7 @@ import { useChatStore } from '../stores/chatStore';
 import { useBackendStore } from '../stores/backendStore';
 import type { BackendLifecycle } from '../types/agent';
 import { useT } from '../i18n/useT';
+import { isMessageKey } from '../i18n/registry';
 import { namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
@@ -304,8 +305,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     // because the system is not yet ready to serve requests. A status the backend
     // can't refresh (slow or failing) is not proof the boot is still running.
     if (isStarting(systemStatus) && !backendSlow && !backendError) {
-        const runningTask = systemStatus?.init_tasks?.find(t => t.status === 'running');
-        const label = runningTask?.name || 'Preparing AI system';
+        // The task's English `name` is a log label; only its `step` is shown, translated.
+        const step = systemStatus?.init_tasks?.find(t => t.status === 'running')?.step;
+        const stepKey = `banner.boot.${step}`;
+        const label = step && isMessageKey(stepKey) ? t(stepKey) : t('banner.boot.generic');
         return (
             <div className="connection-banner connection-banner--init" role="status">
                 <div className="connection-banner__icon">

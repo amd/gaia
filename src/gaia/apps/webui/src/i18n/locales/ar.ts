@@ -1015,6 +1015,8 @@ const messages: Messages = {
     'docs.notAddedServer': 'تعذّرت إضافة {name}: خادم النماذج في GAIA لا يستجيب. أعد المحاولة من صفّه عندما يعود.',
     'docs.unreadable.one': 'تعذّرت قراءتها: {n}',
     'docs.unreadable.other': 'تعذّرت قراءتها: {n}',
+    'docs.serverWaiting.one': 'بانتظار خادم النماذج: {n}',
+    'docs.serverWaiting.other': 'بانتظار خادم النماذج: {n}',
     'docsBar.count.one': 'المستندات: {n}',
     'docsBar.count.other': 'المستندات: {n}',
     'docsBar.failed.one': 'تعذّرت قراءتها: {n}',
@@ -2585,6 +2587,10 @@ const messages: Messages = {
     'banner.pickLoad.lostTrack': 'تعذّر على GAIA متابعة التحميل: {reason}',
     'banner.pickLoad.startFailed': 'تعذّر على GAIA بدء التحميل: {reason}',
     'banner.dismiss': 'إغلاق',
+    'banner.boot.check_server': 'جارٍ فحص خادم النماذج',
+    'banner.boot.load_libraries': 'جارٍ تجهيز البحث في المستندات',
+    'banner.boot.load_model': 'جارٍ تحميل النموذج',
+    'banner.boot.generic': 'جارٍ تجهيز GAIA',
 
     // The update chip
 
@@ -2979,7 +2985,12 @@ const messages: Messages = {
     'schedules.card.pause': 'إيقاف مؤقت',
     'schedules.card.resume': 'استئناف',
     'schedules.card.delete': 'حذف',
-    'schedules.card.confirmDelete': 'تأكيد الحذف؟',
+    'schedules.delete.ask': 'هل تريد حذف المهمة المجدولة «{name}»؟',
+    'schedules.delete.what': 'لن تعمل مجددًا، وسيُحذف سجل تشغيلها المعروض هنا. لا يمكن التراجع عن ذلك.',
+    'schedules.delete.chatStays': 'تبقى محادثتها، مع إجابات مرات التشغيل السابقة.',
+    'schedules.delete.runStops': 'يتوقف التشغيل الجاري الآن.',
+    'schedules.delete.confirm': 'حذف المهمة المجدولة',
+    'schedules.delete.cancel': 'إلغاء',
     'schedules.history': 'سجل التشغيل',
     'schedules.historyLoading': 'جارٍ التحميل…',
     'schedules.historyEmpty': 'لم تُشغَّل بعد',
