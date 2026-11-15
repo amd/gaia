@@ -16,8 +16,9 @@ import { UnsupportedCard } from './UnsupportedCard';
  *
  * A mail or calendar tool that finds no usable account sends this card with
  * its result, so the Connect button is on screen whatever the model writes.
- * Pressing it starts sign-in for the access the asking agent declares, and
- * gives that agent access in the same step.
+ * Pressing it starts sign-in for the access the failed call needs (reading
+ * mail asks only to read it), and gives the asking agent access in the same
+ * step. A card that names no access asks for what the agent declares.
  */
 
 export const CONNECT_ACCOUNT_RENDER = 'connect_account';
@@ -28,6 +29,29 @@ interface ConnectAccountPayload {
     agent_id?: string;
     /** Providers connected already, whose fault is something signing in again fixes. */
     reconnect?: string[];
+    /** Per provider, the access the failed call needs. */
+    scopes?: Record<string, string[]>;
+}
+
+function isScopeMap(value: unknown, providers: unknown[]): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    return Object.entries(value as Record<string, unknown>).every(
+        ([p, s]) =>
+            providers.includes(p)
+            && Array.isArray(s)
+            && s.length > 0
+            && s.every((x) => typeof x === 'string' && x.length > 0),
+    );
+}
+
+/**
+ * What a Connect press asks for: what the call needs, plus what the connection
+ * already carries, so signing in again never takes access away. Empty when the
+ * card names nothing, so the backend asks for what the agent declares.
+ */
+export function requestScopes(needed: string[] | undefined, held: string[] | undefined): string[] {
+    if (!needed?.length) return [];
+    return [...new Set([...(held ?? []), ...needed])];
 }
 
 export function isConnectAccountPayload(value: unknown): value is ConnectAccountPayload {
@@ -40,7 +64,8 @@ export function isConnectAccountPayload(value: unknown): value is ConnectAccount
         v.providers.every((p) => typeof p === 'string' && p.length > 0) &&
         (v.agent_id === undefined || typeof v.agent_id === 'string') &&
         (v.reconnect === undefined
-            || (Array.isArray(v.reconnect) && v.reconnect.every((p) => typeof p === 'string')))
+            || (Array.isArray(v.reconnect) && v.reconnect.every((p) => typeof p === 'string'))) &&
+        (v.scopes === undefined || isScopeMap(v.scopes, v.providers))
     );
 }
 
@@ -121,6 +146,7 @@ function ProviderRow({
     connected,
     needsSetup,
     grantAgents,
+    scopes,
     onOpened,
 }: {
     connectorId: string;
@@ -129,6 +155,7 @@ function ProviderRow({
     /** No OAuth client on this PC yet, so sign-in cannot start. */
     needsSetup: boolean;
     grantAgents: string[];
+    scopes: string[];
     onOpened: () => void;
 }) {
     const t = useT();
@@ -158,9 +185,7 @@ function ProviderRow({
         setBusy(true);
         setError(null);
         try {
-            // No scopes: the backend asks for what the granted agent declares,
-            // never the connector's whole list.
-            const flow = await api.authorizeConnector(connectorId, [], grantAgents);
+            const flow = await api.authorizeConnector(connectorId, scopes, grantAgents);
             openAuthUrl(flow.authorization_url);
             onOpened();
         } catch (e) {
@@ -169,7 +194,7 @@ function ProviderRow({
         } finally {
             setBusy(false);
         }
-    }, [connectorId, needsSetup, grantAgents, onOpened, openSettings]);
+    }, [connectorId, needsSetup, grantAgents, scopes, onOpened, openSettings]);
 
     const label = t(connected ? 'connectCard.reconnect' : 'connectCard.connect', { name });
     return (
@@ -289,6 +314,10 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         PROVIDER_NAMES[id]
         ?? connectors.find((c) => c.id === id && !('error' in c))?.display_name
         ?? id;
+    const heldScopes = (id: string) => {
+        const row = connectors.find((c) => c.id === id);
+        return row && !('error' in row) ? row.scopes : undefined;
+    };
     const anyConnected = awaited(data).some(isConnected);
 
     let prompt = t('connectCard.prompt');
@@ -312,6 +341,10 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                         connected={isConnected(id)}
                         needsSetup={needsSetup(id)}
                         grantAgents={grantIdsFor(agents, data.agent_id, id)}
+                        scopes={requestScopes(
+                            data.scopes?.[id],
+                            heldScopes(id),
+                        )}
                         onOpened={() => {
                             setEnded(null);
                             setOpened(true);

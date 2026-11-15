@@ -242,12 +242,14 @@ def run_python_job(
     Raises:
         OSError: *cmd* could not be started.
     """
+    from gaia.skills.human_only import agent_child_env
+
     started_wall = time.time()
     deadline = time.monotonic() + timeout
     proc = subprocess.Popen(  # pylint: disable=consider-using-with
         list(cmd),
         cwd=cwd,
-        env=env,
+        env=agent_child_env(env),
         # An inherited stdin leaves the child waiting on a pipe nobody writes
         # to, and the run only ends at the timeout.
         stdin=subprocess.DEVNULL,

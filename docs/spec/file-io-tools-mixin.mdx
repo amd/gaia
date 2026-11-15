@@ -122,6 +122,32 @@ see [Read before edit](#read-before-edit).
 }
 ```
 
+**A text file too large for one tool result** (over the host's
+`_truncation_budget()` threshold) comes back as its first lines, numbered like a
+`start_line` read, plus an `outline`: one `line: label` row per definition or
+heading (Python from its syntax tree, Markdown headings, `diff --git` lines,
+and common declarations in other languages), sampled evenly when it has more
+rows than fit. `note` names the size and says to read the rest with
+`start_line`/`end_line`. A file the same turn wrote, a host with no budget, or a
+file whose first line alone is over the budget keeps the whole-file result.
+
+```python
+{
+    "status": "success",
+    "file_path": str,
+    "file_type": str,
+    "line_count": int,
+    "size_bytes": int,
+    "outline": str,             # one "   120: class Store" row per entry
+    "content": str,             # lines 1..end_line, numbered
+    "start_line": 1,
+    "end_line": int,
+    "total_lines": int,
+    "next_start_line": int,
+    "note": str,
+}
+```
+
 **Word, PDF and Excel files** (`.docx`, `.pdf`, `.xlsx`) return their extracted
 text instead of `[Binary file]`, one part at a time. A part is at most the
 model's tool-result budget (`limit` can shrink it) and ends on a line break:

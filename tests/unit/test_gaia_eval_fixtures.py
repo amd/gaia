@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "gaia"
 FAKE_GH = FIXTURES / "fake_gh" / "gh.py"
 REPO = "acme-labs/widgetworks"

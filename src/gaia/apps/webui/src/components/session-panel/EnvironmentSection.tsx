@@ -23,6 +23,7 @@ import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { announcePermissionMode, usePermissionModeEvents } from '../../utils/permissionModeEvents';
 import { requestMobileAccess, useMobileAccessState } from '../../utils/mobileAccessEvents';
 import { MODES } from '../PermissionModeChip';
+import { LocalStatusError } from '../LocalStatusError';
 import { PanelSection } from './PanelSection';
 import { Switch } from './Switch';
 import type { LocalModelStatus, PermissionMode, TunnelStatus } from '../../types';
@@ -131,7 +132,9 @@ function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
                     {memory.free_gb != null ? ` · ${t('env.free', { gb: memory.free_gb.toFixed(1) })}` : ''}
                 </span>
             )}
-            {(error || status?.error) && <span className="sp-error">{error ?? status?.error}</span>}
+            {error
+                ? <span className="sp-error">{error}</span>
+                : status?.error && <span className="sp-error"><LocalStatusError status={status} /></span>}
         </Row>
     );
 }

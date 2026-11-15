@@ -29,6 +29,8 @@ function list(rows: ConnectorRow[]) {
 beforeEach(() => {
     vi.clearAllMocks();
     mocked.listAgentMcps.mockResolvedValue({ agent_mcps: [] });
+    // Saving an MCP server runs a start check; default it to a server that starts.
+    mocked.testConnector.mockResolvedValue({ ok: true, detail: 'started, 1 tool' });
 });
 
 describe('ConnectorsSection groups', () => {

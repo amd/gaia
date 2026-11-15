@@ -4,10 +4,12 @@
 
 `gaia talk --index ... --base-url X` indexed on the default-port server
 (reloading its embedder), and `gaia api start --base-url X` reported that
-server's health instead of X's.
+server's health instead of X's. `gaia chat` and `gaia -p` sent their hardware,
+health and embedder calls there too.
 """
 
 import asyncio
+import os
 import sys
 from argparse import Namespace
 from unittest.mock import Mock, patch
@@ -114,3 +116,42 @@ def test_api_start_health_reports_the_base_url_server(monkeypatch):
 
     assert seen["llm"]["url"] == DEAD
     assert seen["llm"]["status"] == "unavailable"
+
+
+def test_print_mode_points_every_client_at_the_base_url(monkeypatch):
+    from gaia import cli, print_mode
+
+    # The environment names one server; the flag names another.
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:2/api/v1")
+    seen = {}
+
+    def fake_run(_prompt, **kwargs):
+        seen.update(env=os.environ.get("LEMONADE_BASE_URL"), arg=kwargs["base_url"])
+        return 0
+
+    monkeypatch.setattr(print_mode, "run", fake_run)
+    monkeypatch.setattr(sys, "argv", ["gaia", "-p", "hi", "--base-url", DEAD])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert seen == {"env": DEAD, "arg": DEAD}
+
+
+def test_chat_points_every_client_at_the_base_url(monkeypatch):
+    from gaia import cli
+
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:2/api/v1")
+    seen = {}
+
+    def fake_run_cli(action, **kwargs):
+        seen.update(action=action, env=os.environ.get("LEMONADE_BASE_URL"))
+        return 0
+
+    monkeypatch.setattr(cli, "run_cli", fake_run_cli)
+    monkeypatch.setattr(sys, "argv", ["gaia", "chat", "--base-url", DEAD])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 0
+    assert seen == {"action": "chat", "env": DEAD}
