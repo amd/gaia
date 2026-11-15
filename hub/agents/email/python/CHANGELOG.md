@@ -9,6 +9,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **`CONTRACT.md` now documents `GET /v1/email/briefing` (#3625).** The
+  briefing endpoint and its `cache_age_seconds`/`stale` fields were missing
+  from the reference, and the `2.14` history row now names the four response
+  fields that shipped under it without a version bump.
+
 - **The search guidance no longer teaches Outlook queries that Microsoft
   Graph rejects (#3587).** The `search_messages` description and the agent's
   SEARCH prompt now say `label:` and `after:`/`before:` are Gmail-only, and

@@ -150,6 +150,19 @@ def test_version_history_table_records_the_current_version():
     )
 
 
+def test_contract_doc_describes_the_briefing_endpoint():
+    """The briefing route and its freshness fields must be in the reference.
+
+    ``GET /v1/email/briefing`` shipped with ``cache_age_seconds``/``stale``
+    while CONTRACT.md never named it, so integrators reading the contract
+    never learned it existed.
+    """
+    text = _CONTRACT_DOC.read_text(encoding="utf-8")
+    assert "GET /v1/email/briefing" in text
+    for field in ("cache_age_seconds", "stale", "generated_at"):
+        assert re.search(rf"briefing[\s\S]*`{field}`", text), field
+
+
 # ---------------------------------------------------------------------------
 # npm client — its pinned version must match the sidecar's (#2922)
 # ---------------------------------------------------------------------------
