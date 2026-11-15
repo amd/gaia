@@ -127,12 +127,18 @@ function toolAction(n: GaiaNotification, t: Translate): string | null {
   return label.charAt(0).toLowerCase() + label.slice(1);
 }
 
+/** The scope of a folder grant shared by writes, edits and renames. */
+const FILE_CHANGE_SCOPE = 'changes to files in ';
+
 /**
  * What an "always allow" answer covers, in the UI language. The backend words
- * its scope in English (`write_file on notes.txt`, `write_file on files in /x`);
+ * its scope in English (`write_file on notes.txt`, `changes to files in /x`);
  * null when the scope isn't one of those, and the caller keeps the backend's text.
  */
 export function alwaysScopeText(n: GaiaNotification, t: Translate): string | null {
+  if (n.alwaysScope?.startsWith(FILE_CHANGE_SCOPE)) {
+    return t.bare('prompt.always.changes', { folder: n.alwaysScope.slice(FILE_CHANGE_SCOPE.length) });
+  }
   const action = toolAction(n, t);
   const prefix = `${n.tool} `;
   if (!action || !n.alwaysScope?.startsWith(prefix)) return null;
