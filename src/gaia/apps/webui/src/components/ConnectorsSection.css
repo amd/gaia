@@ -34,7 +34,8 @@
     .connector-tile-header {
         flex-wrap: wrap;
     }
-    .connector-status.ok {
+    /* Any status, not only Connected: a long name otherwise pushes the chevron to its own line. */
+    .connector-status {
         order: 3;
         flex-basis: 100%;
         min-width: 0;

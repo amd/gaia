@@ -27,6 +27,7 @@ import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
 import { ref, type MessageKey } from '../i18n/registry';
 import { translator, useT, type Translate } from '../i18n/useT';
 import type { AgentMcpServer, ConnectorListEntry, ConnectorRow, UnavailableConnectorRow } from '../types';
+import { ConnectorGuide, hasConnectorGuide, showsFieldHint } from './ConnectorGuide';
 import { connectorDescription, connectorDescriptionBare, fieldHelp, fieldLabel, missingFieldsMessage } from '../utils/connectorText';
 import { personalizeSourceKind, requestPersonalize } from '../utils/connectorPersonalize';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
@@ -766,6 +767,9 @@ function OAuthConfigureBody({
         connector.configurable === false &&
         !connector.configured &&
         setupFields.length > 0;
+    const guided = hasConnectorGuide(connector.id);
+    // With GAIA the only agent there is nothing to choose: it is granted on connect.
+    const askGrants = grantableAgents.length > 1;
 
     return (
         <div className="configure-body">
@@ -774,7 +778,9 @@ function OAuthConfigureBody({
             )}
             {showSetupForm && (
                 <div className="oauth-setup-form">
-                    <p className="connector-desc">{t('settings.connectors.firstSetup')}</p>
+                    {guided
+                        ? <ConnectorGuide connectorId={connector.id} />
+                        : <p className="connector-desc">{t('settings.connectors.firstSetup')}</p>}
                     {setupFields.map((field) => (
                         <label key={field.key} className="oauth-setup-field">
                             <span className="oauth-setup-label">{fieldLabel(t, connector.id, field)}</span>
@@ -792,14 +798,14 @@ function OAuthConfigureBody({
                                 autoComplete="off"
                                 spellCheck={false}
                             />
-                            {field.help_md && (
+                            {field.help_md && showsFieldHint(connector.id, field.key) && (
                                 <span className="oauth-setup-help"><bdi>{fieldHelp(t, connector.id, field)}</bdi></span>
                             )}
                         </label>
                     ))}
                 </div>
             )}
-            {!connector.configured && grantableAgents.length > 0 && (
+            {!connector.configured && askGrants && (
                 <div className="oauth-grant-onconnect">
                     <p className="oauth-grant-onconnect-label">{t('settings.connectors.grantOnConnect')}</p>
                     {grantableAgents.map((a) => (
@@ -1103,6 +1109,7 @@ function MCPServerConfigureBody({
 
     // Servers like Git and Memory take no keys: connecting just registers them.
     const keyless = connector.mcp_env_keys.length === 0;
+    const mcpGuided = !connector.configured && !keyless && hasConnectorGuide(connector.id);
     const nothingTyped = Object.values(values).every((v) => v.trim() === '');
 
     const handleSave = async () => {
@@ -1214,7 +1221,10 @@ function MCPServerConfigureBody({
             {connector.configured && showEnabledToggle && connector.enabled === false && (
                 <p className="connector-toggle-help">{t('settings.connectors.disabledHelp')}</p>
             )}
-            {connector.setup_url && !connector.configured && (
+            {mcpGuided && (
+                <ConnectorGuide connectorId={connector.id} setupUrl={connector.setup_url} />
+            )}
+            {connector.setup_url && !connector.configured && !mcpGuided && (
                 <a
                     href={safeUrlTransform(connector.setup_url) || undefined}
                     target="_blank"
@@ -1249,7 +1259,7 @@ function MCPServerConfigureBody({
                             spellCheck={false}
                             autoComplete="off"
                         />
-                        {field?.help_md && !connector.configured && (
+                        {field?.help_md && !connector.configured && (!mcpGuided || showsFieldHint(connector.id, field.key)) && (
                             <div className="mcp-key-help" dir="auto">
                                 <ReactMarkdown
                                     disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}

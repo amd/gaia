@@ -2484,7 +2484,7 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
-        test('a keyed server shows its label, help and setup link', async ({ page }) => {
+        test('a keyed server walks through its setup in steps', async ({ page }) => {
             await openConnectors(page, [{
                 id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
                 configured: false, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
@@ -2496,11 +2496,13 @@ for (const locale of ['ar', 'en']) {
             }]);
             await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
-            await expect(page.locator('.connector-setup-link')).toBeVisible();
-            await expect(page.locator('.mcp-key-help code')).toBeVisible();
+            // The steps carry the catalog link; the long hint and the separate button would repeat them.
+            await expect(page.locator('.connector-guide .setup-step')).toHaveCount(4);
+            await expect(page.locator('.setup-step-link')).toHaveAttribute('href', /api\.slack\.com\/apps/);
+            await expect(page.locator('.connector-setup-link')).toHaveCount(0);
+            await expect(page.locator('.mcp-key-help')).toHaveCount(0);
             await expect(page.locator('.mcp-key-input')).toHaveAttribute('dir', 'ltr');
-            await expect(page.locator('.mcp-key-help')).toHaveAttribute('dir', 'auto');
-            await page.locator('.mcp-key-help').scrollIntoViewIfNeeded();
+            await page.locator('.connector-guide').scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-mcp-setup`);
             expect(await audit(page)).toEqual([]);
         });

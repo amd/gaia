@@ -186,7 +186,7 @@ describe('MCP connector configure panel', () => {
         }
     });
 
-    it('shows the field label, help and setup link from the catalog', async () => {
+    it('walks through the Slack setup in steps, with the catalog link and label', async () => {
         const row = mcpRow({
             id: 'mcp-slack',
             display_name: 'Slack',
@@ -211,10 +211,11 @@ describe('MCP connector configure panel', () => {
             'href',
             'https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D',
         );
-        expect(screen.getByRole('link', { name: 'guide' })).toHaveAttribute(
-            'href',
-            'https://amd-gaia.ai/docs/connectors/slack',
-        );
+        expect(screen.getAllByRole('link', { name: /Create Slack app/ })).toHaveLength(1);
+        expect(screen.getByText('Copy the bot token')).toBeInTheDocument();
+        expect(screen.getByText('Invite the bot to your channels')).toBeInTheDocument();
+        // The steps replace the catalog hint, so it isn't shown twice.
+        expect(screen.queryByText(/Click/)).toBeNull();
         expect(screen.queryByText(/\*\*/)).toBeNull();
     });
 

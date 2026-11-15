@@ -981,7 +981,8 @@
     font-size: 15px;
 }
 
-.messaging-steps {
+.messaging-steps,
+.setup-steps {
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -990,13 +991,15 @@
     list-style: none;
 }
 
-.messaging-step {
+.messaging-step,
+.setup-step {
     display: flex;
     align-items: flex-start;
     gap: 12px;
 }
 
-.messaging-step-number {
+.messaging-step-number,
+.setup-step-number {
     display: inline-flex;
     flex: none;
     align-items: center;
@@ -1010,7 +1013,8 @@
     font-weight: 600;
 }
 
-.messaging-step-body {
+.messaging-step-body,
+.setup-step-body {
     display: flex;
     flex: 1;
     flex-direction: column;
@@ -1018,7 +1022,8 @@
     min-inline-size: 0;
 }
 
-.messaging-step-body > p {
+.messaging-step-body > p,
+.setup-step-body > p {
     margin: 0;
     line-height: 1.5;
 }
@@ -1348,3 +1353,22 @@
 .skill-link-perms code {
     font-size: 11px;
 }
+
+/* A connector's outside setup as numbered steps; the form below is the last one. */
+.connector-guide {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.setup-step-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    text-decoration: none;
+}
+
+[dir='rtl'] .setup-step-link-icon {
+    transform: scaleX(-1);
+}
+
