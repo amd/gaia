@@ -422,7 +422,8 @@ def run_once(
             seen["status"] = record.get("status")
             status = record.get("status")
             result = record.get("result")
-            if status not in ("success", "error", "max_steps", "cancelled"):
+            # "incomplete": the turn stopped short but still answered from the work done.
+            if status not in ("success", "incomplete", "error", "max_steps", "cancelled"):
                 broken.append(f"unexpected status {status!r}")
             if not isinstance(result, str) or not result.strip():
                 broken.append(
