@@ -286,6 +286,8 @@ class InitTaskInfo(BaseModel):
     """Summary of a boot-time initialization task (embedded in SystemStatus)."""
 
     name: str
+    # The UI shows banner.boot.<step> in the user's language, never ``name``.
+    step: Optional[str] = None
     status: str  # pending | running | done | failed
 
 

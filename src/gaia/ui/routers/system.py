@@ -1039,7 +1039,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         else:
             status.init_state = "ready"
         status.init_tasks = [
-            InitTaskInfo(name=j.name, status=j.status.value) for j in visible
+            InitTaskInfo(name=j.name, step=j.step, status=j.status.value)
+            for j in visible
         ]
 
     # ── Live download progress ──────────────────────────────────────────

@@ -3261,6 +3261,29 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en'] as const) {
+    for (const running of [...SYSTEM_STATUS.init_tasks, { name: 'Warming the flux capacitor', step: 'warm_flux_capacitor' }]) {
+        test(`the start-up banner says "${running.step}" in the interface language, not the server's label (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route('**/api/system/status', (route) => route.fulfill({
+                    json: {
+                        ...SYSTEM_STATUS, init_state: 'initializing', model_loaded: null,
+                        init_tasks: SYSTEM_STATUS.init_tasks.map((task) => ({ ...task, status: task.step === running.step ? 'running' : 'done' }))
+                            .concat(SYSTEM_STATUS.init_tasks.some((task) => task.step === running.step) ? [] : [{ ...running, status: 'running' }]),
+                    },
+                }));
+            });
+            const banner = page.locator('.connection-banner--init');
+            await expect(banner).toBeVisible();
+            await expect(banner).not.toContainText(running.name);
+            await expect(banner).not.toContainText(/LLM|ML librar|AI model|AI system/);
+            await shot(page, `startup-${running.step}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.connection-banner')).toEqual([]);
+        });
+    }
+}
+
 const MODEL_SERVER_STATES = [
     { name: 'hung', status: { lemonade_error: 'Lemonade did not answer in time' }, hint: { ar: 'فأعد تشغيله', en: 'restart it:' } },
     { name: 'stopped', status: { lemonade_error: null }, hint: { ar: 'لتشغيله يدويًا', en: 'To start it by hand' } },
