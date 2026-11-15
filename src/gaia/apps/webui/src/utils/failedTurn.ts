@@ -32,7 +32,13 @@ const MODEL_UNAVAILABLE_RE = /no model called|doesn't list (?:it|this model)|mus
 const MODEL_LOAD_RE = /\bmodel\b[^\n]{0,40}\b(?:couldn't|didn't|failed to) (?:pre)?load|failed to (?:pre)?load (?:lemonade )?model/i;
 const CONTEXT_RE = /context (?:window|size|length|limit)|exceeds the available context|maximum context|too many tokens/i;
 
-const SECTION_RE = /Settings\s*(?:>|›|→)\s*(General|Setup|Model|Permissions|Skills|Connectors|Memory|Privacy|Notifications|Advanced)\b/g;
+// Every tab by the English label it shows; Voice is shown as "Read aloud".
+const SECTION_LABELS: Record<string, SettingsSection> = {
+    general: 'general', setup: 'setup', model: 'model', permissions: 'permissions', skills: 'skills',
+    connectors: 'connectors', messaging: 'messaging', automations: 'automations', memory: 'memory',
+    privacy: 'privacy', notifications: 'notifications', 'read aloud': 'voice', advanced: 'advanced', about: 'about',
+};
+const SECTION_RE = /Settings\s*(?:>|›|→)\s*(General|Setup|Model|Permissions|Skills|Connectors|Messaging|Automations|Memory|Privacy|Notifications|Read aloud|Advanced|About)\b/g;
 
 function kindOf(text: string): FailedTurnKind {
     if (MODEL_UNAVAILABLE_RE.test(text)) return 'modelUnavailable';
@@ -49,7 +55,7 @@ export function describeFailedTurn(content: string): FailedTurn {
     const raw = RAW_RE.test(text) || (text.length < RAW_MAX_CHARS && COMMAND_RE.test(text));
     const sections: SettingsSection[] = kind === 'modelUnavailable' || kind === 'modelLoad' ? ['model'] : [];
     for (const match of text.matchAll(SECTION_RE)) {
-        const section = match[1].toLowerCase() as SettingsSection;
+        const section = SECTION_LABELS[match[1].toLowerCase()];
         if (!sections.includes(section)) sections.push(section);
     }
     const targets: FailedTurn['targets'] = {};

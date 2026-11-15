@@ -92,6 +92,11 @@ describe('describeFailedTurn', () => {
         expect(describeFailedTurn("The model `x` couldn't load: out of memory.").kind).toBe('modelLoad');
     });
 
+    it('finds a tab by the label it shows, including one that differs from its id', () => {
+        const text = 'Turn it on under Settings > Read aloud, then check Settings > Automations and Settings > About.';
+        expect(describeFailedTurn(text).sections).toEqual(['voice', 'automations', 'about']);
+    });
+
     it('puts an exception dump under Details', () => {
         expect(describeFailedTurn('RuntimeError: boom').raw).toBe(true);
         expect(describeFailedTurn('RuntimeError: boom').kind).toBe('unknown');

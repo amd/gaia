@@ -1020,11 +1020,11 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
     )
     if rejected:
         return LemonadeAuthRejectedError(user_message=rejected.group(0).strip())
-    # Lemonade's own error code beats any wording or status below.
     # Lemonade's refusal to pull a name outside its catalog, enveloped or not.
     if _UNKNOWN_MODEL_RE.search(raw):
         m = re.search(r"Received:\s*([^\s'\"`]+)", raw) or _QUOTED_MODEL_RE.search(raw)
         return LemonadeUnknownModelError(model_id=m.group(1) if m else None)
+    # Lemonade's own error code beats any wording or status below.
     envelope = lemonade_error_envelope(exc)
     if envelope is not None:
         load_error = _model_load_error(envelope[1], context=raw)
