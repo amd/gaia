@@ -2221,6 +2221,8 @@ export const enMessages = {
     'settings.privacy.usersServerKeepsKeys': 'Local only is on. Your Lemonade Server at {url} keeps any cloud keys it already holds, but GAIA will not send it cloud requests.',
     'settings.privacy.runtimeKeysNotDropped': 'Local only is on, but GAIA could not remove a cloud key from its model server ({reason}). Restart Lemonade before using cloud models again.',
     'settings.privacy.savedModelsNotChecked': 'Local only is on, but GAIA could not check saved model choices ({reason}). Review Settings → Model before continuing.',
+    'settings.privacy.savedModelNotCheckedServerDown.one': "Local only is on, but GAIA couldn't check whether your saved model {models} is a cloud model because the model server isn't answering, so it is still saved. Once the model server is back, turn Local only off and on again to check it, or choose another model in Settings → Model.",
+    'settings.privacy.savedModelNotCheckedServerDown.other': "Local only is on, but GAIA couldn't check whether your saved models {models} are cloud models because the model server isn't answering, so they are still saved. Once the model server is back, turn Local only off and on again to check them, or choose other models in Settings → Model.",
     'settings.privacy.policyNoticeUnknown': 'Local only was changed, but GAIA returned an unrecognized policy notice.',
     'settings.privacy.whereTitle': 'Where your data is',
     'settings.privacy.stays': 'Chats, documents and memory stay on this PC.',
