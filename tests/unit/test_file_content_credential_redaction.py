@@ -163,6 +163,42 @@ def test_edit_cannot_write_the_marker_over_a_token(agent, remotes):
     assert remotes.read_bytes() == GIT_CONFIG.encode("utf-8")
 
 
+def test_body_rechecks_a_secret_the_file_gained_after_the_edit_was_proposed(
+    agent, remotes, monkeypatch
+):
+    """The guard has to run again right before the write, not only at propose time.
+
+    If the edit was proposed before the file held anything worth masking —
+    so whatever checked it then found nothing to refuse — the body's own
+    recheck, not that earlier pass, is what has to catch it once the file
+    does hold a secret by the time the write actually runs.
+    """
+    content = _read(agent, remotes)["content"]
+    masked_line = next(line for line in content.splitlines() if "url =" in line)
+    masked_line = masked_line.split("|", 1)[-1].strip()
+
+    # Stands in for "that earlier pass let it through": file_edit.py's own
+    # calls to the guard (read_first_preflight) go through this stub, while
+    # the tool body's own import of the same function, bound at module load,
+    # is untouched and still runs for real.
+    monkeypatch.setattr(
+        "gaia.agents.tools.file_edit.masked_secret_refusal", lambda *a, **k: None
+    )
+
+    result = agent._execute_tool(
+        "edit_file",
+        {
+            "file_path": str(remotes),
+            "old_content": "[core]",
+            "new_content": f"[core]\n\turl = {masked_line}",
+        },
+    )
+
+    assert result["status"] == "error"
+    assert result["error_type"] == "redacted_secret"
+    assert remotes.read_bytes() == GIT_CONFIG.encode("utf-8")
+
+
 def test_edit_whose_search_text_is_the_masked_view_is_refused(agent, remotes):
     _read(agent, remotes)
 
