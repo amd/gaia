@@ -63,8 +63,9 @@ lane's verifier pass once **all** of these hold; the review bot's approval stand
   commit the merging agent pushed: an agent that changed the PR never takes this lane;
 - the product-code change is small, **~300 lines or fewer**. Tests, docs, CHANGELOG and
   eval scenarios don't count toward the size;
-- the review bot's **latest verdict approves** (`Approve` or `Approve with suggestions`),
-  and every comment is addressed: each 🟡 it raised (including `Follow-up:` items) is fixed
+- the review bot's **latest verdict approves** (`Approve` or `Approve with suggestions`)
+  and was posted on the **current head** (otherwise remove and re-add `ready_for_ci` for a
+  fresh one), and every comment is addressed: each 🟡 it raised (including `Follow-up:` items) is fixed
   or filed, and no human review thread is open;
 - no check is still running, and every **failing check is unrelated**:
   - an infra lane: setup journeys, installers, hardware;
