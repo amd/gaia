@@ -65,13 +65,16 @@ std::string MediaTools::base64Decode(const std::string& in) {
     static const std::string chars =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string out;
-    int val = 0, bits = -8;
+    // Unsigned: the accumulator keeps shifting old bits out the top, which is
+    // undefined for a signed int once an image is more than a few characters.
+    unsigned int val = 0;
+    int bits = -8;
     for (unsigned char c : in) {
         if (c == '=' ) break;
         if (std::isspace(c)) continue;
         const size_t pos = chars.find(static_cast<char>(c));
         if (pos == std::string::npos) throw std::invalid_argument("invalid base64 character");
-        val = (val << 6) + static_cast<int>(pos);
+        val = (val << 6) + static_cast<unsigned int>(pos);
         bits += 6;
         if (bits >= 0) {
             out.push_back(static_cast<char>((val >> bits) & 0xFF));

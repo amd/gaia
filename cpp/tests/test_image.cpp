@@ -60,12 +60,13 @@ static std::vector<std::uint8_t> independentBase64Decode(const std::string& s) {
     for (int i = 0; i < 64; ++i) table[static_cast<unsigned char>(alpha[i])] = i;
 
     std::vector<std::uint8_t> out;
-    int val = 0, bits = -8;
+    unsigned int val = 0;  // unsigned: old bits shift out the top
+    int bits = -8;
     for (unsigned char c : s) {
         if (c == '=') break;
         int d = table[c];
         if (d < 0) continue;
-        val = (val << 6) | d;
+        val = (val << 6) | static_cast<unsigned int>(d);
         bits += 6;
         if (bits >= 0) {
             out.push_back(static_cast<std::uint8_t>((val >> bits) & 0xFF));
