@@ -48,6 +48,56 @@ _SPEECH_NAMED = re.compile(
     r"\b(?:aloud|out\s+loud|text[- ]to[- ]speech|into\s+speech)\b", re.IGNORECASE
 )
 
+# Mail questions: "did my landlord email me?" scored just under the jump bar,
+# so the read tools never loaded (#8219). Plain "mail" also means post and
+# armour, so it needs a mailbox term or a reading verb; "email address" and
+# other technical senses are not a mailbox question, and "email me the report"
+# asks to send, so a direct object after "me" is not a read either. "Write to
+# me" is how mail arrives for people who have not switched to "email me".
+MAIL_REQUEST_TOOLS = (
+    "check_mailbox_access",
+    "list_inbox",
+    "search_email",
+    "read_email",
+)
+_MAIL_NOUN = r"\b(?:e-?mails?|mails?)\b"
+_MAILBOX_NOUN = r"\binbox(?:es)?\b|\bmailbox(?:es)?\b|\bmail\s+box\b"
+_MAILBOX_CUE = re.compile(_MAILBOX_NOUN, re.IGNORECASE)
+_NOT_MAIL_TECH = (
+    r"(?!\s+(?:address(?:es)?|format(?:s)?|templates?|validat(?:e|ion|or)"
+    r"|servers?|clients?|protocols?|headers?|signatures?|domains?|hosts?"
+    r"|marketing|campaigns?|aliases?|lists?|filters?|rules?)\b)"
+)
+_MAIL_NAMED = re.compile(
+    _MAILBOX_NOUN + r"|\b(?:e-?mail|e-?mailed|mail|mailed)\s+(?:me|us)\b"
+    r"(?!\s+(?:at\b|(?:the|a|an|my|your|our|their|his|her|this|that|these"
+    r"|those)\s+\w+|(?:an?\s+|the\s+)?(?:package|parcel|letter|box)\b))"
+    r"|\b(?:write|writes|wrote|written|writing)\s+to\s+(?:me|us)\b"
+    r"|\b(?:my|your|our|any|all|new|unread|recent|latest|old)\s+"
+    + _MAIL_NOUN
+    + _NOT_MAIL_TECH
+    + r"|\b(?:check|read|scan|search|list|open|view|review|sort|triage|summarize"
+    r"|show|look\s+(?:at|in|into|through)|go\s+through|clean\s+(?:up|out)|clear)\b"
+    r"[^.?!\n]{0,40}?"
+    + _MAIL_NOUN
+    + _NOT_MAIL_TECH
+    + r"|"
+    + _MAIL_NOUN
+    + r"\s+(?:from|about|regarding|saying|says|said|containing|contains"
+    r"|contain|messages?|threads?|conversations?|notifications?)\b",
+    re.IGNORECASE,
+)
+# A message that opens with a compose verb asks the assistant to write, not to
+# read. It still needs the mailbox when it names one: a draft of what is in the
+# inbox has to read the inbox first.
+_COMPOSE_OPENING = re.compile(
+    r"^\s*(?:(?:please|pls|kindly)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
+    r"(?:(?:send|e-?mail|mail|write|draft)\s+(?:to\s+)?(?:me|us)\b"
+    r"|(?:send|draft|write)\s+(?:an?\s+|some\s+)?(?:e-?mails?|mails?)\b)",
+    re.IGNORECASE,
+)
+
 # A file only an off-list tool can open. The prompt names these tools, and a
 # model cannot call what its list does not hold.
 _MEDIA_NAMED = (
@@ -217,11 +267,11 @@ def _skill_tools(user_input: str) -> List[str]:
 def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
     """Return the registry tools *user_input* explicitly asks for, in order.
 
-    Five signals: a registry tool name written out (``run_shell_command``), a
+    Six signals: a registry tool name written out (``run_shell_command``), a
     request that names the shell or can only be answered by it, a request to
-    speak, a named picture or recording, and a pasted skill or a request to
-    save, install, or correct one. Only names in *registry* are returned, so a
-    profile without shell tools gets none.
+    speak, a question about the mailbox, a named picture or recording, and a
+    pasted skill or a request to save, install, or correct one. Only names in
+    *registry* are returned, so a profile without shell or mail tools gets none.
     """
     names = set(registry)
     found: List[str] = []
@@ -242,6 +292,12 @@ def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
         and "text_to_speech" not in found
     ):
         found.append("text_to_speech")
+    if _MAIL_NAMED.search(user_input) and not (
+        _COMPOSE_OPENING.match(user_input) and not _MAILBOX_CUE.search(user_input)
+    ):
+        for name in MAIL_REQUEST_TOOLS:
+            if name in names and name not in found:
+                found.append(name)
     for pattern, name in _MEDIA_NAMED:
         if pattern.search(user_input) and name in names and name not in found:
             found.append(name)
