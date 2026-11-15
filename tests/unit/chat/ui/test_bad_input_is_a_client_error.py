@@ -75,8 +75,9 @@ def test_opening_a_path_longer_than_windows_allows_is_refused(client):
 
 
 # Linux and macOS raise OSError(ENAMETOOLONG) where Windows raises ValueError.
+# As there, the error carries the whole path, so its text is as long as the path.
 def _posix_too_long(*_args, **_kwargs):
-    raise OSError(errno.ENAMETOOLONG, "File name too long")
+    raise OSError(errno.ENAMETOOLONG, "File name too long", HUGE_PATH)
 
 
 @pytest.mark.parametrize(
@@ -96,6 +97,9 @@ def test_a_path_too_long_for_posix_is_refused_too(
     assert r.status_code in (200, 400)
     if r.status_code == 200:
         assert "is not a path this PC can open" in r.json()["refusal"]
+    # The reason, not a 200 KB echo of the path.
+    assert "File name too long" in r.text
+    assert len(r.text) < 1000
 
 
 def test_a_too_long_path_that_resolves_is_refused_at_the_symlink_check(
@@ -105,7 +109,7 @@ def test_a_too_long_path_that_resolves_is_refused_at_the_symlink_check(
     monkeypatch.setattr("pathlib.Path.is_symlink", _posix_too_long)
     r = client.post("/api/files/open", json={"path": str(Path.home() / "long.txt")})
     assert r.status_code == 400
-    assert "Invalid path" in r.json()["detail"]
+    assert r.json()["detail"] == "Invalid path: File name too long"
 
 
 @pytest.mark.parametrize(

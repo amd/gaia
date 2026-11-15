@@ -41,6 +41,7 @@ from ..models import (
     IndexFolderRequest,
     IndexFolderResponse,
 )
+from ..session_environment import path_error_reason
 from ..utils import (
     ALLOWED_EXTENSIONS,
     FOLDER_INDEX_EXTENSIONS,
@@ -214,7 +215,9 @@ async def upload_by_path(
     try:
         resolved = Path(request.filepath).resolve()
     except (ValueError, OSError) as e:  # too long for the OS
-        raise HTTPException(status_code=400, detail=f"Invalid file path: {e}") from e
+        raise HTTPException(
+            status_code=400, detail=f"Invalid file path: {path_error_reason(e)}"
+        ) from e
     lock = upload_locks.setdefault(str(resolved), asyncio.Lock())
 
     async with lock:
