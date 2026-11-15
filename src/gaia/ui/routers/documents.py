@@ -211,7 +211,10 @@ async def upload_by_path(
         raise HTTPException(status_code=400, detail="Invalid file path")
 
     # Resolve once — used for both the lock key and safe_open validation
-    resolved = Path(request.filepath).resolve()
+    try:
+        resolved = Path(request.filepath).resolve()
+    except ValueError as e:  # longer than Windows allows
+        raise HTTPException(status_code=400, detail=f"Invalid file path: {e}") from e
     lock = upload_locks.setdefault(str(resolved), asyncio.Lock())
 
     async with lock:

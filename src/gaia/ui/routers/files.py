@@ -467,7 +467,10 @@ async def open_file_or_folder(request: OpenFileRequest):
     raw_path = Path(file_path)
     reveal = request.reveal
 
-    resolved = raw_path.resolve(strict=False)
+    try:
+        resolved = raw_path.resolve(strict=False)
+    except ValueError as e:  # longer than Windows allows
+        raise HTTPException(status_code=400, detail=f"Invalid path: {e}") from e
 
     # Security: restrict to user's home directory FIRST, before ANY
     # filesystem operations (is_symlink/exists can throw PermissionError
