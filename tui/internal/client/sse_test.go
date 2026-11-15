@@ -792,6 +792,48 @@ func TestSSEClientTranscriptFallsBackToStreamedTokens(t *testing.T) {
 
 // --- terminal-event contract -------------------------------------------------
 
+// A connection cut mid-answer (the daemon was killed) reads as GAIA stopping,
+// not as a raw socket error; the socket error stays in RawDetail for the log.
+func TestSSEClientConnectionCutMidStreamSaysGaiaStopped(t *testing.T) {
+	f := newFakeRelay(t)
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"token","delta":"half an ans"}`)
+		flush()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack the stream: %v", err)
+			return
+		}
+		// Unterminated chunked body: the client's read fails, as on a reset.
+		_ = conn.Close()
+	}
+
+	c := f.client(t)
+	defer c.Close()
+
+	ch, err := c.Send(context.Background(), "triage")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	got := collect(t, ch)
+	if len(got) == 0 {
+		t.Fatal("expected events")
+	}
+	last, ok := got[len(got)-1].(event.CanonicalErrorEvent)
+	if !ok {
+		t.Fatalf("last event = %T, want a CanonicalErrorEvent (%v)", got[len(got)-1], typeNames(got))
+	}
+	if last.Detail != event.AgentStoppedDetail {
+		t.Errorf("detail = %q, want the plain stopped message", last.Detail)
+	}
+	if !strings.Contains(last.RawDetail, "failed mid-run") {
+		t.Errorf("RawDetail must keep the socket error for the log: %q", last.RawDetail)
+	}
+	if last.Source != "tui" {
+		t.Errorf("synthesized errors must be attributed to the tui, got %q", last.Source)
+	}
+}
+
 // A stream that ends without final/error is a FAILURE, not an empty success.
 func TestSSEClientStreamWithoutTerminalEventIsAnError(t *testing.T) {
 	f := newFakeRelay(t)

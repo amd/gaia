@@ -599,13 +599,15 @@ func (s *SSEClient) consume(
 			Source: "tui",
 		})
 	case reader.Err() != nil:
+		// The daemon or agent went away mid-answer; the next message restarts it.
+		raw := fmt.Sprintf("the '%s' query stream failed mid-run: %v", s.agentID, reader.Err())
+		s.opts.Logf("sse: %s", raw)
 		emit(event.CanonicalErrorEvent{
-			Type: event.CanonicalTypeError,
-			Detail: fmt.Sprintf(
-				"the '%s' query stream failed mid-run: %v. Check `gaia daemon status`",
-				s.agentID, reader.Err()),
-			Status: http.StatusBadGateway,
-			Source: "tui",
+			Type:      event.CanonicalTypeError,
+			Detail:    event.AgentStoppedDetail,
+			RawDetail: raw,
+			Status:    http.StatusBadGateway,
+			Source:    "tui",
 		})
 	default:
 		// The contract mandates exactly one terminal event; a clean EOF without
