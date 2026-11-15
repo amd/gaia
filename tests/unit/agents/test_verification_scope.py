@@ -511,6 +511,8 @@ def test_an_answer_that_reports_the_failed_tests_gets_no_note():
         "The suite does not pass: 3 failed, 52 passed.",
         "Two tests still fail, but the discount one passes now.",
         "pytest fails with an import error.",
+        "52 passed; 3 failed.",
+        "No, the suite fails: 1 failed, 4 passed.",
     ],
 )
 def test_a_plain_failure_report_gets_no_note(answer):
@@ -531,6 +533,13 @@ def test_a_plain_failure_report_gets_no_note(answer):
         # Something failed, but the sentence is not about the tests.
         "I tried the command twice and it kept failing: boom.",
         "The upload failed, so the report was not sent.",
+        # A pass said in a clause of its own, or the failure denied or put in the past.
+        "Previously 3 tests failed; now they pass.",
+        "1 test failed before my fix; the suite is green now.",
+        "Not a single test failed.",
+        "The tests didn't fail.",
+        "No tests are failing anymore.",
+        "One test failed. The rest of the suite is fine and the others pass.",
     ],
 )
 def test_an_answer_that_does_not_plainly_report_the_failure_keeps_the_note(answer):

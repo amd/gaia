@@ -352,24 +352,44 @@ _ABOUT_TESTS = re.compile(
 )
 
 
+#: A failure denied or put in the past: "not a single test failed", "failed before my fix".
+_DENIED_FAILURE = re.compile(
+    r"\b(?:not|no|never|none|nothing|zero|\w+n['’]t)\s+(?:\w+\s+){0,4}?fail"
+    r"|\b(?:before|previously|earlier|anymore|any\s+more|no\s+longer|used\s+to)\b",
+    re.IGNORECASE,
+)
+#: A pass said apart from any failure: "now they pass", "the suite is green".
+_PASS_WORDS = re.compile(
+    r"\b(?:pass(?:es|ed|ing)?|green|fixed|clean|succeed(?:s|ed)?)\b", re.IGNORECASE
+)
+
+
 def _answer_reports(failed: List[Dict[str, Any]], answer: str) -> bool:
     """Whether *answer* already tells the user these *failed* checks failed.
 
     Only test runs, which is all the answer's wording can be matched to, and
-    only an answer that claims no success beside the failure.
+    only an answer that claims no success beside the failure: no success claim,
+    no pass said in a clause of its own, no failure denied or put in the past.
     """
     if not all(
         (e.get("check_kind") or check_kind(e["check_label"])) == "test" for e in failed
     ):
         return False
     labels = {e["check_label"].lower() for e in failed}
+    clauses = [c for c in re.split(r"(?<=[.!?])\s+|\n+|;", answer or "") if c.strip()]
+    reporting = [c for c in clauses if reports_test_failure(c)]
+    if any(_DENIED_FAILURE.search(c) for c in reporting):
+        return False
+    # "52 passed; 3 failed" is a count, not a claim; "now they pass" is.
+    if any(
+        _PASS_WORDS.search(re.sub(r"\b\d+\s+pass\w*", " ", c))
+        for c in clauses
+        if c not in reporting
+    ):
+        return False
     said = any(
-        reports_test_failure(sentence)
-        and (
-            _ABOUT_TESTS.search(sentence)
-            or any(label in sentence.lower() for label in labels)
-        )
-        for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer or "")
+        _ABOUT_TESTS.search(c) or any(label in c.lower() for label in labels)
+        for c in reporting
     )
     return said and not claims_success(answer)
 
