@@ -268,10 +268,18 @@ def test_top_k_must_be_positive():
 def test_render_suggestion():
     assert render_suggestion([]) == ""
     text = render_suggestion(["alpha", "beta"])
-    assert text.startswith("Skills that match this request and are not loaded yet:")
+    assert text.startswith("Skills that may fit this request and are not loaded yet:")
     assert "not loaded yet: alpha, beta" in text
     assert len(text.splitlines()) == 1
     assert "load_skill" in text
+
+
+def test_a_suggestion_leaves_the_choice_to_the_model():
+    """A near miss scores as high as a real match, so the line must not order a load."""
+    text = render_suggestion(["weekly-audit-patterns"])
+    assert "that match this request" not in text
+    assert "before starting" not in text
+    assert "ignore the rest" in text
 
 
 @pytest.mark.parametrize(

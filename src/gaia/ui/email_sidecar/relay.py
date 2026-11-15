@@ -509,6 +509,10 @@ def _dispatch_one(
         if isinstance(event.get("model_messages"), list):
             # Saved with the reply so later turns replay its tool calls.
             handler.relayed_model_messages = event["model_messages"]
+        route = event.get("route")
+        if isinstance(route, dict) and isinstance(route.get("model"), str):
+            # Contract >= 2.29: a hybrid turn is billed to the model it ran on.
+            handler.relayed_route = route
         performance = event.get("performance")
         problem = None if performance is None else turn_record_problem(performance)
         if performance is not None and problem is None:
@@ -760,7 +764,7 @@ def relay_query(
         # that takes it (profiles.session_id_supported); the request models
         # are extra="forbid".
         body["session_id"] = session_id
-    if documents:
+    if documents is not None:
         body["documents"] = list(documents)
     if allowed_paths is not None:
         body["allowed_paths"] = list(allowed_paths)

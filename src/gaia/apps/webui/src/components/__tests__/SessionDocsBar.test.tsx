@@ -40,6 +40,58 @@ describe('the documents bar above the chat', () => {
         expect(screen.getByRole('button', { name: /عرض أقل/ })).toBeInTheDocument();
     });
 
+    it.each([
+        ['en', 'Not all 150 documents in this chat are searched at once: a chat searches up to 100 documents. Ask about a file by name to search it.'],
+        ['ar', 'لا يُبحث في كل مستندات هذه المحادثة البالغ عددها 150 في المرة الواحدة'],
+    ])('says when a chat has more documents than it searches at once (%s)', (locale, text) => {
+        const many = Array.from({ length: 150 }, (_, i) => doc(i + 10));
+        useChatStore.setState({ locale, sessions: [{ ...session, document_ids: many.map((d) => d.id) } as never], documents: many });
+        render(<SessionDocsBar sessionId="s1" onDetachFailed={() => {}} />);
+        expect(screen.getByRole('status').textContent).toContain(text);
+    });
+
+    it.each([
+        ['en', 'Not all 9 documents in this chat are searched at once: they are long, and a chat searches up to 10,000 passages. Ask about a file by name to search it.'],
+        ['ar', 'فهي طويلة، وتبحث المحادثة في'],
+    ])('names the passage limit for a few long documents, never the document count (%s)', (locale, text) => {
+        const books = Array.from({ length: 9 }, (_, i) => ({ ...doc(i + 10), chunk_count: 1200 }));
+        useChatStore.setState({ locale, sessions: [{ ...session, document_ids: books.map((d) => d.id) } as never], documents: books });
+        render(<SessionDocsBar sessionId="s1" onDetachFailed={() => {}} />);
+        const notice = screen.getByRole('status').textContent;
+        expect(notice).toContain(text);
+        expect(notice).not.toContain('100');
+    });
+
+    it('names the limit the chat reaches first, in the order its documents load', () => {
+        // 100 small documents fill the count first; the long one after them never loads.
+        const small = Array.from({ length: 100 }, (_, i) => doc(i + 10));
+        const long = { ...doc(200), chunk_count: 20000 };
+        useChatStore.setState({ sessions: [{ ...session, document_ids: [...small, long].map((d) => d.id) } as never], documents: [long, ...small] });
+        render(<SessionDocsBar sessionId="s1" onDetachFailed={() => {}} />);
+        expect(screen.getByRole('status').textContent).toContain('a chat searches up to 100 documents.');
+    });
+
+    it('says nothing about a limit for one document longer than the passage limit', () => {
+        const book = { ...doc(10), chunk_count: 12000 };
+        useChatStore.setState({ sessions: [{ ...session, document_ids: [book.id] } as never], documents: [book] });
+        render(<SessionDocsBar sessionId="s1" onDetachFailed={() => {}} />);
+        expect(screen.queryByRole('status')).toBeNull();
+    });
+
+    it('says nothing about a limit for documents that fit in it exactly', () => {
+        const books = Array.from({ length: 8 }, (_, i) => ({ ...doc(i + 10), chunk_count: 1250 }));
+        useChatStore.setState({ sessions: [{ ...session, document_ids: books.map((d) => d.id) } as never], documents: books });
+        render(<SessionDocsBar sessionId="s1" onDetachFailed={() => {}} />);
+        expect(screen.queryByRole('status')).toBeNull();
+    });
+
+    it('says nothing about a limit at 100 documents', () => {
+        const hundred = Array.from({ length: 100 }, (_, i) => doc(i + 10));
+        useChatStore.setState({ sessions: [{ ...session, document_ids: hundred.map((d) => d.id) } as never], documents: hundred });
+        render(<SessionDocsBar sessionId="s1" onDetachFailed={() => {}} />);
+        expect(screen.queryByRole('status')).toBeNull();
+    });
+
     it('names its manage button and remove buttons in Arabic', () => {
         setup('ar');
         expect(screen.getByRole('button', { name: /إزالة.*notes-5\.txt.*من هذه المحادثة/ })).toBeInTheDocument();

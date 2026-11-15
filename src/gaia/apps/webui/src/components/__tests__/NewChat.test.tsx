@@ -7,6 +7,7 @@ import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
+import { FlagshipMissing } from '../../utils/newTask';
 import newChatCss from '../NewChat.css?raw';
 import type { ActiveModel, Document, StartScreen, SystemStatus } from '../../types';
 
@@ -70,6 +71,36 @@ describe('NewChat and the document library', () => {
         expect(screen.getByText(/1 more document in your library/)).toBeInTheDocument();
     });
 
+    it('shows a few attached documents and folds the rest behind "+N more" (#7733)', async () => {
+        const many = Array.from({ length: 600 }, (_, i) => libraryDoc(`m${i}`, `file-${i}.txt`));
+        vi.mocked(api.listDocuments).mockResolvedValue({ documents: many, total: 600, total_size_bytes: 0, total_chunks: 0 });
+        useChatStore.setState({ draftDocumentIds: many.map((d) => d.id) });
+        render(<NewChat onSend={vi.fn()} />);
+
+        const more = await screen.findByRole('button', { name: '+595 more' });
+        const list = screen.getByRole('list', { name: 'Documents for this chat' });
+        expect(list.querySelectorAll('li')).toHaveLength(5);
+        expect(list).not.toHaveClass('is-expanded');
+
+        fireEvent.click(more);
+        expect(list.querySelectorAll('li')).toHaveLength(600);
+        // Expanded, the list scrolls inside its own box so the composer stays put.
+        expect(list).toHaveClass('is-expanded');
+        expect(more).toHaveAttribute('aria-expanded', 'true');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Show fewer' }));
+        expect(list.querySelectorAll('li')).toHaveLength(5);
+    });
+
+    it('lists every attached document when there are only a few', async () => {
+        useChatStore.setState({ draftDocumentIds: ['d1', 'd2'] });
+        render(<NewChat onSend={vi.fn()} />);
+
+        const list = await screen.findByRole('list', { name: 'Documents for this chat' });
+        expect(list.querySelectorAll('li')).toHaveLength(2);
+        expect(screen.queryByRole('button', { name: /more$/ })).toBeNull();
+    });
+
     it('opens the library to choose documents', async () => {
         render(<NewChat onSend={vi.fn()} />);
 
@@ -118,6 +149,23 @@ describe('NewChat while GAIA is starting', () => {
         fireEvent.change(box, { target: { value: 'hello' } });
         fireEvent.keyDown(box, { key: 'Enter' });
         expect(onSend).toHaveBeenCalledWith('hello');
+    });
+});
+
+describe('NewChat without the GAIA agent', () => {
+    it('points a refused send at the install notice only while that notice shows', async () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        const onSend = vi.fn().mockRejectedValue(new FlagshipMissing());
+        const { rerender } = render(<NewChat onSend={onSend} agentMissing />);
+
+        const box = screen.getByLabelText('Message');
+        fireEvent.change(box, { target: { value: 'hello' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        expect(await screen.findByRole('alert')).toHaveTextContent('Install it from the notice above');
+        expect(box).toHaveValue('hello');
+
+        rerender(<NewChat onSend={onSend} agentMissing={false} />);
+        expect(screen.queryByText(/notice above/)).not.toBeInTheDocument();
     });
 });
 
@@ -439,6 +487,14 @@ describe('NewChat empty state', () => {
     it('starts with text handed over from setup', () => {
         render(<NewChat onSend={vi.fn()} initialText="Summarize this: " />);
         expect(screen.getByLabelText('Message')).toHaveValue('Summarize this: ');
+    });
+
+    it('puts the caret after text handed over, so typing adds to it', () => {
+        render(<NewChat onSend={vi.fn()} initialText="Use the summarize skill: " />);
+        const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+        expect(document.activeElement).toBe(box);
+        expect(box.selectionStart).toBe(box.value.length);
+        expect(box.selectionEnd).toBe(box.value.length);
     });
 
     it('says in one plain sentence that the assistant did not start, with the detail behind Details', async () => {

@@ -322,6 +322,80 @@ def _forget_evicted(indexed_files: set, evicted: List[str]) -> None:
             indexed_files.discard(path)
 
 
+def attached_not_loaded(host: Any, rag: Any) -> List[str]:
+    """Documents attached to the chat that the index does not hold: past its cap.
+
+    *host*'s ``attached_documents`` lists every document attached to the chat;
+    the index holds at most ``max_indexed_files`` of them, or ``max_total_chunks``
+    passages, at once.
+    """
+    attached = getattr(host, "attached_documents", None) or []
+    if not attached or rag is None:
+        return []
+    return not_held(rag, attached)
+
+
+def not_held(rag: Any, paths: List[str], skip: Any = ()) -> List[str]:
+    """*paths*, less *skip*, that *rag* neither holds nor is still indexing."""
+    held = {os.path.realpath(p) for p in rag.indexed_files}
+    held.update(os.path.realpath(p) for p in documents_still_indexing(rag))
+    return [p for p in paths if p not in skip and os.path.realpath(p) not in held]
+
+
+# Not-loaded documents named in an indexing step; the rest are counted.
+_NOT_LOADED_NAMED = 30
+
+
+def not_loaded_summary(rag: Any, documents: List[str]) -> str:
+    """The indexing step's line for attached *documents* the full index left out."""
+    names = ", ".join(Path(d).name for d in documents[:_NOT_LOADED_NAMED])
+    more = len(documents) - _NOT_LOADED_NAMED
+    return (
+        f"{len(documents)} more not loaded: {index_limit(rag)}. Not loaded: "
+        f"{names}{f', and {more} more' if more > 0 else ''}. Ask about one of "
+        "them by name to search it."
+    )
+
+
+def index_limit(rag: Any) -> str:
+    """Why the index holds no more of the attached documents, by the limit it reached."""
+    reason = rag.full_by()
+    if reason == "size":
+        return (
+            "the attached documents are long, and the search index holds at most "
+            f"{rag.config.max_total_chunks:,} passages at once"
+        )
+    if reason == "files":
+        return (
+            "the search index holds at most "
+            f"{rag.config.max_indexed_files} documents at once"
+        )
+    return "they are not loaded into the search index yet"
+
+
+def not_loaded_note(count: int, rag: Any) -> str:
+    """What the model must know about attached documents it cannot search at once."""
+    return (
+        f"{count} more document{'s are' if count != 1 else ' is'} attached to this "
+        f"chat but not searched by query_documents: {index_limit(rag)}. "
+        "They ARE attached; "
+        "never say one is not attached or does not exist. To search one, call "
+        "query_specific_file with its file name, which loads it. If the answer "
+        "is not found, tell the user only part of the attached documents was "
+        "searched and ask which file to look in."
+    )
+
+
+def _note_not_searched(host: Any, rag: Any, result: Dict[str, Any]) -> None:
+    """Tell the model about attached documents this search could not reach."""
+    missing = attached_not_loaded(host, rag)
+    if missing:
+        result["attached_not_searched"] = len(missing)
+        result["instruction"] = (
+            not_loaded_note(len(missing), rag) + " " + result["instruction"]
+        )
+
+
 def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
     """Tool result for a document that is still indexing in the background."""
     name = Path(job.path).name
@@ -548,6 +622,67 @@ def _served_chunks(rag: Any, left_out) -> List[str]:
             for i, chunk in enumerate(rag.chunks)
             if rag.chunk_to_file.get(i) not in left_out
         ]
+
+
+def _best_chunk_per_document(
+    rag: Any, query: str, left_out
+) -> Tuple[List[str], List[float]]:
+    """Each searched document's best chunk for *query*, when there are several.
+
+    A global top-k lets one long document that matches everywhere fill every
+    slot; this makes sure every document's best passage is at least considered.
+    """
+    # Only documents with a cached per-file index: a miss would re-embed the file.
+    files = [
+        f
+        for f in list(rag.indexed_files)
+        if f not in (left_out or {}) and f in rag.file_indices
+    ]
+    if len(files) < 2:
+        return [], []
+    chunks, scores = [], []
+    for path in files:
+        # pylint: disable=protected-access
+        found, found_scores = rag._retrieve_chunks_from_file(query, path)
+        if found:
+            chunks.append(found[0])
+            scores.append(found_scores[0])
+    return chunks, scores
+
+
+def _spread_over_documents(
+    ranked: List[tuple],
+    extra: List[tuple],
+    owner: Dict[str, List[int]],
+    rag: Any,
+    limit: int,
+) -> Tuple[List[tuple], int]:
+    """*ranked* with other documents' passages added, and how many to keep.
+
+    Keeps the top *limit* by score, then adds the best passage of each document
+    that top leaves out, best first, up to half of *limit* more. Nothing the
+    search ranked is pushed out, so a question about one document keeps all its
+    passages, and "list X from each" still sees every document.
+    """
+
+    def doc_of(chunk: str) -> Optional[str]:
+        return rag.chunk_to_file.get((owner.get(chunk) or [-1])[0])
+
+    top, rest = list(ranked[:limit]), list(ranked[limit:])
+    docs = {doc_of(chunk) for chunk, _ in top}
+    held = {chunk for chunk, _ in top}
+    added: List[tuple] = []
+    for chunk, score in sorted(extra, key=lambda item: item[1], reverse=True):
+        if len(added) == limit // 2:
+            break
+        doc = doc_of(chunk)
+        if doc is None or doc in docs or chunk in held:
+            continue
+        added.append((chunk, score))
+        docs.add(doc)
+        held.add(chunk)
+    rest = [item for item in rest if item[0] not in held]
+    return top + added + rest, len(top) + len(added)
 
 
 def _chunk_positions(rag: Any, left_out=None) -> Dict[str, List[int]]:
@@ -822,6 +957,40 @@ def _asks_once_for_another_search(mixin: Any):
     return wrap
 
 
+# A table row as indexed: ``Header: value | Header: value | Header: value``.
+_TABLE_ROW = re.compile(r"^[^|\n]+: [^|\n]*(?: \| [^|\n]+: [^|\n]*){2,}$", re.MULTILINE)
+
+_TABLE_MATH_NOTE = (
+    "\n\nSome chunks are table rows. For a total, count, average, largest or "
+    "smallest over rows, copy the values into run_python and report what it "
+    "prints; do not work it out in your head. Read a row's values from its own "
+    "line only."
+)
+
+
+def _computes_table_math(mixin: Any):
+    """Send arithmetic over retrieved table rows to run_python, where it exists."""
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if (
+                result.get("status") == "success"
+                and "run_python" in getattr(mixin, "_tools_registry", {})
+                and any(
+                    _TABLE_ROW.search(str(chunk.get("content", "")))
+                    for chunk in result.get("chunks") or []
+                )
+            ):
+                result["instruction"] = result.get("instruction", "") + _TABLE_MATH_NOTE
+            return result
+
+        return wrapper
+
+    return wrap
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -934,15 +1103,20 @@ _CHUNK_CHARS = 2000
 
 
 def top_or_whole_index(
-    ranked: List[tuple], candidates: List[str], limit: int, chunk_chars: int
+    ranked: List[tuple],
+    candidates: List[str],
+    limit: int,
+    chunk_chars: int,
+    keep: Optional[int] = None,
 ) -> List[tuple]:
-    """Return the top ``limit`` (chunk, score) pairs, or every candidate when
-    all of them fit in the text ``limit`` full-size chunks would take.
+    """Return the top ``limit`` (chunk, score) pairs (``keep`` when given), or
+    every candidate when all of them fit in the text ``limit`` full-size chunks
+    would take.
 
     A rollup over eight one-paragraph reports must see all eight.
     """
     if sum(len(chunk) for chunk in candidates) > limit * chunk_chars:
-        return ranked[:limit]
+        return ranked[: keep or limit]
     seen = {chunk for chunk, _ in ranked}
     rest = []
     for chunk in candidates:
@@ -1050,6 +1224,7 @@ class RAGToolsMixin:
         )
         @_answers_in_question_language(self)
         @_asks_once_for_another_search(self)
+        @_computes_table_math(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -1194,6 +1369,12 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
+                # Several documents: each one's best passage, for those the
+                # search leaves out.
+                per_doc_chunks, per_doc_scores = _best_chunk_per_document(
+                    rag, query, left_out
+                )
+
                 # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
                 keywords = keyword_index(rag)
@@ -1265,6 +1446,7 @@ class RAGToolsMixin:
                         result["instruction"] = (
                             _left_out_note(left_out) + result["instruction"]
                         )
+                    _note_not_searched(self, rag, result)
                     if debug_info:
                         result["debug_info"] = debug_info
                     return result
@@ -1322,17 +1504,26 @@ class RAGToolsMixin:
                 else:
                     adaptive_max = self.max_chunks  # Default (5) for small docs
 
-                kept = top_or_whole_index(
+                # A twin chunk in a left-out file must not be cited.
+                positions = _chunk_positions(rag, left_out)
+                spread, keep = _spread_over_documents(
                     sorted_items,
+                    list(zip(per_doc_chunks, per_doc_scores)),
+                    positions,
+                    rag,
+                    adaptive_max,
+                )
+                kept = top_or_whole_index(
+                    spread,
                     _served_chunks(rag, left_out),
                     adaptive_max,
                     _CHUNK_CHARS,
+                    keep,
                 )
+                kept.sort(key=lambda item: item[1], reverse=True)
                 top_chunks = [chunk for chunk, score in kept]
                 top_scores = [score for chunk, score in kept]
 
-                # A twin chunk in a left-out file must not be cited.
-                positions = _chunk_positions(rag, left_out)
                 chunk_indices = [positions.get(chunk, [-1])[0] for chunk in top_chunks]
 
                 # Format chunks with context markers for better readability
@@ -1428,6 +1619,7 @@ class RAGToolsMixin:
                     result["instruction"] = (
                         _left_out_note(left_out) + result["instruction"]
                     )
+                _note_not_searched(self, rag, result)
 
                 # Add debug info to result if debug mode is enabled
                 if debug_info:
@@ -1459,6 +1651,7 @@ class RAGToolsMixin:
         )
         @_answers_in_question_language(self)
         @_asks_once_for_another_search(self)
+        @_computes_table_math(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.
@@ -1504,10 +1697,23 @@ class RAGToolsMixin:
                         if Path(str(f)).name == basename
                     )
                     if len(matching_files) == 0:
+                        attached = _match_indexed_files(
+                            attached_not_loaded(self, rag), file_path
+                        )
+                        if len(attached) > 1:
+                            return _ambiguous_file_error(file_path, attached)
                         # Auto-index the file if it exists on disk instead of failing.
                         # This avoids the slow fail → plan → index → re-query cycle.
-                        disk_path = str(
-                            _resolve_target(file_path, None, _workspace_default(self))
+                        # An attached one past the cap loads here, pushing out
+                        # the least recently searched document.
+                        disk_path = (
+                            attached[0]
+                            if attached
+                            else str(
+                                _resolve_target(
+                                    file_path, None, _workspace_default(self)
+                                )
+                            )
                         )
                         denied = read_access_error(self, disk_path)
                         if denied:

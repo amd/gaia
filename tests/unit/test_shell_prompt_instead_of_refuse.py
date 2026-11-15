@@ -18,6 +18,7 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from unittest.mock import patch
@@ -426,6 +427,38 @@ def test_a_full_access_chat_asks_once_for_a_one_time_line(repo):
     assert (repo / "ran.txt").read_text() == "x"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="cmd.exe runs only the first line")
+def test_a_full_access_chat_asks_for_a_heredoc_and_runs_every_line(repo):
+    command = "cat <<'EOF' > hd_notes.txt\nhello heredoc\nEOF"
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result, events = _drive(
+        agent, handler, _shell(command, repo), on_prompt=_answer(handler)
+    )
+
+    [request] = _prompts(events)
+    [wire] = CanonicalTranslator(run_id="r", agent_id="gaia").translate(request)
+    assert wire["summary"].startswith(command + "\n")
+    assert result["status"] == "success", result
+    assert (repo / "hd_notes.txt").read_text() == "hello heredoc\n"
+
+
+def test_a_full_access_chat_refuses_a_heredoc_hiding_a_delete(repo):
+    command = "cat <<'EOF' > out.txt\nhello\nEOF\nrm -rf a.txt"
+    handler = _full_access_chat()
+    agent = _agent(handler)
+
+    result, events = _drive(
+        agent, handler, _shell(command, repo), on_prompt=_answer(handler)
+    )
+
+    assert _prompts(events) == []
+    assert result["status"] == "error" and result["executed"] is False
+    assert (repo / "a.txt").exists()
+    assert not (repo / "out.txt").exists()
+
+
 def test_a_full_access_chat_runs_a_safe_command_unasked(repo):
     handler = _full_access_chat()
     agent = _agent(handler)
@@ -609,11 +642,37 @@ def test_an_answer_to_a_different_prompt_is_not_consent(repo):
 # ---------------------------------------------------------------------------
 
 
+def _python_runs(name: str) -> bool:
+    # Run the PATH match, not the bare name: Windows would find the venv's
+    # python beside this interpreter before searching PATH at all.
+    found = shutil.which(name)
+    if found is None:
+        return False
+    try:
+        probe = subprocess.run([found, "-c", ""], capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return probe.returncode == 0
+
+
 def _python() -> str:
-    for name in ("python", "python3"):
-        if shutil.which(name):
+    """A ``python`` name the shell tool can really run from this test's PATH.
+
+    Windows' "python" can be the Store alias stub, which only prints "Python
+    was not found". Then this interpreter's folder goes first on PATH; the
+    autouse ``_restore_environ`` fixture undoes that after the test.
+    """
+    names = ("python", "python3")
+    for name in names:
+        if _python_runs(name):
             return name
-    pytest.skip("needs a python on PATH")
+    os.environ["PATH"] = os.pathsep.join(
+        [os.path.dirname(sys.executable), os.environ.get("PATH", "")]
+    )
+    for name in names:
+        if _python_runs(name):
+            return name
+    pytest.skip(f"no runnable python on PATH, nor beside {sys.executable}")
 
 
 ONCE_CASES = [

@@ -8,12 +8,72 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **More attached documents than one conversation searches.** A conversation
+  searches at most 100 documents or 10,000 passages at once. With more in
+  `documents`, the agent loads up to that limit instead of loading every one
+  and pushing earlier ones out, says in the `index_documents` step how many it left unloaded and
+  which limit it reached (the document count, or the passages a few long
+  documents fill), and never calls one of those "not attached": asking about
+  one by name loads it.
+
+- **A reply that is only the model's reasoning no longer ends the turn as
+  done.** A model writing JSON tool calls sometimes replied with just a
+  `thought`: a fenced one was taken as the final answer, and after a bare one
+  the agent asked again with nothing new, up to the step limit. The agent now asks once for a tool call or an
+  answer, and a second such reply in a row ends the turn as incomplete.
+- **`GAIA_AGENT_PLAN_RECAP=0` shortens what a finished plan sends back.** For a
+  model that writes tool calls as JSON text, a finished plan was followed by the
+  whole request and plan again, which every later call re-sent. With the switch
+  off it is one line saying how many plan steps ran and how many steps are
+  left. On by default, so nothing changes unless you set it.
+- **Writing the report after the tests no longer counts as an untested
+  change.** A task that ran its tests and then wrote its summary file, or a
+  changelog entry, was told its passing tests "ran before the last change" and
+  re-ran them for nothing. Prose docs (`.md`, `.rst`, a `README` or
+  `CHANGELOG`, files under `docs/`) and the output file the request asked for
+  no longer make an earlier run stale, unless they sit in a test or data
+  folder or inside a package. Every other write still does.
+- **Large files and outputs are read in fewer, larger pieces.** Reading a file
+  too large for one result returned small archived parts the agent fetched one
+  per call. It now returns the file's first lines and a line-numbered outline
+  of its definitions or headings, so the agent reads the part it needs by line
+  range. `read_tool_output` takes `to_entry` to return a run of parts in one
+  call, up to the same size limit as any tool result.
+- **A command killed at its timeout keeps what it printed, and the agent scopes
+  the retry.** A Python lint or test run that timed out came back with no
+  output at all, and the hint suggested running it again with a longer
+  timeout. Commands and `run_python` scripts now run unbuffered, so the partial
+  output survives the kill, and a timed-out lint or test command's hint names
+  the files the turn changed and says to check just those instead of the whole
+  repository.
+- **The agent knows an MCP server it set up didn't start.** The notice the
+  user sees about MCP servers that couldn't start, couldn't load or went over
+  the tool limit now also reaches the model each turn, so asked about one it
+  says it is set up but unavailable rather than that nothing by that name
+  exists. A corrupt `mcp_servers.json` is described in plain words.
+- **A detached document is no longer searched.** A file an earlier turn sent in
+  `documents` and this turn leaves out (the user detached it, or deleted it from
+  the library) is dropped from the session's index, so answers stop quoting it.
+  An empty `documents` list drops them all.
 - **A turn the output limit keeps cutting off says what to do next.** It told
   the user to "retry with a higher output-token limit (max_tokens)", a setting
   the apps don't have, dropped what the turn had done, and sent no token counts,
   so its cost read "Not reported". It now names the tools it ran and its last
   findings, suggests asking for the work in smaller parts, and carries the
   turn's token counts.
+- **`hybrid` runs each turn on a cheap or a strong model.** A session on the
+  `hybrid` model id (`gaia gateway use hybrid` or `gaia -p --model hybrid`) asks a cheap classifier about each request and runs
+  the whole turn on `amd.DeepSeek-V4.1-Flash` when it is routine and low-stakes,
+  else on `amd.Claude-Opus-5-5`. A failed classification goes strong for that
+  turn only, a session the classifier sent strong stays strong, and an
+  unavailable model fails the turn instead of running the other one, naming the
+  `hybrid_*` setting that chose it.
+  `gaia -p` JSON records the decision as `route`, and so does `/query`'s
+  `final` (contract 2.29), so a host bills and labels the turn by the model
+  that ran it. A classifier that keeps
+  failing is reported with its fix (a notice on every turn after 3 in a row),
+  one that rejects JSON mode is asked in plain text, and `/clear` starts the
+  next turn unescalated.
 - **A run stopped for an approval nobody can give reads as not done.** Its
   `final` now carries `failed: true` and the `usage` spent before the stop, so
   `gaia -p` reports `is_error: true` with real step and token counts instead of
@@ -26,6 +86,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   removes the scratch folders it holds when its process exits normally, and
   the next agent to start clears any no agent has used for a day, including
   ones a killed process left.
+
+- **Files a Python run writes are UTF-8.** `run_python` and
+  `execute_python_file` wrote a bare `open(path, "w")` in the Windows locale
+  codec, so a degree sign landed as the cp1252 byte `0xB0`. Scripts now run in
+  UTF-8 mode, in the packaged binary too.
 
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
@@ -176,6 +241,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   before", so every later chat started with it in its prompt. It, and the new
   `search_tools` cap, are now marked as not run, like a permission refusal, and
   memory skips them.
+- **The integration guide says the web tools reach the internet.** Web search
+  and page fetch send their queries and URLs off the machine even with a local
+  model; the guide now says so next to the cloud-provider caveat.
 - **The package description and integration guide no longer say nothing leaves the
   machine.** Local inference is still the default; both now say a cloud provider
   receives the conversation when you pick one.
@@ -247,6 +315,25 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Fixed
 
+- **A turn that stops early still writes the file you asked for.** When the
+  agent hits its step limit or keeps repeating a call, it gets one step to
+  write a requested file that doesn't exist yet, and it can only write those
+  files in that step. If the file still isn't written, the answer says so
+  instead of claiming it was. A file written that way is read back like any
+  other edit, and if it is missing, empty or no longer parses, the answer says
+  that too. A turn the loop guard ends gets the same completion check as other
+  early stops, so a claimed write that no tool made is named too.
+- **A refused action is reported as refused, not as your decision.** When a
+  safety rule blocks a command, the agent says the command was refused, and a
+  refused delete still guards what it would have deleted.
+- **`gaia -p --time-limit SECONDS`** tells the agent how long the run may take,
+  so it wraps up and answers before the deadline instead of being cut off.
+- **`run_python` can check a project's own code.** Any `import gaia…` was
+  refused, so inside a GAIA checkout the agent copied code into the snippet by
+  hand and reported the copy's output as proof. Only reaching for one of its
+  tools through `gaia` (`from gaia import write_file`) is refused now, and a
+  `src/`-layout project has `src/` on the path so its modules import from the
+  checkout, not an installed copy. `execute_python_file` gets the same path.
 - **"Do not run anything, answer only with a plan" gets the plan.** The
   announced-step check sent a requested tool plan back as unfinished work, and
   the look-first check told the model to open the file the user had said not

@@ -53,7 +53,8 @@ RAG searches your documents and answers using real information.
 **Supported document formats:** PDF, Word (`.docx`), PowerPoint (`.pptx`),
 Excel (`.xlsx`), EPUB e-books (`.epub`, DRM-free), images (`.png`, `.jpg`,
 `.jpeg`, `.webp`, `.bmp`, `.gif`, `.tif`, `.tiff`), plus plain text, Markdown,
-CSV, JSON, HTML, and common source code files. Legacy binary Office formats
+CSV, JSON, HTML (indexed as the page's readable text and table rows, without
+its scripts, styles or navigation), and common source code files. Legacy binary Office formats
 (`.doc`, `.ppt`, `.xls`) and OpenDocument files (`.odt`, `.ods`, `.odp`) are not
 supported — re-save them as `.docx` / `.pptx` / `.xlsx` or PDF. Any other binary
 file is refused with an error rather than indexed as text.
