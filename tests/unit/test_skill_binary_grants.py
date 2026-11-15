@@ -2650,6 +2650,100 @@ def test_a_program_named_with_its_extension_is_found_on_path(tmp_path, monkeypat
     assert _program_on_path("gh.exe", str(tmp_path)) == str(tmp_path / "bin" / "gh.exe")
 
 
+@pytest.mark.parametrize(
+    "spelled", ["C:gh", "c:gh.exe", "gh:stream", ".\\gh", "./gh", "sub/gh", "..\\gh"]
+)
+def test_a_folder_or_drive_spelling_is_never_looked_up_on_path(
+    tmp_path, monkeypatch, spelled
+):
+    """`C:gh` joined onto a PATH entry drops the entry and lands in a cwd."""
+    from gaia.agents.tools.shell_tools import _pin_argv_program, _program_on_path
+
+    monkeypatch.setattr("os.path.isfile", lambda _p: True)
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    assert _program_on_path(spelled, str(tmp_path)) is None
+    # Run as typed: no grant matches it, so it reached here through the prompt.
+    assert _pin_argv_program([spelled, "issue"], str(tmp_path)) == [spelled, "issue"]
+
+
+@pytest.mark.parametrize("spelled", ["C:gh", "./gh", "gh.cmd", "gh.bat", "gh.", "gh:x"])
+def test_a_folder_drive_or_batch_spelling_never_inherits_a_grant(spelled):
+    from gaia.agents.tools.shell_tools import _is_lone_granted_segment
+
+    segment = [spelled, "issue", "list", "--repo", "amd/gaia"]
+    assert not _is_lone_granted_segment([segment], frozenset({"gh"}))
+    error = _validation_error(_Gated("gh"), shlex.join(segment))
+    assert error is not None
+
+
+def test_path_lookup_skips_the_working_folder_however_path_spells_it(
+    tmp_path, monkeypatch
+):
+    from gaia.agents.tools.shell_tools import _program_on_path
+
+    work, bin_ = tmp_path / "work", tmp_path / "bin"
+    work.mkdir()
+    bin_.mkdir()
+    (work / "gh.exe").write_bytes(b"")
+    (bin_ / "gh.exe").write_bytes(b"")
+    monkeypatch.setenv("PATHEXT", ".EXE")
+    spellings = [str(work) + os.sep, str(work / "." / ""), str(tmp_path / "x" / "..")]
+    spellings[-1] = os.path.join(spellings[-1], "work")
+    monkeypatch.setenv("PATH", os.pathsep.join([*spellings, str(bin_)]))
+    assert _program_on_path("gh", str(work)) == str(bin_ / "gh.exe")
+
+
+def test_a_batch_shim_earlier_on_path_fails_instead_of_skipping_ahead(
+    tmp_path, monkeypatch
+):
+    """The .cmd is what a terminal would run, so a later .exe must not stand in."""
+    from gaia.agents.tools.shell_tools import _pin_argv_program
+
+    shims, bin_ = tmp_path / "shims", tmp_path / "bin"
+    shims.mkdir()
+    bin_.mkdir()
+    (shims / "gh.cmd").write_text("")
+    (bin_ / "gh.exe").write_bytes(b"")
+    monkeypatch.setenv("PATHEXT", ".EXE;.CMD")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(shims), str(bin_)]))
+    with pytest.raises(FileNotFoundError, match="only through cmd.exe"):
+        _pin_argv_program(["gh", "issue"], str(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python", "-m", "pytest.__main__", "-q"],
+        ["python", "-mpytest", "-q"],
+        ["python", "-I", "-m", "pytest", "-q"],
+        ["python", "-m", "pytest_evil", "-q"],
+        ["C:python", "-m", "pytest", "-q"],
+        ["python", "-c", "import pytest", "-m", "pytest"],
+    ],
+)
+def test_only_the_exact_python_m_pytest_shape_rides_the_pytest_grant(argv):
+    from gaia.agents.tools.shell_tools import _is_granted_segment
+
+    assert not _is_granted_segment(argv, frozenset({"pytest"}))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pytest -p evil_plugin -q",
+        "python -m pytest -o addopts=-pevil -q",
+        "python -m pytest -c ../other.ini -q",
+        "python -m pytest --rootdir=.. -q",
+    ],
+)
+def test_python_m_pytest_keeps_the_pytest_flag_rules(monkeypatch, command):
+    """The interpreter check must not let the flag allowlist be skipped."""
+    _shell_finds_only(monkeypatch, "python")
+    error = _validation_error(_Gated("pytest"), command)
+    assert error is not None
+    assert "not installed" not in error["error"]
+
+
 @pytest.mark.skipif(os.name == "nt", reason="the OS's own PATH lookup elsewhere")
 def test_a_granted_command_keeps_its_bare_name_off_windows():
     call = _run_capturing_subprocess(_Gated("gh"), "gh issue list --repo amd/gaia")

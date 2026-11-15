@@ -5290,8 +5290,15 @@ def _path_has_relative_entry() -> bool:
     return False
 
 
+#: A program spelled with a folder or a drive (``.\gh``, ``C:gh``), not a bare name.
+_PATH_SPELLING = re.compile(r"[\\/:]")
+
+
 def _program_on_path(name: str, cwd: str) -> Optional[str]:
     """Where PATH alone finds program *name*: never *cwd*, never a relative entry."""
+    # A drive or folder in the name would make the join below ignore PATH.
+    if _PATH_SPELLING.search(name):
+        return None
     here = os.path.normcase(os.path.realpath(cwd))
     # cmd.exe never runs a PATH file that has no extension.
     suffixes = _program_suffixes()[1:]
@@ -5321,7 +5328,8 @@ def _pin_argv_program(argv: list, cwd: str) -> list:
     program PATH finds, never one in the working folder.
     """
     name = argv[0]
-    if re.search(r"[\\/]", name):
+    # A folder or drive spelling runs as typed: no grant matches it, so it was asked.
+    if _PATH_SPELLING.search(name):
         return argv
     program = _program_on_path(name, cwd)
     if program is None:
@@ -5668,7 +5676,7 @@ def _run_step(
     )
 
     exec_cmd = [part for segment in segments for part in segment]
-    if argv_only and os.name == "nt" and not re.search(r"[\\/]", exec_cmd[0]):
+    if argv_only and os.name == "nt" and not _PATH_SPELLING.search(exec_cmd[0]):
         # By PATH alone, never from cwd.
         program = _program_on_path(exec_cmd[0], cwd)
         if program is None:
