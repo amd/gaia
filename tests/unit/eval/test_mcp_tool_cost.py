@@ -29,9 +29,10 @@ from gaia.eval.tool_recall import (  # noqa: E402
 
 # Loader-on recall on 5 servers x 5 tools with the word-overlap embedder. Exact
 # on purpose: the stand-in embedder is deterministic, and every hit today comes
-# from moving the session to every tool, so floor and ceiling are equal. A core
-# tool's description edit can move a probe across the jump threshold; re-measure
-# with `--mcp` then. Raise the floor or lower the ceiling as selection improves.
+# from moving the session to every tool, so floor and ceiling are equal. Any core
+# tool's description edit can move a probe either way and fail this test; re-run
+# `python -m gaia.eval.tool_cost --mcp` and re-pin both to the new measurement.
+# MCP-routing work (WS1) may only raise the floor or lower the ceiling.
 MCP_RECALL_FLOOR = 18 / 25
 MCP_JUMP_RATE_CEILING = 18 / 25
 

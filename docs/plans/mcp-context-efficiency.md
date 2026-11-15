@@ -202,9 +202,10 @@ tokens drop ≥60% vs. eager registration, with no recall regression.
   model and the loader on, a session already opens without MCP tools, so they
   add no first-turn tokens. The cost is on the turn that needs one: the loader
   reaches the tool only by moving the session to every tool (72% recall on 5
-  mock servers, all of it by that move). So WS1's win would show as listed
-  recall going up and the jump rate going down. Hosted models run without the
-  loader and still send every MCP tool.
+  mock servers with the word-overlap stand-in embedder, all of it by that
+  move). So WS1's win would show as listed recall going up and the jump rate
+  going down. Hosted models run without the loader and still send every MCP
+  tool.
 - **Agent eval required** (CLAUDE.md rule — this touches prompt assembly + tool
   schema): run `gaia eval agent` on the relevant category, compare to baseline
   before merge.
