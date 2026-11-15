@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, Eye, EyeOff } from 'lucide-react';
 import { Popover } from './Popover';
 import { useT } from '../i18n/useT';
@@ -23,6 +23,7 @@ export function PrivateChip({ disabled }: { disabled?: boolean }) {
     const [readFailed, setReadFailed] = useState(false);
     const [open, setOpen] = useState(false);
     const anchor = useRef<HTMLButtonElement>(null);
+    const close = useCallback(() => setOpen(false), []);
 
     // Re-read on close: Settings can switch memory off while this screen stays mounted.
     useEffect(() => {
@@ -94,7 +95,7 @@ export function PrivateChip({ disabled }: { disabled?: boolean }) {
                 <span className="composer-chip-label" dir="auto">{on ? t('composer.private') : readFailed ? t('composer.memoryUnknown') : t('composer.memoryOn')}</span>
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
-            <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label={t('composer.memoryMenu')}>
+            <Popover open={open} onClose={close} anchor={anchor} label={t('composer.memoryMenu')}>
                 {options.map(({ priv, Icon, label, note }) => (
                     <button
                         key={String(priv)}
