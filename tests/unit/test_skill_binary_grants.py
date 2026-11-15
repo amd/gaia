@@ -494,7 +494,7 @@ def test_a_bare_binary_name_matches_the_grant(token):
         "~/bin/gh",
     ],
 )
-def test_a_path_spelled_binary_never_matches_the_grant(token):
+def test_a_path_spelled_binary_never_matches_the_grant(token, gh_on_path):
     """`./gh` is a file the caller chose, not the CLI the skill declared.
 
     Matching it would let a granted skill run any executable it can name `gh`.
@@ -573,15 +573,6 @@ def test_the_python_m_spelling_of_a_missing_binary_is_refused_the_same_way(
     assert error is not None
     assert "not installed here" in error["error"]
     assert BINARY_POLICIES["pytest"].substitute in error["error"]
-
-
-@pytest.fixture(name="gh_on_path")
-def _gh_on_path(monkeypatch):
-    """The missing-grant answer is what these tests check, so the binary must
-    look installed — otherwise the not-installed refusal answers first."""
-    monkeypatch.setattr(
-        "gaia.agents.tools.shell_tools.shutil.which", lambda name: f"/usr/bin/{name}"
-    )
 
 
 #: Grant syntax a user cannot act on. It belongs in the log, never in the text
@@ -1119,7 +1110,7 @@ def test_a_call_outside_the_policy_is_asked_with_its_risk_note():
 def test_a_permitted_ungranted_call_still_reaches_the_prompt():
     """The reordering must not swallow the modal for calls that can run."""
     agent = _ExecutingAgent()
-    agent._execute_tool("run_shell_command", {"command": "pwd"})
+    agent._execute_tool("run_shell_command", {"command": "git status"})
     assert [name for name, _ in agent.console.asked] == ["run_shell_command"]
 
 
@@ -2031,7 +2022,14 @@ def test_make_has_no_policy_and_that_is_the_decision():
 
 @pytest.mark.parametrize(
     "command",
-    ["git status", "git log --oneline -10", "git diff HEAD", "git show HEAD"],
+    [
+        "git status",
+        "git log --oneline -10",
+        "git diff HEAD",
+        "git show HEAD",
+        "git blame f.py",
+        "git blame -L 1,5 f.py",
+    ],
 )
 def test_the_read_only_git_floor_survives_without_any_skill(command):
     assert (
@@ -2054,7 +2052,7 @@ def test_the_old_whitelist_holes_are_closed(command, why_now):
     assert error is not None, f"still open: {why_now}"
 
 
-@pytest.mark.parametrize("command", ["git commit -m x", "git add .", "git blame f.py"])
+@pytest.mark.parametrize("command", ["git commit -m x", "git add .", "git shortlog -s"])
 def test_a_write_without_the_grant_asks_the_user(command):
     error = ShellToolsMixin._validate_command("git", shlex.split(command), command)
     assert error is not None
@@ -2064,7 +2062,7 @@ def test_a_write_without_the_grant_asks_the_user(command):
 
 def test_the_floor_widens_to_the_full_policy_once_granted():
     granted = frozenset({"git"})
-    for command in ("git blame f.py", "git commit -m x", "git stash push"):
+    for command in ("git shortlog -s", "git commit -m x", "git stash push"):
         assert (
             ShellToolsMixin._validate_command(
                 "git", shlex.split(command), command, granted_binaries=granted

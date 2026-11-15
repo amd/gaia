@@ -486,7 +486,9 @@ class TestRouter:
     def test_only_listed_logs_can_be_read(self, client, gaia_logs, url):
         assert client.get(url, headers=self.H).status_code == 404
 
-    def test_a_source_with_nothing_written_says_so(self, client):
+    def test_a_source_with_nothing_written_says_so(self, client, tmp_path, monkeypatch):
+        # Its own daemon home: an earlier test may have written a daemon log.
+        monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "daemon-home"))
         body = client.get("/api/logs/service", headers=self.H).json()
         assert not body["available"] and body["reason"] == "no_file"
 

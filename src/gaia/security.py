@@ -400,6 +400,27 @@ def _real_path(path: Any) -> str:
     return os.path.realpath(os.path.expanduser(os.fspath(path)))
 
 
+def protected_directory_of(path: Any) -> Optional[str]:
+    """The system, credential or GAIA-state folder *path* resolves into, or None.
+
+    No approval or full access opens these folders to the agent.
+    """
+    real = os.path.normpath(_normalize_macos_symlinks(_real_path(path)))
+    for blocked_dir in sorted(BLOCKED_DIRECTORIES):
+        normalized = os.path.normpath(_normalize_macos_symlinks(blocked_dir))
+        if not _path_is_within(Path(real), Path(normalized)):
+            continue
+        if normalized in GAIA_STATE_DIRECTORIES and _is_gaia_user_content(
+            real, normalized
+        ):
+            continue
+        return blocked_dir
+    for secret_dir in sorted(SECRET_DIRECTORIES):
+        if _path_is_within(Path(real), Path(secret_dir)):
+            return secret_dir
+    return None
+
+
 def is_credential_file_name(name: str) -> bool:
     """Whether a file called *name* is one the read tools refuse by name.
 
