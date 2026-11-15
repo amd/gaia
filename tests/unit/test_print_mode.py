@@ -782,6 +782,21 @@ def test_an_unknown_model_is_called_unknown_not_undownloaded(
     assert _StubAgent.instances == []
 
 
+def test_a_gaia_model_the_server_has_not_listed_yet_is_not_downloaded(
+    stub_env, monkeypatch, capsys
+):
+    from gaia.llm.lemonade_client import FLASH_OPTION_MODEL_NAME
+
+    _config(monkeypatch, default_model=FLASH_OPTION_MODEL_NAME)
+    _Catalog.downloaded = False
+    _Catalog.listed = False
+    assert print_mode.run("q") == 1
+    err = capsys.readouterr().err
+    assert f"{FLASH_OPTION_MODEL_NAME} is not downloaded" in err
+    assert "Settings > Model" in err
+    assert "correct the id" not in err
+
+
 @pytest.mark.parametrize(
     "routed, setting",
     [

@@ -346,6 +346,7 @@ def _model_on_disk(
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         cloud_model_provider,
+        find_model_requirement,
         resolve_chat_model,
     )
 
@@ -359,7 +360,8 @@ def _model_on_disk(
     if client._is_cloud_model(model):  # pylint: disable=protected-access
         return model
     info = client.get_model_info(model)
-    if not info["listed"]:
+    # GAIA's own models (a user.* pick, an NPU model) are listed only once pulled.
+    if not info["listed"] and find_model_requirement(model) is None:
         raise PrintModeError(
             f"{model} isn't a model the model server knows, so gaia -p can't run "
             f"it. {_missing_model_remedy(model, requested, setting, listed=False)}"
