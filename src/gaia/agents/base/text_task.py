@@ -37,9 +37,10 @@ _QUOTED_TEXT = re.compile(
 #: The quoted passage that opens the text after the colon.
 _LEADING_QUOTE = re.compile(r"\s*(?:\"[^\"\n]+\"|“[^”\n]+”|«[^»\n]+»)")
 
-#: A file name or path that opens the text after the colon.
+#: A file name, path or web page that opens the text after the colon.
 _LEADING_FILE = re.compile(
-    r"\s*[^\s\"'“«]*[\w)]\.[A-Za-z][A-Za-z0-9]{1,4}(?=[,;.!?]?(?:\s|$))"
+    r"\s*(?:https?://\S+"
+    r"|[^\s\"'“«]*[\w)]\.[A-Za-z][A-Za-z0-9]{1,4}(?=[,;.!?]?(?:\s|$)))"
 )
 
 #: A file name in the instruction itself: the text to work on is that file.
@@ -67,7 +68,9 @@ def instruction_part(request: str) -> str:
 
     A file the instruction itself names stays: "Translate README.md to
     French" and "Translate D:\\a.txt and save it as D:\\b.txt" are returned
-    whole. Any other request is returned unchanged.
+    whole. Any other request is returned unchanged. Unquoted text after a
+    colon is cut whole, a save typed after it included: the two can't be told
+    apart without guessing.
     """
     request = request or ""
     colon = _TEXT_AFTER_COLON.match(request)

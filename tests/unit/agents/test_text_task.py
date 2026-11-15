@@ -90,6 +90,7 @@ def test_the_text_handed_over_is_cut_from_the_request(request_text, instruction)
         'Translate this: "C:\\My Docs\\a.txt" and save to b.txt',
         'Translate "Quarterly Sales Report.docx" to French',
         'Translate this: "Quarterly Sales Report.docx"',
+        "Translate to Spanish: https://example.com/page and save to es.txt",
         "Proofread my essay at D:\\essay.docx: fix the typos and save it to D:\\fixed.docx",
         "Translate README.md to French: keep the headings and save it as README.fr.md",
         "Translate this to French and save it to: D:\\out\\fr.txt",
