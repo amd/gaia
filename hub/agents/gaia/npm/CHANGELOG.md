@@ -13,7 +13,7 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   stops the loading of the turn's attached documents, including for a cancel
   that lands just after the run ended. A host that closes the stream on Stop
   never read the loading step's "Stopped: N documents were not loaded" result,
-  so its user was told nothing. The field is absent when nothing was left.
+  so its user was told nothing. The field is `null` when nothing was left.
 
 - **More attached documents than one conversation searches.** A conversation
   searches at most 100 documents or 10,000 passages at once. With more in

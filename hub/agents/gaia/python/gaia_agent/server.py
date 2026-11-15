@@ -398,7 +398,7 @@ class QueryCancelResponse(_Strict):
         default=None,
         description=(
             "How many of the turn's attached documents the cancel left "
-            "unloaded; they load with the next turn. Absent when the run was "
+            "unloaded; they load with the next turn. null when the run was "
             "not loading documents or had loaded them all. The stream a host "
             "closes on cancel never carries the loading step's result, so this "
             "is where the count comes from."
