@@ -9,6 +9,7 @@ import pytest
 
 pypdf = pytest.importorskip("pypdf")
 
+from gaia.rag import pdf_utils  # noqa: E402
 from gaia.ui import _chat_helpers  # noqa: E402
 
 
@@ -18,6 +19,19 @@ def _blank_pdf(path, pages):
         writer.add_blank_page(width=100, height=100)
     with open(path, "wb") as fh:
         writer.write(fh)
+
+
+def _pdf_with_large_array(path, elements):
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(width=100, height=100)
+    writer.pages[0][pypdf.generic.NameObject("/GaiaTestArray")] = (
+        pypdf.generic.ArrayObject(
+            pypdf.generic.NumberObject(0) for _ in range(elements)
+        )
+    )
+    with open(path, "wb") as fh:
+        writer.write(fh)
+    return path
 
 
 class _FakeRAG:
@@ -84,3 +98,18 @@ def test_page_total_is_unknown_for_non_pdf_and_unreadable_files(tmp_path):
 
     assert _chat_helpers._page_total(notes) is None
     assert _chat_helpers._page_total(broken) is None
+
+
+def test_page_total_reads_an_array_past_the_pypdf_default(tmp_path):
+    pdf = _pdf_with_large_array(tmp_path / "f.pdf", 150_000)
+
+    assert _chat_helpers._page_total(pdf) == 1
+
+
+def test_page_total_past_the_cap_is_unknown_not_a_crash(tmp_path, monkeypatch):
+    monkeypatch.setattr(pdf_utils, "PDF_MAX_ARRAY_ELEMENTS", 1_000)
+
+    assert (
+        _chat_helpers._page_total(_pdf_with_large_array(tmp_path / "f.pdf", 5_000))
+        is None
+    )

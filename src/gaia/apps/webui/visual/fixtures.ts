@@ -148,9 +148,9 @@ export const SYSTEM_STATUS = {
     default_model_is_cloud: false, default_model_size_gb: 4.9, lemonade_url: 'http://127.0.0.1:13305',
     expected_model_loaded: true, download_progress: null, init_state: 'ready',
     init_tasks: [
-        { name: 'Checking LLM server', status: 'done' },
-        { name: 'Loading ML libraries', status: 'done' },
-        { name: 'Loading AI model', status: 'done' },
+        { name: 'Checking LLM server', step: 'check_server', status: 'done' },
+        { name: 'Loading ML libraries', step: 'load_libraries', status: 'done' },
+        { name: 'Loading AI model', step: 'load_model', status: 'done' },
     ],
     warm_up: { state: 'done', elapsed_seconds: 2.0, prompt_tokens: 1800, cached_tokens: 1800, error: null },
     detected_devices: ['gpu'], active_profile: 'chat', config_error: null, probe_warnings: [],
