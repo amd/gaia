@@ -39,7 +39,9 @@ from gaia.agents.tools.file_edit import (
 )
 from gaia.agents.tools.file_outline import outline_entries, render_outline
 from gaia.agents.tools.path_access import (
+    locked_file_error,
     missing_file_error,
+    read_permission_error,
     read_refusal,
     readable_entry,
 )
@@ -527,6 +529,9 @@ class FileIOToolsMixin:
                     return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
+                locked = locked_file_error(file_path)
+                if locked:
+                    return locked
 
                 unreadable = index_only_error(file_path)
                 if unreadable:
@@ -670,6 +675,11 @@ class FileIOToolsMixin:
 
                 return _outlined_if_oversized(self, result) or result
 
+            except PermissionError as e:
+                return read_permission_error(file_path) or {
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
