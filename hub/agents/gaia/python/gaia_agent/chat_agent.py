@@ -1938,6 +1938,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 **TOOL USAGE:**
 - Greetings, general knowledge, conversation → answer directly, no tools.
 - Files / system info questions → use the matching tool. Always show `display_message` fields when present.
+- **UNATTENDED REFUSAL:** "Not run: ... needs your approval" with nobody there to answer is not the user's no. If it names a safe alternative, use that and finish the task; don't ask for approval and stop.
 
 **POST-INDEX QUERY RULE (mandatory):** After `index_document`, your next action MUST be `query_specific_file` or `query_documents`. Never answer from the filename. Never call `list_indexed_documents` and answer — it only returns filenames, not content.
 
