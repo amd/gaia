@@ -89,6 +89,9 @@ describe('connect_account payload', () => {
         { kind: 'connect_account', providers: [1] },
         { kind: 'table', providers: ['google'] },
         { kind: 'connect_account', providers: ['google'], agent_id: 7 },
+        { kind: 'connect_account', providers: ['google'], scopes: { microsoft: ['x'] } },
+        { kind: 'connect_account', providers: ['google'], scopes: { google: [] } },
+        { kind: 'connect_account', providers: ['google'], scopes: ['x'] },
     ])('rejects %j', (value) => {
         expect(isConnectAccountPayload(value)).toBe(false);
     });
@@ -140,6 +143,27 @@ describe('ConnectAccountCard', () => {
         render(<ConnectAccountCard data={{ ...card(['microsoft']), reconnect: ['microsoft'] }} />);
         fireEvent.click(await screen.findByRole('button', { name: 'Reconnect Microsoft' }));
         await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledWith('microsoft', [], ['installed:gaia']));
+    });
+
+    it.each([
+        ['google', 'Connect Google', 'https://www.googleapis.com/auth/gmail.readonly'],
+        ['microsoft', 'Connect Microsoft', 'https://graph.microsoft.com/Mail.Read'],
+    ])('asks %s only to read mail when that is what the call needs', async (id, button, readScope) => {
+        render(<ConnectAccountCard data={{ ...card([id]), scopes: { [id]: [readScope] } }} />);
+        fireEvent.click(await screen.findByRole('button', { name: button }));
+        await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledTimes(1));
+        expect(mocked.authorizeConnector).toHaveBeenCalledWith(id, [readScope], ['installed:gaia']);
+    });
+
+    it('keeps what a connection already holds when it asks for more', async () => {
+        const read = 'https://www.googleapis.com/auth/gmail.readonly';
+        const compose = 'https://www.googleapis.com/auth/gmail.compose';
+        mocked.listConnectors.mockResolvedValue({ connectors: [connector('google', true, { scopes: ['openid', read] })] });
+        render(<ConnectAccountCard data={{ ...card(['google']), reconnect: ['google'], scopes: { google: [read, compose] } }} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Reconnect Google' }));
+        await waitFor(() =>
+            expect(mocked.authorizeConnector).toHaveBeenCalledWith('google', ['openid', read, compose], ['installed:gaia']),
+        );
     });
 
     it('opens Connectors in Settings instead of signing in when the agent does not declare the account', async () => {

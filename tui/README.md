@@ -1,7 +1,9 @@
 # GAIA Terminal UI
 
 Chat with GAIA in your terminal — no browser, no account. Chats run on your
-machine by default, and nothing you type leaves it unless you pick a cloud model.
+machine by default, and nothing you type leaves it unless you pick a cloud model
+or the agent uses its web search or page-fetch tools, which send their queries
+and URLs to the sites they look up.
 
 `gaia-tui` boots straight into the flagship `gaia` agent: conversation,
 documents, data, web research, memory, skills. There is nothing to browse and

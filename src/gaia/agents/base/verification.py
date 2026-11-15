@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from gaia.agents.base.checks import (
     CheckResult,
@@ -500,26 +500,122 @@ _PATH_ARG_KEYS: Tuple[str, ...] = (
     "destination",
 )
 
-#: Writing a report, a data file, or an image cannot break a test suite.
-_NON_CODE_SUFFIXES: FrozenSet[str] = frozenset(
-    {
-        ".csv",
-        ".docx",
-        ".gif",
-        ".jpeg",
-        ".jpg",
-        ".log",
-        ".markdown",
-        ".md",
-        ".pdf",
-        ".png",
-        ".rst",
-        ".svg",
-        ".tsv",
-        ".txt",
-        ".xlsx",
-    }
+#: Prose: a write to one of these outside a test, data or package folder is a doc.
+_PROSE_SUFFIXES: FrozenSet[str] = frozenset({".markdown", ".md", ".mdx", ".rst"})
+
+#: Anything a docs folder holds that no code runs: prose, plain text, images.
+_DOCS_FOLDER_SUFFIXES: FrozenSet[str] = _PROSE_SUFFIXES | frozenset(
+    {".gif", ".jpeg", ".jpg", ".pdf", ".png", ".svg", ".txt", ".webp"}
 )
+
+#: Folders that hold only documentation.
+_DOCS_DIRS: FrozenSet[str] = frozenset({"doc", "docs", "documentation"})
+
+#: Doc files often written with no suffix, or as ``.txt``.
+_DOC_NAMES: FrozenSet[str] = frozenset(
+    {"authors", "changelog", "changes", "contributing", "history", "license"}
+    | {"licence", "news", "notice", "readme"}
+)
+
+#: A folder or file name a test may read from: test inputs, expected output, data.
+_TEST_INPUT_NAME = re.compile(
+    r".*(?:test|fixture|snapshot|golden|expected|data).*"
+    r"|specs?|mocks?|samples?|e2e|assets?|resources?"
+)
+
+#: Files that configure a build, an install or a test run, whatever their suffix.
+_BUILD_INPUT = re.compile(
+    r"(?:requirements|constraints)[\w.-]*\.txt|cmakelists\.txt|pyproject\.toml"
+    r"|setup\.cfg|tox\.ini|pytest\.ini|\.coveragerc|makefile|pipfile(?:\.lock)?"
+    r"|poetry\.lock|package(?:-lock)?\.json|tsconfig[\w.-]*\.json|go\.(?:mod|sum)"
+    r"|cargo\.(?:toml|lock)|[\w.-]+\.config\.(?:json|ya?ml)"
+)
+
+#: Source files: one of these is code even when the request named it as output.
+_CODE_SUFFIXES: FrozenSet[str] = frozenset(
+    {".bat", ".c", ".cc", ".cjs", ".cpp", ".cs", ".go", ".h", ".hpp", ".java"}
+    | {".js", ".jsx", ".kt", ".lua", ".mjs", ".php", ".ps1", ".py", ".pyi"}
+    | {".pyx", ".rb", ".rs", ".scala", ".sh", ".svelte", ".swift", ".ts"}
+    | {".tsx", ".vue"}
+)
+
+
+def _project_parts(path: str, root: Optional[str] = None) -> List[str]:
+    """*path*'s lower-cased parts, read below *root* when it lies inside it."""
+    import os
+
+    path = (path or "").strip()
+    if root and path and os.path.isabs(path):
+        try:
+            inside = os.path.relpath(path, os.path.abspath(root))
+        except ValueError:  # another drive
+            inside = ".."
+        if not inside.startswith(".."):
+            path = inside
+    return [p for p in re.split(r"[\\/]+", path.lower()) if p]
+
+
+def feeds_tests(path: str, root: Optional[str] = None) -> bool:
+    """True when a test run may read *path*, whatever its suffix.
+
+    A folder or file named like a test input (``tests``, ``test_data``,
+    ``__tests__``, ``spec``, ``fixtures``, ``data``, ``expected.txt``, …), a
+    file in or below a Python package folder (a ``.md`` there can be a prompt
+    the code loads at runtime), or a build, install or test config. Errs
+    towards True: a wrong True only asks for a re-run. A relative *path* is
+    resolved against *root*, and folder names are read below *root*.
+    """
+    import os
+
+    parts = _project_parts(path, root)
+    if not parts:
+        return False
+    *folders, name = parts
+    stem = os.path.splitext(name)[0]
+    if _BUILD_INPUT.fullmatch(name) or any(
+        _TEST_INPUT_NAME.fullmatch(part) for part in (*folders, stem)
+    ):
+        return True
+    path = path.strip()
+    full = os.path.join(root, path) if root and not os.path.isabs(path) else path
+    folder = os.path.dirname(os.path.abspath(full))
+    while True:
+        if os.path.isfile(os.path.join(folder, "__init__.py")):
+            return True
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            return False
+        folder = parent
+
+
+def is_doc_path(path: str, root: Optional[str] = None) -> bool:
+    """True only for a file that is clearly documentation no test reads.
+
+    Prose (``.md``, ``.mdx``, ``.rst``), a ``README``- or ``CHANGELOG``-style
+    file (bare or ``.txt``), or a text or image file under a ``docs`` folder —
+    and never one :func:`feeds_tests` claims. Data files (``.csv``,
+    ``.json``, a plain ``.txt``) are not docs: a test may read them.
+    """
+    import os
+
+    parts = _project_parts(path, root)
+    if not parts or feeds_tests(path, root):
+        return False
+    *folders, name = parts
+    stem, suffix = os.path.splitext(name)
+    if suffix in _PROSE_SUFFIXES:
+        return True
+    if stem in _DOC_NAMES and suffix in ("", ".txt"):
+        return True
+    return suffix in _DOCS_FOLDER_SUFFIXES and any(f in _DOCS_DIRS for f in folders)
+
+
+def is_code_path(path: str) -> bool:
+    """True when *path* has a source-code suffix."""
+    import os
+
+    return os.path.splitext((path or "").strip().lower())[1] in _CODE_SUFFIXES
+
 
 #: Tools whose *output* can show a test run, whatever the command looked like.
 _TEST_OUTPUT_TOOLS: FrozenSet[str] = frozenset(
@@ -658,11 +754,14 @@ def _is_project_change(execution: Dict[str, Any], project_root: str) -> bool:
     paths = _changed_paths(execution)
     if paths is None:
         return False
+    # The record already judged this write: a doc or the requested output.
+    if execution.get("mutated") is False and is_file_mutation(execution.get("tool")):
+        return False
     if not paths:
         return True
     root = os.path.realpath(project_root)
     for path in paths:
-        if os.path.splitext(path)[1].lower() in _NON_CODE_SUFFIXES:
+        if is_doc_path(path, project_root):
             continue
         if os.path.isabs(path):
             real = os.path.realpath(path)
@@ -820,8 +919,49 @@ def is_file_mutation(tool_name: str) -> bool:
     return (tool_name or "").strip() in _FILE_MUTATION_TOOLS
 
 
+def is_code_mutation(
+    tool_name: str,
+    tool_args: Any,
+    is_deliverable: Optional[Callable[[str], bool]] = None,
+    root: Optional[str] = None,
+) -> bool:
+    """True when this call rewrote a file a test run could depend on.
+
+    A write to a doc (:func:`is_doc_path`), or to a non-code file the request
+    asked for as its output (*is_deliverable*) that no test reads, leaves an
+    earlier test run standing. A call whose target can't be read counts as a
+    change.
+    """
+    if not is_file_mutation(tool_name):
+        return False
+    args = tool_args if isinstance(tool_args, dict) else {}
+    paths = [
+        value
+        for key in _PATH_ARG_KEYS
+        if isinstance((value := args.get(key)), str) and value.strip()
+    ]
+    if not paths:
+        return True
+    return not all(
+        is_doc_path(path, root)
+        or (
+            is_deliverable is not None
+            and not is_code_path(path)
+            and not feeds_tests(path, root)
+            and is_deliverable(path)
+        )
+        for path in paths
+    )
+
+
 def verification_record(
-    tool_name: str, tool_args: Any, result: Any, *, errored: bool
+    tool_name: str,
+    tool_args: Any,
+    result: Any,
+    *,
+    errored: bool,
+    is_deliverable: Optional[Callable[[str], bool]] = None,
+    root: Optional[str] = None,
 ) -> Dict[str, Any]:
     """One tool call as :func:`build_verification_scope` reads it.
 
@@ -855,7 +995,7 @@ def verification_record(
         "ran": check_was_executed(result),
         "checked_absent": isinstance(result, dict)
         and result.get(CHECKED_ABSENT_KEY) is True,
-        "mutated": is_file_mutation(tool_name),
+        "mutated": is_code_mutation(tool_name, tool_args, is_deliverable, root),
         "declared": declared,
     }
 

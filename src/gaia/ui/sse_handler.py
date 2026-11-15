@@ -679,6 +679,8 @@ class SSEOutputHandler(OutputHandler):
         self.relay_hidden_turns = 0
         self.relay_context_error: Optional[str] = None
         self.relay_performance: Optional[Dict[str, Any]] = None
+        # The route a relayed hybrid turn took, from the sidecar's ``final``.
+        self.relayed_route: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
