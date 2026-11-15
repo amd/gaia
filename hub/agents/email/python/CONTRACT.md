@@ -59,7 +59,7 @@ the npm package accepts any higher MINOR), so the one breaking change below —
 | `2.11` | Additive (#2743): `EmailPreScanResult` gains `needs_you` (list of `NeedsYouItem`), `needs_you_total` (int), and `bulk` (`BulkSummary`, nullable) — a single worklist view built on top of the already-classified urgent/actionable/needs_review buckets, never a second independent classification pass. `NeedsYouItem.kind` reuses the published `AttentionItemKind` enum. No existing field changed, so `2.10` consumers keep working. |
 | `2.12` | Additive (#2829): `POST /v1/email/query` gains an optional `session_id`. When the host sends it, the run resolves the SAME agent every other turn on that id used, instead of a throwaway per-turn agent — so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. Omitted -> byte-for-byte the old per-turn behaviour. No existing field changed, so `2.11` consumers keep working. |
 | `2.13` | Additive (#2900): `PreScanItem` gains `is_phishing`/`is_spam` (bool, default `false`) — a flag previously readable only inside a prose `why` string is now a real field. `EmailPreScanResult` gains `suspicious` (list of `PreScanItem`) and `suspicious_total` (int) — the phishing/spam-flagged subset of `actionable`, captured before `actionable`'s own cap so a flagged message ranked past it is never silently dropped from the count. No existing field changed, so `2.12` consumers keep working. |
-| `2.14` | Additive (#2629): a third mailbox provider value, `microsoft_work` (work Microsoft 365 / Entra, distinct from the personal `microsoft` Outlook.com connector), is now valid wherever a provider string is accepted or returned. No existing field or value changed, so `2.13` consumers keep working — they simply never see the new value until a work mailbox is connected. |
+| `2.14` | Additive (#2629): a third mailbox provider value, `microsoft_work` (work Microsoft 365 / Entra, distinct from the personal `microsoft` Outlook.com connector), is now valid wherever a provider string is accepted or returned. No existing field or value changed, so `2.13` consumers keep working — they simply never see the new value until a work mailbox is connected. Four additive response fields also shipped under `2.14` without their own bump: `CalendarEventsResponse.count`/`truncated` (#2664) and `EmailBriefingResponse.cache_age_seconds`/`stale` (#2759). A `2.14` server may or may not send them, so read them as optional until `2.15`. |
 | `2.15` | Additive (#6043): the published OpenAPI contract now includes the twelve stateful `/v1/email/agent/*` operations already served by the sidecar: sessions, history, memory, autonomy, confirmations, cancellation, and the SSE query stream. No existing request or response shape changed. |
 | `2.16` | Additive (#5482): `POST /v1/email/query` gains an optional `memory` mode (`on`, `private`, or `off`). Private and memory-off turns suppress memory reads and writes; omitting the field preserves the session's current mode. |
 
@@ -483,6 +483,12 @@ cursor. `EmailSearchResponse` returns `count`, a list of `EmailSearchResultItem`
 `EmailAddress` objects), and `next_page_token`. Fetch the full body via the triage
 path.
 
+On an Outlook mailbox a `query` supports a plain phrase, `from:`, `subject:`,
+`is:unread`/`is:read`, and `newer_than:`/`older_than:` durations. Any other
+`is:` value (such as `is:starred`), `after:`, `before:`, `newer:`, `older:`,
+`label:`, `has:`, and `in:` are rejected with an error, as is one query that
+mixes `from:`/`subject:`/phrase terms with `is:`/`newer_than:`/`older_than:`.
+
 ### Mailbox actions — archive & phishing-quarantine (#1779)
 
 Mutating actions are gated by a single-use confirmation-token handshake, mirroring
@@ -624,6 +630,25 @@ failure propagates as a normal connector error (403/502/503).
 
 Read-only throughout: this endpoint never archives, marks, replies, or
 sends — proven by an id-set diff in the issue's real-world test evidence.
+
+### Daily briefing — `GET /v1/email/briefing` (#1608)
+
+Returns the latest persisted inbox briefing. `EmailBriefingResponse` carries
+`generated_at` (UTC ISO-8601 time of the run that produced it), `briefing` (the
+`EmailPreScanResult` envelope that run produced, same shape as `/prescan`'s
+`result`),
+and two freshness fields (#2759): `cache_age_seconds` (seconds since
+`generated_at`, measured when this response was built) and `stale` (`true` once
+the briefing is at least 24 hours old).
+
+The endpoint only reads; it never runs a scan. A briefing is produced by the
+sidecar's daily scheduler, which is **off by default**
+(`GAIA_EMAIL_BRIEFING_ENABLED=true` turns it on), or by the agent's briefing
+tool the first time it is asked with no briefing on disk. A stale briefing is
+returned labelled, not regenerated or refused — show its age before its
+contents. `404` means no briefing has been generated yet (use
+`POST /v1/email/prescan` for an on-demand scan); `500` means the persisted
+record could not be read or does not match the envelope.
 
 ## Transient connection errors — retry, don't reconnect
 
