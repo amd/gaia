@@ -155,6 +155,18 @@ def test_a_mail_question_asks_for_the_read_tools(message):
         "search the logs for emails",
         "write a regex that validates any email",
         "my email is foo@bar.com",
+        # Prose about sending, form fields, data sources, and pasted code.
+        "remember to e-mail me later",
+        "I'll e-mail me later",
+        "check the email field in the signup form",
+        "validate the email from the signup form",
+        "read the email column",
+        "show all emails from the users table",
+        "list the emails of all users in the db",
+        "sort the emails alphabetically in this list",
+        "email about this list",
+        "what about the invoice?",
+        "SELECT email FROM users WHERE id = 1",
         # "Write to me" is mail, but as a command it asks the assistant to write.
         "write to me when you land",
         "write me a poem",

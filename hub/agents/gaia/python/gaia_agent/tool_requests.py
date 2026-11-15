@@ -61,7 +61,8 @@ _MAILBOX_CUE = re.compile(_MAILBOX_NOUN, re.IGNORECASE)
 _NOT_MAIL_TECH = (
     r"(?!\s+(?:address(?:es)?|format(?:s)?|templates?|validat(?:e|ion|or)"
     r"|servers?|clients?|protocols?|headers?|signatures?|domains?|hosts?"
-    r"|marketing|campaigns?|aliases?|lists?|filters?|rules?)\b)"
+    r"|marketing|campaigns?|aliases?|lists?|filters?|rules?|fields?"
+    r"|columns?)\b)"
 )
 # Filenames, data sources, and contact details are not mailbox questions.
 _NOT_MAIL_DATA = (
@@ -71,7 +72,13 @@ _NOT_MAIL_DATA = (
     r"(?:a|an|the|this|that|my|your|our|their)?\s*"
     r"(?:csv|spreadsheets?|sheets?|workbooks?|files?|logs?|databases?|dbs?"
     r"|tables?|datasets?|data|json|yaml|xml|text|folders?|director(?:y|ies)"
-    r"|scripts?|code|regex(?:es)?|formulas?|columns?|rows?|cells?)\b)"
+    r"|scripts?|code|regex(?:es)?|formulas?|columns?|rows?|cells?|lists?"
+    r"|forms?|fields?)\b)"
+)
+# A field, column, table, form, or list after a mail noun is data, not mail.
+_NOT_MAIL_FIELD = (
+    r"(?![^.?!\n]{0,30}?\b(?:fields?|columns?|tables?|forms?|lists?"
+    r"|spreadsheets?|dbs?|databases?)\b)"
 )
 _MAIL_NAMED = re.compile(
     _MAILBOX_NOUN + r"|\b(?:e-?mail|e-?mailed|mail|mailed)\s+(?:me|us)\b"
@@ -82,6 +89,7 @@ _MAIL_NAMED = re.compile(
     + _MAIL_NOUN
     + _NOT_MAIL_TECH
     + _NOT_MAIL_DATA
+    + _NOT_MAIL_FIELD
     + r"|\b(?:check|read|scan|search|list|open|view|review|sort|triage|summarize"
     r"|show|look\s+(?:at|in|into|through)|go\s+through|clean\s+(?:up|out)|clear)\b"
     r"\s+(?:(?:the|a|an|my|your|our|their|his|her|all|any|some|new|unread"
@@ -89,11 +97,25 @@ _MAIL_NAMED = re.compile(
     + _MAIL_NOUN
     + _NOT_MAIL_TECH
     + _NOT_MAIL_DATA
+    + _NOT_MAIL_FIELD
     + r"|"
     + _MAIL_NOUN
     + _NOT_MAIL_DATA
-    + r"\s+(?:from|about|regarding|saying|says|said|containing|contains"
-    r"|contain|messages?|threads?|conversations?|notifications?)\b",
+    + _NOT_MAIL_FIELD
+    + r"(?:\s+from\s+(?:(?:the|my|your|our|their|his|her|a|an|this|that)"
+    r"\s+[\w'-]+|(?:me|us|him|her|them|someone|anyone|everyone|somebody"
+    r"|anybody|everybody)|(?-i:[A-Z][\w'-]*))\b"
+    r"(?!\s+(?:fields?|columns?|tables?|forms?|lists?|spreadsheets?"
+    r"|dbs?|databases?)\b)"
+    r"|\s+(?:about|regarding|saying|says|said|containing|contains"
+    r"|contain|messages?|threads?|conversations?|notifications?)\b)",
+    re.IGNORECASE,
+)
+# A send phrasing such as "I'll email me later" is not a read.
+_SEND_VERB = re.compile(
+    r"(?:\bto|\b(?:i|we|you|he|she|they)(?:['’](?:ll|d|m)"
+    r"|\s+(?:will|would|can|could|should|might|may)))\s+"
+    r"(?:e-?mail|mail)\s+(?:me|us)\b",
     re.IGNORECASE,
 )
 # A compose request asks the assistant to write unless it names the mailbox.
@@ -299,8 +321,12 @@ def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
         and "text_to_speech" not in found
     ):
         found.append("text_to_speech")
-    if _MAIL_NAMED.search(user_input) and not (
-        _COMPOSE_OPENING.match(user_input) and not _MAILBOX_CUE.search(user_input)
+    if (
+        _MAIL_NAMED.search(user_input)
+        and not _SEND_VERB.search(user_input)
+        and not (
+            _COMPOSE_OPENING.match(user_input) and not _MAILBOX_CUE.search(user_input)
+        )
     ):
         for name in MAIL_REQUEST_TOOLS:
             if name in names and name not in found:
