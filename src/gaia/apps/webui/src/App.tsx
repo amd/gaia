@@ -255,7 +255,7 @@ function App() {
         api.checkSetup(!!useModelStore.getState().active?.remote)
             .then((check) => {
                 // Only an outage: anything else missing is not a reason to leave the chat.
-                if (!stale && !check.ready && check.stage === 'server' && check.initialized) setSetup({ state: 'serverDown' });
+                if (!stale && !check.ready && check.stage === 'server' && check.initialized) setSetup({ state: 'serverDown', modelListUnread: !!check.model_list_unread });
             })
             .catch((err) => log.system.warn('Could not confirm the model server is down', err));
         return () => { stale = true; };
