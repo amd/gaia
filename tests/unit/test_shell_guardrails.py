@@ -1310,7 +1310,7 @@ class TestHeredocCannotHideARefusedCommand:
     )
     def test_the_scan_stays_linear(self, make_command):
         # Growth ratio, not wall time: a loaded runner slows both sizes alike.
-        small, big = make_command(100), make_command(800)
+        small, big = make_command(400), make_command(3200)
         small_best = big_best = float("inf")
         for _ in range(5):
             start = time.perf_counter()
