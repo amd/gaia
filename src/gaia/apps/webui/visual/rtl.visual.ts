@@ -661,6 +661,38 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A turn that ran two winget commands Undo cannot reverse. */
+async function withUntrackedCommands(page: Page): Promise<void> {
+    await withFailedAnswer(page);
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/changes`, (route) =>
+        route.fulfill({
+            json: {
+                turns: [{
+                    turn_id: 't1', session_id: ANSWER_SESSION, message_id: 2, started_at: NOW.toISOString(),
+                    finished_at: NOW.toISOString(), restored_at: null, files: [], incomplete: true,
+                    untracked: [
+                        { kind: 'shell', detail: 'winget install --id Git.Git --exact', paths: [] },
+                        { kind: 'shell', detail: 'winget install --id Git.Git --exact --source winget', paths: [] },
+                    ],
+                }],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the undo footer says what Undo cannot reverse, in the UI language (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withUntrackedCommands);
+        const warning = page.locator('.turn-changes-warning');
+        await expect(warning).toContainText(locale === 'en' ? 'GAIA ran 2 commands. Undo only restores' : 'التراجع يعيد فقط');
+        await expect(warning).not.toContainText("can't track");
+        expect(await audit(page)).toEqual([]);
+        await warning.screenshot({ path: info.outputPath(`undo-footer-${locale}.png`) });
+        const dir = process.env.GAIA_VISUAL_SHOTS;
+        if (dir) await warning.screenshot({ path: `${dir}/undo-footer-${locale}.png` });
+    });
+}
+
 /** The server's crash notice is English; it ends a partial answer and repeats as the last error step. */
 const CRASH_NOTICE = 'GAIA stopped unexpectedly while answering. Anything it had already written is kept above. Send your message again.';
 
