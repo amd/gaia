@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from gaia.logger import get_logger
 
-from ..security import require_ui_header, via_tunnel
+from ..security import refuse_on_device_listener, require_ui_header, via_tunnel
 
 logger = get_logger(__name__)
 
@@ -79,7 +79,10 @@ class TargetRequest(BaseModel):
     api_key: Optional[str] = None
 
 
-@router.post("/api/lemonade/target", dependencies=[Depends(require_ui_header)])
+@router.post(
+    "/api/lemonade/target",
+    dependencies=[Depends(require_ui_header), Depends(refuse_on_device_listener)],
+)
 def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
     """Switch servers. Nothing is saved unless the user's server checks out."""
     from gaia.config import GaiaConfigError

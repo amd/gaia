@@ -11,6 +11,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..dependencies import get_tunnel
+from ..security import refuse_on_device_listener
 from ..tunnel import TunnelManager
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["tunnel"])
 
 
-@router.post("/api/tunnel/start")
+@router.post("/api/tunnel/start", dependencies=[Depends(refuse_on_device_listener)])
 async def start_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
     """Start ngrok tunnel for mobile access."""
     try:
@@ -33,7 +34,7 @@ async def start_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
         )
 
 
-@router.post("/api/tunnel/stop")
+@router.post("/api/tunnel/stop", dependencies=[Depends(refuse_on_device_listener)])
 async def stop_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
     """Stop ngrok tunnel."""
     try:
@@ -48,7 +49,7 @@ async def stop_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
         )
 
 
-@router.get("/api/tunnel/status")
+@router.get("/api/tunnel/status", dependencies=[Depends(refuse_on_device_listener)])
 async def tunnel_status(tunnel: TunnelManager = Depends(get_tunnel)):
     """Get current tunnel status."""
     return tunnel.get_status()

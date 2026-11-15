@@ -15,8 +15,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from ..security import refuse_on_device_listener
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +107,7 @@ def preview_skill_link(body: SkillLinkRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.post("/api/skills/link/add")
+@router.post("/api/skills/link/add", dependencies=[Depends(refuse_on_device_listener)])
 def add_skill_link(body: SkillLinkAddRequest) -> Dict[str, Any]:
     """Add the chosen skills behind a pasted link to ``~/.gaia/skills``.
 

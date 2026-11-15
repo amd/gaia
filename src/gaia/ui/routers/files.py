@@ -22,7 +22,15 @@ import uuid
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
 from starlette.requests import ClientDisconnect
 
@@ -44,6 +52,7 @@ from ..models import (
     FileUploadResponse,
     OpenFileRequest,
 )
+from ..security import refuse_on_device_listener
 from ..turn_summary import is_openable
 from ..utils import (
     ALLOWED_EXTENSIONS,
@@ -447,7 +456,7 @@ async def browse_files(path: Optional[str] = None):
 # ── Open File/Folder ─────────────────────────────────────────────────────────
 
 
-@router.post("/api/files/open")
+@router.post("/api/files/open", dependencies=[Depends(refuse_on_device_listener)])
 async def open_file_or_folder(request: OpenFileRequest):
     """Open a file or its containing folder in the system file explorer.
 

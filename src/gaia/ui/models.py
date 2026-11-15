@@ -9,6 +9,13 @@ from pydantic import BaseModel, Field, field_validator
 
 from gaia.version import __version__ as _gaia_version
 
+from .devices import (
+    DevicePlatform,
+    DeviceStatus,
+    ListenerErrorCode,
+    PairFailureReason,
+)
+
 # ── System ──────────────────────────────────────────────────────────────────
 
 
@@ -995,3 +1002,85 @@ class FileUploadResponse(BaseModel):
     size: int
     content_type: str
     is_image: bool
+
+
+# ── Paired devices ──────────────────────────────────────────────────────────
+
+
+class DevicePairingOffer(BaseModel):
+    """What the PC's pairing QR code carries, as compact JSON.
+
+    Everything a device needs to pair: where the PC listens, the certificate
+    to pin, and a single-use invitation that dies at ``exp``.
+    """
+
+    v: int = Field(description="Format version")
+    name: str = Field(description="The PC's name, to show on the device")
+    pc_id: str = Field(description="Stays the same for this PC, across resets")
+    origins: List[str] = Field(
+        description="``https://<home-network IPv4>:<port>`` for each address"
+    )
+    pin: str = Field(description="SHA-256 of the listener's certificate, in hex")
+    invite: str = Field(description="The single-use invitation")
+    exp: int = Field(description="When the invitation dies, in Unix seconds")
+
+
+class DevicePairRequest(BaseModel):
+    """A device redeeming the invitation it scanned."""
+
+    invitation: str = Field(min_length=1, max_length=64)
+    device_name: str = Field(min_length=1, max_length=256)
+    platform: DevicePlatform
+
+
+class DevicePairResponse(BaseModel):
+    """The device's token, returned once. The device waits for Allow on the PC."""
+
+    device_id: str
+    token: str
+    pc_name: str
+    pc_id: str
+    status: DeviceStatus
+    # When a device still pending stops working.
+    expires_at: str
+
+
+class PairedDevice(BaseModel):
+    """A paired device, as the PC lists it. Never carries a token or its hash."""
+
+    id: str
+    name: str
+    platform: DevicePlatform
+    status: DeviceStatus
+    created_at: str
+    last_seen_at: Optional[str] = None
+    # Set while pending: when it stops working unless allowed.
+    expires_at: Optional[str] = None
+
+
+class PairedDeviceList(BaseModel):
+    """Every paired device."""
+
+    devices: List[PairedDevice]
+
+
+class FailedRedemption(BaseModel):
+    """A pairing attempt that failed, and why; the device saw one refusal."""
+
+    at: str
+    address: str
+    reason: PairFailureReason
+
+
+class DeviceAccessStatus(BaseModel):
+    """What the PC shows about access from the home network. Carries no secret."""
+
+    listening: bool
+    port: int
+    error_code: Optional[ListenerErrorCode] = None
+    error_detail: Optional[str] = None
+    pairing_open: bool
+    pairing_expires_at: Optional[str] = None
+    idle_expiry_days: int
+    pending_expiry_minutes: int
+    failed_redemptions: List[FailedRedemption] = Field(default_factory=list)
