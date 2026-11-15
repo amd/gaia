@@ -4229,6 +4229,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         except Exception as e:
             logger.error(f"Error closing browser during cleanup: {e}")
         try:
+            # Each MCP server is a process tree (uvx, uv, the server) that outlives us.
+            if getattr(self, "_mcp_manager", None):
+                self._mcp_manager.disconnect_all()
+        except Exception as e:
+            logger.error(f"Error stopping MCP servers during cleanup: {e}")
+        try:
             if self._fs_index:
                 self._fs_index.close_db()
         except Exception as e:

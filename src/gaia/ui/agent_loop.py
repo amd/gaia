@@ -545,6 +545,7 @@ class AgentLoop:
         db = self._db
 
         def _run_agent() -> None:
+            fresh_agent = None  # built for this tick alone, so closed after it
             try:
                 import gaia.ui._chat_helpers as _helpers
 
@@ -637,7 +638,7 @@ class AgentLoop:
                         surface="agent_ui",
                     )
                     with _helpers.writing_tool_registry():
-                        agent = GaiaAgent(config)
+                        agent = fresh_agent = GaiaAgent(config)
                     _helpers._register_agent_memory_ops(agent)
                     agent.console = sse_handler
 
@@ -664,6 +665,13 @@ class AgentLoop:
                 logger.error("AgentLoop tick execution failed: %s", exc, exc_info=True)
                 result_holder["error"] = str(exc)
             finally:
+                if fresh_agent is not None:
+                    try:
+                        fresh_agent.close()
+                    except Exception as exc:  # noqa: BLE001 — logged, tick still ends
+                        logger.warning(
+                            "AgentLoop: closing the tick's agent failed: %s", exc
+                        )
                 try:
                     # Here, not after the wait: a run that outlives its timeout
                     # still cost.
