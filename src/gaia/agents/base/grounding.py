@@ -1020,8 +1020,8 @@ def ungrounded(
     not look, or that its figures are unverified, has nothing left to correct
     about looking or figures — only a false report of work done still counts.
     """
-    # Files to read and commands to run come from the instruction; figures may
-    # come from the text it hands over too.
+    # Files to read and commands to run come from the instruction; the figure
+    # check below reads the whole query, since figures may come from the text.
     asked = instruction_part(query)
     findings = look_findings(answer, asked, records, locate, history, plan_only)
     if admits_unverified(answer):

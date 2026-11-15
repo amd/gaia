@@ -86,6 +86,8 @@ def test_the_text_handed_over_is_cut_from_the_request(request_text, instruction)
         "Translate this file: D:\\letters\\letter.txt",
         "Translate this file to French: notes.txt",
         "Translate the document to French: report.docx and save as report.fr.docx",
+        "Translate to German: notes.txt, and save as de.txt",
+        'Translate this: "C:\\My Docs\\a.txt" and save to b.txt',
         "Translate this to French and save it to: D:\\out\\fr.txt",
         "Save the report to D:\\Reports\\summary.docx",
         "Summarize this: please save it to x.md",
@@ -186,6 +188,7 @@ def test_a_file_named_before_the_colon_is_still_read_and_saved(tmp_path):
         'Translate "Hello there, friend" to French and save it as fr.txt',
         "Translate this to French and save it to: fr.txt",
         'Translate this to French: "Hello there, friend." Then save it to fr.txt',
+        "Translate to French: notes.txt, and save as fr.txt",
     ],
 )
 def test_a_save_the_instruction_asks_for_is_still_owed(request_text):
