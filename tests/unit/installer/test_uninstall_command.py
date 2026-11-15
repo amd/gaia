@@ -1706,7 +1706,7 @@ def installer_home(fake_home, monkeypatch):
     _seed_gaia_tree(fake_home)
     gaia = fake_home / ".gaia"
     (gaia / "bin").mkdir()
-    (gaia / "bin" / "gaia-tui").write_text("tui")
+    (gaia / "bin" / "gaia-cli").write_text("tui")
     (gaia / "bin" / "gaia-agent").write_text("agent")
     host = gaia / "host"
     host.mkdir()
@@ -1820,7 +1820,7 @@ class TestInstallerLeftovers:
 
         assert exit_code == uc.EXIT_OK
         assert (home / ".zshrc").read_text() == text
-        assert (home / ".gaia" / "bin" / "gaia-tui").exists()
+        assert (home / ".gaia" / "bin" / "gaia-cli").exists()
         assert (home / ".gaia" / "host" / "instance.json").exists()
 
     def test_daemon_home_outside_gaia_home_is_skipped(

@@ -78,7 +78,8 @@ class SystemStatus(BaseModel):
     # banner long after it stopped existing. ``start_command`` is None on hosts
     # requiring GUI/manual configuration, including service context changes,
     # and on Windows when Command Prompt and PowerShell need different lines.
-    # In those cases start_instruction carries the necessary steps.
+    # In those cases start_instruction carries the necessary steps. Both are
+    # None for GAIA's own server, which GAIA starts by itself.
     start_instruction: Optional[str] = None
     start_command: Optional[str] = None
     # Extended Lemonade info (settings modal)

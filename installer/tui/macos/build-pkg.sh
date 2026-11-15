@@ -6,8 +6,8 @@
 #
 #   ./build-pkg.sh --version <x.y.z> --arch <arm64|x64> --payload <dir> --out <dir>
 #
-# Produces <out>/gaia-<version>-darwin-<arch>.pkg, installing gaia-tui and
-# gaia-agent to /usr/local/bin, plus LICENSE.md to /usr/local/share/doc/gaia-tui.
+# Produces <out>/gaia-<version>-darwin-<arch>.pkg, installing gaia-cli and
+# gaia-agent to /usr/local/bin, plus LICENSE.md to /usr/local/share/doc/gaia-cli.
 #
 # Signing and notarization are opt-in via the environment — see README.md.
 #
@@ -33,13 +33,13 @@ readonly MIN_OS_VERSION="11.0"
 # payload entry: `--ownership recommended` would stamp such an entry root:wheel,
 # which breaks `brew` on an Intel Mac where Homebrew owns /usr/local as the user.
 readonly BIN_INSTALL_LOCATION="/usr/local/bin"
-# Mirrors the .deb/.rpm layout (usr/share/doc/gaia-tui), under /usr/local
+# Mirrors the .deb/.rpm layout (usr/share/doc/gaia-cli), under /usr/local
 # because that is where this package installs.
-readonly DOC_INSTALL_LOCATION="/usr/local/share/doc/gaia-tui"
+readonly DOC_INSTALL_LOCATION="/usr/local/share/doc/gaia-cli"
 readonly LICENSE_NAME="LICENSE.md"
 # Not `readonly`: bash 3.2, which is what /bin/bash still is on macOS, rejects
 # `readonly name=(...)`.
-PAYLOAD_BINARIES=(gaia-tui gaia-agent)
+PAYLOAD_BINARIES=(gaia-cli gaia-agent)
 PKG_SCRIPTS=(postinstall)
 
 readonly DISTRIBUTION_TEMPLATE="${SCRIPT_DIR}/distribution.xml"
@@ -52,7 +52,7 @@ Usage: build-pkg.sh --version <x.y.z> --arch <arm64|x64> --payload <dir> --out <
 
   --version         Release version, e.g. 1.4.0. Embedded in the package and filename.
   --arch            Architecture of the staged binaries: arm64 or x64.
-  --payload         Directory containing the executables gaia-tui and gaia-agent, plus LICENSE.md.
+  --payload         Directory containing the executables gaia-cli and gaia-agent, plus LICENSE.md.
   --out             Directory to write gaia-<version>-darwin-<arch>.pkg into (created if absent).
   --allow-unsigned  Proceed without Apple credentials. Required to build an
                     unsigned package, so that shipping one is always a decision
@@ -122,12 +122,12 @@ esac
 # ── Inputs ──────────────────────────────────────────────────────────────────
 
 [ -d "$PAYLOAD_DIR" ] || die "--payload directory does not exist: ${PAYLOAD_DIR}" \
-    "Stage the inputs there first; the directory must contain gaia-tui, gaia-agent and LICENSE.md."
+    "Stage the inputs there first; the directory must contain gaia-cli, gaia-agent and LICENSE.md."
 
 for binary in "${PAYLOAD_BINARIES[@]}"; do
     [ -f "${PAYLOAD_DIR}/${binary}" ] || die \
         "payload is missing '${binary}': ${PAYLOAD_DIR}/${binary} not found." \
-        "The staging directory must contain both gaia-tui and gaia-agent (no extension)." \
+        "The staging directory must contain both gaia-cli and gaia-agent (no extension)." \
         "Check the build step that copies the Go binaries into ${PAYLOAD_DIR}."
 done
 
