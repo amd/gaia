@@ -25,12 +25,17 @@ _TARGET_BEFORE_COLON = re.compile(
     re.IGNORECASE,
 )
 
-#: 'Translate "<text>" to French': the quoted span right after the verb.
-_QUOTED_TEXT = re.compile(
-    _VERB + r"(?:\s+(?:this|the|following|my)"
+#: "Translate this sentence to French": the verb, what it acts on, a language.
+_BARE_INSTRUCTION = (
+    _VERB + r"(?:\s+(?:this|(?:the\s+)?following|the|my)"
     r"(?:\s+(?:sentence|text|phrase|line|paragraph|message|quote))?)?"
     r"(?:\s+(?:in)?to\s+[^\W\d_]+)?\s*"
-    r"(?P<quote>\"(?P<a>[^\"\n]+)\"|“(?P<b>[^”\n]+)”|«(?P<c>[^»\n]+)»)",
+)
+
+#: 'Translate "<text>" to French': the quoted span right after the verb.
+_QUOTED_TEXT = re.compile(
+    _BARE_INSTRUCTION
+    + r"(?P<quote>\"(?P<a>[^\"\n]+)\"|“(?P<b>[^”\n]+)”|«(?P<c>[^»\n]+)»)",
     re.IGNORECASE,
 )
 
@@ -109,6 +114,19 @@ _ASKS_FOR_WORK = re.compile(
     re.IGNORECASE,
 )
 
+#: "…, do nothing else", "…and reply with only the translation": asks for
+#: nothing beyond the reply.
+_REPLY_ONLY = (
+    r"(?:,?\s*(?:and\s+)?(?:do\s+nothing\s+else"
+    r"|(?:reply|respond|answer)(?:\s+with)?\s+(?:only|just)"
+    r"(?:\s+(?:the|your))?(?:\s+(?:translation|result|text|answer))?)\s*)*"
+)
+
+#: All that may come before the colon: the bare instruction, kept to the reply.
+_ONLY_THE_INSTRUCTION = re.compile(
+    _BARE_INSTRUCTION + _REPLY_ONLY + r":", re.IGNORECASE
+)
+
 #: All that may follow the quoted text: a target language and an end mark.
 _ONLY_A_LANGUAGE = re.compile(
     r"\s*(?:(?:in)?to\s+[^\W\d_]+)?\s*[.!?]?\s*", re.IGNORECASE
@@ -127,12 +145,14 @@ def hands_over_text_only(request: str) -> bool:
 
     False for any request whose own instruction names a file, a save or a
     command: that work was asked for. False too when the text is not quoted,
-    or when anything but a target language follows the quote: that may be
-    work no word list foresees, so the user is asked.
+    or when anything but the verb and a target language surrounds the quote:
+    that may be work no word list foresees, so the user is asked.
     """
     request = request or ""
     colon = _TEXT_AFTER_COLON.match(request)
     if colon and not _TARGET_BEFORE_COLON.search(colon.group()):
+        if not _ONLY_THE_INSTRUCTION.fullmatch(colon.group()):
+            return False
         quote = _LEADING_QUOTE.match(request[colon.end() :])
         after = request[colon.end() + quote.end() :] if quote else None
     else:
