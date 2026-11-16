@@ -259,10 +259,20 @@ jobs:
       # Prove the credential is ACCEPTED before spending hours of the serial
       # Lemonade slot. An out-of-credit key that passed a presence-only check is
       # what killed every email eval run, on every branch, ~25 minutes in.
+      # On AMD's network Claude goes only through the AMD LLM Gateway, so the
+      # Anthropic account probe below is skipped there.
+      - name: Check for AMD's network
+        id: amd_net
+        uses: ./.github/actions/amd-network
+        with:
+          gateway-key: ${{ secrets.LEMONADE_AMD_API_KEY }}
+          what: "The email scorecard refresh"
+
       # The account this job runs on: the primary, or the secondary if the
       # primary is out of quota. Both out fails here, naming both reset times.
       - name: Pick the Claude account
         id: claude_account
+        if: steps.amd_net.outputs.on != 'true'
         uses: ./.github/actions/claude-credential
         with:
           primary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -274,6 +284,7 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
         run: |
           python -m gaia.eval.judge_client --probe
           if ($LASTEXITCODE -ne 0) { throw "judge credential probe failed" }
@@ -457,6 +468,7 @@ jobs:
           # Same expression every other Claude workflow here uses.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_drafting_report.py
           if ($LASTEXITCODE -ne 0) { throw "drafting eval failed" }
@@ -471,6 +483,7 @@ jobs:
           # Same expression every other Claude workflow here uses.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_action_item_report.py
           if ($LASTEXITCODE -ne 0) { throw "action-item eval failed" }
@@ -483,6 +496,7 @@ jobs:
           # Same expression every other Claude workflow here uses.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
         run: |
           python hub/agents/email/python/packaging/eval_briefing_report.py
           if ($LASTEXITCODE -ne 0) { throw "briefing eval failed" }

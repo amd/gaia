@@ -126,6 +126,9 @@ on:
       ANTHROPIC_API_KEY:
         description: 'Fallback credential, used only when no OAuth token is set.'
         required: false
+      LEMONADE_AMD_API_KEY:
+        description: "AMD LLM Gateway key. On AMD's network the driver and judge use only the gateway, and the job fails without it."
+        required: false
       HUGGINGFACE_ACCESS_TOKEN:
         description: 'Model downloads.'
         required: false
@@ -281,10 +284,21 @@ jobs:
       - name: Install Claude Code CLI (the eval's scenario driver)
         uses: ./.github/actions/install-claude-cli
 
+      # On AMD's network Claude goes only through the AMD LLM Gateway, so the
+      # Anthropic account probe below is skipped there.
+      - name: Check for AMD's network
+        id: amd_net
+        uses: ./.github/actions/amd-network
+        with:
+          gateway-key: ${{ secrets.LEMONADE_AMD_API_KEY }}
+          python: ${{ env.VENV_PY }}
+          what: "Eval lane ${{ inputs.lane }}"
+
       # The account this job starts on: the primary, or the secondary if the
       # primary is out of quota. Both out fails here, naming both reset times.
       - name: Pick the Claude account
         id: claude_account
+        if: steps.amd_net.outputs.on != 'true'
         uses: ./.github/actions/claude-credential
         with:
           primary-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -312,26 +326,42 @@ jobs:
           # Only without a subscription token. The token would win anyway, and the
           # key then never reaches the job.
           ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          AMD_NETWORK: ${{ steps.amd_net.outputs.on }}
+          GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
 
-          if (-not $env:CLAUDE_CODE_OAUTH_TOKEN -and -not $env:ANTHROPIC_API_KEY) {
-            Write-Host "::error::Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set. 'gaia eval agent' drives and scores every scenario through 'claude -p', so without one each scenario errors in seconds. Add either repository secret."
-            exit 1
+          if ($env:AMD_NETWORK -eq 'true') {
+            # On AMD's network the driver and judge go through the AMD LLM
+            # Gateway: check its key and the judge model's gateway id, not Anthropic.
+            $ErrorActionPreference = "Continue"
+            $global:LASTEXITCODE = 1
+            & $env:VENV_PY -m gaia.eval.judge_client --probe --model $env:EVAL_MODEL
+            $probeExit = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            if ($probeExit -ne 0) {
+              Write-Host "::error::The Claude judge did not answer through the AMD LLM Gateway; the output above says why. Check the LEMONADE_AMD_API_KEY secret and that $env:EVAL_MODEL has a gateway equivalent."
+              exit 1
+            }
+          } else {
+            if (-not $env:CLAUDE_CODE_OAUTH_TOKEN -and -not $env:ANTHROPIC_API_KEY) {
+              Write-Host "::error::Neither CLAUDE_CODE_OAUTH_TOKEN nor ANTHROPIC_API_KEY is set. 'gaia eval agent' drives and scores every scenario through 'claude -p', so without one each scenario errors in seconds. Add either repository secret."
+              exit 1
+            }
+            # Accepted, not merely present (#3341); the classifier names who can fix a rejection.
+            # Continue: under Stop, any CLI stderr line is a terminating NativeCommandError.
+            # Preset 1 so a claude that never launches cannot read as a pass.
+            $ErrorActionPreference = "Continue"
+            $global:LASTEXITCODE = 1
+            $probe = (& claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | ForEach-Object { "$_" } | Out-String)
+            $probeExit = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            $probeFile = Join-Path $env:RUNNER_TEMP "claude_probe.txt"
+            Set-Content -Path $probeFile -Value $probe -Encoding UTF8
+            & $env:VENV_PY util/classify_claude_probe.py --exit-code $probeExit --text-file $probeFile
+            if ($LASTEXITCODE -ne 0) { exit 1 }
           }
-          # Accepted, not merely present (#3341); the classifier names who can fix a rejection.
-          # Continue: under Stop, any CLI stderr line is a terminating NativeCommandError.
-          # Preset 1 so a claude that never launches cannot read as a pass.
-          $ErrorActionPreference = "Continue"
-          $global:LASTEXITCODE = 1
-          $probe = (& claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | ForEach-Object { "$_" } | Out-String)
-          $probeExit = $LASTEXITCODE
-          $ErrorActionPreference = "Stop"
-          $probeFile = Join-Path $env:RUNNER_TEMP "claude_probe.txt"
-          Set-Content -Path $probeFile -Value $probe -Encoding UTF8
-          & $env:VENV_PY util/classify_claude_probe.py --exit-code $probeExit --text-file $probeFile
-          if ($LASTEXITCODE -ne 0) { exit 1 }
 
           # A category with no committed scorecard is reported, never assumed to
           # pass; enforcing against nothing would be a pass by default.
@@ -438,6 +468,7 @@ jobs:
           # quota mid-run, and stops with a partial scorecard if both are out.
           CLAUDE_CODE_OAUTH_TOKEN_BACKUP: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN || (steps.claude_account.outputs.account == 'primary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || '') }}
           GAIA_CLAUDE_ACCOUNT: ${{ steps.claude_account.outputs.account }}
+          GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
         run: |
           # Not "Stop": the first stderr line of a native command would become a
           # terminating error. Every failure is checked explicitly.
@@ -463,7 +494,7 @@ jobs:
           # The agent under test runs shell commands; only `claude -p` gets the
           # judge's credentials.
           $judgeCredentials = @{}
-          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "ANTHROPIC_API_KEY")) {
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "ANTHROPIC_API_KEY", "GAIA_GATEWAY_TOKEN")) {
             $judgeCredentials[$name] = [Environment]::GetEnvironmentVariable($name)
           }
           function Start-Isolated($argList, $cwd, $out, $err) {
@@ -939,12 +970,13 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CLAUDE_CODE_OAUTH_TOKEN_SECONDARY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LEMONADE_AMD_API_KEY: ${{ secrets.LEMONADE_AMD_API_KEY }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
           $files = @(Get-ChildItem eval-out -Recurse -File -ErrorAction SilentlyContinue)
           $secrets = @()
-          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY", "ANTHROPIC_API_KEY", "HF_TOKEN")) {
+          foreach ($name in @("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY", "ANTHROPIC_API_KEY", "LEMONADE_AMD_API_KEY", "HF_TOKEN")) {
             $value = [Environment]::GetEnvironmentVariable($name)
             if ($value) { $secrets += $value }
           }

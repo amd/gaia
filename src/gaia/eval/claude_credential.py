@@ -204,6 +204,7 @@ def gateway_credential() -> ClaudeCredential:
 
 def gateway_judge_model(model: str, role: str = "Claude judge") -> str:
     """The gateway id for *model*, announced; raises when the gateway has none."""
+    from gaia.eval.config import DEFAULT_CLAUDE_MODEL
     from gaia.llm.amd_network import GATEWAY_EQUIVALENTS, gateway_equivalent
 
     equivalent = gateway_equivalent(model)
@@ -211,7 +212,7 @@ def gateway_judge_model(model: str, role: str = "Claude judge") -> str:
         raise ValueError(
             f"On the AMD network the {role} runs through the AMD LLM Gateway, "
             f"which has no equivalent of {model!r}. Use one of "
-            f"{', '.join(GATEWAY_EQUIVALENTS)} (e.g. --model claude-opus-5). "
+            f"{', '.join(GATEWAY_EQUIVALENTS)} (e.g. --model {DEFAULT_CLAUDE_MODEL}). "
             "See https://amd-gaia.ai/docs/guides/llm-gateway."
         )
     line = f"{role}: {equivalent} via AMD LLM Gateway"

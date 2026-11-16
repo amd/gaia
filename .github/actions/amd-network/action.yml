@@ -1,0 +1,72 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Is this runner on AMD's network? There GAIA sends Claude (the eval driver and
+# judge) only through the AMD LLM Gateway, so the job needs a gateway key and
+# must not probe Anthropic directly. Fails when it is on the network and no key
+# is available. GitHub-hosted runners read "off" and nothing changes. See
+# util/check_amd_network.py. Run it after GAIA is installed.
+#
+#   - name: Check for AMD's network
+#     id: amd_net
+#     uses: ./.github/actions/amd-network
+#     with:
+#       gateway-key: ${{ secrets.LEMONADE_AMD_API_KEY }}
+#       python: ${{ env.VENV_PY }}
+#
+# Then give eval steps the key only on the network:
+#   GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
+
+name: 'Check for AMD network'
+description: "Report whether the runner is on AMD's network; fail there without a gateway key"
+
+inputs:
+  gateway-key:
+    description: 'secrets.LEMONADE_AMD_API_KEY'
+    required: false
+    default: ''
+  python:
+    description: 'Python interpreter with GAIA installed (default python3, or python on Windows)'
+    required: false
+    default: ''
+  what:
+    description: 'Names the job in messages'
+    required: false
+    default: 'This job'
+
+outputs:
+  on:
+    description: "'true' on AMD's network, else 'false'"
+    value: ${{ steps.posix.outputs.on || steps.windows.outputs.on }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check for AMD's network (Linux/macOS)
+      id: posix
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        GATEWAY_SECRET: ${{ inputs.gateway-key }}
+        PYTHON_BIN: ${{ inputs.python }}
+        WHAT: ${{ inputs.what }}
+        PYTHONIOENCODING: utf-8
+      run: |
+        "${PYTHON_BIN:-python3}" "$GITHUB_ACTION_PATH/../../../util/check_amd_network.py" \
+          --github-output "$GITHUB_OUTPUT" --what "$WHAT"
+
+    - name: Check for AMD's network (Windows)
+      id: windows
+      if: runner.os == 'Windows'
+      shell: powershell
+      env:
+        GATEWAY_SECRET: ${{ inputs.gateway-key }}
+        PYTHON_BIN: ${{ inputs.python }}
+        WHAT: ${{ inputs.what }}
+        PYTHONIOENCODING: utf-8
+      run: |
+        $py = if ($env:PYTHON_BIN) { $env:PYTHON_BIN } else { 'python' }
+        $script = Join-Path $env:GITHUB_ACTION_PATH '..\..\..\util\check_amd_network.py'
+        $global:LASTEXITCODE = 1
+        & $py $script --github-output $env:GITHUB_OUTPUT --what $env:WHAT
+        if ($LASTEXITCODE -ne 0) { exit 1 }

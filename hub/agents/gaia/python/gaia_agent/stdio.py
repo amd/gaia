@@ -534,6 +534,22 @@ def is_skills_command(query: str) -> bool:
     )
 
 
+def claude_unavailable() -> Dict[str, Dict[str, str]]:
+    """Direct Claude ids that can't be used here, with why and the gateway id to use.
+
+    Empty off AMD's network. On it, GAIA sends Claude only through the AMD LLM
+    Gateway, so every direct id is refused when chosen.
+    """
+    from gaia.llm.amd_network import blocked_reason, gateway_suggestion
+
+    out = {}
+    for model_id in CLAUDE_MODELS:
+        reason = blocked_reason(model_id)
+        if reason:
+            out[model_id] = {"reason": reason, "use": gateway_suggestion(model_id)}
+    return out
+
+
 def _model_display_name(model_id: str, is_claude: bool) -> str:
     """Friendly header name for *model_id* — falls back to the raw id."""
     if is_claude:
@@ -575,6 +591,9 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
         "agent_version": agent_version,
         "gaia_version": gaia_version,
     }
+    unavailable = claude_unavailable()
+    if unavailable:
+        event["claude_unavailable"] = unavailable
     # Reported even on the Claude path: embeddings (RAG, memory) still run on
     # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
     event.update(_lemonade_health(_status_lemonade_url(agent)))
@@ -1127,9 +1146,14 @@ def _format_model_list(agent: Any) -> str:
             " ← current" if model_id == current else ""
         )
 
+    unavailable = claude_unavailable()
     lines = ["**Claude (cloud — sent to Anthropic):**"]
     for model_id, label in CLAUDE_MODELS.items():
-        lines.append(f"- `{model_id}` — {label}{marker(model_id)}")
+        blocked = unavailable.get(model_id)
+        if blocked:
+            lines.append(f"- `{model_id}` — {label} (unavailable: {blocked['reason']})")
+        else:
+            lines.append(f"- `{model_id}` — {label}{marker(model_id)}")
 
     lines.append("")
     try:

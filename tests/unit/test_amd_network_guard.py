@@ -246,7 +246,9 @@ def test_on_the_network_the_gateway_host_is_allowed(on_network, base):
         ("Claude-Sonnet-5-5", "amd.Claude-Sonnet-5-5"),
         (" CLAUDE-OPUS-5 ", "amd.Claude-Opus-5"),
         ("opus", "amd.Claude-Opus-5-5"),
-        ("claude-haiku-5-5", "amd.Claude-Opus-5-5"),
+        ("claude-haiku-5-5", "amd.Claude-Haiku-5-5"),
+        ("claude-fable-5-1", "amd.Claude-Fable-5-1"),
+        ("claude-haiku-4-5", "amd.Claude-Opus-5-5"),
         (None, "amd.Claude-Opus-5-5"),
     ],
 )
@@ -442,7 +444,9 @@ def test_the_judge_model_maps_and_is_announced(judge_env, capsys):
     )
 
 
-@pytest.mark.parametrize("model", ["claude-haiku-5-5", "claude-fable-5", "opus", ""])
+@pytest.mark.parametrize(
+    "model", ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8", "opus", ""]
+)
 def test_a_judge_model_without_a_gateway_equivalent_is_refused(judge_env, model):
     from gaia.eval import claude_credential
 
@@ -561,3 +565,125 @@ def test_the_eval_fixer_is_refused_on_the_network(monkeypatch, on_network, tmp_p
     scorecard = {"scenarios": [{"scenario_id": "s", "status": "FAIL"}]}
     with pytest.raises(DirectAnthropicBlockedError):
         runner.run_fix_iteration(scorecard, tmp_path, 1)
+
+
+# ── CI: eval jobs on AMD's network use the gateway ──────────────────────────
+
+REPO = SRC.parent
+WORKFLOWS = REPO / ".github" / "workflows"
+#: Workflows that drive or judge with Claude on self-hosted runners.
+EVAL_WORKFLOWS = (
+    "eval_flagship.yml",
+    "eval_scenario_lane.yml",
+    "gaia_scorecard_refresh.yml",
+    "test_gaia_agent_eval.yml",
+    "email_scorecard_refresh.yml",
+)
+
+
+def _check_script():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_amd_network", REPO / "util" / "check_amd_network.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_ci_check_off_the_network_passes_and_says_so(monkeypatch, tmp_path, capsys):
+    out = tmp_path / "out"
+    monkeypatch.delenv("GATEWAY_SECRET", raising=False)
+    assert _check_script().main(["--github-output", str(out)]) == 0
+    assert out.read_text() == "on=false\n"
+
+
+def test_ci_check_on_the_network_without_a_key_fails_naming_the_secret(
+    monkeypatch, no_gateway_env, tmp_path, capsys
+):
+    _probe(monkeypatch, True)
+    monkeypatch.delenv("GATEWAY_SECRET", raising=False)
+    out = tmp_path / "out"
+    assert _check_script().main(["--github-output", str(out), "--what", "Lane x"]) == 1
+    assert out.read_text() == "on=true\n"
+    printed = capsys.readouterr().out
+    assert "::error::Lane x" in printed and "LEMONADE_AMD_API_KEY" in printed
+
+
+@pytest.mark.parametrize("secret", ["key", "  key  "])
+def test_ci_check_on_the_network_with_the_secret_passes(
+    monkeypatch, no_gateway_env, tmp_path, secret
+):
+    _probe(monkeypatch, True)
+    monkeypatch.setenv("GATEWAY_SECRET", secret)
+    assert _check_script().main(["--github-output", str(tmp_path / "o")]) == 0
+
+
+def test_ci_check_the_secret_alone_never_makes_a_runner_on_network(
+    monkeypatch, no_gateway_env, tmp_path
+):
+    """A GitHub-hosted runner gets the secret too; it must still read as off."""
+    _probe(monkeypatch, False)
+    monkeypatch.setenv("GATEWAY_SECRET", "key")
+    out = tmp_path / "o"
+    assert _check_script().main(["--github-output", str(out)]) == 0
+    assert out.read_text() == "on=false\n"
+
+
+@pytest.mark.parametrize("name", EVAL_WORKFLOWS)
+def test_eval_workflows_route_claude_through_the_gateway_on_amds_network(name):
+    import yaml
+
+    text = (WORKFLOWS / name).read_text(encoding="utf-8")
+    doc = yaml.safe_load(text)
+    steps = [s for job in doc["jobs"].values() for s in job.get("steps", [])]
+    checks = [s for s in steps if s.get("uses") == "./.github/actions/amd-network"]
+    assert checks, f"{name} never checks for AMD's network"
+    for check in checks:
+        assert check["with"]["gateway-key"] == "${{ secrets.LEMONADE_AMD_API_KEY }}"
+    # Only on the network, so a GitHub-hosted runner never reads as on it.
+    gateway_env = (
+        "GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && "
+        "secrets.LEMONADE_AMD_API_KEY || '' }}"
+    )
+    assert gateway_env in text
+    picks = [s for s in steps if s.get("uses") == "./.github/actions/claude-credential"]
+    for pick in picks:
+        assert "steps.amd_net.outputs.on != 'true'" in str(
+            pick.get("if")
+        ), f"{name} probes Anthropic directly even on AMD's network"
+
+
+def test_the_scenario_lane_declares_the_gateway_secret():
+    import yaml
+
+    doc = yaml.safe_load((WORKFLOWS / "eval_scenario_lane.yml").read_text("utf-8"))
+    trigger = doc.get("on") or doc.get(True)
+    assert "LEMONADE_AMD_API_KEY" in trigger["workflow_call"]["secrets"]
+
+
+# ── The flagship agent reports refused ids to the TUI ───────────────────────
+
+
+def test_the_flagship_reports_no_refused_ids_off_the_network():
+    stdio = pytest.importorskip("gaia_agent.stdio")
+    assert stdio.claude_unavailable() == {}
+
+
+def test_the_flagship_reports_every_direct_id_on_the_network(on_network):
+    stdio = pytest.importorskip("gaia_agent.stdio")
+    refused = stdio.claude_unavailable()
+    assert set(refused) == set(stdio.CLAUDE_MODELS)
+    assert refused["claude-opus-5"]["use"] == "amd.Claude-Opus-5"
+    assert "AMD LLM Gateway" in refused["claude-opus-5"]["reason"]
+
+
+def test_the_eval_driver_runs_claude_code_against_the_gateway(judge_env, claude_login):
+    from gaia.eval import runner
+
+    flags, env = runner._driver_auth()
+    assert "--bare" not in flags
+    assert env["ANTHROPIC_BASE_URL"] == GATEWAY_BASE
+    assert env["ANTHROPIC_CUSTOM_HEADERS"].startswith("Ocp-Apim-Subscription-Key: ")
+    assert "ANTHROPIC_API_KEY" not in env and "CLAUDE_CODE_OAUTH_TOKEN" not in env

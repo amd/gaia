@@ -323,3 +323,37 @@ def test_history_cut_status_matches_the_fixture():
     assert set(event) - {"type"} == set(EVENTS["status"]["fields"]) | set(
         EVENTS["status"]["history_cut_extension"]
     )
+
+
+def test_on_amd_network_the_ping_adds_only_the_refused_claude_ids(monkeypatch):
+    class _Lemonade:
+        def __init__(self, **_kwargs):
+            self.base_url = "http://127.0.0.1:13305/api/v1"
+
+        def health_check(self):
+            return {"version": "10.8.0"}
+
+    class _Config:
+        use_claude = False
+        base_url = None
+
+    class _Chat:
+        config = _Config()
+        effective_model = "Gemma-4-E4B-it-GGUF"
+
+    class _Agent:
+        chat = _Chat()
+
+    from gaia.llm import amd_network
+
+    monkeypatch.setattr(stdio, "LemonadeClient", _Lemonade)
+    monkeypatch.setattr(amd_network, "_gateway_configured", lambda: "test")
+    amd_network.forget()
+
+    ping = stdio._model_state_event(_Agent())
+
+    status = EVENTS["status"]
+    assert set(ping) - {"type"} == set(status["fields"]) | set(
+        status["stdio_extension"]
+    ) | set(status["amd_network_extension"])
+    assert set(ping["claude_unavailable"]) == set(stdio.CLAUDE_MODELS)

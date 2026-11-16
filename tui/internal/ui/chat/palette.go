@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -19,6 +20,17 @@ import (
 type paletteCommand struct {
 	Name string // the literal command text, e.g. "/model" — what Enter sends
 	Desc string // one line: what it does, so the name alone never has to carry that
+}
+
+// paletteRowBlocked reports whether a picker row names a direct Claude id the
+// agent said it refuses. Such a row is shown, but Enter and a click do nothing.
+func paletteRowBlocked(name string, blocked map[string]event.ClaudeBlock) bool {
+	id, ok := strings.CutPrefix(name, modelPalettePrefix)
+	if !ok {
+		return false
+	}
+	_, refused := blocked[id]
+	return refused
 }
 
 // paletteCommands is the palette's full list. It is a hand-written mirror of
@@ -73,12 +85,20 @@ var paletteCommands = []paletteCommand{
 const modelPalettePrefix = modelCommandPrefix + " "
 
 // modelPaletteCommands is the model picker's rows, built fresh per call so
-// the list can never drift from client.ClaudeModels.
-func modelPaletteCommands() []paletteCommand {
+// the list can never drift from client.ClaudeModels. An id the agent reported
+// in blocked stays listed but disabled, naming the gateway id to pick instead.
+func modelPaletteCommands(blocked map[string]event.ClaudeBlock) []paletteCommand {
 	out := []paletteCommand{
 		{modelCommandPrefix, "List every model, including the local ones this machine has"},
 	}
 	for _, cm := range client.ClaudeModels {
+		if b, ok := blocked[cm.ID]; ok {
+			out = append(out, paletteCommand{
+				Name: modelPalettePrefix + cm.ID,
+				Desc: cm.Label + " · unavailable on AMD's network, use " + b.Use,
+			})
+			continue
+		}
 		out = append(out, paletteCommand{
 			Name: modelPalettePrefix + cm.ID,
 			// Short on purpose: the panel is capped at 60 columns and these
@@ -95,12 +115,12 @@ func modelPaletteCommands() []paletteCommand {
 // filterModelCommands narrows the model picker to rows matching what has been
 // typed after `/model `. Matched by substring, not prefix: nobody types
 // "claude-" to find Haiku, they type "haiku".
-func filterModelCommands(arg string) []paletteCommand {
+func filterModelCommands(arg string, blocked map[string]event.ClaudeBlock) []paletteCommand {
 	if arg == "" {
-		return modelPaletteCommands()
+		return modelPaletteCommands(blocked)
 	}
 	var out []paletteCommand
-	for _, c := range modelPaletteCommands() {
+	for _, c := range modelPaletteCommands(blocked) {
 		if strings.Contains(strings.ToLower(c.Name), arg) {
 			out = append(out, c)
 		}
@@ -117,6 +137,12 @@ func filterModelCommands(arg string) []paletteCommand {
 // available is nil-safe: a nil map (no gating context, e.g. a bare palette
 // unit test) offers everything, same as before per-agent gating existed.
 func filterPaletteCommands(value string, available map[string]bool) []paletteCommand {
+	return filterPaletteCommandsBlocked(value, available, nil)
+}
+
+// filterPaletteCommandsBlocked is filterPaletteCommands with the agent's
+// unavailable Claude ids marked disabled in the model picker.
+func filterPaletteCommandsBlocked(value string, available map[string]bool, blocked map[string]event.ClaudeBlock) []paletteCommand {
 	// The space after `/model` is the switch into the model picker, so this
 	// one case is matched BEFORE trimming — trimming would erase the very
 	// character that distinguishes "/model" (still naming a command) from
@@ -126,7 +152,7 @@ func filterPaletteCommands(value string, available map[string]bool) []paletteCom
 		if available != nil && !available[modelCommandPrefix] {
 			return nil
 		}
-		return filterModelCommands(strings.TrimSpace(arg))
+		return filterModelCommands(strings.TrimSpace(arg), blocked)
 	}
 	q := strings.ToLower(strings.TrimSpace(value))
 	var out []paletteCommand
@@ -154,7 +180,7 @@ type commandPalette struct {
 // paletteFiltered is the command list for the composer's CURRENT text,
 // narrowed to what this session's agent actually supports (availability.go).
 func (m ChatModel) paletteFiltered() []paletteCommand {
-	return filterPaletteCommands(m.input.Value(), m.availableCommandSet())
+	return filterPaletteCommandsBlocked(m.input.Value(), m.availableCommandSet(), m.claudeUnavailable)
 }
 
 // syncPalette opens, filters, or closes the palette to match the composer's
@@ -246,6 +272,9 @@ func (m ChatModel) handlePaletteKey(msg tea.KeyMsg) (ChatModel, tea.Cmd, bool) {
 		if idx < 0 || idx >= len(filtered) {
 			idx = 0
 		}
+		if paletteRowBlocked(filtered[idx].Name, m.claudeUnavailable) {
+			return m, nil, true
+		}
 		updated, cmd := m.runPaletteRow(filtered[idx].Name)
 		next, ok := updated.(ChatModel)
 		if !ok {
@@ -322,6 +351,9 @@ func (m ChatModel) handlePaletteMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if row == m.palette.selected {
+			if paletteRowBlocked(items[row].Name, m.claudeUnavailable) {
+				return m, nil
+			}
 			return m.runPaletteRow(items[row].Name)
 		}
 		m.palette.selected = row

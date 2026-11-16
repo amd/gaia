@@ -56,6 +56,10 @@ GATEWAY_EQUIVALENTS = {
     "claude-sonnet-5-5": "amd.Claude-Sonnet-5-5",
     "claude-opus-5": "amd.Claude-Opus-5",
     "claude-sonnet-5": "amd.Claude-Sonnet-5",
+    "claude-haiku-5-5": "amd.Claude-Haiku-5-5",
+    "claude-fable-5": "amd.Claude-Fable-5",
+    "claude-fable-5-1": "amd.Claude-Fable-5-1",
+    "claude-fable-5-2": "amd.Claude-Fable-5-2",
 }
 #: Suggested when a direct model has no gateway equivalent.
 DEFAULT_GATEWAY_CLAUDE = "amd.Claude-Opus-5-5"
@@ -167,7 +171,8 @@ def gateway_equivalent(model: Optional[str]) -> Optional[str]:
     return GATEWAY_EQUIVALENTS.get((model or "").strip().lower())
 
 
-def _suggestion(model: Optional[str]) -> str:
+def gateway_suggestion(model: Optional[str]) -> str:
+    """The gateway model to use instead of direct *model*: its equivalent, else Opus."""
     return gateway_equivalent(model) or DEFAULT_GATEWAY_CLAUDE
 
 
@@ -175,7 +180,7 @@ def gateway_only_reason(model: Optional[str]) -> str:
     """Why direct *model* can't be used on AMD's network, for a model list."""
     return (
         f"On the AMD network Claude runs through the AMD LLM Gateway — use "
-        f"{_suggestion(model)}"
+        f"{gateway_suggestion(model)}"
     )
 
 
@@ -200,7 +205,7 @@ def _effective_base_url(base_url: Optional[str]) -> str:
 
 def _blocked(model: Optional[str], destination: str, what: str) -> str:
     verdict = current()
-    suggestion = _suggestion(model)
+    suggestion = gateway_suggestion(model)
     named = f" {model}" if model else ""
     return (
         f"{what} would send Claude{named} to {destination} instead of the AMD "
