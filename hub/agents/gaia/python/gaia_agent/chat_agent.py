@@ -78,7 +78,6 @@ from gaia.agents.base.context_eviction import (
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import (
     SnapshotError,
-    before_change,
     note_folder_changes,
     note_untracked,
     watch_script_folders,
