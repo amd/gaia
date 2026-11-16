@@ -37,11 +37,16 @@ _watcher: Optional[threading.Thread] = None
 def _identity(pid: int) -> Optional[float]:
     """The process's start time, so a reused pid isn't taken for the daemon.
 
-    None when no such process exists. ``psutil.AccessDenied`` propagates: a
-    process we may not inspect is not a process that is gone.
+    None when no such process exists, or it is a zombie: a killed daemon whose
+    parent never reaped it still has a start time on Linux and macOS.
+    ``psutil.AccessDenied`` propagates: a process we may not inspect is not a
+    process that is gone.
     """
     try:
-        return psutil.Process(pid).create_time()
+        proc = psutil.Process(pid)
+        if proc.status() == psutil.STATUS_ZOMBIE:
+            return None
+        return proc.create_time()
     except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return None
 

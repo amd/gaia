@@ -108,3 +108,23 @@ def test_a_daemon_it_may_not_inspect_is_an_error_not_gone(monkeypatch):
     with pytest.raises(psutil.AccessDenied):
         parent_watch.start(env={DAEMON_PID_ENV_VAR: "4242"}, on_gone=gone.set)
     assert not gone.is_set()
+
+
+def test_a_killed_but_unreaped_daemon_counts_as_gone(monkeypatch):
+    """On POSIX a zombie keeps its start time until its parent reaps it."""
+    import psutil
+
+    class _Zombie:
+        def __init__(self, _pid):
+            pass
+
+        def status(self):
+            return psutil.STATUS_ZOMBIE
+
+        def create_time(self):
+            return 1234.0
+
+    monkeypatch.setattr(parent_watch.psutil, "Process", _Zombie)
+    gone = threading.Event()
+    parent_watch.start(env={DAEMON_PID_ENV_VAR: "4242"}, poll_s=0.1, on_gone=gone.set)
+    assert gone.wait(5)
