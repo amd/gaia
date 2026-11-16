@@ -117,6 +117,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     FileIOToolsMixin,
     FileSearchToolsMixin,
     FileToolsMixin,
+    ProcessToolsMixin,
     RAGToolsMixin,
     ReasoningEffortToolsMixin,
     ScreenshotToolsMixin,
@@ -714,6 +715,7 @@ class ChatAgent(
     RAGToolsMixin,
     FileToolsMixin,
     ShellToolsMixin,
+    ProcessToolsMixin,
     CliSetupToolsMixin,
     FileSystemToolsMixin,
     ScratchpadToolsMixin,
@@ -3900,6 +3902,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     # - FileSearchToolsMixin (shared): File and directory search across drives
     # - FileIOToolsMixin (file_io_tools.py): read_file, write_file, edit_file (3 generic tools only)
     # - WaitToolsMixin (wait_tools.py): sleep, to wait out a rate limit
+    # - ProcessToolsMixin (process_tools.py): background processes (full profile)
     # - MCPClientMixin (mcp/mixin.py): MCP server tools (loaded from <gaia_home>/mcp_servers.json)
 
     def _register_external_tools_conditional(self) -> None:
@@ -4243,6 +4246,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         closed) and avoids leaking Session/connection objects in long-running
         services like the Agent UI backend.
         """
+        try:
+            # First: the logs live in the scratch directory removed below.
+            self.close_background_processes()
+        except Exception as e:
+            logger.error(f"Error stopping background processes during cleanup: {e}")
         try:
             self.stop_watching()
         except Exception as e:

@@ -303,10 +303,24 @@ def test_search_tools_takes_any_query_the_model_sends(flagship, query):
     assert agent._search_tools(query)["status"] in ("success", "error")
 
 
+def _unmatched_word(agent) -> str:
+    """A word whose fake-embedding bucket no tool's indexed text shares."""
+    used = {
+        int(np.argmax(_fake_embedding(word)))
+        for name, info in agent._tools_registry.items()
+        for word in ToolLoader._doc_text(name, info).lower().split()
+    }
+    return next(
+        word
+        for word in (f"zzzzqqqq{i}" for i in range(10_000))
+        if int(np.argmax(_fake_embedding(word))) not in used
+    )
+
+
 def test_search_with_no_match_says_so_and_keeps_the_list(flagship):
     agent, model = flagship
     _turn(agent, model, "hello", ["Hi."])
-    result = agent._search_tools("zzzzqqqq")
+    result = agent._search_tools(_unmatched_word(agent))
     assert result["tools"] == [] and "Nothing matches" in result["message"]
     assert agent._active_tool_filter == _core(agent)
 

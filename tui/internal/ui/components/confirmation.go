@@ -133,6 +133,7 @@ var confirmationRiskTiers = map[string]RiskTier{
 
 	"run_shell_command":   RiskDestructive,
 	"wait_for_condition":  RiskDestructive,
+	"start_process":       RiskDestructive,
 	"run_python":          RiskDestructive,
 	"execute_python_file": RiskDestructive,
 	"install_cli":         RiskWrite,
@@ -162,6 +163,7 @@ var confirmationRiskTiers = map[string]RiskTier{
 var actionTitles = map[string]string{
 	"run_shell_command":    "Run this command?",
 	"wait_for_condition":   "Poll with this command?",
+	"start_process":        "Start this command in the background?",
 	"run_python":           "Run this Python code?",
 	"execute_python_file":  "Run this Python file?",
 	"write_file":           "Write this file?",
@@ -212,6 +214,7 @@ func ActionTitle(action string) string {
 var unboundedRiskActions = map[string]string{
 	"run_shell_command":   "command",
 	"wait_for_condition":  "command",
+	"start_process":       "command",
 	"run_python":          "code",
 	"execute_python_file": "code",
 }

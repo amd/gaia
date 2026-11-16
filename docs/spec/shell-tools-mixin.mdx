@@ -369,8 +369,9 @@ suggests a larger timeout. For a `test` or `script` command it names the files
 the turn changed and says to run the check on just those, or, with nothing
 changed, to narrow the run to one test file or the edited files: a repo-wide
 lint or test run that blew one budget usually blows a bigger one too. Any other
-class is pointed at a background run polled with `wait_for_condition`, or at
-shorter steps.
+class is pointed at a background run: `start_process` when the agent has the
+[process tools](/spec/process-tools-mixin), otherwise one polled with
+`wait_for_condition`, or at shorter steps.
 
 ### Waiting Without Spinning
 

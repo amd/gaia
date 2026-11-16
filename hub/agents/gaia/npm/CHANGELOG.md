@@ -8,6 +8,18 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Long commands no longer hold the conversation hostage.** The agent can start
+  a dev server, build, test suite, download or export in the background
+  (`start_process`), keep working, and check on it in the same turn or a later
+  one (`process_status`, `read_process_output`, `wait_for_process`,
+  `stop_process`). A background command passes the same allowlist and approval
+  as `run_shell_command` and starts only when a person approves it or full
+  access is on; a command that needs a one-time approval of its exact text
+  runs only in the foreground. At most 8 run at once, each keeps at most 4 MiB
+  of output on disk, and stopping one — or closing the session — kills
+  everything it spawned. When one finishes mid-turn, the agent is told at its
+  next step. Tools: 105 → 110.
+
 - **Closing an agent stops the MCP servers it started.** Each server is a
   process tree (`uvx`, `uv`, the server), and it used to outlive the agent:
   an agent built for one request left its servers running for good.

@@ -202,10 +202,11 @@ _RUN_WRAPPERS = frozenset(
 #: ``git remote add``) and stops well short of the arguments.
 _MAX_SHELL_SCOPE_WORDS = 2
 
-#: ``wait_for_condition`` belongs here because its ``command`` is a shell
-#: command like any other — scoping the grant to it keeps "always" from becoming
-#: "any command, as long as you poll with it".
-_SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
+#: ``wait_for_condition`` and ``start_process`` belong here because their
+#: ``command`` is a shell command like any other — scoping the grant keeps
+#: "always" from becoming "any command, as long as you poll with it" or "as
+#: long as it runs in the background".
+_SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition", "start_process"})
 
 #: Tools whose blast radius is one path. A prompt for a file inside a named
 #: folder may offer a chat-scoped folder grant; a bare filename stays exact so
