@@ -59,11 +59,20 @@ interface Run {
     retryTimer?: ReturnType<typeof setTimeout>;
     /** Ends the turn here when GAIA never confirms a stop. */
     graceTimer?: ReturnType<typeof setTimeout>;
+    /** The id GAIA saved the reply under, from the turn's `done`. */
+    replyId?: number;
+    /** The stream closed and the turn only waits on its transcript, so leaving the screen must not drop it. */
+    ending?: boolean;
 }
 
 const runs = new Map<string, Run>();
 const subscribers = new Map<string, number>();
 const foregroundListeners = new Map<string, { remove(): void }>();
+/** Ended turns still showing their answer until the transcript holds GAIA's saved copy; each stops its wait. */
+const awaitingReply = new Map<string, () => void>();
+
+/** Re-reads for a saved reply missing from the transcript, after each of these waits. */
+const REPLY_REREAD_DELAYS_MS = [250, 500, 1000, 2000];
 
 function isCurrent(sessionId: string, run: Run): boolean {
     return runs.get(sessionId) === run;
@@ -90,29 +99,84 @@ function refreshChat(queryClient: QueryClient, sessionId: string): Promise<void>
     return queryClient.invalidateQueries({ queryKey: queryKeys.messages(sessionId) });
 }
 
+/** The transcript holds the turn's saved reply: by its id, else as the reply after the last question. */
+function holdsReply(list: MessageList | undefined, replyId: number | undefined): boolean {
+    if (!list) return false;
+    if (replyId !== undefined) return list.messages.some((m) => m.id === replyId);
+    return list.messages.filter((m) => m.role !== 'system').at(-1)?.role === 'assistant';
+}
+
+/** Calls `landed` in the batch of each successful transcript update, with the list it brought. */
+function onTranscript(queryClient: QueryClient, sessionId: string, landed: (list: MessageList | undefined) => void): () => void {
+    const transcript = hashKey(queryKeys.messages(sessionId));
+    return queryClient.getQueryCache().subscribe((event) => {
+        // Cache events arrive inside the batch that notifies the transcript's readers, so this joins it.
+        if (event.type === 'updated' && event.action.type === 'success' && event.query.queryHash === transcript) {
+            const list = event.query.state.data as MessageList | undefined;
+            notifyManager.schedule(() => landed(list));
+        }
+    });
+}
+
 /**
  * Re-reads the chat, then runs `end` in the same batch as the transcript's own
  * update, so a screen never shows the finished reply twice or not at all.
+ * `end` learns whether that transcript holds the reply.
  */
-async function endWithTranscript(queryClient: QueryClient, sessionId: string, end: () => void): Promise<void> {
-    const transcript = hashKey(queryKeys.messages(sessionId));
-    let unsubscribe = () => {};
+async function endWithTranscript(
+    queryClient: QueryClient,
+    sessionId: string,
+    holds: (list: MessageList | undefined) => boolean,
+    end: (hasReply: boolean) => void,
+): Promise<void> {
     let ended = false;
-    const once = () => {
+    const once = (list: MessageList | undefined) => {
         if (ended) return;
         ended = true;
         unsubscribe();
-        end();
+        end(holds(list));
     };
-    unsubscribe = queryClient.getQueryCache().subscribe((event) => {
-        // Cache events arrive inside the batch that notifies the transcript's readers, so this joins it.
-        if (event.type === 'updated' && event.action.type === 'success' && event.query.queryHash === transcript) {
-            notifyManager.schedule(once);
-        }
-    });
+    const unsubscribe = onTranscript(queryClient, sessionId, once);
     await refreshChat(queryClient, sessionId);
-    // Nothing re-read it (no screen shows it) or the read failed.
-    notifyManager.schedule(once);
+    // Nothing re-read it (no screen shows it) or the read failed or was cancelled.
+    notifyManager.schedule(() => once(queryClient.getQueryData<MessageList>(queryKeys.messages(sessionId))));
+}
+
+function stopAwaitingReply(sessionId: string): void {
+    awaitingReply.get(sessionId)?.();
+}
+
+/**
+ * The turn ended but the transcript doesn't hold its saved reply yet (a read that
+ * began before GAIA saved it, or one that was cancelled): its answer stays on
+ * screen, the transcript is read again a few times, and the answer gives way in
+ * the batch of whichever read first brings the saved copy, however late.
+ */
+function awaitReply(queryClient: QueryClient, sessionId: string, holds: (list: MessageList | undefined) => boolean): void {
+    stopAwaitingReply(sessionId);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const stop = () => {
+        clearTimeout(timer);
+        unsubscribe();
+        if (awaitingReply.get(sessionId) === stop) awaitingReply.delete(sessionId);
+    };
+    const waiting = () => awaitingReply.get(sessionId) === stop;
+    const unsubscribe = onTranscript(queryClient, sessionId, (list) => {
+        if (!waiting() || !holds(list)) return;
+        stop();
+        writeTurn(sessionId, null);
+    });
+    awaitingReply.set(sessionId, stop);
+    const reread = (attempt: number) => {
+        const delay = REPLY_REREAD_DELAYS_MS[attempt];
+        if (delay === undefined) return;
+        timer = setTimeout(() => {
+            void queryClient.refetchQueries({ queryKey: queryKeys.messages(sessionId), exact: true }).then(() => {
+                if (waiting()) reread(attempt + 1);
+            });
+        }, delay);
+    };
+    reread(0);
 }
 
 /** The sent message, shown in the transcript until the re-read brings GAIA's own copy. */
@@ -169,10 +233,12 @@ async function follow(deps: ChatStreamDeps, sessionId: string, run: Run, stream:
             if (!isCurrent(sessionId, run)) return;
             if (!run.sawEvent) {
                 run.sawEvent = true;
+                stopAwaitingReply(sessionId);
                 update(sessionId, run, openTurn);
                 if (run.stopRequested) requestStop(deps, sessionId, run);
             }
             if (event.type === 'done' || event.type === 'error') expirePendingPrompts(sessionId);
+            if (event.type === 'done' && typeof event.message_id === 'number') run.replyId = event.message_id;
             update(sessionId, run, (turn) => applyEvent(turn, event));
         }
     } catch (err) {
@@ -212,12 +278,19 @@ async function follow(deps: ChatStreamDeps, sessionId: string, run: Run, stream:
         return;
     }
     expirePendingPrompts(sessionId);
-    await endWithTranscript(deps.queryClient, sessionId, () => {
+    run.ending = true;
+    const holds = (list: MessageList | undefined) => holdsReply(list, run.replyId);
+    await endWithTranscript(deps.queryClient, sessionId, holds, (hasReply) => {
         if (!isCurrent(sessionId, run)) return;
         finishRun(sessionId);
-        const { error, stopState, stopError, liveText, failed, failure, policyAlert, pendingConfirmation } = readTurn(sessionId);
+        const { error, stopState, stopError, liveText, events, failed, failure, policyAlert, pendingConfirmation } = readTurn(sessionId);
         // The stop note, a failure and a policy block outlive the turn; a stop GAIA never confirmed has no saved answer to show, so its text stays too.
         const kept = error || stopState || failed || policyAlert || pendingConfirmation;
+        if (!kept && !hasReply && liveText) {
+            writeTurn(sessionId, { ...IDLE_TURN, liveText, events });
+            awaitReply(deps.queryClient, sessionId, holds);
+            return;
+        }
         writeTurn(
             sessionId,
             kept
@@ -247,6 +320,7 @@ export function sendTurn(deps: ChatStreamDeps, sessionId: string, text: string):
     existing?.view.abort();
     const run = newRun('send');
     runs.set(sessionId, run);
+    stopAwaitingReply(sessionId);
     writeTurn(sessionId, beginTurn());
     void (async () => {
         await showSentMessage(deps.queryClient, sessionId, message);
@@ -319,8 +393,13 @@ export function attachTurn(deps: ChatStreamDeps, sessionId: string): void {
 
 /** Stops following the chat's turn on this phone; the turn goes on on the PC. */
 export function detachTurn(sessionId: string): void {
-    runs.get(sessionId)?.view.abort();
+    const run = runs.get(sessionId);
+    // Its stream already closed; the turn ends on its own once the transcript is read.
+    if (run?.ending) return;
+    run?.view.abort();
     finishRun(sessionId);
+    // An ended turn keeps its answer until the transcript holds the saved copy.
+    if (awaitingReply.has(sessionId)) return;
     const { pendingConfirmation } = readTurn(sessionId);
     writeTurn(sessionId, pendingConfirmation ? { ...IDLE_TURN, pendingConfirmation } : null);
 }

@@ -83,11 +83,12 @@ const cases: [string, Step[]][] = [
             { expect: { status: 'streaming', permission: 'c1', events: ['tool_start', 'permission_request'] } },
             { confirm: { approved: true, confirm_id: 'c1' } },
             { expect: { status: 'streaming', permission: null } },
+            { saved: ['Delete old.txt', 'Deleted.'] },
             {
                 events: [
                     { type: 'tool_result', tool: 'delete_file', success: true },
                     { type: 'chunk', content: 'Deleted.' },
-                    { type: 'done', message_id: 4, content: 'Deleted.' },
+                    { type: 'done', message_id: 2, content: 'Deleted.' },
                 ],
             },
             { end: true },
@@ -107,11 +108,12 @@ const cases: [string, Step[]][] = [
             { expect: { status: 'streaming', question: 'q1' } },
             { answer: { request_id: 'q1', value: 'Paris' } },
             { expect: { status: 'streaming', question: null } },
+            { saved: ['Plan a trip', 'Paris it is.'] },
             {
                 events: [
                     { type: 'tool_end', tool: 'ask_user', success: true },
                     { type: 'chunk', content: 'Paris it is.' },
-                    { type: 'done', message_id: 6, content: 'Paris it is.' },
+                    { type: 'done', message_id: 2, content: 'Paris it is.' },
                 ],
             },
             { end: true },
@@ -168,7 +170,8 @@ const cases: [string, Step[]][] = [
                 ],
             },
             { expect: { status: 'streaming', liveText: 'Sure.\n\nSaved it.', permission: null } },
-            { events: [{ type: 'done', message_id: 10, content: 'Sure.\n\nSaved it.' }] },
+            { saved: ['Save a note', 'Sure.\n\nSaved it.'] },
+            { events: [{ type: 'done', message_id: 2, content: 'Sure.\n\nSaved it.' }] },
             { end: true },
             { expect: IDLE },
         ],
