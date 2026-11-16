@@ -3553,6 +3553,8 @@ A one-time schedule (`add --at`) runs once at or after its time, then shows `com
 
 Runs that never happened are not silent: the ones a sleep skipped or collapsed, and the ones due while the daemon was not running, are counted on the schedule. `gaia schedule show` prints the total, `missed: 3 runs in all while the PC was off or asleep, or the schedule daemon wasn't running (latest due …)`, and `gaia schedule list` adds `missed=3`. Runs due while a schedule was paused are not counted. The total is kept until the schedule is removed; past 100,000 in one stretch it reads "at least", and the latest due time is still exact. Times are shown in local time.
 
+A recurring run that fails is recorded on the schedule as well as in the daemon log. `gaia schedule show` prints `failing: 2 runs in a row failed since the last successful one (latest …): <error>` with the first line of the latest error, `last_run` stays the last run that succeeded, and `gaia schedule list` adds `failing=2`. The next run that succeeds clears it. A failed run is not counted as missed.
+
 Only one `gaia schedule daemon` can run per schedule store. A second one exits immediately with an error instead of firing every schedule twice. The daemon holds `~/.gaia/schedules.lock` while it runs; the OS releases it when the process exits, even after a crash. On Windows that error names no pid — Windows refuses another process's read of the locked byte, so the holder is unknowable.
 
 ```bash

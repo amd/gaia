@@ -4953,6 +4953,7 @@ def _handle_schedule(args):
                 f"{s.name}  [{state}]  {when}  sink={s.sink}"
                 + (f"  next={nxt}" if nxt else "")
                 + (f"  missed={s.missed_count}" if s.missed_count else "")
+                + (f"  failing={s.failed_runs}" if s.failed_runs else "")
             )
         return
 
@@ -4979,6 +4980,8 @@ def _handle_schedule(args):
         print(f"created_at: {_local(s.created_at) if s.created_at else ''}")
         if s.one_shot and s.last_run:
             print(f"ran_at:     {_local(s.last_run)}")
+        elif s.last_run:
+            print(f"last_run:   {_local(s.last_run)}")
         nxt = (
             schedule_daemon.next_fire(s)
             if s.one_shot
@@ -4994,6 +4997,13 @@ def _handle_schedule(args):
                 f"missed:     {count} {runs} in all while the PC was off or "
                 "asleep, or the schedule daemon wasn't running "
                 f"(latest due {_local(s.last_missed)})"
+            )
+        if s.failed_runs:
+            runs = "run" if s.failed_runs == 1 else "runs"
+            when = f" (latest {_local(s.last_failed)})" if s.last_failed else ""
+            print(
+                f"failing:    {s.failed_runs} {runs} in a row failed since the "
+                f"last successful one{when}: {s.last_error or 'no error recorded'}"
             )
         return
 
