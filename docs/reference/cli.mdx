@@ -2265,9 +2265,9 @@ gaia lemonade embedded stop
 gaia lemonade embedded uninstall  # remove the runtime and downloaded backends
 ```
 
-The API key changes on every start, and requests without it get a 401. The port
-stays the same from one start to the next unless another program has taken it,
-in which case a free one is picked and remembered instead. `start` writes them to a file you source rather than printing the key,
+Requests without the API key get a 401. The port and the key stay the same
+from one start to the next unless another program has taken the port, in which
+case a free one is picked and remembered, and the key changes with it. `start` writes them to a file you source rather than printing the key,
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
@@ -2374,6 +2374,7 @@ Everything lives under `~/.gaia/lemonade` (or `$GAIA_HOME/lemonade`):
 | `config/config.json` | Server configuration |
 | `state.json` | The running instance: pid, port, API key, owning daemon (owner-only) |
 | `last_port.json` | The port the last start used; the next start reuses it while it is free |
+| `last_key` | The API key the last start used; reused only on the same port (owner-only) |
 | `env.sh` / `env.ps1` | Sourceable credentials, removed on `stop` (owner-only) |
 | `lemond.log` | Server output — read this first when `start` fails |
 

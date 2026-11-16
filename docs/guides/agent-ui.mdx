@@ -694,9 +694,10 @@ runs: the app, each `gaia` command, sidecar agents, and a process started with
 another `GAIA_HOME` that points `LEMONADE_BASE_URL` at this server. The server
 is never stopped while a lease is held or a request is in flight.
 
-The server keeps the same port from one start to the next, and moves only if
-another program has taken it. Its API key still changes on every start; read
-the current one from `~/.gaia/lemonade/env.sh` (`env.ps1` on Windows).
+The server keeps the same port and API key from one start to the next, so a
+chat that was open before a restart keeps working. If another program has taken
+the port, the server moves and gets a new key. Read the current key from
+`~/.gaia/lemonade/env.sh` (`env.ps1` on Windows).
 
 Fifteen minutes balances giving the GPU memory back to other apps against
 the cost of a cold model load, about 20 to 60 seconds, the next time you use
