@@ -151,11 +151,15 @@ is refused.
    Give times with their UTC offset, e.g. `2026-11-03T09:00:00-05:00`. With
    more than one account, say which account each event is on. If
    `accounts_not_checked` is listed, free time is unknown: say which account
-   couldn't be checked and why, never that the person is free.
+   couldn't be checked and why, never that the person is free. If
+   `calendars_not_shared` is listed, free time still counts, but say it covers
+   only the calendars checked and name the accounts that never shared theirs.
 2. **To create an event**, call `calendar/create_calendar_event` with everyone
    to invite in `notify_attendees` (`[]` for nobody). They are emailed. Pass
    `calendar_account` only when the user named the account; otherwise the
-   default account is used, and the approval shows which.
+   default account is used, and the approval shows which. If the default
+   account can't be used, the call is refused rather than moved to another
+   account: ask the user to reconnect it or to name the account to use.
 3. **To move or cancel one**, list first, then call
    `calendar/update_calendar_event` or `calendar/cancel_calendar_event` with the
    event's `id` exactly as listed (its account tag included), its title and

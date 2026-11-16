@@ -27,7 +27,7 @@ from gaia.agents.tools.email_tools import (
     Mailbox,
 )
 
-# The one injected account: an Outlook mailbox in the default slot.
+# The one injected account: an Outlook mailbox, its provider's default.
 ME = tool_account()
 T = ME.tag
 
@@ -1690,9 +1690,7 @@ def _mail(mid, received, account_note):
 
 
 HOME = tool_account("me@example.com", provider="microsoft")
-WORK = tool_account(
-    "work@example.com", provider="microsoft", slot="id:work", is_default=False
-)
+WORK = tool_account("work@example.com", provider="microsoft", is_default=False)
 
 
 def _two_inboxes(work_backend=None):

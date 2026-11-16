@@ -25,7 +25,6 @@ connection, the per-call writer and the messages waiting on a prompt.
 
 import dataclasses
 import json
-import math
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from gaia.agents.base.call_risk import EXACT_TEXT_ARG, NEEDS_PERSON_ARG
@@ -52,7 +51,14 @@ from gaia.agents.tools._email.scopes import (
     WRITE_SCOPES,
 )
 from gaia.agents.tools.connect_card import agent_surface, with_connect_card
-from gaia.agents.tools.email_tools import EMAIL_AGENT_ID, EmailToolsMixin
+from gaia.agents.tools.email_tools import (
+    EMAIL_AGENT_ID,
+    EmailToolsMixin,
+    _add_coverage,
+    _flag_capped,
+    _interleaved,
+    _share,
+)
 from gaia.logger import get_logger
 from gaia.skills.context import current
 
@@ -216,7 +222,9 @@ class _MailPreflight:
             message = self._build(mailer, account, item_id, **fields)
             if self._will_send:
                 message = checked(message)
-            message = dataclasses.replace(message, sender=account.label)
+            message = dataclasses.replace(
+                message, sender=account.label, sender_account=(account.tag, account.ref)
+            )
         except Exception as exc:  # surfaced to the model instead of a prompt
             logger.warning("email: %s refused: %s", self._tool_name, exc)
             return with_connect_card(
@@ -337,10 +345,11 @@ def _approved_writer(
     account the prompt showed. Read fresh: the prompt may have waited minutes."""
     mailer._email_refresh()
     account, item_id = _target(mailer, tool_name, args)
-    if account.label != approved.sender:
+    if (account.tag, account.ref) != approved.sender_account:
         raise RuntimeError(
-            f"The approval showed the mailbox {approved.sender}, but mail "
-            f"now goes through {account.label}, so nothing was sent or changed. "
+            f"The approval showed the mailbox {approved.sender}, but mail now "
+            f"goes through another account ({account.label}), so nothing was "
+            "sent or changed. "
             "Tell the user; call the tool again only if they ask, so the "
             "prompt shows the account it will use."
         )
@@ -432,29 +441,35 @@ def list_drafts(limit: int = 25, account: str = "") -> str:
         mailer = _mailer()
         wanted = max(1, min(int(limit), _MAX_LIMIT))
         targets = mailer._email_targets(account)
-        share = max(1, math.ceil(wanted / len(targets)))
+        share = _share(wanted, len(targets))
         answers, not_read = mailer._email_each(
             targets,
             lambda backend: backend.list_drafts(limit=share),
             narrowed=bool(account),
         )
-        drafts = [
-            {
-                **draft,
-                "draft_id": acct.tag_id(draft["draft_id"]),
-                "thread_id": (
-                    acct.tag_id(draft["thread_id"]) if draft.get("thread_id") else None
-                ),
-                "account": acct.name,
-            }
-            for acct, found in answers
-            for draft in found
-        ][:wanted]
+        drafts = _interleaved(
+            [
+                [
+                    {
+                        **draft,
+                        "draft_id": acct.tag_id(draft["draft_id"]),
+                        "thread_id": (
+                            acct.tag_id(draft["thread_id"])
+                            if draft.get("thread_id")
+                            else None
+                        ),
+                        "account": acct.name,
+                    }
+                    for draft in found
+                ]
+                for acct, found in answers
+            ]
+        )[:wanted]
         payload = {"success": True, "count": len(drafts), "drafts": drafts}
-        payload["accounts_read"] = [a.name for a, _ in answers]
-        if not_read:
-            payload["accounts_not_read"] = not_read
-        return json.dumps(payload, indent=2)
+        _flag_capped(payload, answers, share, "drafts")
+        return json.dumps(
+            _add_coverage(payload, [a for a, _ in answers], not_read), indent=2
+        )
     except Exception as exc:
         return _fail(exc, "list_drafts")
 

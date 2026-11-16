@@ -65,8 +65,8 @@ FIXTURE_OUTLOOK_ADDRESS = "user@outlook.example"
 # (address, provider, keyring slot, mbox suffix): the accounts beyond the main
 # one that the multi-account state attaches. The main account is the default.
 _EXTRA_ACCOUNTS = (
-    (FIXTURE_WORK_ADDRESS, GOOGLE, "id:eval-work", "work"),
-    (FIXTURE_OUTLOOK_ADDRESS, MICROSOFT, "id:eval-outlook", "outlook"),
+    (FIXTURE_WORK_ADDRESS, GOOGLE, "work"),
+    (FIXTURE_OUTLOOK_ADDRESS, MICROSOFT, "outlook"),
 )
 
 _EXCLUDED_FROM_SEARCH = frozenset({"SPAM", "TRASH"})
@@ -489,17 +489,18 @@ def build_fixture_backend(
 
 def fixture_accounts(mbox_path: str) -> List[Tuple[ToolAccount, Path]]:
     """Every attached fixture account with its mbox, the default first."""
-    wanted = [(FIXTURE_ADDRESS, GOOGLE, "default", Path(mbox_path).expanduser())]
+    wanted = [(FIXTURE_ADDRESS, GOOGLE, Path(mbox_path).expanduser())]
     if is_multi_account():
         wanted += [
-            (address, provider, slot, extra_mbox_path(mbox_path, suffix))
-            for address, provider, slot, suffix in _EXTRA_ACCOUNTS
+            (address, provider, extra_mbox_path(mbox_path, suffix))
+            for address, provider, suffix in _EXTRA_ACCOUNTS
         ]
     out: List[Tuple[ToolAccount, Path]] = []
     for provider in (GOOGLE, MICROSOFT):
         mine = [w for w in wanted if w[1] == provider]
-        tags = make_tags(provider, [slot for _, _, slot, _ in mine])
-        for position, ((address, _, _, path), tag) in enumerate(zip(mine, tags)):
+        # Each fixture account's stable id is its address, as its ``ref`` says.
+        tags = make_tags(provider, [address for address, _, _ in mine])
+        for position, ((address, _, path), tag) in enumerate(zip(mine, tags)):
             account = ToolAccount(
                 provider=provider,
                 email=address,

@@ -206,7 +206,7 @@ class _CalendarAgent(Agent):
 
 ACCOUNT = "me@x.com"
 # The id tag of ACCOUNT, the one Google account the tests connect.
-G = tag("google")
+G = tag("google", ACCOUNT)
 
 
 class _ScopeGrants:
@@ -607,6 +607,37 @@ class TestCreate:
         result = self._create(make_agent(_FakeGoogle()))
         assert result["account"] == ACCOUNT
 
+    def test_an_unshared_google_calendar_lets_new_events_land_on_outlook(
+        self, make_agent, connected_accounts
+    ):
+        """Google never shared its calendar, so Outlook is the only calendar."""
+        connected_accounts["google"]["scopes"] = ["https://mail.google.com/"]
+        connected_accounts["microsoft"] = {
+            "account_email": "me@outlook.com",
+            "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
+        }
+        outlook = _FakeGoogle()
+        agent = make_agent(_FakeGoogle())
+        agent._calendar_backends[tag("microsoft", "me@outlook.com")] = outlook.backend()
+        result = self._create(agent, calendar_account="")
+        assert result["success"] is True and result["account"] == "me@outlook.com"
+
+    def test_an_expired_default_google_never_hands_the_event_to_outlook(
+        self, make_agent, connected_accounts
+    ):
+        connected_accounts["google"]["status"] = "reauth_required"
+        connected_accounts["microsoft"] = {
+            "account_email": "me@outlook.com",
+            "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
+        }
+        outlook = _FakeGoogle()
+        agent = make_agent(_FakeGoogle())
+        agent._calendar_backends[tag("microsoft", "me@outlook.com")] = outlook.backend()
+        result = self._create(agent, calendar_account="")
+        assert result["success"] is False
+        assert ACCOUNT in result["error"] and "me@outlook.com" in result["error"]
+        assert agent.console.asked == [] and outlook.writes == []
+
 
 class TestWhichCalendar:
     WINDOW = {"start": "2026-11-03T09:00:00-05:00", "end": "2026-11-03T17:00:00-05:00"}
@@ -631,7 +662,9 @@ class TestWhichCalendar:
             "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
         }
         agent = make_agent(_FakeGoogle(items=[]))
-        agent._calendar_backends[tag("microsoft")] = _FailingCalendar().backend()
+        agent._calendar_backends[tag("microsoft", "work@corp.com")] = (
+            _FailingCalendar().backend()
+        )
         for result in self._read(agent):
             assert result["success"] is True
             assert result["accounts_checked"] == [ACCOUNT]
@@ -651,6 +684,10 @@ class TestWhichCalendar:
             assert "accounts_not_checked" not in result
             [unshared] = result["calendars_not_shared"]
             assert unshared["account"] == "work@corp.com"
+            # Free stays true (the person never shared that calendar), but the
+            # answer must say which calendar it could not see.
+            assert "work@corp.com" in result["calendars_not_shared_note"]
+            assert "mention" in result["calendars_not_shared_note"]
         assert result["is_free"] is True
 
     def test_the_availability_tool_forbids_claiming_free_overall(self, make_agent):
@@ -689,7 +726,7 @@ class TestSeveralAccounts:
             "account_email": self.OUTLOOK,
             "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
         }
-        work_tag = tag("google", f"id:{self.WORK}")
+        work_tag = tag("google", self.WORK)
         self.fakes = {
             G: _FakeGoogle(
                 items=[_timed("home", "2026-11-03T15:00:00Z", "2026-11-03T16:00:00Z")]
@@ -698,7 +735,7 @@ class TestSeveralAccounts:
                 {**EVENT, "id": "w1"},
                 items=[_timed("w1", "2026-11-03T14:00:00Z", "2026-11-03T15:00:00Z")],
             ),
-            tag("microsoft"): _FakeGoogle(items=[]),
+            tag("microsoft", self.OUTLOOK): _FakeGoogle(items=[]),
         }
         self.work_tag = work_tag
         agent = make_agent(_FakeGoogle())
@@ -756,7 +793,7 @@ class TestSeveralAccounts:
         )
         assert three.console.asked[0][1]["calendar_account"] == self.OUTLOOK
         assert result["account"] == self.OUTLOOK
-        assert len(self.fakes[tag("microsoft")].writes) == 1
+        assert len(self.fakes[tag("microsoft", self.OUTLOOK)].writes) == 1
 
     def test_a_default_that_changes_while_asking_creates_nothing(self, three):
         connections = self.connections
@@ -1202,6 +1239,31 @@ GMAIL_READ = "https://www.googleapis.com/auth/gmail.readonly"
 
 
 class TestConnectionErrors:
+    def test_in_an_app_a_refused_token_names_the_account_to_reconnect(
+        self, make_agent, monkeypatch
+    ):
+        """With several accounts, the connect card must offer the one that failed."""
+        import gaia.connectors.api as api
+        from gaia.agents.tools._calendar.errors import CalendarAuthError
+        from gaia.connectors.errors import AuthRequiredError
+
+        def _refuse(**_):
+            raise AuthRequiredError(
+                AuthRequiredError.Reason.NOT_CONNECTED, provider="google"
+            )
+
+        monkeypatch.setattr(api, "get_access_token_sync", _refuse)
+        agent = make_agent(_FakeGoogle())
+        agent.config = types.SimpleNamespace(surface="agent_ui")
+        tool = _TOOL_REGISTRY[_ns("list_calendar_events")]["function"]
+        ops = tool.__globals__["_CalendarOps"](agent)
+        [account] = ops._calendar_accounts()[0]
+        backend = ops._build_calendar_backend(account)
+        with pytest.raises(CalendarAuthError) as err:
+            backend._access_token_fn()
+        assert err.value.reconnect == ("google",)
+        assert err.value.account == {"google": account.ref}
+
     @pytest.fixture
     def agent(self, make_agent):
         built = make_agent(_FakeGoogle())

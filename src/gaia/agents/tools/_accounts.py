@@ -8,9 +8,11 @@ never land on the wrong account, every message, thread, draft and event id a
 tool hands out starts with a short tag naming its account (``g3f1a:<id>``), and
 a tool that acts on an id takes its account from that tag.
 
-A tag is derived from the account's keyring slot, which never changes for the
-life of the account, so an id read in an earlier turn still names the same
-account after a restart.
+A tag is derived from the account's stable id, so an id read in an earlier
+turn still names the same account after a restart, and never names an account
+connected later in its place. A legacy account whose id GAIA has not learned
+yet is tagged by its keyring slot until its next token refresh records the id;
+its tag then changes once, and an id read before that is refused, not misrouted.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ _PROVIDER_WORDS = {
     MICROSOFT: frozenset({"microsoft", "outlook", "hotmail", "live", "msn"}),
 }
 _TAG_LETTER = {GOOGLE: "g", MICROSOFT: "m"}
-_TAG_RE = re.compile(r"[gm][0-9a-f]{4,40}")
+_TAG_RE = re.compile(r"[gm][0-9a-f]{4,40}", re.IGNORECASE)
 
 
 class AccountChoiceError(ValueError):
@@ -81,17 +83,24 @@ class ToolAccount:
         return f"{self.tag}:{raw}"
 
 
-def make_tags(provider: str, slots: Sequence[str]) -> List[str]:
-    """A short, distinct tag per slot: the provider's letter and a slot hash."""
+def tag_key(account_id: str, slot: str) -> str:
+    """What an account's tag hashes: its stable id, else (legacy) its slot."""
+    from gaia.connectors.accounts import UNIDENTIFIED
+
+    return f"slot:{slot}" if account_id == UNIDENTIFIED else account_id
+
+
+def make_tags(provider: str, keys: Sequence[str]) -> List[str]:
+    """A short, distinct tag per key: the provider's letter and a key hash."""
     digests = [
-        hashlib.sha1(slot.encode("utf-8"), usedforsecurity=False).hexdigest()
-        for slot in slots
+        hashlib.sha1(key.encode("utf-8"), usedforsecurity=False).hexdigest()
+        for key in keys
     ]
     for width in (4, 6, 8, 40):
         tags = [_TAG_LETTER[provider] + digest[:width] for digest in digests]
         if len(set(tags)) == len(tags):
             return tags
-    raise ValueError(f"two {provider} accounts share the keyring slot: {slots}")
+    raise ValueError(f"two {provider} accounts share one id: {keys}")
 
 
 def stored_accounts() -> List[ToolAccount]:
@@ -106,7 +115,7 @@ def stored_accounts() -> List[ToolAccount]:
     out: List[ToolAccount] = []
     for provider in PROVIDERS:
         accounts = api.list_accounts(provider)
-        tags = make_tags(provider, [a.slot for a in accounts])
+        tags = make_tags(provider, [tag_key(a.account_id, a.slot) for a in accounts])
         for account, tag in zip(accounts, tags):
             out.append(
                 ToolAccount(
@@ -126,7 +135,7 @@ def split_id(value: str) -> Tuple[Optional[str], str]:
     """``(tag, provider id)``; the tag is None when ``value`` carries none."""
     tag, sep, raw = value.strip().partition(":")
     if sep and raw and _TAG_RE.fullmatch(tag):
-        return tag, raw
+        return tag.lower(), raw
     return None, value.strip()
 
 
@@ -201,25 +210,29 @@ def default_account(
 ) -> ToolAccount:
     """The account a new message or event uses when the person names none.
 
-    The default account of the first provider, in registry order, that has a
-    usable account. When that default can't be used but another account of its
-    provider can, nothing is guessed: the person is asked which one.
+    The default account of the first provider, in registry order, with any
+    account in ``stored``. When that default can't be used, nothing is guessed,
+    not even another provider's account: the person is asked. ``stored`` holds
+    every account meant for this kind of write, usable or not.
     """
     usable_tags = {a.tag for a in usable}
     for provider in PROVIDERS:
         mine = [a for a in stored if a.provider == provider]
-        live = [a for a in usable if a.provider == provider]
-        if not live:
+        if not mine:
             continue
         default = next((a for a in mine if a.is_default), None)
         if default is not None and default.tag in usable_tags:
-            return next(a for a in live if a.tag == default.tag)
+            return next(a for a in usable if a.tag == default.tag)
         missing = default.name if default is not None else "none is set"
+        others = _names(usable)
+        instead = (
+            f", or which account to use instead: {', '.join(others)}" if others else ""
+        )
         raise AccountChoiceError(
             f"The default {PROVIDER_NAMES[provider]} account ({missing}) can't be "
-            "used right now, so GAIA won't guess which account to use. Ask the "
-            f"user which account to use: {', '.join(_names(usable))}.",
-            _names(usable),
+            "used right now, so GAIA won't pick another account on its own. Ask "
+            f"the user to reconnect it{instead}.",
+            others,
         )
     raise AccountChoiceError("No usable account is connected.", [])
 
@@ -237,4 +250,5 @@ __all__ = [
     "pick",
     "split_id",
     "stored_accounts",
+    "tag_key",
 ]

@@ -408,6 +408,7 @@ def _write_scopes(
             reconnect=(provider,),
             scopes={provider: WRITE_SCOPES[provider][operation]},
             setup=True,
+            account={provider: account.ref},
         )
     if missing:
         union = sorted(set(conn_scopes) | set(DECLARED_SCOPES[provider]))
@@ -480,14 +481,17 @@ def _interleaved(groups: Sequence[Sequence[Dict]]) -> List[Dict]:
 
 
 def _flag_capped(
-    payload: Dict, answers: Sequence[Tuple[ToolAccount, Sequence]], share: int
+    payload: Dict,
+    answers: Sequence[Tuple[ToolAccount, Sequence]],
+    share: int,
+    what: str = "messages",
 ) -> Dict:
     """Say which accounts filled their share, so a cut list isn't read as all."""
     capped = [a.name for a, found in answers if len(found) >= share]
     if len(answers) > 1 and capped:
         payload["accounts_with_more"] = capped
         payload["more_note"] = (
-            f"Each account was read for at most {share} messages, and "
+            f"Each account was read for at most {share} {what}, and "
             f"{', '.join(capped)} had at least that many. For more, call again "
             "with `account` set to one of them."
         )
@@ -824,6 +828,7 @@ class EmailToolsMixin:
                 connect=fix,
                 reconnect=fix,
                 setup=reconnect,
+                account={provider: account.ref},
             ) from exc
 
     def _mailbox_states(self) -> List[Dict]:

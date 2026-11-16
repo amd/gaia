@@ -254,7 +254,7 @@ def provider_api(request):
     return FakeGmailApi if request.param == "gmail" else FakeGraphApi
 
 
-T = tag("google")
+T = tag("google", "me@example.com")
 
 
 def test_get_thread_tool_numbers_messages_and_fences_bodies(provider_api):
@@ -671,7 +671,7 @@ def test_waiting_tool_reports_an_unreadable_long_thread():
         for i in range(101)
     ]
     out = _waiting(FakeGraphApi, long, provider="microsoft")
-    assert out["threads_unchecked"] == [tag("microsoft") + ":conv"]
+    assert out["threads_unchecked"] == [tag("microsoft", "me@example.com") + ":conv"]
     assert "incomplete" in out["note"]
 
 

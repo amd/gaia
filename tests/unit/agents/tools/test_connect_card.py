@@ -435,6 +435,8 @@ def test_in_an_app_a_refused_token_names_no_command(monkeypatch, surface):
     assert "gaia connectors" not in str(err.value)
     assert "needs reconnecting" in str(err.value)
     assert err.value.connect == ("google",) == err.value.reconnect
+    # With several accounts, the card must offer the one that failed.
+    assert err.value.account == {"google": GOOGLE_ACCOUNT.ref}
 
 
 def test_in_an_app_a_busy_connection_is_a_retry_not_a_reconnect(monkeypatch):
@@ -504,6 +506,7 @@ def test_in_an_app_a_write_without_write_access_is_a_reconnect(monkeypatch):
     assert err.value.connect == ("google",)
     assert f"lacks {GMAIL_COMPOSE}" in str(err.value)
     assert "gaia connectors" not in str(err.value)
+    assert err.value.account == {"google": GOOGLE_ACCOUNT.ref}
 
     # The card asks for the write when the write is what failed.
     out = with_connect_card(

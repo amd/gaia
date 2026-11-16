@@ -225,6 +225,7 @@ class _Rows:
                 "scopes": row["scopes"],
                 "account_email": row.get("email", "me@example.com"),
                 "status": row.get("status", "ok"),
+                **({"account_id": row["account_id"]} if "account_id" in row else {}),
             }
             for row in rows
         ]
@@ -296,7 +297,7 @@ def _sent_mime(call):
 
 SEND_NOW = {"to": "dana@example.com", "subject": "Hi", "body": "Hello there"}
 # The `mailbox` fixture's account: its id tag, and the line every prompt opens with.
-G = tag("google")
+G = tag("google", "me@example.com")
 FROM = "From: me@example.com (Google)\n"
 
 
@@ -1622,6 +1623,31 @@ def test_account_changed_while_asking_sends_nothing(mailbox, agent_for, tool, ar
     assert gmail.calls == []
 
 
+def test_a_different_account_with_the_same_address_sends_nothing(outlook, agent_for):
+    """Personal and work Microsoft accounts can share one address; the prompt
+    showed one of them, so the other must not send in its place."""
+    scopes = [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND]
+    personal = {"scopes": scopes, "grants": scopes, "account_id": "personal"}
+    work = {"scopes": scopes, "grants": scopes, "account_id": "work"}
+    outlook["microsoft"] = [personal, work]
+    graph = _Graph()
+
+    class _DefaultSwappedWhileAsking(_Asked):
+        def confirm_tool_execution(self, tool_name, tool_args):
+            super().confirm_tool_execution(tool_name, tool_args)
+            outlook["microsoft"] = [work, personal]
+            return True
+
+    out = json.loads(
+        agent_for(
+            _DefaultSwappedWhileAsking(), graph, OutlookWriteBackend
+        )._execute_tool("send_now", SEND_NOW)
+    )
+    assert out["success"] is False
+    assert "nothing was sent or changed" in out["error"]
+    assert graph.calls == []
+
+
 def test_unrecorded_address_is_named_plainly(mailbox, agent_for):
     mailbox["google"]["email"] = ""
     console = _Asked(answer=False)
@@ -1643,7 +1669,7 @@ def _two_gmails(mailbox):
         {"scopes": scopes, "grants": scopes},
         {"scopes": scopes, "grants": scopes, "email": WORK},
     ]
-    return tag("google", f"id:{WORK}")
+    return tag("google", WORK)
 
 
 def test_a_reply_goes_out_from_the_account_that_received_it(mailbox, agent_for):
@@ -1780,3 +1806,32 @@ def test_a_yes_to_a_reroute_question_still_shows_the_exact_email(
     assert result["status"] == "denied"
     assert console.shown[0][1][EXACT_TEXT_ARG].startswith(FROM)
     assert gmail.calls == []
+
+
+def test_a_cut_draft_list_keeps_every_account_and_says_so(mailbox, agent_for):
+    from _fake_accounts import tool_account
+
+    from gaia.agents.tools.email_tools import Mailbox
+
+    class _Drafts:
+        def __init__(self, prefix):
+            self.prefix = prefix
+
+        def list_drafts(self, limit):
+            return [
+                {"draft_id": f"{self.prefix}{i}", "subject": "s"} for i in range(5)
+            ][:limit]
+
+    agent = agent_for(_Asked(), _Gmail())
+    home = tool_account("me@example.com", "google")
+    work = tool_account(WORK, "google", is_default=False)
+    agent._email_mailboxes = [
+        Mailbox(home, _Drafts("h")),
+        Mailbox(work, _Drafts("w")),
+    ]
+    agent._email_unusable = []
+
+    out = json.loads(agent._execute_tool("list_drafts", {"limit": 3}))
+    assert out["count"] == 3
+    assert {d["account"] for d in out["drafts"]} == {"me@example.com", WORK}
+    assert out["accounts_with_more"] == ["me@example.com", WORK]

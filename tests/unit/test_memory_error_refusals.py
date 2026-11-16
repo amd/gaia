@@ -276,7 +276,7 @@ class TestRefusalsAreNotStored:
 class _FullMailbox(EmailToolsMixin):
     """An email host whose turn budget is already spent."""
 
-    def _email_call(self, *args, **kwargs):
+    def _email_boxes(self):
         raise AssertionError("a full turn must not reach the mailbox")
 
 

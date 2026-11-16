@@ -240,6 +240,26 @@ Client credentials per account were not built; forwards that would need them are
 
   Run `gaia_email` before and after, or name it for the next release candidate's eval run.
 
+Decisions made while building PR 2:
+
+- **A broken default never hands a write to another provider.** If the default Gmail's sign-in
+  expired and Outlook works, a new email or event is refused and the person is asked to
+  reconnect Gmail or name the account. Without this, mail meant for Gmail would quietly go out
+  from Outlook. A calendar the person never shared doesn't count, so with only Outlook's
+  calendar shared, new events land there.
+- **Free means free on the calendars GAIA can see.** An account that never shared its calendar
+  leaves `is_free` true, since the person chose not to share it. The result names those
+  accounts and the model is told to say the answer leaves them out. A calendar that is shared
+  but can't be read still makes `is_free` unknown.
+- **Account tags come from the account's stable id**, not its keyring slot. The first account
+  always lives in the same slot, so a slot-based tag would let an old id route to a new account
+  connected after removing all of them. A legacy account with no id yet is tagged by its slot
+  until its next sign-in refresh records the id; an id read before that is refused, never
+  misrouted.
+- **The send check compares the account itself, not its name.** Two Microsoft accounts can
+  share one address, so the approval stores the account's tag and id, and the write is refused
+  if either changed.
+
 ### PR 3: Settings, chat cards and approvals (after Kalin's connector page PRs land)
 
 Kalin's #7577 (new Connectors page) and #8281 (step-by-step setup) rewrite the same screen and

@@ -73,6 +73,10 @@ class OutgoingMessage:
     # The account it goes out from, shown on the prompt and checked again
     # before the write. Not part of equality: a fetched draft doesn't carry it.
     sender: Optional[str] = dataclasses.field(default=None, compare=False)
+    # That account's (tag, stable id): two accounts can share one address.
+    sender_account: Optional[Tuple[str, str]] = dataclasses.field(
+        default=None, compare=False
+    )
 
 
 @dataclass(frozen=True)

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from gaia.agents.tools._accounts import ToolAccount, make_tags
+from gaia.agents.tools._accounts import ToolAccount, make_tags, tag_key
 from gaia.connectors.accounts import Account
 from gaia.connectors.errors import UnknownAccountError
 
@@ -81,15 +81,15 @@ def install(
     return connections
 
 
-def tag(provider: str, slot: str = "default") -> str:
-    """The id tag the tools give the account in ``slot``."""
-    return make_tags(provider, [slot])[0]
+def tag(provider: str, account_id: str = "default", slot: str = "default") -> str:
+    """The id tag the tools give the account with ``account_id`` (a row's
+    ``account_id``, else its address); a legacy one is tagged by ``slot``."""
+    return make_tags(provider, [tag_key(account_id, slot)])[0]
 
 
 def tool_account(
     email: str = "me@example.com",
     provider: str = "microsoft",
-    slot: str = "default",
     is_default: bool = True,
 ) -> ToolAccount:
     """An account as the tools see it, for a test that injects its backend."""
@@ -97,6 +97,6 @@ def tool_account(
         provider=provider,
         email=email,
         ref=email,
-        tag=tag(provider, slot),
+        tag=tag(provider, email),
         is_default=is_default,
     )
