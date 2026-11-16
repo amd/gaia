@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import type { MessageKey, Params } from '../../i18n/registry';
 import { tEn, type Translate } from '../../i18n/useT';
 import type { ModelPrice } from '../../types';
 
@@ -14,8 +15,12 @@ export function formatPrice(price: ModelPrice | null | undefined, t: Translate =
     return formatPerMillion(price.input_per_million, price.output_per_million, t);
 }
 
-/** formatPrice for a bare input/output pair; either missing reads "price unknown". */
-export function formatPerMillion(input: number | null | undefined, output: number | null | undefined, t: Translate = tEn): string {
+/** formatPrice for a bare input/output pair; either missing reads "price unknown". Pass `t.bare` for an <option>. */
+export function formatPerMillion(
+    input: number | null | undefined,
+    output: number | null | undefined,
+    t: (key: MessageKey, params?: Params) => string = tEn,
+): string {
     if (input == null || output == null) return t('settings.price.unknown');
     return t('settings.price.perMillion', { input: usd(input), output: usd(output) });
 }

@@ -237,7 +237,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
         // A local model costs nothing per token; a cloud one without a known price says so.
         const price = m.provider === 'local'
             ? t.bare('settings.hybrid.onThisPc')
-            : formatPerMillion(m.input_per_million, m.output_per_million, t);
+            : formatPerMillion(m.input_per_million, m.output_per_million, t.bare);
         return `${m.display_name} · ${price}`;
     };
 
