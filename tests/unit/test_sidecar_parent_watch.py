@@ -18,9 +18,12 @@ from gaia.sidecar import parent_watch
 
 
 @pytest.fixture(autouse=True)
-def _fresh_watcher(monkeypatch):
-    # One watcher per process: each test starts from none.
-    monkeypatch.setattr(parent_watch, "_watcher", None)
+def _fresh_watcher():
+    # One watcher per process: each test starts from none and stops its own,
+    # so a leftover thread can never fire into a later test.
+    parent_watch.stop()
+    yield
+    parent_watch.stop()
 
 
 def _sleeper():
@@ -53,15 +56,17 @@ def test_shuts_down_once_the_daemon_dies():
         daemon.kill()
 
 
-def test_a_daemon_already_gone_at_start_shuts_down_at_once():
+def test_a_daemon_already_gone_at_start_refuses_to_start_in_one_line():
+    """A SIGINT before the server is listening surfaced as a bare traceback."""
     daemon = _sleeper()
     daemon.kill()
     daemon.wait()
     gone = threading.Event()
-    parent_watch.start(
-        env={DAEMON_PID_ENV_VAR: str(daemon.pid)}, poll_s=0.1, on_gone=gone.set
-    )
-    assert gone.wait(5)
+    with pytest.raises(ValueError, match="already gone"):
+        parent_watch.start(
+            env={DAEMON_PID_ENV_VAR: str(daemon.pid)}, poll_s=0.1, on_gone=gone.set
+        )
+    assert not gone.is_set()
 
 
 def test_the_daemon_hands_its_pid_to_the_sidecars_it_spawns(tmp_path, monkeypatch):
@@ -116,19 +121,23 @@ def test_a_killed_but_unreaped_daemon_counts_as_gone(monkeypatch):
     """On POSIX a zombie keeps its start time until its parent reaps it."""
     import psutil
 
-    class _Zombie:
+    killed = threading.Event()
+
+    class _Daemon:
         def __init__(self, _pid):
             pass
 
         def status(self):
-            return psutil.STATUS_ZOMBIE
+            return psutil.STATUS_ZOMBIE if killed.is_set() else psutil.STATUS_RUNNING
 
         def create_time(self):
             return 1234.0
 
-    monkeypatch.setattr(parent_watch.psutil, "Process", _Zombie)
+    monkeypatch.setattr(parent_watch.psutil, "Process", _Daemon)
     gone = threading.Event()
     parent_watch.start(env={DAEMON_PID_ENV_VAR: "4242"}, poll_s=0.1, on_gone=gone.set)
+    assert not gone.wait(0.3)
+    killed.set()
     assert gone.wait(5)
 
 
@@ -146,3 +155,73 @@ def test_reading_the_environment_removes_the_pid_from_it(monkeypatch):
     finally:
         daemon.kill()
         daemon.wait()
+
+
+def test_stop_ends_the_watcher_without_firing():
+    daemon = _sleeper()
+    gone = threading.Event()
+    try:
+        thread = parent_watch.start(
+            env={DAEMON_PID_ENV_VAR: str(daemon.pid)}, poll_s=0.1, on_gone=gone.set
+        )
+        parent_watch.stop()
+        assert not thread.is_alive()
+        daemon.kill()
+        daemon.wait()
+        assert not gone.wait(0.5)
+    finally:
+        daemon.kill()
+
+
+@pytest.mark.parametrize(
+    "agent, package",
+    [("gaia", "gaia_agent"), ("email", "gaia_agent_email")],
+)
+def test_the_dev_mode_module_starts_the_watch_when_imported(
+    monkeypatch, agent, package
+):
+    """``uvicorn server:app`` never reaches main(); importing the module must."""
+    import importlib.util
+    from pathlib import Path
+
+    pytest.importorskip(package)
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "hub"
+        / "agents"
+        / agent
+        / "python"
+        / "packaging"
+        / "server.py"
+    )
+    daemon = _sleeper()
+    try:
+        monkeypatch.setenv(DAEMON_PID_ENV_VAR, str(daemon.pid))
+        spec = importlib.util.spec_from_file_location(f"_dev_server_{agent}", path)
+        spec.loader.exec_module(importlib.util.module_from_spec(spec))
+        assert parent_watch._watcher is not None and parent_watch._watcher.is_alive()
+        assert DAEMON_PID_ENV_VAR not in os.environ
+    finally:
+        parent_watch.stop()  # before the daemon dies, or the watch would SIGINT pytest
+        daemon.kill()
+        daemon.wait()
+
+
+def test_the_dev_mode_module_refuses_a_bad_pid_in_one_line(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+
+    pytest.importorskip("gaia_agent")
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "hub"
+        / "agents"
+        / "gaia"
+        / "python"
+        / "packaging"
+        / "server.py"
+    )
+    monkeypatch.setenv(DAEMON_PID_ENV_VAR, "not-a-pid")
+    spec = importlib.util.spec_from_file_location("_dev_server_bad_pid", path)
+    with pytest.raises(SystemExit, match="gaia-agent: GAIA_DAEMON_PID='not-a-pid'"):
+        spec.loader.exec_module(importlib.util.module_from_spec(spec))

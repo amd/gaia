@@ -61,7 +61,10 @@ if __name__ != "__main__":
     # which never reaches main(), where the watch otherwise starts.
     from gaia.sidecar import parent_watch
 
-    parent_watch.start()
+    try:
+        parent_watch.start()
+    except ValueError as exc:  # one line, as main() prints it
+        raise SystemExit(f"gaia-agent: {exc}") from None
 
 if __name__ == "__main__":  # pragma: no cover
     from gaia.sidecar.bundle_freshness import keep_unpacked_bundle_fresh

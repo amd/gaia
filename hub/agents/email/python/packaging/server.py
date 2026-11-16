@@ -45,7 +45,10 @@ if __name__ != "__main__":
     # which never reaches main(), where the watch otherwise starts.
     from gaia.sidecar import parent_watch
 
-    parent_watch.start()
+    try:
+        parent_watch.start()
+    except ValueError as exc:  # one line, as main() prints it
+        raise SystemExit(f"gaia-agent-email: {exc}") from None
 
 # Loaded as the TOP-LEVEL module `server` via `uvicorn server:app --app-dir
 # <this dir>` — NOT `packaging.server:app`, which would resolve to the PyPI

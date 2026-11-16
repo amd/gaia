@@ -16,7 +16,6 @@ import logging
 import os
 import signal
 import threading
-import time
 from typing import Callable, Mapping, Optional
 
 import psutil
@@ -32,6 +31,7 @@ GRACE_S = 30.0
 
 _lock = threading.Lock()
 _watcher: Optional[threading.Thread] = None
+_stopping: Optional[threading.Event] = None
 
 
 def _identity(pid: int) -> Optional[float]:
@@ -74,7 +74,7 @@ def start(
         ValueError: ``GAIA_DAEMON_PID`` is set but is not a pid, or the
             daemon's process can't be inspected.
     """
-    global _watcher
+    global _watcher, _stopping
     if env is None:
         # Read once and drop it: what the agent launches must not inherit the tie.
         raw = os.environ.pop(DAEMON_PID_ENV_VAR, None)
@@ -99,11 +99,18 @@ def start(
                 f"cannot watch the GAIA daemon (pid {pid}): this agent may not "
                 "inspect its process. Run the agent as the same user as the daemon."
             ) from e
+        if born is None:
+            # Before the server is up a SIGINT would surface as a bare traceback.
+            raise ValueError(
+                f"the GAIA daemon (pid {pid}) that started this agent is already "
+                "gone, so the agent is not starting. Start GAIA again."
+            )
+        stopping = threading.Event()
 
         def _watch() -> None:
-            while True:
+            while not stopping.wait(poll_s):
                 try:
-                    gone = born is None or _identity(pid) != born
+                    gone = _identity(pid) != born
                 except psutil.AccessDenied:
                     gone = False  # it exists; we just may not inspect it now
                 if gone:
@@ -114,10 +121,22 @@ def start(
                     )
                     on_gone()
                     return
-                time.sleep(poll_s)
 
+        _stopping = stopping
         _watcher = threading.Thread(
             target=_watch, name="gaia-daemon-watch", daemon=True
         )
         _watcher.start()
         return _watcher
+
+
+def stop(timeout: float = 5.0) -> None:
+    """Stop the running watcher, if any; the next :func:`start` begins afresh."""
+    global _watcher, _stopping
+    with _lock:
+        watcher, stopping = _watcher, _stopping
+        _watcher = _stopping = None
+    if stopping is not None:
+        stopping.set()
+    if watcher is not None:
+        watcher.join(timeout)
