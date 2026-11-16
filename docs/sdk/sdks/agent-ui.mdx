@@ -3538,7 +3538,7 @@ the PC until it is opened to devices on purpose. The list is `DEVICE_ROUTES` in
 
 | Class | A paired device | Routes |
 |---|---|---|
-| Allowed | Allowed | `GET /api/health`, `GET /api/system/status`; `GET`/`POST /api/sessions`, `GET /api/sessions/{session_id}` and its `/messages`; `POST /api/chat/send`, `GET /api/chat/active`, `GET /api/chat/attach`, `POST /api/chat/cancel`, `POST /api/chat/confirm-tool`, `POST /api/chat/user-input`; `GET /api/schedules`, `GET /api/schedules/{name}` and its `/results`; `GET /api/goals`, `GET /api/goals/{goal_id}` |
+| Allowed | Allowed | `GET /api/health`, `GET /api/system/status`; `GET`/`POST /api/sessions`, `GET /api/sessions/events`, `GET /api/sessions/{session_id}` and its `/messages`; `POST /api/chat/send`, `GET /api/chat/active`, `GET /api/chat/attach`, `POST /api/chat/cancel`, `POST /api/chat/confirm-tool`, `POST /api/chat/user-input`; `GET /api/schedules`, `GET /api/schedules/{name}` and its `/results`; `GET /api/goals`, `GET /api/goals/{goal_id}` |
 | Pairing | Only with no token | `POST /api/devices/pair` |
 | Unpairing itself | Pending or allowed | `DELETE /api/devices/me` |
 | PC-only | Refused | Routes that answer only the PC, including every [paired devices](#paired-devices) route that manages devices |

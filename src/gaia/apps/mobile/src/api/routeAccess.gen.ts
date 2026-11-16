@@ -104,7 +104,7 @@ export const ROUTE_ACCESS: Readonly<Record<string, RouteAccessClass>> = {
     'GET /api/schedules/{name:path}': 'remote',
     'GET /api/schedules/{name:path}/results': 'remote',
     'GET /api/sessions': 'remote',
-    'GET /api/sessions/events': 'not_on_listener',
+    'GET /api/sessions/events': 'remote',
     'GET /api/sessions/search': 'not_on_listener',
     'GET /api/sessions/{session_id}': 'remote',
     'GET /api/sessions/{session_id}/capabilities': 'not_on_listener',

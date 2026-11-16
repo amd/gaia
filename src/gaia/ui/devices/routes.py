@@ -29,6 +29,7 @@ DEVICE_ROUTES: FrozenSet[str] = frozenset(
         "POST /api/sessions",
         "GET /api/sessions/{session_id}",
         "GET /api/sessions/{session_id}/messages",
+        "GET /api/sessions/events",
         # A turn: send it and read its stream, stop it, answer its prompts.
         "POST /api/chat/send",
         "GET /api/chat/active",

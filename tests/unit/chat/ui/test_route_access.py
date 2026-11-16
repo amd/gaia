@@ -132,6 +132,7 @@ WEB = {
 #: What an allowed device may call: ``DEVICE_ROUTES`` in
 #: ``gaia.ui.devices.routes``, less its own unpairing (``DEVICE_SELF``).
 REMOTE = {
+    "GET /api/sessions/events",
     "GET /api/chat/active",
     "GET /api/chat/attach",
     "GET /api/goals",
@@ -222,7 +223,6 @@ UNLISTED = {
     "GET /api/providers/local/context",
     "GET /api/providers/local/status",
     "GET /api/providers/{provider}/models",
-    "GET /api/sessions/events",
     "GET /api/sessions/search",
     "GET /api/sessions/{session_id}/capabilities",
     "GET /api/sessions/{session_id}/changes",
