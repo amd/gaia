@@ -30,7 +30,8 @@ describe('EmbedderSetting', () => {
     it('says which embedder runs and on which device', async () => {
         mockedApi.getEmbedder.mockResolvedValue(view('npu', false));
         render(<EmbedderSetting />);
-        expect(await screen.findByText(/EmbeddingGemma 300M NPU runs on the NPU/)).toBeInTheDocument();
+        // The model name is bidi-isolated, so it reads whole in a right-to-left line.
+        expect(await screen.findByText(/EmbeddingGemma 300M NPU\u2069? runs on the NPU/)).toBeInTheDocument();
         expect(screen.getByRole('combobox', { name: 'Embedding model' })).toHaveValue('profile');
     });
 
