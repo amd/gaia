@@ -2403,6 +2403,21 @@ class TestSessionDocumentEndpoints:
         )
         assert resp.status_code == 404
 
+    def test_attach_document_removed_mid_request_is_not_reported_attached(
+        self, client, db, monkeypatch
+    ):
+        session_id = client.post("/api/sessions", json={}).json()["id"]
+        # The document passes the existence check, then is gone when the row is written.
+        monkeypatch.setattr(db, "get_document", lambda doc_id: {"id": doc_id})
+
+        resp = client.post(
+            f"/api/sessions/{session_id}/documents", json={"document_id": "gone"}
+        )
+
+        assert resp.status_code == 409
+        assert "try again" in resp.json()["detail"]
+        assert client.get(f"/api/sessions/{session_id}").json()["document_ids"] == []
+
     def test_detach_document(self, client, db):
         create_resp = client.post("/api/sessions", json={})
         session_id = create_resp.json()["id"]
