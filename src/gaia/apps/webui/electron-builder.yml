@@ -91,7 +91,7 @@ afterPack: ./scripts/after-pack.cjs
 
 # artifactBuildCompleted hook: record Flathub as the .flatpak's runtime repo,
 # so it installs on a PC that has not added Flathub. Other artifacts pass through.
-artifactBuildCompleted: ../../../../installer/scripts/flatpak-runtime-repo.cjs
+artifactBuildCompleted: ./scripts/flatpak-runtime-repo.cjs
 
 # Auto-update provider — R2-primary generic feed (#1724).
 #

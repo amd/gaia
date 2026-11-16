@@ -61,9 +61,11 @@ class TestBuilderConfig:
 
     def test_the_bundle_records_its_runtime_repo(self):
         hook = _builder()["artifactBuildCompleted"]
+        # electron-builder loads hooks only from inside the app's own folder.
+        assert hook.startswith("./")
         assert (BUILDER_YML.parent / hook).resolve() == (
-            REPO / "installer" / "scripts" / "flatpak-runtime-repo.cjs"
-        )
+            BUILDER_YML.parent / "scripts" / "flatpak-runtime-repo.cjs"
+        ).resolve()
 
     def test_file_name_matches_the_other_desktop_builds(self):
         assert (

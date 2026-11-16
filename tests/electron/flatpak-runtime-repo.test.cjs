@@ -3,7 +3,7 @@
 
 /**
  * The electron-builder hook that records Flathub as the .flatpak's runtime
- * repo (installer/scripts/flatpak-runtime-repo.cjs). Without it the bundle
+ * repo (src/gaia/apps/webui/scripts/flatpak-runtime-repo.cjs). Without it the bundle
  * fails to install on a PC that has not added Flathub.
  */
 
@@ -11,7 +11,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const hook = require("../../installer/scripts/flatpak-runtime-repo.cjs");
+const hook = require("../../src/gaia/apps/webui/scripts/flatpak-runtime-repo.cjs");
 const { recordRuntimeRepo, RUNTIME_REPO } = hook;
 
 let dir;
