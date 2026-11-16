@@ -7604,10 +7604,12 @@ def handle_knowledge_command(args):
         # The service answered with an error, so the user's network is fine.
         service = "Tavily" if client.configured else "DuckDuckGo"
         status = getattr(e.response, "status_code", None) or "an error"
-        print(
-            f"❌ Web {action} failed: {service} answered with {status}. "
-            "It may be down for a moment; try again later."
+        hint = (
+            "It rejected the request; check the query or URL and try again."
+            if isinstance(status, int) and status < 500
+            else "It may be down for a moment; try again later."
         )
+        print(f"❌ Web {action} failed: {service} answered with {status}. {hint}")
         sys.exit(1)
     except requests.exceptions.RequestException as e:
         # Redirect loops, a malformed URL and the like: still an error, not a crash.

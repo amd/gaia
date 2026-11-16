@@ -400,8 +400,28 @@ def test_a_server_error_is_not_blamed_on_the_users_connection(capsys):
     assert excinfo.value.code == 1
     out = capsys.readouterr().out
     assert "answered with 503" in out
+    assert "down for a moment" in out
     assert "Check your internet connection" not in out
     assert "Traceback" not in out
+
+
+def test_a_rejected_request_is_not_called_an_outage(capsys):
+    """A 4xx is not the service being down for a moment."""
+    response = requests.Response()
+    response.status_code = 400
+    _FakeTavilyClient.on_search = _raiser(
+        requests.exceptions.HTTPError("400 Client Error", response=response)
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_knowledge_command(_knowledge_args("search"))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "answered with 400" in out
+    assert "rejected the request" in out
+    assert "down for a moment" not in out
+    assert "Check your internet connection" not in out
 
 
 def test_a_connection_dropped_mid_response_is_a_dropped_connection(capsys):
