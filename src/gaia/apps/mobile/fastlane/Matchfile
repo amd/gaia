@@ -1,0 +1,9 @@
+# match keeps the development certificate and profiles, encrypted, in a private git repository.
+# The lanes pass these same values explicitly and fail when one is missing; this file serves
+# `bundle exec fastlane match ...` run by hand. MATCH_PASSWORD: export GAIA_MATCH_PASSWORD's value.
+storage_mode("git")
+git_url(ENV["GAIA_MATCH_GIT_URL"])
+git_branch(ENV.fetch("GAIA_MATCH_GIT_BRANCH", "").empty? ? "main" : ENV["GAIA_MATCH_GIT_BRANCH"])
+team_id(ENV["GAIA_APPLE_TEAM_ID"])
+app_identifier([ENV["GAIA_IOS_BUNDLE_ID"], ENV["GAIA_IOS_BUNDLE_ID_DEV"]].compact)
+type("development")

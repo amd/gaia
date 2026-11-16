@@ -1,0 +1,6 @@
+# The iOS build lanes in fastlane/Fastfile (see fastlane/README.md). Exact versions;
+# Gemfile.lock pins the rest. CocoaPods matches the version `expo prebuild` installs pods with.
+source "https://rubygems.org"
+
+gem "fastlane", "2.241.2"
+gem "cocoapods", "1.17.0"

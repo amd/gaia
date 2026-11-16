@@ -69,6 +69,7 @@
               "setup",
               "quickstart",
               "guides/agent-ui",
+              "guides/mobile",
               "guides/tui",
               "guides/memory",
               {
