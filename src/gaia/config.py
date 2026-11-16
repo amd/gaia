@@ -511,7 +511,7 @@ class GaiaConfig:
             ) from e
 
     @staticmethod
-    def _check_custom_has_rules(policy: str, rules: Any, where: str) -> None:
+    def _check_custom_has_rules(policy: Optional[str], rules: Any, where: str) -> None:
         if policy == "custom" and rules is None:
             raise GaiaConfigError(
                 f"{where}: 'hybrid_policy' is custom, which needs 'hybrid_rules'. "

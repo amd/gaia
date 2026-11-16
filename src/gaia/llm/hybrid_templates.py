@@ -21,6 +21,9 @@ from gaia.llm.hybrid import (
     HybridConfigError,
     HybridSettings,
 )
+from gaia.logger import get_logger
+
+log = get_logger(__name__)
 
 LOCAL, AMD, FIREWORKS, CLAUDE = "local", "amd", "fireworks", "claude"
 PROVIDERS = (LOCAL, AMD, FIREWORKS, CLAUDE)
@@ -420,8 +423,12 @@ def describe(template: Template, inv: Inventory) -> Dict[str, Any]:
         reason = availability((classifier, cheap, strong), inv)
     except GaiaConfigError as e:
         # Only local-plus-cloud reads config.json, for the local default model.
+        log.warning("Template %s: config.json can't be read: %s", template.id, e)
         cheap = strong = classifier = None
-        reason = f"config.json can't be read, so your local model isn't known: {e}"
+        detail = e.args[0] if e.args and isinstance(e.args[0], str) else None
+        reason = "config.json can't be read, so your local model isn't known" + (
+            f": {detail}" if detail else "; the GAIA log has the details"
+        )
     if template.id == "fireworks" and inv.check(strong) and inv.check(CLAUDE_STRONG):
         needs = (
             "the AMD LLM Gateway"

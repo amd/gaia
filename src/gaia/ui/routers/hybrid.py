@@ -56,6 +56,22 @@ _MODEL_FIELDS = ("cheap_model", "strong_model", "classifier_model")
 MAX_PREVIEW_CHARS = 100_000
 
 
+def _app_message(e: Exception, context: str) -> str:
+    """The remedy GAIA wrote into *e*; the exception itself is logged here.
+
+    Read from ``args`` rather than ``str(e)`` so a response carries only GAIA's
+    own message text, never exception internals.
+    """
+    logger.warning("%s: %s", context, e)
+    message = e.args[0] if e.args and isinstance(e.args[0], str) else None
+    return message or f"{context}; the GAIA log has the details."
+
+
+def _app_wording(e: Exception, context: str) -> str:
+    """:func:`_app_message` in the Agent UI's words."""
+    return surface_wording(_app_message(e, context), "agent_ui")
+
+
 def _unprocessable(message: str) -> HTTPException:
     return HTTPException(status_code=422, detail=surface_wording(message, "agent_ui"))
 
@@ -84,12 +100,14 @@ def _gateway_prices() -> Dict[str, Any]:
         doc = ensure_fresh()
         error = None
     except GatewayPriceError as e:
-        logger.warning("Hybrid prices without a fresh gateway price list: %s", e)
-        error = surface_wording(str(e), "agent_ui")
+        error = _app_wording(e, "Hybrid prices without a fresh gateway price list")
         try:
             doc = load()
         except GatewayPriceError as unreadable:
-            doc, error = None, surface_wording(str(unreadable), "agent_ui")
+            doc = None
+            error = _app_wording(
+                unreadable, "The saved gateway price list is unreadable"
+            )
     return {
         "prices_fetched_at": doc.get("fetched_at") if doc else None,
         "prices_error": error,
@@ -98,15 +116,15 @@ def _gateway_prices() -> Dict[str, Any]:
 
 def _lemonade_payloads():
     """The model server's ``/models?show_all=true`` and ``/system-info`` answers."""
-    from .providers import ProviderError, _lemonade
+    from .providers import ProviderError, _lemonade, _ModelListFailed
 
     answers = []
     for path in ("models?show_all=true", "system-info"):
         status, body = _lemonade("GET", path)
         if status >= 400:
-            raise ProviderError(
-                f"The model server answered /{path} with HTTP {status}."
-            )
+            # A 5xx is the server's own state (still starting), not a verdict.
+            failed = _ModelListFailed if status >= 500 else ProviderError
+            raise failed(f"The model server answered /{path} with HTTP {status}.")
         answers.append(body)
     return answers[0], answers[1]
 
@@ -129,7 +147,7 @@ def inventory():
     except HybridConfigError as e:
         from .providers import ProviderError
 
-        raise ProviderError(str(e)) from e
+        raise ProviderError(_app_message(e, "Hybrid models can't be listed")) from e
 
 
 def _inventory_or_503():
@@ -141,7 +159,9 @@ def _inventory_or_503():
         raise HTTPException(
             status_code=503,
             detail=surface_wording(
-                f"Couldn't list the models hybrid can use: {e}", "agent_ui"
+                "Couldn't list the models hybrid can use: "
+                + _app_message(e, "Hybrid models can't be listed"),
+                "agent_ui",
             ),
         ) from e
 
@@ -204,7 +224,9 @@ def _raw_doc() -> Dict[str, Any]:
         text = GaiaConfig._read_text(path)
         return {} if text is None else GaiaConfig._parse_doc(text, path)
     except GaiaConfigError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500, detail=_app_message(e, "config.json is unreadable")
+        ) from e
 
 
 def _settings_from(doc: Dict[str, Any]) -> HybridSettings:
@@ -234,16 +256,17 @@ def _view(db: ChatDatabase) -> Dict[str, Any]:
         doc = _raw_doc()
         try:
             _settings_from(doc)
-            error = surface_wording(str(invalid), "agent_ui")
+            error = _app_wording(invalid, "config.json is invalid")
         except HybridConfigError as e:
-            error = surface_wording(str(e), "agent_ui")
+            error = _app_wording(e, "The saved hybrid settings are invalid")
         settings = None
     else:
         try:
             settings = HybridSettings.load(cfg)
             error = None
         except HybridConfigError as e:
-            settings, error = None, surface_wording(str(e), "agent_ui")
+            settings = None
+            error = _app_wording(e, "The saved hybrid settings are invalid")
     if settings is not None:
         values = {
             "cheap_model": settings.cheap_model,
@@ -280,8 +303,8 @@ def _view(db: ChatDatabase) -> Dict[str, Any]:
     try:
         inv, models_error = inventory(), None
     except ProviderError as e:
-        logger.warning("Hybrid settings without the model list: %s", e)
-        inv, models_error = None, surface_wording(str(e), "agent_ui")
+        inv = None
+        models_error = _app_wording(e, "Hybrid settings without the model list")
     return {
         **values,
         "presets": {p: preset_rules(p) for p in PRESETS},
@@ -356,7 +379,7 @@ def _checked(field: str, value: Any) -> Any:
     try:
         return validate_rules(value)
     except HybridConfigError as e:
-        raise _unprocessable(str(e)) from e
+        raise _unprocessable(_app_message(e, "Invalid hybrid rules")) from e
 
 
 @router.put("/api/hybrid/settings")
@@ -394,7 +417,7 @@ def put_hybrid_settings(
         _settings_from(doc)
         GaiaConfig._from_doc(doc, GaiaConfig.config_path())
     except (GaiaConfigError, HybridConfigError) as e:
-        raise _unprocessable(str(e)) from e
+        raise _unprocessable(_app_message(e, "Invalid hybrid settings")) from e
     chosen = [f for f in _MODEL_FIELDS if body.get(f)]
     if chosen:
         inv = _inventory_or_503()
@@ -415,7 +438,9 @@ def _save(values: Dict[str, Any]) -> None:
     try:
         GaiaConfig.edit_doc(lambda doc: doc.update(values))
     except GaiaConfigError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500, detail=_app_message(e, "Hybrid settings not saved")
+        ) from e
 
 
 @router.get("/api/hybrid/entry")
@@ -431,7 +456,8 @@ def hybrid_picker_entry() -> Dict[str, Any]:
     try:
         settings, error = HybridSettings.load(), None
     except (GaiaConfigError, HybridConfigError) as e:
-        settings, error = None, surface_wording(str(e), "agent_ui")
+        settings = None
+        error = _app_wording(e, "The saved hybrid settings are invalid")
     entry = picker_entry(inv, settings, error)
     if entry["reason"]:
         entry["reason"] = surface_wording(entry["reason"], "agent_ui")
@@ -464,7 +490,7 @@ def apply_hybrid_template(
         raise HTTPException(status_code=404, detail=e.args[0]) from e
     except HybridConfigError as e:
         raise HTTPException(
-            status_code=409, detail=surface_wording(str(e), "agent_ui")
+            status_code=409, detail=_app_wording(e, "Template can't be applied")
         ) from e
     _save(values)
     return _view(db)
@@ -492,14 +518,15 @@ def preview_hybrid_route(body: Any = Body(...)) -> Dict[str, Any]:
         settings = HybridSettings.load()
     except (GaiaConfigError, HybridConfigError) as e:
         raise HTTPException(
-            status_code=409, detail=surface_wording(str(e), "agent_ui")
+            status_code=409,
+            detail=_app_wording(e, "The saved hybrid settings are invalid"),
         ) from e
     try:
         decision = HybridRouter(settings).preview(text)
     except RuntimeError as e:
         # Local only is on and a hybrid model is in the cloud.
         raise HTTPException(
-            status_code=409, detail=surface_wording(str(e), "agent_ui")
+            status_code=409, detail=_app_wording(e, "Hybrid preview refused")
         ) from e
     return {
         "model": decision.model,
@@ -524,10 +551,13 @@ def hybrid_route_stats(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         settings = HybridSettings.load()
     except (GaiaConfigError, HybridConfigError) as e:
         raise HTTPException(
-            status_code=409, detail=surface_wording(str(e), "agent_ui")
+            status_code=409,
+            detail=_app_wording(e, "The saved hybrid settings are invalid"),
         ) from e
     prices = _gateway_prices()
     try:
         return {**spending.hybrid_stats(db, settings), **prices}
     except (RuntimeError, ValueError) as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(
+            status_code=500, detail=_app_message(e, "Hybrid stats unavailable")
+        ) from e
