@@ -47,11 +47,10 @@ beforeEach(() => {
     useChatStore.setState({ settingsSection: null, settingsProvider: null, sessions: [SESSION], currentSessionId: SESSION.id });
     mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, FIREWORKS, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null });
     // Hybrid can't run here (no gateway), so the picker offers no Hybrid entry.
-    mockedApi.getHybridSettings.mockResolvedValue({
-        cheap_model: 'amd.DeepSeek-V4.1-Flash', strong_model: 'amd.Claude-Opus-5-5', classifier_model: null, classifier_timeout: 15,
-        policy: 'quality', rules: {} as never, presets: {} as never, kinds: [], models: [], is_active: false,
+    mockedApi.getHybridEntry.mockResolvedValue({
+        id: 'hybrid', display_name: 'Hybrid (DeepSeek + Opus)', remote: true, available: false,
+        reason: 'Connect the AMD LLM Gateway in Settings › Models', shown: false,
     });
-    mockedApi.getHybridTemplates.mockResolvedValue([]);
     mockedApi.listProviderModels.mockImplementation(async (id) => ({
         provider: id,
         models: id === 'local'

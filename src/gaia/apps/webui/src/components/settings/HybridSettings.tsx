@@ -8,7 +8,7 @@ import { useT } from '../../i18n/useT';
 import { RadioGroup } from '../RadioGroup';
 import { formatPerMillion, formatTotal } from './cloudPrice';
 import {
-    HYBRID_PROVIDERS, hybridClassifierIsLocal, hybridModelName, hybridPairMeasured, hybridProviderName,
+    HYBRID_PROVIDERS, hybridModelName, hybridProviderName,
 } from '../../utils/hybrid';
 import type {
     HybridKind, HybridModelOption, HybridPolicy, HybridPreview, HybridRules, HybridSettings as Settings, HybridSettingsUpdate,
@@ -30,7 +30,7 @@ const FIELDS: Field[] = ['cheap_model', 'strong_model', 'classifier_model', 'cla
 interface Draft {
     cheap_model: string;
     strong_model: string;
-    classifier_model: string | null;
+    classifier_model: string;
     classifier_timeout: string;
     policy: HybridPolicy;
     rules: HybridRules;
@@ -43,11 +43,12 @@ function draftOf(s: Settings): Draft {
         classifier_model: s.classifier_model,
         classifier_timeout: String(s.classifier_timeout),
         policy: s.policy,
-        rules: s.rules,
+        // A custom policy saved without rules starts from Quality; config_error says what's wrong.
+        rules: s.rules ?? s.presets.quality,
     };
 }
 
-function sameRules(a: HybridRules, b: HybridRules): boolean {
+function sameRules(a: HybridRules, b: HybridRules | null): boolean {
     return JSON.stringify(a) === JSON.stringify(b);
 }
 
@@ -70,9 +71,7 @@ function pendingUpdate(saved: Settings, draft: Draft): { update: HybridSettingsU
     const update: HybridSettingsUpdate = {};
     if (draft.cheap_model !== saved.cheap_model) update.cheap_model = draft.cheap_model;
     if (draft.strong_model !== saved.strong_model) update.strong_model = draft.strong_model;
-    if (draft.classifier_model !== saved.classifier_model && draft.classifier_model !== null) {
-        update.classifier_model = draft.classifier_model;
-    }
+    if (draft.classifier_model !== saved.classifier_model) update.classifier_model = draft.classifier_model;
     const timeout = draft.classifier_timeout.trim() === '' ? NaN : Number(draft.classifier_timeout);
     const timeoutValid = Number.isFinite(timeout) && timeout >= MIN_TIMEOUT && timeout <= MAX_TIMEOUT;
     if (timeoutValid && timeout !== saved.classifier_timeout) update.classifier_timeout = timeout;
@@ -243,7 +242,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
 
     const modelSelect = (field: 'cheap_model' | 'strong_model' | 'classifier_model', label: string) => {
         const value = draft[field];
-        const listed = value === null || saved.models.some((m) => m.id === value);
+        const listed = saved.models.some((m) => m.id === value);
         const error = fieldError(field);
         return (
             <div className="settings-field">
@@ -252,12 +251,11 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                     id={`${id}-${field}`}
                     className="settings-input"
                     value={value ?? ''}
-                    onChange={(e) => edit({ [field]: e.target.value || (field === 'classifier_model' ? null : '') } as Partial<Draft>)}
+                    onChange={(e) => edit({ [field]: e.target.value } as Partial<Draft>)}
                     disabled={saving}
                     aria-invalid={!!error}
                     aria-describedby={error ? errorId(field) : undefined}
                 >
-                    {value === null && <option value="">{t.bare('settings.hybrid.sameAsCheap')}</option>}
                     {!listed && <option value={value}>{t.bare('settings.hybrid.currentSetting', { model: value })}</option>}
                     {HYBRID_PROVIDERS.map((provider) => {
                         const models = saved.models.filter((m) => m.provider === provider);
@@ -282,12 +280,10 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
         ? t('settings.hybrid.timeoutRange', { min: MIN_TIMEOUT, max: MAX_TIMEOUT })
         : fieldError('classifier_timeout');
     const generalError = saveError && saveError.field === null ? saveError.message : null;
-    // Notes describe the saved pair; an unsaved pick hasn't been checked yet.
-    const measured = templates === null || hybridPairMeasured(saved, templates);
-    const classifierLocal = hybridClassifierIsLocal(saved);
 
     return (
         <div className="hybrid-settings">
+            {saved.config_error && <p className="settings-error" role="alert"><bdi>{saved.config_error}</bdi></p>}
             <p className="settings-hint">{saved.is_active ? t('settings.hybrid.active') : t('settings.hybrid.inactive')}</p>
 
             <section className="settings-field" aria-labelledby={`${id}-templates`}>
@@ -304,7 +300,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                         {templates.map((tpl) => {
                             const titleId = `${id}-tpl-${tpl.id}`;
                             const inUse = tpl.cheap_model === saved.cheap_model && tpl.strong_model === saved.strong_model
-                                && tpl.policy === saved.policy && (tpl.classifier_model ?? tpl.cheap_model) === (saved.classifier_model ?? saved.cheap_model);
+                                && tpl.policy === saved.policy && tpl.classifier_model === saved.classifier_model;
                             const setUp = tpl.available ? [] : tpl.providers_needed.filter((p) => TAB_PROVIDERS.has(p)) as ProviderId[];
                             return (
                                 <li key={tpl.id} className={`hybrid-template${tpl.available ? '' : ' is-unavailable'}`} aria-labelledby={titleId}>
@@ -319,6 +315,8 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                                         <bdi>{t('settings.hybrid.pair', { cheap: modelName(tpl.cheap_model), strong: modelName(tpl.strong_model) })}</bdi>
                                         {' · '}{t(`settings.hybrid.policy.${tpl.policy}`)}
                                     </p>
+                                    {tpl.measured_note && <p className="settings-hint"><bdi>{tpl.measured_note}</bdi></p>}
+                                    {tpl.classifier_note && <p className="settings-hint"><bdi>{tpl.classifier_note}</bdi></p>}
                                     {!tpl.available && tpl.reason && <p className="settings-hint" id={`${titleId}-why`}>{tpl.reason}</p>}
                                     <div className="settings-row">
                                         <button
@@ -378,10 +376,12 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                     </div>
                 </div>
 
-                {(!measured || classifierLocal) && (
-                    <ul className="hybrid-notes">
-                        {!measured && <li>{t('settings.hybrid.note.unmeasured')}</li>}
-                        {classifierLocal && <li>{t('settings.hybrid.note.localClassifier')}</li>}
+                {saved.models_error && <p className="settings-error" role="alert">{saved.models_error}</p>}
+                {saved.prices_error && <p className="settings-hint">{t('settings.hybrid.pricesStale', { reason: saved.prices_error })}</p>}
+                {(saved.measured_note || saved.classifier_note) && (
+                    <ul className="hybrid-notes" aria-label={t('settings.hybrid.notes')}>
+                        {saved.measured_note && <li><bdi>{saved.measured_note}</bdi></li>}
+                        {saved.classifier_note && <li><bdi>{saved.classifier_note}</bdi></li>}
                     </ul>
                 )}
 
@@ -518,6 +518,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                 {preview && (
                     <div role="status" aria-label={t('settings.hybrid.preview.result')}>
                         {!preview.classified && <p className="settings-hint">{t('settings.hybrid.preview.failedClosed')}</p>}
+                        {!preview.classified && preview.fix && <p className="settings-hint"><bdi>{preview.fix}</bdi></p>}
                         <dl className="hybrid-preview-result">
                             <dt>{t('settings.hybrid.preview.model')}</dt>
                             <dd><bdi>{modelName(preview.model)}</bdi></dd>
@@ -559,12 +560,15 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                         {stats.failed_closed > 0 && <span> {t('settings.hybrid.stats.failed', { n: stats.failed_closed })}</span>}
                         <span>
                             {' '}
-                            {stats.saving_pct != null
-                                ? t('settings.hybrid.stats.cost', {
-                                    cost: formatTotal(stats.cost), allStrong: formatTotal(stats.cost_if_all_strong), pct: Math.round(stats.saving_pct),
-                                })
-                                : t('settings.hybrid.stats.costOnly', { cost: formatTotal(stats.cost), allStrong: formatTotal(stats.cost_if_all_strong) })}
+                            {stats.cost == null || stats.cost_if_all_strong == null
+                                ? t('settings.hybrid.stats.costUnknown')
+                                : stats.saving_pct != null
+                                    ? t('settings.hybrid.stats.cost', {
+                                        cost: formatTotal(stats.cost), allStrong: formatTotal(stats.cost_if_all_strong), pct: Math.round(stats.saving_pct),
+                                    })
+                                    : t('settings.hybrid.stats.costOnly', { cost: formatTotal(stats.cost), allStrong: formatTotal(stats.cost_if_all_strong) })}
                         </span>
+                        {stats.unpriced_turns > 0 && <span> {t('settings.hybrid.stats.unpriced', { n: stats.unpriced_turns })}</span>}
                     </p>
                 )}
             </section>

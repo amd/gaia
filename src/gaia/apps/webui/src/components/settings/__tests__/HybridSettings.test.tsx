@@ -7,7 +7,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HybridSettings } from '../HybridSettings';
 import * as api from '../../../services/api';
-import type { HybridRules, HybridSettings as Settings, HybridStats, HybridTemplate } from '../../../types';
+import type { HybridModelOption, HybridRules, HybridSettings as Settings, HybridStats, HybridTemplate } from '../../../types';
 
 vi.mock('../../../services/api');
 
@@ -25,45 +25,65 @@ const QUALITY: HybridRules = {
 };
 const BALANCED: HybridRules = { ...QUALITY, change_code: { cheap_max_difficulty: 3, allow_high_stakes: true } };
 
+const MEASURED_NOTE = 'This pairing hasn’t been measured yet, so how much it saves and how well it answers are unknown.';
+const CLASSIFIER_NOTE = 'The classifier runs on this PC; a small local model may route less accurately than a cloud one.';
+
+function opt(over: Partial<HybridModelOption> & Pick<HybridModelOption, 'id' | 'display_name' | 'provider'>): HybridModelOption {
+    return {
+        input_per_million: null, output_per_million: null, cache_read_per_million: null, price_source: null,
+        available: true, reason: null, ...over,
+    };
+}
+
 const SETTINGS: Settings = {
     cheap_model: 'amd.DeepSeek-V4.1-Flash',
     strong_model: 'amd.Claude-Opus-5-5',
-    classifier_model: null,
+    classifier_model: 'amd.DeepSeek-V4.1-Flash',
     classifier_timeout: 15,
     policy: 'quality',
     rules: QUALITY,
     presets: { quality: QUALITY, balanced: BALANCED },
     kinds: ['write_prose', 'answer_question', 'analyze_data', 'operate_tools', 'change_code', 'find_defects', 'plan_or_design', 'other'],
     models: [
-        { id: 'claude-opus-5', display_name: 'Claude Opus 5 (direct)', provider: 'claude', input_per_million: null, output_per_million: null, available: true },
-        { id: 'amd.DeepSeek-V4.1-Flash', display_name: 'DeepSeek V4.1 Flash', provider: 'amd', input_per_million: 0.3, output_per_million: 1.2, cache_read_per_million: 0.03, available: true },
-        { id: 'amd.Claude-Opus-5-5', display_name: 'Claude Opus 5.5', provider: 'amd', input_per_million: 5, output_per_million: 25, cache_read_per_million: 0.5, available: true },
-        { id: 'amd.Qwen-Coder', display_name: 'Qwen Coder', provider: 'amd', input_per_million: null, output_per_million: null, cache_read_per_million: null, available: true },
-        { id: 'amd.Retired', display_name: 'Retired model', provider: 'amd', input_per_million: 1, output_per_million: 2, cache_read_per_million: null, available: false },
-        { id: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', provider: 'local', available: true },
-        { id: 'Qwen3.6-35B-A3B-GGUF', display_name: 'Qwen3.6 35B A3B', provider: 'local', available: false, reason: 'Download Qwen3.6-35B-A3B-GGUF' },
-        { id: 'fireworks.deepseek-v4p1-flash', display_name: 'deepseek-v4p1-flash', provider: 'fireworks', input_per_million: 0.3, output_per_million: 1.2, price_source: 'Fireworks AI list price', available: true },
+        opt({ id: 'claude-opus-5', display_name: 'Claude Opus 5 (direct)', provider: 'claude', input_per_million: null, output_per_million: null, available: true }),
+        opt({ id: 'amd.DeepSeek-V4.1-Flash', display_name: 'DeepSeek V4.1 Flash', provider: 'amd', input_per_million: 0.3, output_per_million: 1.2, cache_read_per_million: 0.03, available: true }),
+        opt({ id: 'amd.Claude-Opus-5-5', display_name: 'Claude Opus 5.5', provider: 'amd', input_per_million: 5, output_per_million: 25, cache_read_per_million: 0.5, available: true }),
+        opt({ id: 'amd.Qwen-Coder', display_name: 'Qwen Coder', provider: 'amd', input_per_million: null, output_per_million: null, cache_read_per_million: null, available: true }),
+        opt({ id: 'amd.Retired', display_name: 'Retired model', provider: 'amd', input_per_million: 1, output_per_million: 2, cache_read_per_million: null, available: false }),
+        opt({ id: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', provider: 'local', available: true }),
+        opt({ id: 'Qwen3.6-35B-A3B-GGUF', display_name: 'Qwen3.6 35B A3B', provider: 'local', available: false, reason: 'Download Qwen3.6-35B-A3B-GGUF' }),
+        opt({ id: 'fireworks.deepseek-v4p1-flash', display_name: 'deepseek-v4p1-flash', provider: 'fireworks', input_per_million: 0.3, output_per_million: 1.2, price_source: 'Fireworks AI list price', available: true }),
     ],
+    models_error: null,
+    prices_fetched_at: '2026-11-16T08:00:00Z',
+    prices_error: null,
+    measured: true,
+    measured_note: null,
+    classifier_note: null,
+    entry: { id: 'hybrid', display_name: 'Hybrid (DeepSeek V4.1 Flash + Claude Opus 5.5)', remote: true, available: true, reason: null, shown: true },
     is_active: true,
+    config_error: null,
 };
 
 const STATS: HybridStats = {
     since: '2026-11-01T00:00:00Z', turns: 40, cheap_turns: 30, strong_turns: 10, failed_closed: 2,
-    cost: 1.5, cost_if_all_strong: 6, saving_pct: 75,
+    cost: 1.5, cost_if_all_strong: 6, saving_pct: 75, unpriced_turns: 0, prices_fetched_at: null, prices_error: null,
 };
 
 function template(over: Partial<HybridTemplate> & Pick<HybridTemplate, 'id' | 'name'>): HybridTemplate {
     return {
-        description: 'A pair.', cheap_model: 'amd.DeepSeek-V4.1-Flash', strong_model: 'amd.Claude-Opus-5-5', classifier_model: null,
-        policy: 'quality', providers_needed: ['amd'], available: true, measured: false, ...over,
+        description: 'A pair.', cheap_model: 'amd.DeepSeek-V4.1-Flash', strong_model: 'amd.Claude-Opus-5-5', classifier_model: 'amd.DeepSeek-V4.1-Flash',
+        policy: 'quality', providers_needed: ['amd'], available: true, reason: null,
+        measured: false, measured_note: MEASURED_NOTE, classifier_note: null, ...over,
     };
 }
 
 const TEMPLATES: HybridTemplate[] = [
-    template({ id: 'gateway-deepseek-opus', name: 'Gateway: DeepSeek + Opus', description: 'The pair the policies were tuned on.', measured: true }),
+    template({ id: 'gateway-deepseek-opus', name: 'Gateway: DeepSeek + Opus', description: 'The pair the policies were tuned on.', measured: true, measured_note: null }),
     template({ id: 'gateway-deepseek-sonnet', name: 'Gateway: DeepSeek + Sonnet', strong_model: 'amd.Claude-Sonnet-5-5' }),
     template({
         id: 'all-local', name: 'All on this PC', cheap_model: 'Gemma-4-E4B-it-GGUF', strong_model: 'Qwen3.6-35B-A3B-GGUF',
+        classifier_model: 'Gemma-4-E4B-it-GGUF', classifier_note: CLASSIFIER_NOTE,
         providers_needed: ['local'], available: false, reason: 'Download Qwen3.6-35B-A3B-GGUF',
     }),
     template({
@@ -99,10 +119,8 @@ describe('HybridSettings: load', () => {
         expect(within(cheap).getByRole('option', { name: 'Qwen Coder · price unknown' })).toBeInTheDocument();
         expect(within(cheap).getByRole('option', { name: 'Retired model (not available)' })).toBeDisabled();
         // The policies were tuned on this pair, and a gateway model classifies: no notes.
-        expect(screen.queryByText(/not yet measured\./)).not.toBeInTheDocument();
-        expect(screen.queryByText(/may route less accurately/)).not.toBeInTheDocument();
-        expect(within(form).getByLabelText('Classifier model')).toHaveValue('');
-        expect(within(form).getByRole('option', { name: 'Same as the cheap model' })).toBeInTheDocument();
+        expect(within(form).queryByRole('list', { name: 'About this pairing' })).not.toBeInTheDocument();
+        expect(within(form).getByLabelText('Classifier model')).toHaveValue('amd.DeepSeek-V4.1-Flash');
         expect(within(form).getByLabelText('Classifier time limit (seconds)')).toHaveValue(15);
         expect(within(form).getByRole('radio', { name: 'Quality' })).toHaveAttribute('aria-checked', 'true');
         expect(within(form).queryByRole('table')).not.toBeInTheDocument();
@@ -243,7 +261,7 @@ describe('HybridSettings: try a request', () => {
     it('shows the model, kind, difficulty, stakes, reason and time', async () => {
         mockedApi.previewHybridRoute.mockResolvedValue({
             model: 'amd.DeepSeek-V4.1-Flash', kind: 'change_code', difficulty: 2, stakes: 'low',
-            reason: 'one-line fix with the cause stated', classified: true, seconds: 1.234, policy: 'quality',
+            reason: 'one-line fix with the cause stated', fix: '', tier: 'cheap', classified: true, seconds: 1.234, policy: 'quality',
         });
         render(<HybridSettings />);
         await screen.findByRole('form', { name: 'Hybrid' });
@@ -265,7 +283,8 @@ describe('HybridSettings: try a request', () => {
     it('says when the classifier failed and the strong model was picked', async () => {
         mockedApi.previewHybridRoute.mockResolvedValue({
             model: 'amd.Claude-Opus-5-5', kind: null, difficulty: null, stakes: null,
-            reason: 'the classifier took longer than 15 s', classified: false, seconds: 15.02, policy: 'quality',
+            reason: 'the classifier took longer than 15 s', fix: 'raise hybrid_classifier_timeout in Settings › Models › Hybrid',
+            tier: 'strong', classified: false, seconds: 15.02, policy: 'quality',
         });
         render(<HybridSettings />);
         await screen.findByRole('form', { name: 'Hybrid' });
@@ -276,6 +295,7 @@ describe('HybridSettings: try a request', () => {
         expect(result).toHaveTextContent('The classifier couldn’t decide, so the strong model runs.');
         expect(result).toHaveTextContent('Claude Opus 5.5');
         expect(result).toHaveTextContent('Picked by hybrid. the classifier took longer than 15 s');
+        expect(result).toHaveTextContent('raise hybrid_classifier_timeout in Settings › Models › Hybrid');
     });
 
     it('shows the error when the preview fails', async () => {
@@ -308,6 +328,15 @@ describe('HybridSettings: usage', () => {
         mockedApi.getHybridStats.mockResolvedValue({ ...STATS, turns: 0, cheap_turns: 0, strong_turns: 0, failed_closed: 0, cost: 0, cost_if_all_strong: 0, saving_pct: null });
         render(<HybridSettings />);
         expect(await screen.findByText('No hybrid turns yet.')).toBeInTheDocument();
+    });
+
+    it('says the cost is unknown rather than $0, and counts unpriced turns', async () => {
+        mockedApi.getHybridStats.mockResolvedValue({ ...STATS, cost: null, cost_if_all_strong: null, saving_pct: null, unpriced_turns: 3 });
+        render(<HybridSettings />);
+        const usage = await screen.findByRole('region', { name: 'Usage' });
+        await waitFor(() => expect(usage).toHaveTextContent('Cost unknown: a model these turns ran on has no known price.'));
+        expect(usage).toHaveTextContent('Turns on models with an unknown price, not counted in the cost: 3.');
+        expect(usage).not.toHaveTextContent('$0.00');
     });
 
     it('shows a stats error without hiding the settings', async () => {
@@ -345,11 +374,32 @@ describe('HybridSettings: models from every provider', () => {
         }));
     });
 
-    it('notes an unmeasured pair and a classifier on this PC', async () => {
-        mockedApi.getHybridSettings.mockResolvedValue({ ...SETTINGS, cheap_model: 'Gemma-4-E4B-it-GGUF' });
-        await renderPanel();
-        expect(await screen.findByText(/This pair is not yet measured\./)).toBeInTheDocument();
-        expect(screen.getByText('The classifier runs on this PC. A small local model may route less accurately.')).toBeInTheDocument();
+    it('shows the API’s notes for an unmeasured pair and a classifier on this PC', async () => {
+        mockedApi.getHybridSettings.mockResolvedValue({
+            ...SETTINGS, cheap_model: 'Gemma-4-E4B-it-GGUF', classifier_model: 'Gemma-4-E4B-it-GGUF',
+            measured: false, measured_note: MEASURED_NOTE, classifier_note: CLASSIFIER_NOTE,
+        });
+        const form = await renderPanel();
+        const notes = within(form).getByRole('list', { name: 'About this pairing' });
+        expect(notes).toHaveTextContent(MEASURED_NOTE);
+        expect(notes).toHaveTextContent(CLASSIFIER_NOTE);
+    });
+
+    it('shows why the saved settings, the model list, or the prices could not be used', async () => {
+        mockedApi.getHybridSettings.mockResolvedValue({
+            ...SETTINGS, rules: null, policy: 'custom',
+            config_error: 'hybrid_rules is required when hybrid_policy is custom.',
+            models: [], models_error: 'Couldn’t list the models hybrid can use: the model server is not running.',
+            prices_error: 'The gateway price list could not be fetched.',
+        });
+        const form = await renderPanel();
+        expect(screen.getByText('hybrid_rules is required when hybrid_policy is custom.')).toBeInTheDocument();
+        expect(within(form).getByText(/the model server is not running/)).toHaveAttribute('role', 'alert');
+        expect(within(form).getByText('Prices may be out of date: The gateway price list could not be fetched.')).toBeInTheDocument();
+        // The table starts from Quality so the missing rules can be saved.
+        expect(within(form).getByLabelText('Code changes: cheap model up to difficulty')).toHaveValue('2');
+        fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
+        await waitFor(() => expect(mockedApi.updateHybridSettings).toHaveBeenCalledWith({ rules: QUALITY }));
     });
 });
 
@@ -366,9 +416,13 @@ describe('HybridSettings: templates', () => {
         expect(measured).toHaveTextContent('In use');
         expect(within(measured).getByRole('button', { name: 'Use the Gateway: DeepSeek + Opus template' })).toBeEnabled();
 
+        expect(measured).not.toHaveTextContent(MEASURED_NOTE);
+
         const sonnet = within(list).getByRole('listitem', { name: 'Gateway: DeepSeek + Sonnet' });
         expect(sonnet).toHaveTextContent('Not yet measured');
+        expect(sonnet).toHaveTextContent(MEASURED_NOTE);
         expect(sonnet).not.toHaveTextContent('In use');
+        expect(within(list).getByRole('listitem', { name: 'All on this PC' })).toHaveTextContent(CLASSIFIER_NOTE);
     });
 
     it('disables an unavailable template with its reason and a way to set it up', async () => {
@@ -418,6 +472,16 @@ describe('HybridSettings: templates', () => {
         expect(await within(card).findByRole('alert')).toHaveTextContent('Add an Anthropic key in Settings first');
         expect(within(screen.getByRole('form', { name: 'Hybrid' })).getByLabelText('Strong model')).toHaveValue('amd.Claude-Opus-5-5');
         expect(screen.queryByText(/^Applied /)).not.toBeInTheDocument();
+    });
+
+    it('shows a 404 for a template the backend no longer has', async () => {
+        mockedApi.applyHybridTemplate.mockRejectedValue(Object.assign(
+            new Error("There is no hybrid template 'gateway-deepseek-sonnet'; the templates are gateway-deepseek-opus."), { httpStatus: 404 },
+        ));
+        render(<HybridSettings />);
+        const card = await screen.findByRole('listitem', { name: 'Gateway: DeepSeek + Sonnet' });
+        fireEvent.click(within(card).getByRole('button', { name: /Use the/ }));
+        expect(await within(card).findByRole('alert')).toHaveTextContent('There is no hybrid template');
     });
 
     it('says why the templates could not be read', async () => {

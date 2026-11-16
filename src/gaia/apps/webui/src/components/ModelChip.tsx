@@ -12,14 +12,13 @@ import {
     useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, isHybridModel, sameModelId,
     HYBRID_MODEL_ID, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
-import { hybridEntryName, hybridIsLocal, hybridMembers, hybridProviderName } from '../utils/hybrid';
 import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
 import { formatPrice } from './settings/cloudPrice';
 import { useT } from '../i18n/useT';
 import { providerName, providerNotice } from '../utils/providerText';
 import { MarkedText, markLtr } from './MarkedText';
-import type { HybridProvider, HybridSettings, HybridTemplate, ProviderInfo, ProviderModel } from '../types';
+import type { HybridEntry, ProviderInfo, ProviderModel } from '../types';
 
 interface ProviderModels {
     provider: ProviderInfo;
@@ -27,8 +26,8 @@ interface ProviderModels {
     error?: string;
 }
 
-/** Hybrid's settings and templates, read when the list opens; `error` when they couldn't be. */
-type HybridState = { settings: HybridSettings; templates: HybridTemplate[]; error?: undefined } | { error: string };
+/** Hybrid's picker entry, read when the list opens; `error` when it couldn't be. */
+type HybridState = { entry: HybridEntry; error?: undefined } | { error: string };
 
 // Hybrid asks its own consent, so `choose` is handed a provider that needs none.
 const HYBRID_PROVIDER: ProviderInfo = { id: 'local', name: 'Hybrid', remote: false, privacy_notice: '' };
@@ -176,12 +175,15 @@ export function ModelChip() {
             }));
             rememberNames(lists.flatMap((g) => g.models));
             if (!quiet) {
-                Promise.all([api.getHybridSettings(), api.getHybridTemplates()]).then(
-                    ([settings, templates]) => setHybrid(settings?.models && Array.isArray(templates)
-                        ? { settings, templates }
-                        : { error: t.bare('modelMenu.hybridEmpty') }),
-                    (err) => setHybrid({ error: requestErrorText(err) }),
-                );
+                // Read apart from the model list, so a hybrid failure can't hide the other models.
+                void (async () => {
+                    try {
+                        const entry = await api.getHybridEntry();
+                        setHybrid(entry?.id ? { entry } : { error: t.bare('modelMenu.hybridEmpty') });
+                    } catch (err) {
+                        setHybrid({ error: requestErrorText(err) });
+                    }
+                })();
             }
             setUnavailable(lists.flatMap((g) => g.models).filter((m) => m.available === false).length);
             if (!quiet) focusOnLoad.current = true;
@@ -389,10 +391,8 @@ export function ModelChip() {
     const fireworksHasHiddenModels = (provider: ProviderInfo, models: ProviderModel[]) =>
         fireworksCollapsed(provider, models)
         && models.some((m) => m.rank === null && !sameModelId(currentModel, m.id));
-    // Offered once its current pair, or any template, can run.
-    const hybridShown = !!hybrid && (hybrid.error !== undefined
-        || [hybrid.settings.cheap_model, hybrid.settings.strong_model].every((id) => hybrid.settings.models.some((m) => m.id === id && m.available))
-        || hybrid.templates.some((tpl) => tpl.available));
+    // The backend offers it once its pair, or any template, can run.
+    const hybridShown = !!hybrid && (hybrid.error !== undefined || hybrid.entry.shown);
     const hybridPickable = hybridShown && hybrid?.error === undefined && switching === null;
     const hybridFirst = isHybridModel(active?.model);
     const pickable = [...(hybridPickable && hybridFirst ? [HYBRID_MODEL_ID] : []), ...(groups?.flatMap(({ provider, models }) => [
@@ -447,18 +447,20 @@ export function ModelChip() {
                 </div>
             );
         }
-        const { settings } = hybrid;
-        const local = hybridIsLocal(settings);
+        const { entry } = hybrid;
         const current = isHybridModel(queued ?? active?.model);
-        const cloudProviders = [...new Set(hybridMembers(settings)
-            .map((id) => settings.models.find((m) => m.id === id)?.provider)
-            .filter((p): p is HybridProvider => !!p && p !== 'local'))];
         const pick = () => {
             setPickAfterDownload(null);
             setPendingDownload(null);
             setPendingCloud(null);
+            // Its pair can't run yet, but a template can: choosing one happens in Settings.
+            if (!entry.available) {
+                setOpen(false);
+                openSettings('model');
+                return;
+            }
             // An all-local hybrid sends nothing off this PC, so it needs no cloud consent.
-            if (!local && !active?.remote && !pendingHybrid) {
+            if (entry.remote !== false && !active?.remote && !pendingHybrid) {
                 setPendingHybrid(true);
                 return;
             }
@@ -480,21 +482,22 @@ export function ModelChip() {
                         <span className="popover-item-check" aria-hidden="true">
                             {switching === HYBRID_MODEL_ID ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
                         </span>
-                        <span className="popover-item-body is-inline">
-                            <span className="popover-item-title is-model">{hybridEntryName(t, settings)}</span>
-                            <span className="popover-item-meta">{local ? t('modelStatus.local') : t('settings.model.cloud')}</span>
+                        <span className={`popover-item-body${entry.available ? ' is-inline' : ''}`}>
+                            <span className="popover-item-title is-model">{entry.display_name}</span>
+                            {entry.remote !== null && (
+                                <span className="popover-item-meta">{entry.remote ? t('settings.model.cloud') : t('modelStatus.local')}</span>
+                            )}
+                            {!entry.available && entry.reason && (
+                                <span className="popover-item-note">{t('modelMenu.hybridSetUp', { reason: entry.reason })}</span>
+                            )}
                         </span>
                     </button>
                 </div>
                 {pendingHybrid && (
                     <div ref={consent} className="popover-message" role="alert">
-                        {t('modelMenu.hybridConsent', {
-                            providers: cloudProviders.length
-                                ? cloudProviders.map((p) => hybridProviderName(t, p)).join(', ')
-                                : t.bare('modelMenu.hybridConsentUnknown'),
-                        })}{' '}
+                        {t('modelMenu.hybridConsent')}{' '}
                         <button type="button" className="link-btn" onClick={pick}>
-                            {t('modelMenu.useModel', { name: hybridEntryName(t, settings) })}
+                            {t('modelMenu.useModel', { name: entry.display_name })}
                         </button>
                     </div>
                 )}
