@@ -945,7 +945,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         </button>
                     ))}
                     {/* The agent itself stopped: its own log says why, not the model server's. */}
-                    {isError && !isStreaming && namesAgentLog(message.content) ? (
+                    {(isError || endedBy) && !isStreaming && namesAgentLog(endedBy ?? message.content) ? (
                         <button type="button" className="msg-try-again" onClick={() => showServerLog('agent')}>
                             <ScrollText size={12} aria-hidden="true" />
                             {t('logs.agentLog')}
