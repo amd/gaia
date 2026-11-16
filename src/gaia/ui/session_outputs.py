@@ -5,8 +5,8 @@
 Built from what is already recorded per turn — each answer's turn summary
 (files, images, indexed documents, memories, schedules) and the undo
 snapshots (created, edited and deleted files, and whether the turn was
-undone) — plus the documents added to the chat. Nothing is polled: the panel
-asks when it opens and when a turn ends.
+undone). Documents the user attached are inputs, so they stay out. Nothing is
+polled: the panel asks when it opens and when a turn ends.
 """
 
 from __future__ import annotations
@@ -120,14 +120,11 @@ def list_outputs(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
         ):
             newest_file[_key(path)] = item
 
-    seen_docs = set()
     for answer in db.get_turn_summaries(session_id):
         mid, at, summary = answer["id"], answer["created_at"], answer["summary"]
         for f in summary.get("files") or []:
             add_file(f["path"], mid, at)
         for out in summary.get("outputs") or []:
-            if out["kind"] == "document" and out.get("path"):
-                seen_docs.add(_key(out["path"]))
             if out["kind"] == "image" and out.get("path"):
                 changes.pop((mid, _key(out["path"])), None)
             items.append(
@@ -146,21 +143,6 @@ def list_outputs(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
     for (mid, _), recorded in list(changes.items()):
         add_file(recorded["path"], mid, times.get(mid) if mid else recorded["at"])
     items.extend(newest_file.values())
-
-    for doc in db.get_session_documents(session_id):
-        path = doc.get("filepath")
-        if not path or _key(path) in seen_docs:
-            continue
-        items.append(
-            _item(
-                "document",
-                doc.get("filename") or Path(path).name,
-                path=path,
-                message_id=None,
-                created_at=doc.get("indexed_at"),
-                detail="Added to this chat",
-            )
-        )
 
     items.sort(
         key=lambda i: (i["created_at"] or "", i["message_id"] or 0), reverse=True

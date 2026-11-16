@@ -2,6 +2,12 @@
 /* SPDX-License-Identifier: MIT */
 /* Document Library Modal */
 .doc-modal { width: 640px; }
+/* Pinned to the top, so the title and path box stay put while rows and notices come and go. */
+.modal-overlay:has(> .doc-modal) {
+    align-items: flex-start;
+    padding-block-start: max(24px, 7vh);
+}
+.modal-overlay > .doc-modal { max-height: calc(100vh - 2 * max(24px, 7vh)); }
 
 /* Where added documents go */
 .doc-target {
@@ -80,9 +86,12 @@
     gap: 8px;
     margin-bottom: 16px;
 }
+/* The hint sits close above the form it describes. */
+.path-hint { margin: 0 0 6px; }
 .path-icon { color: var(--text-muted); flex-shrink: 0; }
+/* Wide enough for the example path, so it reads whole; the buttons wrap first. */
 .path-input {
-    flex: 1 1 200px;
+    flex: 1 1 290px;
     min-inline-size: 0;
     padding: 9px 14px;
     border: 1px solid var(--border);
@@ -104,6 +113,14 @@
     color: var(--text-muted);
     margin-bottom: 12px;
     padding: 0 2px;
+}
+.doc-stats-failed {
+    color: var(--danger);
+}
+.doc-stats-failed::before {
+    content: '·';
+    margin-inline-end: 8px;
+    color: var(--text-muted);
 }
 
 /* Document list */
@@ -130,6 +147,26 @@
     white-space: nowrap;
 }
 .doc-meta { font-size: 12px; color: var(--text-muted); }
+
+/* A long name loses its middle, not its extension. */
+.doc-name-split { display: flex; }
+/* As for a whole name (index.css): a name in the other script still sits on the UI's own edge. */
+:root:not([dir="rtl"]) .doc-name-split.is-rtl-text,
+:root[dir="rtl"] .doc-name-split:not(.is-rtl-text) { justify-content: flex-end; }
+.doc-name-head {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.doc-name-tail { flex-shrink: 0; white-space: pre; }
+
+.doc-path-hint {
+    margin: -10px 0 14px;
+    padding-inline-start: 24px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
 
 /* Indexed timestamp */
 .doc-timestamp {
@@ -167,10 +204,15 @@
     align-items: center;
     gap: 2px;
     flex-shrink: 0;
-    opacity: 0;
+    /* Muted at rest so a row still shows it has actions, for keyboard and touch too. */
+    opacity: 0.6;
     transition: opacity var(--duration-fast) var(--ease);
 }
-.doc-row:hover .doc-row-actions { opacity: 1; }
+.doc-row:hover .doc-row-actions,
+.doc-row-actions:focus-within { opacity: 1; }
+@media (hover: none) {
+    .doc-row-actions { opacity: 1; }
+}
 
 .doc-open-folder { color: var(--text-muted); }
 .doc-open-folder:hover { color: var(--accent-blue); }
@@ -260,6 +302,19 @@
 }
 .doc-folder-notice > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .doc-action-error { color: var(--danger); background: var(--danger-dim); }
+.doc-removed-notice { align-items: center; }
+.doc-undo {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    color: var(--accent);
+    font-weight: 600;
+    white-space: nowrap;
+}
+.doc-undo:hover { background: var(--bg-hover); }
 .doc-load-error { color: var(--danger); }
 .doc-load-error p { overflow-wrap: anywhere; }
 .doc-load-error button { margin-top: 12px; }

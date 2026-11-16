@@ -56,6 +56,16 @@ from gaia_agent.server import (  # noqa: E402,F401  (re-exported for the freeze/
     main,
 )
 
+if __name__ != "__main__":
+    # The daemon's dev mode serves this module with `uvicorn server:app`,
+    # which never reaches main(), where the watch otherwise starts.
+    from gaia.sidecar import parent_watch
+
+    try:
+        parent_watch.start()
+    except ValueError as exc:  # one line, as main() prints it
+        raise SystemExit(f"gaia-agent: {exc}") from None
+
 if __name__ == "__main__":  # pragma: no cover
     from gaia.sidecar.bundle_freshness import keep_unpacked_bundle_fresh
 

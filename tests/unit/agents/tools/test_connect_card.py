@@ -37,6 +37,7 @@ AGENT = "installed:gaia"
 CARD = {"kind": "connect_account", "providers": ["google"], "agent_id": AGENT}
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
+MAIL_READ = "https://graph.microsoft.com/Mail.Read"
 
 
 def _agent(surface):
@@ -310,6 +311,8 @@ def test_in_the_agent_ui_no_mailbox_shows_the_button_and_names_no_command(mail, 
         "kind": CONNECT_CARD_KIND,
         "providers": ["google", "microsoft"],
         "agent_id": AGENT,
+        # Reading the inbox asks only to read it: no send, no calendar.
+        "scopes": {"google": [GMAIL_READONLY], "microsoft": [MAIL_READ]},
     }
     assert "No readable mailbox is available" in out["error"]
     assert "google: not connected" in out["error"]
@@ -343,6 +346,49 @@ def test_a_terminal_caller_gets_the_command_and_no_card(mail, surface):
     status = tools("list_connected_mailboxes")
     assert "gaia connectors connect" in status["message"]
     assert CONNECT_CARD_KEY not in status
+
+
+@pytest.mark.parametrize("surface", ["agent_ui", "tui", "cli", None])
+def test_a_missing_mailbox_is_not_learned_as_a_tool_error(mail, surface):
+    """How to connect is worded for the front-end asking. Saved to memory it
+    was replayed into a terminal run, which then pointed at a Connect button
+    on a screen that was not there."""
+    from gaia.agents.base.memory import MemoryMixin
+
+    out = mail(surface)("list_inbox")
+    assert out["success"] is False
+    assert MemoryMixin._was_refused(out)
+
+
+def test_a_write_the_connection_cannot_make_is_not_learned_either(monkeypatch):
+    import gaia.connectors.api as api
+    from gaia.agents.base.memory import MemoryMixin
+    from gaia.agents.tools.email_tools import OPERATION_SEND, _write_scopes
+
+    monkeypatch.setattr(api, "get_connection", lambda p: {"scopes": [GMAIL_READONLY]})
+    for app in (True, False):
+        with pytest.raises(MailboxError) as err:
+            _write_scopes("google", OPERATION_SEND, app=app)
+        out = with_connect_card(
+            {"error": str(err.value)},
+            err.value,
+            agent_id=AGENT,
+            surface="agent_ui" if app else None,
+        )
+        assert MemoryMixin._was_refused(out)
+
+
+def test_a_mailbox_fault_is_still_learned():
+    """Only setup state is kept out of memory, not a real failure."""
+    from gaia.agents.base.memory import MemoryMixin
+
+    out = with_connect_card(
+        {"error": "Gmail returned 500"},
+        MailboxError("Gmail returned 500"),
+        agent_id=AGENT,
+        surface="agent_ui",
+    )
+    assert not MemoryMixin._was_refused(out)
 
 
 def test_in_the_agent_ui_a_mailbox_without_mail_access_is_a_reconnect(mail):
@@ -454,6 +500,49 @@ def test_in_an_app_a_write_without_write_access_is_a_reconnect(monkeypatch):
     assert err.value.connect == ("google",)
     assert f"lacks {GMAIL_COMPOSE}" in str(err.value)
     assert "gaia connectors" not in str(err.value)
+
+    # The card asks for the write when the write is what failed.
+    out = with_connect_card(
+        {"error": str(err.value)},
+        err.value,
+        agent_id=AGENT,
+        surface="agent_ui",
+        scopes={"google": [GMAIL_READONLY]},
+    )
+    assert out[CONNECT_CARD_KEY]["scopes"] == {
+        "google": [GMAIL_READONLY, GMAIL_COMPOSE]
+    }
+
+
+def test_a_card_names_only_the_access_it_was_given():
+    assert "scopes" not in connect_card(["google"], agent_id=AGENT)
+    card = connect_card(
+        ["google", "microsoft"],
+        agent_id=AGENT,
+        scopes={"google": [GMAIL_READONLY, GMAIL_READONLY], "microsoft": []},
+    )
+    assert card["scopes"] == {"google": [GMAIL_READONLY]}
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [
+        {"microsoft": [MAIL_READ]},
+        {"google": []},
+        {"google": "gmail.readonly"},
+        [GMAIL_READONLY],
+    ],
+)
+def test_a_card_whose_access_list_is_malformed_is_no_card(scopes):
+    assert connect_card_in({CONNECT_CARD_KEY: {**CARD, "scopes": scopes}}) is None
+
+
+def test_the_status_check_asks_only_to_read_too(mail):
+    out = mail("agent_ui")("list_connected_mailboxes")
+    assert out[CONNECT_CARD_KEY]["scopes"] == {
+        "google": [GMAIL_READONLY],
+        "microsoft": [MAIL_READ],
+    }
 
 
 # --- the stream: handler -> canonical -> relay ------------------------------

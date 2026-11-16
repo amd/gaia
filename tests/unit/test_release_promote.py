@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -235,6 +236,39 @@ def test_a_hung_gh_call_fails_with_a_reason_not_forever(monkeypatch):
     monkeypatch.setattr(rp.subprocess, "run", hang)
     with pytest.raises(rp.PromoteError, match="did not finish"):
         rp.published_digests("o/r", RC)
+
+
+def _release_after_a_spent_budget(monkeypatch, reset_in):
+    """The release read is refused once on a spent budget; returns the waits."""
+    waits, reset = [], int(time.time()) + reset_in
+
+    def run(args, **kw):
+        if args[:3] == ["gh", "api", "rate_limit"]:
+            core = {"remaining": 0, "reset": reset}
+            return rp.subprocess.CompletedProcess(args, 0, json.dumps(core), "")
+        if not waits:
+            msg = "gh: API rate limit exceeded for installation ID 1 (HTTP 403)"
+            return rp.subprocess.CompletedProcess(args, 1, "", msg)
+        return rp.subprocess.CompletedProcess(args, 0, '{"assets": []}', "")
+
+    monkeypatch.setattr(rp.subprocess, "run", run)
+    monkeypatch.setattr(time, "sleep", waits.append)
+    return waits
+
+
+def test_a_spent_budget_is_waited_out(monkeypatch, capsys):
+    waits = _release_after_a_spent_budget(monkeypatch, reset_in=100)
+    assert rp.published_digests("o/r", RC) == {}
+    assert len(waits) == 1 and 95 <= waits[0] <= 110
+    # locate's stdout is GITHUB_OUTPUT: the refused attempt must not land there.
+    assert capsys.readouterr().out == ""
+
+
+def test_a_budget_that_outlasts_the_bound_names_the_rate_limit(monkeypatch):
+    waits = _release_after_a_spent_budget(monkeypatch, reset_in=7200)
+    with pytest.raises(rp.PromoteError, match="rate limited"):
+        rp.published_digests("o/r", RC)
+    assert waits == []
 
 
 def test_missing_ok_writes_only_github_outputs_to_stdout(monkeypatch, capsys, tmp_path):

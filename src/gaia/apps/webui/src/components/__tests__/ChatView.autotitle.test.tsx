@@ -169,6 +169,21 @@ describe('ChatView title pinning (#2165)', () => {
         });
     });
 
+    it('Enter that picks an IME candidate does not save the title', async () => {
+        setSession({ ...SESSION, title: 'Auto Generated Title' });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Auto Generated Title' }));
+        const input = screen.getByLabelText('Chat title');
+        await act(async () => {
+            fireEvent.change(input, { target: { value: 'にほ' } });
+            fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+        });
+
+        expect(mockedApi.updateSession).not.toHaveBeenCalled();
+        expect(screen.getByLabelText('Chat title')).toBeInTheDocument();
+    });
+
     it('caps a rename at the backend title limit (#5257)', async () => {
         setSession({ ...SESSION, title: 'Auto Generated Title' });
         render(<ChatView sessionId={SESSION.id} />);

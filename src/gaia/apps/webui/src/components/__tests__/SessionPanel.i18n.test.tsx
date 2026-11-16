@@ -65,6 +65,12 @@ describe('This answer', () => {
         ]) expect(screen.getByText(readsAs(text))).toBeInTheDocument();
     });
 
+    it('keeps the dollar sign inside the isolate around the Arabic cost', () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        render(<ThisAnswer messages={turn(SUMMARY)} />);
+        expect(screen.getAllByText((text) => text.includes('⁨$0.0023⁩')).length).toBeGreaterThan(0);
+    });
+
     it('isolates the provider name inside the Arabic sentence', () => {
         expect(ar('rail.docsSent', { provider: 'Fireworks AI' })).toContain('\u2068Fireworks AI\u2069');
     });

@@ -176,6 +176,21 @@ def test_setup_refuses_swapped_tokens_before_any_network_call(monkeypatch):
     assert any("goes in the other field" in line for line in lines)
 
 
+def test_setup_without_a_terminal_says_what_it_needs_instead_of_crashing():
+    """stdin closed (a script, a CI step): input() raises EOFError."""
+
+    def no_terminal(_prompt):
+        raise EOFError
+
+    lines = []
+    code = cli.run_setup(prompt=no_terminal, emit=lines.append, open_browser=False)
+
+    assert code == 1
+    said = " ".join(lines)
+    assert "needs a terminal to paste the tokens into" in said
+    assert "gaia slack connect" in said
+
+
 def test_setup_prints_the_create_url_when_no_browser_is_available():
     answers = iter(["xapp-a", "xoxb-b"])
     lines = []
