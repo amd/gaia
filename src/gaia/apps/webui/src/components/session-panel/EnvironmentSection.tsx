@@ -135,23 +135,26 @@ function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     // The server may have another chat's model loaded; only describe it when it is this chat's.
     const other = !!(status?.model && chatModel && !sameModel(status.model, chatModel));
     const memory = other ? null : status?.memory;
+    // With nothing loaded the server names no model, so name this chat's.
+    const modelName = status?.display_name
+        ?? (status && status.state !== 'loaded' && chatModel ? displayModelName(chatModel) : null);
+    const inUse = memory?.model_gb != null
+        ? t('env.inUse', { gb: memory.model_gb.toFixed(1) })
+        : status?.state === 'loaded' || status?.state === 'warming' ? t('env.inUseUnknown') : null;
+    const free = memory?.free_gb != null ? t('env.free', { gb: memory.free_gb.toFixed(1) }) : null;
+    const memoryText = [inUse, free].filter(Boolean).join(' · ');
     return (
         <Row label={t('env.runsOn')}>
             <span className="sp-place"><Monitor size={13} aria-hidden="true" /> {t('env.thisPc')}{!other && status?.placement?.label ? ` · ${status.placement.label}` : ''}</span>
             {other
                 ? <span className="sp-meta">{t('env.notLoaded', { model: displayModelName(chatModel!) })}</span>
-                : status?.display_name && (
+                : status && modelName && (
                     <span className="sp-meta">
-                        <bdi dir="ltr">{status.display_name}</bdi>
+                        <bdi dir="ltr">{modelName}</bdi>
                         {status.state !== 'loaded' ? ` · ${t(MODEL_STATE[status.state])}` : ''}
                     </span>
                 )}
-            {memory && (
-                <span className="sp-meta">
-                    {memory.model_gb != null ? t('env.inUse', { gb: memory.model_gb.toFixed(1) }) : t('env.inUseUnknown')}
-                    {memory.free_gb != null ? ` · ${t('env.free', { gb: memory.free_gb.toFixed(1) })}` : ''}
-                </span>
-            )}
+            {memory && memoryText && <span className="sp-meta">{memoryText}</span>}
             {error
                 ? <span className="sp-error">{error}</span>
                 : status?.error && <span className="sp-error"><LocalStatusError status={status} /></span>}
