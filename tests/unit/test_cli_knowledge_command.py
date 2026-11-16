@@ -384,3 +384,22 @@ def test_real_fallback_path_with_dropped_connection_passes_the_freeze_walk(
     out = capsys.readouterr().out
     assert "DuckDuckGo could not be reached" in out
     assert _load_smoke().broken_start(out) is None
+
+
+@pytest.mark.parametrize(
+    "status, hint", [(502, "may be down"), (404, "Check the query")]
+)
+def test_a_duckduckgo_error_status_is_one_line_not_a_traceback(capsys, status, hint):
+    """With no Tavily key, a DuckDuckGo 5xx printed a traceback."""
+    from gaia.web.client import SearchStatusError
+
+    _FakeTavilyClient.on_search = _raiser(SearchStatusError("DuckDuckGo", status))
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_knowledge_command(_knowledge_args("search"))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert f"DuckDuckGo answered HTTP {status}" in out
+    assert hint in out
+    assert "Traceback" not in out
