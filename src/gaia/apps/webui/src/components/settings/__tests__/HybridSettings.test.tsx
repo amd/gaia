@@ -426,6 +426,11 @@ describe('HybridSettings: templates', () => {
     });
 
     it('disables an unavailable template with its reason and a way to set it up', async () => {
+        // No Fireworks key here; the gateway is set up.
+        mockedApi.getHybridSettings.mockResolvedValue({
+            ...SETTINGS,
+            models: SETTINGS.models.map((m) => (m.provider === 'fireworks' ? { ...m, available: false, reason: 'Add a Fireworks key' } : m)),
+        });
         const onShowProvider = vi.fn();
         render(<HybridSettings onShowProvider={onShowProvider} />);
         const card = await screen.findByRole('listitem', { name: 'Fireworks + gateway' });
@@ -434,6 +439,8 @@ describe('HybridSettings: templates', () => {
         expect(use).toHaveAccessibleDescription('Add a Fireworks key');
         fireEvent.click(within(card).getByRole('button', { name: 'Set up Fireworks AI' }));
         expect(onShowProvider).toHaveBeenCalledWith('fireworks');
+        // Only what is missing: the gateway this template also uses is already set up.
+        expect(within(card).queryByRole('button', { name: 'Set up AMD LLM Gateway' })).not.toBeInTheDocument();
 
         const local = screen.getByRole('listitem', { name: 'All on this PC' });
         expect(local).toHaveTextContent('Download Qwen3.6-35B-A3B-GGUF');

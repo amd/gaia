@@ -8,7 +8,7 @@ import { useT } from '../../i18n/useT';
 import { RadioGroup } from '../RadioGroup';
 import { formatCost, formatPerMillion } from './cloudPrice';
 import {
-    HYBRID_PROVIDERS, hybridModelName, hybridProviderName,
+    HYBRID_PROVIDERS, hybridModelName, hybridProviderName, hybridUnmetProviders,
 } from '../../utils/hybrid';
 import type {
     HybridKind, HybridModelOption, HybridPolicy, HybridPreview, HybridRules, HybridSettings as Settings, HybridSettingsUpdate,
@@ -304,7 +304,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                             const titleId = `${id}-tpl-${tpl.id}`;
                             const inUse = tpl.cheap_model === saved.cheap_model && tpl.strong_model === saved.strong_model
                                 && tpl.policy === saved.policy && tpl.classifier_model === saved.classifier_model;
-                            const setUp = tpl.available ? [] : tpl.providers_needed.filter((p) => TAB_PROVIDERS.has(p)) as ProviderId[];
+                            const setUp = tpl.available ? [] : hybridUnmetProviders(saved, tpl).filter((p) => TAB_PROVIDERS.has(p)) as ProviderId[];
                             return (
                                 <li key={tpl.id} className={`hybrid-template${tpl.available ? '' : ' is-unavailable'}`} aria-labelledby={titleId}>
                                     <div className="settings-row settings-row-between">
