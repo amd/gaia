@@ -949,7 +949,7 @@ const messages: Messages = {
     'docs.cancelIndexingAria': 'إلغاء فهرسة {name}',
     'docs.cancel': 'إلغاء',
     'docs.failed': 'فشلت',
-    'docs.waiting': 'بالانتظار',
+    'docs.waiting': 'قيد الانتظار',
     'docs.cantRead': 'تتعذّر قراءته',
     'docs.folder.indexed.one': 'الملفات المضافة من «{name}»: {n}.',
     'docs.folder.indexed.other': 'الملفات المضافة من «{name}»: {n}.',

@@ -4,8 +4,13 @@
 import { useEffect, useRef } from 'react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
+import type { Document } from '../types';
 import { isServerFailure } from '../utils/documentFailure';
 import { log } from '../utils/logger';
+
+function waitsOnServer(d: Document): boolean {
+    return d.indexing_status === 'failed' && isServerFailure(d.error_kind);
+}
 
 /**
  * Re-indexes documents that failed only because the model server was down,
@@ -15,31 +20,48 @@ export function useRetryServerWaitingDocs(): void {
     const serverUp = useChatStore((s) => s.systemStatus?.lemonade_running === true);
     const setDocuments = useChatStore((s) => s.setDocuments);
     const running = useRef(false);
+    // A comeback seen mid-pass; docs that pass retried during the blip need another go.
+    const cameBackAgain = useRef(false);
 
     useEffect(() => {
-        if (!serverUp || running.current) return;
+        if (!serverUp) return;
+        if (running.current) {
+            cameBackAgain.current = true;
+            return;
+        }
+        const pass = async (): Promise<void> => {
+            const { documents } = await api.listDocuments();
+            const ids = (documents || []).filter(waitsOnServer).map((d) => d.id);
+            if (ids.length === 0) return;
+            log.doc.info(`Model server is back; retrying ${ids.length} document(s) that were waiting for it`);
+            // One at a time: they all go through the same embedder.
+            for (const id of ids) {
+                // Re-read each time: a manual Retry or a delete may have got there first.
+                const now = (await api.listDocuments()).documents || [];
+                const doc = now.find((d) => d.id === id);
+                if (!doc || !waitsOnServer(doc)) continue;
+                setDocuments(now.map((d) => (d.id === id ? { ...d, indexing_status: 'indexing' } : d)));
+                try {
+                    await api.reindexDocument(id);
+                    log.doc.info(`Indexed "${doc.filename}" now the model server is back`);
+                } catch (err) {
+                    log.doc.warn(`"${doc.filename}" still couldn't be indexed after the model server came back`, err);
+                }
+            }
+            const fresh = await api.listDocuments();
+            setDocuments(fresh.documents || []);
+        };
         running.current = true;
         void (async () => {
             try {
-                const { documents } = await api.listDocuments();
-                const waiting = (documents || []).filter(
-                    (d) => d.indexing_status === 'failed' && isServerFailure(d.error_kind),
-                );
-                if (waiting.length === 0) return;
-                log.doc.info(`Model server is back; retrying ${waiting.length} document(s) that were waiting for it`);
-                // One at a time: they all go through the same embedder.
-                for (const doc of waiting) {
+                do {
+                    cameBackAgain.current = false;
                     try {
-                        await api.reindexDocument(doc.id);
-                        log.doc.info(`Indexed "${doc.filename}" now the model server is back`);
+                        await pass();
                     } catch (err) {
-                        log.doc.warn(`"${doc.filename}" still couldn't be indexed after the model server came back`, err);
+                        log.doc.warn('Could not retry the documents waiting for the model server', err);
                     }
-                }
-                const fresh = await api.listDocuments();
-                setDocuments(fresh.documents || []);
-            } catch (err) {
-                log.doc.warn('Could not retry the documents waiting for the model server', err);
+                } while (cameBackAgain.current && useChatStore.getState().systemStatus?.lemonade_running === true);
             } finally {
                 running.current = false;
             }

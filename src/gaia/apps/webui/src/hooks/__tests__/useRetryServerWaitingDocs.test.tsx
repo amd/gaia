@@ -24,28 +24,66 @@ const base: Document = {
     indexing_status: 'failed', error_kind: 'model_server_down', last_error: 'connection refused',
 } as Document;
 const unreadable: Document = { ...base, id: 'doc-bad', filename: 'bad.pdf', error_kind: 'corrupt' } as Document;
+const busy: Document = { ...base, id: 'doc-busy', filename: 'busy.md', error_kind: 'model_server_busy' } as Document;
 
 function status(up: boolean): SystemStatus {
     return { lemonade_running: up } as SystemStatus;
 }
 
-function listing(docs: Document[]) {
-    return { documents: docs, total: docs.length, total_size_bytes: 0, total_chunks: 0 };
+function setServer(up: boolean) {
+    act(() => { useChatStore.setState({ systemStatus: status(up) }); });
+}
+
+/** A stand-in for the documents table: list reads it, reindex writes it. */
+let rows: Document[];
+let inFlight: number;
+let maxInFlight: number;
+let reindexOutcome: (id: string) => Promise<'complete' | 'model_server_down'>;
+
+function listing() {
+    return { documents: rows.map((d) => ({ ...d })), total: rows.length, total_size_bytes: 0, total_chunks: 0 };
 }
 
 beforeEach(() => {
     vi.clearAllMocks();
+    rows = [];
+    inFlight = 0;
+    maxInFlight = 0;
+    reindexOutcome = async () => 'complete';
     useChatStore.setState({ systemStatus: status(false), documents: [] });
-    mockedApi.reindexDocument.mockResolvedValue({ ...base, indexing_status: 'complete', chunk_count: 3 } as Document);
+    mockedApi.listDocuments.mockImplementation(async () => listing());
+    mockedApi.reindexDocument.mockImplementation(async (id: string) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        rows = rows.map((d) => (d.id === id ? { ...d, indexing_status: 'indexing' } : d));
+        try {
+            const outcome = await reindexOutcome(id);
+            rows = rows.map((d) => (d.id === id
+                ? (outcome === 'complete'
+                    ? { ...d, indexing_status: 'complete', error_kind: null, chunk_count: 3 }
+                    : { ...d, indexing_status: 'failed', error_kind: outcome })
+                : d));
+            if (outcome !== 'complete') throw new Error('Reindex failed');
+            return rows.find((d) => d.id === id)!;
+        } finally {
+            inFlight -= 1;
+        }
+    });
 });
 
 afterEach(() => {
     useChatStore.setState({ systemStatus: null, documents: [] });
 });
 
+function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => { resolve = r; });
+    return { promise, resolve };
+}
+
 describe('useRetryServerWaitingDocs', () => {
     it('does nothing while the model server is down', async () => {
-        mockedApi.listDocuments.mockResolvedValue(listing([base]));
+        rows = [base];
         render(<Harness />);
         await act(async () => {});
         expect(mockedApi.listDocuments).not.toHaveBeenCalled();
@@ -53,34 +91,129 @@ describe('useRetryServerWaitingDocs', () => {
     });
 
     it('re-indexes only the server-failed rows when the server comes back', async () => {
-        const done = { ...base, indexing_status: 'complete', chunk_count: 3, error_kind: null } as Document;
-        mockedApi.listDocuments
-            .mockResolvedValueOnce(listing([base, unreadable]))
-            .mockResolvedValue(listing([done, unreadable]));
+        rows = [base, unreadable, busy];
         render(<Harness />);
+        setServer(true);
 
-        act(() => { useChatStore.setState({ systemStatus: status(true) }); });
+        await waitFor(() => expect(useChatStore.getState().documents.find((d) => d.id === 'doc-down')?.indexing_status).toBe('complete'));
+        await waitFor(() => expect(useChatStore.getState().documents.find((d) => d.id === 'doc-busy')?.indexing_status).toBe('complete'));
+        expect(mockedApi.reindexDocument.mock.calls.map((c) => c[0]).sort()).toEqual(['doc-busy', 'doc-down']);
+        expect(useChatStore.getState().documents.find((d) => d.id === 'doc-bad')?.indexing_status).toBe('failed');
+    });
 
-        await waitFor(() => expect(useChatStore.getState().documents).toEqual([done, unreadable]));
-        expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
-        expect(mockedApi.reindexDocument).toHaveBeenCalledWith('doc-down');
+    it('never retries an unreadable file, however many times the server comes back', async () => {
+        rows = [unreadable];
+        render(<Harness />);
+        for (let i = 0; i < 5; i++) {
+            setServer(true);
+            await act(async () => {});
+            setServer(false);
+        }
+        await waitFor(() => expect(mockedApi.listDocuments).toHaveBeenCalled());
+        expect(mockedApi.reindexDocument).not.toHaveBeenCalled();
     });
 
     it('does not retry again while the server stays up, but does after the next outage', async () => {
-        mockedApi.listDocuments.mockResolvedValue(listing([base]));
-        mockedApi.reindexDocument.mockRejectedValue(new Error('Reindex failed'));
+        rows = [base];
+        reindexOutcome = async () => 'model_server_down';
         render(<Harness />);
 
-        act(() => { useChatStore.setState({ systemStatus: status(true) }); });
+        setServer(true);
         await waitFor(() => expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1));
-        await waitFor(() => expect(mockedApi.listDocuments).toHaveBeenCalledTimes(2));
+        await act(async () => {});
 
         act(() => { useChatStore.setState({ systemStatus: { ...status(true), model_loaded: 'x' } as SystemStatus }); });
         await act(async () => {});
         expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
 
-        act(() => { useChatStore.setState({ systemStatus: status(false) }); });
-        act(() => { useChatStore.setState({ systemStatus: status(true) }); });
+        setServer(false);
+        setServer(true);
         await waitFor(() => expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(2));
+    });
+
+    it('skips a document a manual Retry already picked up', async () => {
+        rows = [base, { ...busy }];
+        const gate = deferred();
+        reindexOutcome = async (id) => { if (id === 'doc-down') await gate.promise; return 'complete'; };
+        render(<Harness />);
+        setServer(true);
+        await waitFor(() => expect(mockedApi.reindexDocument).toHaveBeenCalledWith('doc-down'));
+
+        // The user clicks Retry on the second row while the hook is still on the first.
+        rows = rows.map((d) => (d.id === 'doc-busy' ? { ...d, indexing_status: 'indexing' } : d));
+        await act(async () => { gate.resolve(); });
+
+        await waitFor(() => expect(useChatStore.getState().documents.find((d) => d.id === 'doc-down')?.indexing_status).toBe('complete'));
+        expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips a document deleted while it waited its turn', async () => {
+        rows = [base, { ...busy }];
+        const gate = deferred();
+        reindexOutcome = async (id) => { if (id === 'doc-down') await gate.promise; return 'complete'; };
+        render(<Harness />);
+        setServer(true);
+        await waitFor(() => expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1));
+
+        rows = rows.filter((d) => d.id !== 'doc-busy');
+        await act(async () => { gate.resolve(); });
+
+        await waitFor(() => expect(useChatStore.getState().documents.map((d) => d.id)).toEqual(['doc-down']));
+        expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows the row as indexing while the hook works on it', async () => {
+        rows = [base];
+        const gate = deferred();
+        reindexOutcome = async () => { await gate.promise; return 'complete'; };
+        render(<Harness />);
+        setServer(true);
+
+        await waitFor(() => expect(useChatStore.getState().documents[0]?.indexing_status).toBe('indexing'));
+        await act(async () => { gate.resolve(); });
+        await waitFor(() => expect(useChatStore.getState().documents[0]?.indexing_status).toBe('complete'));
+    });
+
+    it('a flapping server never indexes one document twice at once, and the blip is not lost', async () => {
+        rows = [base];
+        const gate = deferred();
+        let first = true;
+        reindexOutcome = async () => {
+            if (first) { first = false; await gate.promise; return 'model_server_down'; }
+            return 'complete';
+        };
+        render(<Harness />);
+        setServer(true);
+        await waitFor(() => expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1));
+
+        // The server drops and returns several times while the first attempt is in flight.
+        for (let i = 0; i < 4; i++) {
+            setServer(false);
+            setServer(true);
+        }
+        await act(async () => { gate.resolve(); });
+
+        await waitFor(() => expect(useChatStore.getState().documents[0]?.indexing_status).toBe('complete'));
+        expect(maxInFlight).toBe(1);
+        // One follow-up pass for all the blips, not one per blip.
+        expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(2);
+    });
+
+    it('drops the follow-up pass when the server is down again by the time the first ends', async () => {
+        rows = [base];
+        const gate = deferred();
+        reindexOutcome = async () => { await gate.promise; return 'model_server_down'; };
+        render(<Harness />);
+        setServer(true);
+        await waitFor(() => expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1));
+
+        setServer(false);
+        setServer(true);
+        setServer(false);
+        await act(async () => { gate.resolve(); });
+        await act(async () => {});
+
+        expect(mockedApi.reindexDocument).toHaveBeenCalledTimes(1);
+        expect(useChatStore.getState().documents[0]?.indexing_status).toBe('failed');
     });
 });
