@@ -448,6 +448,11 @@ SHORT_LOCAL_TEXT = {
         ("Привет, мир", "cp1251"),
         ("Ελληνικά κείμενα", "cp1253"),
         ("你好", "cp936"),
+        ("5кг", "cp1251"),
+        ("Товар,Кол-во\nЯблоки,5кг\n", "cp1251"),
+        ("Заказ №1", "cp1251"),
+        ("100руб", "cp1251"),
+        ("5ευρώ", "cp1253"),
     ],
     "ids": [
         "arabic-word",
@@ -456,6 +461,11 @@ SHORT_LOCAL_TEXT = {
         "russian-phrase",
         "greek",
         "chinese",
+        "russian-unit",
+        "russian-csv-unit",
+        "russian-number-sign",
+        "russian-price",
+        "greek-price",
     ],
 }
 

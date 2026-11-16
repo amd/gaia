@@ -15,7 +15,6 @@ import codecs
 import functools
 import itertools
 import os
-import re
 import unicodedata
 from typing import Optional, Tuple, Union
 
@@ -50,8 +49,25 @@ _TOO_FEW_TO_TELL = 8
 _SHORT_TEXT = 64
 
 
-#: A non-ASCII character directly beside an ASCII letter or digit.
-_GLUED_TO_ASCII = re.compile(r"[A-Za-z0-9][^\x00-\x7f]|[^\x00-\x7f][A-Za-z0-9]")
+def _western_glued_to_ascii(data: bytes, western: str) -> bool:
+    """Whether a non-ASCII byte sits inside an ASCII word the Western way.
+
+    Beside an ASCII letter ("café"), or beside a digit as a currency sign
+    ("12€"). A local letter beside a digit is not: Russian "5кг" and "№1",
+    Greek "5ευρώ" are local text. *western* is *data* read as cp1252, one
+    character per byte.
+    """
+    for i, byte in enumerate(data):
+        if byte < 0x80:
+            continue
+        neighbours = data[max(0, i - 1) : i] + data[i + 1 : i + 2]
+        if any(chr(b).isascii() and chr(b).isalpha() for b in neighbours):
+            return True
+        if any(chr(b).isdigit() for b in neighbours) and (
+            unicodedata.category(western[i]) == "Sc"
+        ):
+            return True
+    return False
 
 
 @functools.lru_cache(maxsize=1)
@@ -85,17 +101,16 @@ def _local_legacy_encoding(data: bytes) -> Optional[str]:
     if page is None or page == "cp1252":
         return None
     try:
-        local = data.decode(page)
+        data.decode(page)
     except UnicodeDecodeError:
         return None
-    # "cafй", "12Ђ": a local letter glued to ASCII is Western text read wrong.
-    if _GLUED_TO_ASCII.search(local):
-        try:
-            western = data.decode("cp1252")
-        except UnicodeDecodeError:
-            western = None
-        if western is not None and _latin_script_only(western):
-            return None
+    try:
+        western = data.decode("cp1252")
+    except UnicodeDecodeError:
+        return page
+    # "cafй", "12Ђ": Western text read in the local page.
+    if _latin_script_only(western) and _western_glued_to_ascii(data, western):
+        return None
     return page
 
 
