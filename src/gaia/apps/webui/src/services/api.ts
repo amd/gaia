@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage, HybridSettings, HybridSettingsUpdate, HybridPreview, HybridStats } from '../types';
+import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage, HybridSettings, HybridSettingsUpdate, HybridPreview, HybridStats, HybridTemplate } from '../types';
 import type { LogReadResponse, LogSourcesResponse, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import { getApiBase } from '../utils/apiBase';
@@ -496,6 +496,15 @@ export async function previewHybridRoute(text: string): Promise<HybridPreview> {
 
 export async function getHybridStats(): Promise<HybridStats> {
     return apiFetch('GET', '/hybrid/stats');
+}
+
+export async function getHybridTemplates(): Promise<HybridTemplate[]> {
+    return apiFetch('GET', '/hybrid/templates');
+}
+
+/** Use a template's models and policy; a 409 says what to set up first. */
+export async function applyHybridTemplate(id: string): Promise<HybridSettings> {
+    return apiFetch('POST', `/hybrid/templates/${encodeURIComponent(id)}/apply`);
 }
 
 // -- Skills ----------------------------------------------------------------------

@@ -7,7 +7,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HybridSettings } from '../HybridSettings';
 import * as api from '../../../services/api';
-import type { HybridRules, HybridSettings as Settings, HybridStats } from '../../../types';
+import type { HybridRules, HybridSettings as Settings, HybridStats, HybridTemplate } from '../../../types';
 
 vi.mock('../../../services/api');
 
@@ -35,10 +35,14 @@ const SETTINGS: Settings = {
     presets: { quality: QUALITY, balanced: BALANCED },
     kinds: ['write_prose', 'answer_question', 'analyze_data', 'operate_tools', 'change_code', 'find_defects', 'plan_or_design', 'other'],
     models: [
-        { id: 'amd.DeepSeek-V4.1-Flash', display_name: 'DeepSeek V4.1 Flash', input_per_million: 0.3, output_per_million: 1.2, cache_read_per_million: 0.03, available: true },
-        { id: 'amd.Claude-Opus-5-5', display_name: 'Claude Opus 5.5', input_per_million: 5, output_per_million: 25, cache_read_per_million: 0.5, available: true },
-        { id: 'amd.Qwen-Coder', display_name: 'Qwen Coder', input_per_million: null, output_per_million: null, cache_read_per_million: null, available: true },
-        { id: 'amd.Retired', display_name: 'Retired model', input_per_million: 1, output_per_million: 2, cache_read_per_million: null, available: false },
+        { id: 'claude-opus-5', display_name: 'Claude Opus 5 (direct)', provider: 'claude', input_per_million: null, output_per_million: null, available: true },
+        { id: 'amd.DeepSeek-V4.1-Flash', display_name: 'DeepSeek V4.1 Flash', provider: 'amd', input_per_million: 0.3, output_per_million: 1.2, cache_read_per_million: 0.03, available: true },
+        { id: 'amd.Claude-Opus-5-5', display_name: 'Claude Opus 5.5', provider: 'amd', input_per_million: 5, output_per_million: 25, cache_read_per_million: 0.5, available: true },
+        { id: 'amd.Qwen-Coder', display_name: 'Qwen Coder', provider: 'amd', input_per_million: null, output_per_million: null, cache_read_per_million: null, available: true },
+        { id: 'amd.Retired', display_name: 'Retired model', provider: 'amd', input_per_million: 1, output_per_million: 2, cache_read_per_million: null, available: false },
+        { id: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', provider: 'local', available: true },
+        { id: 'Qwen3.6-35B-A3B-GGUF', display_name: 'Qwen3.6 35B A3B', provider: 'local', available: false, reason: 'Download Qwen3.6-35B-A3B-GGUF' },
+        { id: 'fireworks.deepseek-v4p1-flash', display_name: 'deepseek-v4p1-flash', provider: 'fireworks', input_per_million: 0.3, output_per_million: 1.2, price_source: 'Fireworks AI list price', available: true },
     ],
     is_active: true,
 };
@@ -47,6 +51,26 @@ const STATS: HybridStats = {
     since: '2026-11-01T00:00:00Z', turns: 40, cheap_turns: 30, strong_turns: 10, failed_closed: 2,
     cost: 1.5, cost_if_all_strong: 6, saving_pct: 75,
 };
+
+function template(over: Partial<HybridTemplate> & Pick<HybridTemplate, 'id' | 'name'>): HybridTemplate {
+    return {
+        description: 'A pair.', cheap_model: 'amd.DeepSeek-V4.1-Flash', strong_model: 'amd.Claude-Opus-5-5', classifier_model: null,
+        policy: 'quality', providers_needed: ['amd'], available: true, measured: false, ...over,
+    };
+}
+
+const TEMPLATES: HybridTemplate[] = [
+    template({ id: 'gateway-deepseek-opus', name: 'Gateway: DeepSeek + Opus', description: 'The pair the policies were tuned on.', measured: true }),
+    template({ id: 'gateway-deepseek-sonnet', name: 'Gateway: DeepSeek + Sonnet', strong_model: 'amd.Claude-Sonnet-5-5' }),
+    template({
+        id: 'all-local', name: 'All on this PC', cheap_model: 'Gemma-4-E4B-it-GGUF', strong_model: 'Qwen3.6-35B-A3B-GGUF',
+        providers_needed: ['local'], available: false, reason: 'Download Qwen3.6-35B-A3B-GGUF',
+    }),
+    template({
+        id: 'fireworks', name: 'Fireworks + gateway', cheap_model: 'fireworks.deepseek-v4p1-flash',
+        providers_needed: ['fireworks', 'amd'], available: false, reason: 'Add a Fireworks key',
+    }),
+];
 
 /** A 422 as apiFetch throws it: the backend's sentence, and the fields its `loc` names. */
 function rejection(message: string, fields: string[] = []): Error {
@@ -58,6 +82,7 @@ beforeEach(() => {
     mockedApi.getHybridSettings.mockResolvedValue(SETTINGS);
     mockedApi.getHybridStats.mockResolvedValue(STATS);
     mockedApi.updateHybridSettings.mockImplementation(async (update) => ({ ...SETTINGS, ...update }));
+    mockedApi.getHybridTemplates.mockResolvedValue(TEMPLATES);
 });
 
 async function renderPanel() {
@@ -73,6 +98,9 @@ describe('HybridSettings: load', () => {
         expect(within(cheap).getByRole('option', { name: 'DeepSeek V4.1 Flash · $0.30 in · $1.20 out per 1M tokens' })).toBeInTheDocument();
         expect(within(cheap).getByRole('option', { name: 'Qwen Coder · price unknown' })).toBeInTheDocument();
         expect(within(cheap).getByRole('option', { name: 'Retired model (not available)' })).toBeDisabled();
+        // The policies were tuned on this pair, and a gateway model classifies: no notes.
+        expect(screen.queryByText(/not yet measured\./)).not.toBeInTheDocument();
+        expect(screen.queryByText(/may route less accurately/)).not.toBeInTheDocument();
         expect(within(form).getByLabelText('Classifier model')).toHaveValue('');
         expect(within(form).getByRole('option', { name: 'Same as the cheap model' })).toBeInTheDocument();
         expect(within(form).getByLabelText('Classifier time limit (seconds)')).toHaveValue(15);
@@ -287,5 +315,115 @@ describe('HybridSettings: usage', () => {
         render(<HybridSettings />);
         expect(await screen.findByText('The spending database could not be read.')).toHaveAttribute('role', 'alert');
         expect(await screen.findByRole('form', { name: 'Hybrid' })).toBeInTheDocument();
+    });
+});
+
+describe('HybridSettings: models from every provider', () => {
+    it('groups each dropdown by provider, with prices when known and the reason a model is unavailable', async () => {
+        const form = await renderPanel();
+        const strong = within(form).getByLabelText('Strong model');
+        const groups = Array.from(strong.querySelectorAll('optgroup'));
+        expect(groups.map((g) => g.label)).toEqual(['Local', 'AMD LLM Gateway', 'Fireworks AI', 'Claude']);
+        const options = (label: string) => Array.from(groups.find((g) => g.label === label)!.querySelectorAll('option'));
+
+        expect(options('Local').map((o) => o.textContent)).toEqual([
+            'Gemma 4 E4B · on this PC', 'Qwen3.6 35B A3B — Download Qwen3.6-35B-A3B-GGUF',
+        ]);
+        expect(options('Local')[1]).toBeDisabled();
+        expect(options('Fireworks AI')[0]).toHaveTextContent('deepseek-v4p1-flash · $0.30 in · $1.20 out per 1M tokens');
+        expect(options('Claude')[0]).toHaveTextContent('Claude Opus 5 (direct) · price unknown');
+        expect(options('Claude')[0]).toBeEnabled();
+    });
+
+    it('saves a model from another provider', async () => {
+        const form = await renderPanel();
+        fireEvent.change(within(form).getByLabelText('Cheap model'), { target: { value: 'fireworks.deepseek-v4p1-flash' } });
+        fireEvent.change(within(form).getByLabelText('Strong model'), { target: { value: 'claude-opus-5' } });
+        fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
+        await waitFor(() => expect(mockedApi.updateHybridSettings).toHaveBeenCalledWith({
+            cheap_model: 'fireworks.deepseek-v4p1-flash', strong_model: 'claude-opus-5',
+        }));
+    });
+
+    it('notes an unmeasured pair and a classifier on this PC', async () => {
+        mockedApi.getHybridSettings.mockResolvedValue({ ...SETTINGS, cheap_model: 'Gemma-4-E4B-it-GGUF' });
+        await renderPanel();
+        expect(await screen.findByText(/This pair is not yet measured\./)).toBeInTheDocument();
+        expect(screen.getByText('The classifier runs on this PC. A small local model may route less accurately.')).toBeInTheDocument();
+    });
+});
+
+describe('HybridSettings: templates', () => {
+    it('shows each template with its pair, badge and availability', async () => {
+        render(<HybridSettings onShowProvider={vi.fn()} />);
+        const list = await screen.findByRole('list');
+        const cards = within(list).getAllByRole('listitem');
+        expect(cards).toHaveLength(4);
+
+        const measured = within(list).getByRole('listitem', { name: 'Gateway: DeepSeek + Opus' });
+        expect(measured).toHaveTextContent('Measured');
+        expect(measured).toHaveTextContent('DeepSeek V4.1 Flash + Claude Opus 5.5 · Quality');
+        expect(measured).toHaveTextContent('In use');
+        expect(within(measured).getByRole('button', { name: 'Use the Gateway: DeepSeek + Opus template' })).toBeEnabled();
+
+        const sonnet = within(list).getByRole('listitem', { name: 'Gateway: DeepSeek + Sonnet' });
+        expect(sonnet).toHaveTextContent('Not yet measured');
+        expect(sonnet).not.toHaveTextContent('In use');
+    });
+
+    it('disables an unavailable template with its reason and a way to set it up', async () => {
+        const onShowProvider = vi.fn();
+        render(<HybridSettings onShowProvider={onShowProvider} />);
+        const card = await screen.findByRole('listitem', { name: 'Fireworks + gateway' });
+        const use = within(card).getByRole('button', { name: 'Use the Fireworks + gateway template' });
+        expect(use).toBeDisabled();
+        expect(use).toHaveAccessibleDescription('Add a Fireworks key');
+        fireEvent.click(within(card).getByRole('button', { name: 'Set up Fireworks AI' }));
+        expect(onShowProvider).toHaveBeenCalledWith('fireworks');
+
+        const local = screen.getByRole('listitem', { name: 'All on this PC' });
+        expect(local).toHaveTextContent('Download Qwen3.6-35B-A3B-GGUF');
+        expect(within(local).getByRole('button', { name: 'Set up Local' })).toBeInTheDocument();
+    });
+
+    it('applies a template, shows the applied settings, and still lets them be tweaked and saved', async () => {
+        const appliedSettings = { ...SETTINGS, strong_model: 'amd.Qwen-Coder', policy: 'balanced' as const, rules: BALANCED };
+        mockedApi.applyHybridTemplate.mockResolvedValue(appliedSettings);
+        mockedApi.updateHybridSettings.mockImplementation(async (update) => ({ ...appliedSettings, ...update }));
+        const onSaved = vi.fn();
+        render(<HybridSettings onSaved={onSaved} />);
+        const card = await screen.findByRole('listitem', { name: 'Gateway: DeepSeek + Sonnet' });
+        fireEvent.click(within(card).getByRole('button', { name: /Use the/ }));
+
+        await waitFor(() => expect(mockedApi.applyHybridTemplate).toHaveBeenCalledWith('gateway-deepseek-sonnet'));
+        expect(await screen.findByText('Applied Gateway: DeepSeek + Sonnet. Change anything below and save.')).toBeInTheDocument();
+        const form = screen.getByRole('form', { name: 'Hybrid' });
+        expect(within(form).getByLabelText('Strong model')).toHaveValue('amd.Qwen-Coder');
+        expect(within(form).getByRole('radio', { name: 'Balanced' })).toHaveAttribute('aria-checked', 'true');
+        expect(within(form).getByRole('button', { name: 'Save' })).toBeDisabled();
+        expect(onSaved).toHaveBeenCalledTimes(1);
+
+        fireEvent.change(within(form).getByLabelText('Classifier time limit (seconds)'), { target: { value: '40' } });
+        fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
+        await waitFor(() => expect(mockedApi.updateHybridSettings).toHaveBeenCalledWith({ classifier_timeout: 40 }));
+    });
+
+    it('shows a 409 on the template it came from and keeps the settings as they were', async () => {
+        mockedApi.applyHybridTemplate.mockRejectedValue(Object.assign(
+            new Error('Add an Anthropic key in Settings first; claude-direct needs it.'), { httpStatus: 409 },
+        ));
+        render(<HybridSettings />);
+        const card = await screen.findByRole('listitem', { name: 'Gateway: DeepSeek + Sonnet' });
+        fireEvent.click(within(card).getByRole('button', { name: /Use the/ }));
+        expect(await within(card).findByRole('alert')).toHaveTextContent('Add an Anthropic key in Settings first');
+        expect(within(screen.getByRole('form', { name: 'Hybrid' })).getByLabelText('Strong model')).toHaveValue('amd.Claude-Opus-5-5');
+        expect(screen.queryByText(/^Applied /)).not.toBeInTheDocument();
+    });
+
+    it('says why the templates could not be read', async () => {
+        mockedApi.getHybridTemplates.mockRejectedValueOnce(new Error('Templates are unavailable: the gateway catalog timed out.'));
+        render(<HybridSettings />);
+        expect(await screen.findByText('Templates are unavailable: the gateway catalog timed out.')).toHaveAttribute('role', 'alert');
+        expect(screen.getByRole('form', { name: 'Hybrid' })).toBeInTheDocument();
     });
 });

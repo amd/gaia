@@ -1,15 +1,18 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
 import { RadioGroup } from '../RadioGroup';
-import { displayModelName } from '../../stores/modelStore';
 import { formatPerMillion, formatTotal } from './cloudPrice';
+import {
+    HYBRID_PROVIDERS, hybridClassifierIsLocal, hybridModelName, hybridPairMeasured, hybridProviderName,
+} from '../../utils/hybrid';
 import type {
-    HybridKind, HybridPolicy, HybridPreview, HybridRules, HybridSettings as Settings, HybridSettingsUpdate, HybridStats,
+    HybridKind, HybridModelOption, HybridPolicy, HybridPreview, HybridRules, HybridSettings as Settings, HybridSettingsUpdate,
+    HybridStats, HybridTemplate, ProviderId,
 } from '../../types';
 import '../SettingsModal.css';
 import './HybridSettings.css';
@@ -18,6 +21,8 @@ const POLICIES: HybridPolicy[] = ['quality', 'balanced', 'custom'];
 const DIFFICULTIES = [0, 1, 2, 3, 4, 5];
 const MIN_TIMEOUT = 1;
 const MAX_TIMEOUT = 120;
+/** Providers with a tab in Settings > Model, where a missing one is set up. */
+const TAB_PROVIDERS: ReadonlySet<string> = new Set<ProviderId>(['local', 'amd', 'fireworks']);
 
 type Field = keyof HybridSettingsUpdate;
 const FIELDS: Field[] = ['cheap_model', 'strong_model', 'classifier_model', 'classifier_timeout', 'policy', 'rules'];
@@ -79,8 +84,16 @@ function pendingUpdate(saved: Settings, draft: Draft): { update: HybridSettingsU
     return { update, timeoutValid };
 }
 
-/** Which model hybrid turns run on: the models, the routing policy, a try-it box, and what it saved. */
-export function HybridSettings({ onSaved }: { onSaved?: () => void }) {
+interface Props {
+    onSaved?: () => void;
+    /** Called with each settings answer, e.g. so the provider tabs can follow hybrid's models. */
+    onLoaded?: (settings: Settings) => void;
+    /** Open a provider's tab to set it up. */
+    onShowProvider?: (provider: ProviderId) => void;
+}
+
+/** Which models hybrid turns run on: templates, the models, the routing policy, a try-it box, and what it saved. */
+export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
     const t = useT();
     const id = useId();
     const [saved, setSaved] = useState<Settings | null>(null);
@@ -95,15 +108,35 @@ export function HybridSettings({ onSaved }: { onSaved?: () => void }) {
     const [previewing, setPreviewing] = useState(false);
     const [preview, setPreview] = useState<HybridPreview | null>(null);
     const [previewError, setPreviewError] = useState<string | null>(null);
+    const [templates, setTemplates] = useState<HybridTemplate[] | null>(null);
+    const [templatesError, setTemplatesError] = useState<string | null>(null);
+    const [applying, setApplying] = useState<string | null>(null);
+    const [applyError, setApplyError] = useState<{ id: string; message: string } | null>(null);
+    const [applied, setApplied] = useState<string | null>(null);
+    const onLoadedRef = useRef(onLoaded);
+    onLoadedRef.current = onLoaded;
+
+    const show = useCallback((s: Settings) => {
+        setSaved(s);
+        setDraft(draftOf(s));
+        onLoadedRef.current?.(s);
+    }, []);
 
     const load = useCallback(async () => {
         setLoadError(null);
         try {
-            const s = await api.getHybridSettings();
-            setSaved(s);
-            setDraft(draftOf(s));
+            show(await api.getHybridSettings());
         } catch (err) {
             setLoadError(messageOf(err));
+        }
+    }, [show]);
+
+    const loadTemplates = useCallback(async () => {
+        setTemplatesError(null);
+        try {
+            setTemplates(await api.getHybridTemplates());
+        } catch (err) {
+            setTemplatesError(messageOf(err));
         }
     }, []);
 
@@ -118,8 +151,26 @@ export function HybridSettings({ onSaved }: { onSaved?: () => void }) {
 
     useEffect(() => {
         void load();
+        void loadTemplates();
         void loadStats();
-    }, [load, loadStats]);
+    }, [load, loadTemplates, loadStats]);
+
+    const applyTemplate = useCallback(async (tpl: HybridTemplate) => {
+        setApplying(tpl.id);
+        setApplyError(null);
+        setApplied(null);
+        setSaveError(null);
+        setSavedNotice(false);
+        try {
+            show(await api.applyHybridTemplate(tpl.id));
+            setApplied(tpl.name);
+            onSaved?.();
+        } catch (err) {
+            setApplyError({ id: tpl.id, message: messageOf(err) });
+        } finally {
+            setApplying(null);
+        }
+    }, [onSaved, show]);
 
     const pending = useMemo(() => (saved && draft ? pendingUpdate(saved, draft) : null), [saved, draft]);
     const dirty = !!pending && Object.keys(pending.update).length > 0;
@@ -135,9 +186,8 @@ export function HybridSettings({ onSaved }: { onSaved?: () => void }) {
         setSaveError(null);
         setSavedNotice(false);
         try {
-            const next = await api.updateHybridSettings(pending.update);
-            setSaved(next);
-            setDraft(draftOf(next));
+            show(await api.updateHybridSettings(pending.update));
+            setApplied(null);
             setSavedNotice(true);
             onSaved?.();
         } catch (err) {
@@ -145,7 +195,7 @@ export function HybridSettings({ onSaved }: { onSaved?: () => void }) {
         } finally {
             setSaving(false);
         }
-    }, [dirty, onSaved, pending]);
+    }, [dirty, onSaved, pending, show]);
 
     const tryRequest = useCallback(async () => {
         const text = request.trim();
@@ -173,10 +223,23 @@ export function HybridSettings({ onSaved }: { onSaved?: () => void }) {
             : <p className="settings-hint" role="status"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>;
     }
 
-    const modelName = (model: string) => saved.models.find((m) => m.id === model)?.display_name ?? displayModelName(model);
+    const modelName = (model: string) => hybridModelName(saved, model);
     const kindLabel = (kind: HybridKind | null) => (kind ? t(`settings.hybrid.kind.${kind}`) : t('settings.hybrid.preview.none'));
     const fieldError = (field: Field) => (saveError?.field === field ? saveError.message : null);
     const errorId = (field: Field) => `${id}-${field}-error`;
+
+    const optionText = (m: HybridModelOption) => {
+        if (!m.available) {
+            return m.reason
+                ? t.bare('settings.hybrid.unavailableBecause', { model: m.display_name, reason: m.reason })
+                : t.bare('settings.hybrid.unavailable', { model: m.display_name });
+        }
+        // A local model costs nothing per token; a cloud one without a known price says so.
+        const price = m.provider === 'local'
+            ? t.bare('settings.hybrid.onThisPc')
+            : formatPerMillion(m.input_per_million, m.output_per_million, t);
+        return `${m.display_name} · ${price}`;
+    };
 
     const modelSelect = (field: 'cheap_model' | 'strong_model' | 'classifier_model', label: string) => {
         const value = draft[field];
@@ -196,13 +259,19 @@ export function HybridSettings({ onSaved }: { onSaved?: () => void }) {
                 >
                     {value === null && <option value="">{t.bare('settings.hybrid.sameAsCheap')}</option>}
                     {!listed && <option value={value}>{t.bare('settings.hybrid.currentSetting', { model: value })}</option>}
-                    {saved.models.map((m) => (
-                        <option key={m.id} value={m.id} disabled={!m.available && m.id !== value}>
-                            {m.available
-                                ? `${m.display_name} · ${formatPerMillion(m.input_per_million, m.output_per_million, t)}`
-                                : t.bare('settings.hybrid.unavailable', { model: m.display_name })}
-                        </option>
-                    ))}
+                    {HYBRID_PROVIDERS.map((provider) => {
+                        const models = saved.models.filter((m) => m.provider === provider);
+                        if (!models.length) return null;
+                        return (
+                            <optgroup key={provider} label={hybridProviderName(t, provider)}>
+                                {models.map((m) => (
+                                    <option key={m.id} value={m.id} disabled={!m.available && m.id !== value}>
+                                        {optionText(m)}
+                                    </option>
+                                ))}
+                            </optgroup>
+                        );
+                    })}
                 </select>
                 {error && <p className="settings-error" id={errorId(field)} role="alert">{error}</p>}
             </div>
@@ -213,10 +282,70 @@ export function HybridSettings({ onSaved }: { onSaved?: () => void }) {
         ? t('settings.hybrid.timeoutRange', { min: MIN_TIMEOUT, max: MAX_TIMEOUT })
         : fieldError('classifier_timeout');
     const generalError = saveError && saveError.field === null ? saveError.message : null;
+    // Notes describe the saved pair; an unsaved pick hasn't been checked yet.
+    const measured = templates === null || hybridPairMeasured(saved, templates);
+    const classifierLocal = hybridClassifierIsLocal(saved);
 
     return (
         <div className="hybrid-settings">
             <p className="settings-hint">{saved.is_active ? t('settings.hybrid.active') : t('settings.hybrid.inactive')}</p>
+
+            <section className="settings-field" aria-labelledby={`${id}-templates`}>
+                <span className="settings-label" id={`${id}-templates`}>{t('settings.hybrid.templates')}</span>
+                {templatesError && (
+                    <div className="settings-row">
+                        <p className="settings-error" role="alert">{templatesError}</p>
+                        <button type="button" className="btn-secondary" onClick={() => void loadTemplates()}>{t('settings.hybrid.retry')}</button>
+                    </div>
+                )}
+                {!templates && !templatesError && <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}
+                {templates && (
+                    <ul className="hybrid-templates">
+                        {templates.map((tpl) => {
+                            const titleId = `${id}-tpl-${tpl.id}`;
+                            const inUse = tpl.cheap_model === saved.cheap_model && tpl.strong_model === saved.strong_model
+                                && tpl.policy === saved.policy && (tpl.classifier_model ?? tpl.cheap_model) === (saved.classifier_model ?? saved.cheap_model);
+                            const setUp = tpl.available ? [] : tpl.providers_needed.filter((p) => TAB_PROVIDERS.has(p)) as ProviderId[];
+                            return (
+                                <li key={tpl.id} className={`hybrid-template${tpl.available ? '' : ' is-unavailable'}`} aria-labelledby={titleId}>
+                                    <div className="settings-row settings-row-between">
+                                        <span className="hybrid-template-name" id={titleId}>{tpl.name}</span>
+                                        <span className={`hybrid-badge${tpl.measured ? ' is-measured' : ''}`}>
+                                            {tpl.measured ? t('settings.hybrid.measured') : t('settings.hybrid.notMeasured')}
+                                        </span>
+                                    </div>
+                                    <p className="settings-hint">{tpl.description}</p>
+                                    <p className="hybrid-template-pair">
+                                        <bdi>{t('settings.hybrid.pair', { cheap: modelName(tpl.cheap_model), strong: modelName(tpl.strong_model) })}</bdi>
+                                        {' · '}{t(`settings.hybrid.policy.${tpl.policy}`)}
+                                    </p>
+                                    {!tpl.available && tpl.reason && <p className="settings-hint" id={`${titleId}-why`}>{tpl.reason}</p>}
+                                    <div className="settings-row">
+                                        <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            disabled={!tpl.available || applying !== null || saving}
+                                            aria-describedby={!tpl.available && tpl.reason ? `${titleId}-why` : undefined}
+                                            aria-label={t.bare('settings.hybrid.useTemplateAria', { name: tpl.name })}
+                                            onClick={() => void applyTemplate(tpl)}
+                                        >
+                                            {applying === tpl.id ? <Loader2 size={13} className="spin" /> : null} {t('settings.hybrid.useTemplate')}
+                                        </button>
+                                        {inUse && <span className="settings-ok">{t('settings.hybrid.inUse')}</span>}
+                                        {onShowProvider && setUp.map((p) => (
+                                            <button key={p} type="button" className="link-btn" onClick={() => onShowProvider(p)}>
+                                                {t('settings.hybrid.setUp', { provider: hybridProviderName(t, p) })}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    {applyError?.id === tpl.id && <p className="settings-error" role="alert">{applyError.message}</p>}
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
+                {applied && <p className="settings-ok" role="status">{t('settings.hybrid.applied', { name: applied })}</p>}
+            </section>
 
             <form
                 className="hybrid-settings-form"
@@ -248,6 +377,13 @@ export function HybridSettings({ onSaved }: { onSaved?: () => void }) {
                         )}
                     </div>
                 </div>
+
+                {(!measured || classifierLocal) && (
+                    <ul className="hybrid-notes">
+                        {!measured && <li>{t('settings.hybrid.note.unmeasured')}</li>}
+                        {classifierLocal && <li>{t('settings.hybrid.note.localClassifier')}</li>}
+                    </ul>
+                )}
 
                 <div className="settings-field">
                     <span className="settings-label" id={`${id}-policy`}>{t('settings.hybrid.policy')}</span>

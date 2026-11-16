@@ -27,14 +27,22 @@ export interface HybridRule {
 
 export type HybridRules = Record<HybridKind, HybridRule>;
 
-/** A gateway model the hybrid router can use, with the gateway's price per million tokens. */
+/** Where a hybrid member model runs. `claude` is Anthropic's API, used directly. */
+export type HybridProvider = 'local' | 'amd' | 'fireworks' | 'claude';
+
+/** A model any configured provider offers, with its price per million tokens when GAIA knows it. */
 export interface HybridModelOption {
     id: string;
     display_name: string;
-    input_per_million: number | null;
-    output_per_million: number | null;
-    cache_read_per_million: number | null;
+    provider: HybridProvider;
     available: boolean;
+    /** Why it can't be used, when `available` is false. */
+    reason?: string | null;
+    /** Null when unknown; never guessed. */
+    input_per_million?: number | null;
+    output_per_million?: number | null;
+    cache_read_per_million?: number | null;
+    price_source?: string | null;
 }
 
 /** GET /api/hybrid/settings, also returned by PUT. */
@@ -58,6 +66,24 @@ export interface HybridSettings {
 export type HybridSettingsUpdate = Partial<
     Pick<HybridSettings, 'cheap_model' | 'strong_model' | 'classifier_model' | 'classifier_timeout' | 'policy' | 'rules'>
 >;
+
+/** GET /api/hybrid/templates: a ready-made cheap/strong pair and policy. */
+export interface HybridTemplate {
+    id: string;
+    name: string;
+    description: string;
+    cheap_model: string;
+    strong_model: string;
+    /** Null when the cheap model classifies too. */
+    classifier_model: string | null;
+    policy: HybridPolicy;
+    providers_needed: HybridProvider[];
+    available: boolean;
+    /** What to set up first, when `available` is false. */
+    reason?: string | null;
+    /** True only for the pair the shipped policies were tuned on. */
+    measured: boolean;
+}
 
 /** POST /api/hybrid/preview: the decision a request would get, without running a turn. */
 export interface HybridPreview {

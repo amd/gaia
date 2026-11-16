@@ -45,6 +45,9 @@ export function ModelSettings() {
     const [loadError, setLoadError] = useState<string | null>(null);
     const requested = useChatStore((s) => s.settingsProvider);
     const [chosen, setChosen] = useState<ProviderId>(requested ?? providerTabOf(active) ?? 'local');
+    // Set once the user picks a tab, so hybrid's settings arriving late don't move it.
+    const tabPicked = useRef(!!requested);
+    const hybridInUse = isHybridModel(active?.model);
     const [models, setModels] = useState<ProviderModel[] | null>(null);
     const [modelsError, setModelsError] = useState<string | null>(null);
     const [query, setQuery] = useState('');
@@ -321,7 +324,7 @@ export function ModelSettings() {
                         role="radio"
                         aria-checked={chosen === p.id}
                         className={`provider-tab${chosen === p.id ? ' is-active' : ''}${offline(p) || blocked(p) ? ' is-disabled' : ''}`}
-                        onClick={() => setChosen(p.id)}
+                        onClick={() => { tabPicked.current = true; setChosen(p.id); }}
                         disabled={(offline(p) || blocked(p)) && chosen !== p.id}
                         title={blocked(p) ? t('settings.privacy.localOnlyBlocked') : offline(p) ? t('setup.key.gatewayOff') : undefined}
                     >
@@ -570,15 +573,21 @@ export function ModelSettings() {
 
                     {local && connected && <LocalModelsSections downloadsSlot={downloadsSlot} />}
 
-                    {chosen === 'amd' && connected && models?.some((m) => isHybridModel(m.id)) && (
-                        <SettingsDisclosure title={t('settings.hybrid.title')} hint={t('settings.hybrid.hint')} targetId="hybrid">
-                            <HybridSettings onSaved={() => void loadModels('amd', true)} />
-                        </SettingsDisclosure>
-                    )}
-
                     {provider.remote && <SpendingLimit />}
                 </section>
             )}
+            <SettingsDisclosure title={t('settings.hybrid.title')} hint={t('settings.hybrid.hint')} targetId="hybrid" lazy defaultOpen={hybridInUse}>
+                <HybridSettings
+                    onSaved={() => { void refreshActive(); }}
+                    onLoaded={(s) => {
+                        // A hybrid chat opens on the tab of the model that runs its hard turns.
+                        const strong = s.models.find((m) => m.id === s.strong_model)?.provider;
+                        if (hybridInUse && !tabPicked.current && strong && strong !== 'claude') setChosen(strong);
+                    }}
+                    onShowProvider={(p) => { tabPicked.current = true; setChosen(p); }}
+                />
+            </SettingsDisclosure>
+
             {removing && (
                 <ConfirmSheet
                     title={t('settings.models.removeTitle', { name: labels[removing.id] ?? removing.id })}

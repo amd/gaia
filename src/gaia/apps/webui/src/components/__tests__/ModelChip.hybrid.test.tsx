@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** Hybrid in the model picker and in Settings > Model: its group, its place, and its tab. */
+/** Hybrid in the model picker and in Settings > Model: its own entry, its name and place, and its tab. */
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -11,19 +11,20 @@ import { providerTabOf, useModelStore } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import { mockSetupApis } from '../../test/setupApiMocks';
-import type { ActiveModel, HybridSettings, ProviderInfo, ProviderModel } from '../../types';
+import type { ActiveModel, HybridSettings, HybridTemplate, ProviderInfo, ProviderModel } from '../../types';
 
 vi.mock('../../services/api');
 
 const mockedApi = vi.mocked(api);
 
 const GEMMA = 'Gemma-4-E4B-it-GGUF';
+const QWEN = 'Qwen3.6-35B-A3B-GGUF';
 const LOCAL_ACTIVE: ActiveModel = {
     provider: 'local', model: GEMMA, display_name: 'Gemma 4 E4B', label: 'Gemma', remote: false, is_default: true, downloaded: true,
 };
 // The backend files the unprefixed `hybrid` id under local.
 const HYBRID_ACTIVE: ActiveModel = {
-    provider: 'local', model: 'hybrid', display_name: 'Hybrid', label: 'Hybrid · AMD LLM Gateway', remote: true,
+    provider: 'local', model: 'hybrid', display_name: 'Hybrid', label: 'Hybrid', remote: true,
     provider_name: 'AMD LLM Gateway', is_default: false,
 };
 const LOCAL: ProviderInfo = { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC.' };
@@ -39,6 +40,7 @@ function model(id: string, over: Partial<ProviderModel> = {}): ProviderModel {
 }
 
 const LOCAL_MODELS = [model(GEMMA, { display_name: 'Gemma 4 E4B', state: 'loaded' })];
+// An older backend still lists hybrid under the gateway; the picker shows it once, on its own.
 const AMD_MODELS = [
     model('amd.DeepSeek-V4.1-Flash', { display_name: 'DeepSeek-V4.1-Flash' }),
     model('hybrid', { display_name: 'Hybrid (DeepSeek + Opus)' }),
@@ -53,9 +55,23 @@ function hybridSettings(over: Partial<HybridSettings> = {}): HybridSettings {
     return {
         cheap_model: 'amd.DeepSeek-V4.1-Flash', strong_model: 'amd.Claude-Opus-5-5', classifier_model: null,
         classifier_timeout: 15, policy: 'quality', rules, presets: { quality: rules, balanced: rules },
-        kinds: Object.keys(rules) as HybridSettings['kinds'], models: [], is_active: false, ...over,
+        kinds: Object.keys(rules) as HybridSettings['kinds'],
+        models: [
+            { id: 'amd.DeepSeek-V4.1-Flash', display_name: 'DeepSeek', provider: 'amd', available: true },
+            { id: 'amd.Claude-Opus-5-5', display_name: 'Opus', provider: 'amd', available: true },
+            { id: 'fireworks.deepseek-v4p1-flash', display_name: 'DeepSeek Fireworks', provider: 'fireworks', available: true },
+            { id: GEMMA, display_name: 'Gemma 4 E4B', provider: 'local', available: true },
+            { id: QWEN, display_name: 'Qwen3.6 35B', provider: 'local', available: true },
+        ],
+        is_active: false,
+        ...over,
     };
 }
+
+const TEMPLATE: HybridTemplate = {
+    id: 'gateway-deepseek-opus', name: 'Gateway', description: 'x', cheap_model: 'amd.DeepSeek-V4.1-Flash',
+    strong_model: 'amd.Claude-Opus-5-5', classifier_model: null, policy: 'quality', providers_needed: ['amd'], available: true, measured: true,
+};
 
 beforeEach(() => {
     vi.clearAllMocks();
@@ -69,8 +85,13 @@ beforeEach(() => {
     mockedApi.selectModel.mockImplementation(async (m) => (m === 'hybrid' ? HYBRID_ACTIVE : { ...LOCAL_ACTIVE, model: m }));
     mockedApi.listSessions.mockResolvedValue({ sessions: [], total: 0 });
     mockedApi.getHybridSettings.mockResolvedValue(hybridSettings());
+    mockedApi.getHybridTemplates.mockResolvedValue([TEMPLATE]);
     mockedApi.getHybridStats.mockResolvedValue({
         since: null, turns: 0, cheap_turns: 0, strong_turns: 0, failed_closed: 0, cost: 0, cost_if_all_strong: 0, saving_pct: null,
+    });
+    mockedApi.getContextChoice.mockResolvedValue({
+        model: GEMMA, display_name: 'Gemma 4 E4B', chosen: null, automatic: 65536,
+        min: 65536, max_fit: 65536, options: [65536], loaded_ctx: null, memory_source: 'AMD iGPU', note: null,
     });
     mockedApi.getSpending.mockResolvedValue({
         month: '2026-11', total_usd: 0, turns: 0, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price',
@@ -81,74 +102,101 @@ async function openPicker() {
     render(<ModelChip />);
     fireEvent.click(screen.getByRole('button', { name: /Gemma 4 E4B|Hybrid/ }));
     const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
-    const gateway = await within(dialog).findByRole('group', { name: 'AMD LLM Gateway' });
-    return { dialog, gateway };
+    await within(dialog).findByRole('group', { name: 'AMD LLM Gateway' });
+    return dialog;
 }
 
 describe('ModelChip: hybrid', () => {
-    it('offers Hybrid under the AMD LLM Gateway, labelled cloud', async () => {
-        const { gateway } = await openPicker();
-        const row = await within(gateway).findByRole('option', { name: /Hybrid \(DeepSeek \+ Opus\)/ });
-        await waitFor(() => expect(row).toHaveTextContent('Cloud'));
-        expect(within(screen.getByRole('group', { name: 'Local' })).queryByText(/Hybrid/)).not.toBeInTheDocument();
+    it('is its own entry, named from the configured pair, not a row of the gateway', async () => {
+        const dialog = await openPicker();
+        const group = await within(dialog).findByRole('group', { name: 'Hybrid' });
+        const row = within(group).getByRole('option', { name: /Hybrid \(DeepSeek \+ Opus\)/ });
+        expect(row).toHaveTextContent('Cloud');
+        expect(within(within(dialog).getByRole('group', { name: 'AMD LLM Gateway' })).queryByText(/Hybrid/)).not.toBeInTheDocument();
+        expect(within(dialog).getAllByRole('option', { name: /Hybrid/ })).toHaveLength(1);
     });
 
-    it('asks the gateway’s consent like other gateway models, then makes it the model', async () => {
-        const { gateway } = await openPicker();
-        fireEvent.click(await within(gateway).findByRole('option', { name: /Hybrid/ }));
+    it('names a pair from other providers and asks consent naming each cloud provider', async () => {
+        mockedApi.getHybridSettings.mockResolvedValue(hybridSettings({ cheap_model: 'fireworks.deepseek-v4p1-flash' }));
+        const dialog = await openPicker();
+        const group = await within(dialog).findByRole('group', { name: 'Hybrid' });
+        fireEvent.click(within(group).getByRole('option', { name: /Hybrid \(DeepSeek Fireworks \+ Opus\)/ }));
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
-        fireEvent.click(await within(gateway).findByRole('button', { name: /^Use / }));
+        expect(within(group).getByRole('alert')).toHaveTextContent('Hybrid sends chat history to Fireworks AI, AMD LLM Gateway');
+        fireEvent.click(within(group).getByRole('button', { name: /^Use Hybrid/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('hybrid'));
         await waitFor(() => expect(useModelStore.getState().active?.model).toBe('hybrid'));
     });
 
-    it('is labelled local, with no cloud consent, when every model it routes to runs on this PC', async () => {
-        mockedApi.getHybridSettings.mockResolvedValue(hybridSettings({ cheap_model: 'Qwen3-4B-GGUF', strong_model: GEMMA }));
-        const { gateway } = await openPicker();
-        const row = await within(gateway).findByRole('option', { name: /Hybrid/ });
-        await waitFor(() => expect(row).toHaveTextContent('Local'));
+    it('is labelled local, with no cloud consent, when every member runs on this PC', async () => {
+        mockedApi.getHybridSettings.mockResolvedValue(hybridSettings({ cheap_model: GEMMA, strong_model: QWEN }));
+        const dialog = await openPicker();
+        const row = await within(dialog).findByRole('option', { name: /Hybrid \(Gemma 4 E4B \+ Qwen3.6 35B\)/ });
+        expect(row).toHaveTextContent('Local');
         fireEvent.click(row);
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('hybrid'));
     });
 
     it('counts a cloud classifier as cloud even when both routed models are local', async () => {
+        mockedApi.getHybridSettings.mockResolvedValue(hybridSettings({ cheap_model: GEMMA, strong_model: QWEN, classifier_model: 'amd.DeepSeek-V4.1-Flash' }));
+        const dialog = await openPicker();
+        expect(await within(dialog).findByRole('option', { name: /Hybrid/ })).toHaveTextContent('Cloud');
+    });
+
+    it('is hidden when neither the configured pair nor any template can run', async () => {
         mockedApi.getHybridSettings.mockResolvedValue(hybridSettings({
-            cheap_model: 'Qwen3-4B-GGUF', strong_model: GEMMA, classifier_model: 'amd.DeepSeek-V4.1-Flash',
+            models: [{ id: 'amd.DeepSeek-V4.1-Flash', display_name: 'DeepSeek', provider: 'amd', available: false, reason: 'Not deployed' }],
         }));
-        const { gateway } = await openPicker();
-        const row = await within(gateway).findByRole('option', { name: /Hybrid/ });
-        await waitFor(() => expect(row).toHaveTextContent('Cloud'));
+        mockedApi.getHybridTemplates.mockResolvedValue([{ ...TEMPLATE, available: false, reason: 'Connect the gateway' }]);
+        const dialog = await openPicker();
+        await waitFor(() => expect(mockedApi.getHybridTemplates).toHaveBeenCalled());
+        expect(within(dialog).queryByRole('group', { name: 'Hybrid' })).not.toBeInTheDocument();
     });
 
-    it('makes no place claim when the hybrid settings cannot be read', async () => {
+    it('says why when the hybrid settings cannot be read, and makes no place claim', async () => {
         mockedApi.getHybridSettings.mockRejectedValue(new Error('hybrid_rules is required when hybrid_policy is custom.'));
-        const { gateway } = await openPicker();
-        const row = await within(gateway).findByRole('option', { name: /Hybrid/ });
-        await waitFor(() => expect(mockedApi.getHybridSettings).toHaveBeenCalled());
-        expect(row).not.toHaveTextContent(/Cloud|Local/);
+        const dialog = await openPicker();
+        const group = await within(dialog).findByRole('group', { name: 'Hybrid' });
+        expect(group).toHaveTextContent('hybrid_rules is required when hybrid_policy is custom.');
+        expect(within(group).queryByRole('option')).not.toBeInTheDocument();
     });
 
-    it('lists the gateway first while a hybrid chat is in use', async () => {
+    it('lists hybrid first while a hybrid chat is in use', async () => {
         useModelStore.setState({ active: HYBRID_ACTIVE });
-        const { dialog } = await openPicker();
-        const headings = within(dialog).getAllByRole('group').map((g) => g.getAttribute('aria-labelledby'));
-        expect(document.getElementById(headings[0]!)).toHaveTextContent('AMD LLM Gateway');
+        const dialog = await openPicker();
+        await within(dialog).findByRole('group', { name: 'Hybrid' });
+        expect(within(dialog).getAllByRole('group')[0]).toHaveAccessibleName('Hybrid');
     });
 });
 
 describe('ModelSettings: hybrid', () => {
-    it('opens on the AMD LLM Gateway tab, not Local, while hybrid is in use', async () => {
+    it('opens on the tab of hybrid’s strong model, not Local, with the Hybrid panel open', async () => {
         useModelStore.setState({ active: HYBRID_ACTIVE });
         render(<ModelSettings />);
-        expect(await screen.findByRole('radio', { name: /AMD LLM Gateway/ })).toHaveAttribute('aria-checked', 'true');
+        await waitFor(() => expect(screen.getByRole('radio', { name: /AMD LLM Gateway/ })).toHaveAttribute('aria-checked', 'true'));
         expect(screen.getByRole('radio', { name: /Local/ })).toHaveAttribute('aria-checked', 'false');
-        // The Hybrid panel sits under the gateway once it offers hybrid.
-        expect(await screen.findByText('Each request runs on a cheap model or a strong one')).toBeInTheDocument();
+        expect(await screen.findByRole('form', { name: 'Hybrid' })).toBeInTheDocument();
     });
 
-    it('maps the in-use model to its tab', () => {
-        expect(providerTabOf(HYBRID_ACTIVE)).toBe('amd');
-        expect(providerTabOf({ ...HYBRID_ACTIVE, model: ' Hybrid ' })).toBe('amd');
+    it('stays on Local for an all-local hybrid', async () => {
+        useModelStore.setState({ active: HYBRID_ACTIVE });
+        mockedApi.getHybridSettings.mockResolvedValue(hybridSettings({ cheap_model: GEMMA, strong_model: QWEN }));
+        render(<ModelSettings />);
+        await screen.findByRole('form', { name: 'Hybrid' });
+        expect(screen.getByRole('radio', { name: /Local/ })).toHaveAttribute('aria-checked', 'true');
+    });
+
+    it('reads nothing hybrid until its section is opened, when another model is in use', async () => {
+        render(<ModelSettings />);
+        await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
+        expect(mockedApi.getHybridSettings).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByText('Each request runs on a cheap model or a strong one'));
+        expect(await screen.findByRole('form', { name: 'Hybrid' })).toBeInTheDocument();
+    });
+
+    it('maps the in-use model to its tab; hybrid has none of its own', () => {
+        expect(providerTabOf(HYBRID_ACTIVE)).toBeUndefined();
+        expect(providerTabOf({ ...HYBRID_ACTIVE, model: ' Hybrid ' })).toBeUndefined();
         expect(providerTabOf(LOCAL_ACTIVE)).toBe('local');
         expect(providerTabOf(null)).toBeUndefined();
     });

@@ -396,12 +396,12 @@ export function isCloudModelId(model: string): boolean {
 }
 
 /**
- * The provider tab the in-use model belongs to. Hybrid is offered under the
- * AMD LLM Gateway, though the backend files its unprefixed id under local.
+ * The provider tab the in-use model belongs to. None for hybrid, whose models
+ * can come from any provider, though the backend files its id under local.
  */
 export function providerTabOf(active: ActiveModel | null | undefined): ProviderId | undefined {
-    if (!active) return undefined;
-    return isHybridModel(active.model) ? 'amd' : active.provider;
+    if (!active || isHybridModel(active.model)) return undefined;
+    return active.provider;
 }
 
 /** The model id without its cloud provider prefix ("fireworks." or "amd."). */

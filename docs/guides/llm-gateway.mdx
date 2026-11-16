@@ -343,10 +343,13 @@ A hybrid chat is labelled cloud when its cheap or strong model is a cloud
 model, and local when both run on this PC. In the Agent UI it keeps `hybrid`
 when you switch device, and each answer's footer names the model the turn ran on, with
 the classifier's reason on hover; the degraded notice shows under the answer.
-The Agent UI's model list offers Hybrid under the AMD LLM Gateway, and
-**Settings > Model > AMD LLM Gateway > Hybrid** edits the settings below, with
-gateway prices beside each model, a box that shows how a request would route
-without running it, and how many turns went cheap or strong and what that saved.
+The Agent UI's model list offers Hybrid as its own entry, named from its pair
+("Hybrid (cheap + strong)"). **Settings > Model > Hybrid** starts with
+templates (ready-made pairs, marked Measured or Not yet measured, each saying
+what to set up when it can't run yet), then edits the settings below with
+models from every connected provider and their prices, a box that shows how a
+request would route without running it, and how many turns went cheap or strong
+and what that saved.
 
 Pick the models with `gaia config`:
 
