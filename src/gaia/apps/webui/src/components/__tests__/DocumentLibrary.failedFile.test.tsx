@@ -207,5 +207,6 @@ describe('a file the model server could not embed', () => {
         const badge = document.querySelector('.doc-failure .doc-status-badge')!;
         expect(badge).toHaveTextContent('Waiting');
         expect(badge).not.toHaveClass('doc-status-failed');
+        expect(badge.getAttribute('aria-label')).toMatch(/^Waiting: /);
     });
 });

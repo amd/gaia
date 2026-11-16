@@ -966,6 +966,7 @@ const messages: Messages = {
     'docs.tooLarge': '«{name}» كبير جدًا',
     'docs.tooLargeDetail': 'تقبل المكتبة ملفات حتى {max} ميغابايت. قسّمه إلى ملفات أصغر، ثم أضفها.',
     'docs.failedAria': 'فشلت: {error}',
+    'docs.waitingAria': 'قيد الانتظار: {error}',
     'docs.indexingFailed': 'فشلت الفهرسة',
     'docs.retry': 'إعادة المحاولة',
     'docs.retrying': 'جارٍ إعادة المحاولة…',

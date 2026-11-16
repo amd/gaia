@@ -966,6 +966,7 @@ export const enMessages = {
     'docs.tooLarge': '"{name}" is too large',
     'docs.tooLargeDetail': 'The library takes files up to {max} MB. Split it into smaller files, then add those.',
     'docs.failedAria': 'Failed: {error}',
+    'docs.waitingAria': 'Waiting: {error}',
     'docs.indexingFailed': 'Indexing failed',
     'docs.retry': 'Retry',
     'docs.retrying': 'Retrying…',

@@ -704,7 +704,7 @@ export function DocumentLibrary() {
                             <span
                                 className={waiting ? 'doc-status-badge doc-status-waiting' : 'doc-status-badge doc-status-failed'}
                                 title={lastError || undefined}
-                                aria-label={lastError ? t('docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
+                                aria-label={lastError ? t(waiting ? 'docs.waitingAria' : 'docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
                             >
                                 <AlertCircle size={12} /> {hint ? t('docs.cantRead') : waiting ? t('docs.waiting') : t('docs.failed')}
                             </span>
