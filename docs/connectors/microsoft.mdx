@@ -256,7 +256,10 @@ restart the flow with the full default scope set.
 ## More than one account
 
 Each Microsoft connector can hold several accounts, for example two
-Outlook.com addresses under `microsoft`:
+Outlook.com addresses under `microsoft`. In the Agent UI, open Settings →
+Connectors → Microsoft and choose **Add another Microsoft account**; with two
+or more, each account has its own **Make default**, **Disconnect** and, when
+its sign-in expired, **Reconnect**. From the CLI:
 
 ```bash
 gaia connectors connect microsoft --add   # Microsoft asks which account
@@ -278,8 +281,10 @@ Two places — both work, per connector:
 
 - **From GAIA**: Settings → Connectors → the connector tile →
   **Disconnect**. With one account, removes its refresh token from the keyring;
-  the next API call for it errors with `NOT_CONNECTED`. With several, choose
-  which one to remove, or remove them all. The other Microsoft
+  the next API call for it errors with `NOT_CONNECTED`. With several, each
+  account has its own **Disconnect** and the others keep working; the
+  connector's **Disconnect** names every account and asks before removing them
+  all. The other Microsoft
   connector (if connected) is unaffected.
 - **From Microsoft**: personal accounts at <a href="https://account.live.com/consent/Manage"
   target="_blank">account.live.com/consent/Manage</a>; work/school accounts at

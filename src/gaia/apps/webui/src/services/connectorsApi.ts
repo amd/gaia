@@ -3,7 +3,7 @@
 
 /** Connector calls, re-exported by api.ts; callers keep importing from there. */
 
-import type { AgentMcpServer, ConnectorListEntry, ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorAccount, ConnectorListEntry, ConnectorRow } from '../types';
 import { apiFetch, UI_HEADER } from './api';
 
 // -- Connections (issue #915) ---------------------------------------------------
@@ -18,10 +18,14 @@ export async function getConnector(connectorId: string): Promise<ConnectorRow> {
     return apiFetch('GET', `/connectors/${connectorId}`);
 }
 
+/** Sign in to another account (`addAccount`), or again to one stored account (`account`, its id or address). */
+export type AuthorizeTarget = { addAccount: true } | { account: string };
+
 export async function authorizeConnector(
     connectorId: string,
     scopes: string[],
     grantAgents: string[] = [],
+    target?: AuthorizeTarget,
 ): Promise<{ flow_id: string; authorization_url: string }> {
     // `grantAgents` (#2117) — namespaced agent ids to grant this connector the
     // moment OAuth completes, so connecting a mailbox grants it to the email
@@ -29,7 +33,12 @@ export async function authorizeConnector(
     return apiFetch(
         'POST',
         `/connectors/${connectorId}/authorize`,
-        { scopes, grant_agents: grantAgents },
+        {
+            scopes,
+            grant_agents: grantAgents,
+            ...(target && 'addAccount' in target ? { add_account: true } : {}),
+            ...(target && 'account' in target ? { account: target.account } : {}),
+        },
         UI_HEADER,
     );
 }
@@ -76,6 +85,16 @@ export async function testConnector(
 
 export async function disconnectConnector(connectorId: string): Promise<void> {
     await apiFetch<unknown>('DELETE', `/connectors/${connectorId}`, undefined, UI_HEADER);
+}
+
+/** Sign out of one account; the connector's other accounts and its grants stay. */
+export async function disconnectConnectorAccount(connectorId: string, accountId: string): Promise<void> {
+    await apiFetch<unknown>('DELETE', `/connectors/${connectorId}/accounts/${encodeURIComponent(accountId)}`, undefined, UI_HEADER);
+}
+
+/** Make one account the one GAIA uses when nothing names an account. */
+export async function setDefaultConnectorAccount(connectorId: string, accountId: string): Promise<{ accounts: ConnectorAccount[] }> {
+    return apiFetch('PATCH', `/connectors/${connectorId}/accounts/${encodeURIComponent(accountId)}`, { is_default: true }, UI_HEADER);
 }
 
 /**

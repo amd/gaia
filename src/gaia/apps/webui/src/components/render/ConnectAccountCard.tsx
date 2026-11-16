@@ -8,7 +8,9 @@ import { useChatStore } from '../../stores/chatStore';
 import { useT } from '../../i18n/useT';
 import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
 import { log } from '../../utils/logger';
-import type { ConnectorListEntry, Message } from '../../types';
+import type { ConnectorAccount, ConnectorListEntry, Message } from '../../types';
+import { accountsOf, middleCut, needsSignIn, reconnectOffer } from '../../utils/connectorAccounts';
+import { ltrIn } from '../setup/format';
 import { UnsupportedCard } from './UnsupportedCard';
 
 /**
@@ -144,6 +146,7 @@ function ProviderRow({
     connectorId,
     name,
     connected,
+    offer,
     needsSetup,
     grantAgents,
     scopes,
@@ -152,6 +155,8 @@ function ProviderRow({
     connectorId: string;
     name: string;
     connected: boolean;
+    /** Accounts to sign in to again, with "Use a different account" beside them; null for the plain Connect button. */
+    offer: ConnectorAccount[] | null;
     /** No OAuth client on this PC yet, so sign-in cannot start. */
     needsSetup: boolean;
     grantAgents: string[];
@@ -170,7 +175,7 @@ function ProviderRow({
         if (!needsSetup) setSetup(false);
     }, [needsSetup]);
 
-    const connect = useCallback(async () => {
+    const connect = useCallback(async (target?: api.AuthorizeTarget) => {
         if (needsSetup) {
             setError(null);
             setSetup(true);
@@ -185,7 +190,10 @@ function ProviderRow({
         setBusy(true);
         setError(null);
         try {
-            const flow = await api.authorizeConnector(connectorId, scopes, grantAgents);
+            // A plain Connect sends the request it always did.
+            const flow = target
+                ? await api.authorizeConnector(connectorId, scopes, grantAgents, target)
+                : await api.authorizeConnector(connectorId, scopes, grantAgents);
             openAuthUrl(flow.authorization_url);
             onOpened();
         } catch (e) {
@@ -196,21 +204,48 @@ function ProviderRow({
         }
     }, [connectorId, needsSetup, grantAgents, scopes, onOpened, openSettings]);
 
+    const icon = busy
+        ? <Loader2 size={12} className="render-connect__spinner" aria-hidden="true" />
+        : <ExternalLink size={12} aria-hidden="true" />;
     const label = t(connected ? 'connectCard.reconnect' : 'connectCard.connect', { name });
     return (
         <div className="render-connect__provider">
-            <button
-                type="button"
-                className={`render-connect__button${connected ? ' render-connect__button--quiet' : ''}`}
-                onClick={() => void connect()}
-                disabled={busy}
-            >
-                {busy
-                    ? <Loader2 size={12} className="render-connect__spinner" aria-hidden="true" />
-                    : <ExternalLink size={12} aria-hidden="true" />}
-                <span>{label}</span>
-            </button>
-            {connected && (
+            {offer ? (
+                <>
+                    {offer.map((account) => (
+                        <button
+                            key={account.account_id}
+                            type="button"
+                            className="render-connect__button"
+                            title={account.email || undefined}
+                            onClick={() => void connect({ account: account.account_id })}
+                            disabled={busy}
+                        >
+                            {icon}
+                            <span>{t('connectCard.reconnectAccount', { address: ltrIn(t.locale, middleCut(account.email || account.account_id)) })}</span>
+                        </button>
+                    ))}
+                    <button
+                        type="button"
+                        className="render-connect__button render-connect__button--quiet"
+                        onClick={() => void connect({ addAccount: true })}
+                        disabled={busy}
+                    >
+                        <span>{t('connectCard.otherAccount')}</span>
+                    </button>
+                </>
+            ) : (
+                <button
+                    type="button"
+                    className={`render-connect__button${connected ? ' render-connect__button--quiet' : ''}`}
+                    onClick={() => void connect()}
+                    disabled={busy}
+                >
+                    {icon}
+                    <span>{label}</span>
+                </button>
+            )}
+            {connected && !offer && (
                 <span className="render-connect__connected" role="status">
                     <CheckCircle2 size={13} aria-hidden="true" />
                     {t('connectCard.connected', { name })}
@@ -304,8 +339,9 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         return <UnsupportedCard variant="invalid" render={CONNECT_ACCOUNT_RENDER} data={data} />;
     }
 
+    // Connected only once no account of it waits on a sign-in.
     const isConnected = (id: string) =>
-        connectors.some((c) => c.id === id && !('error' in c) && c.configured);
+        connectors.some((c) => c.id === id && !('error' in c) && c.configured && !accountsOf(c).some(needsSignIn));
     const needsSetup = (id: string) =>
         connectors.some(
             (c) => c.id === id && !('error' in c) && !c.configured && c.configurable === false,
@@ -339,6 +375,7 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                         connectorId={id}
                         name={displayName(id)}
                         connected={isConnected(id)}
+                        offer={reconnectOffer(connectors.find((c) => c.id === id))}
                         needsSetup={needsSetup(id)}
                         grantAgents={grantIdsFor(agents, data.agent_id, id)}
                         scopes={requestScopes(

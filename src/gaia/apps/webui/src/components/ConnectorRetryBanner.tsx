@@ -20,6 +20,8 @@ import { CheckCircle2, RefreshCw } from 'lucide-react';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import type { ConnectorListEntry } from '../types';
+import { useT } from '../i18n/useT';
+import { accountsOf, needsSignIn } from '../utils/connectorAccounts';
 import { detectProvider } from './email/EmailConnectCta';
 import './ConnectorRetryBanner.css';
 
@@ -36,8 +38,9 @@ export function referencedProviderConnected(
     connectors: ConnectorListEntry[],
     providers: string[] = [],
 ): boolean {
+    // An account that still waits on a sign-in keeps the provider unfixed, whatever else works.
     const isConfigured = (id: string) =>
-        connectors.some((c) => c.id === id && !('error' in c) && c.configured);
+        connectors.some((c) => c.id === id && !('error' in c) && c.configured && !accountsOf(c).some(needsSignIn));
     // A Connect card names its connectors outright; no wording to read.
     if (providers.length > 0) return providers.some(isConfigured);
     const provider = detectProvider(content);
@@ -59,7 +62,7 @@ export function connectedProviderLabel(
     providers: string[] = [],
 ): string {
     const isConfigured = (id: string) =>
-        connectors.some((c) => c.id === id && !('error' in c) && c.configured);
+        connectors.some((c) => c.id === id && !('error' in c) && c.configured && !accountsOf(c).some(needsSignIn));
     const named = providers.find(isConfigured);
     if (named) {
         const row = connectors.find((c) => c.id === named && !('error' in c));
@@ -89,6 +92,7 @@ export function ConnectorRetryBanner({
     /** Re-run the previous question. */
     onRetry: () => void;
 }) {
+    const t = useT();
     const [connectors, setConnectors] = useState<ConnectorListEntry[]>([]);
     const [dismissed, setDismissed] = useState(false);
 
@@ -123,7 +127,7 @@ export function ConnectorRetryBanner({
         <div className="connector-retry-banner" role="status">
             <CheckCircle2 size={14} className="connector-retry-banner__icon" />
             <span className="connector-retry-banner__text">
-                {label} connected since this reply — ask again to run it now.
+                {t('retryBanner.connected', { name: label })}
             </span>
             <button
                 type="button"
@@ -131,13 +135,13 @@ export function ConnectorRetryBanner({
                 onClick={() => { setDismissed(true); onRetry(); }}
             >
                 <RefreshCw size={12} />
-                <span>Ask again</span>
+                <span>{t('retryBanner.askAgain')}</span>
             </button>
             <button
                 type="button"
                 className="connector-retry-banner__dismiss"
                 onClick={() => setDismissed(true)}
-                aria-label="Dismiss"
+                aria-label={t('retryBanner.dismiss')}
             >
                 ×
             </button>
