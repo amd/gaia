@@ -2831,6 +2831,22 @@ def serve_http(argv: List[str]) -> int:
         print(f"gaia-agent: {exc}", file=sys.stderr)
         return 2
 
+    try:
+        from gaia.sidecar import parent_watch
+    except ImportError:  # amd-gaia older than the daemon watch; the pin allows it
+        print(
+            "WARNING: this amd-gaia cannot watch the GAIA daemon, so this agent "
+            "keeps running if the daemon is killed. "
+            "Fix: pip install --upgrade amd-gaia",
+            file=sys.stderr,
+        )
+    else:
+        try:
+            parent_watch.start()
+        except ValueError as exc:
+            print(f"gaia-agent: {exc}", file=sys.stderr)
+            return 2
+
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0
 

@@ -437,3 +437,86 @@ class TestUndecodableTextNamesTheFile:
         result = search_tools["analyze_data_file"](str(path))
         assert result["status"] == "error"
         assert "scrambled.csv" in result["error"]
+
+
+SHORT_LOCAL_TEXT = {
+    "argnames": "text, page",
+    "argvalues": [
+        ("مرحبا", "cp1256"),
+        ("المنتج,السعر\nقهوة,5678\nشاي,1234\n", "cp1256"),
+        ("Привет", "cp1251"),
+        ("Привет, мир", "cp1251"),
+        ("Ελληνικά κείμενα", "cp1253"),
+        ("你好", "cp936"),
+        ("5кг", "cp1251"),
+        ("Товар,Кол-во\nЯблоки,5кг\n", "cp1251"),
+        ("Заказ №1", "cp1251"),
+        ("100руб", "cp1251"),
+        ("5ευρώ", "cp1253"),
+    ],
+    "ids": [
+        "arabic-word",
+        "arabic-csv",
+        "russian-word",
+        "russian-phrase",
+        "greek",
+        "chinese",
+        "russian-unit",
+        "russian-csv-unit",
+        "russian-number-sign",
+        "russian-price",
+        "greek-price",
+    ],
+}
+
+
+class TestShortTextReadsInThisPCsCodePage:
+    """A word or two gives the detector nothing to go on (#8295).
+
+    "مرحبا" came back as cp932 and a three-line Arabic CSV as Mac Cyrillic; a
+    legacy file on a PC is nearly always in that PC's Windows code page.
+    """
+
+    @pytest.mark.parametrize(**SHORT_LOCAL_TEXT)
+    def test_reads_in_the_pcs_code_page(self, monkeypatch, text, page):
+        from gaia.utils import text_decoding
+
+        monkeypatch.setattr(text_decoding, "_ansi_code_page", lambda: page)
+        assert text_decoding.decode_text(text.encode(page)) == (text, page)
+
+    def test_a_western_pc_still_reads_short_accents_as_cp1252(self, monkeypatch):
+        from gaia.utils import text_decoding
+
+        monkeypatch.setattr(text_decoding, "_ansi_code_page", lambda: "cp1252")
+        assert text_decoding.decode_text("café".encode("cp1252")) == ("café", "cp1252")
+
+    def test_off_windows_nothing_changes(self, monkeypatch):
+        from gaia.utils import text_decoding
+
+        monkeypatch.setattr(text_decoding, "_ansi_code_page", lambda: None)
+        assert text_decoding.decode_text("café".encode("cp1252"))[1] == "cp1252"
+
+    @pytest.mark.parametrize("page", ["cp1251", "cp1253", "cp1256"])
+    @pytest.mark.parametrize(**LEGACY_SAMPLES)
+    def test_long_text_still_follows_the_detector(
+        self, monkeypatch, text, encoding, page
+    ):
+        from gaia.utils import text_decoding
+
+        # Another locale's PC must not override a confidently detected file.
+        monkeypatch.setattr(text_decoding, "_ansi_code_page", lambda: page)
+        assert text_decoding.decode_text(text.encode(encoding))[0] == text
+
+    @pytest.mark.parametrize("page", ["cp1251", "cp1253", "cp1256"])
+    @pytest.mark.parametrize(
+        "text",
+        ["café", "Café, résumé", "año", "naïve façade", "Grüße", "12€ — 15€"],
+    )
+    def test_a_non_western_pc_still_reads_short_western_text_as_cp1252(
+        self, monkeypatch, text, page
+    ):
+        from gaia.utils import text_decoding
+
+        # On a Russian PC "café" read as cp1251 is "cafй".
+        monkeypatch.setattr(text_decoding, "_ansi_code_page", lambda: page)
+        assert text_decoding.decode_text(text.encode("cp1252")) == (text, "cp1252")

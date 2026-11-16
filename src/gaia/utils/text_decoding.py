@@ -5,12 +5,14 @@
 A byte-order mark names its codec (UTF-16/UTF-32 from PowerShell 5.1 ``>`` and
 some Notepad saves, UTF-8 with BOM); otherwise UTF-8; otherwise the legacy code
 page charset-normalizer detects (Windows-1256 Arabic, Shift-JIS, GBK,
-Windows-1251…), with CP1252 kept for Western text it reads the same way. The
+Windows-1251…), with CP1252 kept for Western text it reads the same way. Text
+too short to detect (a word or two) reads in this PC's Windows code page. The
 file tools, the Agent UI preview and document Q&A all decode through here, so a
 file reads the same everywhere.
 """
 
 import codecs
+import functools
 import itertools
 import os
 import unicodedata
@@ -43,6 +45,73 @@ SNIFF_BYTES = 1 << 16
 
 #: Fewer non-ASCII bytes than this give detection nothing to go on.
 _TOO_FEW_TO_TELL = 8
+#: Up to about a sentence: past this, a zero score (common for CJK) is not a guess.
+_SHORT_TEXT = 64
+
+
+def _western_glued_to_ascii(data: bytes, western: str) -> bool:
+    """Whether a non-ASCII byte sits inside an ASCII word the Western way.
+
+    Beside an ASCII letter ("café"), or beside a digit as a currency sign
+    ("12€"). A local letter beside a digit is not: Russian "5кг" and "№1",
+    Greek "5ευρώ" are local text. *western* is *data* read as cp1252, one
+    character per byte.
+    """
+    for i, byte in enumerate(data):
+        if byte < 0x80:
+            continue
+        neighbours = data[max(0, i - 1) : i] + data[i + 1 : i + 2]
+        if any(chr(b).isascii() and chr(b).isalpha() for b in neighbours):
+            return True
+        if any(chr(b).isdigit() for b in neighbours) and (
+            unicodedata.category(western[i]) == "Sc"
+        ):
+            return True
+    return False
+
+
+@functools.lru_cache(maxsize=1)
+def _ansi_code_page() -> Optional[str]:
+    """This PC's Windows ANSI code page (``cp1256`` on Arabic Windows), or None.
+
+    None off Windows and when the code page is UTF-8 (65001).
+    """
+    if os.name != "nt":
+        return None
+    import ctypes
+
+    page = ctypes.windll.kernel32.GetACP()
+    if page == 65001:
+        return None
+    name = f"cp{page}"
+    try:
+        codecs.lookup(name)
+    except LookupError:
+        return None
+    return name
+
+
+def _local_legacy_encoding(data: bytes) -> Optional[str]:
+    """This PC's ANSI code page when it decodes *data* and isn't the Western one.
+
+    A legacy file on a PC is nearly always in that PC's code page; this settles
+    the short files the detector can only guess at.
+    """
+    page = _ansi_code_page()
+    if page is None or page == "cp1252":
+        return None
+    try:
+        data.decode(page)
+    except UnicodeDecodeError:
+        return None
+    try:
+        western = data.decode("cp1252")
+    except UnicodeDecodeError:
+        return page
+    # "cafй", "12Ђ": Western text read in the local page.
+    if _latin_script_only(western) and _western_glued_to_ascii(data, western):
+        return None
+    return page
 
 
 def _latin_script_only(text: str) -> bool:
@@ -97,6 +166,11 @@ def detect_encoding(data: bytes, truncated: bool = False) -> str:
         None,
     )
     high = sum(byte >= 0x80 for byte in data)
+    # No language evidence (a word or a few short lines): every guess scores 0.
+    if high < _SHORT_TEXT and (best is None or not best.coherence):
+        local = _local_legacy_encoding(data)
+        if local is not None:
+            return local
     if best is not None:
         # Latin-script text scores as cp1250/cp775 too, and a handful of bytes
         # ("café") scores as anything: both are Windows ANSI. Another script
