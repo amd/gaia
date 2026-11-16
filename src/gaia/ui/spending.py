@@ -359,3 +359,80 @@ def price_list(provider: str) -> List[Dict[str, Any]]:
         )
     out.sort(key=lambda m: (m["rank"] is None, m["rank"] or 0, m["name"]))
     return out
+
+
+def _token_counts(stats: Dict[str, Any]) -> Optional[tuple]:
+    """(input, output, cached) a turn reported, or None when it reported none."""
+    inp, out = stats.get("input_tokens"), stats.get("output_tokens")
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in (inp, out)):
+        return None
+    cached = stats.get("cached_tokens")
+    if (
+        isinstance(cached, bool)
+        or not isinstance(cached, int)
+        or not 0 <= cached <= inp
+    ):
+        cached = 0
+    return inp, out, cached
+
+
+def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:
+    """List-price dollars for *counts* on *model*; a local model costs nothing."""
+    if cloud_provider(model) is None:
+        return 0.0
+    return turn_cost(model, *counts) if counts else None
+
+
+def hybrid_stats(db, settings) -> Dict[str, Any]:
+    """How every recorded ``hybrid`` turn routed, and what it cost against all-strong.
+
+    Covers every hybrid answer still in the chat database (deleting a chat
+    removes its turns); ``since`` is when the oldest was answered. Costs are
+    list prices, as the month total uses: ``cost`` is what the turns cost on the
+    models they ran on, ``cost_if_all_strong`` the same tokens at the strong
+    model's price (the one *settings* name now). Either is None, never $0, when
+    any turn's price is unknown; ``unpriced_turns`` counts those turns.
+    """
+    turns = cheap = failed = unpriced = 0
+    cost: Optional[float] = 0.0
+    all_strong: Optional[float] = 0.0
+    since = None
+    for row in db.hybrid_turns():
+        route = row["stats"]["route"]
+        model = route.get("model")
+        if not isinstance(model, str) or not model:
+            continue
+        turns += 1
+        since = since or _parse_instant(row["created_at"]).isoformat()
+        # Records from before ``tier`` existed are told apart by today's cheap model.
+        tier = route.get("tier") or (
+            "cheap" if model == settings.cheap_model else "strong"
+        )
+        cheap += tier == "cheap"
+        # Only a failed classification carries a fix; an empty request does not.
+        if not route.get("classified") and route.get("fix"):
+            failed += 1
+        counts = _token_counts(row["stats"])
+        ran = _list_cost(model, counts)
+        strong = _list_cost(settings.strong_model, counts)
+        if ran is None or strong is None:
+            unpriced += 1
+        cost = None if cost is None or ran is None else cost + ran
+        all_strong = (
+            None if all_strong is None or strong is None else all_strong + strong
+        )
+    saving = None
+    if cost is not None and all_strong:
+        saving = round(100 * (1 - cost / all_strong), 1)
+    return {
+        "since": since,
+        "turns": turns,
+        "cheap_turns": cheap,
+        "strong_turns": turns - cheap,
+        "failed_closed": failed,
+        "cost": None if cost is None else round(cost, 6),
+        "cost_if_all_strong": None if all_strong is None else round(all_strong, 6),
+        "saving_pct": saving,
+        "unpriced_turns": unpriced,
+        "price_source": PRICE_SOURCE,
+    }

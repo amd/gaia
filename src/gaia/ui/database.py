@@ -2021,6 +2021,38 @@ class ChatDatabase:
                 out.append(stats)
         return out
 
+    def hybrid_turns(self) -> List[Dict[str, Any]]:
+        """Every answer a ``hybrid`` route chose the model for, oldest first.
+
+        Each row is ``{message_id, created_at, stats}``, *stats* being the
+        answer's inference stats with its ``route``.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, session_id, created_at, inference_stats FROM messages "
+                "WHERE role = 'assistant' AND inference_stats LIKE '%\"route\"%' "
+                "ORDER BY created_at ASC, id ASC"
+            ).fetchall()
+        out = []
+        for row in rows:
+            try:
+                stats = json.loads(row["inference_stats"])
+            except ValueError as e:
+                raise RuntimeError(
+                    f"Message {row['id']} in chat {row['session_id']} has unreadable "
+                    f"inference stats ({e}); inspect the messages table in the chat "
+                    "database."
+                ) from e
+            if isinstance(stats, dict) and isinstance(stats.get("route"), dict):
+                out.append(
+                    {
+                        "message_id": row["id"],
+                        "created_at": row["created_at"],
+                        "stats": stats,
+                    }
+                )
+        return out
+
     # ── Cloud spending ────────────────────────────────────────────────
 
     def add_cloud_spend(

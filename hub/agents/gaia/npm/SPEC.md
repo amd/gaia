@@ -519,8 +519,9 @@ stream had not yet sent when the cancel landed is discarded with the
 half-written tail.
 
 A session on the `hybrid` model id gets `final.route` (contract ≥ 2.29): the
-turn's routing decision, with `model` naming the concrete model it ran on. Bill
-and label the turn by `route.model`, not by `hybrid`.
+turn's routing decision, with `model` naming the concrete model it ran on and
+`tier` (`cheap` or `strong`) which side that is. Bill and label the turn by
+`route.model`, not by `hybrid`.
 
 `final` carries `context` (contract ≥ 2.21): what the next model call holds
 if the caller pushes this turn back as history — the same payload the Agent

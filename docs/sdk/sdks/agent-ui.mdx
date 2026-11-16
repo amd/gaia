@@ -3068,6 +3068,11 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `tokens_per_second`, the median of its recent turns on this PC. A model
     the user added from a Hugging Face link has `custom: true` and its
     `source_url`, and is listed before it is downloaded.
+
+    Once the gateway lists any model, `amd` also ends with a `hybrid` entry
+    (`hybrid: true`), its `display_name` built from the configured models, such
+    as "Hybrid (DeepSeek + Opus)". When the hybrid settings can't be used, its
+    `error` says why.
   </Accordion>
 
   <Accordion title="POST /api/providers/local/custom/check">
@@ -3158,7 +3163,69 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     now; **503** while the local model server is still starting. A successful
     pick clears this run's restore notice. Picking a local model also starts a
     fresh warm-up (see `POST /api/system/warm-up`), so the model loads before
-    the next message; follow it with `GET /api/system/warm-up`.
+    the next message; follow it with `GET /api/system/warm-up`. Picking
+    `hybrid` checks that its cheap, strong and classifier models can all run,
+    saves `last_provider` as `hybrid` (as the TUI does), and loads nothing.
+  </Accordion>
+</AccordionGroup>
+
+### Hybrid model
+
+The settings behind the `hybrid` model (see
+[Hybrid model](/guides/llm-gateway#hybrid-model)). They are the `hybrid_*` keys
+in `~/.gaia/config.json`, shared with `gaia config` and the TUI, and validated
+the same way.
+
+<AccordionGroup>
+  <Accordion title="GET /api/hybrid/settings">
+    `cheap_model`, `strong_model`, `classifier_model`, `classifier_timeout`,
+    `policy` (`quality`, `balanced` or `custom`), and `rules`: the table the
+    policy applies, one `{cheap_max_difficulty, allow_high_stakes}` rule per
+    kind. Also `presets` (the `quality` and `balanced` tables), `kinds` (all
+    8, in display order), `models` (the gateway's chat models plus any
+    configured model it doesn't list, each with `display_name`, list prices
+    `input_per_million` / `output_per_million` / `cache_read_per_million` —
+    `null` when GAIA doesn't know them, as for every gateway model — and
+    `available`, `null` when the list couldn't be read, with `models_error`
+    saying why), and `is_active` (a new chat starts on `hybrid`). When the
+    saved settings can't be used, `config_error` says why and the values are
+    shown as saved, so they can be fixed.
+  </Accordion>
+
+  <Accordion title="PUT /api/hybrid/settings">
+    Change any subset of `cheap_model`, `strong_model`, `classifier_model`
+    (`null` restores a model's default), `classifier_timeout` (whole seconds,
+    1-120), `policy`, and `rules`. `rules` must cover all 8 kinds, each with
+    exactly `cheap_max_difficulty` (0-5; 0 never runs cheap) and
+    `allow_high_stakes` (true or false); `custom` needs rules, saved or sent in
+    the same request. Switching to a preset keeps saved rules for later.
+    Returns the `GET` shape. **422**, with what to change, for an unknown
+    field, a wrong type or range, a self-routing `hybrid` model, the same cheap
+    and strong model, or `custom` without rules; nothing is saved then.
+  </Accordion>
+
+  <Accordion title="POST /api/hybrid/preview">
+    Where a request would run as a new chat's first turn. Body: `{"text"}` (at
+    most 100,000 characters). Runs the real classifier and policy and nothing
+    else: no turn, no tools, no chat becomes sticky, and failures don't count
+    toward the degraded notice. Returns `model`, `tier` (`cheap` or `strong`),
+    `kind`, `difficulty`, `stakes`, `reason`, `classified`, `seconds`,
+    `policy`, and `fix`. A classifier failure answers like a turn: the strong
+    model, `classified: false`, and `reason` / `fix` saying why. **409** when
+    the settings can't be used, or Local only is on and a hybrid model is in
+    the cloud (nothing is sent).
+  </Accordion>
+
+  <Accordion title="GET /api/hybrid/stats">
+    How every hybrid answer still in the chat database routed: `turns`,
+    `cheap_turns`, `strong_turns`, `failed_closed` (turns the classifier
+    couldn't judge), and `since`, when the oldest was answered (`null` with
+    none; deleting a chat removes its turns). `cost` is those turns at list
+    price on the models they ran on, `cost_if_all_strong` the same tokens at
+    the strong model's price, and `saving_pct` the difference. A turn whose
+    price is unknown — every gateway model, or a turn that reported no token
+    counts — makes `cost` and `cost_if_all_strong` `null`, never $0;
+    `unpriced_turns` counts them.
   </Accordion>
 </AccordionGroup>
 

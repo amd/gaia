@@ -306,6 +306,39 @@ stakes) to the cheap model: cheaper, with a measurable quality cost on harder
 fixes. Reviews, planning, anything at difficulty 4 or above, and high-stakes
 writing stay on the strong model under either policy.
 
+Each policy is a table with one rule per kind: the highest difficulty that may
+run on the cheap model (0 means never), and whether a high-stakes request of
+that kind may. `custom` applies your own table:
+
+| Kind | `quality` | `balanced` |
+|------|-----------|------------|
+| `write_prose`, `answer_question`, `analyze_data`, `operate_tools` | 3, low stakes only | 3, low stakes only |
+| `change_code` | 2, low stakes only | 3, any stakes |
+| `find_defects`, `plan_or_design`, `other` | 0 (never) | 0 (never) |
+
+```bash
+gaia config set hybrid_rules '{"write_prose": {"cheap_max_difficulty": 3, "allow_high_stakes": false}, ...}'
+gaia config set hybrid_policy custom
+```
+
+`hybrid_rules` must name all 8 kinds (`write_prose`, `answer_question`,
+`analyze_data`, `operate_tools`, `change_code`, `find_defects`,
+`plan_or_design`, `other`), each with exactly `cheap_max_difficulty` (0-5) and
+`allow_high_stakes` (true or false); anything else is refused with what to fix.
+Set the rules before choosing `custom`. Switching back to a preset keeps them.
+A label the classifier can't produce still runs on the strong model under every
+policy.
+
+To see where a request would run without running it:
+
+```bash
+gaia hybrid preview "Fix the typo in README.md"
+```
+
+It prints the model, the label and the classifier's reason, and runs nothing.
+In the Agent UI, **Settings › Models › Hybrid** edits the same settings, has a
+box to try a request the same way, and shows how your hybrid turns have routed.
+
 - **One decision per turn.** Every step of the turn, and every `--attempts`
   attempt, runs on the model chosen at the start, so the tool format and the
   prompt cache stay consistent.
@@ -335,7 +368,7 @@ Requests longer than 9,000 characters are judged on their beginning, and the
 classifier is told the full length. `gaia -p --output-format json` adds a
 `route` object naming the model, the label, the classifier's reason, whether it
 classified (`classified`), how long it took (`seconds`), whether the turn was
-`sticky`, the `policy` in effect, the request format the classifier answered in
+`sticky`, the `policy` in effect, the `tier` it went to (`cheap` or `strong`), the request format the classifier answered in
 (`classifier_format`), and on a failed classification the `fix`, plus
 `degraded` and its `notice` once failures repeat. Each decision is also logged
 at INFO.
@@ -352,7 +385,8 @@ Pick the models with `gaia config`:
 | `hybrid_strong_model` | `amd.Claude-Opus-5-5` | Runs every other turn |
 | `hybrid_classifier_model` | the cheap model | Labels each turn |
 | `hybrid_classifier_timeout` | `15` | Seconds to wait for the label (1-120) before going strong |
-| `hybrid_policy` | `quality` | `quality`, or `balanced` to also send medium-difficulty code changes to the cheap model |
+| `hybrid_policy` | `quality` | `quality`, `balanced` to also send medium-difficulty code changes to the cheap model, or `custom` to apply `hybrid_rules` |
+| `hybrid_rules` | _(unset)_ | The `custom` policy's table, one rule per kind (see above). Required while `hybrid_policy` is `custom` |
 
 Set a model key to `""` to go back to its default. Routing applies to the flagship
 agent's turns in new sessions; picking a model by name (`/model <id>`) ends it for

@@ -57,6 +57,8 @@ LOCAL = "local"
 FIREWORKS = "fireworks"
 AMD = "amd"
 PROVIDER_IDS = (LOCAL, FIREWORKS, AMD)
+#: ``last_provider`` for a ``hybrid`` pick, as the TUI's HybridProvider.
+HYBRID_PROVIDER = "hybrid"
 
 _NAMES = {LOCAL: "Local", FIREWORKS: "Fireworks AI", AMD: "AMD LLM Gateway"}
 
@@ -665,6 +667,11 @@ def _rank_gateway_models(models: List[Dict[str, Any]]) -> None:
         m["note"] = "recommended"
 
 
+def _loads_here(model_id: str) -> bool:
+    """True for a local model; ``hybrid`` loads nothing by its own name."""
+    return provider_of(model_id) == LOCAL and not is_hybrid_model(model_id)
+
+
 def provider_of(model_id: str) -> str:
     """The provider a model id belongs to; its prefix wins, as in the TUI."""
     prefix = model_id.split(".", 1)[0] if "." in model_id else ""
@@ -726,6 +733,44 @@ def display_name(model_id: str) -> str:
     if cloud_provider_name(model_id) is None:
         return friendly_name(model_id)
     return model_id.split(".", 1)[1].rsplit("/", 1)[-1]
+
+
+def _family(model_id: str) -> str:
+    """A model's short family name: ``amd.Claude-Opus-5-5`` -> ``Opus``."""
+    parts = [p for p in display_name(model_id).split("-") if p.lower() != "claude"]
+    return parts[0] if parts else model_id
+
+
+def _hybrid_entry() -> Dict[str, Any]:
+    """The ``hybrid`` choice in the gateway's model list, named by its two models."""
+    from gaia.config import GaiaConfigError
+    from gaia.llm.hybrid import HYBRID_MODEL_ID, HybridSettings
+
+    try:
+        settings = HybridSettings.load()
+    except (GaiaConfigError, HybridConfigError) as e:
+        # Still offered, with why it can't run yet, so the picker can say so.
+        name, error = "Hybrid", surface_wording(str(e), "agent_ui")
+    else:
+        cheap, strong = _family(settings.cheap_model), _family(settings.strong_model)
+        name, error = f"Hybrid ({cheap} + {strong})", None
+    return {
+        "id": HYBRID_MODEL_ID,
+        "display_name": name,
+        "hybrid": True,
+        "error": error,
+        "context_length": None,
+        "downloaded": True,
+        "labels": [],
+        "recipe": None,
+        "size_gb": None,
+        "rank": None,
+        "note": "picks a cheap or strong model for each turn",
+        "evidence": None,
+        "price": None,
+        "custom": False,
+        "source_url": None,
+    }
 
 
 def _active_view(db: ChatDatabase) -> Dict[str, Any]:
@@ -863,6 +908,8 @@ def _check_model_available(model_id: str) -> Optional[str]:
     """
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
+    if is_hybrid_model(model_id):
+        return _check_hybrid_available()
     provider = provider_of(model_id)
     if provider != LOCAL and cloud_blocked():
         return "Local only is on, so cloud models can't run"
@@ -909,6 +956,23 @@ def _check_model_available(model_id: str) -> Optional[str]:
         return str(e)
     except requests.RequestException as e:
         return str(e)
+
+
+def _check_hybrid_available() -> Optional[str]:
+    """None when every model ``hybrid`` routes to can run now, else why not."""
+    from gaia.llm.hybrid import HybridSettings
+
+    try:
+        settings = HybridSettings.load()
+    except HybridConfigError as e:
+        return surface_wording(str(e), "agent_ui").rstrip(".")
+    for model in dict.fromkeys(
+        (settings.classifier_model, settings.cheap_model, settings.strong_model)
+    ):
+        reason = _check_model_available(model)
+        if reason is not None:
+            return f"{model}, which hybrid uses, can't run: {reason}"
+    return None
 
 
 def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
@@ -961,7 +1025,7 @@ def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
                 # Picked elsewhere (the TUI): it is the pick, not a Custom model ID.
                 db.set_setting(PICKED_MODEL_SETTING, last)
             db.set_setting("custom_model", last)
-            if load and not unchanged and provider_of(last) == LOCAL:
+            if load and not unchanged and _loads_here(last):
                 from gaia.ui import warmup
 
                 # Start-up may have loaded the model this replaces.
@@ -978,7 +1042,7 @@ def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
                     f"Couldn't restore your last model, {model_label(last)}: {reason}. "
                     "Pick a model to continue."
                 ),
-                "retry": provider_of(last) != LOCAL and not cloud_blocked(),
+                "retry": not _loads_here(last) and not cloud_blocked(),
             }
         return _restore_result
 
@@ -1452,6 +1516,8 @@ def provider_models(
         }
     try:
         models = _list_models(provider)
+        if provider == AMD and models:
+            models.append(_hybrid_entry())
         if provider != LOCAL:
             return {"provider": provider, "models": models, "blocked": False}
         return {"provider": provider, **_local_report(models, db)}
@@ -1599,7 +1665,13 @@ def select_model(
     )
     from gaia.connectors.store import retry_keyring
 
-    if provider_of(model_id) != LOCAL:
+    hybrid = is_hybrid_model(model_id)
+    if hybrid:
+        from gaia.llm.hybrid import HYBRID_MODEL_ID
+
+        # Saved as the TUI saves it, so either client restores it.
+        model_id = HYBRID_MODEL_ID
+    if hybrid or provider_of(model_id) != LOCAL:
         # Picking a cloud model needs its key, so it may ask the OS again.
         retry_keyring()
     try:
@@ -1619,13 +1691,16 @@ def select_model(
         )
     try:
         _write_config_keys(
-            {"last_provider": provider_of(model_id), "last_model": model_id}
+            {
+                "last_provider": HYBRID_PROVIDER if hybrid else provider_of(model_id),
+                "last_model": model_id,
+            }
         )
     except ProviderError as e:
         _raise(e)
     db.set_setting("custom_model", model_id)
     db.set_setting(PICKED_MODEL_SETTING, model_id)
-    if provider_of(model_id) == LOCAL:
+    if _loads_here(model_id):
         from gaia.ui import warmup
 
         # Load it now: nothing else would until the next message is sent.

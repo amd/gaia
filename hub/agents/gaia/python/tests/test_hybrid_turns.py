@@ -215,7 +215,7 @@ def test_routed_model_refusal_names_its_setting(monkeypatch):
     assert message.startswith(
         f"hybrid routed this turn to {CHEAP} (hybrid_cheap_model)"
     )
-    assert "set hybrid_cheap_model to a model the gateway offers" in message
+    assert "choose a cheap model the gateway offers" in message
 
 
 def test_refusal_without_routing_is_unchanged(monkeypatch):
@@ -252,7 +252,7 @@ def test_a_degraded_classifier_warns_in_the_turn(monkeypatch):
         result = agent.process_query("Write a note.")
     assert result["route"]["degraded"] is True
     (warning,) = agent.warnings
-    assert warning == result["route"]["notice"] and "hybrid_classifier_model" in warning
+    assert warning == result["route"]["notice"] and "classifier model" in warning
 
 
 def test_a_single_classifier_failure_does_not_warn_in_the_turn(monkeypatch):

@@ -1878,7 +1878,7 @@ def test_cloud_models_are_prefixed_and_ranked_first(client, lemonade):
 def test_amd_models_only(client, lemonade):
     lemonade.models = _CATALOG
     models = client.get("/api/providers/amd/models").json()["models"]
-    assert [m["id"] for m in models] == ["amd.gpt-oss"]
+    assert [m["id"] for m in models] == ["amd.gpt-oss", "hybrid"]
 
 
 def test_amd_models_rank_the_gateway_preference_first(client, lemonade):
@@ -1891,6 +1891,7 @@ def test_amd_models_rank_the_gateway_preference_first(client, lemonade):
         ("amd.DeepSeek-V4.1-Flash", 1),
         ("amd.Gemma-4-31B", 2),
         ("amd.Claude-Haiku-4.5", None),
+        ("hybrid", None),
     ]
     assert models[0]["note"] == "recommended" and models[2]["note"] is None
 
