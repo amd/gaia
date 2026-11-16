@@ -131,6 +131,74 @@ TEST_F(FileToolsTest, FileRead_ALaterVersionBesideTheFileIsPointedOut) {
     }
 }
 
+TEST_F(FileToolsTest, FileRead_Utf16TextIsDecoded) {
+    ToolInfo tool = FileIOTools::fileRead();
+    std::string raw = "\xFF\xFE";
+    for (char c : std::string("team,score\r\nSync,4\r\nCore,9\r\nSync,6\r\n")) {
+        raw.push_back(c);
+        raw.push_back('\0');
+    }
+    raw += std::string("\xE9\x00\n\x00", 4);  // e-acute, then a line end
+    const std::string path = writeFile("survey_utf16.csv", raw);
+    const json read = tool.callback({{"path", path}});
+    EXPECT_EQ(read.value("content", ""), "team,score\nSync,4\nCore,9\nSync,6\n\xC3\xA9") << read.dump();
+    EXPECT_NE(read.value("note", "").find("UTF-16"), std::string::npos);
+    EXPECT_NE(read.value("summary", "").find("score by team: Sync 10"), std::string::npos) << read.dump();
+    EXPECT_EQ(tool.callback({{"path", path}, {"start_line", 2}, {"end_line", 2}}).value("content", ""), "Sync,4");
+}
+
+TEST_F(FileToolsTest, FileRead_AStrayWindows1252ByteIsShownAsItsCharacter) {
+    ToolInfo tool = FileIOTools::fileRead();
+    const std::string menu = writeFile("menu.txt", "Tasting menu for ten: \x80" "1,250\nCaf\xE9 terrace, na\xC3\xAFve art\n");
+    const json read = tool.callback({{"path", menu}});
+    const std::string content = read.value("content", "");
+    EXPECT_NE(content.find("\xE2\x82\xAC" "1,250"), std::string::npos) << content;
+    EXPECT_NE(content.find("Caf\xC3\xA9 terrace, na\xC3\xAFve"), std::string::npos) << content;
+    EXPECT_NE(read.value("note", "").find("2 bytes are not UTF-8"), std::string::npos) << read.dump();
+    const std::string plain = writeFile("plain.txt", "na\xC3\xAFve\n");
+    EXPECT_FALSE(tool.callback({{"path", plain}}).contains("note"));
+}
+
+TEST_F(FileToolsTest, FileRead_ACsvComesWithItsTotals) {
+    ToolInfo tool = FileIOTools::fileRead();
+    const std::string messy = writeFile(
+        "sales_messy.csv",
+        "Date,Region,Rep,Amount\n2026-01-04,North,Priya,\"$1,204.50\"\n2026-01-06,south,Marco,880.00\n"
+        "2026-01-09,North ,Priya,\"$2,310.00\"\n\nDate,Region,Rep,Amount\n2026-02-22,NORTH,Lena,\"$1,480.00\"\n"
+        "TOTAL,,,\"$5,874.50\"\n");
+    const json read = tool.callback({{"path", messy}});
+    const std::string summary = read.value("summary", "");
+    EXPECT_NE(summary.find("all 4 data rows"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("Amount: total 5874.50 over 4 rows"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("Amount by Region: North 4994.50 (85.0%), south 880.00 (15.0%)"), std::string::npos)
+        << summary;
+    EXPECT_NE(summary.find("Amount by Date: 2026-01 4394.50"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("rows by Rep: Lena 1, Marco 1, Priya 2"), std::string::npos) << summary;
+    EXPECT_NE(read.value("note", "").find("summary field"), std::string::npos);
+
+    // Semicolons, whole numbers, and a cell that is not a number.
+    const std::string ledger = writeFile("ledger.csv", "team;units\nA;3\nB;n/a\nA;4\nB;5\nA;1\n");
+    const std::string units = tool.callback({{"path", ledger}}).value("summary", "");
+    EXPECT_NE(units.find("units: total 13 over 4 rows"), std::string::npos) << units;
+    EXPECT_NE(units.find("1 cells are not numbers"), std::string::npos) << units;
+    EXPECT_NE(units.find("units by team: A 8 (61.5%), B 5 (38.5%)"), std::string::npos) << units;
+    EXPECT_NE(units.find("average units by team: B 5.00, A 2.67"), std::string::npos) << units;
+
+    // A header with no rows points at the log beside it.
+    const std::string empty = writeFile("orders_2026-09.csv", "order_id,amount\n");
+    writeFile("export_run.txt", "ERROR could not connect\n");
+    EXPECT_NE(tool.callback({{"path", empty}}).value("note", "").find("export_run.txt"), std::string::npos);
+
+    const std::string euro = writeFile("konto.csv", "posten;betrag\nMiete;1.200,50\nStrom;80,25\nMiete;1200,50\n");
+    const std::string betrag = tool.callback({{"path", euro}}).value("summary", "");
+    EXPECT_NE(betrag.find("betrag: total 2481.25 over 3 rows"), std::string::npos) << betrag;
+
+    // Nothing to total: no summary.
+    const std::string words = writeFile("words.csv", "term,meaning\nalpha,the first one of a long series of them\n"
+                                                     "beta,the second one of a long series of things\n");
+    EXPECT_FALSE(tool.callback({{"path", words}}).contains("summary"));
+}
+
 TEST_F(FileToolsTest, FileRead_ACsvsRowsThatAreNotDataAreNamed) {
     ToolInfo tool = FileIOTools::fileRead();
     const std::string messy = writeFile(
@@ -151,7 +219,7 @@ TEST_F(FileToolsTest, FileRead_ACsvsRowsThatAreNotDataAreNamed) {
 
     // A tidy file gets no such note.
     const std::string tidy = writeFile("tidy.csv", "region,amount\nNorth,1200\nSouth,340\nNorth,2150\n");
-    EXPECT_FALSE(tool.callback({{"path", tidy}}).contains("note"));
+    EXPECT_EQ(tool.callback({{"path", tidy}}).value("note", "").find("Before totalling"), std::string::npos);
 }
 
 TEST_F(FileToolsTest, FileRead_WithLineRange) {

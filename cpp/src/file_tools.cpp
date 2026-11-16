@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -556,6 +559,270 @@ ToolInfo FileIOTools::fileRead() {
     return info;
 }
 
+/// UTF-16 text as UTF-8; the byte order comes from the mark, else from which bytes are NUL.
+static std::string utf16ToUtf8(const std::string& raw) {
+    const auto byte = [&raw](size_t i) { return static_cast<unsigned char>(raw[i]); };
+    size_t at = 0;
+    bool little = true;
+    if (raw.size() >= 2 && byte(0) == 0xFF && byte(1) == 0xFE) at = 2;
+    else if (raw.size() >= 2 && byte(0) == 0xFE && byte(1) == 0xFF) { at = 2; little = false; }
+    else {
+        size_t evenNul = 0, oddNul = 0;
+        for (size_t i = 0; i < raw.size() && i < 4096; ++i) (i % 2 ? oddNul : evenNul) += raw[i] == '\0';
+        little = oddNul >= evenNul;
+    }
+    auto unit = [&](size_t i) -> std::uint32_t {
+        return little ? byte(i) | (byte(i + 1) << 8) : (byte(i) << 8) | byte(i + 1);
+    };
+    std::string out;
+    for (; at + 1 < raw.size(); at += 2) {
+        std::uint32_t cp = unit(at);
+        if (cp >= 0xD800 && cp < 0xDC00 && at + 3 < raw.size()) {
+            const std::uint32_t low = unit(at + 2);
+            if (low >= 0xDC00 && low < 0xE000) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                at += 2;
+            }
+        }
+        if (cp >= 0xD800 && cp < 0xE000) cp = 0xFFFD;  // half of a pair on its own
+        if (cp < 0x80) out.push_back(static_cast<char>(cp));
+        else if (cp < 0x800) {
+            out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else if (cp < 0x10000) {
+            out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        } else {
+            out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        }
+    }
+    return out;
+}
+
+/// Rewrites bytes that are not UTF-8 as the Windows-1252 characters they most likely are.
+static size_t repairLegacyBytes(std::string& text) {
+    static const std::uint16_t kHigh[32] = {0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+                                            0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+                                            0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+                                            0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178};
+    std::string out;
+    size_t repaired = 0;
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        const size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        bool ok = len > 0;
+        for (size_t k = 1; ok && k < len; ++k) {
+            ok = i + k < text.size() && (static_cast<unsigned char>(text[i + k]) & 0xC0) == 0x80;
+        }
+        if (ok) {
+            out.append(text, i, len);
+            i += len;
+            continue;
+        }
+        const std::uint32_t cp = c < 0xA0 ? kHigh[c - 0x80] : c;
+        if (cp < 0x800) {
+            out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        } else {
+            out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+            out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        }
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+        ++repaired;
+        ++i;
+    }
+    if (repaired) text.swap(out);
+    return repaired;
+}
+
+/// Totals a small model otherwise adds up wrongly: each numeric column, split by each
+/// short label column and by month.
+static std::string tableSummary(const std::vector<std::string>& names,
+                                const std::vector<std::vector<std::string>>& data) {
+    if (data.size() < 2 || names.size() < 2 || names.size() > 12) return "";
+    auto trim = [](std::string v) {
+        while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.pop_back();
+        size_t lead = 0;
+        while (lead < v.size() && std::isspace(static_cast<unsigned char>(v[lead]))) ++lead;
+        return v.substr(lead);
+    };
+    auto lower = [](std::string v) {
+        for (auto& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return v;
+    };
+    auto number = [&trim](const std::string& raw, double& value) {
+        std::string v;
+        bool negative = false;
+        std::string cell = trim(raw);
+        // 1200,50 is a decimal comma; a thousands comma is followed by three digits.
+        const size_t lastComma = cell.rfind(','), lastDot = cell.rfind('.');
+        if (lastComma != std::string::npos && lastDot != std::string::npos && lastDot < lastComma) {
+            cell.erase(std::remove(cell.begin(), cell.end(), '.'), cell.end());
+        }
+        const size_t comma = cell.find(',');
+        if (comma != std::string::npos && cell.find(',', comma + 1) == std::string::npos &&
+            cell.find('.') == std::string::npos && cell.size() - comma - 1 <= 2 && comma + 1 < cell.size()) {
+            cell[comma] = '.';
+        }
+        for (char c : cell) {
+            if (c == '(') negative = true;
+            else if (c != ')' && c != ',' && c != '$' && c != '%' && c != ' ') v.push_back(c);
+        }
+        if (v.empty()) return false;
+        char* end = nullptr;
+        value = std::strtod(v.c_str(), &end);
+        if (end != v.c_str() + v.size() || !std::isfinite(value)) return false;
+        if (negative) value = -value;
+        return true;
+    };
+    auto month = [&trim](const std::string& raw) -> std::string {
+        const std::string v = trim(raw);
+        auto digits = [&v](size_t from, size_t count) {
+            for (size_t i = from; i < from + count; ++i) {
+                if (i >= v.size() || !std::isdigit(static_cast<unsigned char>(v[i]))) return false;
+            }
+            return true;
+        };
+        if (v.size() < 10 || !digits(0, 4) || (v[4] != '-' && v[4] != '/') || !digits(5, 2) || v[7] != v[4] ||
+            !digits(8, 2)) {
+            return "";
+        }
+        return v.substr(0, 4) + "-" + v.substr(5, 2);
+    };
+
+    enum class Kind { Other, Number, Label, Month };
+    struct Column {
+        Kind kind = Kind::Other;
+        bool whole = true;
+        size_t notNumbers = 0;
+        std::vector<std::string> keys;         // per row; empty when the cell is
+        std::map<std::string, std::string> shown;  // key -> first spelling seen
+    };
+    std::vector<Column> cols(names.size());
+    for (size_t c = 0; c < names.size(); ++c) {
+        size_t filled = 0, numeric = 0, dated = 0;
+        bool shortText = true;
+        Column& col = cols[c];
+        for (const auto& row : data) {
+            const std::string cell = c < row.size() ? trim(row[c]) : "";
+            std::string key = lower(cell);
+            if (!cell.empty()) {
+                ++filled;
+                double v = 0;
+                if (number(cell, v)) {
+                    ++numeric;
+                    if (v != std::floor(v)) col.whole = false;
+                }
+                const std::string m = month(cell);
+                if (!m.empty()) {
+                    ++dated;
+                    key = m;
+                }
+                if (cell.size() > 30) shortText = false;
+                col.shown.emplace(key, m.empty() ? cell : m);
+            }
+            col.keys.push_back(key);
+        }
+        const std::string name = lower(trim(names[c]));
+        const bool identifier = name == "id" || name == "year" || name == "zip" ||
+                                (name.size() > 2 && (name.compare(name.size() - 2, 2, "id") == 0));
+        if (!filled) continue;
+        if (dated == filled) col.kind = Kind::Month;
+        else if (numeric * 5 >= filled * 4 && !identifier) {
+            col.kind = Kind::Number;
+            col.notNumbers = filled - numeric;
+        } else if (numeric == 0 && shortText && col.shown.size() <= 12) col.kind = Kind::Label;
+    }
+
+    auto shown = [](double v, bool whole) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), whole ? "%.0f" : "%.2f", v);
+        return std::string(buf);
+    };
+    constexpr size_t kMaxBytes = 2400;
+    std::string out = "Computed from all " + std::to_string(data.size()) + " data rows:";
+    const size_t headerBytes = out.size();
+    auto add = [&out](const std::string& line) {
+        if (out.size() + line.size() <= kMaxBytes) out += "\n" + line;
+    };
+    std::vector<size_t> numbers, groups;
+    for (size_t c = 0; c < cols.size(); ++c) {
+        if (cols[c].kind == Kind::Number && numbers.size() < 4) numbers.push_back(c);
+        if ((cols[c].kind == Kind::Label || cols[c].kind == Kind::Month) && groups.size() < 4) groups.push_back(c);
+    }
+    for (size_t n : numbers) {
+        double total = 0, low = 0, high = 0;
+        size_t count = 0;
+        for (const auto& row : data) {
+            double v = 0;
+            if (n >= row.size() || !number(row[n], v)) continue;
+            low = count ? std::min(low, v) : v;
+            high = count ? std::max(high, v) : v;
+            total += v;
+            ++count;
+        }
+        std::string line = trim(names[n]) + ": total " + shown(total, cols[n].whole) + " over " +
+                           std::to_string(count) + " rows (lowest " + shown(low, cols[n].whole) + ", highest " +
+                           shown(high, cols[n].whole) + ")";
+        if (cols[n].notNumbers) line += "; " + std::to_string(cols[n].notNumbers) + " cells are not numbers and are left out";
+        add(line);
+    }
+    for (size_t g : groups) {
+        const Column& group = cols[g];
+        std::map<std::string, size_t> counts;
+        for (const auto& key : group.keys) {
+            if (!key.empty()) ++counts[key];
+        }
+        if (numbers.empty() && counts.size() == data.size()) continue;  // every row its own label
+        std::string line = "rows by " + trim(names[g]) + ":";
+        for (const auto& [key, count] : counts) line += " " + group.shown.at(key) + " " + std::to_string(count) + ",";
+        line.pop_back();
+        add(line);
+        for (size_t n : numbers) {
+            std::map<std::string, double> sums;
+            std::map<std::string, size_t> cells;
+            double total = 0;
+            bool signedValues = false;
+            for (size_t r = 0; r < data.size(); ++r) {
+                double v = 0;
+                if (group.keys[r].empty() || n >= data[r].size() || !number(data[r][n], v)) continue;
+                sums[group.keys[r]] += v;
+                ++cells[group.keys[r]];
+                total += v;
+                if (v < 0) signedValues = true;
+            }
+            std::vector<std::pair<std::string, double>> order(sums.begin(), sums.end());
+            if (group.kind == Kind::Label) {
+                std::stable_sort(order.begin(), order.end(),
+                                 [](const auto& a, const auto& b) { return a.second > b.second; });
+            }
+            line = trim(names[n]) + " by " + trim(names[g]) + ":";
+            for (const auto& [key, sum] : order) {
+                line += " " + group.shown.at(key) + " " + shown(sum, cols[n].whole);
+                if (!signedValues && total > 0) {
+                    char pct[32];
+                    std::snprintf(pct, sizeof(pct), " (%.1f%%)", 100.0 * sum / total);
+                    line += pct;
+                }
+                line += ",";
+            }
+            line.pop_back();
+            add(line);
+            if (group.kind != Kind::Label || sums.size() == data.size()) continue;  // one row each: nothing to average
+            for (auto& entry : order) entry.second /= static_cast<double>(cells[entry.first]);
+            std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+            line = "average " + trim(names[n]) + " by " + trim(names[g]) + ":";
+            for (const auto& [key, mean] : order) line += " " + group.shown.at(key) + " " + shown(mean, false) + ",";
+            line.pop_back();
+            add(line);
+        }
+    }
+    return out.size() == headerBytes ? "" : out;
+}
+
 json FileIOTools::doFileRead(const json& args) {
     static constexpr size_t kMaxReadBytes = 32 * 1024;
     static constexpr size_t kChunkBytes = 64 * 1024;
@@ -652,10 +919,34 @@ json FileIOTools::doFileRead(const json& args) {
 
         // Binary bytes shown as text are noise a small model can loop on.
         const TextKind kind = textKind(head);
+        bool decodedUtf16 = false;
         if (kind == TextKind::Utf16) {
-            return json{{"error", path + " is UTF-16 text, which file_read doesn't decode. Read it with a program "
-                                      "that does, for example Python's open(path, encoding='utf-16')."},
-                        {"path", path}};
+            constexpr std::uint64_t kMaxDecoded = 256 * 1024;
+            if (totalBytes > kMaxDecoded) {
+                return json{{"error", path + " is UTF-16 text too large for file_read to decode. Read it with a "
+                                          "program, for example Python's open(path, encoding='utf-16')."},
+                            {"path", path}};
+            }
+            std::ifstream again(fs::u8path(path), std::ios::binary);
+            const std::string raw((std::istreambuf_iterator<char>(again)), std::istreambuf_iterator<char>());
+            std::istringstream lines(utf16ToUtf8(raw));
+            content.clear();
+            truncated = false;
+            totalLines = 0;
+            int emitted = 0;
+            for (std::string line; std::getline(lines, line);) {
+                ++totalLines;
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if ((startLine > 0 && totalLines < startLine) || (endLine > 0 && totalLines > endLine) || truncated) continue;
+                if (content.size() + line.size() > kMaxReadBytes) {
+                    truncated = true;
+                    continue;
+                }
+                if (emitted++) content.push_back('\n');
+                content += line;
+            }
+            if (truncated) content += "\n... [output truncated at 32 KB]";
+            decodedUtf16 = true;
         }
         if (kind == TextKind::LegacyEncoding) {
             return json{{"error", path + " is text in a legacy encoding, not UTF-8 (for example Windows-1252, "
@@ -708,6 +999,8 @@ json FileIOTools::doFileRead(const json& args) {
             }
         }
 
+        // Read to the end, so a character cut by the size limit is not taken for a stray byte.
+        const size_t legacyBytes = truncated ? 0 : repairLegacyBytes(content);
         json out{
             {"content", content},
             {"lines", totalLines},
@@ -715,11 +1008,21 @@ json FileIOTools::doFileRead(const json& args) {
             {"truncated", truncated},
             {"content_hash", shortHash(hash)},
         };
+        if (decodedUtf16) {
+            out["note"] = "This file is UTF-16; the content shown is decoded. A program that opens it must name "
+                          "the encoding (Python: encoding='utf-16'), and file_edit cannot change it.";
+        }
+        if (legacyBytes) {
+            out["note"] = std::to_string(legacyBytes) + " byte" + (legacyBytes == 1 ? " is" : "s are") +
+                          " not UTF-8 and " + (legacyBytes == 1 ? "is" : "are") +
+                          " shown as the Windows-1252 character (a euro sign, an accented letter). "
+                          "Quote them as shown.";
+        }
         // Small models copy rows into a script and get them wrong; point at the file instead.
         std::string ext = fs::u8path(path).extension().u8string();
         for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         if ((ext == ".csv" || ext == ".tsv") && totalLines > 20) {
-            out["note"] = "To total, count or compare this data, read the file by its path in a script "
+            out["note"] = (out.contains("note") ? out["note"].get<std::string>() + " " : std::string()) + "To total, count or compare this data, read the file by its path in a script "
                           "(pandas.read_csv or the csv module). Don't paste its rows into a command.";
         }
         // Rows that are not data, and labels that differ only by case or spacing, are what a
@@ -763,6 +1066,7 @@ json FileIOTools::doFileRead(const json& args) {
                 const std::vector<std::string> names = cells(header);
                 std::vector<std::string> found;
                 size_t dataRows = 0, blanks = 0;
+                std::vector<std::vector<std::string>> data;
                 std::vector<std::map<std::string, std::set<std::string>>> spellings(names.size());
                 for (size_t i = 1; i < rows.size(); ++i) {
                     if (blank(rows[i])) {
@@ -782,6 +1086,7 @@ json FileIOTools::doFileRead(const json& args) {
                         continue;
                     }
                     ++dataRows;
+                    data.push_back(row);
                     for (size_t c = 0; c < row.size() && c < names.size(); ++c) {
                         const std::string key = folded(row[c]);
                         const bool text = std::any_of(key.begin(), key.end(), [](unsigned char ch) { return std::isalpha(ch); });
@@ -802,12 +1107,32 @@ json FileIOTools::doFileRead(const json& args) {
                 if (dataRows == 0) {
                     note = "This file has a header row and no data rows. Its data is missing, not zero: say that, "
                            "report the figure as unknown, and look for a log or error beside it that says why.";
+                    std::string logs;
+                    std::error_code ec;
+                    int budget = 200, named = 0;
+                    for (fs::directory_iterator it(fs::u8path(path).parent_path(), ec), end;
+                         it != end && !ec && budget-- > 0 && named < 3; it.increment(ec)) {
+                        std::string e = it->path().extension().u8string();
+                        for (auto& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        if (!it->is_regular_file(ec) || (e != ".log" && e != ".txt" && e != ".err")) continue;
+                        logs += (named++ ? ", " : "") + it->path().filename().u8string();
+                    }
+                    if (named) note += " In the same folder: " + logs + ". Read it and tell the user what it says.";
                 } else if (!found.empty() || sep == ';') {
                     if (sep == ';') found.insert(found.begin(), "fields are separated by semicolons (sep=';')");
                     if (found.size() > 6) found.resize(6);
                     for (const auto& f : found) note += (note.empty() ? "Before totalling, note: " : "; ") + f;
                     note += ". Handle these in the script (skip those lines, strip and lower-case that column), "
                             "and tell the user what you cleaned.";
+                }
+                const std::string summary = tableSummary(names, data);
+                if (!summary.empty()) {
+                    out["summary"] = summary;
+                    note += std::string(note.empty() ? "" : " ") +
+                            "The summary field was computed from every data row, with header repeats, blank lines "
+                            "and totals rows left out and labels matched ignoring case and spacing. Take totals, "
+                            "counts, averages and shares from it. A label or month it doesn't list is not in the file: "
+                            "say it is absent instead of reporting 0 for it.";
                 }
                 if (!note.empty()) out["note"] = out.contains("note") ? out["note"].get<std::string>() + " " + note : note;
             }

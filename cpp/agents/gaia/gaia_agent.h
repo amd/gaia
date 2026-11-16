@@ -103,6 +103,10 @@ public:
     /// instead of reading the file. "" when it doesn't.
     static std::string pastedDataRefusal(const std::string& command, const std::vector<std::string>& roots);
 
+    /// The small CSV a command names that file_read has not returned this turn; empty when there is none.
+    static std::string unreadTable(const std::string& command, const std::vector<CallSeen>& calls,
+                                   const std::vector<std::string>& roots);
+
     /// command with a backslash put before each ${name} or $name that a POSIX shell would
     /// replace, usually with nothing, inside an inline script it expands (python -c "...", or an
     /// unquoted heredoc). Unchanged when there is none, or when command or earlier (the turn's
@@ -125,6 +129,9 @@ public:
     /// The answer offers to read or work something out instead of doing it.
     static std::optional<std::string> handBackNote(const std::string& answer,
                                                    const std::vector<CallSeen>& calls);
+
+    /// The request numbers three or more questions and the answer is too short to cover them.
+    static std::optional<std::string> skippedQuestionsNote(const std::string& request, const std::string& answer);
 
     /// The file asked for was missing, a near-named one was read, and the answer doesn't say so.
     static std::optional<std::string> swappedFileNote(const std::string& answer,
@@ -155,6 +162,7 @@ private:
     Options options_;
     mutable std::mutex turnListingMu_;
     std::optional<std::string> turnListing_;  // unset until the first turn starts
+    std::set<std::string> turnTablesPointedAt_;  // CSVs a command was sent to file_read for, once each
     std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
     std::unique_ptr<SkillLibrary> skills_;
     std::unique_ptr<LemonadeClient> embedClient_;
