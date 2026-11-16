@@ -275,6 +275,9 @@ class McpServerHandler:
         Resolves every key in ``spec.mcp_env_keys`` from the keyring.
         Raises ``ConnectorsError`` if any key is missing (fail-closed).
         """
+        from gaia.connectors.offsite import refuse_offsite_connector
+
+        refuse_offsite_connector(spec)
         env: Dict[str, str] = {}
         missing: List[str] = []
         for env_key in spec.mcp_env_keys:
@@ -312,6 +315,9 @@ class McpServerHandler:
         After writing, calls the reload callback (if registered) so running
         agents pick up new tools without restart.
         """
+        from gaia.connectors.offsite import refuse_offsite_connector
+
+        refuse_offsite_connector(spec)
         # Validate all required env keys are supplied.
         missing_keys = [k for k in spec.mcp_env_keys if k not in config]
         if missing_keys:

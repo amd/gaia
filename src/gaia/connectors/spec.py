@@ -141,6 +141,9 @@ class ConnectorSpec:
     provides: tuple[str, ...] = field(default_factory=tuple)
     # mcp_server only: the tool that runs a web search, for ``WEB_SEARCH``.
     web_search_tool: str | None = None
+    # True when using the connector sends user data (queries, URLs, and
+    # similar) to a service off this PC. Local only mode refuses these.
+    sends_data_offsite: bool = False
 
     def scope_ceiling(self) -> tuple[str, ...]:
         """Every scope a grant for this connector is allowed to carry.

@@ -324,6 +324,7 @@ def _connector_fallback(
         is_mcp_server_configured,
         is_mcp_server_enabled,
     )
+    from gaia.connectors.offsite import offsite_blocked_message
 
     errors: List[str] = []
     for spec in _search_connectors():
@@ -331,6 +332,10 @@ def _connector_fallback(
             if not is_mcp_server_configured(spec.id) or not is_mcp_server_enabled(
                 spec.id
             ):
+                continue
+            blocked = offsite_blocked_message(spec)
+            if blocked:
+                errors.append(blocked)
                 continue
             if spec.id == _TAVILY_CONNECTOR_ID:
                 results = _tavily_search(query, num_results)

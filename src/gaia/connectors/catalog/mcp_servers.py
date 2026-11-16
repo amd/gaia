@@ -68,6 +68,7 @@ _TAVILY = ConnectorSpec(
     mcp_env_keys=("TAVILY_API_KEY",),
     provides=(WEB_SEARCH,),
     web_search_tool="tavily_search",
+    sends_data_offsite=True,
     config_schema=(
         ConfigField(
             key="TAVILY_API_KEY",
@@ -263,6 +264,7 @@ _BRAVE_SEARCH = ConnectorSpec(
     mcp_env_keys=("BRAVE_API_KEY",),
     provides=(WEB_SEARCH,),
     web_search_tool="brave_web_search",
+    sends_data_offsite=True,
     config_schema=(
         ConfigField(
             key="BRAVE_API_KEY",
@@ -288,6 +290,7 @@ _KEENABLE = ConnectorSpec(
     mcp_args=("-y", "@keenable/mcp@0.1.1"),
     provides=(WEB_SEARCH,),
     web_search_tool="search_web_pages",
+    sends_data_offsite=True,
 )
 
 # ---------------------------------------------------------------------------

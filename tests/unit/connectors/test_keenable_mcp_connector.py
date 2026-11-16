@@ -7,6 +7,8 @@ Tavily stays the tier-1 search connector; Keenable sits next to Brave Search.
 
 from __future__ import annotations
 
+import pytest
+
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 from gaia.agents.tools.browser_tools import _parse_search_text
 from gaia.connectors.catalog.mcp_servers import (
@@ -64,3 +66,49 @@ def test_keenable_text_results_parse():
     ]
     assert results[0]["title"] == "GAIA on Ryzen AI"
     assert results[0]["snippet"] == "Run local LLMs."
+
+
+def test_cloud_search_connectors_send_data_offsite():
+    assert _TAVILY.sends_data_offsite
+    assert _BRAVE_SEARCH.sends_data_offsite
+    assert _KEENABLE.sends_data_offsite
+
+
+def test_local_only_refuses_keenable(tmp_path, monkeypatch):
+    """A user who chose Local only cannot turn Keenable on or search with it."""
+    from gaia.agents.tools.browser_tools import _connector_fallback
+    from gaia.connectors.api import activate
+    from gaia.connectors.errors import ConfigurationError
+    from gaia.connectors.offsite import refuse_offsite_connector
+    from gaia.llm import local_only
+
+    monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+    local_only.set_policy("local_ai_only")
+
+    with pytest.raises(ConfigurationError, match="Local only is on"):
+        refuse_offsite_connector(_KEENABLE)
+    with pytest.raises(ConfigurationError, match="Keenable"):
+        activate("mcp-keenable", "agent-1", scopes_for_grant=["use"])
+
+    monkeypatch.setattr(
+        "gaia.connectors.mcp_server.is_mcp_server_configured",
+        lambda connector_id: connector_id == "mcp-keenable",
+    )
+    monkeypatch.setattr(
+        "gaia.connectors.mcp_server.is_mcp_server_enabled",
+        lambda connector_id: connector_id == "mcp-keenable",
+    )
+
+    def should_not_run(*_args, **_kwargs):
+        raise AssertionError("Keenable search ran while Local only is on")
+
+    monkeypatch.setattr(
+        "gaia.agents.tools.browser_tools._mcp_connector_search", should_not_run
+    )
+    monkeypatch.setattr(
+        "gaia.agents.tools.browser_tools._tavily_search", should_not_run
+    )
+    results, name, errors = _connector_fallback(object(), "local models", 5)
+    assert results is None
+    assert name is None
+    assert any("Keenable" in error and "Local only" in error for error in errors)
