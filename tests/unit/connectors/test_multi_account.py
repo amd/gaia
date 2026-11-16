@@ -33,6 +33,7 @@ from gaia.connectors.tokens import get_or_refresh
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GMAIL = "https://www.googleapis.com/auth/gmail.readonly"
+CALENDAR = "https://www.googleapis.com/auth/calendar"
 SCOPES = ["openid", "https://www.googleapis.com/auth/userinfo.email", GMAIL]
 
 ALICE = {"sub": "alice-sub", "email": "alice@example.com"}
@@ -55,6 +56,8 @@ class _Google:
         self.revoked = []
         self.invalid = set()
         self.refresh_identity = None
+        self.granted = SCOPES
+        self.rotate_to = None
 
     def token(self, request: httpx.Request) -> httpx.Response:
         form = parse_qs(request.content.decode())
@@ -66,6 +69,8 @@ class _Google:
             reply = {"access_token": f"access-for-{sent}", "expires_in": 3600}
             if self.refresh_identity:
                 reply["id_token"] = _id_token(self.refresh_identity)
+            if self.rotate_to:
+                reply["refresh_token"] = self.rotate_to
             return httpx.Response(200, json=reply)
         return httpx.Response(
             200,
@@ -73,7 +78,7 @@ class _Google:
                 "access_token": "signin-access",
                 "refresh_token": self.next_refresh,
                 "expires_in": 3600,
-                "scope": " ".join(SCOPES),
+                "scope": " ".join(self.granted),
                 "id_token": _id_token(self.next_identity),
             },
         )
@@ -582,9 +587,10 @@ async def test_adding_beside_an_account_stored_without_an_address_adds_one(googl
     assert len(accounts.list_accounts("google")) == 2
 
 
-async def test_an_old_slot_learning_an_id_already_stored_merges_into_one(google):
+async def _merge_old_slot_with_a_later_sign_in(google, granted):
     _old_store_without_an_address()
     # The same Gmail was later added beside it, under its stable id.
+    google.granted = granted
     await _sign_in(google, ALICE, "rt-new", add=True)
     assert len(accounts.list_accounts("google")) == 2
 
@@ -596,9 +602,25 @@ async def test_an_old_slot_learning_an_id_already_stored_merges_into_one(google)
     assert [(a.account_id, a.email, a.is_default) for a in listed] == [
         ("alice-sub", "alice@example.com", True)
     ]
-    # The token the refresh just proved is the one kept.
-    assert peek_connection("google", slot=listed[0].slot)["refresh_token"] == "rt-old"
     assert accounts.resolve_slot("google", "alice-sub") == listed[0].slot
+    return peek_connection("google", slot=listed[0].slot)
+
+
+async def test_an_old_slot_learning_an_id_already_stored_merges_into_one(google):
+    kept = await _merge_old_slot_with_a_later_sign_in(google, SCOPES)
+
+    # Same grants: the token the refresh just proved is the one kept.
+    assert kept["refresh_token"] == "rt-old"
+
+
+async def test_a_merge_keeps_the_later_sign_in_when_it_granted_more(google):
+    kept = await _merge_old_slot_with_a_later_sign_in(google, SCOPES + [CALENDAR])
+
+    # The user added calendar access by signing in again; it is not lost.
+    assert kept["refresh_token"] == "rt-new"
+    assert CALENDAR in kept["scopes"]
+    token = await api.get_access_token(provider="google", scopes=[CALENDAR])
+    assert token == "access-for-rt-new"
 
 
 async def test_an_old_slot_learns_its_address_with_its_id(google):
@@ -726,6 +748,30 @@ async def test_a_crash_while_recording_an_id_is_finished_by_the_next_refresh(
 
     ids = sorted(a.account_id for a in accounts.list_accounts("google"))
     assert ids == ["alice-sub", "bob-sub"]
+
+
+@pytest.mark.parametrize("failure", [OSError("disk full"), ConnectorsError("busy")])
+async def test_a_refresh_saves_its_new_token_when_the_account_list_fails(
+    google, monkeypatch, caplog, failure
+):
+    _old_store_without_an_address()
+    google.refresh_identity = ALICE
+    google.rotate_to = "rt-rotated"
+
+    def fail(*a, **k):
+        raise failure
+
+    monkeypatch.setattr(accounts, "record_identity", fail)
+    with caplog.at_level("WARNING", logger="gaia.connectors.tokens"):
+        assert await _refresh_default() == "access-for-rt-old"
+
+    assert peek_connection("google")["refresh_token"] == "rt-rotated"
+    assert peek_connection("google").get("account_id") is None
+    assert any("account id" in r.getMessage() for r in caplog.records)
+
+    monkeypatch.undo()
+    await _refresh_default()
+    assert peek_connection("google")["account_id"] == "alice-sub"
 
 
 def test_a_sign_in_whose_account_vanished_says_so(monkeypatch):

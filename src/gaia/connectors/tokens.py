@@ -617,36 +617,65 @@ def _save_refreshed(
     if identity is not None:
         if stored.get("account_email") in (None, "", DEFAULT_ACCOUNT):
             fields["account_email"] = identity.email
-        if _claim_identity(
-            provider_id, slot_name, identity.account_id, fields["account_email"]
-        ):
+        try:
+            holder = _claim_identity(
+                provider_id,
+                slot_name,
+                identity.account_id,
+                fields["account_email"],
+                fields["scopes"],
+            )
+        except (ConnectorsError, OSError) as e:
+            logger.warning(
+                "connectors: could not record the account id of a %s "
+                "connection (%s); will retry on the next refresh",
+                provider_id,
+                e,
+            )
+            holder = None
+        if holder == slot_name:
             fields["account_id"] = identity.account_id
+        elif holder is not None:
+            return True  # Merged into the account's later sign-in.
     save_connection(**fields)
     return True
 
 
-def _claim_identity(provider_id: str, slot: str, account_id: str, email: str) -> bool:
-    """Record ``account_id`` for ``slot``. When an old build stored the same
-    account in a second slot, that slot is deleted first and ``slot``, whose
-    token was just proven, takes its default flag. False when that needs a
-    lock someone holds now; a later refresh tries again."""
+def _claim_identity(
+    provider_id: str, slot: str, account_id: str, email: str, scopes: list
+) -> Optional[str]:
+    """Record ``account_id`` for ``slot`` and return the slot that holds it,
+    or None when that needs a lock someone holds now; a later refresh tries
+    again. When an old build stored the same account in a second slot, the
+    two merge: ``slot``, whose token was just proven, is kept unless the
+    other slot was granted scopes it lacks. The survivor takes the default
+    flag."""
     from gaia.connectors import accounts
 
     twin = accounts.slot_holding(provider_id, account_id, besides=slot)
     if twin is None:
-        return accounts.record_identity(provider_id, slot, account_id, email)
+        if accounts.record_identity(provider_id, slot, account_id, email):
+            return slot
+        return None
     # Never waits: this thread already holds an account lock.
     with (
         _refresh_lock.try_held_sync(provider_id) as provider_free,
         _refresh_lock.try_held_account_sync(provider_id, twin) as twin_free,
     ):
         if not (provider_free and twin_free):
-            return False
+            return None
         if accounts.slot_holding(provider_id, account_id, besides=slot) != twin:
-            return False
+            return None
+        twin_scopes = (peek_connection(provider_id, slot=twin) or {}).get("scopes")
+        if not set(twin_scopes or []) <= set(scopes):
+            delete_connection(provider_id, slot=slot)
+            accounts.drop_duplicate(provider_id, keep=twin, drop=slot)
+            return twin
         delete_connection(provider_id, slot=twin)
         accounts.drop_duplicate(provider_id, keep=slot, drop=twin)
-        return accounts.record_identity(provider_id, slot, account_id, email)
+        if accounts.record_identity(provider_id, slot, account_id, email):
+            return slot
+        return None
 
 
 def _delete_if_unchanged(provider_id: str, slot: str, sent_refresh_token: str) -> bool:
