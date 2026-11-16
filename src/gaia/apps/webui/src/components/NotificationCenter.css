@@ -5,8 +5,8 @@
 .notification-center {
   display: flex;
   flex-direction: column;
-  width: 400px;
-  max-height: 600px;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(600px, calc(100dvh - 72px));
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -15,16 +15,10 @@
   animation: notifSlideIn var(--duration) var(--ease);
 }
 
-[data-theme="dark"] .notification-center {
-  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
-  backdrop-filter: blur(20px) saturate(1.2);
-  -webkit-backdrop-filter: blur(20px) saturate(1.2);
-}
-
 @keyframes notifSlideIn {
   from {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -77,16 +71,13 @@
 }
 
 /* ── Filter Bar ──────────────────────────────────────────────────────── */
+/* Tabs wrap to a second line rather than run off the panel's edge. */
 .notification-filter-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-light);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.notification-filter-bar::-webkit-scrollbar {
-  display: none;
 }
 
 .notification-filter-tab {

@@ -97,21 +97,6 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
     "src/gaia/agents/registry.py": {
         "terminal command": (1, "amd/gaia#7338"),
     },
-    "src/gaia/agents/tools/_calendar/google.py": {
-        "terminal command": (2, "amd/gaia#7338"),
-    },
-    "src/gaia/agents/tools/_calendar/graph.py": {
-        "terminal command": (2, "amd/gaia#7338"),
-    },
-    "src/gaia/agents/tools/_email/gmail.py": {
-        "terminal command": (3, "amd/gaia#7338"),
-    },
-    "src/gaia/agents/tools/_email/graph.py": {
-        "terminal command": (4, "amd/gaia#7338"),
-    },
-    "src/gaia/agents/tools/browser_tools.py": {
-        "terminal command": (1, "amd/gaia#7338"),
-    },
     "src/gaia/agents/tools/document_text.py": {
         "pip": (2, "amd/gaia#7338"),
     },
@@ -155,12 +140,23 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
 NOT_USER_TEXT: dict[str, dict[str, tuple[int, str]]] = {
     "hub/agents/gaia/python/gaia_agent/server.py": {
         "removed feature": (2, "API schema text for developers"),
+        "pip": (
+            1,
+            "stderr of a pip-installed agent on an older amd-gaia; the app's "
+            "bundled agent always has the daemon watch",
+        ),
     },
     "src/gaia/agents/base/console.py": {
         "pip": (1, "printed by a pip install that lacks rich, never by an app"),
     },
     "src/gaia/agents/base/tool_grants.py": {
         "pip": (2, "names commands GAIA holds for approval"),
+    },
+    "src/gaia/agents/tools/connect_card.py": {
+        "terminal command": (
+            1,
+            "only for a caller outside both apps, already in a terminal",
+        ),
     },
     "src/gaia/agents/tools/package_installs.py": {
         "pip": (1, "tells the agent to use the project's own environment"),

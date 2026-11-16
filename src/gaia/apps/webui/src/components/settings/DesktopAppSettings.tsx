@@ -92,6 +92,7 @@ export function DesktopAppSettings() {
                                 <span>{t(shownLabel, { tray: TRAY })}</span>
                                 <span className="toggle-switch">
                                     <input
+                                        id={`desktop-${key}`}
                                         type="checkbox"
                                         role="switch"
                                         checked={!blockedBy && !!settings?.[key]}

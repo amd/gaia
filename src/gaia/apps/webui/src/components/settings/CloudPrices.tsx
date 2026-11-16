@@ -47,7 +47,10 @@ export function CloudPrices({ provider, limit, picked = null, onPick, pickDisabl
     if (list.models.length === 0) {
         return <p className="settings-hint cloud-prices-note">{t('settings.price.unknownSentence')} <bdi>{list.note}</bdi></p>;
     }
-    const shown = limit ? list.models.slice(0, limit) : list.models;
+    const top = limit ? list.models.slice(0, limit) : list.models;
+    // A pick beyond the top rows (the model in use) stays in view.
+    const extra = picked ? list.models.find((m) => m.model === picked && !top.includes(m)) : undefined;
+    const shown = extra ? [...top, extra] : top;
     // The list comes ranked: its first row is the model GAIA uses unless another is picked.
     const chosen = picked ?? shown[0]?.model;
     const pickable = onPick !== undefined;

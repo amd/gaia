@@ -333,6 +333,53 @@ def test_active_skill_enables_extraction_but_general_knowledge_does_not(tmp_path
     assert exhaustive_request("Enumerate every function in code.py")
 
 
+def _whole_read(text):
+    return {
+        "status": "success",
+        "content": text,
+        "line_count": len(text.splitlines()),
+        "size_bytes": len(text.encode()),
+    }
+
+
+def test_a_short_file_read_whole_owes_no_extraction(tmp_path):
+    query = "Read every .txt file in the folder and list each file with its code."
+    state = ExtractionLedger(query, str(tmp_path))
+    state.activate_skill("Extract every item from each source document.")
+    assert state.enabled
+
+    state.observe(
+        "read_file", {"file_path": "site_1.txt"}, _whole_read("Code: unit-48-zebra.")
+    )
+
+    assert not state.gaps()
+
+
+def test_a_file_the_request_names_owes_extraction_even_when_read_whole(tmp_path):
+    (tmp_path / "source.txt").write_text("Squats\nLunges\n", encoding="utf-8")
+    state = ExtractionLedger("List every exercise in source.txt", str(tmp_path))
+    assert state.enabled
+
+    state.observe(
+        "read_file", {"file_path": "source.txt"}, _whole_read("Squats\nLunges\n")
+    )
+
+    assert any("source.txt" in gap for gap in state.gaps())
+
+
+def test_a_long_or_partial_read_still_owes_extraction(tmp_path):
+    query = "Read every .txt file in the folder and list each file with its code."
+    state = ExtractionLedger(query, str(tmp_path))
+    state.activate_skill("Extract every item from each source document.")
+
+    state.observe("read_file", {"file_path": "long.txt"}, _whole_read("item\n" * 2000))
+    partial = {**_whole_read("Code: unit-48-zebra."), "total_lines": 900}
+    state.observe("read_file", {"file_path": "part.txt"}, partial)
+
+    gaps = " ".join(state.gaps())
+    assert "long.txt" in gaps and "part.txt" in gaps
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -1756,8 +1803,9 @@ def test_cloud_extraction_sends_only_an_effort_the_model_accepts(
     assert result.get("status") != "error", result
     assert sent
     for kwargs in sent:
-        assert kwargs.get("reasoning_effort") == effort
-        assert ("reasoning_effort" in kwargs) == (effort is not None)
+        # Always present: None keeps a configured cloud_reasoning_effort off too.
+        assert "reasoning_effort" in kwargs
+        assert kwargs["reasoning_effort"] == effort
         assert "repeat_penalty" not in kwargs
 
 
@@ -1817,8 +1865,8 @@ def test_a_cloud_page_that_exhausts_its_budget_fails_without_a_swapped_effort(
     assert sent
     expected = cloud_lowest_reasoning_effort(model_id)
     for kwargs in sent:
-        assert kwargs.get("reasoning_effort") == expected
-        assert ("reasoning_effort" in kwargs) == (expected is not None)
+        assert "reasoning_effort" in kwargs
+        assert kwargs["reasoning_effort"] == expected
 
 
 def test_a_gateway_rejection_surfaces_instead_of_retrying_another_effort(

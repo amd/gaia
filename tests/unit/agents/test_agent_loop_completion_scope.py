@@ -134,6 +134,8 @@ def test_a_file_from_before_the_turn_does_not_count(tmp_path):
     old.write_text("old\n")
     hour_ago = time.time() - 3600
     os.utime(old, (hour_ago, hour_ago))
+    # Created (or utime'd) before the run's clock slack, as a real old file is.
+    time.sleep(0.1)
     ledger = CompletionEvidence("Save the outputs into out/", str(tmp_path))
     _run_script(ledger, lambda: None)
     assert _missing(_gaps(ledger))

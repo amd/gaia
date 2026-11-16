@@ -45,6 +45,7 @@ on:
       - 'tests/unit/test_run_python_adversarial.py'
       - 'tests/unit/test_run_python_frozen.py'
       - 'tests/unit/test_run_python_frozen_adversarial.py'
+      - 'tests/unit/test_script_credential_guard.py'
       - 'tests/unit/test_run_python_untracked.py'
       - 'tests/unit/test_scratch_dir_lifecycle.py'
       - 'tests/unit/test_tool_loader_disambiguation.py'
@@ -80,6 +81,9 @@ on:
       - 'src/gaia/hub/**'
       - 'src/gaia/skills/**'
       - 'src/gaia/utils/**'
+      - 'src/gaia/mcp/mixin.py'
+      - 'src/gaia/mcp/client/mcp_client.py'
+      - 'src/gaia/mcp/client/mcp_client_manager.py'
       - 'src/gaia/cli.py'
       - 'src/gaia/config.py'
       - 'src/gaia/security.py'
@@ -129,6 +133,7 @@ on:
       - 'tests/unit/test_run_python_adversarial.py'
       - 'tests/unit/test_run_python_frozen.py'
       - 'tests/unit/test_run_python_frozen_adversarial.py'
+      - 'tests/unit/test_script_credential_guard.py'
       - 'tests/unit/test_run_python_untracked.py'
       - 'tests/unit/test_scratch_dir_lifecycle.py'
       - 'tests/unit/test_tool_loader_disambiguation.py'
@@ -164,6 +169,9 @@ on:
       - 'src/gaia/hub/**'
       - 'src/gaia/skills/**'
       - 'src/gaia/utils/**'
+      - 'src/gaia/mcp/mixin.py'
+      - 'src/gaia/mcp/client/mcp_client.py'
+      - 'src/gaia/mcp/client/mcp_client_manager.py'
       - 'src/gaia/cli.py'
       - 'src/gaia/config.py'
       - 'src/gaia/security.py'
@@ -255,6 +263,7 @@ jobs:
             tests/unit/test_run_python_adversarial.py \
             tests/unit/test_run_python_frozen.py \
             tests/unit/test_run_python_frozen_adversarial.py \
+            tests/unit/test_script_credential_guard.py \
             tests/unit/test_run_python_untracked.py \
             tests/unit/test_scratch_dir_lifecycle.py \
             tests/unit/test_tool_loader_disambiguation.py \

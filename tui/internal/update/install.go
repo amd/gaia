@@ -21,7 +21,7 @@ import (
 	"sync"
 )
 
-// Kind is how this gaia-tui was installed, which decides how it is replaced.
+// Kind is how this gaia-cli was installed, which decides how it is replaced.
 type Kind string
 
 const (
@@ -67,7 +67,7 @@ var (
 func DetectKind() (Kind, error) {
 	exe, err := executable()
 	if err != nil {
-		return "", fmt.Errorf("cannot find the running gaia-tui: %w", err)
+		return "", fmt.Errorf("cannot find the running gaia-cli: %w", err)
 	}
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
@@ -96,7 +96,7 @@ func DetectKind() (Kind, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("this gaia-tui (%s) was not put there by a GAIA installer, so it cannot update itself — "+
+	return "", fmt.Errorf("this gaia-cli (%s) was not put there by a GAIA installer, so it cannot update itself — "+
 		"install a release from %s, or run the installer from https://amd-gaia.ai", exe, ReleasesPage)
 }
 
@@ -166,16 +166,36 @@ func assetPattern(kind Kind) (*regexp.Regexp, error) {
 }
 
 // tuiBinary is the build the install scripts fetch for this machine, e.g.
-// gaia-linux-amd64 or gaia-windows-arm64.exe.
+// gaia-cli-linux-amd64 or gaia-cli-windows-arm64.exe.
 func tuiBinary() string {
-	name := "gaia-" + goos + "-" + goarch
+	return "gaia-cli-" + platformSuffix()
+}
+
+// legacyTuiBinary is tuiBinary's name on releases from before the binary
+// became gaia-cli, e.g. gaia-linux-amd64.
+func legacyTuiBinary() string {
+	return "gaia-" + platformSuffix()
+}
+
+func platformSuffix() string {
+	name := goos + "-" + goarch
 	if goos == "windows" {
 		name += ".exe"
 	}
 	return name
 }
 
+// scriptBinary finds this machine's build in r under either name.
+func scriptBinary(r Release) (Asset, bool) {
+	if a, ok := r.Asset(tuiBinary()); ok {
+		return a, true
+	}
+	return r.Asset(legacyTuiBinary())
+}
+
 // tuiSums is the checksum file the install scripts verify tuiBinary against.
+// Every installed GAIA finds the newest release through this name, so it
+// keeps it.
 const tuiSums = "gaia-tui-SHA256SUMS.txt"
 
 // Installable reports whether r carries what kind needs to install on this
@@ -183,7 +203,7 @@ const tuiSums = "gaia-tui-SHA256SUMS.txt"
 // build for this OS and architecture.
 func Installable(r Release, kind Kind) bool {
 	if kind == "" || kind == KindScript {
-		_, bin := r.Asset(tuiBinary())
+		_, bin := scriptBinary(r)
 		_, sums := r.Asset(tuiSums)
 		return bin && sums
 	}
@@ -232,7 +252,7 @@ func installFile(r Release, kind Kind) (Asset, error) {
 	if kind != "" && kind != KindScript {
 		return installerAsset(r, kind)
 	}
-	if a, ok := r.Asset(tuiBinary()); ok {
+	if a, ok := scriptBinary(r); ok {
 		return a, nil
 	}
 	return Asset{}, fmt.Errorf("GAIA %s has no %s for this machine — pick another release at %s", r.Tag, tuiBinary(), ReleasesPage)
@@ -452,7 +472,7 @@ func moveSelfAside() (func() error, error) {
 			return nil
 		}
 		if err := os.Rename(old, exe); err != nil {
-			return fmt.Errorf("gaia-tui is missing: putting it back from %s failed (%v) — rename that file to %s by hand", old, err, exe)
+			return fmt.Errorf("gaia-cli is missing: putting it back from %s failed (%v) — rename that file to %s by hand", old, err, exe)
 		}
 		return nil
 	}, nil
@@ -462,7 +482,7 @@ func moveSelfAside() (func() error, error) {
 func RemoveLeftover() error {
 	exe, err := executable()
 	if err != nil {
-		return fmt.Errorf("cannot find the running gaia-tui to tidy after an update: %w", err)
+		return fmt.Errorf("cannot find the running gaia-cli to tidy after an update: %w", err)
 	}
 	err = os.Remove(exe + ".old")
 	if err == nil || errors.Is(err, os.ErrNotExist) {

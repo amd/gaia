@@ -12,7 +12,7 @@ Run AI agents **locally** on your AMD hardware — analyze documents, generate c
 
 ## Recommended: Install GAIA
 
-[Install GAIA](/guides/install) is the one place to start as a user. On Windows, one installer lets you choose the **desktop app** (Agent UI), the **terminal** (`gaia-tui`), or both. On macOS and Linux each has its own download. The desktop app ships its backend, so it installs no Python on your PC.
+[Install GAIA](/guides/install) is the one place to start as a user. On Windows, one installer lets you choose the **desktop app** (Agent UI), the **terminal** (`gaia-cli`), or both. On macOS and Linux each has its own download. The desktop app ships its backend, so it installs no Python on your PC.
 
 <CardGroup cols={3}>
   <Card title="Windows" icon="windows" href="https://amd-gaia.ai/#install">
@@ -113,8 +113,8 @@ Install GAIA globally with a single command:
 
     This will:
     - ✅ Download GAIA itself, a ready-to-run `gaia.exe` checked against the release's checksums, into `%USERPROFILE%\.gaia\bin`. No Python or pip is needed
-    - ✅ Download the GAIA terminal hub, `gaia-tui.exe`, into `%USERPROFILE%\.gaia\bin` (checksum-verified; the install fails if it can't be fetched)
-    - ✅ Download the flagship GAIA agent, `gaia-agent.exe`, into the same folder. It is skipped with a warning if no build exists for your architecture (for example ARM64 Windows), and `gaia-tui` then opens an agent list instead of a chat
+    - ✅ Download the GAIA terminal hub, `gaia-cli.exe`, into `%USERPROFILE%\.gaia\bin` (checksum-verified; the install fails if it can't be fetched)
+    - ✅ Download the flagship GAIA agent, `gaia-agent.exe`, into the same folder. It is skipped with a warning if no build exists for your architecture (for example ARM64 Windows), and `gaia-cli` then opens an agent list instead of a chat
     - ✅ Add `%USERPROFILE%\.gaia\bin` to your PATH. Only GAIA's own commands live there, so your own `python` and `pip` stay first. Re-running the installer fixes an older install that put `%USERPROFILE%\.gaia\venv\Scripts` on PATH
 
     <Tip>
@@ -135,8 +135,8 @@ Install GAIA globally with a single command:
     This will:
     - ✅ Download GAIA itself, a ready-to-run `gaia` checked against the release's checksums, into `~/.gaia/core`. No Python or pip is needed
     - ✅ Link `gaia` into `~/.gaia/bin`
-    - ✅ Download the GAIA terminal hub, `gaia-tui`, into `~/.gaia/bin` (checksum-verified; the install fails if it can't be fetched)
-    - ✅ Download the flagship GAIA agent, `gaia-agent`, into the same folder. It is skipped with a warning if no build exists for your platform, and `gaia-tui` then shows the agent as unavailable
+    - ✅ Download the GAIA terminal hub, `gaia-cli`, into `~/.gaia/bin` (checksum-verified; the install fails if it can't be fetched)
+    - ✅ Download the flagship GAIA agent, `gaia-agent`, into the same folder. It is skipped with a warning if no build exists for your platform, and `gaia-cli` then shows the agent as unavailable
     - ✅ Add `~/.gaia/bin` to your PATH. Only GAIA's own commands live there, so your system `python3` and `pip` stay first. Re-running the installer fixes an older install that put `~/.gaia/venv/bin` on PATH
 
     <Tip>

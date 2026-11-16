@@ -43,6 +43,7 @@ import {
   artifactFileName,
   desktopArtifactFileName,
   desktopExtraFileNames,
+  legacyBinaryFileName,
   windowsSetupOffersChoice,
   type DownloadKey,
   type InstallerKey,
@@ -86,7 +87,8 @@ interface TuiRow {
 
 const tuiRow = (platform: PlatformKey): TuiRow => ({
   platform,
-  binary: published(artifactFileName(platform, version)),
+  binary:
+    published(artifactFileName(platform, version)) ?? published(legacyBinaryFileName(platform)),
   installers: INSTALLERS_FOR[platform].flatMap((key) => {
     const artifact = published(artifactFileName(key as DownloadKey, version));
     return artifact ? [{ key, artifact }] : [];

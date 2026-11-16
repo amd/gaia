@@ -3,11 +3,11 @@
 
 /**
  * Opening Mobile access without ngrok is a one-time setup step, not a broken
- * feature (#1577): no "Couldn't start" / red error, this OS's command with a
- * Copy button, the download link, and Retry in place.
+ * feature (#1577): no "Couldn't start" / red error, what the feature is, where
+ * to get ngrok, and Retry. Never a terminal command to run (#7415).
  */
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MobileAccessModal } from '../MobileAccessModal';
 import * as api from '../../services/api';
@@ -18,11 +18,7 @@ vi.mock('../../services/api');
 const HINT = 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok';
 
 describe('MobileAccessModal when ngrok is not installed', () => {
-    let writeText: ReturnType<typeof vi.fn>;
-
     beforeEach(() => {
-        writeText = vi.fn().mockResolvedValue(undefined);
-        Object.assign(navigator, { clipboard: { writeText } });
         vi.mocked(api.getTunnelStatus).mockClear();
     });
 
@@ -34,46 +30,35 @@ describe('MobileAccessModal when ngrok is not installed', () => {
         const { container } = render(
             <MobileAccessModal isOpen onClose={vi.fn()} setupCommands={['choco install ngrok']} onRetry={vi.fn()} />,
         );
-        expect(screen.getByText('ngrok required')).toBeInTheDocument();
-        expect(screen.getByText('Set up ngrok (one-time)')).toBeInTheDocument();
+        expect(screen.getByText('Needs ngrok')).toBeInTheDocument();
         expect(screen.queryByText("Couldn't start mobile access")).toBeNull();
         expect(screen.queryByText(/Failed to connect|Connection failed/)).toBeNull();
         expect(container.querySelector('.tunnel-error')).toBeNull();
-        expect(container.querySelector('.status-dot.error')).toBeNull();
+        expect(container.querySelector('.status-dot.is-error')).toBeNull();
         expect(screen.queryByText(/Scan the QR code/)).toBeNull();
         expect(screen.queryByText('Connecting...')).toBeNull();
     });
 
-    it('shows only the command it was given, copyable in one click', async () => {
-        render(<MobileAccessModal isOpen onClose={vi.fn()} setupCommands={['choco install ngrok']} />);
-        const inputs = screen.getAllByLabelText('ngrok install command') as HTMLInputElement[];
-        expect(inputs.map((i) => i.value)).toEqual(['choco install ngrok']);
-        expect(screen.queryByText(/brew|snap|apt/)).toBeNull();
-
-        fireEvent.click(screen.getByTitle('Copy command'));
-        expect(writeText).toHaveBeenCalledWith('choco install ngrok');
-        await waitFor(() => expect(screen.getByText('Copied')).toBeInTheDocument());
-    });
-
-    it('copies the exact command of the row clicked when there are two routes', async () => {
-        const apt = 'curl -sSL https://example | sudo tee x && sudo apt install ngrok';
-        render(<MobileAccessModal isOpen onClose={vi.fn()} setupCommands={['sudo snap install ngrok', apt]} />);
-        const buttons = screen.getAllByTitle('Copy command');
-        expect(buttons).toHaveLength(2);
-        fireEvent.click(buttons[1]);
-        expect(writeText).toHaveBeenCalledWith(apt);
-        await waitFor(() => expect(screen.getAllByText('Copied')).toHaveLength(1));
-    });
-
-    it('links the download page and still offers Retry when no command is known', () => {
+    it('says what the feature is and where to get ngrok, never a command to run', () => {
         const onRetry = vi.fn();
-        render(<MobileAccessModal isOpen onClose={vi.fn()} setupCommands={[]} onRetry={onRetry} />);
-        expect(screen.queryByLabelText('ngrok install command')).toBeNull();
-        const link = screen.getByRole('link', { name: /ngrok download page/ });
+        render(<MobileAccessModal isOpen onClose={vi.fn()} setupCommands={['choco install ngrok']} onRetry={onRetry} />);
+        expect(screen.getByText(/Use GAIA from your phone while this PC is on/)).toBeInTheDocument();
+        expect(screen.queryByText(/choco|brew|snap|apt|install ngrok/)).toBeNull();
+        expect(screen.queryByRole('textbox')).toBeNull();
+        expect(screen.queryByTitle('Copy command')).toBeNull();
+        const link = screen.getByRole('link', { name: /Get ngrok/ });
         expect(link).toHaveAttribute('href', 'https://ngrok.com/download');
         expect(link).toHaveAttribute('rel', 'noopener noreferrer');
         fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
         expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
+    it('draws the status as a small dot, not a bar', () => {
+        const { container } = render(<MobileAccessModal isOpen onClose={vi.fn()} setupCommands={[]} />);
+        const dot = container.querySelector('.tunnel-status .status-dot') as HTMLElement;
+        // The bare "setup" class picked up the setup screen's layout and stretched the dot.
+        expect(dot.classList.contains('setup')).toBe(false);
+        expect(dot).toHaveClass('is-setup');
     });
 
     it('does not poll the tunnel while it waits for setup', async () => {
@@ -89,20 +74,17 @@ describe('MobileAccessModal when ngrok is not installed', () => {
         render(<MobileAccessModal isOpen onClose={vi.fn()} error="ngrok authtoken not configured." onRetry={vi.fn()} />);
         expect(screen.getByText("Couldn't start mobile access")).toBeInTheDocument();
         expect(screen.getByText('ngrok authtoken not configured.')).toBeInTheDocument();
-        expect(screen.queryByText('Set up ngrok (one-time)')).toBeNull();
+        expect(screen.queryByRole('link', { name: /Get ngrok/ })).toBeNull();
         expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
     });
 
-    it('is translated, and keeps the shell command left-to-right in Arabic', () => {
+    it('is translated', () => {
         act(() => useChatStore.getState().setLocale('ar'));
         try {
             const { container } = render(
                 <MobileAccessModal isOpen onClose={vi.fn()} setupCommands={['choco install ngrok']} onRetry={vi.fn()} />,
             );
-            expect(container.querySelector('.tunnel-setup-title')?.textContent).toContain('إعداد ngrok');
-            const input = container.querySelector('.tunnel-setup-command input') as HTMLInputElement;
-            expect(input.value).toBe('choco install ngrok');
-            expect(input).toHaveAttribute('dir', 'ltr');
+            expect(container.querySelector('.tunnel-setup-title')?.textContent).toContain('استخدم GAIA من هاتفك');
         } finally {
             act(() => useChatStore.getState().setLocale('en'));
             localStorage.removeItem('gaia-chat-locale');
@@ -114,6 +96,6 @@ describe('MobileAccessModal when ngrok is not installed', () => {
             <MobileAccessModal isOpen onClose={vi.fn()} error={HINT} setupCommands={['choco install ngrok']} />,
         );
         expect(container.querySelector('.tunnel-error')).toBeNull();
-        expect(screen.getByText('ngrok required')).toBeInTheDocument();
+        expect(screen.getByText('Needs ngrok')).toBeInTheDocument();
     });
 });

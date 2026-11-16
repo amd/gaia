@@ -88,27 +88,31 @@ export function UpdatesSection() {
             <div className="settings-field" role="group" aria-labelledby="updates-label">
                 <p className="visually-hidden" role="status">{line}</p>
 
-                <label className="setting-row">
-                    <span>{t('update.settings.auto')}</span>
-                    <span className="toggle-switch">
-                        <input
-                            type="checkbox"
-                            role="switch"
-                            checked={update.autoUpdate}
-                            aria-describedby="updates-auto-hint"
-                            aria-label={t('update.settings.auto')}
-                            aria-busy={busy}
-                            disabled={disabled}
-                            onChange={() => {
-                                if (!busy) void run('update.action.saveAuto', (b) => b.setAutoUpdate(!update.autoUpdate));
-                            }}
-                        />
-                        <span className="toggle-track" />
-                    </span>
-                </label>
-                <p className="settings-hint" id="updates-auto-hint">
-                    {t('update.settings.autoHint')}
-                </p>
+                {!update.manualInstall && (
+                    <>
+                        <label className="setting-row">
+                            <span>{t('update.settings.auto')}</span>
+                            <span className="toggle-switch">
+                                <input
+                                    type="checkbox"
+                                    role="switch"
+                                    checked={update.autoUpdate}
+                                    aria-describedby="updates-auto-hint"
+                                    aria-label={t('update.settings.auto')}
+                                    aria-busy={busy}
+                                    disabled={disabled}
+                                    onChange={() => {
+                                        if (!busy) void run('update.action.saveAuto', (b) => b.setAutoUpdate(!update.autoUpdate));
+                                    }}
+                                />
+                                <span className="toggle-track" />
+                            </span>
+                        </label>
+                        <p className="settings-hint" id="updates-auto-hint">
+                            {t('update.settings.autoHint')}
+                        </p>
+                    </>
+                )}
 
                 <label className="setting-row">
                     <span>{t('update.settings.rc')}</span>
@@ -151,7 +155,18 @@ export function UpdatesSection() {
                 )}
 
                 <div className="setting-actions">
-                    {update.status === 'available' && !update.pinnedVersion && (
+                    {update.status === 'available' && update.manualInstall && (
+                        <a
+                            className="btn-primary update-download-link"
+                            href={update.downloadUrl ?? RELEASES_PAGE}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-describedby="updates-manual-hint"
+                        >
+                            {t('update.settings.downloadVersion', { version: update.version ?? '' })}
+                        </a>
+                    )}
+                    {update.status === 'available' && !update.manualInstall && !update.pinnedVersion && (
                         <button
                             type="button"
                             className="btn-primary"
@@ -217,6 +232,9 @@ export function UpdatesSection() {
                         </button>
                     )}
                 </div>
+                {update.status === 'available' && update.manualInstall && (
+                    <p className="settings-hint" id="updates-manual-hint">{t('update.settings.manualHint')}</p>
+                )}
                 {update.previousVersion && (
                     <p className="settings-hint" id="updates-back-hint">{t('update.settings.goBackHint')}</p>
                 )}
@@ -231,7 +249,7 @@ export function UpdatesSection() {
                 )}
                 {update.configError && <p className="settings-error" role="alert">{update.configError}</p>}
                 {error && <p className="settings-error" role="alert">{error}</p>}
-                {showPicker && <VersionPicker onClose={() => setShowPicker(false)} />}
+                {showPicker && <VersionPicker onClose={() => setShowPicker(false)} manualInstall={update.manualInstall} />}
             </div>
         </SettingsDisclosure>
     );
