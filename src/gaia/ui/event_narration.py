@@ -219,6 +219,8 @@ _NARRATION_OVERRIDES = {
     "text_to_speech": "Reading aloud",
     "unload_skill": "Putting away skill",
     "wait_for_condition": "Waiting for a condition",
+    "process_status": "Checking a background process",
+    "wait_for_process": "Waiting for a background process",
 }
 
 #: Substrings marking a tool that shells out. The narration for these MUST
