@@ -3062,3 +3062,12 @@ def test_selecting_hybrid_while_the_server_is_starting_is_503(
     resp = client.post("/api/providers/select", json={"model": "hybrid"})
     assert resp.status_code == 503
     assert db.get_setting("custom_model") is None
+
+
+def test_providers_list_with_broken_custom_hybrid_rules(client, lemonade, keys):
+    """A hand-broken hybrid table must not take the model list down with it."""
+    _write_config({"hybrid_policy": "custom", "hybrid_rules": {"other": {}}})
+    lemonade.models = [{"id": DEFAULT_MODEL_NAME, "downloaded": True, "labels": []}]
+    resp = client.get("/api/providers")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["active"]["model"] == DEFAULT_MODEL_NAME
