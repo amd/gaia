@@ -20,6 +20,11 @@ export function formatPerMillion(input: number | null | undefined, output: numbe
     return t('settings.price.perMillion', { input: usd(input), output: usd(output) });
 }
 
+/** A cost that keeps a sub-cent amount readable: "$0.0028", not "$0.00". */
+export function formatCost(n: number): string {
+    return n > 0 && n < 0.01 ? `$${n.toPrecision(2)}` : formatTotal(n);
+}
+
 /** "$1.23" for a running total. */
 export function formatTotal(n: number): string {
     return `$${n.toFixed(2)}`;

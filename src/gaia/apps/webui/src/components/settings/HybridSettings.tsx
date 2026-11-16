@@ -6,7 +6,7 @@ import { Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
 import { RadioGroup } from '../RadioGroup';
-import { formatPerMillion, formatTotal } from './cloudPrice';
+import { formatCost, formatPerMillion } from './cloudPrice';
 import {
     HYBRID_PROVIDERS, hybridModelName, hybridProviderName,
 } from '../../utils/hybrid';
@@ -173,6 +173,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
 
     const pending = useMemo(() => (saved && draft ? pendingUpdate(saved, draft) : null), [saved, draft]);
     const dirty = !!pending && Object.keys(pending.update).length > 0;
+    const edited = dirty || (!!saved && !!draft && draft.classifier_timeout !== String(saved.classifier_timeout));
 
     const edit = (change: Partial<Draft>) => {
         setDraft((d) => (d ? { ...d, ...change } : d));
@@ -450,7 +451,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                                                 </select>
                                             </td>
                                             <td>
-                                                <span className="toggle-switch">
+                                                <label className="toggle-switch">
                                                     <input
                                                         type="checkbox"
                                                         role="switch"
@@ -460,7 +461,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                                                         aria-label={t.bare('settings.hybrid.rules.highStakesAria', { kind: label })}
                                                     />
                                                     <span className="toggle-track" />
-                                                </span>
+                                                </label>
                                             </td>
                                         </tr>
                                     );
@@ -477,7 +478,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                     <button type="submit" className="btn-primary" disabled={saving || !dirty || !pending?.timeoutValid}>
                         {saving ? <Loader2 size={13} className="spin" /> : null} {t('settings.advanced.save')}
                     </button>
-                    {dirty && (
+                    {edited && (
                         <button
                             type="button"
                             className="btn-secondary"
@@ -546,6 +547,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                     </div>
                 )}
                 {!stats && !statsError && <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}
+                {stats?.scope && <p className="settings-hint"><bdi>{stats.scope}</bdi></p>}
                 {stats && stats.turns === 0 && <p className="settings-hint">{t('settings.hybrid.stats.none')}</p>}
                 {stats && stats.turns > 0 && (
                     <p className="settings-hint hybrid-stats">
@@ -564,9 +566,9 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                                 ? t('settings.hybrid.stats.costUnknown')
                                 : stats.saving_pct != null
                                     ? t('settings.hybrid.stats.cost', {
-                                        cost: formatTotal(stats.cost), allStrong: formatTotal(stats.cost_if_all_strong), pct: Math.round(stats.saving_pct),
+                                        cost: formatCost(stats.cost), allStrong: formatCost(stats.cost_if_all_strong), pct: Math.round(stats.saving_pct),
                                     })
-                                    : t('settings.hybrid.stats.costOnly', { cost: formatTotal(stats.cost), allStrong: formatTotal(stats.cost_if_all_strong) })}
+                                    : t('settings.hybrid.stats.costOnly', { cost: formatCost(stats.cost), allStrong: formatCost(stats.cost_if_all_strong) })}
                         </span>
                         {stats.unpriced_turns > 0 && <span> {t('settings.hybrid.stats.unpriced', { n: stats.unpriced_turns })}</span>}
                     </p>

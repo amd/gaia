@@ -491,3 +491,56 @@ describe('HybridSettings: templates', () => {
         expect(screen.getByRole('form', { name: 'Hybrid' })).toBeInTheDocument();
     });
 });
+
+describe('HybridSettings: end-to-end findings', () => {
+    it('toggles a high-stakes switch with a mouse click on its track', async () => {
+        const form = await renderPanel();
+        fireEvent.click(within(form).getByRole('radio', { name: 'Custom' }));
+        const toggle = within(form).getByRole('switch', { name: 'Writing: allow high-stakes requests on the cheap model' });
+        expect(toggle).not.toBeChecked();
+        // The input itself is invisible; a person clicks the track drawn beside it.
+        fireEvent.click(toggle.nextElementSibling!);
+        expect(toggle).toBeChecked();
+        fireEvent.click(toggle.nextElementSibling!);
+        expect(toggle).not.toBeChecked();
+    });
+
+    it('keeps Undo while the time limit is invalid, and Undo restores it', async () => {
+        const form = await renderPanel();
+        const timeout = within(form).getByLabelText('Classifier time limit (seconds)');
+        fireEvent.change(timeout, { target: { value: '0' } });
+        fireEvent.click(within(form).getByRole('button', { name: 'Undo changes' }));
+        expect(timeout).toHaveValue(15);
+        expect(within(form).queryByRole('button', { name: 'Undo changes' })).not.toBeInTheDocument();
+    });
+
+    it('shows a sub-cent cost instead of rounding it to $0.00', async () => {
+        mockedApi.getHybridStats.mockResolvedValue({
+            ...STATS, turns: 1, cheap_turns: 1, strong_turns: 0, failed_closed: 0, cost: 0.002832, cost_if_all_strong: 0.04452, saving_pct: 93.6,
+        });
+        render(<HybridSettings />);
+        const usage = await screen.findByRole('region', { name: 'Usage' });
+        await waitFor(() => expect(usage).toHaveTextContent('Cost $0.0028, against $0.04 if every turn had run on the strong model (94% saved).'));
+        expect(usage).not.toHaveTextContent('$0.00,');
+    });
+
+    it('says what the usage covers when the backend names it', async () => {
+        mockedApi.getHybridStats.mockResolvedValue({ ...STATS, scope: 'Counts hybrid turns from Agent UI chats.' });
+        render(<HybridSettings />);
+        const usage = await screen.findByRole('region', { name: 'Usage' });
+        await waitFor(() => expect(usage).toHaveTextContent('Counts hybrid turns from Agent UI chats.'));
+    });
+
+    it('stays usable when the saved settings are broken, and saves the fix', async () => {
+        mockedApi.getHybridSettings.mockResolvedValue({
+            ...SETTINGS, policy: 'custom', rules: null,
+            config_error: 'hybrid_rules is missing "other". To fix, set every kind in Settings › Models › Hybrid.',
+        });
+        const form = await renderPanel();
+        expect(screen.getByText(/hybrid_rules is missing "other"/).closest('[role="alert"]')).toBeInTheDocument();
+        expect(within(form).getByRole('radio', { name: 'Custom' })).toHaveAttribute('aria-checked', 'true');
+        fireEvent.click(within(form).getByRole('button', { name: 'Start from Balanced' }));
+        fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
+        await waitFor(() => expect(mockedApi.updateHybridSettings).toHaveBeenCalledWith({ rules: BALANCED }));
+    });
+});

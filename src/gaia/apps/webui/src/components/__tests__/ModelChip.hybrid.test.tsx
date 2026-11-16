@@ -186,8 +186,7 @@ describe('ModelChip: hybrid', () => {
         expect(row).not.toHaveTextContent(/Cloud|Local/);
     });
 
-    it('lists hybrid first while a hybrid chat is in use', async () => {
-        useModelStore.setState({ active: HYBRID_ACTIVE });
+    it('lists hybrid first, ahead of long provider lists', async () => {
         const dialog = await openPicker();
         await within(dialog).findByRole('group', { name: 'Hybrid' });
         expect(within(dialog).getAllByRole('group')[0]).toHaveAccessibleName('Hybrid');

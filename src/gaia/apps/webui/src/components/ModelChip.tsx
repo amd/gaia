@@ -394,14 +394,14 @@ export function ModelChip() {
     // The backend offers it once its pair, or any template, can run.
     const hybridShown = !!hybrid && (hybrid.error !== undefined || hybrid.entry.shown);
     const hybridPickable = hybridShown && hybrid?.error === undefined && switching === null;
-    const hybridFirst = isHybridModel(active?.model);
-    const pickable = [...(hybridPickable && hybridFirst ? [HYBRID_MODEL_ID] : []), ...(groups?.flatMap(({ provider, models }) => [
+    // First, as in the TUI: a long gateway list would otherwise bury it.
+    const pickable = [...(hybridPickable ? [HYBRID_MODEL_ID] : []), ...(groups?.flatMap(({ provider, models }) => [
         ...(provider.remote && !provider.models_discovered ? [`key:${provider.id}`] : []),
         ...fireworksVisibleModels(provider, models)
             .filter((m) => switching === null && !isDownloading(m))
             .map((m) => m.id),
         ...(fireworksHasHiddenModels(provider, models) ? [`showall:${provider.id}`] : []),
-    ]) ?? []), ...(hybridPickable && !hybridFirst ? [HYBRID_MODEL_ID] : [])];
+    ]) ?? [])];
     const tabRow = activeRow && pickable.includes(activeRow)
         ? activeRow
         : currentModel && pickable.includes(currentModel) ? currentModel : pickable[0];
@@ -539,7 +539,7 @@ export function ModelChip() {
                 )}
                 {groups && (
                 <div ref={list} role="listbox" aria-label={t('modelMenu.models')} onKeyDown={onListKey}>
-                {hybridFirst && hybridGroup()}
+                {hybridGroup()}
                 {shownGroups!.map(({ provider, models, error: groupError }) => (
                     <div key={provider.id} role="group" aria-labelledby={`${listId}-${provider.id}`}>
                         <div className="popover-heading" id={`${listId}-${provider.id}`}>{providerName(t, provider)}</div>
@@ -709,7 +709,6 @@ export function ModelChip() {
                         )}
                     </div>
                 ))}
-                {!hybridFirst && hybridGroup()}
                 </div>
                 )}
                 {unavailable > 0 && (
