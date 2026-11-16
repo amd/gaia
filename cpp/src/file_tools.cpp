@@ -695,7 +695,7 @@ static std::string tableSummary(const std::vector<std::string>& names,
 
     enum class Kind { Other, Number, Label, Month };
     struct Column {
-        Kind kind = Kind::Other;
+        Kind kind{};  // Other
         bool whole = true;
         size_t notNumbers = 0;
         std::vector<std::string> keys;         // per row; empty when the cell is
@@ -765,7 +765,9 @@ static std::string tableSummary(const std::vector<std::string>& names,
             ++count;
         }
         std::string line = trim(names[n]) + ": total " + shown(total, cols[n].whole) + " over " +
-                           std::to_string(count) + " rows (lowest " + shown(low, cols[n].whole) + ", highest " +
+                           std::to_string(count) + " rows (average " +
+                           shown(count ? total / static_cast<double>(count) : 0, false) + ", lowest " +
+                           shown(low, cols[n].whole) + ", highest " +
                            shown(high, cols[n].whole) + ")";
         if (cols[n].notNumbers) line += "; " + std::to_string(cols[n].notNumbers) + " cells are not numbers and are left out";
         add(line);

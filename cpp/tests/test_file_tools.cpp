@@ -169,7 +169,7 @@ TEST_F(FileToolsTest, FileRead_ACsvComesWithItsTotals) {
     const json read = tool.callback({{"path", messy}});
     const std::string summary = read.value("summary", "");
     EXPECT_NE(summary.find("all 4 data rows"), std::string::npos) << summary;
-    EXPECT_NE(summary.find("Amount: total 5874.50 over 4 rows"), std::string::npos) << summary;
+    EXPECT_NE(summary.find("Amount: total 5874.50 over 4 rows (average 1468.6"), std::string::npos) << summary;
     EXPECT_NE(summary.find("Amount by Region: North 4994.50 (85.0%), south 880.00 (15.0%)"), std::string::npos)
         << summary;
     EXPECT_NE(summary.find("Amount by Date: 2026-01 4394.50"), std::string::npos) << summary;

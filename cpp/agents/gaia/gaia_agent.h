@@ -101,6 +101,9 @@ public:
 
     /// Why command must not run: it pastes five or more rows of a CSV in roots into a script
     /// instead of reading the file. "" when it doesn't.
+    /// Why a one-line `python -c` script cannot run (a block statement after a semicolon); empty if it can.
+    static std::string oneLineBlockRefusal(const std::string& command);
+
     static std::string pastedDataRefusal(const std::string& command, const std::vector<std::string>& roots);
 
     /// The small CSV a command names that file_read has not returned this turn; empty when there is none.
@@ -130,7 +133,16 @@ public:
     static std::optional<std::string> handBackNote(const std::string& answer,
                                                    const std::vector<CallSeen>& calls);
 
-    /// The request numbers three or more questions and the answer is too short to cover them.
+    /// A script failed on a missing module and the answer stops there, with the script's inputs unread.
+    static std::optional<std::string> failedScriptNote(const std::string& answer, const std::vector<CallSeen>& calls);
+
+    /// A CSV was totalled by file_read and the answer reports a bare 0 for something.
+    static std::optional<std::string> zeroForAbsentNote(const std::string& answer, const std::vector<CallSeen>& calls);
+
+    /// Where a bare-named new file belongs when the request says "next to" a file in a folder; empty otherwise.
+    static std::string besidePath(const std::string& request, const std::string& writtenPath);
+
+    /// The request numbers two or more questions and the answer is too short to cover them.
     static std::optional<std::string> skippedQuestionsNote(const std::string& request, const std::string& answer);
 
     /// The file asked for was missing, a near-named one was read, and the answer doesn't say so.

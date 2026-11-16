@@ -348,6 +348,9 @@ TEST(GaiaAgentTest, AWriteThatWouldHaveHappenedNamesNoFile) {
 TEST(GaiaAgentTest, ASaveBesideADenialOrACounterfactualIsStillAClaim) {
     using Files = std::vector<std::string>;
     EXPECT_EQ(GaiaAgent::claimedFiles("I wrote no files except `summary.md`."), Files{"summary.md"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("The file `summary.md` has been created with the following content:"),
+              Files{"summary.md"});
+    EXPECT_TRUE(GaiaAgent::claimedFiles("`summary.md` has not been created.").empty());
     EXPECT_EQ(GaiaAgent::claimedFiles("Nothing was saved besides notes.md."), Files{"notes.md"});
     EXPECT_EQ(GaiaAgent::claimedFiles("I would have written it to a.txt, but I saved it to `b.txt`."),
               Files{"b.txt"});
@@ -788,6 +791,47 @@ TEST(GaiaAgentTest, NotFoundInALargeFolderIsNotSentBack) {
     EXPECT_FALSE(GaiaAgent::unopenedFilesNote("Not found.", {w.path}, {{"file_read", {{"path", "note1.txt"}}}}));
 }
 
+TEST(GaiaAgentTest, AnAnswerThatStopsAtAMissingModuleIsSentBack) {
+    const std::vector<GaiaAgent::CallSeen> failed = {
+        {"bash_execute", {{"command", "python pkg/make_report.py"}}, "ModuleNotFoundError: No module named 'acme_stats'"},
+        {"file_read", {{"path", "pkg/requirements.txt"}}, "acme_stats"}};
+    EXPECT_FALSE(GaiaAgent::failedScriptNote("I cannot run the script to get the totals: a package is missing.", {}));
+    EXPECT_FALSE(GaiaAgent::failedScriptNote("Totals: 4 orders, $450. The script itself failed on acme_stats.", failed));
+    std::vector<GaiaAgent::CallSeen> thenRead = failed;
+    thenRead.push_back({"file_read", {{"path", "pkg/orders.csv"}}, "id,amount"});
+    EXPECT_FALSE(GaiaAgent::failedScriptNote("I cannot run the script, but the totals are 4 orders.", thenRead));
+    EXPECT_TRUE(GaiaAgent::failedScriptNote("I could not get the totals: acme_stats is not installed.", failed))
+        << "reading requirements.txt is not reading the script or its data";
+}
+
+TEST(GaiaAgentTest, AZeroForSomethingTheTableLacksIsSentBack) {
+    const std::vector<GaiaAgent::CallSeen> totalled = {
+        {"file_read", {{"path", "sales.csv"}}, "{\"summary\":\"Computed from all 12 data rows:\"}"}};
+    EXPECT_TRUE(GaiaAgent::zeroForAbsentNote("1. Revenue for Gadget Pro in the East region is **0**.", totalled));
+    EXPECT_TRUE(GaiaAgent::zeroForAbsentNote("April revenue: 0 (the data covers January to March).", totalled));
+    EXPECT_FALSE(GaiaAgent::zeroForAbsentNote("There is no East region. Total revenue is 7200, of 18,600.", totalled));
+    EXPECT_FALSE(GaiaAgent::zeroForAbsentNote("Growth was 0.5% and the total is 100.", totalled));
+    EXPECT_FALSE(GaiaAgent::zeroForAbsentNote("East revenue is 0.", {}));
+}
+
+TEST(GaiaAgentTest, AFileAskedForNextToAnotherIsWrittenThere) {
+    const std::string request = "Make a copy of config/app_config.ini next to it, called app_config.local.ini.";
+    EXPECT_EQ(GaiaAgent::besidePath(request, "app_config.local.ini"), "config/app_config.local.ini");
+    EXPECT_EQ(GaiaAgent::besidePath(request, "config/app_config.local.ini"), "");
+    EXPECT_EQ(GaiaAgent::besidePath("Copy config/app.ini to backup.ini.", "backup.ini"), "");
+    EXPECT_EQ(GaiaAgent::besidePath("Put it next to a/x.ini or b/y.ini.", "z.ini"), "") << "two folders";
+}
+
+TEST(GaiaAgentTest, AOneLineScriptWithABlockAfterASemicolonIsRefused) {
+    const std::string bad = "python -c \"import pandas as pd; try: df = pd.read_excel('a.xlsx'); print(df)\"";
+    EXPECT_NE(GaiaAgent::oneLineBlockRefusal(bad).find("'try'"), std::string::npos);
+    EXPECT_NE(GaiaAgent::oneLineBlockRefusal("python3 -c 'import os; for f in os.listdir(): print(f)'"), "");
+    EXPECT_EQ(GaiaAgent::oneLineBlockRefusal("python -c \"import pandas as pd; print(pd.read_excel('a.xlsx'))\""), "");
+    EXPECT_EQ(GaiaAgent::oneLineBlockRefusal("python -c \"for f in [1]: print(f)\""), "") << "a block may start the line";
+    EXPECT_EQ(GaiaAgent::oneLineBlockRefusal("python -c \"import os\ntry:\n    print(1)\nexcept: pass\""), "");
+    EXPECT_EQ(GaiaAgent::oneLineBlockRefusal("echo 'a; if b: c'"), "");
+}
+
 TEST(GaiaAgentTest, AScriptOnASmallCsvNotYetReadIsNamed) {
     const fs::path dir = fs::temp_directory_path() / "gaia_unread_table";
     fs::remove_all(dir);
@@ -812,7 +856,9 @@ TEST(GaiaAgentTest, AnAnswerTooShortForTheNumberedQuestionsIsSentBack) {
     EXPECT_FALSE(GaiaAgent::skippedQuestionsNote(
         request, "1. Seven files contain it.\n2. Three files: a.txt, b.txt, c.txt.\n3. It says Owner: Zoe."));
     EXPECT_FALSE(GaiaAgent::skippedQuestionsNote(request, "Seven files contain it. The folder holds three. It says Zoe."));
-    EXPECT_FALSE(GaiaAgent::skippedQuestionsNote("1. Sum it.\n2. By region?", "13,700."));
+    EXPECT_TRUE(GaiaAgent::skippedQuestionsNote("1. The fee, and which page?\n2. And the rent?", "Rent is $3,850, page 2."));
+    EXPECT_FALSE(GaiaAgent::skippedQuestionsNote("1. The fee?\n2. The rent?", "The fee is $15,400.\nRent is $3,850."));
+    EXPECT_FALSE(GaiaAgent::skippedQuestionsNote("Do this:\n1. Sum it.", "13,700."));
     EXPECT_FALSE(GaiaAgent::skippedQuestionsNote("Use version 2.1 and step 3. Then stop.", "Done."));
 }
 
