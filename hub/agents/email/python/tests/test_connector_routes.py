@@ -141,3 +141,29 @@ def test_explicit_nonempty_scopes_is_honored_unchanged(client, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     assert captured["config"]["scopes"] == ["openid"]
+
+
+def test_disconnect_with_several_accounts_asks_which(client, monkeypatch):
+    from gaia.connectors.errors import AccountChoiceRequiredError
+
+    seen = []
+
+    async def _fake_disconnect(provider, *, account_id=None, all_accounts=False):
+        seen.append(all_accounts)
+        if not all_accounts:
+            raise AccountChoiceRequiredError(
+                provider, ["a@example.com", "b@example.com"], action="disconnect"
+            )
+        return {}
+
+    monkeypatch.setattr("gaia.connectors.handler.disconnect", _fake_disconnect)
+
+    resp = client.delete("/v1/email/connectors/google")
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["error"] == "account_choice_required"
+    assert detail["choices"] == ["a@example.com", "b@example.com"]
+
+    resp = client.delete("/v1/email/connectors/google?all=true")
+    assert resp.status_code == 200, resp.text
+    assert seen == [False, True]

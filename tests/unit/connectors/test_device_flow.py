@@ -464,3 +464,105 @@ class TestProviderBodyNeverLeaks:
         assert self.LEAKY_BODY not in message
         assert "502" in message
         assert "GAIA_MICROSOFT_CLIENT_ID" in message
+
+
+class TestDeviceSignInIntent:
+    """``--add`` and ``--account`` mean the same with ``--device`` as without."""
+
+    _DEVICE = {
+        "device_code": "DEV",
+        "user_code": "ABCD-EFGH",
+        "verification_uri": "https://microsoft.com/devicelogin",
+        "expires_in": 900,
+        "interval": 5,
+    }
+
+    def _old_account_without_an_address(self):
+        # Old builds stored "default" when the Graph /me lookup failed.
+        from gaia.connectors.providers import get as get_provider
+        from gaia.connectors.store import save_connection
+
+        save_connection(
+            provider="microsoft",
+            account_email="default",
+            refresh_token="rt-old",
+            scopes=[MAIL_READ],
+            client_id_hash=get_provider("microsoft").client_id_hash,
+        )
+
+    def _sign_in(self, monkeypatch, **intent):
+        payload = TestPollDeviceFlow()._success_payload()
+        payload["id_token"] = ""
+        _install_responses(
+            monkeypatch,
+            [_FakeResp(200, self._DEVICE), _FakeResp(200, payload)],
+            get_responses=[_FakeResp(200, _ME)],
+        )
+
+        async def _run():
+            info = await flow_mod.start_device_flow("microsoft", [MAIL_READ], **intent)
+            return await flow_mod.poll_device_flow(
+                "microsoft",
+                info["device_code"],
+                scopes=info["scopes"],
+                intent=info["intent"],
+            )
+
+        return asyncio.run(_run())
+
+    def test_adding_never_replaces_an_old_account_stored_without_an_address(
+        self, monkeypatch
+    ):
+        from gaia.connectors import accounts
+        from gaia.connectors.store import peek_connection
+
+        self._old_account_without_an_address()
+
+        result = self._sign_in(monkeypatch, add_account=True)
+
+        assert result["added"] is True
+        assert peek_connection("microsoft")["refresh_token"] == "rt-old"
+        assert sorted(a.email for a in accounts.list_accounts("microsoft")) == [
+            "default",
+            "user@example.com",
+        ]
+
+    def test_reconnecting_names_the_account_asked_for(self, monkeypatch):
+        from gaia.connectors import accounts
+        from gaia.connectors.providers import get as get_provider
+
+        accounts.save_signed_in_account(
+            "microsoft",
+            account_id="pat-id",
+            email="pat@outlook.com",
+            refresh_token="rt-pat",
+            scopes=[MAIL_READ],
+            client_id_hash=get_provider("microsoft").client_id_hash,
+        )
+
+        result = self._sign_in(monkeypatch, account="pat@outlook.com")
+
+        assert result["added"] is True
+        assert result["requested_account_id"] == "pat-id"
+        assert result["is_default"] is False
+
+    def test_an_unknown_account_fails_before_the_code_is_requested(self, monkeypatch):
+        from gaia.connectors.errors import UnknownAccountError
+
+        _install_responses(monkeypatch, [])
+        with pytest.raises(UnknownAccountError):
+            asyncio.run(
+                flow_mod.start_device_flow(
+                    "microsoft", [MAIL_READ], account="nobody@example.com"
+                )
+            )
+        assert _FakeAsyncClient.calls == []
+
+    def test_add_and_account_together_are_refused(self, monkeypatch):
+        _install_responses(monkeypatch, [])
+        with pytest.raises(ConnectorsError, match="not both"):
+            asyncio.run(
+                flow_mod.start_device_flow(
+                    "microsoft", [MAIL_READ], add_account=True, account="a@b.com"
+                )
+            )

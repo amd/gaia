@@ -270,15 +270,16 @@ name another. Signing in again as an account you already connected updates
 it; a different account is added beside it. Microsoft has no revoke API, so
 removing an account clears GAIA's copy only. The device-code flow has no
 account picker: sign in with the account you want in the browser it sends
-you to.
+you to. `--add` and `--account` work with `--device` too.
 
 ## Revoking access
 
 Two places — both work, per connector:
 
 - **From GAIA**: Settings → Connectors → the connector tile →
-  **Disconnect**. Removes every refresh token that connector holds from the keyring;
-  the next API call for it errors with `NOT_CONNECTED`. The other Microsoft
+  **Disconnect**. With one account, removes its refresh token from the keyring;
+  the next API call for it errors with `NOT_CONNECTED`. With several, choose
+  which one to remove, or remove them all. The other Microsoft
   connector (if connected) is unaffected.
 - **From Microsoft**: personal accounts at <a href="https://account.live.com/consent/Manage"
   target="_blank">account.live.com/consent/Manage</a>; work/school accounts at

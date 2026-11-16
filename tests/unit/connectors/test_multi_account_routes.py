@@ -153,8 +153,44 @@ def test_removing_one_account_keeps_the_other_and_the_grants(
     assert _summary(ui_api_client)["configured"] is False
 
 
-def test_plain_disconnect_removes_every_account(ui_api_client, two_gmails, revoked):
+def test_plain_disconnect_asks_which_account_when_there_are_several(
+    ui_api_client, two_gmails, revoked
+):
+    grant_agent("google", "agent-A", ["openid"])
+
     resp = ui_api_client.delete("/api/connectors/google", headers=UI_HEADER)
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["error"] == "account_choice_required"
+    assert detail["connector_id"] == "google"
+    assert detail["choices"] == ["alice@example.com", "bob@example.com"]
+    assert "--" not in detail["message"]
+    assert revoked == []
+    assert len(_summary(ui_api_client)["accounts"]) == 2
+    assert list_agent_grants("google") == {"agent-A": ["openid"]}
+
+
+def test_plain_disconnect_of_one_account_needs_no_choice(
+    ui_api_client, google_provider, revoked
+):
+    accounts.save_signed_in_account(
+        "google",
+        account_id="alice-sub",
+        email="alice@example.com",
+        refresh_token="rt-alice-sub",
+        scopes=["openid"],
+        client_id_hash=google_provider.client_id_hash,
+    )
+
+    resp = ui_api_client.delete("/api/connectors/google", headers=UI_HEADER)
+
+    assert resp.status_code == 204, resp.text
+    assert revoked == ["rt-alice-sub"]
+
+
+def test_disconnect_all_removes_every_account(ui_api_client, two_gmails, revoked):
+    resp = ui_api_client.delete("/api/connectors/google?all=true", headers=UI_HEADER)
 
     assert resp.status_code == 204, resp.text
     assert sorted(revoked) == ["rt-alice-sub", "rt-bob-sub"]

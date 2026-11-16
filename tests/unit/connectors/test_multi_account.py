@@ -857,3 +857,80 @@ async def test_a_network_error_reading_the_profile_is_retried(monkeypatch):
 
     assert me.call_count == 2
     assert [a.account_id for a in accounts.list_accounts("microsoft")] == ["pat-id"]
+
+
+def _old_outlook_account():
+    from gaia.connectors.providers import _registry
+    from gaia.connectors.providers import get as get_provider
+
+    _registry.clear()
+    provider = get_provider("microsoft")
+    save_connection(
+        provider="microsoft",
+        account_email="pat@outlook.com",
+        refresh_token="rt-old",
+        scopes=["Mail.Read", "User.Read", "offline_access"],
+        client_id_hash=provider.client_id_hash,
+        tenant=getattr(provider, "tenant", None),
+    )
+    return provider
+
+
+@pytest.fixture
+def outlook_env(monkeypatch):
+    monkeypatch.setenv(
+        "GAIA_MICROSOFT_CLIENT_ID", "11112222-bbbb-3333-cccc-4444dddd5555"
+    )
+    monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
+
+
+_profile_lookups = []
+
+
+async def _hang(request):
+    _profile_lookups.append(request.url)
+    await asyncio.sleep(60)
+
+
+@pytest.mark.parametrize("budget", [4.5, 3.5])
+async def test_a_slow_profile_lookup_never_fails_a_refresh(
+    outlook_env, monkeypatch, budget
+):
+    from gaia.connectors import tokens
+
+    provider = _old_outlook_account()
+    # 4.5 s leaves the lookup about 1.5 s; 3.5 s leaves too little to try.
+    monkeypatch.setattr(tokens, "_REFRESH_BUDGET_SECONDS", budget, raising=False)
+    _profile_lookups.clear()
+    with respx.mock(assert_all_called=False) as router:
+        router.post(provider.token_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "access_token": "at",
+                    "expires_in": 3600,
+                    "refresh_token": "rt-2",
+                },
+            )
+        )
+        router.get(url__startswith="https://graph.microsoft.com/v1.0/me").mock(
+            side_effect=_hang
+        )
+        token = await asyncio.wait_for(get_or_refresh("microsoft"), 3.0)
+
+    assert token == "at"
+    assert peek_connection("microsoft")["refresh_token"] == "rt-2"
+    assert len(_profile_lookups) == (1 if budget == 4.5 else 0)
+
+
+async def test_the_sign_in_profile_lookup_has_an_overall_deadline(monkeypatch):
+    monkeypatch.setattr(flow_mod, "_USERINFO_DEADLINE_SECONDS", 0.2, raising=False)
+    with respx.mock(assert_all_called=False) as router:
+        router.get("https://graph.microsoft.com/v1.0/me").mock(side_effect=_hang)
+        with pytest.raises(ConnectorsError, match="did not answer"):
+            await asyncio.wait_for(
+                flow_mod._fetch_userinfo(
+                    "microsoft", "https://graph.microsoft.com/v1.0/me", "at"
+                ),
+                2.0,
+            )

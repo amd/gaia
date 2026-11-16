@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 import keyring
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -57,6 +57,7 @@ from gaia.connectors.api import activate as activate_connector_for_agent
 from gaia.connectors.api import deactivate as deactivate_connector_for_agent
 from gaia.connectors.api import resolve_declared_scopes
 from gaia.connectors.errors import (
+    AccountChoiceRequiredError,
     AuthRequiredError,
     ConfigurationError,
     ConnectionBusyError,
@@ -284,6 +285,8 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
                 "message": str(exc),
             },
         )
+    if isinstance(exc, AccountChoiceRequiredError):
+        return HTTPException(status_code=409, detail=exc.http_detail())
     if isinstance(exc, UnknownConnectorError):
         return HTTPException(
             status_code=404,
@@ -687,7 +690,7 @@ async def connector_events() -> StreamingResponse:
       - ``connector.enabled``           ({connector_id})
       - ``connector.disabled``          ({connector_id})
       - ``connector.oauth.completed``   ({connector_id, account_email,
-        account_id, added})
+        account_id, added, is_default, requested_account_id})
       - ``connector.oauth.error``       ({connector_id, error})
       - ``connector.grant.changed``     ({connector_id, agent_id, scopes})
       - ``connector.activation.changed`` ({connector_id, agent_id, active})
@@ -958,11 +961,19 @@ async def test_connector(connector_id: str) -> Dict[str, Any]:
 @router.delete(
     "/{connector_id}", status_code=204, dependencies=[Depends(_require_ui_header)]
 )
-async def disconnect_connector(connector_id: str) -> Response:
-    """Disconnect a connector — removes credentials (every account of an OAuth
-    connector) and (for MCP) removes it from mcp_servers.json."""
+async def disconnect_connector(
+    connector_id: str, all_accounts: bool = Query(False, alias="all")
+) -> Response:
+    """Disconnect a connector — removes credentials and (for MCP) removes it
+    from mcp_servers.json.
+
+    An OAuth connector with several accounts answers 409
+    ``account_choice_required`` with the ``choices``: remove one with
+    ``DELETE /{connector_id}/accounts/{account_id}``, or every one with
+    ``?all=true``.
+    """
     try:
-        revoke_result = await disconnect(connector_id)
+        revoke_result = await disconnect(connector_id, all_accounts=all_accounts)
     except KeyError:
         raise HTTPException(
             status_code=404, detail=f"Unknown connector: {connector_id!r}"
@@ -1164,7 +1175,10 @@ async def authorize_device(
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
         info = await connections.start_device_flow(
-            connector_id, scopes=_signin_scopes(connector_id, body.scopes, grant_map)
+            connector_id,
+            scopes=_signin_scopes(connector_id, body.scopes, grant_map),
+            add_account=body.add_account,
+            account=body.account,
         )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
@@ -1179,6 +1193,7 @@ async def authorize_device(
                 interval=info["interval"],
                 expires_in=info["expires_in"],
                 grant_agents=grant_map or None,
+                intent=info["intent"],
             )
         except ConnectorsError as e:
             await _emitter.emit(

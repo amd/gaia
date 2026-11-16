@@ -286,11 +286,26 @@ class AccountChoiceRequiredError(ConnectorsError):
     def __init__(self, connector_id: str, choices: list[str], *, action: str):
         self.connector_id = connector_id
         self.choices = list(choices)
+        self.action = action
         super().__init__(
             f"{connector_id} has {len(self.choices)} connected accounts "
             f"({', '.join(self.choices)}), so {action} needs to know which one. "
             "Name it with --account <address>, or pass --all for every account."
         )
+
+    def http_detail(self) -> dict:
+        """The body of the HTTP 409 for this error: the choices, and a message
+        without CLI flags."""
+        return {
+            "error": "account_choice_required",
+            "connector_id": self.connector_id,
+            "choices": self.choices,
+            "message": (
+                f"{self.connector_id} has {len(self.choices)} connected accounts "
+                f"({', '.join(self.choices)}). Choose one to {self.action}, or "
+                f"{self.action} them all."
+            ),
+        }
 
 
 class ScopeMismatchError(ConnectorsError):

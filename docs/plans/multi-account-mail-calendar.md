@@ -170,20 +170,25 @@ nothing, or several accounts, raises `UnknownAccountError` with `choices` (the a
 `add_account=True` shows the account picker (Google `prompt=select_account consent`, Microsoft
 `prompt=select_account`). `account=` reconnects: it sends `login_hint`, and for Microsoft
 `domain_hint` when the account kind is known. Passing both is an error. The sign-in result and
-the `connector.oauth.completed` event carry `account_id` and `added`; a reconnect also carries
-`requested_account_id`, so a caller can say when a different account came back.
+the `connector.oauth.completed` event carry `account_id`, `added` and `is_default`; a reconnect
+also carries `requested_account_id`, so a caller can say when a different account came back.
+The device-code flow takes the same `add_account` and `account` (`start_device_flow` returns
+an `intent` for `poll_device_flow`), so a device sign-in with `--add` never replaces an old
+account stored without an address.
 
 Agent UI routes, `/api/connectors`:
 
 - `GET /{id}` and the list rows keep `account_id` (the default account's address, as today) and
   add `accounts: [{account_id, email, status, is_default}]`. `configured` is true when any
   account is `ok`.
-- `DELETE /{id}` still removes every account.
+- `DELETE /{id}` removes the only account. With several it refuses: 409
+  `{"error": "account_choice_required", "connector_id", "choices": [...], "message"}`.
+  `DELETE /{id}?all=true` removes every account. MCP connectors are unchanged.
 - `DELETE /{id}/accounts/{account}` removes one (204). Grants stay unless it was the last.
 - `PATCH /{id}/accounts/{account}` with `{"is_default": true}` returns `{"accounts": [...]}` and
   emits `connector.account.changed`. `false` is a 400.
-- `POST /{id}/authorize` accepts `add_account` and `account`. Reconnecting goes through this
-  route with `account`; there is no separate reauthorize route.
+- `POST /{id}/authorize` and `POST /{id}/authorize-device` accept `add_account` and `account`.
+  Reconnecting goes through these routes with `account`; there is no separate reauthorize route.
 - An unknown account is a 404 `{"error": "unknown_account", "choices": [...]}`.
 - `GET /v1/connections/{provider}?account=` picks an account; `DELETE /v1/connections/{provider}`
   removes every account.
@@ -192,14 +197,16 @@ CLI, `gaia connectors`:
 
 - `list` / `status`: a line per account under a connector that has several, or one whose
   sign-in expired. `--json` rows gain `accounts`.
-- `connect <id> --add` or `--account <address>`.
+- `connect <id> --add` or `--account <address>`, with or without `--device`. A plain `connect`
+  that signs in a different account says it was added and that the default is unchanged.
 - `disconnect <id> --account <address>` or `--all`. With several accounts and neither flag it
   refuses (exit 5) and lists them.
 - `set-default <id> <account>`.
 
 Uninstall removes every account of every provider.
 
-Not in PR 1: the device-code flow has no account picker (Microsoft's device page always asks).
+Not in PR 1: the device-code flow has no account picker or sign-in hint (Microsoft's device
+page always asks), so `--add` and `--account` there only decide where the sign-in is saved.
 Client credentials per account were not built; forwards that would need them are refused.
 
 ### PR 2: mail and calendar tools use every account

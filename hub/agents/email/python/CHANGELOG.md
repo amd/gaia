@@ -9,6 +9,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Disconnecting a provider with several accounts asks which one.**
+  `DELETE /v1/email/connectors/{provider}` used to remove every connected
+  account. With more than one it now answers 409
+  `{"error": "account_choice_required", "choices": [...]}`; pass `?all=true`
+  to remove them all.
 - **The sidecar stops when the GAIA daemon that started it is killed.** The
   daemon now passes its pid in `GAIA_DAEMON_PID`; the sidecar polls it and
   shuts down through its normal SIGINT path within seconds of the daemon dying,

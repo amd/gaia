@@ -189,3 +189,87 @@ def test_add_and_account_cannot_be_combined():
         "connectors", "connect", "google", "--add", "--account", "a@example.com"
     )
     assert rc == 2
+
+
+def _fake_browser_sign_in(monkeypatch, result):
+    async def _start(connector_id, *, scopes, grant_agents=None, **account):
+        return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+
+    async def _complete(flow_id):
+        return result
+
+    monkeypatch.setattr("gaia.connectors.api.start_authorization", _start)
+    monkeypatch.setattr("gaia.connectors.api.complete_authorization", _complete)
+
+
+def test_a_plain_connect_as_another_account_says_it_was_added(monkeypatch):
+    _fake_browser_sign_in(
+        monkeypatch,
+        {"account_email": "carol@example.com", "added": True, "is_default": False},
+    )
+
+    rc, out, err = _run("connectors", "connect", "google")
+
+    assert rc == 0, err
+    assert "Connected as" not in out
+    assert "Added carol@example.com as another account; the default is unchanged" in (
+        out
+    )
+    assert "gaia connectors set-default google carol@example.com" in out
+
+
+def test_the_first_account_says_connected(monkeypatch):
+    _fake_browser_sign_in(
+        monkeypatch,
+        {"account_email": "carol@example.com", "added": True, "is_default": True},
+    )
+
+    rc, out, err = _run("connectors", "connect", "google")
+
+    assert rc == 0, err
+    assert out.endswith("Connected as carol@example.com\n")
+
+
+@pytest.mark.parametrize(
+    "flags, intent",
+    [
+        ([], {"add_account": False, "account": None}),
+        (["--add"], {"add_account": True, "account": None}),
+        (
+            ["--account", "bob@example.com"],
+            {"add_account": False, "account": "bob@example.com"},
+        ),
+    ],
+)
+def test_device_connect_passes_the_account_choice(monkeypatch, flags, intent):
+    seen = {}
+
+    async def _start(connector_id, scopes, **account):
+        seen.update(account)
+        return {
+            "device_code": "DEV",
+            "user_code": "CODE",
+            "verification_uri": "https://example.com/device",
+            "scopes": scopes,
+            "interval": 1,
+            "expires_in": 60,
+            "message": "",
+            "intent": "the-intent",
+        }
+
+    async def _poll(connector_id, device_code, **kwargs):
+        seen["polled_intent"] = kwargs["intent"]
+        return {
+            "account_email": "carol@example.com",
+            "added": True,
+            "is_default": False,
+        }
+
+    monkeypatch.setattr("gaia.connectors.api.start_device_flow", _start)
+    monkeypatch.setattr("gaia.connectors.api.poll_device_flow", _poll)
+
+    rc, out, err = _run("connectors", "connect", "google", "--device", *flags)
+
+    assert rc == 0, err
+    assert seen == {**intent, "polled_intent": "the-intent"}
+    assert "carol@example.com" in out and "Connected as" not in out

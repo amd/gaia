@@ -54,7 +54,7 @@ from typing import TYPE_CHECKING, Optional, Tuple
 
 import httpx
 
-from gaia.connectors import _refresh_lock
+from gaia.connectors import _loop, _refresh_lock
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -90,6 +90,13 @@ _EXPIRY_BUFFER_SECONDS = 60
 # An overall cap on the token POST (httpx's timeout is per phase), so a peer
 # holding the connection lock always finishes inside its 15 s wait.
 _TOKEN_POST_DEADLINE_SECONDS = 10.0
+
+# How long get_or_refresh_sync waits for a whole refresh.
+_REFRESH_BUDGET_SECONDS = _loop._DEFAULT_TIMEOUT
+# Kept back from the budget for saving the refreshed token.
+_SAVE_RESERVE_SECONDS = 3.0
+# The account lookup is skipped when less than this is left of the budget.
+_MIN_LOOKUP_SECONDS = 1.0
 
 
 @dataclass
@@ -247,6 +254,7 @@ async def get_or_refresh(provider_id: str, *, slot: str = DEFAULT_ACCOUNT) -> st
     callers race.
     """
     get_provider(provider_id)  # an unknown or unconfigured provider fails now
+    budget_ends = time.monotonic() + _REFRESH_BUDGET_SECONDS
 
     key = _cache_key(provider_id, slot)
     entry = _cache.get(key)
@@ -276,13 +284,18 @@ async def get_or_refresh(provider_id: str, *, slot: str = DEFAULT_ACCOUNT) -> st
 
         remaining = max(0.0, deadline - time.monotonic())
         async with _refresh_lock.held_account(provider_id, slot, timeout=remaining):
-            return await _refresh_locked(provider_id, slot, entry)
+            return await _refresh_locked(provider_id, slot, entry, budget_ends)
     finally:
         entry.lock.release()
 
 
-async def _refresh_locked(provider_id: str, slot: str, entry: _AccessTokenCache) -> str:
-    """Refresh ``entry``; the caller holds its slot lock and the account lock."""
+async def _refresh_locked(
+    provider_id: str, slot: str, entry: _AccessTokenCache, budget_ends: float
+) -> str:
+    """Refresh ``entry``; the caller holds its slot lock and the account lock.
+
+    ``budget_ends`` is when the caller's wait runs out (``time.monotonic()``).
+    """
     from gaia.connectors import accounts
 
     # Read first so a connection the tripwire is about to clear can still be
@@ -362,7 +375,7 @@ async def _refresh_locked(provider_id: str, slot: str, entry: _AccessTokenCache)
     identity = (
         None
         if stored.get("account_id")
-        else await _identify_for_backfill(provider, refreshed, slot)
+        else await _identify_for_backfill(provider, refreshed, slot, budget_ends)
     )
 
     # Refresh-token rotation: if the provider returned a new refresh
@@ -423,10 +436,11 @@ _identity_unavailable: set[Tuple[str, str]] = set()
 
 
 async def _identify_for_backfill(
-    provider: OAuthProvider, refreshed: "_Refreshed", slot: str
+    provider: OAuthProvider, refreshed: "_Refreshed", slot: str, budget_ends: float
 ) -> Optional["AccountIdentity"]:
     """Who a refresh says the account is, or None. Only metadata: a failure
-    here never fails the refresh."""
+    or a slow lookup here never fails the refresh, so the lookup gets only
+    the time left before ``budget_ends`` beyond what saving the token needs."""
     from gaia.connectors.flow import identify_account
 
     if not refreshed.id_token and not getattr(provider, "userinfo_url", None):
@@ -434,9 +448,25 @@ async def _identify_for_backfill(
     key = (provider.provider_id, slot)
     if key in _identity_unavailable:
         return None
+    left = budget_ends - time.monotonic() - _SAVE_RESERVE_SECONDS
+    if left < _MIN_LOOKUP_SECONDS:
+        logger.info(
+            "connectors: no time left in this %s refresh to learn its account "
+            "id; will retry on the next refresh",
+            provider.provider_id,
+        )
+        return None
     try:
-        return await identify_account(
-            provider, refreshed.id_token, refreshed.access_token
+        return await asyncio.wait_for(
+            identify_account(provider, refreshed.id_token, refreshed.access_token),
+            left,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "connectors: looking up the account id of a %s connection took "
+            "over %.0fs on refresh; will retry on the next refresh",
+            provider.provider_id,
+            left,
         )
     except ProfileRefusedError as e:
         _identity_unavailable.add(key)

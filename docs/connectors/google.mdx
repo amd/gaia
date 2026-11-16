@@ -411,8 +411,9 @@ To remove one account, run `gaia connectors disconnect google --account
 Two places — both work:
 
 - **From GAIA**: Settings → Connectors → Google → **Disconnect**.
-  Removes every connected Google account's refresh token from the keyring;
-  the next API call errors with `NOT_CONNECTED`.
+  With one account, removes its refresh token from the keyring; the next API
+  call errors with `NOT_CONNECTED`. With several, choose which one to remove,
+  or remove them all.
 - **From Google**: Follow Google's
   [instructions for removing an app's access](https://support.google.com/accounts/answer/13533235)
   for your OAuth client. Useful if you've lost the laptop the keyring

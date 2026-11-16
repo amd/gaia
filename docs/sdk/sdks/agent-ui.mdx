@@ -2329,8 +2329,11 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   </Accordion>
 
   <Accordion title="DELETE /api/connectors/{connector_id}">
-    Disconnect a connector — removes stored credentials (every account of an
-    OAuth connector) and, for `mcp_server`, its `mcp_servers.json` entry.
+    Disconnect a connector — removes stored credentials and, for `mcp_server`,
+    its `mcp_servers.json` entry. An OAuth connector with several accounts
+    refuses with 409 `{"error": "account_choice_required", "connector_id",
+    "choices": [...], "message"}` (inside `detail`): remove one with the route
+    below, or every one with `?all=true`.
   </Accordion>
 
   <Accordion title="DELETE /api/connectors/{connector_id}/accounts/{account_id}">

@@ -577,7 +577,7 @@ def _handle_connect(args: argparse.Namespace) -> int:
 
 
 def _connected_message(args: argparse.Namespace, result: dict) -> str:
-    """ "Connected as …", saying when a reconnect signed in another account."""
+    """ "Connected as …", or what happened when the sign-in added an account."""
     email = result.get("account_email") or "<unknown>"
     reconnecting = getattr(args, "account", None)
     if reconnecting and result.get("added"):
@@ -586,8 +586,12 @@ def _connected_message(args: argparse.Namespace, result: dict) -> str:
             f"{reconnecting}, so it was added as a new account; {reconnecting} "
             "still needs reconnecting"
         )
-    if result.get("added") and getattr(args, "add_account", False):
-        return f"Added {email}"
+    if result.get("added") and not result.get("is_default"):
+        return (
+            f"Added {email} as another account; the default is unchanged "
+            f"(`gaia connectors set-default {args.connector_id} {email}` to "
+            "switch)"
+        )
     return f"Connected as {email}"
 
 
@@ -605,7 +609,12 @@ def _handle_connect_device(
     from gaia.connectors.api import poll_device_flow, start_device_flow
 
     async def _run() -> dict:
-        info = await start_device_flow(args.connector_id, scopes=scopes)
+        info = await start_device_flow(
+            args.connector_id,
+            scopes=scopes,
+            add_account=getattr(args, "add_account", False),
+            account=getattr(args, "account", None),
+        )
         # Prefer the provider's own message (it already contains the URL + code);
         # fall back to a constructed instruction line.
         if info.get("message"):
@@ -624,6 +633,7 @@ def _handle_connect_device(
             interval=info["interval"],
             expires_in=info["expires_in"],
             grant_agents=grant_agents,
+            intent=info["intent"],
         )
         return result
 
@@ -810,21 +820,13 @@ def _handle_disconnect(args: argparse.Namespace) -> int:
         )
         return 1
     account = getattr(args, "account", None)
-    spec = REGISTRY.get(args.connector_id)
-    if spec.type == "oauth_pkce" and account is None:
-        from gaia.connectors.accounts import list_accounts
-        from gaia.connectors.errors import AccountChoiceRequiredError
-
-        stored = list_accounts(spec.oauth_provider_ref or spec.id)
-        if len(stored) > 1 and not getattr(args, "all_accounts", False):
-            raise AccountChoiceRequiredError(
-                args.connector_id,
-                [a.email or a.account_id for a in stored],
-                action="disconnect",
-            )
 
     async def _run():
-        return await disconnect(args.connector_id, account_id=account)
+        return await disconnect(
+            args.connector_id,
+            account_id=account,
+            all_accounts=getattr(args, "all_accounts", False),
+        )
 
     result = asyncio.run(_run())
 

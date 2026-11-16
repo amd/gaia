@@ -38,7 +38,7 @@ import secrets
 import uuid
 import webbrowser
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Mapping, Optional, Tuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -59,6 +59,9 @@ from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
 from gaia.connectors.prior_state import resolve_or_reject_empty_scopes
 from gaia.connectors.providers import get as get_provider
 from gaia.connectors.store import DEFAULT_ACCOUNT, peek_connection
+
+if TYPE_CHECKING:
+    from gaia.connectors.accounts import Account
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +96,9 @@ _ERROR_HTML = (
 # Long enough for a first-time user to read an unverified-app consent screen
 # and click through Google's interstitial.
 _FLOW_TIMEOUT_SECONDS = 900
+
+# An overall cap on the profile lookup (httpx's timeout is per phase).
+_USERINFO_DEADLINE_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -256,11 +262,21 @@ async def _fetch_userinfo(provider_id: str, url: str, access_token: str) -> dict
             f"{provider_id} returned no access token to look up the signed-in "
             "account with. Connect again."
         )
-    try:
+
+    async def _get() -> httpx.Response:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
+            return await client.get(
                 url, headers={"Authorization": f"Bearer {access_token}"}
             )
+
+    try:
+        resp = await asyncio.wait_for(_get(), _USERINFO_DEADLINE_SECONDS)
+    except asyncio.TimeoutError as e:
+        raise ConnectorsError(
+            f"{provider_id}'s profile lookup at {url} did not answer within "
+            f"{_USERINFO_DEADLINE_SECONDS:.0f}s, so GAIA could not tell which "
+            "account signed in. Check the network and connect again."
+        ) from e
     except httpx.HTTPError as e:
         raise ConnectorsError(
             f"Could not look up which {provider_id} account signed in "
@@ -322,7 +338,30 @@ async def _save_signed_in(
         "account_email": account.email,
         "account_id": account.account_id,
         "added": added,
+        "is_default": account.is_default,
     }
+
+
+def _sign_in_intent(
+    provider_id: str, add_account: bool, account: Optional[str]
+) -> Tuple[SignInIntent, Optional["Account"]]:
+    """The intent of a sign-in, and the stored account it reconnects if any.
+    Raises before any sign-in starts when ``account`` is not stored."""
+    if add_account and account is not None:
+        raise ConnectorsError(
+            f"Signing in to {provider_id}: pass add_account=True to add an "
+            "account, or account=<id or address> to reconnect one, not both."
+        )
+    target = None
+    if account is not None:
+        from gaia.connectors.accounts import resolve_account
+
+        target = resolve_account(provider_id, account)
+    intent = SignInIntent(
+        add_account=add_account,
+        reconnect=target.account_id if target else None,
+    )
+    return intent, target
 
 
 def _reject_scopes_outside_catalog(provider_id: str, scopes_list: list[str]) -> None:
@@ -377,11 +416,7 @@ async def start_authorization(
     with the same id is updated in place, any other is added, and no account
     is ever overwritten by a different one.
     """
-    if add_account and account is not None:
-        raise ConnectorsError(
-            "start_authorization: pass add_account=True to add an account, or "
-            "account=<id or address> to reconnect one, not both."
-        )
+    intent, target = _sign_in_intent(provider_id, add_account, account)
     if _pending:
         # User re-clicking Connect signals the previous flow is dead.
         # Common case: Google blocks the auth (wrong account / consent
@@ -406,22 +441,13 @@ async def start_authorization(
     )
     # Both CLI and Agent UI browser flows converge here.
     _reject_scopes_outside_catalog(provider_id, scopes_list)
-    target = None
     extra_params: Dict[str, str] = {}
-    if account is not None:
-        from gaia.connectors.accounts import resolve_account
-
-        target = resolve_account(provider_id, account)
     if add_account or target is not None:
         extra_params = provider.account_prompt_params(
             select_account=add_account,
             login_hint=target.email if target else None,
             account_type=target.account_type if target else None,
         )
-    intent = SignInIntent(
-        add_account=add_account,
-        reconnect=target.account_id if target else None,
-    )
 
     code_verifier = generate_code_verifier()
     challenge = compute_code_challenge(code_verifier)
@@ -1049,7 +1075,9 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
 async def _emit_connected(provider_id: str, saved: Dict[str, Any]) -> None:
     """Emit the framework event (what the Agent UI listens for) and the legacy
     one. ``account_id`` names the account; ``added`` says it is new;
-    ``requested_account_id`` is the account a reconnect asked for, if any."""
+    ``is_default`` says whether it is the default account (an added account
+    is not, unless it is the first); ``requested_account_id`` is the account
+    a reconnect asked for, if any."""
     await emit(
         "connector.oauth.completed",
         {
@@ -1057,6 +1085,7 @@ async def _emit_connected(provider_id: str, saved: Dict[str, Any]) -> None:
             "account_email": saved["account_email"],
             "account_id": saved["account_id"],
             "added": saved["added"],
+            "is_default": saved["is_default"],
             "requested_account_id": saved.get("requested_account_id"),
         },
     )
@@ -1083,14 +1112,26 @@ async def _emit_connected(provider_id: str, saved: Dict[str, Any]) -> None:
 _DEVICE_POLL_DEFAULT_INTERVAL = 5
 
 
-async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str, Any]:
+async def start_device_flow(
+    provider_id: str,
+    scopes: Iterable[str],
+    *,
+    add_account: bool = False,
+    account: Optional[str] = None,
+) -> Dict[str, Any]:
     """Request a device + user code from the provider's device-code endpoint.
 
     Returns ``{provider_id, scopes, device_code, user_code, verification_uri,
-    expires_in, interval, message}``. The caller shows ``user_code`` +
+    expires_in, interval, message, intent}``. The caller shows ``user_code`` +
     ``verification_uri`` (or the provider-supplied ``message``) to the user,
-    then awaits :func:`poll_device_flow` with the returned ``device_code``.
+    then awaits :func:`poll_device_flow` with the returned ``device_code`` and
+    ``intent``.
+
+    ``add_account`` and ``account`` mean what they mean for
+    :func:`start_authorization`. The device-code page has no account picker
+    or sign-in hint, so they only decide where the sign-in is saved.
     """
+    intent, _target = _sign_in_intent(provider_id, add_account, account)
     provider = get_provider(provider_id)
     device_code_url = getattr(provider, "device_code_url", None)
     if not device_code_url:
@@ -1157,6 +1198,7 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
         "expires_in": int(d.get("expires_in", 900)),
         "interval": int(d.get("interval", _DEVICE_POLL_DEFAULT_INTERVAL)),
         "message": d.get("message", ""),
+        "intent": intent,
     }
 
 
@@ -1168,8 +1210,12 @@ async def poll_device_flow(
     interval: int = _DEVICE_POLL_DEFAULT_INTERVAL,
     expires_in: int = 900,
     grant_agents: Optional[Mapping[str, Iterable[str]]] = None,
+    intent: Optional[SignInIntent] = None,
 ) -> Dict[str, Any]:
     """Poll the token endpoint until the user approves the device code.
+
+    ``intent`` is the one :func:`start_device_flow` returned; without it the
+    sign-in is saved as a plain connect.
 
     Honors the RFC 8628 poll cadence: ``authorization_pending`` waits one
     ``interval``; ``slow_down`` widens it by 5s. Persists the connection on
@@ -1239,9 +1285,17 @@ async def poll_device_flow(
         )
     account_type = _resolve_account_type(provider, payload.get("id_token", ""))
     granted_scopes = _resolve_granted_scopes(payload, scopes_list)
+    intent = intent or SignInIntent()
     saved = await _save_signed_in(
-        provider_id, provider, payload, granted_scopes, account_type
+        provider_id,
+        provider,
+        payload,
+        granted_scopes,
+        account_type,
+        add_account=intent.add_account,
     )
+    if intent.reconnect:
+        saved["requested_account_id"] = intent.reconnect
 
     await _commit_grants_for_provider(provider_id, grant_agents, granted_scopes)
 
