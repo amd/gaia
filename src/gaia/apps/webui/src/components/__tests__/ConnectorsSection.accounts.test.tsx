@@ -175,3 +175,59 @@ describe('Settings with several accounts', () => {
         expect(stripIsolates(tile().textContent ?? '')).toContain('الحسابات: 2');
     });
 });
+
+describe('Disconnect on a tile that shows one account', () => {
+    const SAM = account('sam@example.com');
+    // Another window or the CLI added an account since this tile last loaded.
+    const severalNow = (choices: string[]) => Object.assign(new Error('Google has 2 connected accounts.'), {
+        httpStatus: 409,
+        body: { error: 'account_choice_required', connector_id: 'google', choices, message: 'Google has 2 connected accounts.' },
+    });
+
+    it('disconnects at once when the server finds one account, as before', async () => {
+        mocked.disconnectConnector.mockResolvedValue();
+        await open(google([JANE]));
+        fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+        await vi.waitFor(() => expect(mocked.disconnectConnector).toHaveBeenCalledWith('google'));
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+
+    it('names every account the server found and removes them only once the user agrees', async () => {
+        mocked.disconnectConnector.mockRejectedValueOnce(severalNow(['jane@example.com', 'sam@example.com']));
+        mocked.disconnectConnector.mockResolvedValueOnce();
+        await open(google([JANE]));
+        fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+        const ask = await screen.findByRole('alertdialog');
+        expect(stripIsolates(ask.textContent ?? '')).toContain('Disconnect all 2 Google accounts?');
+        expect(within(ask).getByRole('list').textContent).toBe('jane@example.com' + 'sam@example.com');
+        expect(mocked.disconnectConnector).toHaveBeenCalledTimes(1);
+        fireEvent.click(within(ask).getByRole('button', { name: 'Disconnect all' }));
+        await vi.waitFor(() => expect(mocked.disconnectConnector).toHaveBeenLastCalledWith('google', { all: true }));
+        await vi.waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+        expect(mocked.disconnectConnectorAccount).not.toHaveBeenCalled();
+    });
+
+    it('keeps every account on Cancel and shows them all', async () => {
+        mocked.disconnectConnector.mockRejectedValueOnce(severalNow(['jane@example.com', 'sam@example.com']));
+        await open(google([JANE]));
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE, SAM])] });
+        mocked.getConnector.mockResolvedValue(google([JANE, SAM]));
+        fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+        fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+        await screen.findByRole('list', { name: 'Google accounts' });
+        expect(mocked.disconnectConnector).toHaveBeenCalledTimes(1);
+    });
+
+    it('asks in Arabic too', async () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        mocked.disconnectConnector.mockRejectedValueOnce(severalNow(['jane@example.com', 'sam@example.com']));
+        await open(google([JANE]));
+        fireEvent.click(screen.getByRole('button', { name: /قطع الاتصال/ }));
+        const ask = await screen.findByRole('alertdialog');
+        const text = stripIsolates(ask.textContent ?? '');
+        expect(text).toContain('هل تريد قطع اتصال جميع حسابات Google (عددها 2)؟');
+        expect(text).toContain('jane@example.com');
+        expect(text).toContain('sam@example.com');
+    });
+});

@@ -2821,6 +2821,26 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a Disconnect that finds several accounts names them all and asks first', async ({ page }) => {
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE([{ account_id: 'a1', email: 'jane@example.com', status: 'ok', is_default: true }])]);
+            // Another window added sam@ since this tile loaded, so the server refuses a plain disconnect.
+            await page.route('**/api/connectors/google', (route) => (route.request().method() === 'DELETE' ? route.fulfill({
+                status: 409,
+                json: { detail: {
+                    error: 'account_choice_required', connector_id: 'google', choices: ['jane@example.com', 'sam@example.com'],
+                    message: 'google has 2 connected accounts (jane@example.com, sam@example.com). Choose one to disconnect, or disconnect them all.',
+                } },
+            }) : route.fallback()));
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await tile.locator('.connector-tile-header').click();
+            await tile.locator('.configure-actions .btn-secondary').click();
+            const ask = page.getByRole('alertdialog');
+            await expect(ask.locator('.confirm-accounts li')).toHaveCount(2);
+            await shot(page, `connectors-${locale}-disconnect-all`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.confirm-sheet', 'bdi')).toEqual([]);
+        });
+
         test('phone width: a long account stays on screen', async ({ page }) => {
             await page.setViewportSize({ width: 390, height: 844 });
             await open(page, '', locale, (p) => withConnectors(p));

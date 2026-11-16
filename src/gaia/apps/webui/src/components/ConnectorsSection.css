@@ -842,6 +842,12 @@ p.connector-check { flex-direction: row; align-items: center; gap: 6px; }
     white-space: nowrap;
     min-width: 0;
 }
+/* The accounts a "Disconnect all" would remove, inside its confirm sheet. */
+.confirm-accounts {
+    margin: 0;
+    padding-inline-start: 18px;
+    color: var(--text-primary);
+}
 .connector-account-default {
     flex-shrink: 0;
     font-size: 11px;

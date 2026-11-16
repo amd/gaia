@@ -8,8 +8,8 @@ import { useChatStore } from '../../stores/chatStore';
 import { useT } from '../../i18n/useT';
 import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
 import { log } from '../../utils/logger';
-import type { ConnectorListEntry, Message } from '../../types';
-import { accountRef, accountsOf, middleCut, reconnectOffer, signInFixed, type ConnectOffer } from '../../utils/connectorAccounts';
+import type { ConnectorAccount, ConnectorListEntry, Message } from '../../types';
+import { accountRef, accountsOf, addedBesideDefault, middleCut, reconnectOffer, signInFixed, type ConnectOffer } from '../../utils/connectorAccounts';
 import { useConnectorPoll } from '../../hooks/useConnectorPoll';
 import { ltrIn } from '../setup/format';
 import { UnsupportedCard } from './UnsupportedCard';
@@ -167,6 +167,7 @@ function ProviderRow({
     name,
     connected,
     saysConnected,
+    added,
     offer,
     needsSetup,
     grantAgents,
@@ -178,6 +179,8 @@ function ProviderRow({
     connected: boolean;
     /** Say the provider is connected: never while the account that failed may still be broken. */
     saysConnected: boolean;
+    /** The account just signed in beside the default, which GAIA uses only when asked. */
+    added: ConnectorAccount | null;
     offer: ConnectOffer;
     /** No OAuth client on this PC yet, so sign-in cannot start. */
     needsSetup: boolean;
@@ -268,7 +271,9 @@ function ProviderRow({
             {saysConnected && !account && (
                 <span className="render-connect__connected" role="status">
                     <CheckCircle2 size={13} aria-hidden="true" />
-                    {t('connectCard.connected', { name })}
+                    {added
+                        ? t('connectCard.addedAccount', { address: ltrIn(t.locale, middleCut(added.email || added.account_id)), name })
+                        : t('connectCard.connected', { name })}
                 </span>
             )}
             {error && (
@@ -402,6 +407,7 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                         name={displayName(id)}
                         connected={isConnected(id)}
                         saysConnected={saysConnected(id)}
+                        added={isFixed(id) ? addedBesideDefault(rowOf(connectors, id), rowOf(before, id)) : null}
                         offer={reconnectOffer(rowOf(connectors, id), data.account?.[id])}
                         needsSetup={needsSetup(id)}
                         grantAgents={grantIdsFor(agents, data.agent_id, id)}

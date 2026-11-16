@@ -31,7 +31,8 @@ import { connectorDescription, connectorDescriptionBare, fieldHelp, fieldLabel, 
 import { personalizeSourceKind, requestPersonalize } from '../utils/connectorPersonalize';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { AccountAddress, ConnectorAccountList } from './ConnectorAccounts';
-import { needsSignIn, showsAccountList } from '../utils/connectorAccounts';
+import { accountChoices, needsSignIn, showsAccountList } from '../utils/connectorAccounts';
+import { ConfirmSheet } from './setup/ConfirmSheet';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
 import { ltrIn } from './setup/format';
 import './ConnectorsSection.css';
@@ -736,14 +737,19 @@ function OAuthConfigureBody({
         ),
     );
 
-    const handleDisconnect = async () => {
+    // Accounts the server found when this tile showed one: removed only once the user agrees.
+    const [removeAll, setRemoveAll] = useState<string[] | null>(null);
+    const handleDisconnect = async (all = false) => {
         setBusy(true);
         setErr(null);
         try {
-            await api.disconnectConnector(connector.id);
+            await (all ? api.disconnectConnector(connector.id, { all: true }) : api.disconnectConnector(connector.id));
+            setRemoveAll(null);
             onChanged();
         } catch (e) {
-            setErr(e instanceof Error ? e.message : String(e));
+            const choices = all ? null : accountChoices(e);
+            if (choices) setRemoveAll(choices);
+            else setErr(e instanceof Error ? e.message : String(e));
         } finally {
             setBusy(false);
         }
@@ -878,10 +884,33 @@ function OAuthConfigureBody({
             {accountList && (
                 <ConnectorAccountList connector={connector} onChanged={onChanged} onSignIn={(account) => signIn({ account })} />
             )}
-            {err && (
+            {err && !removeAll && (
                 <div className="configure-error">
                     <AlertCircle size={12} /> {err}
                 </div>
+            )}
+            {removeAll && (
+                <ConfirmSheet
+                    title={t('settings.connectors.disconnectAllAsk', { n: removeAll.length, name: connector.display_name })}
+                    confirmLabel={t('settings.connectors.disconnectAll')}
+                    cancelLabel={t('settings.connectors.cancel')}
+                    onConfirm={() => void handleDisconnect(true)}
+                    onCancel={() => {
+                        setRemoveAll(null);
+                        setErr(null);
+                        onChanged();
+                    }}
+                    danger
+                    busy={busy}
+                >
+                    <ul className="confirm-accounts">
+                        {removeAll.map((address) => (
+                            <li key={address}><AccountAddress email={address} /></li>
+                        ))}
+                    </ul>
+                    <p>{t('settings.connectors.disconnectAllBody')}</p>
+                    {err && <p className="configure-error" role="alert">{err}</p>}
+                </ConfirmSheet>
             )}
             <div className="configure-actions">
                 {accountList ? (

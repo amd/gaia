@@ -83,8 +83,14 @@ export async function testConnector(
     return apiFetch('POST', `/connectors/${connectorId}/test`, undefined, UI_HEADER);
 }
 
-export async function disconnectConnector(connectorId: string): Promise<void> {
-    await apiFetch<unknown>('DELETE', `/connectors/${connectorId}`, undefined, UI_HEADER);
+/**
+ * Disconnect the connector. With several accounts the server refuses (409
+ * `account_choice_required`, see `accountChoices`) unless `all` says the user
+ * agreed to remove every one.
+ */
+export async function disconnectConnector(connectorId: string, options?: { all: true }): Promise<void> {
+    const query = options?.all ? '?all=true' : '';
+    await apiFetch<unknown>('DELETE', `/connectors/${connectorId}${query}`, undefined, UI_HEADER);
 }
 
 /** Sign out of one account; the connector's other accounts and its grants stay. */

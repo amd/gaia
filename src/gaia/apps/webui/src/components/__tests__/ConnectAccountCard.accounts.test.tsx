@@ -154,6 +154,27 @@ describe('Connect card with several accounts', () => {
         expect(mocked.listConnectors.mock.calls.length).toBe(calls);
         vi.useRealTimers();
     });
+    it('says a different account was added beside the default, not that Google is connected', async () => {
+        const sam = account('sam@example.com');
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE, WORK])] });
+        render(<ConnectAccountCard data={card} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Use a different account' }));
+        await waitFor(() => expect(shown()).toContain('A browser tab opened'));
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE, WORK, sam])] });
+        act(() => { window.dispatchEvent(new Event('focus')); });
+        await waitFor(() => expect(shown()).toContain('Added sam@example.com as another Google account'));
+        expect(shown()).not.toContain('Google is connected');
+    });
+
+    it('says Google is connected when the new account is the only one', async () => {
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([])] });
+        render(<ConnectAccountCard data={card} />);
+        await screen.findByRole('button', { name: 'Connect Google' });
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE])] });
+        act(() => { window.dispatchEvent(new Event('focus')); });
+        await waitFor(() => expect(shown()).toContain('Google is connected'));
+        expect(shown()).not.toContain('Added');
+    });
 });
 
 describe('email Connect button with several accounts', () => {

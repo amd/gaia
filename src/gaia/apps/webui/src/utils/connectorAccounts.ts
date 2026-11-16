@@ -89,3 +89,19 @@ export function middleCut(text: string, max = 32): string {
     // Drop a dot left dangling before the cut, so it never reads as "name.…".
     return `${text.slice(0, max - 1 - tail).replace(/[.\-_]+$/, '')}…${text.slice(text.length - tail)}`;
 }
+
+/** The accounts a whole-connector disconnect would remove, when the server refused it for having several. */
+export function accountChoices(error: unknown): string[] | null {
+    const e = error as { httpStatus?: number; body?: Record<string, unknown> | null } | null;
+    const choices = e?.httpStatus === 409 && e.body?.error === 'account_choice_required' ? e.body.choices : null;
+    return Array.isArray(choices) ? choices.map(String) : null;
+}
+
+/** An account signed in since `before` that GAIA won't use unless asked: not the default. */
+export function addedBesideDefault(
+    row: ConnectorListEntry | undefined,
+    before: ConnectorListEntry | undefined,
+): ConnectorAccount | null {
+    const known = new Set(accountsOf(before).map(accountRef));
+    return accountsOf(row).find((a) => isOk(a) && !a.is_default && !known.has(accountRef(a))) ?? null;
+}

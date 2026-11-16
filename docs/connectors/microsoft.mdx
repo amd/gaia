@@ -282,10 +282,9 @@ Two places — both work, per connector:
 - **From GAIA**: Settings → Connectors → the connector tile →
   **Disconnect**. With one account, removes its refresh token from the keyring;
   the next API call for it errors with `NOT_CONNECTED`. With several, each
-  account has its own **Disconnect** and the others keep working; the
-  connector's **Disconnect** names every account and asks before removing them
-  all. The other Microsoft
-  connector (if connected) is unaffected.
+  account has its own **Disconnect** and the others keep working. If a
+  **Disconnect** would remove several accounts, GAIA lists them and asks first.
+  The other Microsoft connector (if connected) is unaffected.
 - **From Microsoft**: personal accounts at <a href="https://account.live.com/consent/Manage"
   target="_blank">account.live.com/consent/Manage</a>; work/school accounts at
   <a href="https://myapps.microsoft.com" target="_blank">myapps.microsoft.com</a>
