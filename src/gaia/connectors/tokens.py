@@ -16,12 +16,16 @@ Critical invariants (T-5b, plan amendments A6, A7):
   re-reads the stored connection after taking it. Without it two processes
   refresh with the same refresh token, and the loser's ``invalid_grant``
   deleted the connection the winner had just rotated. The lock is per
-  account, so a slow refresh of one account never stalls another.
+  account, so a slow refresh of one account never stalls another. The one
+  exception is a forwarded import: it changes the client config every
+  account shares, so while one is in flight (or was interrupted and not yet
+  undone) every account of that provider reports busy.
 
 - A refresh records the account's state in the account list: an
   ``invalid_grant`` or a cleared connection marks it ``reauth_required``,
   and the next success clears that. A connection saved before GAIA recorded
-  stable account ids gets its id filled in on its next refresh.
+  stable account ids gets its id (and a missing address) filled in on its
+  next refresh; if that id is already stored in another slot, the two merge.
 
 - 60-second expiry buffer: a token whose ``expires_at`` is within the
   next 60 seconds is treated as already expired (AC4).
@@ -46,7 +50,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 import httpx
 
@@ -70,6 +74,9 @@ from gaia.connectors.store import (
     recover_forward_recovery,
     save_connection,
 )
+
+if TYPE_CHECKING:
+    from gaia.connectors.flow import AccountIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -351,8 +358,10 @@ async def _refresh_locked(provider_id: str, slot: str, entry: _AccessTokenCache)
         raise
 
     new_refresh = refreshed.refresh_token
-    account_id = stored.get("account_id") or await _identify_for_backfill(
-        provider, refreshed
+    identity = (
+        None
+        if stored.get("account_id")
+        else await _identify_for_backfill(provider, refreshed, slot)
     )
 
     # Refresh-token rotation: if the provider returned a new refresh
@@ -368,18 +377,18 @@ async def _refresh_locked(provider_id: str, slot: str, entry: _AccessTokenCache)
     # forever (which would keep re-triggering the A5 split-language
     # guess on every future unrelated failure).
     rotated = bool(new_refresh) and new_refresh != stored["refresh_token"]
-    backfilled = bool(account_id) and not stored.get("account_id")
-    if rotated or backfilled:
+    if rotated or identity is not None:
         # A reconnect or disconnect during the POST must not be overwritten.
         if not await _refresh_lock.run_to_completion(
-            _save_if_still_holds,
+            _save_refreshed,
             provider_id,
             slot,
-            stored["refresh_token"],
+            stored,
+            identity,
             provider=provider_id,
             slot=slot,
             account_email=stored.get("account_email", DEFAULT_ACCOUNT),
-            account_id=account_id,
+            account_id=stored.get("account_id"),
             refresh_token=new_refresh if rotated else stored["refresh_token"],
             scopes=stored.get("scopes", []),
             client_id_hash=provider.client_id_hash,
@@ -394,10 +403,6 @@ async def _refresh_locked(provider_id: str, slot: str, entry: _AccessTokenCache)
             forwarded=bool(stored.get("forwarded")),
         ):
             raise _replaced_error(provider_id)
-        if backfilled:
-            await _refresh_lock.run_to_completion(
-                accounts.record_identity, provider_id, slot, account_id
-            )
 
     if await _refresh_lock.run_to_completion(
         accounts.entry_state, provider_id, slot
@@ -411,28 +416,37 @@ async def _refresh_locked(provider_id: str, slot: str, entry: _AccessTokenCache)
     return entry.access_token
 
 
+# Accounts whose token can't read its own profile (a forwarded Microsoft
+# token without User.Read): asked once per process, not on every refresh.
+_identity_unavailable: set[Tuple[str, str]] = set()
+
+
 async def _identify_for_backfill(
-    provider: OAuthProvider, refreshed: "_Refreshed"
-) -> Optional[str]:
-    """The stable account id a refresh can reveal, or None (tried again on the
-    next refresh). Only metadata: a failure here never fails the refresh."""
+    provider: OAuthProvider, refreshed: "_Refreshed", slot: str
+) -> Optional["AccountIdentity"]:
+    """Who a refresh says the account is, or None. Only metadata: a failure
+    here never fails the refresh."""
     from gaia.connectors.flow import identify_account
 
     if not refreshed.id_token and not getattr(provider, "userinfo_url", None):
         return None  # This refresh carried no identity; a later one may.
+    key = (provider.provider_id, slot)
+    if key in _identity_unavailable:
+        return None
     try:
-        identity = await identify_account(
+        return await identify_account(
             provider, refreshed.id_token, refreshed.access_token
         )
     except ConnectorsError as e:
+        _identity_unavailable.add(key)
         logger.warning(
             "connectors: could not learn the account id of a %s connection "
-            "on refresh (%s); will retry on the next refresh",
+            "on refresh (%s); not asking again until GAIA restarts. Reconnect "
+            "the account to record it.",
             provider.provider_id,
             e,
         )
         return None
-    return identity.account_id
 
 
 async def get_token_with_expiry(
@@ -587,6 +601,70 @@ def _save_if_still_holds(
     if current is None or current.get("refresh_token") != sent_refresh_token:
         return False
     save_connection(**save_kwargs)
+    return True
+
+
+def _save_refreshed(
+    provider_id: str,
+    slot_name: str,
+    stored: dict,
+    identity: Optional["AccountIdentity"],
+    **fields,
+) -> bool:
+    """Save a refresh's result, filling in the account's id and address when
+    the refresh revealed them. Returns False when the stored connection was
+    replaced meanwhile.
+
+    When another slot already holds that id (an old build stored the account
+    twice), the two become one: this slot keeps the newer sign-in's token and
+    the default flag, and the other is deleted. Blocking; the caller holds
+    this slot's account lock.
+    """
+    from gaia.connectors import accounts
+
+    sent = stored["refresh_token"]
+    if identity is None:
+        return _save_if_still_holds(provider_id, slot_name, sent, **fields)
+    if stored.get("account_email") in (None, "", DEFAULT_ACCOUNT):
+        fields["account_email"] = identity.email
+    twin_slot = accounts.slot_holding(
+        provider_id, identity.account_id, besides=slot_name
+    )
+    if twin_slot is None:
+        fields["account_id"] = identity.account_id
+        if not _save_if_still_holds(provider_id, slot_name, sent, **fields):
+            return False
+        accounts.record_identity(
+            provider_id, slot_name, identity.account_id, fields["account_email"]
+        )
+        return True
+    with _refresh_lock.try_held_account_sync(provider_id, twin_slot) as got:
+        if not got:
+            # Merged on a later refresh; one id is never stored in two slots.
+            return _save_if_still_holds(provider_id, slot_name, sent, **fields)
+        twin = peek_connection(provider_id, slot=twin_slot)
+        if (
+            twin is not None
+            and twin.get("client_id_hash") == fields["client_id_hash"]
+            and (twin.get("connected_at") or 0) > (stored.get("connected_at") or 0)
+        ):
+            fields.update(
+                account_email=twin.get("account_email") or fields["account_email"],
+                refresh_token=twin["refresh_token"],
+                scopes=twin.get("scopes", []),
+                connected_at=twin.get("connected_at"),
+                tenant=twin.get("tenant") or fields["tenant"],
+                account_type=twin.get("account_type") or fields["account_type"],
+                forwarded=bool(twin.get("forwarded")),
+            )
+        fields["account_id"] = identity.account_id
+        if not _save_if_still_holds(provider_id, slot_name, sent, **fields):
+            return False
+        delete_connection(provider_id, slot=twin_slot)
+    accounts.drop_duplicate(provider_id, keep=slot_name, drop=twin_slot)
+    accounts.record_identity(
+        provider_id, slot_name, identity.account_id, fields["account_email"]
+    )
     return True
 
 

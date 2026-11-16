@@ -100,7 +100,12 @@ Status: built on `claude/multi-account-store`. A person with one account sees no
 - A sign-in writes its list entry as `pending` first, then the token, then marks it `ok`. A crash
   in between leaves a listed account with status `error` that can be removed or signed into again.
 - The stable id of an account saved before this change is filled in on its next refresh (Google
-  from the refresh's id_token, Microsoft from Graph `/me`). Until then it is matched by address.
+  from the refresh's id_token, Microsoft from Graph `/me`), with its address if it was stored as
+  `default`. Until then it is matched by address, but only when the account kinds (personal or
+  work) don't conflict. A lone old account stored without an address is updated by a reconnect
+  and kept beside an added account. If the id it learns is already stored in another slot, the
+  two merge into one, keeping the newer sign-in's token and the default flag. A token that can't
+  read its profile is asked once per process.
 - A sign-in whose reply names no account id fails loudly and saves nothing.
 - The same stable id updates the stored account in place. A different id is added; it never
   overwrites another account, even with the same address.

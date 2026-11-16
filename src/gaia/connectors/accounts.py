@@ -173,6 +173,8 @@ def _save_index(data: Dict[str, Any]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, sort_keys=True, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
         if sys.platform != "win32":
             os.chmod(path, 0o600)
@@ -339,13 +341,16 @@ def save_signed_in_account(
     client_id_hash: str,
     tenant: Optional[str] = None,
     account_type: Optional[str] = None,
+    add_account: bool = False,
 ) -> Tuple[Account, bool]:
     """Store a finished sign-in; returns ``(account, added)``.
 
     The same stable id as a stored account updates it in place, keeping its
-    default flag. A legacy account with no stable id yet matches by email. A
-    different id is added as a new account; another account is never
-    overwritten. Blocking; the caller holds the provider lock.
+    default flag. A legacy account with no stable id yet matches by email when
+    the account kinds don't conflict; a lone legacy account stored without an
+    address matches any sign-in that is not ``add_account``. Anything else is
+    added as a new account; another account is never overwritten. Blocking;
+    the caller holds the provider lock.
     """
     if not account_id or not email:
         raise ConnectorsError(
@@ -354,17 +359,7 @@ def save_signed_in_account(
         )
     with _mutate(connector_id) as section:
         entries = section["accounts"]
-        match = next(
-            (e for e in entries if e.get("account_id") == account_id), None
-        ) or next(
-            (
-                e
-                for e in entries
-                if e.get("account_id") in (None, UNIDENTIFIED)
-                and (e.get("email") or "").casefold() == email.casefold()
-            ),
-            None,
-        )
+        match = _signed_in_match(entries, account_id, email, account_type, add_account)
         added = match is None
         if added:
             slot = LEGACY_SLOT if not entries else slot_for(account_id)
@@ -405,31 +400,76 @@ def save_signed_in_account(
     return account, added
 
 
+def _unidentified(entry: Dict[str, Any]) -> bool:
+    return entry.get("account_id") in (None, "", UNIDENTIFIED)
+
+
+def _signed_in_match(
+    entries: List[Dict[str, Any]],
+    account_id: str,
+    email: str,
+    account_type: Optional[str],
+    add_account: bool,
+) -> Optional[Dict[str, Any]]:
+    """The stored entry a sign-in updates in place, or None to add one."""
+    for entry in entries:
+        if entry.get("account_id") == account_id:
+            return entry
+    for entry in entries:
+        kind = entry.get("account_type")
+        if (
+            _unidentified(entry)
+            and (entry.get("email") or "").casefold() == email.casefold()
+            and (kind is None or account_type is None or kind == account_type)
+        ):
+            return entry
+    # Old builds stored "default" when the address lookup failed.
+    if (
+        not add_account
+        and len(entries) == 1
+        and _unidentified(entries[0])
+        and entries[0].get("email") in (None, "", DEFAULT_ACCOUNT)
+    ):
+        return entries[0]
+    return None
+
+
 def remove_account(connector_id: str, slot: str) -> int:
     """Delete one account's token and index entry; returns how many accounts
     remain. Blocking; the caller holds the provider lock."""
-    with _refresh_lock.held_account_sync(connector_id, slot):
-        delete_connection(connector_id, slot=slot)
+    _delete_slot(connector_id, slot)
     with _mutate(connector_id) as section:
         section["accounts"] = [e for e in section["accounts"] if e["slot"] != slot]
         remaining = len(section["accounts"])
-    _evict_token(connector_id, slot)
     return remaining
 
 
 def remove_all_accounts(connector_id: str) -> int:
     """Delete every stored account of ``connector_id`` (uninstall, or a full
-    disconnect). Returns how many were removed."""
-    listed = [a.slot for a in list_accounts(connector_id)]
-    for slot in listed + ([] if LEGACY_SLOT in listed else [LEGACY_SLOT]):
-        with _refresh_lock.held_account_sync(connector_id, slot):
-            delete_connection(connector_id, slot=slot)
-        _evict_token(connector_id, slot)
+    disconnect). Returns how many were removed.
+
+    The ``default`` slot goes first, so an unreadable account list (which
+    raises) still never leaves the first account's token behind.
+    """
+    had_legacy = peek_connection(connector_id, slot=LEGACY_SLOT) is not None
+    _delete_slot(connector_id, LEGACY_SLOT)
+    section = _load_index()["connectors"].get(connector_id) or {}
+    slots = {e["slot"] for e in section.get("accounts", [])}
+    if had_legacy:
+        slots.add(LEGACY_SLOT)
+    for slot in slots - {LEGACY_SLOT}:
+        _delete_slot(connector_id, slot)
     with _index_locked():
         data = _load_index()
         data["connectors"].pop(connector_id, None)
         _save_index(data)
-    return len(listed)
+    return len(slots)
+
+
+def _delete_slot(connector_id: str, slot: str) -> None:
+    with _refresh_lock.held_account_sync(connector_id, slot):
+        delete_connection(connector_id, slot=slot)
+    _evict_token(connector_id, slot)
 
 
 def set_default_account(connector_id: str, account: str) -> Account:
@@ -501,12 +541,33 @@ def record_account(
         )
 
 
-def record_identity(connector_id: str, slot: str, account_id: str) -> None:
-    """Fill in the stable id of an account that was stored without one."""
+def record_identity(connector_id: str, slot: str, account_id: str, email: str) -> None:
+    """Fill in the stable id and address of an account stored without them."""
     with _mutate(connector_id) as section:
         for entry in section["accounts"]:
             if entry["slot"] == slot:
                 entry["account_id"] = account_id
+                entry["email"] = email
+
+
+def slot_holding(connector_id: str, account_id: str, *, besides: str) -> Optional[str]:
+    """Another slot already stored under ``account_id``, or None."""
+    section = _load_index()["connectors"].get(connector_id) or {}
+    for entry in section.get("accounts", []):
+        if entry["slot"] != besides and entry.get("account_id") == account_id:
+            return entry["slot"]
+    return None
+
+
+def drop_duplicate(connector_id: str, *, keep: str, drop: str) -> None:
+    """Forget ``drop``, a second slot of the account in ``keep``, after its
+    token was deleted. ``keep`` inherits the default flag."""
+    with _mutate(connector_id) as section:
+        slots = [e["slot"] for e in section["accounts"]]
+        if _default_of(section, slots) == drop:
+            section["default_slot"] = keep
+        section["accounts"] = [e for e in section["accounts"] if e["slot"] != drop]
+    _evict_token(connector_id, drop)
 
 
 def _evict_token(connector_id: str, slot: str) -> None:

@@ -92,7 +92,7 @@ def google(google_provider, no_browser):
         yield endpoint
 
 
-async def _sign_in(google, identity, refresh_token, reconnect=None):
+async def _sign_in(google, identity, refresh_token, reconnect=None, add=False):
     google.next_identity = identity
     google.next_refresh = refresh_token
     pending = flow_mod._PendingFlow(
@@ -104,7 +104,7 @@ async def _sign_in(google, identity, refresh_token, reconnect=None):
         redirect_uri="http://127.0.0.1/callback",
         runner=None,
         future=asyncio.get_running_loop().create_future(),
-        intent=flow_mod.SignInIntent(reconnect=reconnect),
+        intent=flow_mod.SignInIntent(add_account=add, reconnect=reconnect),
     )
     return await flow_mod._exchange_code_for_tokens(pending, "code")
 
@@ -512,3 +512,150 @@ def test_microsoft_prompts(account_type, domain_hint):
     assert reconnect.get("login_hint") == "u@outlook.com"
     assert reconnect.get("domain_hint") == domain_hint
     assert "prompt" not in reconnect
+
+
+# ---------------------------------------------------------------------------
+# Ambiguous sign-ins: never merge two accounts, never leave one behind
+# ---------------------------------------------------------------------------
+
+
+def test_a_personal_microsoft_account_never_replaces_a_work_one_at_one_address():
+    # An old build stored the work account without its stable id.
+    save_connection(
+        provider="microsoft",
+        account_email="pat@contoso.com",
+        refresh_token="rt-work",
+        scopes=["Mail.Read"],
+        client_id_hash="h",
+        account_type="work",
+    )
+
+    _, added = accounts.save_signed_in_account(
+        "microsoft",
+        account_id="personal-cid",
+        email="pat@contoso.com",
+        refresh_token="rt-personal",
+        scopes=["Mail.Read"],
+        client_id_hash="h",
+        account_type="personal",
+    )
+
+    assert added is True
+    assert peek_connection("microsoft")["refresh_token"] == "rt-work"
+    assert peek_connection("microsoft")["account_type"] == "work"
+    assert sorted(a.account_type for a in accounts.list_accounts("microsoft")) == [
+        "personal",
+        "work",
+    ]
+
+
+def _old_store_without_an_address(refresh_token="rt-old"):
+    # Old builds wrote "default" when they could not look the address up.
+    save_connection(
+        provider="google",
+        account_email="default",
+        refresh_token=refresh_token,
+        scopes=SCOPES,
+        client_id_hash=google_provider_hash(),
+        connected_at=1000.0,
+    )
+
+
+async def test_reconnecting_an_account_stored_without_an_address_updates_it(google):
+    _old_store_without_an_address()
+
+    result = await _sign_in(google, ALICE, "rt-new")
+
+    assert result["added"] is False
+    assert _listed() == [("alice@example.com", "ok", True)]
+    assert peek_connection("google")["refresh_token"] == "rt-new"
+    assert peek_connection("google")["account_id"] == "alice-sub"
+
+
+async def test_adding_beside_an_account_stored_without_an_address_adds_one(google):
+    _old_store_without_an_address()
+
+    result = await _sign_in(google, BOB, "rt-bob", add=True)
+
+    assert result["added"] is True
+    assert peek_connection("google")["refresh_token"] == "rt-old"
+    assert len(accounts.list_accounts("google")) == 2
+
+
+async def test_an_old_slot_learning_an_id_already_stored_merges_into_one(google):
+    _old_store_without_an_address()
+    # The same Gmail was later added beside it, under its stable id.
+    await _sign_in(google, ALICE, "rt-new", add=True)
+    assert len(accounts.list_accounts("google")) == 2
+
+    google.refresh_identity = ALICE
+    token = await api.get_access_token(provider="google", scopes=[GMAIL])
+
+    assert token == "access-for-rt-old"
+    listed = accounts.list_accounts("google")
+    assert [(a.account_id, a.email, a.is_default) for a in listed] == [
+        ("alice-sub", "alice@example.com", True)
+    ]
+    # The newer sign-in's token is the one kept.
+    assert peek_connection("google", slot=listed[0].slot)["refresh_token"] == "rt-new"
+    assert accounts.resolve_slot("google", "alice-sub") == listed[0].slot
+
+
+async def test_an_old_slot_learns_its_address_with_its_id(google):
+    _old_store_without_an_address()
+    google.refresh_identity = ALICE
+
+    await api.get_access_token(provider="google", scopes=[GMAIL])
+
+    assert _listed() == [("alice@example.com", "ok", True)]
+    assert peek_connection("google")["account_email"] == "alice@example.com"
+
+
+async def test_uninstall_clears_the_first_account_even_with_a_torn_account_list(
+    google,
+):
+    await _two_gmails(google)
+    accounts.index_path().write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ConnectorsError, match="could not be read"):
+        accounts.remove_all_accounts("google")
+
+    assert peek_connection("google") is None
+
+
+async def test_a_token_that_cannot_read_its_profile_asks_only_once(monkeypatch, caplog):
+    from gaia.connectors import tokens
+    from gaia.connectors.providers import _registry
+    from gaia.connectors.providers import get as get_provider
+
+    monkeypatch.setenv(
+        "GAIA_MICROSOFT_CLIENT_ID", "11112222-bbbb-3333-cccc-4444dddd5555"
+    )
+    monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
+    _registry.clear()
+    provider = get_provider("microsoft")
+    # A forwarded token without User.Read: refreshes work, /me does not.
+    save_connection(
+        provider="microsoft",
+        account_email="pat@outlook.com",
+        refresh_token="rt-fwd",
+        scopes=["Mail.Read", "offline_access"],
+        client_id_hash=provider.client_id_hash,
+        tenant=getattr(provider, "tenant", None),
+    )
+    with respx.mock(assert_all_called=False) as router:
+        router.post(provider.token_url).mock(
+            return_value=httpx.Response(
+                200, json={"access_token": "at", "expires_in": 3600}
+            )
+        )
+        me = router.get(url__startswith="https://graph.microsoft.com/v1.0/me").mock(
+            return_value=httpx.Response(403, json={"error": {"code": "Forbidden"}})
+        )
+        with caplog.at_level("WARNING", logger="gaia.connectors.tokens"):
+            for _ in range(3):
+                tokens._cache.clear()
+                assert await get_or_refresh("microsoft") == "at"
+
+    assert me.call_count == 1
+    assert len([r for r in caplog.records if "account id" in r.getMessage()]) == 1

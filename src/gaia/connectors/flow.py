@@ -291,6 +291,8 @@ async def _save_signed_in(
     payload: Dict[str, Any],
     granted_scopes: list[str],
     account_type: Optional[str],
+    *,
+    add_account: bool = False,
 ) -> Dict[str, Any]:
     """Identify the account, store it, and return the result fields."""
     from gaia.connectors.accounts import save_signed_in_account
@@ -312,6 +314,7 @@ async def _save_signed_in(
         # from the blob entirely (A7-style contract).
         tenant=getattr(provider, "tenant", None),
         account_type=account_type,
+        add_account=add_account,
     )
     return {
         "account_email": account.email,
@@ -1003,7 +1006,12 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     account_type = _resolve_account_type(provider, payload.get("id_token", ""))
     granted_scopes = _resolve_granted_scopes(payload, flow.scopes)
     saved = await _save_signed_in(
-        flow.provider_id, provider, payload, granted_scopes, account_type
+        flow.provider_id,
+        provider,
+        payload,
+        granted_scopes,
+        account_type,
+        add_account=flow.intent.add_account,
     )
     if flow.intent.reconnect:
         # Lets the caller say so when a different account came back.
