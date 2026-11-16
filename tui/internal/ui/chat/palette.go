@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -45,6 +46,7 @@ var paletteCommands = []paletteCommand{
 	{"/skills", "List skills, or add one or a library: /skills add <GitHub or skills.sh link>"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
 	{"/gateway", "Connect GAIA to the AMD LLM gateway and pick its models"},
+	{"/hybrid", "Hybrid routing: its models, policy and rules; try a request"},
 	{"/cost", "What this session has spent; /cost help for rates"},
 	{"/copy", "Pick any message with ↑/↓ and copy it with Enter"},
 	{"/copy all", "Copy the whole conversation as markdown"},
@@ -77,6 +79,7 @@ const modelPalettePrefix = modelCommandPrefix + " "
 func modelPaletteCommands() []paletteCommand {
 	out := []paletteCommand{
 		{modelCommandPrefix, "List every model, including the local ones this machine has"},
+		{modelPalettePrefix + lemonade.HybridModelID, hybridPaletteDesc()},
 	}
 	for _, cm := range client.ClaudeModels {
 		out = append(out, paletteCommand{

@@ -24,6 +24,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
+	"github.com/amd/gaia/tui/internal/ui/hybrid"
 	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/theme"
@@ -167,6 +168,10 @@ type ChatModel struct {
 	updateCheckOnLaunch bool
 
 	providerPanel *providers.Model
+	// hybridPanel is /hybrid, the hybrid routing settings, while open.
+	hybridPanel *hybrid.Model
+	// hybridNotice is the degraded-classifier notice last shown, so it is said once.
+	hybridNotice string
 	// modelSetup is /models, /gpu or first-run setup. It outlives its screen
 	// while a /models download runs in the background; modelSetupOpen is
 	// whether it is on screen.
@@ -879,7 +884,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if len(next.queued) == 0 || next.streaming || next.startup.pending || next.relayedSwitching ||
 		next.setupChecking || next.setupRunning ||
-		next.providerPanel != nil || next.agentsPanel != nil {
+		next.providerPanel != nil || next.agentsPanel != nil || next.hybridPanel != nil {
 		return next, cmd
 	}
 	// A mid-turn message still in flight settles within one loopback
@@ -970,6 +975,10 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.providerPanel = &panel
 			return m, cmd
 		}
+	}
+
+	if m.hybridPanel != nil {
+		return m.updateHybridPanel(msg)
 	}
 
 	if m.agentsPanel != nil {
@@ -1987,6 +1996,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/gateway":
 		return m, func() tea.Msg { return OpenGatewayMsg{} }
 
+	case "/hybrid":
+		return m.openHybridSettings()
+
 	case "/sessions":
 		return m, func() tea.Msg { return OpenSessionsMsg{} }
 
@@ -2925,11 +2937,16 @@ func (m ChatModel) turnElapsed(now time.Time) time.Duration {
 // breakdown back on for the people tuning the machinery.
 func (m ChatModel) answerStats(msg *Message) string {
 	if msg.Duration <= 0 {
-		return ""
+		return msg.Route
 	}
 	stats := []string{msg.DurationLabel + fmt.Sprintf("%.1fs", msg.Duration.Seconds())}
+	// Which model answered is about the answer, not the machinery, so a hybrid
+	// turn always names it.
+	if msg.Route != "" {
+		stats = append(stats, msg.Route)
+	}
 	if !m.dev {
-		return stats[0]
+		return strings.Join(stats, " · ")
 	}
 
 	// Every figure below is the inference backend's own measurement, passed
@@ -3795,6 +3812,9 @@ func (m ChatModel) View() string {
 	}
 	if m.providerPanel != nil {
 		return m.providerPanel.View()
+	}
+	if m.hybridPanel != nil {
+		return m.hybridPanel.View()
 	}
 	if m.agentsPanel != nil {
 		return m.agentsPanel.View()

@@ -194,6 +194,7 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"/connectors":   "/connectors",
 		"/agents":       "/agents",
 		"/gateway":      "/gateway",
+		"/hybrid":       "/hybrid",
 		"/copy":         "/copy",
 		"/copy all":     "/copy all",
 		"/sessions":     "/sessions",

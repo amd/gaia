@@ -388,6 +388,9 @@ func loadCatalog(ctx context.Context, c *lemonade.Client, provider string) model
 		}
 		entries = lemonade.OnlyProvenNPU(entries, chosen)
 	}
+	if provider == "amd" && err == nil {
+		entries = withHybrid(entries)
+	}
 	return modelsMsg{source: c, entries: entries, capacity: line, err: err, note: note}
 }
 
@@ -1072,7 +1075,7 @@ func (m Model) View() string {
 				marker = "› "
 			}
 			label := entryName(e, m.chosen())
-			if e.Featured() && !e.Recommended.Custom {
+			if e.Featured() && !e.Recommended.Custom && !lemonade.IsHybridID(e.Model.ID) {
 				label = "★ " + label
 			}
 			if rank, note, ok := lemonade.Rank(e.Model.ID); ok {
@@ -1218,6 +1221,8 @@ func formatTokens(n int) string {
 // entryGroup is the heading a picker row sits under.
 func entryGroup(e lemonade.Entry) string {
 	switch {
+	case lemonade.IsHybridID(e.Model.ID):
+		return "Hybrid routing"
 	case !e.Featured():
 		return "All models"
 	case e.Recommended.Custom:

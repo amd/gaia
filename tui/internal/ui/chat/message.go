@@ -43,6 +43,10 @@ type Message struct {
 	// DurationLabel names the time in the footnote; empty prints it bare.
 	DurationLabel string
 
+	// Route is where a hybrid turn ran, as a short line ("→ DeepSeek
+	// (writing, d1)"); empty on every other turn.
+	Route string
+
 	// Metrics is the agent's per-turn performance record. Nil unless the agent
 	// ran with GAIA_TURN_LOG set — every ordinary turn, and every turn from an
 	// agent older than the record, leaves it nil.

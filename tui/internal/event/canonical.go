@@ -179,6 +179,39 @@ type CanonicalFinalEvent struct {
 	Type   string          `json:"type"`
 	Answer string          `json:"answer"`
 	Usage  json.RawMessage `json:"usage,omitempty"`
+	// Route is the hybrid route record (gaia.llm.hybrid.RouteDecision) when the
+	// session runs on `hybrid`; absent otherwise and from agents before 2.29.
+	Route json.RawMessage `json:"route,omitempty"`
+}
+
+// CanonicalRoute is which model a hybrid turn ran on, and why. The same shape
+// answers the Agent UI's hybrid preview.
+type CanonicalRoute struct {
+	Model      string  `json:"model"`
+	Kind       string  `json:"kind"`
+	Difficulty *int    `json:"difficulty"`
+	Stakes     string  `json:"stakes"`
+	Reason     string  `json:"reason"`
+	Classified bool    `json:"classified"`
+	Seconds    float64 `json:"seconds"`
+	Sticky     bool    `json:"sticky"`
+	Policy     string  `json:"policy"`
+	Fix        string  `json:"fix"`
+	Degraded   bool    `json:"degraded"`
+	Notice     string  `json:"notice"`
+}
+
+// CanonicalRouteOf decodes a final event's route, or nil when it has none or
+// it names no model: a route is display metadata, not an outcome.
+func CanonicalRouteOf(e CanonicalFinalEvent) *CanonicalRoute {
+	if len(e.Route) == 0 {
+		return nil
+	}
+	var r CanonicalRoute
+	if err := json.Unmarshal(e.Route, &r); err != nil || r.Model == "" {
+		return nil
+	}
+	return &r
 }
 
 // CanonicalUsage is the shape the TUI reads out of CanonicalFinalEvent.Usage.

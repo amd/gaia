@@ -53,7 +53,7 @@
         "timeout_seconds"
       ]
     },
-    "final": { "fields": ["answer", "usage"] },
+    "final": { "fields": ["answer", "usage", "route"], "not_sent_over_stdio": ["route"] },
     "error": { "fields": ["detail", "status", "source"], "not_sent_over_stdio": ["source"] }
   },
   "session_index": {

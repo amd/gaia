@@ -292,6 +292,16 @@ In a running chat, `/model hybrid` turns routing on and `/model <id>` turns it
 off. The terminal UI checks the cheap, strong and classifier models before it
 starts, and names the `hybrid_*` setting to change if one is unavailable.
 
+In the terminal UI, the model picker (`/provider` › AMD LLM Gateway, and
+`/gateway`) lists hybrid as **Hybrid (DeepSeek + Opus)**, marked `(cloud)` or
+`(local)` by where its models run. `/hybrid` opens its settings: the cheap,
+strong and classifier models, the classifier's time limit, the policy, and for
+**Custom** a rules table you can start from Quality or Balanced. It saves to
+`~/.gaia/config.json` with the same checks as `gaia config set`. Its **Try a
+request** box and its routing stats need the Agent UI server running
+(`gaia chat --ui`). Each hybrid answer ends with where it ran, such as
+`→ DeepSeek (writing, d1)`.
+
 Before each turn, the cheap model labels your request: what kind of work it is,
 how hard it is (1-5), and whether a wrong answer would be acted on directly
 (`stakes`). The turn runs on the cheap model only when stakes are low and the
