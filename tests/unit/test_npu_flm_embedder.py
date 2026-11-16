@@ -42,6 +42,26 @@ class TestDeviceEmbedderResolution:
         assert embedder == "user.embeddinggemma-300m-GGUF"
         assert embedder in INIT_PROFILES["gaia"]["models"]
 
+    @pytest.mark.parametrize(
+        "profile, embedder",
+        [("npu", "embed-gemma-300m-FLM"), ("gpu", "user.embeddinggemma-300m-GGUF")],
+    )
+    def test_the_pcs_profile_picks_the_embedder(
+        self, profile, embedder, tmp_path, monkeypatch
+    ):
+        """One per PC: a chat on the other device must not change it (#6008)."""
+        import json
+
+        from gaia import config as config_mod
+        from gaia.agents.registry import machine_embedding_model
+
+        config_file = tmp_path / "config.json"
+        config_file.write_text(
+            json.dumps({"default_device": profile}), encoding="utf-8"
+        )
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
+        assert machine_embedding_model() == embedder
+
     def test_device_config_carries_embedder(self):
         """The embedder choice lives next to the chat model in DeviceConfig."""
         from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS

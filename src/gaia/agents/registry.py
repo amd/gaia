@@ -396,6 +396,22 @@ def get_embedding_model_for_device(device: Optional[str]) -> str:
     return DEFAULT_EMBEDDING_MODEL
 
 
+def machine_embedding_model() -> str:
+    """The embedder every chat on this PC uses: its profile's (``default_device``).
+
+    One per machine, never per chat or per model switch. Memory is one store
+    whose vectors belong to one embedder; changing it clears them all, so an
+    embedder that followed the chat model would wipe Memory on every NPU/GPU
+    switch.
+
+    Raises:
+        GaiaConfigError: ``~/.gaia/config.json`` can't be read.
+    """
+    from gaia.config import GaiaConfig
+
+    return get_embedding_model_for_device(GaiaConfig.load().default_device)
+
+
 @dataclass
 class ModelTier:
     """A selectable model size for an agent (#1162).

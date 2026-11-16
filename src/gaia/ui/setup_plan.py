@@ -837,7 +837,6 @@ def choose_vision_model(model_id: Optional[str]) -> None:
 def _job_model(job: str) -> Optional[str]:
     """The model *job* would load now, or None when no local model is involved."""
     from gaia.llm.lemonade_client import (
-        DEFAULT_EMBEDDING_MODEL,
         is_cloud_model_with_catalog,
         resolve_chat_model,
         resolve_default_vision_model,
@@ -850,7 +849,9 @@ def _job_model(job: str) -> Optional[str]:
     if job == model_choice.ROLE_VISION:
         return resolve_default_vision_model()
     if job == model_choice.ROLE_EMBEDDING:
-        return DEFAULT_EMBEDDING_MODEL
+        from gaia.agents.registry import machine_embedding_model
+
+        return machine_embedding_model()
     return next(
         (m for m, role in model_choice.OPTIONAL_MODELS.items() if role == job), None
     )

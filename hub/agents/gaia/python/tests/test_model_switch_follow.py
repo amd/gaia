@@ -23,6 +23,7 @@ from tests.fixtures.fake_lemonade import FakeLemonade
 GPU = DEFAULT_MODEL_NAME
 NPU = NPU_DEFAULT_MODEL_NAME
 EMBEDDER = "user.embeddinggemma-300m-GGUF"
+NPU_EMBEDDER = "embed-gemma-300m-FLM"
 
 
 @pytest.fixture
@@ -41,7 +42,7 @@ def server(tmp_path, monkeypatch):
     monkeypatch.chdir(work)
     LemonadeManager.reset()
     env = {"FAKE_LEMONADE_MAX_LLM": "1", "FAKE_LEMONADE_NPU": "1"}
-    with FakeLemonade(downloaded=(GPU, NPU, EMBEDDER), env=env) as fake:
+    with FakeLemonade(downloaded=(GPU, NPU, EMBEDDER, NPU_EMBEDDER), env=env) as fake:
         monkeypatch.setenv("LEMONADE_BASE_URL", fake.base_url)
         yield fake
     LemonadeManager.reset()
@@ -147,3 +148,30 @@ def test_image_reading_follows_the_agents_own_model_not_the_saved_pick(
         assert agent.vlm_model is None, "chat on the NPU reads no images"
     finally:
         close_agent(agent)
+
+
+@pytest.mark.parametrize("profile", ["npu", "gpu"])
+def test_every_chat_on_a_pc_uses_its_profiles_embedder(server, tmp_path, profile):
+    """A chat built on, or switched to, either device keeps the PC's embedder.
+
+    Memory has one store; a different embedder clears all its vectors (#6008).
+    """
+    from gaia_agent import stdio
+    from gaia_agent.session_registry import build_session_agent, close_agent
+
+    from gaia.agents.registry import get_embedding_model_for_device
+    from gaia.config import GaiaConfig
+
+    GaiaConfig.save_keys({"default_device": profile})
+    expected = get_embedding_model_for_device(profile)
+    for model, device in ((GPU, "gpu"), (NPU, None)):
+        agent = build_session_agent(
+            model_id=model, device=device, allowed_paths=[str(tmp_path / "work")]
+        )
+        try:
+            assert agent._rag_config_kwargs["embedding_model"] == expected
+            assert agent._embedding_model == expected
+            stdio.switch_model(agent, NPU if model == GPU else GPU)
+            assert agent._embedding_model == expected
+        finally:
+            close_agent(agent)

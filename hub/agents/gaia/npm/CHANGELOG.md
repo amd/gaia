@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **An NPU PC embeds documents and memory on the NPU.** The embedder was chosen
+  from a session's `device`, which `/query` never sets, so every session used
+  the GPU embedder; on an NPU profile it evicted the FastFlowLM chat model each
+  turn. It now follows the PC's profile (`default_device`), one embedder for
+  every session, so a session on the other device also leaves memory's vectors
+  alone.
 - **Closing an agent stops the MCP servers it started.** Each server is a
   process tree (`uvx`, `uv`, the server), and it used to outlive the agent:
   an agent built for one request left its servers running for good.

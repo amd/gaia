@@ -93,6 +93,12 @@ reached, setup still downloads the models, then reports itself incomplete and ex
 `gaia config set default_model <id>` with a GPU model; picking one in the Agent UI or terminal
 UI model list changes only the model those open on.
 
+The embedder for documents and memory follows the PC's profile, not the chat model: after
+`gaia init --profile npu` every chat uses `embed-gemma-300m-FLM`, including a chat switched
+to a GPU model. Memory keeps one set of vectors, made by one embedder, so a chat on the other
+device never clears them. Changing the profile changes the embedder, and memory is
+re-embedded with the new one.
+
 ## Which NPU model
 
 You don't need the NPU profile to use the NPU. On any PC with a Ryzen AI NPU, a plain

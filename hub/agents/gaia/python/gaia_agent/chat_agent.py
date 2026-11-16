@@ -105,7 +105,7 @@ from gaia.agents.base.tool_loader import (
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.install_hints import missing_package_hint
-from gaia.agents.registry import get_embedding_model_for_device
+from gaia.agents.registry import machine_embedding_model
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
@@ -847,11 +847,10 @@ class ChatAgent(
         # which binds a port chosen at start time.
         effective_base_url = resolve_lemonade_base_url(config.base_url)
 
-        # Embedder is device-scoped: the NPU profile uses the FLM-native
-        # embedder so chat and embeddings stay co-resident on the NPU backend
-        # (a GGUF embedder runs on Vulkan and evicts the FLM chat model every
-        # turn — #1744). GPU/CPU use the GGUF embedder `gaia init` downloads.
-        effective_embedding_model = get_embedding_model_for_device(config.device)
+        # The PC's profile picks it, not this chat's device: the NPU profile's
+        # FLM embedder stays beside the FLM chat model (#1744), and Memory's
+        # vectors aren't cleared by a chat on the other device.
+        effective_embedding_model = machine_embedding_model()
 
         # RAG (#2323 Increment 3): ``RAGConfig`` is cheap (no I/O) and built
         # eagerly here — every profile's allowed_paths/model/embedding wiring
