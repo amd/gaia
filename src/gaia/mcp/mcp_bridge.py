@@ -19,7 +19,7 @@ import threading
 from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
 # Add GAIA to path
@@ -33,6 +33,7 @@ from gaia.api.local_http import (  # pylint: disable=wrong-import-position
 )
 from gaia.llm import create_client  # pylint: disable=wrong-import-position
 from gaia.llm.lemonade_client import (  # pylint: disable=wrong-import-position
+    resolve_default_chat_model,
     resolve_lemonade_base_url,
 )
 from gaia.llm.reasoning import (  # pylint: disable=wrong-import-position
@@ -179,8 +180,8 @@ class GAIAMCPBridge:
             "capabilities": ["query", "stream", "model_selection"],
         }
         self.agents["chat"] = {
-            "module": "gaia.chat.app",
-            "function": "main",
+            "module": "gaia.chat.sdk",
+            "class": "AgentSDK",
             "description": "Interactive chat",
             "capabilities": ["conversation", "history", "context_management"],
         }
@@ -254,17 +255,20 @@ class GAIAMCPBridge:
             if not self.llm_client:
                 self.llm_client = create_client("lemonade", base_url=self.base_url)
             # Streamed so a hang-up can end the reply: closing it hangs up on Lemonade.
+            model = args.get("model") or resolve_default_chat_model()
             reply = self.llm_client.generate(
                 prompt=args.get("query", ""),
-                model=args.get("model"),
+                model=model,
                 max_tokens=args.get("max_tokens", 500),
                 stream=True,
             )
-            response = self._answer_from(reply, client_gone)
+            response = self._answer_from(reply, client_gone, model)
 
         return {"success": True, "result": response}
 
-    def _answer_from(self, reply, client_gone: Callable[[], bool]) -> str:
+    def _answer_from(
+        self, reply, client_gone: Callable[[], bool], model: Optional[str] = None
+    ) -> str:
         """Read a streamed *reply* into the answer a non-streamed call returns."""
         if isinstance(reply, str):
             return reply
@@ -279,8 +283,13 @@ class GAIAMCPBridge:
             if callable(close):
                 close()
         answer = strip_reasoning("".join(parts))
-        # Matches the unstreamed reply, where a finished answer sent as reasoning wins.
-        if not answer and self.llm_client.get_last_finish_reason() == "stop":
+        # Matches the unstreamed reply: a finished answer a local model sent as
+        # reasoning wins, but a cloud model's reasoning is never the answer.
+        if (
+            not answer
+            and self.llm_client.get_last_finish_reason() == "stop"
+            and not self.llm_client.cloud_model_provider(model)
+        ):
             answer = self.llm_client.get_last_reasoning() or ""
         return answer
 
@@ -296,7 +305,9 @@ class GAIAMCPBridge:
             with _in_turn(self._chat_lock, "chat", client_gone):
                 if self.chat_sdk is None:
                     # AgentSDK uses the global LLM configuration, not a base_url
-                    self.chat_sdk = AgentSDK(config=AgentConfig())
+                    self.chat_sdk = AgentSDK(
+                        config=AgentConfig(model=resolve_default_chat_model())
+                    )
                 chat_response = self.chat_sdk.send(query)
 
             # Extract the text response

@@ -1,12 +1,14 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { AlertTriangle, Check, Copy, Info, Loader2, RotateCcw } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
 import type { Say } from '../../i18n/registry';
+import { useModelStore } from '../../stores/modelStore';
 import type { GpuMemoryPreset, GpuMemoryStatus } from '../../types';
+import { RadioGroup } from '../RadioGroup';
 import { ConfirmSheet } from './ConfirmSheet';
 import { SetupFooter } from './SetupFooter';
 import { formatSize } from './format';
@@ -99,39 +101,39 @@ function SplitBar({ status, targetGpuGb }: { status: GpuMemoryStatus; targetGpuG
 
 interface PresetPickerProps {
     presets: GpuMemoryPreset[];
+    /** null is keeping the GPU's share as it is. */
     value: number | null;
-    onChange: (settingGb: number) => void;
+    onChange: (settingGb: number | null) => void;
     recommended: number | null;
     max: number | null;
+    /** The GPU's share now, offered first as the choice to change nothing; null hides it. */
+    keepGb: number | null;
     disabled?: boolean;
 }
 
-/** A radiogroup of safe sizes; arrow keys move between them. */
-function PresetPicker({ presets, value, onChange, recommended, max, disabled }: PresetPickerProps) {
+/** A radiogroup of safe sizes, after keeping the current one; arrow keys move between them. */
+function PresetPicker({ presets, value, onChange, recommended, max, keepGb, disabled }: PresetPickerProps) {
     const t = useT();
-    const refs = useRef<Array<HTMLButtonElement | null>>([]);
-    const at = Math.max(0, presets.findIndex((p) => p.setting_gb === value));
-    const onKey = (e: KeyboardEvent) => {
-        const delta = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
-        if (!delta) return;
-        e.preventDefault();
-        const rtl = getComputedStyle(e.currentTarget).direction === 'rtl';
-        const horizontal = e.key === 'ArrowRight' || e.key === 'ArrowLeft';
-        const step = horizontal && rtl ? -delta : delta;
-        const next = (at + step + presets.length) % presets.length;
-        onChange(presets[next].setting_gb);
-        refs.current[next]?.focus();
-    };
     return (
-        <div className="gpu-presets" role="radiogroup" aria-label={t('gpu.presets.label')} onKeyDown={onKey}>
-            {presets.map((p, i) => (
+        <RadioGroup className="gpu-presets" aria-label={t('gpu.presets.label')}>
+            {keepGb != null && (
+                <button
+                    type="button"
+                    role="radio"
+                    aria-checked={value === null}
+                    className={`gpu-preset${value === null ? ' is-active' : ''}`}
+                    disabled={disabled}
+                    onClick={() => onChange(null)}
+                >
+                    <bdi>{t('gpu.presets.keep', { gb: formatSize(keepGb) })}</bdi>
+                </button>
+            )}
+            {presets.map((p) => (
                 <button
                     key={p.setting_gb}
-                    ref={(el) => { refs.current[i] = el; }}
                     type="button"
                     role="radio"
                     aria-checked={p.setting_gb === value}
-                    tabIndex={i === at ? 0 : -1}
                     className={`gpu-preset${p.setting_gb === value ? ' is-active' : ''}`}
                     disabled={disabled}
                     onClick={() => onChange(p.setting_gb)}
@@ -141,7 +143,7 @@ function PresetPicker({ presets, value, onChange, recommended, max, disabled }: 
                     {p.setting_gb === max && <>{' '}<span className="gpu-tag is-max">{t('gpu.presets.max')}</span></>}
                 </button>
             ))}
-        </div>
+        </RadioGroup>
     );
 }
 
@@ -157,6 +159,8 @@ export interface GpuMemoryPanelProps {
     onContinue?: () => void;
     /** Setup's Back. */
     onBack?: () => void;
+    /** The user picked a cloud model in this run of setup. */
+    cloud?: boolean;
 }
 
 /**
@@ -166,8 +170,10 @@ export interface GpuMemoryPanelProps {
  * AMD Software or the BIOS where it can't. Every reading comes from the backend
  * re-reading the machine, never from what was asked for.
  */
-export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContinue, onBack, headingId }: GpuMemoryPanelProps) {
+export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContinue, onBack, headingId, cloud = false }: GpuMemoryPanelProps) {
     const t = useT();
+    // Chat answered in the cloud: no local model to recommend a split for.
+    const chatInCloud = useModelStore((s) => !!s.active?.remote) || cloud;
     const focusHeading = useCallback(() => {
         const el = headingId ? document.getElementById(headingId) : null;
         if (el) focusInView(el);
@@ -177,7 +183,9 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
     }, [mode, focusHeading]);
     const stepsId = useId();
     const presets = status.presets ?? [];
-    const [target, setTarget] = useState<number | null>(status.recommended_setting_gb ?? presets[0]?.setting_gb ?? null);
+    // Nothing to gain from a change: keeping the current share is what's picked.
+    const recommended = chatInCloud ? null : status.recommended_setting_gb ?? null;
+    const [target, setTarget] = useState<number | null>(recommended ?? (status.gpu_gb != null ? null : presets[0]?.setting_gb ?? null));
     const [guided, setGuided] = useState(false);
     const [guidedSteps, setGuidedSteps] = useState<string[] | null>(null);
     const [guidedValue, setGuidedValue] = useState<string | null | undefined>(undefined);
@@ -187,12 +195,11 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
     const [copied, setCopied] = useState<string | null>(null);
 
     const preset = presets.find((p) => p.setting_gb === target) ?? null;
-    const recommended = status.recommended_setting_gb ?? null;
     // The top preset is the most GAIA allows: the CPU keeps only its floor there.
     const max = presets.length > 0 && presets[presets.length - 1].setting_gb === status.setting?.max_gb ? presets[presets.length - 1].setting_gb : null;
     const cpuLeft = preset && status.total_gb != null ? Math.max(0, status.total_gb - preset.gpu_gb) : null;
     // No raise unlocks a default model: the split already runs the best one GAIA picks.
-    const fitsNow = recommended == null ? (status.models ?? []).find((m) => m.default && m.fits_now) : undefined;
+    const fitsNow = recommended == null && !chatInCloud ? (status.models ?? []).find((m) => m.default && m.fits_now) : undefined;
     const unlocks = (preset?.unlocks ?? []).slice(0, 2).map((id) => names[id] ?? id);
     const pending = status.pending ?? null;
     const canApply = status.method === 'apply';
@@ -332,7 +339,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                             <Check size={13} aria-hidden="true" /> {t('gpu.keepRecommended', { model: names[fitsNow.id] ?? fitsNow.id })}
                         </p>
                     )}
-                    <PresetPicker presets={presets} value={target} onChange={setTarget} recommended={recommended} max={max} disabled={busy !== null} />
+                    <PresetPicker presets={presets} value={target} onChange={setTarget} recommended={recommended} max={max} keepGb={status.gpu_gb ?? null} disabled={busy !== null} />
                     {preset && (
                         <p className="gpu-unlock">
                             {unlocks.length > 0
@@ -409,7 +416,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                     </button>
                 );
                 const showMe = !restartPending && presets.length > 0 && canGuide && (
-                    <button type="button" className={canApply ? 'btn-secondary' : 'btn-primary'} onClick={() => void showSteps()} disabled={busy !== null}>
+                    <button type="button" className={canApply ? 'btn-secondary' : 'btn-primary'} onClick={() => void showSteps()} disabled={busy !== null || target == null}>
                         {t('gpu.showMe')}
                     </button>
                 );
@@ -420,7 +427,9 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                             {onBack && <button type="button" className="btn-secondary" onClick={onBack}>{t('setup.back')}</button>}
                             {restartPending
                                 ? onContinue && <button type="button" className="btn-primary" onClick={onContinue} autoFocus>{t('setup.continue')}</button>
-                                : <>
+                                : target == null && presets.length > 0
+                                    ? (onSkip ?? onContinue) && <button type="button" className="btn-primary" onClick={onSkip ?? onContinue} disabled={busy !== null}>{t('gpu.keepAsIs')}</button>
+                                    : <>
                                     {onSkip && <button type="button" className="btn-secondary" onClick={onSkip} disabled={busy !== null}>{t('gpu.skip')}</button>}
                                     {canApply ? <>{showMe}{apply}</> : showMe}
                                 </>}

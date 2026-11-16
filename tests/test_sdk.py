@@ -493,7 +493,6 @@ class TestAudioClient:
         assert hasattr(AudioClient, "start_voice_chat")
         assert hasattr(AudioClient, "initialize_tts")
         assert hasattr(AudioClient, "speak_text")
-        assert hasattr(AudioClient, "process_voice_input")
         assert hasattr(AudioClient, "halt_generation")
 
 

@@ -315,6 +315,16 @@ export interface GoalStats {
     tasks: Partial<Record<TaskStatus, number>>;
 }
 
+/** Why the background loop could not read the goal store; null when it can. */
+export function getGoalStoreHealth() {
+    return memFetch<{ error: string | null; damaged: boolean }>('GET', '/goals/health');
+}
+
+/** Move a damaged goal list aside and start an empty one; returns the kept file's name. */
+export function resetGoalStore() {
+    return memFetch<{ kept: string }>('POST', '/goals/store/reset');
+}
+
 export function getGoalStats() {
     return memFetch<GoalStats>('GET', '/goals/stats');
 }

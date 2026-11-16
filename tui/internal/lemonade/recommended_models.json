@@ -51,6 +51,15 @@
       "kv_bytes_per_token": 22528
     },
     {
+      "id": "Muse-Glimmer-30B-GGUF",
+      "provider": "local",
+      "label": "Muse Glimmer 30B",
+      "note": "optional: Meta's agent model, with vision; dense, so slower than Qwen3.6 on Strix Halo; needs ~24 GB for models",
+      "size_gb": 21.36,
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 13312
+    },
+    {
       "id": "ggml-gpt-oss-20b-MXFP4-GGUF",
       "register_as": "user.ggml-gpt-oss-20b-MXFP4-GGUF",
       "provider": "local",

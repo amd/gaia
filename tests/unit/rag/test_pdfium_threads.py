@@ -30,10 +30,7 @@ _STRESS = textwrap.dedent("""
     from reportlab.lib.utils import ImageReader
     from reportlab.pdfgen import canvas
 
-    from gaia.rag.pdf_utils import (
-        extract_images_from_page_pdfium,
-        get_image_positions_on_page,
-    )
+    from gaia.rag.pdf_utils import extract_images_from_page_pdfium
     from gaia.utils import pdf_page_to_image
 
     out = Path(sys.argv[1])
@@ -60,7 +57,6 @@ _STRESS = textwrap.dedent("""
                 pdf = rng.choice(pdfs)
                 page = rng.randrange(PAGES)
                 assert extract_images_from_page_pdfium(pdf, page + 1)
-                assert get_image_positions_on_page(pdf, page)
                 assert pdf_page_to_image(pdf, page, scale=1.0)
         except Exception as e:  # reported to the parent, which fails the test
             errors.append(repr(e))

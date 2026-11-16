@@ -50,6 +50,16 @@ def test_a_long_message_is_saved_and_the_model_is_told_where(tmp_path):
     assert "never copy the message into a tool call" in note
 
 
+def test_the_note_says_the_file_holds_the_request_itself(tmp_path):
+    """rc18, DeepSeek: a count over the file included the question's ZEBRA."""
+    paste = _paste()
+
+    sent = _agent(str(tmp_path))._with_long_message_file(paste)
+
+    note = sent[: -len(paste)]
+    assert "the request itself" in note
+
+
 def test_the_file_holds_the_users_words_not_the_framed_message(tmp_path):
     paste = _paste()
     agent = _agent(str(tmp_path))

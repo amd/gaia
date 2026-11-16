@@ -20,11 +20,22 @@ export type SettingsSection =
     | 'permissions'
     | 'skills'
     | 'connectors'
+    | 'messaging'
+    | 'automations'
     | 'memory'
     | 'privacy'
     | 'notifications'
     | 'voice'
-    | 'advanced';
+    | 'advanced'
+    | 'about';
+
+export interface SettingsJump {
+    section: SettingsSection;
+    /** CSS selector for the setting inside that section. */
+    target: string;
+    /** The tab that sent the user here, offered as the way back; none from outside Settings. */
+    from?: SettingsSection;
+}
 
 /**
  * Read a UI preference, saying so when the store is unreadable.
@@ -123,12 +134,23 @@ function readQueues(): Record<string, QueuedMessage[]> {
 export interface PendingPrompt {
     sessionId: string;
     text: string;
+    /** Its chat has scheduled the send; New chat can still take it back until then. */
+    sending?: boolean;
 }
 
 /** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
+export interface QuestionOption {
+    value: string;
+    label: string;
+}
+
 export interface LiveQuestion {
     sessionId: string;
     expiresAt: number | null;
+    /** Lets the message box answer it: the choices, and whether any text will do. */
+    options?: QuestionOption[];
+    allowFreeText?: boolean;
+    sensitive?: boolean;
 }
 
 /** One stage of a recording: 0 running, 1 done, 2 skipped. */
@@ -218,6 +240,8 @@ interface ChatState {
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
     /** Note a skill_use event; with a step, add it before the running tool call that brought the skill in. */
     addSkillStep: (step: AgentStep | null) => void;
+    /** Add a finished step before the running tool call it happened inside, so steps stay in time order. */
+    addStepBeforeRunningCall: (step: AgentStep) => void;
     /** Counts skill_use events, so the session panel's Skills section re-reads mid-reply. */
     skillUses: number;
     clearAgentSteps: () => void;
@@ -238,9 +262,17 @@ interface ChatState {
     /** Mid-run questions the agent is still blocked on, by request id. A card
      *  missing from here can no longer be answered. */
     liveQuestions: Record<string, LiveQuestion>;
-    openQuestion: (requestId: string, sessionId: string, timeoutSeconds?: number | null) => void;
+    openQuestion: (
+        requestId: string,
+        sessionId: string,
+        timeoutSeconds?: number | null,
+        shape?: Pick<LiveQuestion, 'options' | 'allowFreeText' | 'sensitive'>,
+    ) => void;
     closeQuestion: (requestId: string) => void;
     closeSessionQuestions: (sessionId: string) => void;
+    /** What the user answered, by request id, so the card keeps it as a record; null hides a sensitive one. */
+    questionAnswers: Record<string, string | null>;
+    recordAnswer: (requestId: string, shown: string | null) => void;
 
     // Structured cards from tool_result.render events (issue #2108).
     // Accumulated during the stream, transferred onto the finalized
@@ -266,6 +298,8 @@ interface ChatState {
     theme: 'light' | 'dark';
     showDocLibrary: boolean;
     showFileBrowser: boolean;
+    /** The file browser was opened from the document library, so closing it goes back there. */
+    fileBrowserFromLibrary: boolean;
     /** Open settings section, or null when settings is closed. */
     settingsSection: SettingsSection | null;
     /** Setup was asked to run again from Settings. */
@@ -273,6 +307,12 @@ interface ChatState {
     runSetupAgain: (on: boolean) => void;
     /** Provider tab Settings > Model opens on; null follows the active model. */
     settingsProvider: ProviderId | null;
+    /** The connector Settings › Connectors opens at, if one was asked for. */
+    settingsConnector: string | null;
+    /** A setting to scroll to in the open section, and the section that sent the user there. */
+    settingsJump: SettingsJump | null;
+    /** The section Settings was last closed on, so it reopens there this session. */
+    lastSettingsSection: SettingsSection;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
@@ -306,8 +346,16 @@ interface ChatState {
     /** Re-resolve a `system` preference after the OS appearance changed. */
     syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
+    /** Closing returns to the document library when that is where it was opened from. */
     setShowFileBrowser: (show: boolean) => void;
+    /** Swap the document library for the file browser, to come back to on close. */
+    openFileBrowserFromLibrary: () => void;
+    /** Close the file browser without going back to the library, e.g. to start a chat. */
+    leaveFileBrowser: () => void;
     openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
+    /** Open Settings › Connectors with *connectorId*'s tile open. */
+    openConnectorSettings: (connectorId: string) => void;
+    jumpToSetting: (jump: SettingsJump, provider?: ProviderId) => void;
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
@@ -331,6 +379,19 @@ interface ChatState {
 
 /** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */
 const NO_DESTINATION = { showMemoryDashboard: false, showSchedules: false, showDocLibrary: false };
+
+/** *steps* with *step* just before the last tool call if it is still running, else at the end. */
+function beforeRunningCall(steps: AgentStep[], step: AgentStep): AgentStep[] {
+    const next = [...steps];
+    let at = next.length;
+    for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].type !== 'tool') continue;
+        if (next[i].active) at = i;
+        break;
+    }
+    next.splice(at, 0, step);
+    return next;
+}
 
 export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
@@ -480,11 +541,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const steps = [...state.agentSteps];
             const last = steps[steps.length - 1];
             if (last.type !== 'thinking') return state;
+            const prior = last.detail ?? '';
+            // Streamed pieces carry their own spacing; a closed thought ends with a break, as in consolidateSteps.
+            const gap = !last.active && last.latencyMs != null && /\S$/.test(prior) && /^\S/.test(content) ? '\n\n' : '';
             steps[steps.length - 1] = {
                 ...last,
-                // Streamed pieces carry their own spacing, as the saved turn joins them.
-                detail: (last.detail ?? '') + content,
+                detail: prior + gap + content,
                 active: true,
+                latencyMs: undefined,
             };
             return { agentSteps: steps };
         }),
@@ -505,16 +569,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addSkillStep: (step) =>
         set((state) => {
             if (!step) return { skillUses: state.skillUses + 1 };
-            const steps = [...state.agentSteps];
-            let at = steps.length;
-            for (let i = steps.length - 1; i >= 0; i--) {
-                if (steps[i].type !== 'tool') continue;
-                if (steps[i].active) at = i;
-                break;
-            }
-            steps.splice(at, 0, step);
-            return { agentSteps: steps, skillUses: state.skillUses + 1 };
+            return { agentSteps: beforeRunningCall(state.agentSteps, step), skillUses: state.skillUses + 1 };
         }),
+    addStepBeforeRunningCall: (step) =>
+        set((state) => ({ agentSteps: beforeRunningCall(state.agentSteps, step) })),
     skillUses: 0,
     clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
     liveStatus: null,
@@ -537,16 +595,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     awaitingUser: false,
     setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
     liveQuestions: {},
-    openQuestion: (requestId, sessionId, timeoutSeconds) =>
+    openQuestion: (requestId, sessionId, timeoutSeconds, shape) =>
         set((state) => ({
             liveQuestions: {
                 ...state.liveQuestions,
                 [requestId]: {
                     sessionId,
                     expiresAt: timeoutSeconds != null && timeoutSeconds > 0 ? Date.now() + timeoutSeconds * 1000 : null,
+                    ...shape,
                 },
             },
         })),
+    questionAnswers: {},
+    recordAnswer: (requestId, shown) =>
+        set((state) => ({ questionAnswers: { ...state.questionAnswers, [requestId]: shown } })),
     closeQuestion: (requestId) =>
         set((state) => {
             if (!(requestId in state.liveQuestions)) return state;
@@ -583,10 +645,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     theme: resolveTheme(readThemePreference()),
     showDocLibrary: false,
     showFileBrowser: false,
+    fileBrowserFromLibrary: false,
     settingsSection: null,
     setupAgain: false,
     runSetupAgain: (on) => set({ setupAgain: on }),
     settingsProvider: null,
+    settingsConnector: null,
+    settingsJump: null,
+    lastSettingsSection: 'general',
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
@@ -636,9 +702,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
     pendingPrompt: null,
     setShowDocLibrary: (show) =>
         set(show ? { ...NO_DESTINATION, showDocLibrary: true } : { showDocLibrary: false }),
-    setShowFileBrowser: (show) => set({ showFileBrowser: show }),
-    openSettings: (section = 'general', provider) => set({ settingsSection: section, settingsProvider: provider ?? null }),
-    closeSettings: () => set({ settingsSection: null, settingsProvider: null }),
+    setShowFileBrowser: (show) => {
+        if (show) {
+            set({ showFileBrowser: true });
+            return;
+        }
+        const backToLibrary = get().fileBrowserFromLibrary;
+        set({ showFileBrowser: false, fileBrowserFromLibrary: false });
+        if (backToLibrary) get().setShowDocLibrary(true);
+    },
+    openFileBrowserFromLibrary: () => set({ showDocLibrary: false, showFileBrowser: true, fileBrowserFromLibrary: true }),
+    leaveFileBrowser: () => set({ showFileBrowser: false, fileBrowserFromLibrary: false }),
+    openSettings: (section, provider) => set((s) => ({
+        settingsSection: section ?? s.lastSettingsSection,
+        settingsProvider: provider ?? null,
+        settingsConnector: null,
+        settingsJump: null,
+    })),
+    openConnectorSettings: (connectorId) => set({
+        settingsSection: 'connectors',
+        settingsProvider: null,
+        settingsConnector: connectorId,
+        settingsJump: null,
+    }),
+    jumpToSetting: (jump, provider) => set({ settingsSection: jump.section, settingsProvider: provider ?? null, settingsConnector: null, settingsJump: jump }),
+    closeSettings: () => set((s) => ({
+        settingsSection: null,
+        settingsProvider: null,
+        settingsConnector: null,
+        settingsJump: null,
+        lastSettingsSection: s.settingsSection ?? s.lastSettingsSection,
+    })),
     setShowMemoryDashboard: (show) =>
         set(show ? { ...NO_DESTINATION, showMemoryDashboard: true } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>

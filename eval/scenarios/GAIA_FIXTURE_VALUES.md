@@ -21,7 +21,12 @@ be sandbox refusals there. The eval setup therefore **stages
 - `tests/fixtures/gaia/mini_repo/` → `~/gaia-eval/mini_repo/`
 
 Scenario user messages/objectives reference only the staged `~/gaia-eval/...`
-locations. Exception: `gaia_rag` (and other `setup.index_documents` entries)
+locations. CI stages there literally. `util/run_eval_lane.py` stages under its
+`--out/eval-root/gaia-eval` instead and the runner rewrites every scenario
+string from `~/gaia-eval` to that folder, and `127.0.0.1:8765` (and `port 8765`)
+to the port its fixture server bound, before the driver and judge see it
+(`src/gaia/eval/fixture_env.py`). Write scenarios against the literal
+`~/gaia-eval` and `8765`; never hard-code another spelling of either. Exception: `gaia_rag` (and other `setup.index_documents` entries)
 keep corpus-relative paths like `eval/corpus/documents/...` — the runner
 resolves those itself via `--corpus-dir` pointed at the staged copy, so they
 never pass through the agent's sandbox as user-message paths.
@@ -52,9 +57,10 @@ turn 3 accept an honest empty/unreadable result.
   tests, the T2 `needs_confirmation` pin, and the `tui`-tagged TUI lane.
   REFUSE-tier behaviour is unaffected by auto-approve.
 - `GAIA_MEMORY_ADMIN=1` — exposes the eval MCP admin tools
-  (`memory_clear(scope=all)` / `memory_seed`). Every `gaia_memory` scenario's
-  first turn instructs the simulator to call `memory_clear(scope=all)` before
-  sending the first user message — the only cross-scenario isolation.
+  (`memory_clear(scope=all)` / `memory_seed`) and the endpoint the runner
+  uses to clear memory before every `gaia_*` and memory scenario
+  (`POST /api/memory/admin/clear`). `setup.memory_clear: false` opts a
+  scenario out, for one that reads what an earlier scenario left behind.
 - `GAIA_EVAL_SCRIPTED_USER=1` — lets a scenario's `setup.decline_commands`
   script a user who declines those shell commands (checked before
   auto-approve, so it is the transport's only "no") and answers no
@@ -66,8 +72,13 @@ turn 3 accept an honest empty/unreadable result.
 `tests/fixtures/gaia/serve_fixtures.py` serves `tests/fixtures/gaia/web/`,
 `tests/fixtures/gaia/rss/`, `tests/fixtures/gaia/fixture_hub/`, and
 `tests/fixtures/gaia/capture/` on
-**http://127.0.0.1:8765** (never port 4001). All scenario URLs below assume
-that base URL; if the server picks a different default port, update the
+**http://127.0.0.1:8765** (never port 4001) in CI; a local
+`util/run_eval_lane.py` run binds a free port and the runner rewrites the
+scenarios to it. Only the scenarios are rewritten, not what the server returns:
+links inside served feeds and pages (`rss/feed.xml`,
+`tiers_skills_web/feeds/*.xml`, `tiers_skills_web/web/companion_app.html`,
+`tiers_resilience/http/status_board_injected.html`) still name 8765, so on a
+local run a scenario that follows one of them reaches the wrong port. All scenario URLs below assume that base URL; if the server picks a different default port, update the
 `gaia_web`, `gaia_skills_lifecycle`, `gaia_skills_tasks`, and
 `gaia_skills_capture` scenarios together.
 

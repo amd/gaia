@@ -483,6 +483,32 @@ async def test_a_reply_cut_off_by_a_server_restart_is_not_recovered(tmp_path):
     assert reply == f"It says hi.\n\n{INTERRUPTED_TURN_NOTICE}"
 
 
+async def test_text_that_starts_after_the_reasoning_is_saved_at_once(tmp_path):
+    # A thinking model reasons for seconds, so the last save often holds no
+    # text; a kill moments after the answer starts must still keep it.
+    now = [0.0]
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    try:
+        sid = db.create_session()["id"]
+        db.begin_turn(sid, "hi")
+        journal = restart_recovery.TurnJournal(db, sid, clock=lambda: now[0])
+        now[0] = restart_recovery.PARTIAL_SAVE_INTERVAL
+        journal.observe('data: {"type": "thinking", "content": "Plan it."}\n\n')
+        now[0] += 0.01
+        journal.observe(_chunk("Bridges are old."))
+        with _new_server():
+            assert recover_interrupted_work(db)["turns"] == 1
+        reply = db.get_messages(sid)[-1]["content"]
+    finally:
+        db.close()
+    assert reply == f"Bridges are old.\n\n{INTERRUPTED_TURN_NOTICE}"
+
+
+async def test_streamed_text_is_saved_at_least_twice_a_second():
+    # A cloud model writes a paragraph a second; a kill loses at most the last save.
+    assert restart_recovery.PARTIAL_SAVE_INTERVAL <= 0.5
+
+
 async def test_a_failed_close_does_not_mask_the_turns_own_error(runtime, caplog):
     db, _db_path, _manager, _http_request = runtime
     sid = db.create_session()["id"]
@@ -539,11 +565,12 @@ async def test_two_servers_in_one_chat_keep_their_own_turns(tmp_path):
     finally:
         a.close()
         b.close()
+    # B's reply is dated when B last saved, which was before A answered.
     assert contents == [
         "question to A",
         "question to B",
-        "A's answer",
         f"B's partial answer\n\n{INTERRUPTED_TURN_NOTICE}",
+        "A's answer",
     ]
 
 
@@ -559,7 +586,12 @@ async def test_another_servers_reply_does_not_end_this_turn(tmp_path):
             db.add_message(sid, "assistant", "someone else's reply", ends_turn=True)
         with _as_server("C"):
             assert recover_interrupted_work(db)["turns"] == 1
-        assert db.get_messages(sid)[-1]["content"] == INTERRUPTED_TURN_NOTICE
+        # Dated when B was last alive, so it sits under B's own question.
+        assert [m["content"] for m in db.get_messages(sid)] == [
+            "question to B",
+            INTERRUPTED_TURN_NOTICE,
+            "someone else's reply",
+        ]
     finally:
         db.close()
 
@@ -582,6 +614,46 @@ async def test_a_cut_off_reply_says_which_tools_it_had_started(tmp_path):
         "Before it stopped, it had started these tools: move_file.\n\n"
         f"{INTERRUPTED_TURN_NOTICE}"
     )
+
+
+def _at(second):
+    return f"2026-11-11T22:{second // 60:02d}:{second % 60:02d}+00:00"
+
+
+@pytest.mark.parametrize(
+    "frame, last_alive",
+    [
+        (_chunk("Paris is"), 5),
+        # Nothing new to save, but the turn was still running.
+        ('data: {"type": "status", "message": "Thinking"}\n\n', 5),
+        # No sign of life after the question: the reply claims no time at all.
+        (None, 0),
+    ],
+)
+async def test_a_cut_off_reply_is_dated_when_the_turn_was_last_alive(
+    tmp_path, frame, last_alive
+):
+    """The reply was dated when the next server started, so a 5 s answer cut
+    off by a crash read "Interrupted after 8 min 13 s"."""
+    db = ChatDatabase(str(tmp_path / "chat.db"))
+    now = [0]
+    try:
+        with patch.object(db, "_now", lambda: _at(now[0])):
+            sid = db.create_session()["id"]
+            db.begin_turn(sid, "What is the capital?")
+            journal = restart_recovery.TurnJournal(db, sid, interval=0.0)
+            if frame is not None:
+                now[0] = 5
+                journal.observe(frame)
+            now[0] = 8 * 60 + 13
+            with _new_server():
+                assert recover_interrupted_work(db)["turns"] == 1
+            question, reply = db.get_messages(sid)
+    finally:
+        db.close()
+    assert question["created_at"] == _at(0)
+    assert reply["created_at"] == _at(last_alive)
+    assert reply["content"].endswith(INTERRUPTED_TURN_NOTICE)
 
 
 async def test_the_question_and_its_marker_are_saved_together(tmp_path):

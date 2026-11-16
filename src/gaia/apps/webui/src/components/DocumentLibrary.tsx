@@ -3,19 +3,23 @@
 
 import { ensureModel } from '../stores/modelNeededStore';
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw } from 'lucide-react';
+import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw, Undo2 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { requestErrorParam } from '../utils/requestErrors';
 import { formatSize } from '../utils/format';
 import { examplePath } from '../utils/platform';
+import { cleanPastedPath } from '../utils/pastedPath';
 import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
 import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
+import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
+import { isServerFailure, serverFailureText } from '../utils/documentFailure';
 import './DocumentLibrary.css';
 
 /** Split a stored indexing error into a one-line summary and the rest. */
@@ -26,27 +30,38 @@ function splitFailureReason(lastError: string): { summary: string; more: string 
 }
 
 /** One sentence on what folder indexing added, skipped and couldn't read. */
-function describeFolderResult(folderName: string, result: IndexFolderResponse): string {
+function describeFolderResult(t: Translate, folderName: string, result: IndexFolderResponse): string {
     const skipped = result.skipped ?? 0;
-    const parts: string[] = [];
-    if (result.indexed > 0) {
-        parts.push(`Indexed ${result.indexed} file${result.indexed !== 1 ? 's' : ''} from "${folderName}".`);
-    } else if (result.failed === 0) {
-        parts.push(`"${folderName}" has no documents GAIA can index.`);
-    }
-    if (skipped > 0) {
-        parts.push(`Skipped ${skipped} file${skipped !== 1 ? 's' : ''} of a type GAIA doesn't index.`);
-    }
-    if (result.failed > 0) {
-        const first = result.errors[0] ? ` ${result.errors[0].split('\n')[0]}` : '';
-        parts.push(`${result.failed} file${result.failed !== 1 ? 's' : ''} couldn't be indexed.${first}`);
-    }
-    parts.push('Subfolders aren\'t included.');
-    return parts.join(' ');
+    return t.compose((say) => {
+        const parts: string[] = [];
+        if (result.indexed > 0) {
+            parts.push(say(pluralKey('docs.folder.indexed', result.indexed), { n: result.indexed, name: folderName }));
+        } else if (result.failed === 0) {
+            parts.push(say('docs.folder.none', { name: folderName }));
+        }
+        if (skipped > 0) {
+            parts.push(say(pluralKey('docs.folder.skipped', skipped), { n: skipped }));
+        }
+        const images = result.skipped_images ?? 0;
+        if (images > 0) {
+            parts.push(say(pluralKey('docs.folder.images', images), { n: images }));
+        }
+        if (result.failed > 0) {
+            parts.push(say(pluralKey('docs.folder.failed', result.failed), { n: result.failed }));
+            if (result.errors[0]) parts.push(result.errors[0].split('\n')[0]);
+        }
+        parts.push(say('docs.folder.noSubfolders'));
+        return parts.join(' ');
+    });
 }
 
 /** How often an indexing document's status (and progress) is asked for. */
 export const INDEX_POLL_MS = 1000;
+
+/** How long a removed document can be put back before it is deleted. */
+export const REMOVE_UNDO_MS = 6000;
+
+interface PendingRemoval { id: string; name: string }
 
 /** The progress map with `id` set to `progress`, or dropped once there is none. */
 function withProgress(map: Record<string, api.IndexProgress>, id: string, progress: api.IndexProgress | null | undefined) {
@@ -113,9 +128,41 @@ function formatFullTimestamp(isoString: string, t: Translate): string {
     }
 }
 
+/** Characters a long name keeps at its end, so the extension and any version suffix stay in view. */
+export const NAME_TAIL_CHARS = 14;
+
+/** A file name that, when it doesn't fit, is cut in the middle rather than at the end. */
+function DocName({ name }: { name: string }) {
+    // Code points, so an emoji at the cut isn't split into two broken halves.
+    const chars = Array.from(name);
+    if (chars.length <= NAME_TAIL_CHARS * 2) {
+        // Left to right, so the extension stays last whatever the script.
+        return <span className="doc-name" dir="ltr">{name}</span>;
+    }
+    // dir="auto" picks the direction from the first strong letter; the CSS needs to know it too.
+    const firstStrong = name.match(/\p{L}/u)?.[0] ?? '';
+    const rtlText = /[֐-ࣿיִ-﷿ﹰ-﻿]/.test(firstStrong);
+    if (rtlText) {
+        const ext = name.match(/\.[^.\s]{1,10}$/)?.[0] ?? '';
+        // Splitting inside right-to-left words puts "docx." at the front; cut only the base name instead.
+        return (
+            <span className="doc-name doc-name-split is-rtl-text" dir="auto" title={name}>
+                <span className="doc-name-head">{name.slice(0, name.length - ext.length)}</span>
+                {ext && <span className="doc-name-tail" dir="ltr">{ext}</span>}
+            </span>
+        );
+    }
+    return (
+        <span className="doc-name doc-name-split" dir="auto" title={name}>
+            <span className="doc-name-head">{chars.slice(0, -NAME_TAIL_CHARS).join('')}</span>
+            <span className="doc-name-tail">{chars.slice(-NAME_TAIL_CHARS).join('')}</span>
+        </span>
+    );
+}
+
 export function DocumentLibrary() {
     const t = useT();
-    const { documents, setDocuments, setShowDocLibrary, setShowFileBrowser,
+    const { documents, setDocuments, setShowDocLibrary, openFileBrowserFromLibrary,
             currentSessionId, sessions, updateSessionInList,
             draftDocumentIds, addDraftDocuments, removeDraftDocument } = useChatStore();
     const currentSession = sessions.find(s => s.id === currentSessionId) ?? null;
@@ -124,9 +171,12 @@ export function DocumentLibrary() {
     const targetSessionId = target === 'chat' ? currentSessionId : null;
     const targetChatName = `“${currentSession?.title || t('docs.untitledChat')}”`;
     const [notice, setNotice] = useState('');
+    /** The document the notice is about, so removing it takes the notice with it. */
+    const noticeDocId = useRef<string | null>(null);
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
     const dialogRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     useFocusTrap(dialogRef, true);
     useDialogFocus(dialogRef, true);
     const [isDragOver, setIsDragOver] = useState(false);
@@ -137,6 +187,14 @@ export function DocumentLibrary() {
     const [uploadError, setUploadError] = useState<{ filename: string; error: string; status?: number; kind?: string | null } | null>(null);
     // Outcome of indexing a folder typed into the path box
     const [folderNotice, setFolderNotice] = useState<string | null>(null);
+    // Why the last remove, cancel or open-folder failed
+    const [actionError, setActionError] = useState<string | null>(null);
+    // A removed document stays on the server until its Undo runs out
+    const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
+    const pendingRemovalRef = useRef<PendingRemoval | null>(null);
+    const removalTimer = useRef<number | null>(null);
+    // The library couldn't be listed: an empty list would look like the documents are gone
+    const [loadError, setLoadError] = useState<{ err: unknown } | null>(null);
     // Documents with a reindex in flight — guards double-click and shows progress
     const [reindexingIds, setReindexingIds] = useState<Set<string>>(new Set());
     // Pages read / chunks embedded, per document being indexed right now
@@ -146,10 +204,10 @@ export function DocumentLibrary() {
     // Force re-render for elapsed time updates
     const [, setTick] = useState(0);
 
-    // Load documents on mount
-    useEffect(() => {
+    const loadDocuments = useCallback(() => {
         log.doc.info('Loading document library...');
         const timer = log.doc.time();
+        setLoadError(null);
         api.listDocuments()
             .then((data) => {
                 const docs = data.documents || [];
@@ -158,9 +216,12 @@ export function DocumentLibrary() {
             })
             .catch((err) => {
                 log.doc.error('Failed to load documents', err);
-                setDocuments([]);
+                setLoadError({ err });
             });
     }, [setDocuments]);
+
+    // Load documents on mount
+    useEffect(loadDocuments, [loadDocuments]);
 
     // Poll for indexing status on documents that are still 'indexing'
     const hasIndexingDocs = documents.some(
@@ -252,19 +313,28 @@ export function DocumentLibrary() {
                     setDocuments(freshDocs);
                     log.doc.debug('Document list refreshed (server-side changes detected)');
                 }
-            } catch {
-                // Ignore refresh errors
+                setLoadError(null);
+            } catch (err) {
+                // The next refresh asks again; the list keeps what it last showed.
+                log.doc.warn('Document list refresh failed', err);
             }
         }, 15000); // Refresh every 15 seconds
 
         return () => clearInterval(refreshInterval);
     }, [setDocuments]);
 
-    const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
-    const totalChunks = documents.reduce((sum, d) => sum + d.chunk_count, 0);
+    // The row waiting on Undo is already gone from the list, so from the count too.
+    const shownDocs = documents.filter((d) => d.id !== pendingRemoval?.id);
+    const shownCount = shownDocs.length;
+    const totalSize = shownDocs.reduce((sum, d) => sum + d.file_size, 0);
+    const failedDocs = shownDocs.filter((d) => d.indexing_status === 'failed');
+    // A file that failed only because the model server was down isn't unreadable.
+    const serverWaitCount = failedDocs.filter((d) => isServerFailure(d.error_kind)).length;
+    const unreadableCount = failedDocs.length - serverWaitCount;
 
     /** Attach a document where the user chose, and say where it went. */
     const attachToTarget = useCallback(async (docId: string, filename: string) => {
+        noticeDocId.current = docId;
         if (!targetSessionId) {
             addDraftDocuments([docId]);
             setNotice(t('docs.willAttach', { name: filename }));
@@ -316,9 +386,9 @@ export function DocumentLibrary() {
     const runUpload = useCallback(async (
         filename: string,
         uploader: () => Promise<Document>,
-        onFolder?: () => Promise<void>,
-    ) => {
-        if (!(await ensureModel('embedding'))) return;
+        onFolder?: () => Promise<boolean>,
+    ): Promise<boolean> => {
+        if (!(await ensureModel('embedding'))) return false;
         const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
         const unsupportedMessage = ext && !isExtensionSupported(ext)
             ? (getUnsupportedCategory(ext)?.message ?? `The file type "${ext}" is not supported for indexing.`)
@@ -327,7 +397,7 @@ export function DocumentLibrary() {
         if (unsupportedMessage && !onFolder) {
             log.doc.warn(`Unsupported file type: ${filename} (${ext})`);
             setUploadError({ filename, error: unsupportedMessage });
-            return;
+            return false;
         }
 
         log.doc.info(`Indexing document: ${filename}`);
@@ -335,12 +405,21 @@ export function DocumentLibrary() {
         setIsUploading(true);
         setUploadStatus(t('docs.indexingFile', { name: filename }));
         setUploadError(null);
+        setActionError(null);
         setFolderNotice(null);
         setNotice('');
         try {
             const doc = await uploader();
             log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, timer);
-            if (doc?.id) {
+            const failed = doc?.indexing_status === 'failed';
+            if (failed) {
+                // Its row carries the reason and Retry; attaching it would promise a chat a file it can't search.
+                log.doc.warn(`"${filename}" couldn't be added (${doc.error_kind ?? 'unreadable'}); not attaching it`);
+                const name = doc.filename || filename;
+                setActionError(serverFailureText(doc.error_kind, t)
+                    ? t('docs.notAddedServer', { name })
+                    : t('docs.notAdded', { name }));
+            } else if (doc?.id) {
                 try {
                     await attachToTarget(doc.id, doc.filename || filename);
                 } catch (attachErr) {
@@ -356,40 +435,46 @@ export function DocumentLibrary() {
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
             setUploadStatus('');
+            // A failed add keeps the typed path, so Retry is one click.
+            return !failed;
         } catch (err) {
             // ApiError's fields, read by shape: the class itself is mocked in tests.
-            const { httpStatus, reason } = (err ?? {}) as { httpStatus?: number; reason?: string | null };
+            const { httpStatus, reason, body } = (err ?? {}) as { httpStatus?: number; reason?: string | null; body?: Record<string, unknown> | null };
             if (reason === 'is_folder' && onFolder) {
-                await onFolder();
-                return;
+                return await onFolder();
             }
             log.doc.error(`Failed to index "${filename}"`, err);
-            const errMsg = httpStatus === 400 && unsupportedMessage
-                ? unsupportedMessage
-                : err instanceof Error ? err.message : 'Upload failed';
+            const errMsg = reason === 'too_large'
+                ? t('docs.tooLargeDetail', { max: String(body?.max_mb) })
+                : serverFailureText(reason, t) ?? (httpStatus === 400 && unsupportedMessage
+                    ? unsupportedMessage
+                    : err instanceof Error ? err.message : 'Upload failed');
             setUploadError({ filename, error: errMsg, status: httpStatus, kind: reason });
             setUploadStatus('');
+            return false;
         } finally {
             setIsUploading(false);
         }
     }, [attachToTarget, targetChatName, setDocuments, t]);
 
     /** Index the documents directly inside a folder typed into the path box. */
-    const indexFolderPath = useCallback(async (folder: string, folderName: string) => {
+    const indexFolderPath = useCallback(async (folder: string, folderName: string): Promise<boolean> => {
         log.doc.info(`"${folder}" is a folder; indexing its documents`);
         setUploadStatus(t('docs.indexingFolder', { name: folderName }));
         try {
             // Top level only: a typed path like a home folder would otherwise index everything below it.
             const result = await api.indexFolder(folder, false);
             await attachIndexed(result.documents.map((d) => d.id).filter(Boolean), folderName);
-            setFolderNotice(describeFolderResult(folderName, result));
+            setFolderNotice(describeFolderResult(t, folderName, result));
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
+            return true;
         } catch (err) {
             log.doc.error(`Failed to index folder "${folder}"`, err);
             const errMsg = err instanceof Error ? err.message : 'Folder indexing failed';
             const { httpStatus } = (err ?? {}) as { httpStatus?: number };
             setUploadError({ filename: folderName, error: errMsg, status: httpStatus });
+            return false;
         } finally {
             setUploadStatus('');
         }
@@ -397,7 +482,7 @@ export function DocumentLibrary() {
 
     /** Index a document by a server-side filesystem path (used by the file browser and path input). */
     const uploadFile = useCallback(async (filepath: string, filename: string) => {
-        await runUpload(
+        return runUpload(
             filename,
             () => api.uploadDocumentByPath(filepath),
             () => indexFolderPath(filepath, filename),
@@ -426,43 +511,99 @@ export function DocumentLibrary() {
         }
     }, [uploadFileBlob]);
 
-    const handleDeleteDoc = useCallback(async (id: string) => {
-        const doc = documents.find((d) => d.id === id);
-        log.doc.info(`Deleting document: ${doc?.filename || id}`);
+    const handlePickedFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files ?? []);
+        e.target.value = '';
+        for (const file of files) {
+            await uploadFileBlob(file);
+        }
+    }, [uploadFileBlob]);
+
+    const commitRemoval = useCallback(async ({ id, name }: PendingRemoval) => {
+        log.doc.info(`Deleting document: ${name}`);
         try {
             await api.deleteDocument(id);
-            indexingStartTimes.current.delete(id);
-            removeDraftDocument(id);
-            setDocuments(documents.filter((d) => d.id !== id));
-            log.doc.info(`Deleted document: ${doc?.filename || id}`);
         } catch (err) {
-            log.doc.error(`Failed to delete document: ${doc?.filename || id}`, err);
+            log.doc.error(`Failed to delete document: ${name}`, err);
+            setPendingRemoval((p) => (p?.id === id ? null : p));
+            setActionError(t('docs.deleteFailed', { name, error: requestErrorParam(err) }));
+            return;
         }
-    }, [documents, setDocuments, removeDraftDocument]);
+        indexingStartTimes.current.delete(id);
+        removeDraftDocument(id);
+        if (noticeDocId.current === id) setNotice('');
+        // The list now, not when the click happened: a poll may have refreshed it meanwhile.
+        setDocuments(useChatStore.getState().documents.filter((d) => d.id !== id));
+        setPendingRemoval((p) => (p?.id === id ? null : p));
+        log.doc.info(`Deleted document: ${name}`);
+    }, [setDocuments, removeDraftDocument, t]);
+
+    /** Deletes the removal waiting on Undo now, if there is one. */
+    const flushRemoval = useCallback(() => {
+        if (removalTimer.current !== null) clearTimeout(removalTimer.current);
+        removalTimer.current = null;
+        const pending = pendingRemovalRef.current;
+        pendingRemovalRef.current = null;
+        if (pending) void commitRemoval(pending);
+    }, [commitRemoval]);
+
+    const handleDeleteDoc = useCallback((id: string) => {
+        const name = documents.find((d) => d.id === id)?.filename || id;
+        setActionError(null);
+        setUploadError(null);
+        setFolderNotice(null);
+        setNotice('');
+        flushRemoval();
+        const pending = { id, name };
+        pendingRemovalRef.current = pending;
+        setPendingRemoval(pending);
+        removalTimer.current = window.setTimeout(flushRemoval, REMOVE_UNDO_MS);
+    }, [documents, flushRemoval]);
+
+    const undoRemoval = useCallback(() => {
+        if (removalTimer.current !== null) clearTimeout(removalTimer.current);
+        removalTimer.current = null;
+        pendingRemovalRef.current = null;
+        setPendingRemoval(null);
+    }, []);
+
+    // Closing the library doesn't cancel a removal; only Undo does.
+    const flushOnClose = useRef(flushRemoval);
+    flushOnClose.current = flushRemoval;
+    useEffect(() => () => flushOnClose.current(), []);
 
     const handleOpenFolder = useCallback(async (filepath: string, filename: string) => {
         log.doc.info(`Opening folder for: ${filepath}`);
+        setActionError(null);
         try {
             await api.openFileOrFolder(filepath, true);
         } catch (err) {
             log.doc.error(`Failed to open folder for: ${filename}`, err);
+            setActionError(t('docs.openFolderFailed', { name: filename, error: requestErrorParam(err) }));
         }
-    }, []);
+    }, [t]);
 
     const handleCancelIndexing = useCallback(async (id: string) => {
-        const doc = documents.find((d) => d.id === id);
-        log.doc.info(`Cancelling indexing for: ${doc?.filename || id}`);
+        const name = documents.find((d) => d.id === id)?.filename || id;
+        log.doc.info(`Cancelling indexing for: ${name}`);
+        setActionError(null);
         try {
             await api.cancelIndexing(id);
-            indexingStartTimes.current.delete(id);
-            // Refresh
+        } catch (err) {
+            log.doc.error(`Failed to cancel indexing: ${name}`, err);
+            setActionError(t('docs.cancelFailed', { name, error: requestErrorParam(err) }));
+            return;
+        }
+        indexingStartTimes.current.delete(id);
+        log.doc.info(`Cancelled indexing for: ${name}`);
+        try {
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
-            log.doc.info(`Cancelled indexing for: ${doc?.filename || id}`);
         } catch (err) {
-            log.doc.error(`Failed to cancel indexing: ${doc?.filename || id}`, err);
+            // The periodic refresh shows the cancelled row on its next pass.
+            log.doc.warn('Could not refresh the documents after cancelling', err);
         }
-    }, [documents, setDocuments]);
+    }, [documents, setDocuments, t]);
 
     const handleReindex = useCallback(async (id: string) => {
         if (reindexingIds.has(id)) return; // guard against double-click
@@ -509,11 +650,11 @@ export function DocumentLibrary() {
 
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!folderPath.trim()) return;
-        const typed = folderPath.trim();
+        const typed = cleanPastedPath(folderPath);
+        if (!typed) return;
         log.doc.info(`Indexing from path input: ${typed}`);
-        await uploadFile(typed, typed.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'file');
-        setFolderPath('');
+        const added = await uploadFile(typed, typed.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'file');
+        if (added) setFolderPath('');
     }, [folderPath, uploadFile]);
 
     const renderDocStatus = (doc: Document) => {
@@ -553,14 +694,16 @@ export function DocumentLibrary() {
             }
             case 'failed': {
                 const hint = doc.error_kind ? PERMANENT_FAILURE_HINTS[doc.error_kind] : undefined;
-                const reason = doc.last_error ? splitFailureReason(doc.last_error) : null;
+                const serverReason = serverFailureText(doc.error_kind, t);
+                const lastError = serverReason ?? doc.last_error;
+                const reason = lastError ? splitFailureReason(lastError) : null;
                 return (
                     <div className="doc-failure">
                         <div className="doc-indexing-status">
                             <span
                                 className="doc-status-badge doc-status-failed"
-                                title={doc.last_error || undefined}
-                                aria-label={doc.last_error ? t('docs.failedAria', { error: doc.last_error }) : t('docs.indexingFailed')}
+                                title={lastError || undefined}
+                                aria-label={lastError ? t('docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
                             >
                                 <AlertCircle size={12} /> {hint ? t('docs.cantRead') : t('docs.failed')}
                             </span>
@@ -576,7 +719,14 @@ export function DocumentLibrary() {
                             </button>
                         </div>
                         {hint && <p className="doc-failure-hint">{hint}</p>}
-                        {reason && (reason.more ? (
+                        {/* The hint already says what's wrong; the raw reason is for whoever asks. */}
+                        {hint && reason && (
+                            <details className="doc-failure-reason">
+                                <summary>{t('docs.technicalDetails')}</summary>
+                                <p>{[reason.summary, reason.more].filter(Boolean).join('\n')}</p>
+                            </details>
+                        )}
+                        {!hint && reason && (reason.more ? (
                             <details className="doc-failure-reason">
                                 <summary>{reason.summary}</summary>
                                 <p>{reason.more}</p>
@@ -605,7 +755,7 @@ export function DocumentLibrary() {
             default:
                 return (
                     <span className="doc-meta">
-                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi> &middot; {t.plural('docs.chunks', doc.chunk_count)}
+                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi>
                         {indexedTime && (
                             <span className="doc-timestamp" title={t('docs.indexedAt', { time: indexedTimeFull })}>
                                 <Clock size={10} />
@@ -652,7 +802,18 @@ export function DocumentLibrary() {
                         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
                         onDragLeave={() => setIsDragOver(false)}
                         onDrop={handleDrop}
+                        role="button"
+                        tabIndex={isUploading ? -1 : 0}
+                        aria-label={t('docs.drop')}
+                        onClick={() => { if (!isUploading) fileInputRef.current?.click(); }}
+                        onKeyDown={(e) => {
+                            if (!isUploading && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+                                e.preventDefault();
+                                fileInputRef.current?.click();
+                            }
+                        }}
                     >
+                        <input ref={fileInputRef} type="file" multiple hidden onClick={(e) => e.stopPropagation()} onChange={handlePickedFiles} />
                         {isUploading ? (
                             <>
                                 <div className="upload-spinner" />
@@ -668,6 +829,7 @@ export function DocumentLibrary() {
                     </div>
 
                     {/* Path input for folder/file */}
+                    <p className="drop-hint path-hint">{t('docs.pathHint')}</p>
                     <form className="path-input-form" onSubmit={handleFolderSubmit}>
                         <FolderOpen size={16} className="path-icon" />
                         <input
@@ -675,7 +837,7 @@ export function DocumentLibrary() {
                             className="path-input"
                             value={folderPath}
                             onChange={(e) => setFolderPath(e.target.value)}
-                            placeholder={t('docs.pathPlaceholder', { example: examplePath() })}
+                            placeholder={examplePath()}
                             aria-label={t('docs.pathAria')}
                             dir="auto"
                         />
@@ -685,13 +847,14 @@ export function DocumentLibrary() {
                         <button
                             type="button"
                             className="btn-secondary"
-                            onClick={() => { setShowDocLibrary(false); setShowFileBrowser(true); }}
+                            onClick={openFileBrowserFromLibrary}
                             title={t('docs.browseTitle')}
                         >
                             <Search size={14} />
                             {t('docs.browse')}
                         </button>
                     </form>
+                    <p className="doc-path-hint">{t('docs.pathSubfolders')}</p>
 
                     {notice && <p className="doc-target-notice" role="status">{notice}</p>}
 
@@ -706,6 +869,37 @@ export function DocumentLibrary() {
                         />
                     )}
 
+                    {loadError && documents.length > 0 && (
+                        <div className="doc-folder-notice doc-action-error" role="alert">
+                            <AlertCircle size={14} />
+                            <span>{t('docs.loadFailed', { error: requestErrorParam(loadError.err) })}</span>
+                            <button type="button" className="btn-secondary" onClick={loadDocuments}>
+                                {t('docs.loadRetry')}
+                            </button>
+                        </div>
+                    )}
+
+                    {actionError && (
+                        <div className="doc-folder-notice doc-action-error" role="alert">
+                            <AlertCircle size={14} />
+                            <span>{actionError}</span>
+                            <button className="btn-icon-sm" onClick={() => setActionError(null)} aria-label={t('docs.dismissError')}>
+                                <X size={12} />
+                            </button>
+                        </div>
+                    )}
+
+                    {pendingRemoval && (
+                        <div key={pendingRemoval.id} className="doc-folder-notice doc-removed-notice" role="status">
+                            <Trash2 size={14} />
+                            <span>{t('docs.removed', { name: pendingRemoval.name })}</span>
+                            {/* The Remove button just left with its row; keep keyboard focus in the dialog. */}
+                            <button type="button" className="doc-undo" onClick={undoRemoval} autoFocus>
+                                <Undo2 size={12} /> {t('docs.undo')}
+                            </button>
+                        </div>
+                    )}
+
                     {folderNotice && (
                         <div className="doc-folder-notice" role="status">
                             <CheckCircle size={14} />
@@ -717,11 +911,15 @@ export function DocumentLibrary() {
                     )}
 
                     {/* Stats */}
-                    {documents.length > 0 && (
+                    {shownCount > 0 && (
                         <div className="doc-stats">
-                            <span>{t.plural('docs.count', documents.length)}</span>
-                            <span>&middot;</span>
-                            <span>{t.plural('docs.chunks', totalChunks)}</span>
+                            <span>{t.plural('docs.count', shownCount - failedDocs.length)}</span>
+                            {unreadableCount > 0 && (
+                                <span className="doc-stats-failed">{t.plural('docs.unreadable', unreadableCount)}</span>
+                            )}
+                            {serverWaitCount > 0 && (
+                                <span className="doc-stats-failed doc-stats-server">{t.plural('docs.serverWaiting', serverWaitCount)}</span>
+                            )}
                             <span>&middot;</span>
                             <bdi dir="ltr">{formatSize(totalSize)}</bdi>
                         </div>
@@ -729,17 +927,26 @@ export function DocumentLibrary() {
 
                     {/* Document list */}
                     <div className="doc-list">
-                        {documents.length === 0 && !isUploading && (
+                        {loadError && documents.length === 0 && (
+                            <div className="empty-docs doc-load-error" role="alert">
+                                <AlertCircle size={32} strokeWidth={1} />
+                                <p>{t('docs.loadFailed', { error: requestErrorParam(loadError.err) })}</p>
+                                <button type="button" className="btn-secondary" onClick={loadDocuments}>
+                                    {t('docs.loadRetry')}
+                                </button>
+                            </div>
+                        )}
+                        {documents.length === 0 && !isUploading && !loadError && (
                             <div className="empty-docs">
                                 <FileText size={32} strokeWidth={1} />
                                 <p>{t('docs.empty')}</p>
                                 <span>{t('docs.emptyHint')}</span>
                             </div>
                         )}
-                        {documents.map((doc) => (
+                        {documents.filter((d) => d.id !== pendingRemoval?.id).map((doc) => (
                             <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
-                                    <span className="doc-name" dir="auto">{doc.filename}</span>
+                                    <DocName name={doc.filename} />
                                     {renderDocStatus(doc)}
                                 </div>
                                 <div className="doc-row-actions">

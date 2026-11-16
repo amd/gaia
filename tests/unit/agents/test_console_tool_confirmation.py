@@ -519,7 +519,7 @@ class _StubChatAgent:
 class TestAlwaysAllowScope:
     """ "Always" must not become a blank cheque for arbitrary execution."""
 
-    @pytest.mark.parametrize("tool_name", ["run_shell_command", "run_cli_command"])
+    @pytest.mark.parametrize("tool_name", ["run_shell_command", "wait_for_condition"])
     def test_a_shell_grant_covers_only_that_command(self, tty, monkeypatch, tool_name):
         """The shell tools may be granted, but never wholesale.
 

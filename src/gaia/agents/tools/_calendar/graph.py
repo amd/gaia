@@ -30,6 +30,7 @@ from gaia.agents.tools._calendar.model import (
     event_path_segment,
     parse_instant,
 )
+from gaia.agents.tools._calendar.scopes import MICROSOFT_CONNECTOR_ID
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -219,15 +220,20 @@ class GraphCalendarBackend:
         detail = _error_code(response)
         if code == 401:
             raise CalendarAuthError(
-                "Microsoft Graph rejected the access token (401). Reconnect with "
-                f"`gaia connectors connect microsoft`, then retry. (request: {where})"
+                "Microsoft Graph rejected the access token (401), so the "
+                "Microsoft connection needs reconnecting. "
+                f"(request: {where})",
+                connect=(MICROSOFT_CONNECTOR_ID,),
+                reconnect=(MICROSOFT_CONNECTOR_ID,),
             )
         if code == 403:
             raise CalendarAuthError(
                 "Microsoft Graph refused the calendar request (403). The connection "
-                "may lack Calendars.ReadWrite: reconnect with `gaia connectors "
-                f"connect microsoft --grant-agent installed:gaia`. (request: {where}; "
-                f"code: {detail or 'forbidden'})"
+                "may lack calendar access, so it needs reconnecting with calendar "
+                f"access ticked. (request: {where}; "
+                f"code: {detail or 'forbidden'})",
+                connect=(MICROSOFT_CONNECTOR_ID,),
+                reconnect=(MICROSOFT_CONNECTOR_ID,),
             )
         if code == 404:
             raise CalendarEventNotFound(f"Outlook found no event ({where}).")

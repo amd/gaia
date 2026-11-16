@@ -521,8 +521,8 @@ const (
 	// readinessEnsureTimeout bounds start-or-attach of the background service and
 	// the spawn of the agent's sidecar. It matches the gate's own ensureTimeout
 	// and the daemon client's ensure budget on purpose: a first run may still
-	// fetch the sidecar binary here, and a bound tighter than the hub's would
-	// refuse a cold start the hub completes on the same machine.
+	// fetch the sidecar binary here, and a bound tighter than the gate's would
+	// refuse a cold start the interactive TUI completes on the same machine.
 	readinessEnsureTimeout = 15 * time.Minute
 	// readinessCheckTimeout bounds the readiness probe. Same value as the gate's
 	// CheckTimeout, over the same call — two paths asking the same question must
@@ -579,7 +579,7 @@ func ReportReadiness(
 
 // ReportLocalReadiness is the same gate for an agent the TUI spawns itself.
 //
-// It is what makes `gaia-tui chat --agent gaia --query …` on a machine with no
+// It is what makes `gaia-cli chat --agent gaia --query …` on a machine with no
 // gaia-agent print the same three-part refusal a person sees on the readiness
 // screen, and exit 1 — instead of failing at exec with a message that names
 // neither the program nor where to get it.

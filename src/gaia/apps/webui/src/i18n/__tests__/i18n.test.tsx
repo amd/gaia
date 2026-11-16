@@ -79,10 +79,10 @@ describe('translate', () => {
     });
 
     it('resolves a message param in each language, without nested brackets', () => {
-        expect(ar('tool.failed', { label: ref('tool.semantic_search.active') }))
-            .toBe('تعذّر: البحث في المستندات (Searching documents failed)');
-        expect(translate('en', 'tool.failed', { label: ref('tool.semantic_search.active') }))
-            .toBe('Searching documents failed');
+        expect(ar('tool.failed', { label: ref('tool.query_documents.active') }))
+            .toBe('تعذّر: الاستعلام في المستندات (Querying documents failed)');
+        expect(translate('en', 'tool.failed', { label: ref('tool.query_documents.active') }))
+            .toBe('Querying documents failed');
     });
 
     it('fails loudly when a param is missing', () => {

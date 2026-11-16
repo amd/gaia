@@ -44,6 +44,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from gh_retry import RateLimitWaitExceeded, wait_out_rate_limit
+from github_release_retry import RateLimited, _is_rate_limit_error
 from release_tag import parse_tag
 
 
@@ -239,6 +241,28 @@ def judge(
     )
 
 
+# The repository's API budget refills hourly; a call waits at most that long.
+RATE_LIMIT_WAIT_SECONDS = 3600
+
+
+def _rate_limited(e: urllib.error.HTTPError, body: bytes) -> RateLimited | None:
+    """The rate limit a 403 or 429 reports, or None for any other refusal."""
+    if e.code not in (403, 429):
+        return None
+    headers = {k.lower(): v for k, v in (e.headers or {}).items()}
+    spent = headers.get("x-ratelimit-remaining") == "0"
+    retry_after = headers.get("retry-after", "")
+    text = body.decode("utf-8", "replace")
+    if not spent and not retry_after and not _is_rate_limit_error(text):
+        return None
+    reset = headers.get("x-ratelimit-reset", "") if spent else ""
+    return RateLimited(
+        f"HTTP {e.code}: {text}",
+        reset=int(reset) if reset.isdigit() else None,
+        retry_after=int(retry_after) if retry_after.isdigit() else None,
+    )
+
+
 def _api(url: str, token: str, body: dict | None = None):
     req = urllib.request.Request(
         url,
@@ -250,16 +274,25 @@ def _api(url: str, token: str, body: dict | None = None):
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read()
-            return json.loads(raw) if raw else None
-    except urllib.error.HTTPError as e:
-        hint = " The job needs `actions: write` permission." if e.code == 403 else ""
-        raise RuntimeError(
-            f"{req.get_method()} {url} returned HTTP {e.code}: "
-            f"{e.read()[:300]!r}.{hint}"
-        ) from e
+
+    def attempt():
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            detail = e.read()[:300]
+            limited = _rate_limited(e, detail)
+            if limited is not None:
+                raise limited from e
+            hint = " The job needs `actions: write` permission." if e.code == 403 else ""
+            raise RuntimeError(
+                f"{req.get_method()} {url} returned HTTP {e.code}: {detail!r}.{hint}"
+            ) from e
+
+    return wait_out_rate_limit(
+        attempt, RATE_LIMIT_WAIT_SECONDS, label=f"{req.get_method()} {url}"
+    )
 
 
 def fetch_runs(repo: str, workflow: str, sha: str, token: str) -> list[dict]:
@@ -500,6 +533,14 @@ def main(argv: list[str] | None = None) -> int:
     def get_jobs(run_id: int) -> list[dict]:
         return fetch_jobs(args.repo, run_id, token)
 
+    try:
+        return _gate(args, is_rc, token, get_runs, get_jobs)
+    except RateLimitWaitExceeded as e:
+        print(f"::error::{e}")
+        return 1
+
+
+def _gate(args, is_rc: bool, token: str, get_runs, get_jobs) -> int:
     if is_rc:
         verdicts = snapshot(args.repo, args.tag, RC_REPORTED, get_runs, get_jobs)
         text, warnings = report_rc(verdicts, args.sha, args.tag)

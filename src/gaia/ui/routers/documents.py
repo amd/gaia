@@ -17,14 +17,22 @@ import logging
 import os
 import sys
 import tempfile
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from .._chat_helpers import UnreadableDocumentError, index_progress
+from gaia.upload_names import reserve_copy_path
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
+
+from .._chat_helpers import (
+    ModelServerIndexError,
+    UnreadableDocumentError,
+    index_progress,
+)
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
 from ..models import (
@@ -62,17 +70,12 @@ MAX_DOCUMENT_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB
 # Streaming chunk size for multipart blob upload.
 UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
 
-# Length of the random hex ID prefixed to managed document filenames.
-# 12 hex chars = 48 bits ≈ 2.8e14 possibilities; collision probability with
-# 1 million concurrent uploads is ~1 in 1.4e14 — effectively zero. Files are
-# also deduped by SHA-256 hash before writing, so identical-content collisions
-# are impossible. 12 chars keeps the on-disk basename well under Windows
-# MAX_PATH limits once combined with the original filename.
+# Length of the random hex ID in a partial upload's name.
 MANAGED_ID_LEN = 12
 
 
 def _short_id() -> str:
-    """Return a short random hex identifier for managed document filenames."""
+    """Return a short random hex identifier for partial upload names."""
     return uuid.uuid4().hex[:MANAGED_ID_LEN]
 
 
@@ -131,6 +134,26 @@ _ILLEGAL_FILENAME_CHARS = '<>:"/\\|?*'
 _SHELL_QUOTING_CHARS = "'`"
 
 
+# Characters drawn like a slash or backslash, which would make a name read as a path.
+_SLASH_LOOKALIKES = "\u2044\u2215\u29f5\u29f8\u29f9\ufe68\uff0f\uff3c"
+
+# Zero-width joiners spell words in Persian, Indic scripts and emoji; they stay.
+_JOINERS = "\u200c\u200d"
+
+
+def _unsafe_name_char(c: str) -> bool:
+    """Whether *c* must not appear in a stored document name."""
+    return (
+        c in _ILLEGAL_FILENAME_CHARS
+        or c in _SHELL_QUOTING_CHARS
+        or c in _SLASH_LOOKALIKES
+        or (
+            unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co", "Zl", "Zp")
+            and c not in _JOINERS
+        )
+    )
+
+
 def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     """Sanitize a filename stem for safe cross-platform filesystem use.
 
@@ -140,19 +163,17 @@ def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     and dots (Windows disallows trailing dots/spaces), and truncates to *max_length*
     characters. Returns ``"file"`` if nothing usable remains.
 
-    The returned stem is combined with a UUID prefix to form the final
-    on-disk filename, so collisions are impossible regardless of what the
-    user-provided name contained. The purpose of preserving the original
-    name is purely so downstream consumers (RAG tools, the LLM) can
+    Invisible and line-breaking characters (Unicode control, format and
+    separator categories) and characters drawn like a slash are replaced too,
+    since the name is shown to the model and the user as part of the path.
+
+    The returned stem becomes the on-disk name, with an id in front only when
+    that name is taken (see ``reserve_copy_path``). The purpose of preserving
+    the original name is so downstream consumers (RAG tools, the LLM) can
     recognize the document by its human-readable name.
     """
     cleaned = "".join(
-        (
-            "_"
-            if c in _ILLEGAL_FILENAME_CHARS or c in _SHELL_QUOTING_CHARS or ord(c) < 32
-            else c
-        )
-        for c in stem
+        "_" if _unsafe_name_char(c) else c for c in unicodedata.normalize("NFC", stem)
     )
     cleaned = cleaned.strip(" .")
     cleaned = cleaned[:max_length]
@@ -385,7 +406,8 @@ async def upload_document_blob(
     # Strip any path components the client might have sent (defense in depth;
     # we never use this value as a filesystem path, but it's stored in the
     # db for display and returned to the frontend).
-    display_name = Path(file.filename).name
+    # Composed, so a macOS (decomposed) name matches the one the model writes.
+    display_name = unicodedata.normalize("NFC", Path(file.filename).name)
     ext = Path(display_name).suffix.lower()
 
     # 2. Validate extension against the strict document set
@@ -422,12 +444,14 @@ async def upload_document_blob(
                         break
                     bytes_written += len(chunk)
                     if bytes_written > MAX_DOCUMENT_UPLOAD_SIZE:
+                        max_mb = f"{MAX_DOCUMENT_UPLOAD_SIZE // (1024 * 1024)}"
                         raise HTTPException(
                             status_code=413,
-                            detail=(
-                                f"File too large. Maximum size is "
-                                f"{MAX_DOCUMENT_UPLOAD_SIZE // (1024 * 1024)} MB."
-                            ),
+                            detail={
+                                "status": "too_large",
+                                "message": f"File too large. Maximum size is {max_mb} MB.",
+                                "max_mb": max_mb,
+                            },
                         )
                     hasher.update(chunk)
                     out.write(chunk)
@@ -458,20 +482,24 @@ async def upload_document_blob(
             )
             return doc_to_response(existing)
 
-        # 6. Promote partial -> final (atomic rename). The on-disk filename
-        # embeds the sanitized original stem so that downstream consumers
-        # (RAG tools, the agent LLM) can recognize the document by its
-        # human-readable name — a pure-UUID filename causes the LLM to
-        # hallucinate paths when it needs to reference the file in a tool
-        # call. The UUID prefix still guarantees uniqueness. After this,
+        # 6. Promote partial -> final (atomic rename) under the sanitized
+        # original name, so the agent reads and quotes the name the person
+        # gave; an id is added only when that name is taken. After this,
         # `partial_path` is cleared so the finally block won't unlink our
         # now-final file.
         safe_stem = _sanitize_stem(Path(display_name).stem)
-        final_path = managed_dir / f"{_short_id()}_{safe_stem}{ext}"
         try:
+            final_path = reserve_copy_path(
+                managed_dir,
+                safe_stem,
+                ext,
+                taken=lambda p: db.path_held_by_other_content(str(p), file_hash),
+            )
             os.replace(partial_path, final_path)
         except OSError as e:
             logger.error("Failed to promote %s -> %s: %s", partial_path, final_path, e)
+            if final_path is not None:
+                _cleanup_temp(final_path)
             raise HTTPException(status_code=500, detail="Failed to save uploaded file")
         partial_path = None  # ownership transferred
     finally:
@@ -502,6 +530,18 @@ async def upload_document_blob(
         logger.warning("Uploaded document %s can't be read: %s", display_name, e)
         raise HTTPException(
             status_code=422, detail={"status": e.kind, "message": str(e)}
+        ) from e
+    except ModelServerIndexError as e:
+        _cleanup_temp(final_path)
+        # The connection error stays in the log; the client words the reason.
+        logger.warning("Could not index uploaded document %s: %s", display_name, e)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": e.kind,
+                "message": "GAIA's model server isn't answering, so the "
+                "document couldn't be added. Retry once it's back.",
+            },
         ) from e
     except Exception as e:
         _cleanup_temp(final_path)
@@ -538,19 +578,6 @@ async def upload_document_blob(
         doc.get("chunk_count", 0),
     )
     return doc_to_response(doc)
-
-
-@router.get("/api/documents/monitor/status")
-async def monitor_status(request: Request):
-    """Get status of the document file monitor."""
-    monitor = getattr(request.app.state, "document_monitor", None)
-    if not monitor:
-        return {"running": False, "interval_seconds": 0, "reindexing": []}
-    return {
-        "running": monitor.is_running,
-        "interval_seconds": monitor._interval,
-        "reindexing": list(monitor.reindexing_docs),
-    }
 
 
 @router.get("/api/documents/{doc_id}/status")
@@ -595,6 +622,17 @@ async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
             status_code=404,
             detail=f"{doc.get('filename') or doc_id} is no longer on disk at {path}",
         )
+    # FileResponse opens the file only once headers are out, cutting the reply.
+    try:
+        with open(real, "rb"):
+            pass
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{doc.get('filename') or doc_id} can't be opened: "
+            "this account isn't allowed to read it, or another program has it "
+            "locked.",
+        ) from e
     response = FileResponse(
         path=str(real),
         media_type=_INLINE_MEDIA_TYPES.get(
@@ -719,13 +757,44 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
     return {"deleted": True}
 
 
+def _record_failed_document(
+    db: ChatDatabase, filepath: Path, file_hash: str, error: Exception
+) -> None:
+    """Give a file that failed to index a library row saying why, to retry from."""
+    try:
+        file_stat = filepath.stat()
+    except OSError:
+        file_stat = None
+    doc = db.add_document(
+        filename=filepath.name,
+        filepath=str(filepath),
+        file_hash=file_hash,
+        file_size=file_stat.st_size if file_stat else 0,
+        chunk_count=0,
+        file_mtime=file_stat.st_mtime if file_stat else None,
+    )
+    # The same bytes indexed fine, or are indexing, from elsewhere: leave that row.
+    if doc.get("indexing_status") in ("pending", "indexing") or (
+        doc.get("indexing_status") == "complete" and doc.get("chunk_count")
+    ):
+        return
+    db.update_document_status(
+        doc["id"],
+        "failed",
+        last_error=str(error),
+        error_kind=getattr(error, "kind", None),
+    )
+
+
 @router.post("/api/documents/index-folder", response_model=IndexFolderResponse)
 async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(get_db)):
     """Index all supported documents in a folder.
 
     Scans the given folder for files with extensions in
     FOLDER_INDEX_EXTENSIONS and indexes each one using the RAG pipeline.
-    Images are skipped: they index only when picked one by one.
+    Images are skipped and counted apart: they index only when picked one by
+    one. A file that fails gets a ``failed`` library row with the reason, so
+    it can be retried, and is left out of ``documents``.
     Indexing runs in a thread-pool executor to avoid blocking the
     event loop.
 
@@ -762,6 +831,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     # Collect all candidate files
     candidate_files: List[Path] = []
     skipped = 0
+    skipped_images = 0
     try:
         pattern_iter = resolved.rglob("*") if request.recursive else resolved.iterdir()
         for item in pattern_iter:
@@ -769,6 +839,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
                 continue
             if item.suffix.lower() in FOLDER_INDEX_EXTENSIONS:
                 candidate_files.append(item)
+            elif item.suffix.lower() in IMAGE_EXTENSIONS:
+                skipped_images += 1
             else:
                 skipped += 1
     except PermissionError:
@@ -779,7 +851,12 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
 
     if not candidate_files:
         return IndexFolderResponse(
-            indexed=0, failed=0, skipped=skipped, documents=[], errors=[]
+            indexed=0,
+            failed=0,
+            skipped=skipped,
+            skipped_images=skipped_images,
+            documents=[],
+            errors=[],
         )
 
     logger.info(
@@ -789,34 +866,53 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
         request.recursive,
     )
 
+    from .._chat_helpers import one_embedder_load
+
     _index_document = _server_mod()._index_document
     indexed_docs: List[DocumentResponse] = []
     errors: List[str] = []
 
-    for filepath in candidate_files:
-        try:
-            file_hash = await asyncio.get_running_loop().run_in_executor(
-                None, compute_file_hash, filepath
-            )
-            file_stat = filepath.stat()
-            file_size = file_stat.st_size
-            file_mtime = file_stat.st_mtime
+    with one_embedder_load():
+        for filepath in candidate_files:
+            file_hash = None
+            try:
+                file_hash = await asyncio.get_running_loop().run_in_executor(
+                    None, compute_file_hash, filepath
+                )
+                file_stat = filepath.stat()
+                file_size = file_stat.st_size
+                file_mtime = file_stat.st_mtime
 
-            chunk_count = await _index_document(filepath)
+                chunk_count = await _index_document(filepath)
+                if chunk_count == 0:
+                    raise ValueError("indexing produced 0 chunks")
 
-            doc = db.add_document(
-                filename=filepath.name,
-                filepath=str(filepath),
-                file_hash=file_hash,
-                file_size=file_size,
-                chunk_count=chunk_count,
-                file_mtime=file_mtime,
-            )
-            indexed_docs.append(doc_to_response(doc))
-        except Exception as e:
-            error_msg = f"{filepath.name}: {e}"
-            logger.warning("Failed to index %s: %s", filepath, e)
-            errors.append(error_msg)
+                doc = db.add_document(
+                    filename=filepath.name,
+                    filepath=str(filepath),
+                    file_hash=file_hash,
+                    file_size=file_size,
+                    chunk_count=chunk_count,
+                    file_mtime=file_mtime,
+                )
+                indexed_docs.append(doc_to_response(doc))
+            except Exception as e:
+                error_msg = f"{filepath.name}: {e}"
+                logger.warning("Failed to index %s: %s", filepath, e)
+                errors.append(error_msg)
+                # Unhashable means unreadable: no content key to file a row under.
+                if file_hash is not None:
+                    try:
+                        _record_failed_document(db, filepath, file_hash, e)
+                    except Exception as record_err:  # pylint: disable=broad-except
+                        # One file's failure must not lose the folder's results.
+                        logger.error(
+                            "Could not record the failed row for %s: %s",
+                            filepath,
+                            record_err,
+                            exc_info=True,
+                        )
+                        errors[-1] += f" (no library row: {record_err})"
 
     logger.info(
         "Folder indexing complete: %d indexed, %d failed",
@@ -828,6 +924,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
         indexed=len(indexed_docs),
         failed=len(errors),
         skipped=skipped,
+        skipped_images=skipped_images,
         documents=indexed_docs,
         errors=errors,
     )

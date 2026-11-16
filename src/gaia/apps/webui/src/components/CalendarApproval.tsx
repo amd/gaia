@@ -110,8 +110,8 @@ function among(ranges: ReadonlyArray<readonly [number, number]>, char: string): 
 
 const variationSelector = (char: string) => among(VARIATION_SELECTORS, char);
 
-function hidden(char: string): boolean {
-    if (KEPT_AS_WRITTEN.has(char) || variationSelector(char)) return false;
+function hidden(char: string, kept: ReadonlySet<string>): boolean {
+    if (kept.has(char) || variationSelector(char)) return false;
     return BLANK_LOOKING.has(char) || HIDDEN_CATEGORY.test(char) || among(DEFAULT_IGNORABLE, char);
 }
 
@@ -128,11 +128,14 @@ function selectorFits(chars: string[], at: number): boolean {
     return point >= 0xE0100 && point <= 0xE01EF && among(CJK_IDEOGRAPHS, previous);
 }
 
-/** `[U+202E]` in place of each, so what is approved reads as what is saved. */
-function visibleText(value: string, multiline: boolean): string {
+/**
+ * `[U+202E]` in place of each, so what is approved reads as what is saved. `kept` is what
+ * stays as written: prose keeps `KEPT_AS_WRITTEN`, a file preview keeps less.
+ */
+export function visibleWith(kept: ReadonlySet<string>, value: string, multiline: boolean): string {
     const chars = [...value.replace(/\r\n/g, '\n')];
     const shown = chars.map((char, at) => {
-        const isHidden = variationSelector(char) ? !selectorFits(chars, at) : hidden(char);
+        const isHidden = variationSelector(char) ? !selectorFits(chars, at) : hidden(char, kept);
         return isHidden ? `[U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}]` : char;
     }).join('');
     return multiline ? shown : shown.replace(/\n/g, '[U+000A]');
@@ -143,13 +146,13 @@ const UNSEEN_NOTE = "This text holds characters that don't show. Those that hide
     'appear as [U+XXXX]; ideograph variant marks are kept as written. They are saved as written.';
 
 /** Mirrors `has_unseen`: a code would show, or an ideograph variant mark is kept as written. */
-function unseen(value: unknown): boolean {
+export function unseenWith(kept: ReadonlySet<string>, value: unknown): boolean {
     if (typeof value !== 'string') return false;
     const chars = [...value.replace(/\r\n/g, '\n')];
     return chars.some((char, at) => {
         const point = char.codePointAt(0) ?? 0;
         if (point >= 0xE0100 && point <= 0xE01EF) return true;
-        return variationSelector(char) ? !selectorFits(chars, at) : hidden(char);
+        return variationSelector(char) ? !selectorFits(chars, at) : hidden(char, kept);
     });
 }
 
@@ -187,7 +190,7 @@ function plain(value: unknown): string {
             if (fenceSide(chars[at]) === side) {
                 count += 1;
                 last = at;
-            } else if (!hidden(chars[at])) break;
+            } else if (!hidden(chars[at], KEPT_AS_WRITTEN)) break;
         }
         out += count >= 3 ? side + side : chars.slice(start, last + 1).join('');
         start = last + 1;
@@ -197,7 +200,7 @@ function plain(value: unknown): string {
 
 /** GAIA sends the checked values (addresses as notified), so this only makes them visible. */
 function text(value: unknown, multiline = false): string {
-    return visibleText(plain(value), multiline);
+    return visibleWith(KEPT_AS_WRITTEN, plain(value), multiline);
 }
 
 /** Local midnight, so an all-day date can't slide to a neighbouring day. */
@@ -262,7 +265,7 @@ export function CalendarApproval({ tool, args }: { tool: string; args: Record<st
 
     // GAIA's own note covers this when it sent one; otherwise the card says it.
     const values = [...Object.values(args), ...(Array.isArray(args.notify_attendees) ? args.notify_attendees : [])];
-    const note = typeof args._risk_note !== 'string' && values.some(unseen) ? UNSEEN_NOTE : '';
+    const note = typeof args._risk_note !== 'string' && values.some((value) => unseenWith(KEPT_AS_WRITTEN, value)) ? UNSEEN_NOTE : '';
 
     return (
         <>

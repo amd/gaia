@@ -275,7 +275,7 @@ func TestLoadInstalledAgentsReadsSentinels(t *testing.T) {
 	c.LoadInstalledAgents()
 
 	email := c.Get("email")
-	if email == nil || !email.Status.IsLaunchable() {
+	if email == nil || email.Status != StatusInstalled {
 		t.Fatalf("an installed sentinel did not make email launchable: %+v", email)
 	}
 	if email.InstalledVersion != "0.5.0" {

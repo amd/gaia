@@ -68,8 +68,8 @@ def test_failed_model_makes_init_exit_nonzero_with_fix_steps():
 
     assert rc == 1
     assert "llama-server crashed" in out
-    assert "gaia uninstall --models --yes" in out
-    assert "gaia init --profile minimal --yes" in out
+    assert "gaia init --profile minimal --force-models --yes" in out
+    assert "gaia uninstall" not in out
     assert "Model verification failed for:" in out
     assert "GAIA initialization complete!" not in out
 
@@ -187,7 +187,7 @@ def test_a_model_short_of_memory_is_not_called_corrupted():
     assert "not have enough free memory" in out
     assert "nothing needs re-downloading" in out
     assert "may be corrupted" not in out
-    assert "gaia uninstall --models" not in out
+    assert "--force-models" not in out
 
 
 def test_a_broken_model_beside_a_short_one_still_gets_the_re_download_steps():

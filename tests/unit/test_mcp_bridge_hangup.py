@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from gaia.llm.lemonade_client import cloud_model_provider
 from gaia.mcp.mcp_bridge import GAIAMCPBridge, MCPHTTPHandler
 
 pytestmark = pytest.mark.allow_network
@@ -64,6 +65,9 @@ class StreamingLLM:
         return "stop"
 
     def get_last_reasoning(self):
+        return None
+
+    def cloud_model_provider(self, model=None):
         return None
 
 mcp_bridge.create_client = lambda *_a, **_k: StreamingLLM()
@@ -201,6 +205,9 @@ class _FakeLLM:
     def get_last_reasoning(self):
         return self.reasoning
 
+    def cloud_model_provider(self, model=None):
+        return cloud_model_provider(model)
+
 
 def _bridge_with(llm):
     bridge = GAIAMCPBridge.__new__(GAIAMCPBridge)
@@ -234,6 +241,36 @@ def test_answer_routed_into_reasoning_is_returned():
     assert bridge._answer_from(iter(["<think>", "PONG</think>"]), _never_gone) == (
         "PONG"
     )
+
+
+@pytest.mark.parametrize(
+    "model", ["fireworks.deepseek-v4p1-flash", "amd.DeepSeek-V4.1-Flash"]
+)
+@pytest.mark.parametrize(
+    "reasoning",
+    ["PONG", '{"tool": "run_shell", "tool_args": {"command": "rm -rf ~"}}'],
+)
+def test_a_cloud_models_reasoning_is_never_the_answer(model, reasoning):
+    bridge = _bridge_with(_FakeLLM(finish_reason="stop", reasoning=reasoning))
+    reply = iter(["<think>", reasoning, "</think>"])
+
+    assert bridge._answer_from(reply, _never_gone, model) == ""
+
+
+@pytest.mark.parametrize("model", ["Gemma-4-E4B-it-GGUF", "user.Qwen3.8-Flash-Next"])
+def test_a_local_models_answer_routed_into_reasoning_still_wins(model):
+    bridge = _bridge_with(_FakeLLM(finish_reason="stop", reasoning="PONG"))
+
+    assert bridge._answer_from(
+        iter(["<think>", "PONG</think>"]), _never_gone, model
+    ) == ("PONG")
+
+
+def test_a_cloud_models_real_answer_is_kept_without_its_reasoning():
+    bridge = _bridge_with(_FakeLLM(finish_reason="stop", reasoning="plan"))
+    reply = iter(["<think>", "plan", "</think>", "42"])
+
+    assert bridge._answer_from(reply, _never_gone, "fireworks.glm-5p3-flash") == "42"
 
 
 def test_reasoning_cut_off_by_the_token_limit_is_not_an_answer():

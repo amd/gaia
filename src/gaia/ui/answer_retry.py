@@ -148,8 +148,13 @@ def _is_loaded(client: Any, model: str) -> bool:
     return any((m.get("model_name") or "").lower() == model.lower() for m in loaded)
 
 
-def answer_with(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
-    """Load *model* the way a chat turn would, then ask it. Blocking."""
+def answer_with(
+    model: str, messages: list[dict[str, Any]], *, cloud: bool = False
+) -> dict[str, Any]:
+    """Load *model* the way a chat turn would, then ask it. Blocking.
+
+    A *cloud* model has nothing to load on this PC; it is asked straight away.
+    """
     import requests
 
     from gaia.daemon.broker_client import BrokerUnavailableError, model_lease
@@ -166,21 +171,27 @@ def answer_with(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
     started = time.monotonic()
     # One lease over load and ask, so no other process swaps the model out between them.
     with ExitStack() as lease:
-        # The loader's errors carry the remedy (free memory, another app holds
-        # the model, the daemon kept the slot); pass them on, not a bare 500.
-        try:
-            lease.enter_context(model_lease(model, priority="interactive"))
-            _maybe_load_expected_model(model)
-        except (InsufficientMemoryError, BrokerUnavailableError, RuntimeError) as exc:
-            raise RetryError(503, f"{model} could not be loaded: {exc}") from exc
-        # Asking a model that isn't loaded would let Lemonade load it at its own,
-        # smaller window.
-        if not _is_loaded(client, model):
-            raise RetryError(
-                503,
-                f"{model} could not be loaded, often because there is not enough "
-                "free memory. Close other apps and try again; gaia.log says why.",
-            )
+        if not cloud:
+            # The loader's errors carry the remedy (free memory, another app
+            # holds the model, the daemon kept the slot); pass them on, not a 500.
+            try:
+                lease.enter_context(model_lease(model, priority="interactive"))
+                _maybe_load_expected_model(model)
+            except (
+                InsufficientMemoryError,
+                BrokerUnavailableError,
+                RuntimeError,
+            ) as exc:
+                raise RetryError(503, f"{model} could not be loaded: {exc}") from exc
+            # Asking a model that isn't loaded would let Lemonade load it at its
+            # own, smaller window.
+            if not _is_loaded(client, model):
+                raise RetryError(
+                    503,
+                    f"{model} could not be loaded, often because there is not "
+                    "enough free memory. Close other apps and try again; gaia.log "
+                    "says why.",
+                )
         loaded = time.monotonic()
         try:
             data = client.chat_completions(
@@ -198,17 +209,19 @@ def answer_with(model: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
                 "Check Settings → Model.",
             ) from exc
         finished = time.monotonic()
-        try:
-            # Read under the lease, so the numbers are this request's, as on a chat turn.
-            server = client.get_stats()
-        except LemonadeClientError as exc:
-            logger.warning(
-                "Lemonade /stats unavailable after retrying with %s; the comparison "
-                "shows no speed for it: %s",
-                model,
-                exc,
-            )
-            server = {}
+        server: dict[str, Any] = {}
+        # The model server's speed counters describe its own models only.
+        if not cloud:
+            try:
+                # Read under the lease, so the numbers are this request's, as on a chat turn.
+                server = client.get_stats()
+            except LemonadeClientError as exc:
+                logger.warning(
+                    "Lemonade /stats unavailable after retrying with %s; the "
+                    "comparison shows no speed for it: %s",
+                    model,
+                    exc,
+                )
     content = (
         (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
     ).strip()

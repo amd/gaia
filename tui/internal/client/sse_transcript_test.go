@@ -36,7 +36,7 @@ func TestTheTranscriptCarriesWhatTheCardShowed(t *testing.T) {
 	s := &SSEClient{}
 	s.appendTurn("triage my inbox", "Here's your inbox pre-scan.", []string{line}, nil)
 
-	turns := s.Transcript()
+	turns := s.transcriptSnapshot()
 	if len(turns) != 2 {
 		t.Fatalf("expected a user and an assistant turn, got %d", len(turns))
 	}
@@ -58,7 +58,7 @@ func TestTheTranscriptCarriesWhatTheCardShowed(t *testing.T) {
 func TestAnOrdinaryTurnIsRecordedUnchanged(t *testing.T) {
 	s := &SSEClient{}
 	s.appendTurn("thanks", "You're welcome!", nil, nil)
-	if got := s.Transcript()[1].Content; got != "You're welcome!" {
+	if got := s.transcriptSnapshot()[1].Content; got != "You're welcome!" {
 		t.Errorf("a card-less turn was rewritten: %q", got)
 	}
 }
@@ -72,7 +72,7 @@ func TestCardMarkerCannotBeMistakenForContent(t *testing.T) {
 	s.appendTurn("triage my inbox", "Here's your inbox pre-scan.",
 		[]string{"- [suggested_archives] DMW Martial Arts — SUMMER HOLIDAY SALE (id abc123)"}, nil)
 
-	got := s.Transcript()[1].Content
+	got := s.transcriptSnapshot()[1].Content
 	if strings.Contains(got, "[shown to the user]") {
 		t.Errorf("the old bare marker must not appear verbatim:\n%s", got)
 	}
@@ -94,7 +94,7 @@ func TestAFollowUpIsRecordedBetweenTheQuestionAndTheAnswer(t *testing.T) {
 	s.appendTurn("triage my inbox", "Done — 3 archived.", nil,
 		[]string{"only the unread ones", "and skip newsletters"})
 
-	turns := s.Transcript()
+	turns := s.transcriptSnapshot()
 	var got []string
 	for _, turn := range turns {
 		got = append(got, turn.Role+":"+turn.Content)

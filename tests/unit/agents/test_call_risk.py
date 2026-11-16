@@ -81,7 +81,7 @@ def test_an_unreadable_line_stays_opaque_for_the_risk_label():
 
 @pytest.mark.parametrize(
     "tool",
-    ["run_shell_command", "run_cli_command", "wait_for_condition"],
+    ["run_shell_command", "wait_for_condition"],
 )
 def test_no_shell_tool_labels_an_unreadable_line_by_one_reading(tool):
     assert call_risk(tool, {"command": DISAGREEING_LINE}) == "execute"

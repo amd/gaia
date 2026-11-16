@@ -24,7 +24,8 @@ validator = PathValidator()
 session = PathValidator(allowed_paths=["/home/user/documents/report.pdf"])
 
 # Reads: scope AND secrets. `.env`, id_rsa, *.pem, ~/.ssh/* are refused even
-# when they sit inside an allowed directory.
+# when they sit inside an allowed directory, and so is a hard link elsewhere to
+# a file in a credential folder such as ~/.ssh.
 is_allowed, reason = session.validate_read("/home/user/documents/report.pdf")
 
 # Writes: additionally refuses blocked directories and files that execute on
@@ -65,8 +66,10 @@ Three things are wider on purpose:
 
 `ChatAgent` and `GaiaAgent` create one scratch directory per agent that has a
 file-writing tool, name it in the system prompt, and delete it when the agent is
-cleaned up (`GaiaAgent.close()`). The `chat` profile has no file-writing tools, so
-it gets none.
+cleaned up (`GaiaAgent.close()`). A process that exits without that cleanup still
+removes the scratch directories it holds, and the first agent in a process removes
+`gaia-scratch-*` directories no run has written to for a day. The `chat` profile
+has no file-writing tools, so it gets none.
 
 <Warning>
   Only a validator built **without** an `allowed_paths` argument reads or writes the
@@ -110,9 +113,12 @@ v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
   server and the flagship sidecar check it before they start serving.
 
 <Warning>
-  This confines GAIA's tools, not code they run. A `run_python` script or shell
-  command can still open any file the OS user can read. Real isolation needs OS-level
-  separation: a separate user account, a container, or a VM.
+  This confines GAIA's tools, not code they run. A `run_python` or
+  `execute_python_file` script can't open, copy, move, link or delete files in
+  the credential folders (`~/.ssh`, `~/.aws` and the like), however it builds the
+  path. A shell command, or a process a script starts, can still open any file
+  the OS user can read. Real isolation needs OS-level separation: a separate
+  user account, a container, or a VM.
 </Warning>
 
 ---

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -101,6 +102,8 @@ def summarize(
         "duration_s": round(duration_s, 2),
         "error_count": int(result.get("error_count") or 0),
     }
+    if result.get("time_limit_reached"):
+        record["time_limit_reached"] = True
     if record["is_error"]:
         record["error"] = _turn_error(result)
     if verbose:
@@ -119,6 +122,7 @@ def configure_console(console: Any, skip_permissions: bool, full_access: bool) -
 
 def _emit_failure(output_format: str, message: str, code: int = 1) -> int:
     """Report a run that never produced a turn, in the shape stdout promises."""
+    message = _cli(message)
     if output_format == "json":
         print(
             json.dumps(
@@ -146,6 +150,7 @@ def run(
     full_access: bool = False,
     base_url: Optional[str] = None,
     attempts: int = 1,
+    time_limit: Optional[int] = None,
 ) -> int:
     """Run one headless turn and print its result. Returns the exit code.
 
@@ -157,8 +162,16 @@ def run(
             f"Unknown --output-format {output_format!r}; choose one of: "
             f"{', '.join(OUTPUT_FORMATS)}."
         )
+    if time_limit and attempts > 1:
+        return _emit_failure(
+            output_format,
+            "--time-limit can't be combined with --attempts yet. Drop one of them.",
+            code=2,
+        )
+    route = settings = None
     try:
         text = read_prompt(prompt)
+        model, route, settings = _route(text, model, base_url)
         turn = dict(
             model=model,
             verbose=verbose,
@@ -170,14 +183,26 @@ def run(
         record = (
             _run_with_attempts(text, attempts, **turn)
             if attempts > 1
-            else _run_turn(text, **turn)
+            else _run_turn(text, time_limit=time_limit, **turn)
         )
+        if route is not None:
+            record["route"] = {
+                k: _cli(v) if k in ("fix", "notice") else v
+                for k, v in route.as_record().items()
+            }
+            if record["is_error"] and record.get("error"):
+                record["error"] = _cli(
+                    _explain_routed(settings, route, record["error"]) or record["error"]
+                )
     except KeyboardInterrupt:
         return _emit_failure(output_format, "interrupted", code=130)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report, never a traceback
         # DEBUG, not INFO: the console handler prints INFO, traceback and all.
         log.debug("gaia -p failed", exc_info=True)
-        return _emit_failure(output_format, f"{type(exc).__name__}: {exc}")
+        return _emit_failure(
+            output_format,
+            _explain_routed(settings, route, exc) or f"{type(exc).__name__}: {exc}",
+        )
 
     if output_format == "json":
         print(json.dumps(record, ensure_ascii=False))
@@ -235,6 +260,53 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
     return record
 
 
+def _route(text: str, model: Optional[str], base_url: Optional[str]):
+    """``(model to run, route, settings)``: the hybrid router's pick, else
+    *model* and two Nones.
+
+    Decided once, before any attempt starts, so every attempt and the final
+    turn run on the same model.
+    """
+    from gaia.llm.hybrid import HybridRouter, is_hybrid_model
+
+    model = _resolve_model(model)
+    if not is_hybrid_model(model):
+        return model, None, None
+    router = HybridRouter()
+    detected = _start_server(router.settings.classifier_model, base_url)
+    route = router.decide(text, base_url=base_url or detected)
+    label = (
+        f"{route.kind}, difficulty {route.difficulty}, {route.stakes} stakes"
+        if route.classified
+        else route.reason
+    )
+    print(f"gaia -p: hybrid runs this turn on {route.model} ({label})", file=sys.stderr)
+    if route.notice:
+        print(f"⚠️  gaia -p: {_cli(route.notice)}", file=sys.stderr)
+    elif route.fix:
+        print(
+            f"⚠️  gaia -p: hybrid's classifier failed. To fix: {_cli(route.fix)}",
+            file=sys.stderr,
+        )
+    return route.model, route, router.settings
+
+
+def _cli(text: str) -> str:
+    """*text* with the apps' advice swapped for the CLI's commands."""
+    from gaia.llm.surface_hints import surface_wording
+
+    return surface_wording(text, "cli")
+
+
+def _explain_routed(settings: Any, route: Any, error: Any) -> Optional[str]:
+    """*error* restated with the hybrid setting that chose the turn's model."""
+    if route is None:
+        return None
+    from gaia.llm.hybrid import explain_route_failure
+
+    return explain_route_failure(settings, route.model, error)
+
+
 def _resolve_model(model: Optional[str]) -> Optional[str]:
     if model is None:
         from gaia.config import GaiaConfig
@@ -269,6 +341,7 @@ def _run_turn(
     full_access: bool,
     base_url: Optional[str],
     extra_paths: Optional[List[str]] = None,
+    time_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.logger import configure
@@ -285,11 +358,13 @@ def _run_turn(
         return _relay_turn(
             text,
             model=model,
+            verbose=verbose,
             max_steps=max_steps,
             skip_permissions=skip_permissions,
             full_access=full_access,
             base_url=base_url,
             extra_paths=extra_paths,
+            time_limit=time_limit,
         )
     detected_base_url = _start_server(model, base_url)
 
@@ -313,10 +388,13 @@ def _run_turn(
         )
     agent._ensure_tool_loader_reset()  # pylint: disable=protected-access
 
+    timer = _arm_time_limit(agent, time_limit) if time_limit else None
     started = time.time()
     try:
         result = agent.process_query(text) or {}
     finally:
+        if timer is not None:
+            timer.cancel()
         from gaia.agents.base.memory import drain_memory_extraction
 
         drain_memory_extraction(agent)
@@ -325,15 +403,43 @@ def _run_turn(
     )
 
 
+def _arm_time_limit(agent: Any, seconds: int) -> threading.Timer:
+    """Give the turn *seconds*: the agent wraps up before, a stop enforces it.
+
+    The agent warns the model and stops its loop short of the limit so the
+    requested files and the answer still get written. A turn still busy at the
+    limit is stopped: a shell or Python run ends there, a model call already
+    sent is waited for, and the turn ends at its next step.
+    """
+    from gaia.agents.base.agent import TurnCancel
+
+    agent.time_limit_s = seconds
+    cancel = TurnCancel()
+    agent._cancel_event = cancel  # pylint: disable=protected-access
+    timer = threading.Timer(
+        seconds,
+        cancel.cancel,
+        args=[
+            f"Stopped at the {seconds}-second time limit (--time-limit) before "
+            "the turn finished."
+        ],
+    )
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
 def _relay_turn(
     text: str,
     *,
     model: Optional[str],
+    verbose: bool,
     max_steps: Optional[int],
     skip_permissions: bool,
     full_access: bool,
     base_url: Optional[str],
     extra_paths: Optional[List[str]] = None,
+    time_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run the turn on the GAIA agent's own binary, through the daemon.
 
@@ -344,11 +450,15 @@ def _relay_turn(
 
     from gaia.daemon.agent_query import ConsoleRenderer, run_query
 
-    if skip_permissions or full_access or base_url:
+    if skip_permissions or full_access or base_url or time_limit:
         flag = (
             "--full-access"
             if full_access
-            else "--dangerously-skip-permissions" if skip_permissions else "--base-url"
+            else (
+                "--dangerously-skip-permissions"
+                if skip_permissions
+                else "--base-url" if base_url else "--time-limit"
+            )
         )
         raise RuntimeError(
             f"{flag} needs the GAIA agent in this process, and here it runs as "
@@ -369,11 +479,18 @@ def _relay_turn(
         renderer=renderer,
         working_directory=cwd,
         allowed_paths=[cwd, *(extra_paths or [])],
+        # Sent, even empty, it makes the final carry the turn's model messages.
+        **({"turns": []} if verbose else {}),
     )
     succeeded = outcome.terminal_type == "final" and not outcome.failed
+    usage = outcome.usage or {}
     result: Dict[str, Any] = {
         "status": "success" if succeeded else "error",
         "result": outcome.final_answer or "",
+        "steps_taken": usage.get("steps"),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("tokens"),
+        "conversation": outcome.model_messages or [],
     }
     if not succeeded:
         result["error"] = (
@@ -381,4 +498,12 @@ def _relay_turn(
             or (outcome.final_answer if outcome.failed else "")
             or "the GAIA agent's reply ended without an answer"
         )
-    return summarize(result, model, time.time() - started)
+    record = summarize(result, model, time.time() - started, verbose=verbose)
+    # Prefer the agent's own counts; a final without them keeps the conversation's.
+    for src, dst in (
+        ("tools_used", "num_tool_calls"),
+        ("cached_tokens", "cached_tokens"),
+    ):
+        if src in usage:
+            record[dst] = int(usage[src] or 0)
+    return record

@@ -418,9 +418,7 @@ class TestMicrosoftDispatch:
         assert personal is not work
         assert personal.provider_id != work.provider_id
         assert personal.client_id != work.client_id
-        assert {"microsoft", "microsoft_work"}.issubset(
-            set(providers.list_provider_ids())
-        )
+        assert {"microsoft", "microsoft_work"}.issubset(set(providers._registry))
 
 
 class TestGoogleCatalogScopes:

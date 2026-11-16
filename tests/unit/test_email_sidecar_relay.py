@@ -771,7 +771,8 @@ class TestSidecarHTTPErrorDetail:
         )
         assert "gaia " not in agent_errors[0]["content"]
 
-    def test_a_detail_that_names_the_setup_repair_gains_no_hint(self):
+    def test_a_server_that_could_not_start_gets_the_outage_wording(self):
+        """Its raw reason goes to the log; the daemon starts it again on resend."""
         from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
 
         handler = _FakeHandler()
@@ -779,7 +780,15 @@ class TestSidecarHTTPErrorDetail:
             "GAIA's AI engine couldn't start: lemond timed out. Sending the "
             f"message again won't help until it is repaired. {AGENT_UI_SETUP_HINT}"
         )
-        self._assert_left_alone(detail)
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(
+                SidecarHTTPError(503, detail, path="/v1/gaia/query")
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert agent_errors[0]["content"] == relay.ENGINE_START_FAILED_MESSAGE
+        assert "lemond" not in agent_errors[0]["content"]
 
     def test_a_detail_that_already_says_to_resend_gains_no_hint(self):
         self._assert_left_alone(
@@ -787,19 +796,26 @@ class TestSidecarHTTPErrorDetail:
             "refused). Start the model server, then send the message again."
         )
 
-    def test_a_server_the_user_runs_gets_its_start_instruction(self, monkeypatch):
+    def test_a_server_the_user_runs_is_theirs_to_start_with_no_command(
+        self, monkeypatch
+    ):
         from gaia.llm import lemonade_launcher
+        from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT
 
-        start = "Start the Lemonade app from Applications, then retry."
         monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
         monkeypatch.setattr(
             lemonade_launcher,
             "describe_start_hint",
-            lambda ctx_size=None: lemonade_launcher.StartHint(instruction=start),
+            lambda ctx_size=None: lemonade_launcher.StartHint(
+                instruction="Lemonade Server is not installed. Run `gaia init`."
+            ),
         )
         detail = "local LLM triage failed: connection refused"
         content = relay._augment_error_detail(detail)
-        assert content == f"{detail}{relay.LEMONADE_CONNECTION_HINT} {start}"
+        assert content == (
+            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {APP_OTHER_SERVER_DOWN_HINT}"
+        )
+        assert "gaia init" not in content
 
     def _assert_left_alone(self, detail):
         handler = _FakeHandler()
@@ -812,17 +828,40 @@ class TestSidecarHTTPErrorDetail:
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert agent_errors[0]["content"] == detail
 
-    def test_404_http_error_still_shows_version_upgrade_message(self):
+    @pytest.mark.parametrize("path", ["/v1/email/query", "/v1/email/query/"])
+    def test_404_http_error_still_shows_version_upgrade_message(self, path):
         handler = _FakeHandler()
         proxy = _ScriptedProxy(
-            lambda: _RaisingIterator(
-                SidecarHTTPError(404, "Not Found", path="/v1/email/query")
-            )
+            lambda: _RaisingIterator(SidecarHTTPError(404, "Not Found", path=path))
         )
         relay.relay_query(handler, proxy, query="q", context=[])
         agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
         assert len(agent_errors) == 1
         assert agent_errors[0]["content"] == relay.EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/v1/email/query/r1/tool_decision",
+            "/v1/email/query/r1/respond",
+            "/v1/email/sessions/s1/internet",
+            # Another agent's /query says nothing about this one's version.
+            "/v1/gaia/query",
+            "",
+        ],
+    )
+    def test_a_404_from_another_route_is_not_called_an_old_agent(self, path):
+        """Only a missing /query proves an old binary; a finished run 404s too."""
+        handler = _FakeHandler()
+        detail = "No run 'r1' is in flight. It may have already finished."
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(SidecarHTTPError(404, detail, path=path))
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        [agent_error] = [e for e in handler.events if e["type"] == "agent_error"]
+        assert agent_error["content"] != relay.EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
+        assert "out of date" not in agent_error["content"]
+        assert detail in agent_error["content"]
 
     def test_detail_less_http_error_falls_back_to_stream_ended(self):
         handler = _FakeHandler()

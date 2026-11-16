@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -28,12 +29,20 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from gaia.llm.hybrid import HybridConfigError, is_hybrid_model
 from gaia.llm.local_only import (
-    SETTINGS_HINT,
+    blocked_reason,
     cloud_blocked,
     local_only_key_message,
+    recipes_confirm_local,
+    recipes_in_catalog,
 )
-from gaia.llm.surface_hints import APP_RESTART_HINT
+from gaia.llm.surface_hints import (
+    AGENT_UI_LOCAL_ONLY_HINT,
+    APP_OTHER_SERVER_START_HINT,
+    APP_RESTART_HINT,
+    surface_wording,
+)
 from gaia.logger import get_logger
 
 from ..database import ChatDatabase
@@ -82,6 +91,10 @@ class ProviderError(Exception):
         self.status = status
 
 
+class _ModelListFailed(ProviderError):
+    """The model server answered ``/models`` with a 5xx: its own state, no verdict on a model."""
+
+
 # ── Lemonade access ────────────────────────────────────────────────────────
 
 
@@ -101,11 +114,10 @@ def _is_local_url(base_url: str) -> bool:
 
 def _server_owner(base_url: str) -> str:
     """``gaia`` for GAIA's own Lemonade, ``user`` for another local one, ``remote``."""
-    from gaia.llm.lemonade_client import _read_embedded_lemonade_state
+    from gaia.llm.lemonade_client import gaia_lemonade_port
     from gaia.llm.model_server_info import server_owner
 
-    state = _read_embedded_lemonade_state()
-    return server_owner(base_url, state.get("port") if state else None)
+    return server_owner(base_url, gaia_lemonade_port())
 
 
 def _require_loopback(base_url: str) -> None:
@@ -141,14 +153,14 @@ def _lemonade(
             allow_redirects=False,
         )
     except requests.RequestException as e:
-        from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
+        from gaia.llm.lemonade_launcher import gaia_runs_lemonade
 
         logger.warning("Model server at %s not reachable: %s", base, e)
         # GAIA restarts its own server; one the user runs is theirs to start.
         advice = (
             APP_RESTART_HINT
             if gaia_runs_lemonade(base)
-            else describe_start_hint().instruction
+            else f"{APP_OTHER_SERVER_START_HINT}, then try again."
         )
         raise ProviderError(
             f"The local model server is not reachable at {base}. {advice}",
@@ -162,22 +174,44 @@ def _lemonade(
 
 
 def _cloud_error(
-    provider: str, status: int, body: Dict[str, Any], echo_body: bool = True
+    provider: str,
+    status: int,
+    body: Dict[str, Any],
+    echo_body: bool = True,
+    *,
+    install: bool = False,
 ) -> ProviderError:
-    """*echo_body* False for calls that carried a key: Lemonade may echo the request."""
+    """*echo_body* False for calls that carried a key: Lemonade may echo the request.
+
+    *install* is set for ``POST /install``, where a 404 means the endpoint is
+    missing and the version hint is always right. On the auth routes a 404 can
+    also mean the provider was never registered, which needs a registration hint.
+    """
     name = _NAMES[provider]
     if status in (401, 403):
         return ProviderError(f"{name} rejected the key. Check it and try again.", 401)
+    detail = body.get("error")
+    detail = detail if isinstance(detail, dict) else {}
+    message = detail.get("message")
+    error_type = detail.get("type")
     if status == 404:
         from gaia.llm.lemonade_launcher import describe_upgrade_hint
         from gaia.version import LEMONADE_MIN_VERSION
 
-        return ProviderError(
-            "This Lemonade cannot register cloud providers, so it is older than "
-            f"v{LEMONADE_MIN_VERSION}, the oldest version GAIA supports. "
-            f"{describe_upgrade_hint()}",
-            409,
-        )
+        if not install and isinstance(message, str) and "is not installed" in message:
+            return ProviderError(
+                f"Lemonade has no cloud provider registered for {name}, so it "
+                "cannot accept a key yet. Open Settings > Model and connect it "
+                "again, then try again.",
+                409,
+            )
+        if install or not error_type or error_type == "not_found":
+            return ProviderError(
+                "This Lemonade cannot register cloud providers, so it is older than "
+                f"v{LEMONADE_MIN_VERSION}, the oldest version GAIA supports. "
+                f"{describe_upgrade_hint()}",
+                409,
+            )
     if status == 409:
         from gaia.llm.cloud_keys import env_var_for
 
@@ -187,8 +221,7 @@ def _cloud_error(
             "the key blank to keep using it.",
             409,
         )
-    detail = (body.get("error") or {}) if isinstance(body.get("error"), dict) else {}
-    message = (detail.get("message") if echo_body else None) or f"HTTP {status}"
+    message = (message if echo_body else None) or f"HTTP {status}"
     return ProviderError(f"Lemonade could not configure {name}: {message}.", 502)
 
 
@@ -236,6 +269,8 @@ _MIN_KEY_LENGTH_FOR_HINT = 16
 
 #: ``key_state`` while the OS holds the stored-key read for the user's permission.
 KEY_WAITING = "waiting_for_os_permission"
+#: ``key_state`` once the user closed the store's unlock prompt; GAIA holds off asking.
+KEY_LOCKED = "store_locked"
 
 
 def _key_slot(provider: str) -> str:
@@ -351,7 +386,10 @@ def _key_hint(
 
 
 def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    from gaia.connectors.credential_wait import CredentialStoreWaiting
+    from gaia.connectors.credential_wait import (
+        CredentialStoreLocked,
+        CredentialStoreWaiting,
+    )
     from gaia.llm.cloud_keys import env_var_for
 
     view: Dict[str, Any] = {
@@ -369,6 +407,8 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
             "read",
             None,
         )
+    except CredentialStoreLocked as e:
+        key_source, key_state, key_message = None, KEY_LOCKED, str(e)
     except CredentialStoreWaiting as e:
         # Unknown, not absent: the UI must not offer "Add your key" here.
         key_source, key_state, key_message = None, KEY_WAITING, str(e)
@@ -463,7 +503,9 @@ def _suggested_local_models() -> set:
 
 def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str, Any]]:
     """Chat models for *provider*; *offer_optional* adds the optional ones that fit."""
+    from gaia.installer import model_choice
     from gaia.llm.lemonade_client import (
+        NPU_MODEL_LADDER,
         _model_ids_match,
         catalog_context_window,
         find_model_requirement,
@@ -475,7 +517,9 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
 
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
-        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+        failed = _ModelListFailed if status >= 500 else ProviderError
+        raise failed(f"Lemonade answered /models with HTTP {status}.")
+    listed = _model_entries(body)
     offered: List[str] = []
     if provider == LOCAL:
         offered = [*_suggested_local_models()]
@@ -483,8 +527,9 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
             offered += _optional_models_that_fit()
     added = _added_models() if provider == LOCAL else []
     offered += [e["id"] for e in added]
+    npu_kept = [*NPU_MODEL_LADDER, *offered, *_last_local_model()]
     out: List[Dict[str, Any]] = []
-    for m in body.get("data") or []:
+    for m in listed:
         model_id = str(m.get("id") or "")
         if not model_id or not _is_chat_model(m):
             continue
@@ -493,6 +538,11 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
             if is_cloud or not (
                 m.get("downloaded")
                 or any(_model_ids_match(model_id, o) for o in offered)
+            ):
+                continue
+            # Only NPU builds with evals on the NPU, or one the user already chose.
+            if runs_on_npu(model_id) and not any(
+                _model_ids_match(model_id, k) for k in npu_kept
             ):
                 continue
         elif not model_id.startswith(f"{provider}."):
@@ -505,7 +555,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                 "downloaded": bool(m.get("downloaded")) or is_cloud,
                 "labels": list(m.get("labels") or []),
                 "recipe": m.get("recipe"),
-                "size_gb": m.get("size"),
+                "size_gb": model_choice.download_size_gb(model_id, m.get("size")),
                 "rank": ranked[0] if ranked else None,
                 "note": ranked[1].note if ranked else None,
                 "evidence": ranked[1].evidence if ranked else None,
@@ -528,7 +578,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
                     "labels": [],
                     "recipe": (req.recipe if req else None)
                     or ("flm" if runs_on_npu(model_id) else None),
-                    "size_gb": req.size_gb if req else None,
+                    "size_gb": model_choice.download_size_gb(model_id, None),
                     "rank": None,
                     "note": None,
                     "evidence": None,
@@ -543,6 +593,29 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _model_entries(body: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The model entries of a ``/models`` answer; a malformed one is named, not a 500."""
+    from .system import _catalog_entries
+
+    try:
+        return _catalog_entries(body)
+    except ValueError as e:
+        raise ProviderError(str(e)) from e
+
+
+def _last_local_model() -> List[str]:
+    """The model the user last switched to, as config.json remembers it."""
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    try:
+        last = (GaiaConfig.load().last_model or "").strip()
+    except GaiaConfigError as e:
+        # The active view reports the broken config; the list still shows the rest.
+        logger.warning("Listing models without the one last used: %s", e)
+        return []
+    return [last] if last else []
 
 
 def _added_models() -> List[Dict[str, Any]]:
@@ -598,19 +671,59 @@ def provider_of(model_id: str) -> str:
     return prefix if prefix in (FIREWORKS, AMD) else LOCAL
 
 
-def model_label(model_id: str) -> str:
+def cloud_provider_name(model_id: str) -> Optional[str]:
+    """Who answers cloud *model_id*, or None for a local one.
+
+    Also names a provider GAIA only learned from Lemonade's model list.
+    """
+    from .._chat_helpers import _ui_cloud_provider
+
     provider = provider_of(model_id)
-    name = (
-        model_id.split(".", 1)[1].rsplit("/", 1)[-1] if provider != LOCAL else model_id
-    )
-    return f"{name} · {'local' if provider == LOCAL else _NAMES[provider]}"
+    if provider != LOCAL:
+        return _NAMES[provider]
+    cloud = _ui_cloud_provider(model_id)
+    return _NAMES.get(cloud, cloud) if cloud else None
+
+
+def _is_cloud_model(model_id: str) -> bool:
+    """Whether *model_id* is a cloud model, asking Lemonade's list when only it can say.
+
+    Right after a restart nothing has taught the in-memory cloud check yet.
+
+    Raises:
+        ProviderError: the list was needed and couldn't be read.
+    """
+    from gaia.llm.lemonade_client import find_model_requirement, may_be_cloud_model
+
+    if cloud_provider_name(model_id) is not None:
+        return True
+    if not may_be_cloud_model(model_id) or find_model_requirement(model_id) is not None:
+        return False
+    return _listed_as_cloud(model_id)
+
+
+def _learn_cloud_models(model_id: str) -> None:
+    """Teach the in-memory cloud check about *model_id* before it is shown."""
+    try:
+        _is_cloud_model(model_id)
+    except ProviderError as e:
+        logger.info("Could not tell whether %s is a cloud model: %s", model_id, e)
+
+
+def model_label(model_id: str) -> str:
+    cloud = cloud_provider_name(model_id)
+    if cloud is None:
+        return f"{model_id} · local"
+    return f"{display_name(model_id)} · {cloud}"
 
 
 def display_name(model_id: str) -> str:
     """The name a person reads: friendly for local models, bare for cloud ones."""
     from ..local_models import friendly_name
 
-    if provider_of(model_id) == LOCAL:
+    if is_hybrid_model(model_id):
+        return "Hybrid"
+    if cloud_provider_name(model_id) is None:
         return friendly_name(model_id)
     return model_id.split(".", 1)[1].rsplit("/", 1)[-1]
 
@@ -624,7 +737,9 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
     try:
         # The model a new chat starts on, so the chip never names another.
         model = chosen or resolved_default_model()
-    except GaiaConfigError as e:
+        _learn_cloud_models(model)
+        cloud = cloud_provider_name(model)
+    except (GaiaConfigError, HybridConfigError) as e:
         # A new chat cannot start either; say why rather than name a model.
         return {
             "provider": LOCAL,
@@ -632,16 +747,18 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
             "display_name": None,
             "label": None,
             "remote": False,
+            "provider_name": None,
             "is_default": True,
             "config_error": str(e),
         }
-    provider = provider_of(model)
     return {
-        "provider": provider,
+        # The provider tab; ``local`` for a cloud provider GAIA has no tab for.
+        "provider": provider_of(model),
         "model": model,
         "display_name": display_name(model),
         "label": model_label(model),
-        "remote": provider != LOCAL,
+        "remote": cloud is not None,
+        "provider_name": cloud,
         "is_default": not chosen,
         "config_error": None,
         **_new_chat_location(model, chosen or None),
@@ -686,9 +803,56 @@ def _write_config_keys(values: Dict[str, Any]) -> None:
 _restore_lock = threading.Lock()
 _restore_result: Optional[Dict[str, Any]] = None
 
+#: How long a key Lemonade holds may go without listed models before it counts as broken.
+KEY_SETTLE_SECONDS = 15.0
+_key_settle_started: Dict[str, float] = {}
+
 
 class _ServerNotReady(Exception):
     """The model server is not answering yet; the question can be asked again."""
+
+
+def _key_still_settling(provider: str) -> bool:
+    """True while Lemonade holds *provider*'s key and has not listed its models yet.
+
+    Lemonade stores a key before the provider answers with its models, so a
+    restore that lands in between would call a good key broken.
+    """
+    entry = _cloud_entry(provider) or {}
+    held = entry.get("env_var_set") or entry.get("runtime_key_set")
+    if not held or entry.get("models_discovered"):
+        _key_settle_started.pop(provider, None)
+        return False
+    started = _key_settle_started.setdefault(provider, time.monotonic())
+    return time.monotonic() - started < KEY_SETTLE_SECONDS
+
+
+def _listed_as_cloud(model_id: str) -> bool:
+    """True when the model server's own list has *model_id* as a cloud model.
+
+    Reads the list, which also teaches the in-memory cloud check every other
+    part of the UI classifies by.
+    """
+    from gaia.llm.lemonade_client import (
+        CLOUD_RECIPE,
+        _model_ids_match,
+        record_cloud_models,
+    )
+
+    status, body = _lemonade("GET", "models?show_all=true")
+    if status >= 400:
+        raise ProviderError(
+            f"Lemonade answered /models with HTTP {status}. {APP_RESTART_HINT}"
+        )
+    record_cloud_models(body)
+    # Match as the server does (case, ``user.`` prefix), or a retyped id slips by.
+    entries = body.get("data") if isinstance(body, dict) else None
+    return any(
+        isinstance(e, dict)
+        and e.get("recipe") == CLOUD_RECIPE
+        and _model_ids_match(e.get("id"), model_id)
+        for e in entries or []
+    )
 
 
 def _check_model_available(model_id: str) -> Optional[str]:
@@ -713,10 +877,20 @@ def _check_model_available(model_id: str) -> Optional[str]:
             ):
                 _register_on_gaias_server(provider, base_url)
             if not ensure_authenticated(provider, recall=lambda: _usable_key(provider)):
+                if _key_still_settling(provider):
+                    raise _ServerNotReady(
+                        f"{_NAMES[provider]} hasn't listed its models yet; "
+                        "try again in a few seconds"
+                    )
                 return f"{_NAMES[provider]} has no working key"
         models = _list_models(provider)
         found = _listed(models, model_id)
         if found is None:
+            # The local list leaves out cloud entries from a provider with no tab.
+            if provider == LOCAL and _listed_as_cloud(model_id):
+                if cloud_blocked():
+                    return "Local only is on, so cloud models can't run"
+                return None
             return "the model is no longer listed"
         if provider != LOCAL:
             return None
@@ -725,9 +899,10 @@ def _check_model_available(model_id: str) -> Optional[str]:
         # Refuse only what nothing here can run; a memory estimate stays a caveat.
         return _local_unavailable(models, model_id)
     except ProviderError as e:
-        if e.status == 503:
+        if e.status == 503 or isinstance(e, _ModelListFailed):
             raise _ServerNotReady(str(e)) from e
-        return str(e)
+        # Callers end the sentence themselves.
+        return str(e).rstrip(".")
     except CloudKeyError as e:
         if "not reachable" in str(e):
             raise _ServerNotReady(str(e)) from e
@@ -736,11 +911,12 @@ def _check_model_available(model_id: str) -> Optional[str]:
         return str(e)
 
 
-def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
+def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
     """Apply ``last_model`` from config.json once per backend run.
 
     Never runs a different model quietly: when the saved one cannot run, the
-    result says why and the UI asks the user to pick.
+    result says why and the UI asks the user to pick. A restore that changes
+    the model loads it, unless *load* is False (start-up loads it itself).
     """
     global _restore_result
     with _restore_lock:
@@ -774,11 +950,22 @@ def restore_last_model(db: ChatDatabase) -> Dict[str, Any]:
             }
             return _restore_result
         if reason is None:
-            from gaia.llm.lemonade_client import resolve_default_chat_model
+            from gaia.llm.lemonade_client import (
+                _model_ids_match,
+                resolve_default_chat_model,
+            )
 
             current = (db.get_setting("custom_model") or "").strip()
-            unchanged = last == (current or resolve_default_chat_model())
+            unchanged = _model_ids_match(last, current or resolve_default_chat_model())
+            if custom_model_override(db) is None:
+                # Picked elsewhere (the TUI): it is the pick, not a Custom model ID.
+                db.set_setting(PICKED_MODEL_SETTING, last)
             db.set_setting("custom_model", last)
+            if load and not unchanged and provider_of(last) == LOCAL:
+                from gaia.ui import warmup
+
+                # Start-up may have loaded the model this replaces.
+                warmup.request_warm_up("restored model", fresh=True, model=last)
             _restore_result = {
                 "status": "restored",
                 # Nothing to announce when the model was going to run anyway.
@@ -801,13 +988,16 @@ def reset_restore_state() -> None:
     global _restore_result
     with _restore_lock:
         _restore_result = None
+        _key_settle_started.clear()
+        _pending_context_reload.clear()
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 
 
 def _raise(e: ProviderError) -> None:
-    raise HTTPException(status_code=e.status, detail=str(e)) from e
+    detail = surface_wording(str(e), "agent_ui")
+    raise HTTPException(status_code=e.status, detail=detail) from e
 
 
 def _known(provider: str) -> None:
@@ -822,7 +1012,10 @@ def _known(provider: str) -> None:
 @router.get("/api/providers", dependencies=[Depends(require_ui_header)])
 def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """Every provider with its connection state, and the active model."""
-    from gaia.connectors.credential_wait import CredentialStoreWaiting
+    from gaia.connectors.credential_wait import (
+        CredentialStoreLocked,
+        CredentialStoreWaiting,
+    )
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
     providers = [_provider_view(LOCAL, None)]
@@ -845,8 +1038,11 @@ def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
                     if not found:
                         view["error"] = _no_models_message(provider, view)
                 except CredentialStoreWaiting as e:
+                    locked = isinstance(e, CredentialStoreLocked)
                     view.update(
-                        key_source=None, key_state=KEY_WAITING, key_message=str(e)
+                        key_source=None,
+                        key_state=KEY_LOCKED if locked else KEY_WAITING,
+                        key_message=str(e),
                     )
                 except (ProviderError, CloudKeyError, requests.RequestException) as e:
                     view["error"] = str(e)
@@ -921,7 +1117,7 @@ def _install(provider: str, body: "ConnectRequest") -> None:
         },
     )
     if status >= 400:
-        raise _cloud_error(provider, status, result)
+        raise _cloud_error(provider, status, result, install=True)
 
 
 # Can restore and persist the last model, so a cross-site GET must not reach it.
@@ -968,6 +1164,8 @@ def connect_provider(
     provider: str, body: ConnectRequest, request: Request
 ) -> Dict[str, Any]:
     """Register the provider and hand Lemonade the key; keep a key that works."""
+    # A new key gets its own settle window.
+    _key_settle_started.pop(provider, None)
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated, remember_key
 
     _known(provider)
@@ -975,7 +1173,10 @@ def connect_provider(
         raise HTTPException(status_code=422, detail="Local models need no connection.")
     if cloud_blocked():
         raise HTTPException(
-            status_code=409, detail=local_only_key_message(_NAMES[provider])
+            status_code=409,
+            detail=surface_wording(
+                local_only_key_message(_NAMES[provider]), "agent_ui"
+            ),
         )
     key = (body.api_key or "").strip()
     if key and via_tunnel(request):
@@ -983,6 +1184,10 @@ def connect_provider(
             status_code=403,
             detail="Enter provider keys on the PC running GAIA, not over mobile access.",
         )
+    from gaia.connectors.store import retry_keyring
+
+    # Connecting needs the key store, so it may ask the OS again.
+    retry_keyring()
     if key:
         from gaia.connectors.credential_wait import discard
 
@@ -1027,10 +1232,16 @@ def connect_provider(
                 except CloudKeyError as e:
                     remember_error = str(e)
         else:
-            from gaia.connectors.credential_wait import CredentialStoreWaiting
+            from gaia.connectors.credential_wait import (
+                CredentialStoreLocked,
+                CredentialStoreWaiting,
+            )
 
             try:
                 ensure_authenticated(provider, recall=lambda: _usable_key(provider))
+            except CredentialStoreLocked as e:
+                # Not 409: the screen would ask again, reopening the prompt.
+                raise ProviderError(str(e), 423) from e
             except CredentialStoreWaiting as e:
                 # 409, not a failure: the screen shows this and asks again.
                 raise ProviderError(str(e), 409) from e
@@ -1041,6 +1252,8 @@ def connect_provider(
             ):
                 try:
                     stored = _usable_key(provider)
+                except CredentialStoreLocked as e:
+                    raise ProviderError(str(e), 423) from e
                 except CredentialStoreWaiting as e:
                     raise ProviderError(str(e), 409) from e
                 if stored:
@@ -1073,10 +1286,26 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
     from gaia.llm.fireworks_known_models import KnownModelsError, use_known_models
     from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+    from gaia.llm.lemonade_tls import ca_store_problem
     from gaia.llm.providers.fireworks import ModelListState, check_model_list
 
     name = _NAMES[provider]
+    runs_lemonade = gaia_runs_lemonade(_base_url())
+    ca_problem = ca_store_problem() if runs_lemonade else None
+    if ca_problem:
+        raise ProviderError(ca_problem, 503)
     check = check_model_list(key) if provider == FIREWORKS else None
+    if check is not None and check.state is ModelListState.OK:
+        from gaia.llm import lemonade_client
+
+        log = lemonade_client.embedded_lemonade_log_path(_base_url())
+        where = str(log) if log else "The model server's log"
+        raise ProviderError(
+            f"{name} accepted that key, but the model server discovered no "
+            f"models with it, so the key is not the problem. {where} says why; "
+            "paste the key again once that is fixed.",
+            502,
+        )
     if check is None or check.state is not ModelListState.FAILING:
         raise ProviderError(
             f"{name} did not accept that key (no models were discovered). "
@@ -1101,7 +1330,7 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
             else "It was not copied into GAIA's credential store."
         )
     )
-    if not gaia_runs_lemonade(_base_url()):
+    if not runs_lemonade:
         raise ProviderError(f"{outage} {kept} Connect again when {name} recovers.", 503)
     try:
         use_known_models(EmbeddedLemonade())
@@ -1192,6 +1421,17 @@ def forget_provider_key(provider: str) -> Dict[str, Any]:
     except ConnectorsError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     return {"removed": removed}
+
+
+@router.post(
+    "/api/providers/key-store/retry", dependencies=[Depends(require_ui_header)]
+)
+def retry_key_store() -> Dict[str, Any]:
+    """Let the next read ask the OS to unlock the key store again (Try again)."""
+    from gaia.connectors.store import retry_keyring
+
+    retry_keyring()
+    return {"retrying": True}
 
 
 @router.get("/api/providers/{provider}/models")
@@ -1351,21 +1591,23 @@ def select_model(
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
-    if provider_of(model_id) != LOCAL and cloud_blocked():
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Can't switch to {model_label(model_id)}: Local only is on. "
-                f"{SETTINGS_HINT}"
-            ),
-        )
+    refuse_blocked_cloud_model(model_id)
     from gaia.config import GaiaConfigError
-    from gaia.connectors.credential_wait import CredentialStoreWaiting
+    from gaia.connectors.credential_wait import (
+        CredentialStoreLocked,
+        CredentialStoreWaiting,
+    )
+    from gaia.connectors.store import retry_keyring
 
+    if provider_of(model_id) != LOCAL:
+        # Picking a cloud model needs its key, so it may ask the OS again.
+        retry_keyring()
     try:
         reason = _check_model_available(model_id)
     except _ServerNotReady as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
+    except CredentialStoreLocked as e:
+        raise HTTPException(status_code=423, detail=str(e)) from e
     except CredentialStoreWaiting as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except GaiaConfigError as e:
@@ -1382,16 +1624,116 @@ def select_model(
     except ProviderError as e:
         _raise(e)
     db.set_setting("custom_model", model_id)
+    db.set_setting(PICKED_MODEL_SETTING, model_id)
     if provider_of(model_id) == LOCAL:
         from gaia.ui import warmup
 
         # Load it now: nothing else would until the next message is sent.
-        warmup.request_warm_up("model pick", fresh=True)
-    # A choice made now supersedes this run's restore notice.
+        warmup.request_warm_up("model pick", fresh=True, model=model_id)
+    clear_restore_notice()
+    return _active_view(db)
+
+
+#: The model picked under Model, which a cleared Custom model ID goes back to.
+PICKED_MODEL_SETTING = "picked_model"
+
+
+def custom_model_override(db: ChatDatabase) -> Optional[str]:
+    """The Custom model ID in force; None while the picked model runs."""
+    custom = (db.get_setting("custom_model") or "").strip()
+    picked = (db.get_setting(PICKED_MODEL_SETTING) or "").strip()
+    return custom if custom and custom != picked else None
+
+
+def model_after_clearing_custom(db: ChatDatabase) -> Optional[str]:
+    """The model a cleared Custom model ID leaves running; None is the default.
+
+    The model picked under Model. With no pick on record, a cloud user keeps
+    their model unless the local default is on disk.
+    """
+    from gaia.config import GaiaConfigError
+
+    from ..database import resolved_default_model
+
+    picked = (db.get_setting(PICKED_MODEL_SETTING) or "").strip()
+    current = (db.get_setting("custom_model") or "").strip()
+    for model in (picked, current):
+        if model:
+            _learn_cloud_models(model)
+    if picked and not (cloud_blocked() and cloud_provider_name(picked)):
+        return picked
+    if not current or cloud_provider_name(current) is None or cloud_blocked():
+        return None
+    try:
+        default = {"remote": False, "model": resolved_default_model()}
+    except GaiaConfigError as e:
+        logger.info("Keeping %s: the default model can't be read: %s", current, e)
+        return current
+    return None if _local_downloaded(default) else current
+
+
+def clear_restore_notice() -> None:
+    """A model the user picks now supersedes this run's restore notice."""
     global _restore_result
     with _restore_lock:
         _restore_result = {"status": "none", "message": None}
-    return _active_view(db)
+
+
+def _known_local_without_catalog(model_id: str) -> bool:
+    """True when *model_id* is local by shape or by declaration.
+
+    A bare id names no namespaced model, and an id GAIA declares is local
+    by declaration. Saving one must work without asking the model server.
+    """
+    from gaia.llm.lemonade_client import find_model_requirement, may_be_cloud_model
+
+    return (
+        not may_be_cloud_model(model_id) or find_model_requirement(model_id) is not None
+    )
+
+
+def refuse_blocked_cloud_model(model_id: str) -> None:
+    """Refuse *model_id* when Local only can't vouch that it runs here.
+
+    Raises 409 for a cloud model or a router collection, and 503 when only
+    the model server's list could say and it can't be read.
+    """
+    if not cloud_blocked():
+        return
+    try:
+        cloud = _is_cloud_model(model_id)
+        recipes = (
+            None
+            if cloud or _known_local_without_catalog(model_id)
+            else _catalog_recipes(model_id)
+        )
+    except ProviderError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Can't switch to {model_id}: Local only is on and GAIA couldn't "
+                f"check that it isn't a cloud model. {e}"
+            ),
+        ) from e
+    if cloud:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't switch to {model_label(model_id)}: Local only is on, so it "
+                f"was blocked: it is a cloud model. {AGENT_UI_LOCAL_ONLY_HINT}"
+            ),
+        )
+    # A router collection can forward to a cloud member, so the catalog must
+    # confirm every recipe it lists runs on this PC: the same allowlist the
+    # per-turn guard applies, so the two checks can't disagree.
+    if recipes is not None and not recipes_confirm_local(recipes):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't switch to {model_id}: Local only is on, so it was blocked: "
+                f"{blocked_reason(recipes)}. {AGENT_UI_LOCAL_ONLY_HINT}"
+            ),
+        )
 
 
 # ── Context size (#5213) ───────────────────────────────────────────────────
@@ -1425,7 +1767,7 @@ def _trained_window(model_id: str) -> Optional[int]:
             f"the context sizes {model_id} was trained for. Try again once the "
             "local model server is answering."
         )
-    for m in body.get("data") or []:
+    for m in _model_entries(body):
         if _model_ids_match(str(m.get("id") or ""), model_id):
             # ``context_length`` is the configured window; this is the trained one.
             window = m.get("max_context_window")
@@ -1525,7 +1867,7 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
     reload = None
     if view["loaded_ctx"]:
         try:
-            entry = _chat_entry(_read_health())
+            entry = _chat_entry(_read_health(), model_id)
         except ProviderError as e:
             _raise(e)
         busy_reason = _busy_reason(entry, _warming_up())
@@ -1534,15 +1876,78 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
             reload = {"started": False, "reason": "already_loaded"}
         elif _server_owner(_base_url()) != "gaia":
             reload = {"started": False, "reason": "not_gaias_server"}
-        elif busy_reason == "warm_up":
-            reload = {"started": False, "reason": "warm_up"}
-        elif busy_reason == "request":
-            reload = {"started": False, "reason": "busy"}
+        elif busy_reason in ("warm_up", "request"):
+            # Applied once the model is free: nothing else would shrink a window.
+            _pending_context_reload.add(model_id)
+            reload = {
+                "started": False,
+                "reason": "warm_up" if busy_reason == "warm_up" else "busy",
+            }
         elif _start_reload(model_id, server_up=True):
             reload = {"started": True, "reason": None}
         else:
             reload = {"started": False, "reason": "restarting"}
     return {**view, "reload": reload}
+
+
+#: Models whose chosen context size waits for the model to stop being busy.
+_pending_context_reload: set = set()
+
+
+def apply_pending_context_reload() -> List[str]:
+    """Reload each model whose context size was chosen while it was busy.
+
+    Called when a chat turn or a warm-up ends. A model that is busy again, or
+    a reload already running, keeps waiting. Returns the models reloaded.
+
+    Raises:
+        ProviderError: Lemonade could not be read; the models keep waiting.
+    """
+    if not _pending_context_reload:
+        return []
+    from .._chat_helpers import _active_sse_handlers
+
+    if _active_sse_handlers or _warming_up():
+        return []
+    health = _read_health()
+    if _server_owner(_base_url()) != "gaia":
+        logger.info(
+            "Not reloading %s for a new context size: the model server isn't "
+            "GAIA's. The size applies the next time the model loads.",
+            ", ".join(sorted(_pending_context_reload)),
+        )
+        _pending_context_reload.clear()
+        return []
+    started = []
+    for model_id in sorted(_pending_context_reload):
+        try:
+            view = _context_view(model_id)
+        except HTTPException as e:
+            if e.status_code == 503:
+                continue  # Lemonade is briefly unreadable; try after the next turn.
+            # Said once, not after every turn: the size applies at its next load.
+            logger.warning(
+                "Not reloading %s for its new context size: %s. The size "
+                "applies the next time the model loads.",
+                model_id,
+                e.detail,
+            )
+            _pending_context_reload.discard(model_id)
+            continue
+        wanted = view["chosen"] or view["automatic"]
+        if not view["loaded_ctx"] or view["loaded_ctx"] == wanted:
+            _pending_context_reload.discard(model_id)
+            continue
+        if _busy_reason(_chat_entry(health, model_id), False) is not None:
+            continue
+        # Again, after the reads above: a turn may have started meanwhile.
+        if _active_sse_handlers or _warming_up():
+            break
+        if not _start_reload(model_id, server_up=True):
+            break
+        _pending_context_reload.discard(model_id)
+        started.append(model_id)
+    return started
 
 
 # ── Models the user adds from a Hugging Face link ─────────────────────────
@@ -1582,7 +1987,18 @@ def _lemonade_catalog() -> List[Dict[str, Any]]:
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
         raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
-    return list(body.get("data") or [])
+    return _model_entries(body)
+
+
+def _catalog_recipes(model_id: str) -> List[Optional[str]]:
+    """Recipes Lemonade's catalog lists for *model_id*.
+
+    The same allowlist the per-turn guard applies, so a model the guard
+    would refuse can never be saved as the Custom model ID.
+    """
+    catalog = _lemonade_catalog()
+    entries = {e["id"]: e for e in catalog if isinstance(e, dict) and e.get("id")}
+    return recipes_in_catalog(model_id, entries, lambda: {"data": catalog})
 
 
 @router.post("/api/providers/local/custom/check")
@@ -1639,6 +2055,7 @@ def remove_custom_model(
     from gaia.llm.custom_models import remove_custom_model as forget
     from gaia.llm.lemonade_client import _model_ids_match
 
+    before = _running_model(db)
     try:
         result = forget(model_id, _delete_from_lemonade)
     except CustomModelError as e:
@@ -1647,15 +2064,51 @@ def remove_custom_model(
         _raise(e)
     except GaiaConfigError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+    if _model_ids_match(db.get_setting(PICKED_MODEL_SETTING), result["removed"]):
+        db.set_setting(PICKED_MODEL_SETTING, None)
     if _model_ids_match(db.get_setting("custom_model"), result["removed"]):
-        db.set_setting("custom_model", None)
+        # Back to the model picked under Model, as clearing the field does.
+        after = model_after_clearing_custom(db)
+        db.set_setting("custom_model", after)
+        if after:
+            try:
+                _write_config_keys(
+                    {"last_provider": provider_of(after), "last_model": after}
+                )
+            except ProviderError as e:
+                _raise(e)
+    now = _running_model(db)
+    if now and provider_of(now) == LOCAL and not _model_ids_match(now, before):
+        from gaia.ui import warmup
+
+        # Chat moved to another model: load it, as picking it would.
+        warmup.request_warm_up("model removed", fresh=True, model=now)
     return result
+
+
+def _running_model(db: ChatDatabase) -> Optional[str]:
+    """The model new turns run on; None when the config can't say."""
+    from gaia.config import GaiaConfigError
+
+    from ..database import resolved_default_model
+
+    chosen = (db.get_setting("custom_model") or "").strip()
+    try:
+        return chosen or resolved_default_model()
+    except GaiaConfigError as e:
+        # The model list reports the config; nothing is loaded meanwhile.
+        logger.warning("Can't tell which model chat runs on: %s", e)
+        return None
 
 
 # ── Live status of the local model (sidebar popover) ──────────────────────
 
 
-def _chat_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _chat_entry(
+    health: Dict[str, Any], expected: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """The loaded local chat model: *expected* when it is loaded, else the root's."""
+    from gaia.llm.lemonade_client import _model_ids_match
     from gaia.llm.model_server_info import is_chat_model_entry
 
     loaded = [
@@ -1663,6 +2116,9 @@ def _chat_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         for m in health.get("all_models_loaded") or []
         if is_chat_model_entry(m) and m.get("recipe") != "cloud"
     ]
+    for m in loaded:
+        if expected and _model_ids_match(m.get("model_name"), expected):
+            return m
     root = str(health.get("model_loaded") or "").lower()
     for m in loaded:
         if root and str(m.get("model_name") or "").lower() == root:
@@ -1766,6 +2222,8 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         "memory_error": None,
         "error": None,
         "error_detail": None,
+        # "model_server_down" lets the UI word that failure in its own language.
+        "error_cause": None,
         "base_url": None,
         "owner": None,
         "busy": False,
@@ -1791,8 +2249,9 @@ def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
             else str(e)
         )
         view["error_detail"] = str(e)
+        view["error_cause"] = "model_server_down" if down else None
         return view
-    entry = _chat_entry(health)
+    entry = _chat_entry(health, active["model"])
     warming = warmup.warm_up_status().get("state") == warmup.WARMING
     if entry is None:
         view["state"] = "warming" if warming else "idle"
