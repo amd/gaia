@@ -200,6 +200,10 @@ class TestStartDeviceFlow:
         assert "does not support the device-code flow" in str(exc.value)
 
 
+# Graph /me: the stable id is what tells one Microsoft account from another.
+_ME = {"id": "user-oid", "mail": "user@example.com"}
+
+
 class TestPollDeviceFlow:
     def _success_payload(self):
         return {
@@ -218,6 +222,7 @@ class TestPollDeviceFlow:
                 _FakeResp(400, {"error": "slow_down"}),
                 _FakeResp(200, self._success_payload()),
             ],
+            get_responses=[_FakeResp(200, _ME)],
         )
         result = asyncio.run(
             flow_mod.poll_device_flow(
@@ -242,7 +247,9 @@ class TestPollDeviceFlow:
         other_scope = "https://graph.microsoft.com/Calendars.ReadWrite"
         payload = self._success_payload()
         payload["scope"] = MAIL_READ  # the calendar scope was declined
-        _install_responses(monkeypatch, [_FakeResp(200, payload)])
+        _install_responses(
+            monkeypatch, [_FakeResp(200, payload)], get_responses=[_FakeResp(200, _ME)]
+        )
 
         result = asyncio.run(
             flow_mod.poll_device_flow(
@@ -264,7 +271,9 @@ class TestPollDeviceFlow:
         other_scope = "https://graph.microsoft.com/Calendars.ReadWrite"
         payload = self._success_payload()
         payload["scope"] = MAIL_READ
-        _install_responses(monkeypatch, [_FakeResp(200, payload)])
+        _install_responses(
+            monkeypatch, [_FakeResp(200, payload)], get_responses=[_FakeResp(200, _ME)]
+        )
         asyncio.run(
             flow_mod.poll_device_flow(
                 "microsoft",
@@ -281,7 +290,9 @@ class TestPollDeviceFlow:
     def test_empty_effective_grant_fails_loudly(self, monkeypatch):
         payload = self._success_payload()
         payload["scope"] = ""
-        _install_responses(monkeypatch, [_FakeResp(200, payload)])
+        _install_responses(
+            monkeypatch, [_FakeResp(200, payload)], get_responses=[_FakeResp(200, _ME)]
+        )
 
         with pytest.raises(GrantAfterConnectError, match="granted none"):
             asyncio.run(
@@ -304,7 +315,11 @@ class TestPollDeviceFlow:
             get_responses=[
                 _FakeResp(
                     200,
-                    {"mail": "user@example.com", "userPrincipalName": "u@example.com"},
+                    {
+                        "id": "user-oid",
+                        "mail": "user@example.com",
+                        "userPrincipalName": "u@example.com",
+                    },
                 )
             ],
         )
@@ -316,7 +331,7 @@ class TestPollDeviceFlow:
         assert _FakeAsyncClient.get_calls
         assert "/me" in _FakeAsyncClient.get_calls[0][0]
 
-    def test_account_email_default_when_userinfo_unavailable(self, monkeypatch):
+    def test_sign_in_fails_when_the_account_cannot_be_identified(self, monkeypatch):
         payload = self._success_payload()
         payload["id_token"] = ""
         _install_responses(
@@ -324,11 +339,13 @@ class TestPollDeviceFlow:
             [_FakeResp(200, payload)],
             get_responses=[_FakeResp(403, {}, "forbidden")],
         )
-        result = asyncio.run(
-            flow_mod.poll_device_flow("microsoft", "DEV", scopes=[MAIL_READ])
-        )
-        # Label-only fallback — connection still persists, never fails.
-        assert result["account_email"] == "default"
+        with pytest.raises(ConnectorsError, match="HTTP 403"):
+            asyncio.run(
+                flow_mod.poll_device_flow("microsoft", "DEV", scopes=[MAIL_READ])
+            )
+        from gaia.connectors.store import peek_connection
+
+        assert peek_connection("microsoft") is None
 
     def test_declined_raises_consent_denied(self, monkeypatch):
         _install_responses(
@@ -349,7 +366,9 @@ class TestPollDeviceFlow:
     def test_missing_refresh_token_raises(self, monkeypatch):
         payload = self._success_payload()
         del payload["refresh_token"]
-        _install_responses(monkeypatch, [_FakeResp(200, payload)])
+        _install_responses(
+            monkeypatch, [_FakeResp(200, payload)], get_responses=[_FakeResp(200, _ME)]
+        )
         with pytest.raises(ConnectorsError) as exc:
             asyncio.run(
                 flow_mod.poll_device_flow("microsoft", "DEV", scopes=[MAIL_READ])

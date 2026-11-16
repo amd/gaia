@@ -2271,7 +2271,9 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   <Accordion title="GET /api/connectors/events">
     Long-lived SSE stream of connector lifecycle events — configured,
     disconnected, tested, enabled/disabled, OAuth completed/errored, grant
-    changed, activation changed.
+    changed, activation changed, default account changed
+    (`connector.account.changed`). `connector.oauth.completed` carries the
+    signed-in `account_id` and `added` (true when it is a new account).
   </Accordion>
 
   <Accordion title="GET /api/connectors/agent-mcps">
@@ -2298,6 +2300,10 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
 
   <Accordion title="GET /api/connectors/{connector_id}">
     Summary for one connector (type, configured/enabled state, account info).
+    An OAuth connector lists every connected account in `accounts`
+    (`[{account_id, email, status, is_default}]`, `status` one of `ok`,
+    `reauth_required`, `error`); `account_id` and `scopes` at the top level
+    stay the default account's address and scopes.
   </Accordion>
 
   <Accordion title="GET /api/connectors/{connector_id}/grants">
@@ -2323,8 +2329,21 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   </Accordion>
 
   <Accordion title="DELETE /api/connectors/{connector_id}">
-    Disconnect a connector — removes stored credentials and, for `mcp_server`,
-    its `mcp_servers.json` entry.
+    Disconnect a connector — removes stored credentials (every account of an
+    OAuth connector) and, for `mcp_server`, its `mcp_servers.json` entry.
+  </Accordion>
+
+  <Accordion title="DELETE /api/connectors/{connector_id}/accounts/{account_id}">
+    Disconnect one account of an OAuth connector (`account_id` is its stable id
+    or address); the others keep working. Agent grants stay until the last
+    account goes. 204; 404 `{"error": "unknown_account", "choices": [...]}`
+    when it names no connected account.
+  </Accordion>
+
+  <Accordion title="PATCH /api/connectors/{connector_id}/accounts/{account_id}">
+    `{"is_default": true}` makes that account the one agents use when they
+    name none. Returns `{"accounts": [...]}`. `false` is a 400: choose another
+    account as the default instead.
   </Accordion>
 
   <Accordion title="POST /api/connectors/{connector_id}/enable">
@@ -2339,7 +2358,11 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
 
   <Accordion title="POST /api/connectors/{connector_id}/authorize">
     Start an OAuth PKCE flow. Returns `{flow_id, authorization_url}` — the UI
-    opens the URL and polls for completion.
+    opens the URL and polls for completion. `"add_account": true` shows the
+    provider's account picker to connect another account; `"account":
+    "<id or address>"` reconnects that account (the provider is told which
+    one). Signing in as a different account than the one named adds it rather
+    than replacing it.
   </Accordion>
 
   <Accordion title="POST /api/connectors/{connector_id}/authorize-device">

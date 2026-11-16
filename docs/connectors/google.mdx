@@ -386,13 +386,33 @@ You either skipped pasting the Client Secret in Step 5, or the
 connection blob in your keyring predates a GAIA upgrade. Disconnect
 and reconnect from the UI to reset.
 
+## More than one Google account
+
+You can connect several Google accounts at once, for example a personal
+Gmail and a work one:
+
+```bash
+gaia connectors connect google --add      # Google asks which account
+gaia connectors list google               # one line per account
+gaia connectors set-default google work@example.com
+```
+
+The first account you connect is the default, and agents use it unless they
+name another. Signing in again as an account you already connected updates
+it; it never replaces a different account. While your OAuth app is in
+Testing, add each account as a test user first.
+
+Agents you granted Google scopes can use every connected Google account.
+To remove one account, run `gaia connectors disconnect google --account
+<address>`; its token is revoked with Google and the others keep working.
+
 ## Revoking access
 
 Two places — both work:
 
 - **From GAIA**: Settings → Connectors → Google → **Disconnect**.
-  Removes the refresh token from the keyring; the next API call
-  errors with `NOT_CONNECTED`.
+  Removes every connected Google account's refresh token from the keyring;
+  the next API call errors with `NOT_CONNECTED`.
 - **From Google**: Follow Google's
   [instructions for removing an app's access](https://support.google.com/accounts/answer/13533235)
   for your OAuth client. Useful if you've lost the laptop the keyring

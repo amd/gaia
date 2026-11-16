@@ -1087,7 +1087,7 @@ class TestConnectorActionsLiftTheKeyringHold:
     def test_authorize_lifts_the_hold(self, ui_api_client, monkeypatch, held):
         seen = []
 
-        async def start(connector_id, scopes=None, grant_agents=None):
+        async def start(connector_id, scopes=None, grant_agents=None, **_account):
             seen.append(held.keyring_refusal())
             return {"flow_id": "f", "authorization_url": "https://x"}
 

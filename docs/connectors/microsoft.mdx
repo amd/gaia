@@ -253,12 +253,31 @@ GAIA always requests `offline_access`, which is what makes Microsoft issue a
 refresh token. If you see this, disconnect and reconnect from the UI to
 restart the flow with the full default scope set.
 
+## More than one account
+
+Each Microsoft connector can hold several accounts, for example two
+Outlook.com addresses under `microsoft`:
+
+```bash
+gaia connectors connect microsoft --add   # Microsoft asks which account
+gaia connectors list microsoft            # one line per account
+gaia connectors set-default microsoft me@outlook.com
+gaia connectors disconnect microsoft --account old@outlook.com
+```
+
+The first account you connect is the default, and agents use it unless they
+name another. Signing in again as an account you already connected updates
+it; a different account is added beside it. Microsoft has no revoke API, so
+removing an account clears GAIA's copy only. The device-code flow has no
+account picker: sign in with the account you want in the browser it sends
+you to.
+
 ## Revoking access
 
 Two places — both work, per connector:
 
 - **From GAIA**: Settings → Connectors → the connector tile →
-  **Disconnect**. Removes that connector's refresh token from the keyring;
+  **Disconnect**. Removes every refresh token that connector holds from the keyring;
   the next API call for it errors with `NOT_CONNECTED`. The other Microsoft
   connector (if connected) is unaffected.
 - **From Microsoft**: personal accounts at <a href="https://account.live.com/consent/Manage"

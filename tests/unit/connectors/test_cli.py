@@ -169,7 +169,7 @@ class TestConnectGrantAgent:
 
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["connector_id"] = connector_id
             captured["scopes"] = list(scopes)
             captured["grant_agents"] = grant_agents
@@ -204,7 +204,7 @@ class TestConnectGrantAgent:
     def test_grant_agent_passes_grant_agents_to_the_flow(self, monkeypatch):
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["connector_id"] = connector_id
             captured["scopes"] = list(scopes)
             captured["grant_agents"] = grant_agents
@@ -437,7 +437,7 @@ class TestConnectGrantAgent:
     def test_plain_connect_passes_no_grant_agents(self, monkeypatch):
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["grant_agents"] = grant_agents
             return {"flow_id": "F1", "authorization_url": "https://auth.example"}
 
@@ -478,7 +478,7 @@ class TestConnectGrantAgent:
 
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["scopes"] = sorted(scopes)
             captured["grant_agents"] = grant_agents
             return {"flow_id": "F1", "authorization_url": "https://auth.example"}
@@ -517,7 +517,7 @@ class TestConnectGrantAgent:
         default_scopes for a genuine first-time connect)."""
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["scopes"] = list(scopes)
             return {"flow_id": "F1", "authorization_url": "https://auth.example"}
 

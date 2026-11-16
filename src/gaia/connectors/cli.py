@@ -88,6 +88,25 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
             "set instead."
         ),
     )
+    p_conn_which = p_conn.add_mutually_exclusive_group()
+    p_conn_which.add_argument(
+        "--add",
+        action="store_true",
+        dest="add_account",
+        help=(
+            "Add another account: the provider shows its account picker. The "
+            "accounts already connected keep working."
+        ),
+    )
+    p_conn_which.add_argument(
+        "--account",
+        dest="account",
+        metavar="ADDRESS_OR_ID",
+        help=(
+            "Reconnect this connected account (its address or account id), for "
+            "example after its sign-in expired."
+        ),
+    )
     p_conn.add_argument(
         "--device",
         action="store_true",
@@ -147,6 +166,30 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "disconnect", help="Remove credentials and reset a connector's state"
     )
     p_disc.add_argument("connector_id")
+    p_disc_which = p_disc.add_mutually_exclusive_group()
+    p_disc_which.add_argument(
+        "--account",
+        dest="account",
+        metavar="ADDRESS_OR_ID",
+        help=(
+            "Disconnect only this account (its address or account id). Needed "
+            "when more than one account is connected, unless --all is given."
+        ),
+    )
+    p_disc_which.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_accounts",
+        help="Disconnect every account of the connector.",
+    )
+
+    # set-default
+    p_def = sub.add_parser(
+        "set-default",
+        help="Choose which connected account a connector uses by default",
+    )
+    p_def.add_argument("connector_id", help="Connector id (e.g. 'google')")
+    p_def.add_argument("account", help="The account's address or account id")
 
     # grants
     p_grants = sub.add_parser("grants", help="Manage per-agent scope grants")
@@ -246,6 +289,8 @@ def handle(args: argparse.Namespace) -> int:
             return _handle_test(args)
         if action == "disconnect":
             return _handle_disconnect(args)
+        if action == "set-default":
+            return _handle_set_default(args)
         if action == "grants":
             return _handle_grants(args)
         if action == "activations":
@@ -266,6 +311,7 @@ def handle(args: argparse.Namespace) -> int:
 
 def _handle_list(args: argparse.Namespace) -> int:
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.accounts import list_accounts
     from gaia.connectors.activations import load_activations
     from gaia.connectors.mcp_server import (
         is_mcp_server_configured,
@@ -301,10 +347,19 @@ def _handle_list(args: argparse.Namespace) -> int:
         account_id = None
         scopes: list = []
         activations: dict = {}
+        accounts: list = []
         if spec.type == "oauth_pkce":
-            blob = peek_connection(spec.oauth_provider_ref or spec.id)
+            provider_ref = spec.oauth_provider_ref or spec.id
+            stored = list_accounts(provider_ref)
+            accounts = [a.to_dict() for a in stored]
+            configured = any(a.status == "ok" for a in stored)
+            default = next((a for a in stored if a.is_default), None)
+            blob = (
+                peek_connection(provider_ref, slot=default.slot)
+                if default is not None and default.status == "ok"
+                else None
+            )
             if blob is not None:
-                configured = True
                 account_id = blob.get("account_email")
                 scopes = list(blob.get("scopes", []))
         elif spec.type == "mcp_server":
@@ -322,6 +377,7 @@ def _handle_list(args: argparse.Namespace) -> int:
                 "configured": configured,
                 "enabled": enabled,
                 "account_id": account_id,
+                "accounts": accounts,
                 "scopes": scopes,
                 "activations": activations,
             }
@@ -339,7 +395,26 @@ def _handle_list(args: argparse.Namespace) -> int:
         status = "configured" if row["configured"] else "not configured"
         acct = f" ({row['account_id']})" if row.get("account_id") else ""
         sys.stdout.write(f"{row['id']:<30}  [{row['type']}]  {status}{acct}\n")
+        accounts = row["accounts"]
+        # One account that works is already named on the connector's line.
+        if len(accounts) > 1 or any(a["status"] != "ok" for a in accounts):
+            for a in accounts:
+                notes = (
+                    [_ACCOUNT_STATUS_TEXT[a["status"]]] if a["status"] != "ok" else []
+                )
+                if a["is_default"]:
+                    notes.insert(0, "default")
+                label = a["email"] or a["account_id"]
+                tail = f"  ({', '.join(notes)})" if notes else ""
+                sys.stdout.write(f"    {label}{tail}\n")
     return 0
+
+
+_ACCOUNT_STATUS_TEXT = {
+    "reauth_required": "sign-in expired: reconnect with "
+    "`gaia connectors connect <id> --account <address>`",
+    "error": "sign-in did not finish saving: disconnect it and connect again",
+}
 
 
 def _handle_connect(args: argparse.Namespace) -> int:
@@ -469,7 +544,11 @@ def _handle_connect(args: argparse.Namespace) -> int:
 
     async def _run() -> dict:
         info = await start_authorization(
-            args.connector_id, scopes=scopes, grant_agents=grant_agents
+            args.connector_id,
+            scopes=scopes,
+            grant_agents=grant_agents,
+            add_account=getattr(args, "add_account", False),
+            account=getattr(args, "account", None),
         )
         sys.stdout.write(
             f"Open this URL to authorize {args.connector_id}:\n"
@@ -484,8 +563,7 @@ def _handle_connect(args: argparse.Namespace) -> int:
         return result
 
     result = asyncio.run(_run())
-    email = result.get("account_email") or "<unknown>"
-    msg = f"Connected as {email}"
+    msg = _connected_message(args, result)
     if grant_agent:
         from gaia.connectors.grants import list_agent_grants
 
@@ -496,6 +574,21 @@ def _handle_connect(args: argparse.Namespace) -> int:
         )
     sys.stdout.write(msg + "\n")
     return 0
+
+
+def _connected_message(args: argparse.Namespace, result: dict) -> str:
+    """ "Connected as …", saying when a reconnect signed in another account."""
+    email = result.get("account_email") or "<unknown>"
+    reconnecting = getattr(args, "account", None)
+    if reconnecting and result.get("added"):
+        return (
+            f"Signed in as {email}, which is a different account from "
+            f"{reconnecting}, so it was added as a new account; {reconnecting} "
+            "still needs reconnecting"
+        )
+    if result.get("added") and getattr(args, "add_account", False):
+        return f"Added {email}"
+    return f"Connected as {email}"
 
 
 def _handle_connect_device(
@@ -511,7 +604,7 @@ def _handle_connect_device(
     """
     from gaia.connectors.api import poll_device_flow, start_device_flow
 
-    async def _run() -> str:
+    async def _run() -> dict:
         info = await start_device_flow(args.connector_id, scopes=scopes)
         # Prefer the provider's own message (it already contains the URL + code);
         # fall back to a constructed instruction line.
@@ -532,14 +625,14 @@ def _handle_connect_device(
             expires_in=info["expires_in"],
             grant_agents=grant_agents,
         )
-        return result.get("account_email") or "<unknown>"
+        return result
 
     try:
-        email = asyncio.run(_run())
+        result = asyncio.run(_run())
     except ConnectorsError as e:
         sys.stderr.write(f"gaia connectors connect --device: {e}\n")
         return 1
-    msg = f"Connected as {email}"
+    msg = _connected_message(args, result)
     if grant_agents:
         from gaia.connectors.grants import list_agent_grants
 
@@ -709,22 +802,43 @@ def _handle_test(args: argparse.Namespace) -> int:
 def _handle_disconnect(args: argparse.Namespace) -> int:
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.handler import disconnect
+    from gaia.connectors.registry import REGISTRY
 
-    async def _run():
-        return await disconnect(args.connector_id)
-
-    try:
-        result = asyncio.run(_run())
-    except KeyError:
+    if args.connector_id not in REGISTRY:
         sys.stderr.write(
             f"gaia connectors disconnect: unknown connector {args.connector_id!r}\n"
         )
         return 1
+    account = getattr(args, "account", None)
+    spec = REGISTRY.get(args.connector_id)
+    if spec.type == "oauth_pkce" and account is None:
+        from gaia.connectors.accounts import list_accounts
+        from gaia.connectors.errors import AccountChoiceRequiredError
+
+        stored = list_accounts(spec.oauth_provider_ref or spec.id)
+        if len(stored) > 1 and not getattr(args, "all_accounts", False):
+            raise AccountChoiceRequiredError(
+                args.connector_id,
+                [a.email or a.account_id for a in stored],
+                action="disconnect",
+            )
+
+    async def _run():
+        return await disconnect(args.connector_id, account_id=account)
+
+    result = asyncio.run(_run())
 
     # #2591: report the provider-side revoke outcome honestly instead of a
     # bare "Disconnected" that implies GAIA's app access was actually
     # revoked when only the local keyring entry was cleared.
     result = result or {}
+    if account is not None:
+        named = result.get("account_email") or account
+        remaining = result.get("remaining_accounts", 0)
+        sys.stdout.write(
+            f"Removed {named} from {args.connector_id}; {remaining} other "
+            f"account{'s' if remaining != 1 else ''} still connected.\n"
+        )
     if not result.get("revoke_supported"):
         if "revoke_supported" not in result:
             # Handler type with no remote-revoke concept at all (e.g. an
@@ -756,6 +870,17 @@ def _handle_disconnect(args: argparse.Namespace) -> int:
             f"not confirm the revoke ({result.get('revoke_error')}). It may "
             "still show as connected in your account's app permissions.\n"
         )
+    return 0
+
+
+def _handle_set_default(args: argparse.Namespace) -> int:
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.api import set_default_account
+
+    chosen = set_default_account(args.connector_id, args.account)
+    sys.stdout.write(
+        f"{args.connector_id} now uses {chosen.email or chosen.account_id} by default.\n"
+    )
     return 0
 
 
