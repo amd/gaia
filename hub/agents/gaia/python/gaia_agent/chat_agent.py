@@ -4262,9 +4262,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         except Exception as e:
             logger.error(f"Error closing browser during cleanup: {e}")
         try:
-            # Each MCP server is a process tree (uvx, uv, the server) that outlives us.
-            if getattr(self, "_mcp_manager", None):
-                self._mcp_manager.disconnect_all()
+            # Each MCP server is a process tree (uvx, uv, the server) that outlives
+            # us. The collector may run this on the event loop, and stopping a
+            # server waits for it, so the stop happens on its own thread here;
+            # close() stops them synchronously first, leaving nothing to do.
+            manager = getattr(self, "_mcp_manager", None)
+            if manager is not None and getattr(manager, "_clients", None):
+                threading.Thread(
+                    target=manager.disconnect_all, name="gaia-mcp-stop", daemon=True
+                ).start()
         except Exception as e:
             logger.error(f"Error stopping MCP servers during cleanup: {e}")
         try:
