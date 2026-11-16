@@ -47,7 +47,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, FrozenSet, List, Optional, Tuple
+from typing import Any, ClassVar, FrozenSet, List, Optional, Tuple
 
 from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 from gaia_agent.connectors import MAILBOX_REQUIREMENTS
@@ -66,12 +66,26 @@ from gaia.agents.base.skill_loader import (
     SkillLoader,
     dynamic_skills_env_override,
 )
+from gaia.agents.base.skill_suggester import (
+    DEFAULT_SUGGEST_THRESHOLD,
+    SkillSuggester,
+    render_suggestion,
+    suggest_env_override,
+)
+from gaia.agents.base.text_task import instruction_part
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 from gaia.config import GaiaConfig
 from gaia.connectors.providers.base import ConnectorRequirement
+from gaia.llm.hybrid import (
+    HybridModelError,
+    HybridRouter,
+    RouteDecision,
+    explain_route_failure,
+    is_hybrid_model,
+)
 from gaia.logger import get_logger
 from gaia.project_context import project_context_setting
 from gaia.skills.errors import SkillSetError
@@ -182,11 +196,10 @@ def fast_env_override() -> Optional[bool]:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-#: The flagship's step limit when nothing overrides it. Desktop tasks (read nine
-#: datasheets, price a BOM, write two files) need ~60-70 steps, so the fleet's
-#: 50 ended them mid-research with nothing written. ``GAIA_AGENT_MAX_STEPS``
+#: The flagship's step limit when nothing overrides it: a backstop for a runaway
+#: turn, high enough that real work never reaches it. ``GAIA_AGENT_MAX_STEPS``
 #: and an explicit ``max_steps`` still win.
-FLAGSHIP_MAX_STEPS = 150
+FLAGSHIP_MAX_STEPS = 1000
 
 
 def flagship_max_steps() -> int:
@@ -268,6 +281,13 @@ class GaiaAgentConfig(ChatAgentConfig):
     # this agent specifically — it ships a skill library and meets users who
     # have never read it. Overridable via GAIA_SKILL_DISCOVERY.
     skill_discovery: bool = True
+
+    # Name the catalogue skills that match each request in one line of the
+    # turn's context, so a small local model is not left to pick from the whole
+    # list — the step it skips. Suggestion only: the model still calls
+    # load_skill. Needs the catalogue on. Overridable via GAIA_SKILL_SUGGEST.
+    skill_suggestions: bool = True
+    skill_suggestion_threshold: float = DEFAULT_SUGGEST_THRESHOLD
 
     # On for the flagship only. It does pull a second resident model and evict
     # the chat model — a cost a document agent should not pay silently, so
@@ -369,6 +389,7 @@ def _apply_fast_mode(config: GaiaAgentConfig) -> None:
     config.dynamic_tools = False
     config.dynamic_skills = False
     config.skill_discovery = False
+    config.skill_suggestions = False
     config.auto_index = False
 
 
@@ -434,10 +455,70 @@ class GaiaAgent(
                 "[gaia] fast mode: conversational profile only — no documents, "
                 "files, web or skills this session"
             )
+        router = None
+        requested = resolved.model_id
+        if requested is None and not resolved.use_claude:
+            requested = GaiaConfig.load().default_model
+        if is_hybrid_model(requested):
+            router = HybridRouter()
+            # Built on the cheap model; each turn's route switches as needed.
+            resolved.model_id = router.settings.cheap_model
         super().__init__(config=resolved)
+        #: Picks each turn's model when the session runs on ``hybrid``.
+        self.hybrid_router: Optional[HybridRouter] = router
+        self.last_route: Optional[RouteDecision] = None
         if self.config.developer_mode:
             self.load_skill(ENGINEERING_SKILL)
             self._start_engineering_setup()
+
+    def process_query(self, user_input, *args, **kwargs):
+        """Run a turn; on ``hybrid``, first move to the model its route picks."""
+        route = self._route_turn(user_input)
+        result = super().process_query(user_input, *args, **kwargs)
+        if route is not None and isinstance(result, dict):
+            result["route"] = route.as_record()
+        return result
+
+    def _route_turn(self, user_input: Any) -> Optional[RouteDecision]:
+        router = self.hybrid_router
+        if router is None:
+            return None
+        # A turn whose route can't be decided must not report the last one's.
+        self.last_route = None
+        route = router.decide(
+            user_input if isinstance(user_input, str) else "",
+            base_url=getattr(self.chat.config, "base_url", None),
+        )
+        self.last_route = route
+        if route.notice:
+            self.console.print_warning(route.notice)
+        if route.model != self.model_id:
+            from gaia_agent.stdio import switch_concrete_model
+
+            # Raises with the model's own remedy; never runs the other model.
+            try:
+                switch_concrete_model(self, route.model)
+            except Exception as exc:
+                explained = explain_route_failure(router.settings, route.model, exc)
+                if explained is None:
+                    raise
+                raise HybridModelError(explained) from exc
+        router.ran(route)
+        return route
+
+    def reset_hybrid_route(self) -> None:
+        """A new conversation starts unescalated, routed afresh."""
+        if self.hybrid_router is not None:
+            self.hybrid_router.reset()
+        self.last_route = None
+
+    def _cloud_account_refusal(self, exc: BaseException) -> Optional[str]:
+        """The base refusal, naming the hybrid setting that chose the model."""
+        refusal = super()._cloud_account_refusal(exc)
+        router, route = self.hybrid_router, self.last_route
+        if refusal is None or router is None or route is None:
+            return refusal
+        return explain_route_failure(router.settings, route.model, refusal) or refusal
 
     @property
     def skill_manager(self):
@@ -480,15 +561,24 @@ class GaiaAgent(
         names = super()._always_on_skill_names
         return names | {ENGINEERING_SKILL} if self.config.developer_mode else names
 
-    def close(self) -> None:
+    def close(self, *, wait_for_mcp: bool = True) -> None:
         """Release this agent's watchers, HTTP session and SQLite handles now.
 
         ``ChatAgent`` puts that teardown in ``__del__``, which for an instance
         whose tool registry holds bound methods only runs when the cyclic
         collector gets to it — far too late for a sidecar that builds an agent
         per one-shot request. Every step is individually guarded and idempotent,
-        so the later ``__del__`` is harmless.
+        so the later ``__del__`` is harmless. MCP servers are stopped here and
+        waited for, so they are gone when ``close()`` returns; with
+        ``wait_for_mcp=False`` they stop on a background thread instead, for a
+        caller that something else is waiting on.
         """
+        manager = getattr(self, "_mcp_manager", None)
+        if manager is not None and wait_for_mcp:
+            try:
+                manager.disconnect_all()
+            except Exception as e:  # noqa: BLE001 — logged; the rest still runs
+                logger.error("Error stopping MCP servers during close: %s", e)
         self.__del__()
 
     def _register_tools(self) -> None:
@@ -516,6 +606,7 @@ class GaiaAgent(
         )
         self.skill_loader = self._maybe_build_skill_loader()
         self._skill_catalog_enabled = self._resolve_skill_catalog_enabled()
+        self.skill_suggester = self._maybe_build_skill_suggester()
         if self._profile_registers_tools():
             self.register_skill_library_tools()
             # Adaptive skills (#2674): lets the agent propose a correction to a
@@ -577,6 +668,70 @@ class GaiaAgent(
         if override is not None:
             return override
         return bool(getattr(self.config, "skill_discovery", False))
+
+    def _maybe_build_skill_suggester(self) -> Optional[SkillSuggester]:
+        """The per-request skill suggester, or ``None`` when it is off.
+
+        Off with the catalogue: a suggestion names catalogue skills, and with
+        no catalogue there is nothing for it to point into.
+        """
+        if not self._skill_catalog_enabled:
+            return None
+        override = suggest_env_override()
+        enabled = (
+            override
+            if override is not None
+            else bool(getattr(self.config, "skill_suggestions", True))
+        )
+        if not enabled:
+            return None
+        return SkillSuggester(
+            embed_fn=self._embed_text,
+            embed_batch_fn=self._embed_texts_batch,
+            threshold=float(
+                getattr(
+                    self.config,
+                    "skill_suggestion_threshold",
+                    DEFAULT_SUGGEST_THRESHOLD,
+                )
+            ),
+        )
+
+    def _select_skill_suggestions_for_turn(self, user_input: str) -> List[str]:
+        """Unloaded catalogue skills that clearly match *user_input*.
+
+        The current message alone, unlike skill-body selection: a suggestion is
+        about what this request needs, and the previous turn's skills are
+        already loaded or were already declined. Empty when the suggester is
+        off, or memory is off (the same embedder backs both).
+        """
+        suggester = getattr(self, "skill_suggester", None)
+        if suggester is None:
+            return []
+        if getattr(self, "_memory_store", None) is None:
+            logger.debug("[skills] no suggestions: memory store (embedder) is off")
+            return []
+        # Text handed over to translate or reword needs no skill, whatever it says.
+        if instruction_part(user_input) != (user_input or ""):
+            return []
+        return suggester.suggest(
+            user_input,
+            self._catalog_skills(),
+            loaded=frozenset(self.loaded_skills),
+            list_project=self._lists_project_skills(),
+        )
+
+    def get_memory_dynamic_context(self) -> str:
+        """Per-turn context, plus the skills that may fit this request.
+
+        In the user message, not the system prompt: a line that changes from
+        turn to turn anywhere in the system prompt makes the server re-read the
+        whole conversation (see ``test_prompt_prefix_stability.py``).
+        """
+        query = getattr(self, "_memory_turn_query", None) or ""
+        line = render_suggestion(self._select_skill_suggestions_for_turn(query))
+        parts = (super().get_memory_dynamic_context(), line)
+        return "\n".join(part for part in parts if part)
 
     def _maybe_build_skill_loader(self) -> Optional[SkillLoader]:
         """Construct the per-turn skill-body selector, or ``None`` when off."""

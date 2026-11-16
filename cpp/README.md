@@ -53,7 +53,7 @@ starts `LemonadeServer.exe` from the tray icon or the Start menu; Linux runs the
 start one from the repo (this restarts the server and frees its port first):
 
 ```powershell
-.\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+.\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -Port 13305 -NoModel
 ```
 
 Default model: `Qwen3-4B-GGUF` (configurable via `AgentConfig::modelId`)

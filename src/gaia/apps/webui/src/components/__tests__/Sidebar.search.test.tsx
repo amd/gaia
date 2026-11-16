@@ -117,6 +117,18 @@ describe('Sidebar chat search', () => {
         expect(within(list()).queryByRole('button', { name: /Tax questions/ })).not.toBeInTheDocument();
     });
 
+    it('clears the search once a result is opened, so the whole list is back', async () => {
+        render(<Sidebar onNewChat={vi.fn()} />);
+        await type('trip');
+        expect(within(list()).queryByRole('button', { name: /Fix the build/ })).not.toBeInTheDocument();
+
+        fireEvent.click(within(list()).getByRole('button', { name: 'Plan the trip' }));
+        expect(useChatStore.getState().currentSessionId).toBe('b');
+        expect(searchbox()).toHaveValue('');
+        expect(within(list()).getByRole('button', { name: 'Fix the build' })).toBeInTheDocument();
+        expect(within(list()).getByRole('button', { name: 'Tax questions' })).toBeInTheDocument();
+    });
+
     it('moves through results with the arrow keys and opens one with Enter', async () => {
         mockedApi.searchSessions.mockResolvedValue({ query: 'trip', results: [TRIP_IN_TAX] });
         render(<Sidebar onNewChat={vi.fn()} />);

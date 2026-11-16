@@ -1322,3 +1322,112 @@ def test_a_sourced_file_passes_without_a_correction(bom_agent):
     assert len(sent) == 3
     assert os.path.isfile("bom.md")
     assert VERIFICATION_NOTE_OPENER not in result["result"]
+
+
+# A rate copied from a tool's output into a script is not an invented figure.
+
+LA3_RATES = (
+    '{"date": "2026-11-11", "base": "EUR", "rates": '
+    '{"USD": 1.084, "GBP": 0.8615, "SEK": 11.42, "CHF": 0.941}}'
+)
+LA3_INVOICES = (
+    "invoice,currency,amount\n"
+    "F-1001,USD,1250.0\nF-1003,SEK,15300.0\nF-1004,CHF,2210.75\nF-1006,EUR,410.0\n"
+)
+LA3_OUTPUT = (
+    "invoice,currency,amount,amount_eur\n"
+    "F-1001,USD,1250.0,1153.14\nF-1003,SEK,15300.0,1339.75\n"
+    "F-1004,CHF,2210.75,2349.36\nF-1006,EUR,410.0,410.00\n"
+)
+LA3_QUERY = "Run get_rates.py, convert invoices.csv to EUR, save invoices_eur.csv"
+LA3_TYPED_RATES = (
+    '{"USD": 1.0840, "GBP": 0.8615, "SEK": 11.4200, "CHF": 0.9410, "EUR": 1.0}'
+)
+
+
+def _la3_code(rates):
+    return (
+        "import csv\n"
+        f"rates = {rates}\n"
+        "with open('invoices.csv', newline='') as f:\n"
+        "    rows = list(csv.DictReader(f))\n"
+        "with open('invoices_eur.csv', 'w', newline='') as f:\n"
+        "    w = csv.writer(f)\n"
+        "    w.writerow(['invoice', 'currency', 'amount', 'amount_eur'])\n"
+        "    for r in rows:\n"
+        "        eur = float(r['amount']) / rates[r['currency']]\n"
+        "        w.writerow([*r.values(), f'{eur:.2f}'])\n"
+    )
+
+
+def _la3_findings(rates=LA3_TYPED_RATES, shown=LA3_RATES):
+    records = [
+        _read("invoices.csv", LA3_INVOICES),
+        _rec(
+            "run_shell_command",
+            {"command": "python get_rates.py"},
+            {"status": "success", "stdout": shown, "return_code": 0},
+        ),
+        _run_python(_la3_code(rates)),
+        _read("invoices_eur.csv", LA3_OUTPUT),
+    ]
+    return file_findings(
+        {"invoices_eur.csv": text_blocks(LA3_OUTPUT, ".csv")},
+        records,
+        query=LA3_QUERY,
+    )
+
+
+def test_rates_copied_from_a_tools_output_into_the_script_are_sourced():
+    """rc18 la3: correct EUR amounts called "figures I found no source for"."""
+    assert _la3_findings() == []
+
+
+def test_a_rate_no_tool_showed_still_leaves_the_amounts_unsourced():
+    """Nothing this turn shows 11.42, so the SEK rate was typed, not copied."""
+    findings = _la3_findings(shown=LA3_RATES.replace('"SEK": 11.42, ', ""))
+
+    assert [f.gate for f in findings] == [FILE]
+    assert "1339.75" in findings[0].note
+
+
+def test_a_number_only_the_written_file_shows_does_not_source_the_script():
+    """Reading the result back is not where the script's literal came from."""
+    findings = _la3_findings(rates='{"USD": 1153.14}', shown="no rates")
+
+    assert [f.gate for f in findings] == [FILE]
+
+
+def test_a_whole_number_a_date_happens_to_show_is_not_a_copied_rate():
+    """12 in "2026-11-12" is not where a typed rate of 12 came from."""
+    findings = _la3_findings(
+        rates='{"USD": 1.0840, "SEK": 12, "CHF": 0.9410, "EUR": 1.0}',
+        shown=LA3_RATES.replace("2026-11-11", "2026-11-12"),
+    )
+
+    assert [f.gate for f in findings] == [FILE]
+
+
+def test_a_rate_only_earlier_conversation_shows_is_not_copied_this_turn():
+    records = [
+        _read("invoices.csv", LA3_INVOICES),
+        _run_python(_la3_code(LA3_TYPED_RATES)),
+    ]
+    findings = file_findings(
+        {"invoices_eur.csv": text_blocks(LA3_OUTPUT, ".csv")},
+        records,
+        query=LA3_QUERY,
+        context="Earlier: USD 1.084, GBP 0.8615, SEK 11.42, CHF 0.941",
+    )
+
+    assert [f.gate for f in findings] == [FILE]
+
+
+def test_an_oversized_whole_number_in_a_script_does_not_crash_the_check():
+    findings = _la3_findings(
+        rates='{"USD": 1.0840, "SEK": 11.42, "CHF": 0.9410, "EUR": 1.0, "X": '
+        + "9" * 400
+        + "}"
+    )
+
+    assert [f.gate for f in findings] == [FILE]

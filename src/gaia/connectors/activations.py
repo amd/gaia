@@ -80,6 +80,14 @@ SCHEMA_VERSION = 1
 _write_lock = threading.Lock()
 
 
+class ActivationsLedgerCorrupt(ConnectorsError):
+    """The ledger exists but isn't valid JSON of the expected shape; deleting it resets it."""
+
+    def __init__(self, message: str, path: Path) -> None:
+        super().__init__(message)
+        self.path = path
+
+
 def _activations_path() -> Path:
     """Resolve the activations path on each call so tests can monkeypatch
     ``Path.home`` after import."""
@@ -116,14 +124,15 @@ def _load_activations_raw() -> Dict[str, object]:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
-        raise ConnectorsError(
+        raise ActivationsLedgerCorrupt(
             f"Activations ledger at {path} is corrupted ({e.msg} at line "
             f"{e.lineno}). Delete the file to reset every per-agent "
             f"activation:\n"
             f"  rm {path}\n"
             "You will need to re-activate connectors from Settings → "
             "Connectors → Active for, or via "
-            "`gaia connectors activations activate ...`."
+            "`gaia connectors activations activate ...`.",
+            path,
         ) from e
     except OSError as e:
         raise ConnectorsError(
@@ -132,18 +141,20 @@ def _load_activations_raw() -> Dict[str, object]:
             "the file 0600."
         ) from e
     if not isinstance(data, dict):
-        raise ConnectorsError(
+        raise ActivationsLedgerCorrupt(
             f"Activations ledger at {path} has the wrong shape (expected "
-            f"a JSON object). Delete with `rm {path}` to reset."
+            f"a JSON object). Delete with `rm {path}` to reset.",
+            path,
         )
     # Tolerate older / forward versions silently — readers must keep
     # working even if a future version adds new fields.
     activations = data.get("activations", {})
     if not isinstance(activations, dict):
-        raise ConnectorsError(
+        raise ActivationsLedgerCorrupt(
             f"Activations ledger at {path} has the wrong shape "
             f"(expected an 'activations' object). Delete with "
-            f"`rm {path}` to reset."
+            f"`rm {path}` to reset.",
+            path,
         )
     return data
 

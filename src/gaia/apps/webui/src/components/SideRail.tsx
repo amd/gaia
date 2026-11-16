@@ -59,10 +59,12 @@ function documentMeta(say: Say, pages: number[] | undefined, passages: number): 
 function costText(summary: TurnSummary, t: Translate = tEn, stopped = false): string {
     const { cost } = summary;
     if (cost.kind === 'local') return t('rail.costLocal');
+    if (cost.kind === 'no_reply') return t('rail.costNoReply');
     if (cost.kind === 'unreported') return t(stopped ? 'rail.costUnreportedStopped' : 'rail.costUnreported');
     if (cost.kind === 'estimate' && typeof cost.usd === 'number') {
         const usd = cost.usd < 0.01 ? cost.usd.toFixed(4) : cost.usd.toFixed(2);
-        return t('rail.costAbout', { usd });
+        // The "$" rides inside the value so the bidi isolate keeps it left of the digits in Arabic.
+        return t('rail.costAbout', { usd: `$${usd}` });
     }
     return t(summary.model ? 'rail.costUnknownModel' : 'rail.costUnknown');
 }
@@ -109,7 +111,11 @@ export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
                 <>
                     <SourcesSection summary={summary} />
                     <FilesSection summary={summary} />
-                    <ThisTurnSection summary={summary} stopped={state.kind === 'turn' && !!state.turn.stopState} />
+                    <ThisTurnSection
+                        summary={summary}
+                        stopped={state.kind === 'turn' && !!state.turn.stopState}
+                        alone={(summary.pages ?? []).length === 0 && (summary.documents ?? []).length === 0 && (summary.files ?? []).length === 0}
+                    />
                 </>
             ))}
         </div>
@@ -162,7 +168,7 @@ function SourcesSection({ summary }: { summary: TurnSummary }) {
                         <li key={d.path} className="side-rail-item">
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
-                                <span className="side-rail-name" title={d.name} dir="auto">{d.name}</span>
+                                <span className="side-rail-name" title={d.name} dir="ltr">{d.name}</span>
                                 <span className="side-rail-meta">
                                     {t.compose((say) => documentMeta(say, d.pages, count))}
                                 </span>
@@ -282,42 +288,42 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
     );
 }
 
-function ThisTurnSection({ summary, stopped }: { summary: TurnSummary; stopped: boolean }) {
+function ThisTurnSection({ summary, stopped, alone }: { summary: TurnSummary; stopped: boolean; alone: boolean }) {
     const t = useT();
     useModelNames();
     const { model } = summary;
     const sites = summary.sites ?? [];
     const usedDocs = (summary.documents ?? []).length > 0;
-    return (
-        <Section title={t('rail.thisTurn')}>
-            <dl className="side-rail-facts">
-                <dt>{t('rail.model')}</dt>
-                <dd>
-                    {model ? (
-                        <span className={`side-rail-where${model.remote ? ' remote' : ''}`}>
-                            {model.remote ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
-                            {model.remote ? t('rail.cloudModel', { name: model.provider_name }) : t('rail.thisPc')}
-                        </span>
-                    ) : (
-                        <span className="side-rail-where">{t('rail.notReported')}</span>
-                    )}
-                    {model?.name && <span className="side-rail-meta" title={model.name} dir="ltr">{displayModelName(model.name)}</span>}
-                </dd>
-                {usedDocs && (
-                    <>
-                        <dt>{t('rail.documents')}</dt>
-                        <dd>
-                            {model?.remote
-                                ? t('rail.docsSent', { provider: model.provider_name })
-                                : t(model ? 'rail.docsLocal' : 'rail.docsSearched')}
-                        </dd>
-                    </>
+    const facts = (
+        <dl className="side-rail-facts">
+            <dt>{t('rail.model')}</dt>
+            <dd>
+                {model ? (
+                    <span className={`side-rail-where${model.remote ? ' remote' : ''}`}>
+                        {model.remote ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
+                        {model.remote ? t('rail.cloudModel', { name: model.provider_name }) : t('rail.thisPc')}
+                    </span>
+                ) : (
+                    <span className="side-rail-where">{t('rail.notReported')}</span>
                 )}
-                <dt>{t('rail.websites')}</dt>
-                <dd>{sites.length > 0 ? <span dir="ltr">{sites.join(', ')}</span> : t('rail.noSites')}</dd>
-                <dt>{t('rail.cost')}</dt>
-                <dd>{costText(summary, t, stopped)}</dd>
-            </dl>
-        </Section>
+                {model?.name && <span className="side-rail-meta" title={model.name} dir="ltr">{displayModelName(model.name)}</span>}
+            </dd>
+            {usedDocs && (
+                <>
+                    <dt>{t('rail.documents')}</dt>
+                    <dd>
+                        {model?.remote
+                            ? t('rail.docsSent', { provider: model.provider_name })
+                            : t(model ? 'rail.docsLocal' : 'rail.docsSearched')}
+                    </dd>
+                </>
+            )}
+            <dt>{t('rail.websites')}</dt>
+            <dd>{sites.length > 0 ? <span dir="ltr">{sites.join(', ')}</span> : t('rail.noSites')}</dd>
+            <dt>{t('rail.cost')}</dt>
+            <dd>{costText(summary, t, stopped)}</dd>
+        </dl>
     );
+    // Alone under "This answer", a second heading only repeats it.
+    return alone ? facts : <Section title={t('rail.thisTurn')}>{facts}</Section>;
 }

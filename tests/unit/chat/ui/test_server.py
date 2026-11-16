@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -936,6 +937,53 @@ class TestSystemStatus:
         assert data["model_downloaded"] is True
         assert data["default_model_size_gb"] == 23.3
 
+    @patch("httpx.AsyncClient")
+    def test_system_status_sizes_match_setup(self, mock_httpx_cls, client):
+        """Lemonade's 21.7 (GiB) for Qwen3.6 reads as GAIA's 23.3 GB; a model
+        GAIA has no figure for keeps Lemonade's."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "TinyModel-0.5B-GGUF",
+            "all_models_loaded": [
+                {
+                    "model_name": "TinyModel-0.5B-GGUF",
+                    "type": "llm",
+                    "recipe_options": {"ctx_size": 4096},
+                }
+            ],
+        }
+        catalog = {
+            "data": [
+                {"id": "TinyModel-0.5B-GGUF", "downloaded": True, "size": 0.4},
+                {"id": "Qwen3.6-35B-A3B-GGUF", "downloaded": True, "size": 21.7},
+            ]
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/models" in url:
+                return make_response(200, catalog)
+            return make_response(200, {})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        client.put("/api/settings", json={"custom_model": "Qwen3.6-35B-A3B-GGUF"})
+        data = client.get("/api/system/status").json()
+        assert data["model_size_gb"] == 0.4
+        assert data["default_model_size_gb"] == 23.3
+
     @pytest.mark.parametrize(
         "query, expected",
         [("", ("new chat", False)), ("?fresh=true", ("model pick retry", True))],
@@ -1024,6 +1072,44 @@ class TestSystemStatus:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_httpx_cls.return_value = mock_client
 
+    @pytest.mark.parametrize("data", ["x", ["x"], {"id": "a"}])
+    @patch("httpx.AsyncClient")
+    def test_a_malformed_model_list_is_named_not_reported_as_down(
+        self, mock_httpx_cls, client, data
+    ):
+        """#7219: /health answers and chats work; only /models is malformed."""
+        mock_client = AsyncMock()
+
+        async def mock_get(url, **kwargs):
+            resp = MagicMock()
+            resp.status_code = 200
+            if "/health" in url:
+                resp.json.return_value = {"status": "ok", "all_models_loaded": []}
+            elif "/models" in url:
+                resp.json.return_value = {"object": "list", "data": data}
+            else:
+                resp.json.return_value = {}
+            return resp
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        status = client.get("/api/system/status").json()
+
+        assert status["lemonade_running"] is True
+        assert status["lemonade_probe"] == "ok"
+        assert status["lemonade_error"] is None
+        shape_warnings = [
+            w
+            for w in status["probe_warnings"]
+            if "model list came back in an unexpected shape" in w
+        ]
+        # One fault, one warning: the download check reads the same list.
+        assert len(shape_warnings) == 1, status["probe_warnings"]
+        assert not any("gaia init" in w for w in status["probe_warnings"])
+
     _EMBEDDER = {
         "model_name": "nomic-embed-text-v2-moe-GGUF",
         "type": "embedding",
@@ -1085,6 +1171,180 @@ class TestSystemStatus:
         assert data["model_loaded"] is None
         assert data["expected_model_loaded"] is not False
         assert data["embedding_model_loaded"] is True
+
+
+class TestCustomModelIsTheChosenModel:
+    """Settings > Advanced's custom model is the model the sidecar warms (#7217)."""
+
+    @pytest.fixture(autouse=True)
+    def _private_config(self, monkeypatch, tmp_path):
+        monkeypatch.setattr("gaia.config.GAIA_CONFIG_FILE", tmp_path / "config.json")
+
+    def test_saving_a_custom_model_records_it_as_the_last_model(self, client):
+        from gaia.config import GaiaConfig
+        from gaia.llm.lemonade_client import resolve_chat_model
+
+        GaiaConfig.save_keys(
+            {
+                "last_model": "fireworks.deepseek-v4p1-flash",
+                "last_provider": "fireworks",
+            }
+        )
+        resp = client.put(
+            "/api/settings", json={"custom_model": " opencode.big-model "}
+        )
+
+        assert resp.status_code == 200
+        assert GaiaConfig.load().last_model == "opencode.big-model"
+        # The flagship sidecar's start-up warm-up loads resolve_chat_model().
+        assert resolve_chat_model() == "opencode.big-model"
+
+    def test_clearing_the_custom_model_clears_the_last_model(self, client):
+        from gaia.config import GaiaConfig
+
+        client.put("/api/settings", json={"custom_model": "opencode.big-model"})
+        client.put("/api/settings", json={"custom_model": ""})
+
+        cfg = GaiaConfig.load()
+        assert cfg.last_model is None
+        assert cfg.last_provider is None
+
+    def test_omitting_the_custom_model_leaves_the_last_model(self, client):
+        from gaia.config import GaiaConfig
+
+        GaiaConfig.save_keys({"last_model": "Qwen3.6-35B-A3B-GGUF"})
+        client.put("/api/settings", json={"agent_mode": "manual"})
+
+        assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
+
+    def test_an_unwritable_config_fails_the_save_and_keeps_the_old_model(
+        self, client, db
+    ):
+        from gaia.config import GaiaConfigError
+
+        db.set_setting("custom_model", "Qwen3.6-35B-A3B-GGUF")
+        with patch(
+            "gaia.config.GaiaConfig.save_keys",
+            side_effect=GaiaConfigError("config.json is read-only."),
+        ):
+            resp = client.put(
+                "/api/settings", json={"custom_model": "opencode.big-model"}
+            )
+
+        assert resp.status_code == 500
+        assert "read-only" in resp.json()["detail"]
+        assert db.get_setting("custom_model") == "Qwen3.6-35B-A3B-GGUF"
+
+    def test_a_cloud_model_is_refused_while_local_only_is_on(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.config import GaiaConfig
+        from gaia.llm import local_only
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        GaiaConfig.save_keys({"last_model": "Qwen3.6-35B-A3B-GGUF"})
+
+        resp = client.put(
+            "/api/settings", json={"custom_model": "fireworks.glm-5p3-flash"}
+        )
+
+        assert resp.status_code == 409
+        assert "Local only is on" in resp.json()["detail"]
+        assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
+        assert db.get_setting("custom_model") is None
+
+    def test_a_cloud_model_only_the_server_lists_is_refused_under_local_only(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.config import GaiaConfig
+        from gaia.llm import lemonade_client, local_only
+        from gaia.ui.routers import providers
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        GaiaConfig.save_keys({"last_model": "Qwen3.6-35B-A3B-GGUF"})
+        asked = []
+
+        def model_list(method, path, payload=None):
+            asked.append((method, path))
+            listed = {"id": "othercloud.big-model", "recipe": "cloud"}
+            return 200, {"data": [listed]}
+
+        monkeypatch.setattr(providers, "_lemonade", model_list)
+        try:
+            resp = client.put(
+                "/api/settings", json={"custom_model": "othercloud.big-model"}
+            )
+        finally:
+            lemonade_client.record_cloud_models({"data": []})
+
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert (
+            "Can't switch to big-model · othercloud: Local only is on, so it was blocked: it is a cloud model."
+            in detail
+        )
+        assert "Settings > Privacy" in detail and "gaia config" not in detail
+        assert asked == [("GET", "models?show_all=true")]
+        assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
+        assert db.get_setting("custom_model") is None
+
+    def test_a_listed_cloud_model_retyped_in_another_case_is_refused_under_local_only(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.llm import lemonade_client, local_only
+        from gaia.ui.routers import providers
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        listed = {"id": "othercloud.big-model", "recipe": "cloud"}
+        monkeypatch.setattr(
+            providers, "_lemonade", lambda *a, **k: (200, {"data": [listed]})
+        )
+        try:
+            resp = client.put(
+                "/api/settings", json={"custom_model": "user.OtherCloud.Big-Model"}
+            )
+        finally:
+            lemonade_client.record_cloud_models({"data": []})
+
+        assert resp.status_code == 409
+        assert "Local only is on" in resp.json()["detail"]
+        assert db.get_setting("custom_model") is None
+
+    def test_a_local_model_is_saved_under_local_only_without_asking_the_server(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.llm import local_only
+        from gaia.ui.routers import providers
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        monkeypatch.setattr(
+            providers, "_lemonade", lambda *a, **k: pytest.fail("asked the server")
+        )
+
+        resp = client.put("/api/settings", json={"custom_model": "Qwen3-4B-GGUF"})
+
+        assert resp.status_code == 200
+        assert db.get_setting("custom_model") == "Qwen3-4B-GGUF"
+
+    def test_saving_a_custom_model_clears_a_failed_restore_notice(
+        self, client, monkeypatch
+    ):
+        from gaia.ui.routers import providers
+
+        monkeypatch.setattr(
+            providers,
+            "_restore_result",
+            {"status": "failed", "message": "Couldn't restore your last model."},
+        )
+
+        resp = client.put("/api/settings", json={"custom_model": "opencode.big-model"})
+
+        assert resp.status_code == 200
+        assert providers._restore_result == {"status": "none", "message": None}
 
 
 class TestDynamicToolsSetting:
@@ -1233,6 +1493,8 @@ class TestNetworkPolicySetting:
                 "severity": "warning",
                 "url": None,
                 "reason": "server refused",
+                "cause": None,
+                "models": None,
             }
         ]
 
@@ -1255,6 +1517,8 @@ class TestNetworkPolicySetting:
                 "severity": "info",
                 "url": "http://127.0.0.1:1234",
                 "reason": None,
+                "cause": None,
+                "models": None,
             }
         ]
 
@@ -1785,6 +2049,38 @@ class TestExportEndpoint:
 
         content = client.get(f"/api/sessions/{sid}/export").json()["content"]
         assert "*Model: Only-GGUF*" in content
+
+    def test_export_reads_like_a_document_not_a_database_dump(self, client, db):
+        sid = client.post(
+            "/api/sessions", json={"model": "fireworks.deepseek-v4p1-flash"}
+        ).json()["id"]
+        db.add_message(
+            sid,
+            "user",
+            "What color is it?\n\n"
+            "[notes.txt](/api/files/uploads/a23f365ad6b1_notes.txt)\n"
+            "![red square.png](/api/files/uploads/5f7e41b718f3_red_square.png)",
+        )
+        db.add_message(
+            sid,
+            "assistant",
+            "Red.",
+            inference_stats={"model": "fireworks.deepseek-v4p1-flash"},
+        )
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+
+        assert "+00:00" not in content
+        assert re.search(
+            r"\*Created: [A-Z][a-z]+ \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M\*", content
+        )
+        assert "*Model: deepseek-v4p1-flash*" in content
+        assert "**Assistant (deepseek-v4p1-flash):**" in content
+        assert "fireworks." not in content
+        assert "/api/files/uploads" not in content
+        assert "a23f365ad6b1" not in content
+        assert "Attached: notes.txt" in content
+        assert "Attached: red square.png" in content
 
     def test_export_json(self, client, db):
         create_resp = client.post("/api/sessions", json={"title": "JSON Export"})

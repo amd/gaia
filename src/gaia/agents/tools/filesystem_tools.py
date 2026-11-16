@@ -216,7 +216,9 @@ class PathAccessDenied(ValueError):
     """The validator refused a path; ``refusal`` is the tool result to return."""
 
     def __init__(self, denied: dict):
-        super().__init__(f"Access denied: {denied['error']}")
+        reason = str(denied["error"])
+        prefix = "Access denied: "
+        super().__init__(reason if reason.startswith(prefix) else prefix + reason)
         self.refusal = {**denied, "error": str(self)}
 
 

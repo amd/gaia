@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 
+from gaia.credential_shapes import REDACTED, TOKEN_SHAPES, URL_USERINFO
 from gaia.llm import call_ledger
 from gaia.logger import get_logger
 
@@ -52,7 +53,6 @@ RECORD_ID_RE = re.compile(r"GF-\d{8}-\d{6}-[0-9a-f]{4}")
 #: Process names of the servers a local model call goes through.
 _SERVER_PROCESSES = ("lemond", "lemonadeserver", "llama-server", "flm")
 
-REDACTED = "[redacted]"
 #: A field whose name is, or ends in, a secret's name: ``api_key``, ``Authorization``.
 #: Not ``max_tokens`` or ``tokens_per_second``, which are counts.
 _SECRET_KEY_RE = re.compile(
@@ -111,6 +111,11 @@ _NAMED_SECRET_PATTERNS = (
             rf"[ \t]*[A-Za-z0-9+/]{{16,}}={{0,2}}[ \t]*(?:{_NL}|\Z)[\s\S]*?"
             r"(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
         ),
+    ),
+    ("credentials in a URL", re.compile(URL_USERINFO)),
+    *(
+        ("known token shape", re.compile(shape, re.IGNORECASE))
+        for shape in TOKEN_SHAPES
     ),
 )
 _SECRET_PATTERNS = tuple(pattern for _, pattern in _NAMED_SECRET_PATTERNS)

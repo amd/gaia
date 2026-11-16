@@ -68,6 +68,7 @@ from gaia_agent_email.answer_grounding import (  # noqa: E402
 )
 from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
 
+from gaia.agents.base.verification import build_verification_scope  # noqa: E402
 from gaia.database.mixin import DatabaseMixin  # noqa: E402
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
@@ -1421,6 +1422,50 @@ class TestProcessQueryWiring:
             ):
                 out = agent.process_query("anything need my attention?")
             assert out["result"] == grounded_by_loop
+            assert out["result"].count("attention card") == 1
+        finally:
+            agent.close_db()
+
+    def test_loop_verification_line_does_not_trigger_a_second_grounding(self, tmp_path):
+        # #3572: the loop appends a "Verification:" line after finalize_answer,
+        # so process_query only recognises an already-grounded answer by
+        # stripping it. Built with the loop's own appender, so a change to the
+        # line's wording or spacing that breaks the strip fails here.
+        _store_attention_view(items=[_attention_item("action_item")], scanned=7)
+        agent = _build_agent(tmp_path)
+        try:
+            conversation = [{"role": "user", "content": "anything need my attention?"}]
+            grounded_by_loop = agent.finalize_answer(
+                "No urgent or actionable items found.", conversation
+            )
+            statement = build_verification_scope([], unchecked_change="notes.txt")
+            assert statement
+            with patch.object(
+                EmailTriageAgent,
+                "verification_scope_statement",
+                return_value=statement,
+            ):
+                emitted = agent._with_verification_scope(grounded_by_loop)
+            assert emitted != grounded_by_loop
+            assert emitted.endswith(statement)
+
+            canned = {
+                "status": "success",
+                "result": emitted,
+                "conversation": conversation,
+                "steps_taken": 1,
+            }
+            with (
+                patch(
+                    "gaia.agents.base.agent.Agent.process_query", return_value=canned
+                ),
+                patch(
+                    "gaia_agent_email.agent.ground_final_answer",
+                    side_effect=AssertionError("answer was grounded twice"),
+                ),
+            ):
+                out = agent.process_query("anything need my attention?")
+            assert out["result"] == emitted
             assert out["result"].count("attention card") == 1
         finally:
             agent.close_db()

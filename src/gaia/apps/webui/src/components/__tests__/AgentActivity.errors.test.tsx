@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { AgentActivity } from '../AgentActivity';
 import type { AgentStep } from '../../types';
@@ -38,4 +38,32 @@ it('says a folded run with a policy block was blocked by policy', () => {
     render(<AgentActivity steps={steps} isActive={false} />);
 
     expect(screen.getByRole('button', { name: /^Blocked by policy$/ })).toHaveAttribute('aria-expanded', 'true');
+});
+
+it('does not head a run whose only memory call failed "Saved to memory"', () => {
+    const steps: AgentStep[] = [
+        { id: 1, type: 'thinking', label: 'Thinking', detail: 'Store it as sensitive.', active: false, timestamp: 1 },
+        { id: 2, type: 'tool', label: 'Using remember', tool: 'remember', active: false, success: false, result: 'Invalid category', timestamp: 2 },
+        { id: 3, type: 'thinking', label: 'Thinking', detail: 'Use another category.', active: false, timestamp: 3 },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /Saving to memory failed/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Saved to memory/ })).toBeNull();
+});
+
+it('says a blocked page fetch in plain words and keeps the site name on the row', () => {
+    const steps: AgentStep[] = [
+        {
+            id: 1, type: 'tool', label: 'Using fetch_page', tool: 'fetch_page', active: false, success: false, timestamp: 1,
+            narration: 'Fetching page: accuweather.com/…/paris/623',
+            result: 'Error fetching page: 403 Client Error: Forbidden for url: https://www.accuweather.com/en/fr/paris/623',
+        },
+    ];
+    const { container } = render(<AgentActivity steps={steps} isActive={false} />);
+    fireEvent.click(screen.getAllByRole('button')[0]);
+
+    expect(screen.getByText('Site blocked it (403)')).toBeVisible();
+    expect(screen.getByText('Fetching page: accuweather.com/…/paris/623')).toBeVisible();
+    expect(container.querySelector('.flow-tool-failure')).toHaveTextContent('Site blocked it (403)');
 });

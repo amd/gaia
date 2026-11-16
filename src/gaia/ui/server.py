@@ -38,7 +38,9 @@ from starlette.convertors import PathConvertor, register_url_convertor
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_wheel_failed_message
+from gaia.client_hangups import quiet_client_hangups
 from gaia.config import UnsafeGaiaHomeError
+from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 # ── Backward-compatible re-exports ──────────────────────────────────────────
@@ -59,6 +61,7 @@ from .document_monitor import DocumentMonitor
 from .memory_settings import memory_enabled
 from .restart_recovery import recover_interrupted_work, sweep_interrupted_work
 from .routers import agents as agents_router_mod
+from .routers import automations as automations_router_mod
 from .routers import changes as changes_router_mod
 from .routers import chat as chat_router_mod
 from .routers import connectors as connectors_router_mod
@@ -72,6 +75,7 @@ from .routers import lemonade as lemonade_router_mod
 from .routers import logs as logs_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
+from .routers import messaging as messaging_router_mod
 from .routers import onboarding as onboarding_router_mod
 from .routers import providers as providers_router_mod
 from .routers import resources as resources_router_mod
@@ -354,7 +358,17 @@ def _run_scheduled_prompt(
     agent._cancel_event = cancel_event
     if console is not None:
         agent.console = console
-    result = agent.process_query(prompt)
+    try:
+        result = agent.process_query(prompt)
+    finally:
+        from gaia.agents.base.memory import drain_memory_extraction
+
+        # Save the run's memories now: a queued save would keep the agent alive.
+        drain_memory_extraction(agent)
+        try:
+            agent.close()
+        except Exception as exc:  # noqa: BLE001 — logged; the run's own result stands
+            logger.warning("Scheduled run: closing its agent failed: %s", exc)
     if isinstance(result, dict):
         val = result.get("result")
         answer = val if val is not None else result.get("answer", "")
@@ -445,7 +459,7 @@ class _ScheduledRuns:
         await turn_queue.acquire(f"schedule:{uuid.uuid4()}")
         try:
             cancel = threading.Event()
-            # Background mode: nobody is watching, so gated tools are denied.
+            # Background mode: nobody can approve, so a gated step ends the run.
             console = SSEOutputHandler(background_mode=True)
             worker = run_in_own_thread(
                 lambda: _run_scheduled_prompt(
@@ -468,9 +482,14 @@ class _ScheduledRuns:
                     "freeing the model while its thread winds down",
                     self._timeout,
                 )
+            limit = (
+                f"{self._timeout / 60:g} minutes"
+                if self._timeout >= 120
+                else f"{self._timeout:g} seconds"
+            )
             raise asyncio.TimeoutError(
-                f"Scheduled run did not finish within {self._timeout:g}s and was "
-                "stopped. Raise GAIA_SCHEDULE_TIMEOUT if the task needs longer."
+                f"This scheduled task took longer than {limit} and was stopped. "
+                "Try a shorter or simpler task, or run it again."
             )
         finally:
             turn_queue.release()
@@ -525,6 +544,10 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         from gaia.ui._chat_helpers import _eval_provider_kwargs
         from gaia.ui.dispatch import DispatchQueue
 
+        # A client quitting mid-connection is not an error here.
+        quiet_client_hangups(asyncio.get_running_loop())
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
         _eval_provider_kwargs()
 
         # ── Boot-time initialization via DispatchQueue ──────────────────
@@ -533,6 +556,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         queue = DispatchQueue(max_workers=4)
         app.state.dispatch_queue = queue
+        from gaia.ui import dispatch as dispatch_mod
+
+        dispatch_mod.BOOT_QUEUE = queue
 
         # ── Model-slot broker (#2248) ───────────────────────────────────
         # The daemon exports the broker URL into its own environment, so only
@@ -642,6 +668,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
                 logger.info("Model preload skipped: %s", low_memory)
                 return
 
+            # The TUI may have picked another model since this app last ran.
+            from gaia.ui.routers.providers import restore_last_model
+
+            try:
+                restore_last_model(db, load=False)
+            except Exception as exc:  # noqa: BLE001 - the model list reports it
+                # /api/providers/active runs the restore again and shows why.
+                logger.warning(
+                    "Could not restore the last model before the preload: %s", exc
+                )
+
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as
             # FAILED (not DONE) — the frontend will show "degraded" state.
@@ -703,15 +740,22 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         # Dispatch startup tasks.  Jobs A and B run in parallel; Job C
         # waits for A (needs Lemonade reachable) before loading the model.
+        # A visible job's `step` needs banner.boot.<step> in every UI locale.
         lemonade_id = queue.dispatch(
-            "Checking LLM server", _check_lemonade, visible=True
+            "Checking LLM server", _check_lemonade, visible=True, step="check_server"
         )
-        queue.dispatch("Loading ML libraries", _import_modules, visible=True)
+        queue.dispatch(
+            "Loading ML libraries",
+            _import_modules,
+            visible=True,
+            step="load_libraries",
+        )
         model_job = queue.dispatch(
             "Loading AI model",
             _load_model,
             visible=True,
             depends_on=lemonade_id,
+            step="load_model",
         )
         from gaia.ui import warmup
         from gaia.ui.dispatch import JobStatus
@@ -727,6 +771,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         queue.dispatch(
             "Priming the first prompt", _prime_first_prompt, depends_on=model_job
         )
+        # A connected Discord bridge set to autostart comes back with the app.
+        queue.dispatch("Starting Discord", messaging_router_mod.autostart_discord)
 
         # Start autonomous agent loop
         await agent_loop.start(db=db, app_state=app.state)
@@ -835,6 +881,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await agent_loop.stop()
         logger.info("AgentLoop stopped")
         await queue.shutdown()
+        if dispatch_mod.BOOT_QUEUE is queue:
+            dispatch_mod.BOOT_QUEUE = None
         await monitor.stop()
         logger.info("Document file monitor stopped")
         from gaia.connectors.activation_watcher import stop_watcher
@@ -966,6 +1014,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(memory_router_mod.router)
     app.include_router(schedules_router_mod.router)
     app.include_router(mcp_router_mod.router)
+    app.include_router(messaging_router_mod.router)
+    app.include_router(automations_router_mod.router)
     # Issue #915 — OAuth connections (Settings page + agent grants).
     app.include_router(connectors_router_mod.router)
     # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).

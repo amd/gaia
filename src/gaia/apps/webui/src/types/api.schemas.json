@@ -271,6 +271,17 @@
         "title": "Active",
         "type": "boolean"
       },
+      "autoDeclined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Autodeclined"
+      },
       "commandOutput": {
         "anyOf": [
           {
@@ -312,6 +323,17 @@
         ],
         "title": "Decision"
       },
+      "declined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Declined"
+      },
       "detail": {
         "anyOf": [
           {
@@ -336,6 +358,17 @@
       "id": {
         "title": "Id",
         "type": "integer"
+      },
+      "kept": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Kept"
       },
       "label": {
         "title": "Label",
@@ -405,6 +438,17 @@
           }
         ],
         "title": "Narration"
+      },
+      "needsModel": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Needsmodel"
       },
       "planNarrations": {
         "anyOf": [
@@ -513,6 +557,17 @@
           }
         ],
         "title": "Success"
+      },
+      "timedOut": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Timedout"
       },
       "timestamp": {
         "default": 0,
@@ -637,6 +692,17 @@
         },
         "title": "Entries",
         "type": "array"
+      },
+      "folder_refusal": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Folder Refusal"
       },
       "parent_path": {
         "anyOf": [
@@ -1178,6 +1244,52 @@
       "history"
     ],
     "title": "DeviceUsage",
+    "type": "object"
+  },
+  "DiscordConnectRequest": {
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "token": {
+        "title": "Token",
+        "type": "string"
+      }
+    },
+    "required": [
+      "token"
+    ],
+    "title": "DiscordConnectRequest",
+    "type": "object"
+  },
+  "DiscordStartRequest": {
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "take_over": {
+        "default": false,
+        "title": "Take Over",
+        "type": "boolean"
+      }
+    },
+    "title": "DiscordStartRequest",
     "type": "object"
   },
   "DiscoveryCommit": {
@@ -2084,6 +2196,11 @@
         "default": 0,
         "title": "Skipped",
         "type": "integer"
+      },
+      "skipped_images": {
+        "default": 0,
+        "title": "Skipped Images",
+        "type": "integer"
       }
     },
     "title": "IndexFolderResponse",
@@ -2220,6 +2337,16 @@
         ],
         "title": "Retried"
       },
+      "route": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/TurnRouteResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "seconds": {
         "anyOf": [
           {
@@ -2266,6 +2393,17 @@
       "status": {
         "title": "Status",
         "type": "string"
+      },
+      "step": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Step"
       }
     },
     "required": [
@@ -3200,6 +3338,11 @@
   "ModelStatus": {
     "description": "Status of a custom model on the Lemonade server.",
     "properties": {
+      "checked": {
+        "default": false,
+        "title": "Checked",
+        "type": "boolean"
+      },
       "downloaded": {
         "default": false,
         "title": "Downloaded",
@@ -3455,9 +3598,34 @@
   "PolicyNotice": {
     "description": "Structured Local only notice translated by the Agent UI.",
     "properties": {
+      "cause": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cause"
+      },
       "code": {
         "title": "Code",
         "type": "string"
+      },
+      "models": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Models"
       },
       "reason": {
         "anyOf": [
@@ -4605,6 +4773,7 @@
       "custom_model": {
         "anyOf": [
           {
+            "maxLength": 256,
             "type": "string"
           },
           {
@@ -4689,6 +4858,61 @@
       }
     },
     "title": "SetupRunRequest",
+    "type": "object"
+  },
+  "SkillLinkAddRequest": {
+    "properties": {
+      "allow_code": {
+        "default": false,
+        "title": "Allow Code",
+        "type": "boolean"
+      },
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
+      },
+      "names": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Names"
+      },
+      "pin": {
+        "title": "Pin",
+        "type": "string"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "pin"
+    ],
+    "title": "SkillLinkAddRequest",
+    "type": "object"
+  },
+  "SkillLinkRequest": {
+    "properties": {
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "title": "SkillLinkRequest",
     "type": "object"
   },
   "SkipModelRequest": {
@@ -5362,6 +5586,35 @@
       "approved"
     ],
     "title": "ToolConfirmRequest",
+    "type": "object"
+  },
+  "TurnRouteResponse": {
+    "description": "The model a ``hybrid`` turn was routed to, and why.",
+    "properties": {
+      "degraded": {
+        "default": false,
+        "title": "Degraded",
+        "type": "boolean"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "notice": {
+        "default": "",
+        "title": "Notice",
+        "type": "string"
+      },
+      "reason": {
+        "default": "",
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "title": "TurnRouteResponse",
     "type": "object"
   },
   "TurnSummaryCost": {

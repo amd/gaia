@@ -37,6 +37,18 @@ export const useBackendStore = create<BackendState>((set, get) => ({
 }));
 
 /**
+ * Ask the desktop app where its backend is now. A window that missed the
+ * restart push, or reloaded back to its startup port, otherwise never finds it.
+ */
+export function resyncBackend(): void {
+    const bridge = window.gaiaAPI?.backend;
+    if (!bridge) return;
+    bridge.getState()
+        .then((state) => useBackendStore.getState().apply(state))
+        .catch((err) => log.system.error('Could not read the backend state from the desktop app', err));
+}
+
+/**
  * Follow the desktop app's backend restarts. `onBack` runs when a restarted
  * backend is up, so the caller can re-check status at once. Returns the unsubscribe.
  */

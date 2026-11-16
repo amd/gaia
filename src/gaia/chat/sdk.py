@@ -27,12 +27,31 @@ from gaia.llm.lemonade_client import (
     resolve_ctx_size,
 )
 from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
-from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
+from gaia.llm.providers.lemonade import _NATIVE_TC_KEY, NATIVE_TOOL_CALLS_PREFIX
+from gaia.llm.retry import stopped_by_user
 from gaia.logger import get_logger
 from gaia.utils import perf_trace
 
 #: Threads inside ``AgentSDK.side_request``; their calls are not the turn's.
 _SIDE_CALLS = threading.local()
+
+
+def _is_tool_call_envelope(chunk: str, tools: Optional[List[Dict]]) -> bool:
+    """Whether *chunk* is the provider's native tool-call envelope, not prose.
+
+    A cloud model on the in-text tool format gets no ``tools`` yet can still
+    call one natively; then only a whole JSON envelope counts, so a model
+    merely quoting the prefix stays text.
+    """
+    if not chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+        return False
+    if tools:
+        return True
+    try:
+        envelope = json.loads(chunk)
+    except ValueError:
+        return False
+    return isinstance(envelope, dict) and isinstance(envelope.get(_NATIVE_TC_KEY), list)
 
 
 class LLMCallCancelled(Exception):
@@ -593,7 +612,10 @@ class AgentSDK:
             self.log.error(f"LLM connection error in send_messages: {e}")
             raise ConnectionError(f"Failed to connect to LLM server: {e}") from e
         except Exception as e:
-            self.log.error(f"Error in send_messages: {e}")
+            if stopped_by_user(e):
+                self.log.info(f"send_messages stopped by the user: {e}")
+            else:
+                self.log.error(f"Error in send_messages: {e}")
             raise
 
     def _send_messages_cancellable(
@@ -703,7 +725,7 @@ class AgentSDK:
                 # would print raw JSON at the user — so it terminates the stream
                 # as the complete response, which is the shape the agent loop's
                 # native tool_calls branch already parses.
-                if tools and chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+                if _is_tool_call_envelope(chunk, tools):
                     self._recorder_mark()
                     call_reported = True
                     self._report_llm_call(call_started, streamed=True, ok=True)
@@ -743,7 +765,10 @@ class AgentSDK:
                 f"Failed to connect to LLM server (streaming): {e}"
             ) from e
         except Exception as e:
-            self.log.error(f"Error in send_messages_stream: {e}")
+            if stopped_by_user(e):
+                self.log.info(f"send_messages_stream stopped by the user: {e}")
+            else:
+                self.log.error(f"Error in send_messages_stream: {e}")
             raise
         finally:
             # Cancelling closes this generator at the yield; without this the

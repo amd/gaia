@@ -30,7 +30,7 @@ on:
       - '.github/workflows/test_npu_embedder.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -71,7 +71,7 @@ on:
       - '.github/workflows/test_npu_embedder.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -149,7 +149,7 @@ jobs:
           # Free the port, then start Lemonade in a single session so the FLM
           # backend child survives for the test run. -Backend installs flm:npu
           # first; without it the FLM half of the catalog is empty.
-          .\installer\scripts\start-lemonade.ps1 `
+          .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped `
               -ModelName "gemma4-it-e2b-FLM" `
               -Backend "flm:npu" `
               -Port 13305 `

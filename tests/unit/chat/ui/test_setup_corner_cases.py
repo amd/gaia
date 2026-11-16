@@ -129,6 +129,19 @@ def test_cancel_sets_a_working_component_back():
     assert "backend" not in runner.status()["components"]
 
 
+def test_a_new_part_does_not_show_the_last_parts_percent():
+    runner = sr.SetupRunner()
+    runner._run = sr.SetupRun(skip_chat_model=False)
+    runner._run.percent, runner._run.size = 100, "120 MB"
+    runner._on_event({"event": "component", "component": "server", "state": "done"})
+    assert runner.status()["percent"] == 100, "a part finishing keeps its figure"
+    runner._on_event({"event": "component", "component": "backend", "state": "failed"})
+    assert runner.status()["percent"] == 100, "only a part starting clears it"
+    runner._on_event({"event": "component", "component": "backend", "state": "active"})
+    assert runner.status()["percent"] is None
+    assert runner.status()["size"] is None
+
+
 def test_a_malformed_event_stops_the_child_it_can_no_longer_read(monkeypatch):
     proc = _Proc(
         _lines(

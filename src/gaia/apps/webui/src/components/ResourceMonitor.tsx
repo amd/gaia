@@ -134,6 +134,16 @@ function unavailable(t: Translate, tone: Tile['tone'], label: string, reason: st
     };
 }
 
+function isIdle(net: NetworkUsage): boolean {
+    return [net.send_bps, net.recv_bps, ...net.send_history, ...net.recv_history].every((v) => v === 0);
+}
+
+/** Adapters that carried traffic this minute; when none did, the first so Network still shows. */
+function shownNetworks(all: NetworkUsage[]): NetworkUsage[] {
+    const busy = all.filter((n) => !isIdle(n));
+    return busy.length > 0 ? busy : all.slice(0, 1);
+}
+
 export function buildTiles(t: Translate, usage: ResourceUsage): Tile[] {
     const tiles: Tile[] = [];
     if (usage.cpu) {
@@ -177,7 +187,7 @@ export function buildTiles(t: Translate, usage: ResourceUsage): Tile[] {
     }
     if (usage.devices_error) tiles.push(unavailable(t, 'gpu', t('resources.gpu'), usage.devices_error));
     if (usage.npus_error) tiles.push(unavailable(t, 'npu', t('resources.npu'), usage.npus_error));
-    const networks = usage.networks ?? [];
+    const networks = shownNetworks(usage.networks ?? []);
     for (const net of networks) {
         // One unit for both, the larger one's, as Task Manager shows "S: 0 R: 8.0 Kbps".
         const unit = rateUnit(Math.max(net.send_bps, net.recv_bps));
@@ -224,7 +234,7 @@ export function ResourceMonitor({ onClose }: ResourceMonitorProps) {
                             <Sparkline values={tile.history} max={tile.max} dashed={tile.dashed} />
                             <span className="resource-text">
                                 <span className="resource-label">
-                                    {tile.label}
+                                    <bdi>{tile.label}</bdi>
                                     {tile.name && <span className="resource-sr-only">{` (${tile.name})`}</span>}
                                 </span>
                                 <span className="resource-reading">

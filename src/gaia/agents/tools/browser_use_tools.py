@@ -374,10 +374,11 @@ class BrowserUseToolsMixin:
             # Registering tools whose backend can never work would spend prompt
             # tokens on an unusable capability and give the model something to
             # fail with. Say why, once, and register nothing.
+            from gaia.browser.errors import browser_install_hint
+
             logger.info(
-                "Browser-use tools not registered: Playwright is not installed. "
-                "Install with: pip install 'amd-gaia[browser]' && "
-                "python -m playwright install chromium"
+                "Browser-use tools not registered: Playwright is not installed. %s",
+                browser_install_hint(),
             )
             return
 

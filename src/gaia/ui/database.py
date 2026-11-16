@@ -99,6 +99,11 @@ def is_placeholder_title(title: str | None) -> bool:
     return (title or "").strip().lower() in PLACEHOLDER_TITLES
 
 
+def _path_key(filepath: str) -> str:
+    """A case-insensitive form of *filepath*, for comparing stored paths."""
+    return str(Path(filepath)).replace("\\", "/").casefold()
+
+
 # Sentinel used by update_document_status to distinguish "caller passed None to clear
 # last_error" from "caller did not pass last_error at all" (leaving it unchanged).
 _UNSET = object()
@@ -1492,6 +1497,15 @@ class ChatDatabase:
                 ),
             )
 
+    def touch_turn(self, question_id: int) -> None:
+        """Note that this process's turn is still running, with nothing new to keep."""
+        with self._transaction():
+            self._conn.execute(
+                "UPDATE unfinished_turns SET updated_at = ? "
+                "WHERE question_id = ? AND owner = ?",
+                (self._now(), question_id, current_owner()),
+            )
+
     def discard_turn(self, question_id: int) -> None:
         """Forget this process's turn, whose outcome the caller reported."""
         with self._transaction():
@@ -1514,8 +1528,13 @@ class ChatDatabase:
         notice: str,
         owner: Optional[str] = None,
         tools_notice: Optional[Callable[[List[str]], str]] = None,
+        dated_last_alive: bool = False,
     ) -> Optional[int]:
         """Save *notice* as the reply of an unfinished turn, and end it.
+
+        *dated_last_alive* dates the reply when the turn last recorded
+        anything rather than now, for a turn whose process ended some unknown
+        time ago.
 
         *owner* is the process the turn must belong to, this one by default,
         so one server never closes another's live turn. Whatever the turn had
@@ -1528,7 +1547,8 @@ class ChatDatabase:
         owner = owner or current_owner()
         with self._transaction():
             row = self._conn.execute(
-                "SELECT session_id, partial_content, tools_run FROM unfinished_turns "
+                "SELECT session_id, partial_content, tools_run, started_at, "
+                "updated_at FROM unfinished_turns "
                 "WHERE question_id = ? AND owner = ?",
                 (question_id, owner),
             ).fetchone()
@@ -1551,10 +1571,13 @@ class ChatDatabase:
                     "streamed text nor a notice to save as its reply"
                 )
             now = self._now()
+            replied_at = now
+            if dated_last_alive:
+                replied_at = row["updated_at"] or row["started_at"]
             cursor = self._conn.execute(
                 "INSERT INTO messages (session_id, role, content, created_at) "
                 "VALUES (?, 'assistant', ?, ?)",
-                (row["session_id"], content, now),
+                (row["session_id"], content, replied_at),
             )
             self._conn.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
@@ -1620,6 +1643,40 @@ class ChatDatabase:
                 doc["chunk_count"] = new_chunk_count
                 return self._enrich_document(doc)
 
+            # The same file with new content: its row moves to the new content.
+            same_file = self._conn.execute(
+                "SELECT id FROM documents WHERE filepath = ? ORDER BY indexed_at DESC",
+                (filepath,),
+            ).fetchone()
+            if same_file:
+                self._conn.execute(
+                    """UPDATE documents
+                       SET filename = ?, file_hash = ?, file_size = ?,
+                           chunk_count = ?, file_mtime = ?, indexed_at = ?,
+                           last_accessed_at = ?, indexing_status = 'complete',
+                           last_error = NULL, error_kind = NULL
+                       WHERE id = ?""",
+                    (
+                        filename,
+                        file_hash,
+                        file_size,
+                        chunk_count,
+                        file_mtime,
+                        now,
+                        now,
+                        same_file["id"],
+                    ),
+                )
+                self._conn.commit()
+                doc_id = same_file["id"]
+                return self._enrich_document(
+                    dict(
+                        self._conn.execute(
+                            "SELECT * FROM documents WHERE id = ?", (doc_id,)
+                        ).fetchone()
+                    )
+                )
+
             # Insert new document (still under lock)
             try:
                 self._conn.execute(
@@ -1673,6 +1730,19 @@ class ChatDatabase:
                 return None
 
             return self._enrich_document(dict(row))
+
+    def path_held_by_other_content(self, filepath: str, file_hash: str) -> bool:
+        """Whether a library row for different content still names *filepath*.
+
+        Compared case-insensitively: on Windows and macOS two names that differ
+        only in case are one file.
+        """
+        wanted = _path_key(filepath)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT filepath FROM documents WHERE file_hash != ?", (file_hash,)
+            ).fetchall()
+        return any(_path_key(row["filepath"] or "") == wanted for row in rows)
 
     def _enrich_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         """Add sessions_using count to document dict.
@@ -1969,6 +2039,18 @@ class ChatDatabase:
                 "output_tokens, usd) VALUES (?, ?, ?, ?, ?, ?)",
                 (month, model, provider, input_tokens, output_tokens, usd),
             )
+
+    def cloud_spend_since(self, since: datetime) -> List[Dict]:
+        """Every cloud turn recorded at or after the aware instant *since*."""
+        # Rows are SQLite's UTC "YYYY-MM-DD HH:MM:SS", so the bound is written alike.
+        bound = since.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT model, provider, input_tokens, output_tokens, usd "
+                "FROM cloud_spend WHERE created_at >= ? ORDER BY id",
+                (bound,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def cloud_spend_for_month(self, month: str) -> List[Dict]:
         """Every cloud turn recorded in *month* (``YYYY-MM``)."""
