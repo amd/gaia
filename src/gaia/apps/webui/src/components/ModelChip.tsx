@@ -9,7 +9,8 @@ import * as api from '../services/api';
 import { requestErrorText } from '../utils/requestErrors';
 import { useChatStore } from '../stores/chatStore';
 import {
-    useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, sameModelId, UNKNOWN_PLACE_TITLE,
+    useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, isCloudModelId, isHybridModel,
+    providerTabOf, sameModelId, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
 import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
@@ -24,6 +25,11 @@ interface ProviderModels {
     models: ProviderModel[];
     error?: string;
 }
+
+/** Where hybrid's models run, from its settings; `error` when they couldn't be read. */
+type HybridPlace =
+    | { local: boolean; cheap: string; strong: string; error?: undefined }
+    | { error: string };
 
 const DOWNLOAD_POLL_MS = 2000;
 const KEY_WAITING = 'waiting_for_os_permission';
@@ -115,6 +121,7 @@ export function ModelChip() {
     const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [unavailable, setUnavailable] = useState(0);
     const [error, setError] = useState<string | null>(null);
+    const [hybridPlace, setHybridPlace] = useState<HybridPlace | null>(null);
     const [pendingCloud, setPendingCloud] = useState<{ model: string; provider: ProviderInfo } | null>(null);
     // A download asked for, waiting on the user's yes; `pick` switches to it once downloaded.
     const [pendingDownload, setPendingDownload] = useState<{ model: string; provider: ProviderInfo; pick: boolean } | null>(null);
@@ -165,6 +172,17 @@ export function ModelChip() {
                 }
             }));
             rememberNames(lists.flatMap((g) => g.models));
+            if (!quiet && lists.some((g) => g.models.some((m) => isHybridModel(m.id)))) {
+                // Hybrid counts as local only when every model it routes to runs on this PC.
+                void api.getHybridSettings().then(
+                    (h) => setHybridPlace({
+                        local: [h.cheap_model, h.strong_model, h.classifier_model ?? h.cheap_model].every((id) => !isCloudModelId(id)),
+                        cheap: h.cheap_model,
+                        strong: h.strong_model,
+                    }),
+                    (err) => setHybridPlace({ error: requestErrorText(err) }),
+                );
+            }
             setUnavailable(lists.flatMap((g) => g.models).filter((m) => m.available === false).length);
             if (!quiet) focusOnLoad.current = true;
             setGroups(lists.map((g) => ({ ...g, models: g.models.filter((m) => m.available !== false) })));
@@ -391,7 +409,7 @@ export function ModelChip() {
     const name = chipModel ? displayModelName(chipModel) : 'Model';
     const label = `${name}${place ? ` · ${place.label}` : ''}`;
     const rowLabels = Object.fromEntries((groups ?? []).map((g) => [g.provider.id, distinctModelLabels(g.models)]));
-    const shownGroups = groups && orderGroups(groups, active?.provider, currentModel);
+    const shownGroups = groups && orderGroups(groups, providerTabOf(active), currentModel);
     const notDownloaded = active?.downloaded === false && chipModel === active.model;
     const title = autoSwitchError
         ? autoSwitchError
@@ -490,7 +508,17 @@ export function ModelChip() {
                             const current = sameModelId(queued ?? active?.model, m.id);
                             const needsDownload = !provider.remote && modelState(m) === 'not_downloaded';
                             const modelName = rowLabels[provider.id][m.id];
-                            const details = modelDetails(m, provider.remote);
+                            const hybrid = isHybridModel(m.id);
+                            const hybridLocal = hybrid && hybridPlace?.error === undefined && hybridPlace?.local === true;
+                            // An all-local hybrid sends nothing to the gateway, so it needs no cloud consent.
+                            const rowProvider = hybridLocal ? { ...provider, remote: false } : provider;
+                            const details = hybrid
+                                ? [hybridPlace?.error !== undefined
+                                    ? t('modelMenu.hybridUnreadable', { reason: hybridPlace.error })
+                                    : hybridPlace
+                                        ? t('modelMenu.hybridRoutes', { cheap: displayModelName(hybridPlace.cheap), strong: displayModelName(hybridPlace.strong) })
+                                        : null].filter((x): x is string => !!x)
+                                : modelDetails(m, provider.remote);
                             const infoId = `${listId}-info-${provider.id}-${m.id}`;
                             return (
                                 <Fragment key={m.id}>
@@ -506,7 +534,7 @@ export function ModelChip() {
                                                     // A pick made since outranks one waiting on a download.
                                                     setPickAfterDownload(null);
                                                     setPendingDownload(null);
-                                                    return void choose(m.id, provider);
+                                                    return void choose(m.id, rowProvider);
                                                 }
                                                 // One question open at a time.
                                                 setPendingCloud(null);
@@ -525,6 +553,11 @@ export function ModelChip() {
                                                 {!provider.remote && m.size_gb ? (
                                                     <span className="popover-item-meta"><bdi dir="ltr">{m.size_gb} GB</bdi></span>
                                                 ) : null}
+                                                {hybrid && hybridPlace && hybridPlace.error === undefined && (
+                                                    <span className="popover-item-meta">
+                                                        {hybridPlace.local ? t('modelStatus.local') : t('settings.model.cloud')}
+                                                    </span>
+                                                )}
                                             </span>
                                         </button>
                                         <InfoBubble

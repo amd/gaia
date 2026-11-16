@@ -11,7 +11,13 @@ function usd(n: number): string {
 /** "$0.15 in · $0.50 out per 1M tokens", or "price unknown" — never $0 for a missing price. */
 export function formatPrice(price: ModelPrice | null | undefined, t: Translate = tEn): string {
     if (!price) return t('settings.price.unknown');
-    return t('settings.price.perMillion', { input: usd(price.input_per_million), output: usd(price.output_per_million) });
+    return formatPerMillion(price.input_per_million, price.output_per_million, t);
+}
+
+/** formatPrice for a bare input/output pair; either missing reads "price unknown". */
+export function formatPerMillion(input: number | null | undefined, output: number | null | undefined, t: Translate = tEn): string {
+    if (input == null || output == null) return t('settings.price.unknown');
+    return t('settings.price.perMillion', { input: usd(input), output: usd(output) });
 }
 
 /** "$1.23" for a running total. */

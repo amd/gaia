@@ -8,6 +8,7 @@ import type { SetupNpuProblem } from './setup';
 
 export * from './setup';
 export * from './stream';
+export * from './hybrid';
 
 export interface Session {
     id: string;

@@ -1,0 +1,63 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* Settings > Model > AMD LLM Gateway > Hybrid. */
+
+.hybrid-settings,
+.hybrid-settings-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.hybrid-rules {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.hybrid-rules caption {
+    text-align: start;
+    padding-bottom: 6px;
+}
+
+.hybrid-rules th,
+.hybrid-rules td {
+    padding: 6px 8px;
+    text-align: start;
+    vertical-align: middle;
+    border-bottom: 1px solid var(--border-light);
+}
+
+.hybrid-rules thead th {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.hybrid-rules tbody th {
+    font-weight: 500;
+}
+
+.hybrid-preview textarea {
+    resize: vertical;
+    font-family: inherit;
+}
+
+.hybrid-preview-result {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 12px;
+    margin: 0;
+    font-size: 13px;
+}
+
+.hybrid-preview-result dt {
+    color: var(--text-secondary);
+}
+
+.hybrid-preview-result dd {
+    margin: 0;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
