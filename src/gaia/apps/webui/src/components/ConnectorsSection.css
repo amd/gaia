@@ -107,6 +107,7 @@
 }
 .connector-status.ok { color: var(--accent-green); }
 .connector-status.idle { color: var(--text-muted); }
+.connector-status.failed { color: var(--danger); }
 /*
  * "Disabled" pill (#1004) — distinct from .idle.
  *
@@ -789,8 +790,9 @@ p.connector-check { flex-direction: row; align-items: center; gap: 6px; }
     border-radius: 8px;
 }
 
+/* Just connected: the same box, asking. */
 .connector-personalize--offer {
-    margin-block: 0 12px;
+    border-color: var(--accent);
 }
 
 .connector-personalize-error {

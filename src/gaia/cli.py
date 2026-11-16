@@ -276,6 +276,8 @@ class GaiaCliClient:
     # Where a failure record looks: Lemonade, unless this client talks to Claude.
     calls_lemonade = True
     lemonade_url: Optional[str] = None
+    # Set when a reply failed, so `gaia prompt` exits non-zero.
+    failed = False
 
     def __init__(
         self,
@@ -309,6 +311,8 @@ class GaiaCliClient:
         self.log.debug(f"model: {self.model}\n max_tokens: {self.max_tokens}")
 
     async def send_message(self, message):
+        from gaia.apps.llm.app import _reasoning_only_error, _ReasoningFilter
+
         try:
             # Use LLMClient.generate with streaming
             response_generator = self.llm_client.generate(
@@ -318,9 +322,18 @@ class GaiaCliClient:
                 max_tokens=self.max_tokens,
             )
 
-            for chunk in response_generator:
+            reasoning = _ReasoningFilter()
+            answered = False
+            for chunk in reasoning(response_generator):
+                if not answered:
+                    chunk = chunk.lstrip()
+                    if not chunk:
+                        continue
+                    answered = True
                 print(chunk, end="", flush=True)
                 yield chunk
+            if reasoning.saw_reasoning and not answered:
+                raise _reasoning_only_error(self.max_tokens)
 
         except Exception as e:
             # A backend string like "Max length reached!" tells the user
@@ -328,6 +341,7 @@ class GaiaCliClient:
             error_message = _cli_error_text(e, self.calls_lemonade, self.lemonade_url)
             self.log.error(error_message)
             print(error_message)
+            self.failed = True
             yield error_message
 
     def get_stats(self):
@@ -569,7 +583,7 @@ async def async_main(action, **kwargs):
             if stats:
                 for key, value in stats.items():
                     print(f"{key}: {value}")
-        return None
+        return 1 if client.failed else None
     elif action == "chat":
         if agent_registry is not None:
             return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)
@@ -1239,7 +1253,8 @@ def build_parser():
         "--model",
         dest="print_model",
         default=None,
-        help="Model id for -p (default: config default_model, else the agent's)",
+        help="Model id for -p, or 'hybrid' to pick a cheap or strong model for "
+        "the turn (default: config default_model, else the agent's)",
     )
     parser.add_argument(
         "--output-format",
@@ -1261,6 +1276,16 @@ def build_parser():
         type=_positive_int,
         default=None,
         help="With -p: cap on agent steps (default: the agent's own limit)",
+    )
+    parser.add_argument(
+        "--time-limit",
+        dest="print_time_limit",
+        type=_positive_int,
+        default=None,
+        metavar="SECONDS",
+        help="With -p: wall-clock seconds the turn may take. The agent is told "
+        "when time is running short, wraps up before the limit, and is stopped "
+        "at it, so the answer is still printed (default: no limit)",
     )
     parser.add_argument(
         "--attempts",
@@ -3506,7 +3531,7 @@ afterwards (or `swebench <run_dir>` does, later).
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
-        help="Start TUI control MCP server (drives a running `gaia-tui --control`)",
+        help="Start TUI control MCP server (drives a running `gaia-cli --control`)",
     )
     mcp_tui_parser.add_argument(
         "--host", default="localhost", help="Host to bind to (default: localhost)"
@@ -4062,7 +4087,11 @@ afterwards (or `swebench <run_dir>` does, later).
     gateway_use_parser = gateway_subparsers.add_parser(
         "use", help="Make a gateway model the default for gaia chat/llm/prompt"
     )
-    gateway_use_parser.add_argument("model", help="Model id to make active")
+    gateway_use_parser.add_argument(
+        "model",
+        help="Model id to make active, or 'hybrid' to pick a cheap or strong "
+        "model per turn",
+    )
     gateway_test_parser = gateway_subparsers.add_parser(
         "test", help="Send a prompt through the gateway end to end"
     )
@@ -4897,7 +4926,11 @@ def _handle_schedule(args):
             sink=args.sink,
             sink_args=sink_args,
         )
-        store.add(schedule)
+        try:
+            store.add(schedule)
+        except ValueError as exc:
+            print(f"❌ Cannot add schedule {args.name!r}: {exc}", file=sys.stderr)
+            sys.exit(1)
         if schedule.one_shot:
             print(
                 f"✅ Added one-time schedule {schedule.name!r} "
@@ -4920,6 +4953,7 @@ def _handle_schedule(args):
                 f"{s.name}  [{state}]  {when}  sink={s.sink}"
                 + (f"  next={nxt}" if nxt else "")
                 + (f"  missed={s.missed_count}" if s.missed_count else "")
+                + (f"  failing={s.failed_runs}" if s.failed_runs else "")
             )
         return
 
@@ -4946,6 +4980,8 @@ def _handle_schedule(args):
         print(f"created_at: {_local(s.created_at) if s.created_at else ''}")
         if s.one_shot and s.last_run:
             print(f"ran_at:     {_local(s.last_run)}")
+        elif s.last_run:
+            print(f"last_run:   {_local(s.last_run)}")
         nxt = (
             schedule_daemon.next_fire(s)
             if s.one_shot
@@ -4961,6 +4997,13 @@ def _handle_schedule(args):
                 f"missed:     {count} {runs} in all while the PC was off or "
                 "asleep, or the schedule daemon wasn't running "
                 f"(latest due {_local(s.last_missed)})"
+            )
+        if s.failed_runs:
+            runs = "run" if s.failed_runs == 1 else "runs"
+            when = f" (latest {_local(s.last_failed)})" if s.last_failed else ""
+            print(
+                f"failing:    {s.failed_runs} {runs} in a row failed since the "
+                f"last successful one{when}: {s.last_error or 'no error recorded'}"
             )
         return
 
@@ -4988,6 +5031,7 @@ def _handle_schedule(args):
             schedule = store.get(args.name)
         except KeyError as exc:
             _exit_unknown_schedule(exc)
+        cannot_run = (schedule_runner.ScheduleModelError, LemonadeClientError)
         if schedule.one_shot:
             claimed = store.claim_one_shot(
                 schedule.name, datetime.now(timezone.utc), due_only=False
@@ -5000,9 +5044,19 @@ def _handle_schedule(args):
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            schedule_daemon.run_one_shot(claimed, store)
+            try:
+                schedule_daemon.run_one_shot(claimed, store)
+            except cannot_run as exc:
+                print(
+                    f"❌ Schedule {schedule.name!r} did not run: {exc}", file=sys.stderr
+                )
+                sys.exit(1)
             return
-        schedule_runner.fire(schedule)
+        try:
+            schedule_runner.fire(schedule)
+        except cannot_run as exc:
+            print(f"❌ Schedule {schedule.name!r} did not run: {exc}", file=sys.stderr)
+            sys.exit(1)
         store.mark_run(
             schedule.name,
             datetime.now(timezone.utc).isoformat(),
@@ -5146,6 +5200,7 @@ def main():
         "--output-format": args.print_output_format is not None,
         "--verbose": args.print_verbose,
         "--max-steps": args.print_max_steps is not None,
+        "--time-limit": args.print_time_limit is not None,
         "--attempts": args.print_attempts is not None,
         "--dangerously-skip-permissions": args.print_skip_permissions,
         "--full-access": args.print_full_access,
@@ -5178,6 +5233,9 @@ def main():
 
             if args.print_attempts > MAX_ATTEMPTS:
                 parser.error(f"--attempts takes 1 to {MAX_ATTEMPTS}.")
+        # Hardware, health and embedder clients read the server from the environment.
+        if args.base_url:
+            os.environ["LEMONADE_BASE_URL"] = args.base_url
         from gaia.print_mode import run as run_print_mode
 
         sys.exit(
@@ -5191,6 +5249,7 @@ def main():
                 skip_permissions=args.print_skip_permissions,
                 full_access=args.print_full_access,
                 base_url=args.base_url,
+                time_limit=args.print_time_limit,
             )
         )
 
@@ -5271,6 +5330,9 @@ def main():
 
     if args.action == "chat":
         _reject_flagship_only_flags(args)
+        # Hardware, health and embedder clients read the server from the environment.
+        if getattr(args, "base_url", None):
+            os.environ["LEMONADE_BASE_URL"] = args.base_url
 
     # Handle chat --ui: launch Agent UI server (backward compat)
     if args.action == "chat" and getattr(args, "ui", False):
@@ -6669,6 +6731,11 @@ Let me know your answer!
                 sys.exit(0)
             if status.stage == "load":
                 print(f"NOT READY: profile '{profile}' is downloaded but will not load")
+            elif status.model_list_unread:
+                print(
+                    f"NOT READY: profile '{profile}': the model server's model list "
+                    "can't be read"
+                )
             else:
                 print(f"NOT READY: profile '{profile}' needs setup")
             for reason in status.reasons:
@@ -7491,6 +7558,9 @@ def handle_knowledge_command(args):
         print("Run 'gaia knowledge --help' for more information")
         return
 
+    import requests
+
+    from gaia.web.client import SearchStatusError, SearchUnavailableError
     from gaia.web.tavily import (
         BudgetConfig,
         TavilyBudgetExceeded,
@@ -7526,8 +7596,37 @@ def handle_knowledge_command(args):
     except TavilyBudgetExceeded as e:
         print(f"🛑 {e}")
         sys.exit(1)
-    except TavilyConfigError as e:
+    except (TavilyConfigError, SearchUnavailableError, SearchStatusError) as e:
         print(f"❌ {e}")
+        sys.exit(1)
+    except (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        requests.exceptions.ChunkedEncodingError,  # dropped mid-response
+    ) as e:
+        service = "Tavily" if client.configured else "DuckDuckGo"
+        print(
+            f"❌ Web {action} failed: {service} could not be reached ({e}). "
+            "Check your internet connection or proxy settings and try again."
+        )
+        sys.exit(1)
+    except requests.exceptions.HTTPError as e:
+        # The service answered with an error, so the user's network is fine.
+        service = "Tavily" if client.configured else "DuckDuckGo"
+        status = getattr(e.response, "status_code", None) or "an error"
+        hint = (
+            "It rejected the request; check the query or URL and try again."
+            if isinstance(status, int) and status < 500
+            else "It may be down for a moment; try again later."
+        )
+        print(f"❌ Web {action} failed: {service} answered with {status}. {hint}")
+        sys.exit(1)
+    except requests.exceptions.RequestException as e:
+        # Redirect loops, a malformed URL and the like: still an error, not a crash.
+        service = "Tavily" if client.configured else "DuckDuckGo"
+        print(
+            f"❌ Web {action} failed: the {service} request could not complete ({e})."
+        )
         sys.exit(1)
     finally:
         client.close()
@@ -7722,6 +7821,42 @@ def _print_gateway_models(models, state):
         print(f"\n⚠️  {describe_unavailable(state.active_model, active_failure)}")
 
 
+def _use_hybrid(manager) -> None:
+    """``gaia gateway use hybrid``: route each turn between two gateway models."""
+    from gaia.config import GaiaConfig
+    from gaia.llm.hybrid import HYBRID_MODEL_ID, HybridConfigError, HybridSettings
+
+    cfg = GaiaConfig.load()
+    try:
+        settings = HybridSettings.load(cfg)
+    except HybridConfigError as e:
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
+        sys.exit(1)
+    discovered = {m.id for m in manager.list_models()}
+    missing = [
+        m
+        for m in dict.fromkeys(
+            (settings.cheap_model, settings.strong_model, settings.classifier_model)
+        )
+        if discovered and m not in discovered
+    ]
+    if missing:
+        print(
+            f"❌ hybrid needs {', '.join(missing)}, which the gateway doesn't list.\n"
+            "   Run `gaia gateway models` to see what is available, then set "
+            "hybrid_cheap_model / hybrid_strong_model with `gaia config set`.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    cfg.set("default_model", HYBRID_MODEL_ID)
+    cfg.save()
+    print(
+        f"✅ hybrid is now the default model: each turn runs on "
+        f"{settings.cheap_model} or {settings.strong_model}, picked by "
+        f"{settings.classifier_model}."
+    )
+
+
 def _warn_if_default_model_unavailable(model_id: str) -> None:
     """One stderr line when the saved default last failed with a 404.
 
@@ -7887,6 +8022,7 @@ def handle_gateway_command(args):
         recall_token,
         remember_token,
     )
+    from gaia.llm.hybrid import is_hybrid_model
     from gaia.llm.lemonade_client import CloudModelUnavailableError
 
     action = getattr(args, "gateway_action", None)
@@ -8133,6 +8269,10 @@ def handle_gateway_command(args):
             updated = manager.disable(args.model)
             print(f"✅ Disabled {args.model}")
             print(f"   Active model is now: {updated.active_model or '(none)'}")
+            return
+
+        if action == "use" and is_hybrid_model(args.model):
+            _use_hybrid(manager)
             return
 
         if action == "use":
@@ -11801,7 +11941,7 @@ def handle_mcp_serve(args):
 
 
 def handle_mcp_tui(args):
-    """Start the TUI control MCP server (drives a running `gaia-tui --control`)."""
+    """Start the TUI control MCP server (drives a running `gaia-cli --control`)."""
     log = get_logger(__name__)
 
     try:
@@ -11821,7 +11961,7 @@ def handle_mcp_tui(args):
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
-            print("   Target  : the running `gaia-tui --control` session")
+            print("   Target  : the running `gaia-cli --control` session")
             print(f"   MCP     : http://{args.host}:{args.port}/mcp")
             try:
                 tool_count = len(

@@ -178,6 +178,9 @@ async def test_timed_out_goal_tick_holds_session_until_worker_exits(
         agent_loop_mod.AgentLoop, "_get_actionable_goals", lambda s: [goal]
     )
     monkeypatch.setattr(agent_loop_mod, "_TICK_TIMEOUT", 0.1)
+    monkeypatch.setattr(
+        agent_loop_mod.AgentLoop, "_settle_goal", staticmethod(lambda *a: None)
+    )
     monkeypatch.setattr(agent_loop_mod, "turn_queue", TurnQueue())
 
     loop = agent_loop_mod.AgentLoop()

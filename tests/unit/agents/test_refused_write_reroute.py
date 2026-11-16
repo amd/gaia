@@ -300,12 +300,14 @@ def test_an_unattended_refused_write_cannot_be_rerouted_through_run_python(layou
     assert refused["status"] == "error"
     assert "not in allowed paths" in refused["error"]
     assert not layout["file"].exists()
-    assert rerouted["status"] == "denied", rerouted
+    # The folder is outside the allowed ones, so the scope check refuses it first.
+    assert rerouted["status"] == "error", rerouted
     assert rerouted["executed"] is False
     assert agent.ran == []
     # A refusal no approval could lift is never offered as "Allow once".
     assert console.questions == []
-    assert "was refused" in rerouted["error"]
+    assert "outside the folders this chat may use" in rerouted["error"]
+    assert "write_file" in rerouted["error"]
 
 
 def test_a_refused_write_cannot_be_rerouted_through_the_shell(layout):

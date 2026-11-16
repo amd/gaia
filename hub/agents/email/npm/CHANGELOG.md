@@ -6,6 +6,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **The sidecar stops when the GAIA daemon that started it is killed.** It
+  used to keep running until the next daemon started; it now notices within
+  seconds and shuts down normally.
+- **With two mailboxes connected, `prescan()` now orders by sender preference
+  across both (#3623).** Each mailbox used to be sorted on its own and the
+  results joined, so the archive list could keep one mailbox's priority
+  senders and drop the other's low-priority ones.
 - **Warnings are marked as warnings.** A `status` event that warns the user now
   carries `level: "warning"`, so a client can show it rather than treat it as
   progress.
@@ -175,6 +182,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   events list, so a caller couldn't tell a short calendar from a truncated
   page. The response now also carries `count` and `truncated`.
 
+- **Pre-scan lists now follow the user's sender preferences, so their
+  order changed.** In `prescan()`, priority senders come first and
+  low-priority senders last in `urgent`, `actionable` and `needs_review`.
+  `suggested_archives` runs the other way, low-priority first, so its cap
+  keeps the safest candidates. A host that shows these lists in response
+  order will see the new order (#2777).
+
 - **A daily briefing now tells you how old it is, so a cached one can't be
   shown as this morning's.** `GET /v1/email/briefing` and the agent's own
   `get_briefing` returned the last scheduled run with nothing to say when it
@@ -207,8 +221,8 @@ behind any entry — API shapes, endpoints, and version semantics — see
   as literal search text; they are now translated to the matching Graph
   query so `search({ query: "is:unread" })` and similar calls behave the
   way they do for Gmail (#2996).
-- **Searching Outlook with `is:starred`, `after:`, `before:`, `label:`,
-  `has:`, or `in:` now fails with a clear error instead of quietly matching
+- **Searching Outlook with `is:starred`, `after:`, `before:`, `newer:`,
+  `older:`, `label:`, `has:`, or `in:` now fails with a clear error instead of quietly matching
   nothing.** Microsoft Graph has no equivalent for these, so they used to be
   sent as plain search text and return zero results with no indication why
   (#2996).
@@ -411,12 +425,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   integrator using this package is unaffected and keeps resolving the mailbox from
   the local GAIA connector store exactly as before (#2154).
 - **The agent's autonomy commands now work against the shipped binary.** `gaia
-  email autonomy status/set-level/pause/resume/run/undo/kill/trust` call REST
+  email autonomy status/set-level/pause/resume/run/kill/trust` call REST
   routes (`/v1/email/agent/autonomy*`) that did not exist in any previously
   published binary — a sidecar installed from 0.5.0 or earlier 404'd on every
-  one of them, with nothing telling the caller why. All eight subcommands now
+  one of them, with nothing telling the caller why. All seven subcommands now
   reach a real route and get back a 200, or a correct 409 when autonomy is
-  off (#2894).
+  off (#2894). Undo has no CLI subcommand; it is available over REST only, as
+  `POST /v1/email/agent/autonomy/undo`.
 - **Muting a sender no longer buries their genuinely urgent mail as
   promotional.** The category override for a muted (low-priority) sender was
   unconditional — every message from that sender was force-classified

@@ -77,9 +77,10 @@ _THINKING_BLOCK_TYPES = frozenset({"thinking", "redacted_thinking"})
 #: (a server tool block, say) is not kept, since it can't be rebuilt faithfully.
 _REPLAYABLE_BLOCK_TYPES = _THINKING_BLOCK_TYPES | {"text", "tool_use"}
 
-#: Tool turns whose original blocks are kept for replay. Older turns go back
-#: without their thinking, which the API accepts.
-_MAX_REPLAY_TURNS = 256
+#: Turns whose original blocks are kept for replay. Older turns go back
+#: without their thinking, which the API accepts. Every turn counts, with or
+#: without thinking, so this is sized for long sessions.
+_MAX_REPLAY_TURNS = 1024
 
 #: OpenAI ``tool_choice`` strings with a direct Anthropic equivalent.
 _TOOL_CHOICE_MAP = {"none": {"type": "none"}, "auto": {"type": "auto"}}
@@ -90,6 +91,132 @@ _FINISH_REASON_MAP = {
     "stop_sequence": "stop",
     "max_tokens": "length",
 }
+
+
+#: Tool results that must reach the model exactly as the tool returned them.
+_VERBATIM_TOOL_RESULTS = frozenset({"read_tool_output"})
+
+#: Control characters other than tab, newline and carriage return.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+#: A list of scalars this short stays on one line, as JSON.
+_INLINE_LIST_CHARS = 120
+
+#: Nesting below this depth stays one line of JSON, so recursion is bounded.
+_MAX_RENDER_DEPTH = 32
+
+
+#: First characters of a string that might read as a JSON number, literal,
+#: array, object or quoted string when written plain.
+_JSON_LOOKALIKE_START = frozenset('-0123456789tfnNI[{"')
+
+
+def _reads_as_json(value: str) -> bool:
+    if value[:1] not in _JSON_LOOKALIKE_START:
+        return False
+    try:
+        json.loads(value)
+    except (ValueError, RecursionError):
+        return False
+    return True
+
+
+def _scalar_text(value: Any) -> str:
+    """A scalar as the model reads it: plain when unambiguous, else JSON."""
+    if isinstance(value, str) and (
+        value
+        and value == value.strip()
+        and "\n" not in value
+        and not _CONTROL_CHARS.search(value)
+        and not _reads_as_json(value)
+    ):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _key_text(key: str) -> str:
+    """A key as a label: plain unless it could pass for a value or a new field."""
+    text = _scalar_text(key)
+    if text == key and (":" in key or key.startswith(("-", "<", ">"))):
+        return json.dumps(key, ensure_ascii=False)
+    return text
+
+
+def _is_block_text(value: Any) -> bool:
+    """Multi-line text that can go out raw: nothing in it closes the block."""
+    return (
+        isinstance(value, str)
+        and "\n" in value
+        and not _CONTROL_CHARS.search(value)
+        and ">>>" not in value.splitlines()
+    )
+
+
+def _render_value(label: str, value: Any, depth: int, lines: List[str]) -> None:
+    indent = "  " * depth
+    if depth >= _MAX_RENDER_DEPTH:
+        lines.append(f"{indent}{label} {json.dumps(value, ensure_ascii=False)}")
+    elif _is_block_text(value):
+        # Raw between markers: no escaping, no indent added to the text itself.
+        lines.append(f"{indent}{label} <<<\n{value}\n>>>")
+    elif isinstance(value, dict) and value:
+        lines.append(f"{indent}{label}")
+        for key, item in value.items():
+            _render_value(f"{_key_text(key)}:", item, depth + 1, lines)
+    elif isinstance(value, list) and value:
+        inline = json.dumps(value, ensure_ascii=False)
+        if len(inline) <= _INLINE_LIST_CHARS and not any(
+            isinstance(item, (dict, list)) or _is_block_text(item) for item in value
+        ):
+            lines.append(f"{indent}{label} {inline}")
+            return
+        lines.append(f"{indent}{label}")
+        for item in value:
+            _render_value("-", item, depth + 1, lines)
+    elif isinstance(value, (dict, list)):
+        lines.append(f"{indent}{label} {json.dumps(value)}")  # empty
+    else:
+        lines.append(f"{indent}{label} {_scalar_text(value)}")
+
+
+def _readable_tool_text(text: str) -> str:
+    """A JSON-object tool result as indented ``key: value`` lines.
+
+    JSON escaping spends tokens on every newline, quote and backslash of file
+    contents and command output, on every call that re-reads the history.
+    Multi-line strings go out raw between ``<<<`` and ``>>>``. Anything that is
+    not a JSON object is returned unchanged. Deterministic, so the cached
+    prefix stays byte-identical across calls.
+    """
+    if not text.startswith("{"):
+        return text
+    try:
+        parsed = json.loads(text)
+    except (ValueError, RecursionError):
+        return text  # not an object this renders; it goes out as the tool wrote it
+    if not isinstance(parsed, dict) or not parsed:
+        return text
+    lines: List[str] = []
+    for key, value in parsed.items():
+        _render_value(f"{_key_text(key)}:", value, 0, lines)
+    return "\n".join(lines)
+
+
+def _readable_tool_content(content: Any) -> Any:
+    if isinstance(content, str):
+        return _readable_tool_text(content)
+    if isinstance(content, list):
+        return [
+            (
+                {**block, "text": _readable_tool_text(block["text"])}
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                else block
+            )
+            for block in content
+        ]
+    return content
 
 
 def _check_empty_reply(stop_reason: str, api_blocks: List[dict]) -> None:
@@ -336,11 +463,28 @@ def _api_block(block: Any) -> dict:
 
 @dataclass
 class _ReplayTurn:
-    """A tool turn exactly as Claude produced it, thinking blocks included."""
+    """A turn as Claude produced it: its blocks when they carry thinking, else
+    only what verifies it is unchanged."""
 
-    blocks: List[dict]
-    view: _TurnView
+    blocks: Optional[List[dict]]
+    view_digest: str
     prefix_digest: str
+
+
+def _view_digest(view: _TurnView) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            [view[0], [[i, n, a.decode("utf-8")] for i, n, a in view[1]]],
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _replay_key(view: _TurnView, prefix_digest: str) -> tuple:
+    """Tool turns by their tool_use ids, which Anthropic makes unique; a text
+    turn by where it sits, so two identical answers never share an entry."""
+    ids = tuple(call[0] for call in view[1])
+    return ids if ids else ("text", prefix_digest)
 
 
 def _cache_last_tool(tools: List[dict]) -> List[dict]:
@@ -358,6 +502,8 @@ class ClaudeProvider(LLMClient):
 
     #: Where requests go, as named in the Local only refusal.
     _DESTINATION = "Anthropic Claude"
+
+    caches_prompt_prefix = True
 
     def __init__(
         self,
@@ -377,7 +523,7 @@ class ClaudeProvider(LLMClient):
         self._last_usage: Optional[dict] = None
         self._last_finish_reason: Optional[str] = None
         self._last_ttft_seconds: Optional[float] = None
-        # Keyed by the turn's tool_use ids, which Anthropic makes unique.
+        # Keyed by _replay_key.
         self._replay_turns: "OrderedDict[tuple, _ReplayTurn]" = OrderedDict()
         # Sanitized-name → GAIA-name; rebuilt per request by _to_anthropic_tools.
 
@@ -629,10 +775,13 @@ class ClaudeProvider(LLMClient):
         tool_call_id = message.get("tool_call_id")
         if not tool_call_id:
             raise ValueError("Claude tool results require a tool_call_id.")
+        content = message.get("content") or "[tool returned no output]"
+        if message.get("name") not in _VERBATIM_TOOL_RESULTS:
+            content = _readable_tool_content(content)
         block = {
             "type": "tool_result",
             "tool_use_id": tool_call_id,
-            "content": message.get("content") or "[tool returned no output]",
+            "content": content,
         }
         if (
             cleaned
@@ -732,9 +881,12 @@ class ClaudeProvider(LLMClient):
         digest: the API chains each block to the previous one rather than binding
         it as prefix, so dropping the oldest turns' thinking first stays valid.
 
-        Any assistant turn whose thinking can't be restored (a final answer, a
-        cut-off stream, an edited turn) ends the run: every older turn goes back
-        without its thinking, so the kept blocks never have a gap.
+        Every turn Claude produced is stored, with or without thinking, so a
+        turn that simply had no thinking is verified as-is and never ends the
+        run. A turn that can't be verified (a cut-off stream, an edited turn,
+        one from before this provider) does: every older turn goes back without
+        its thinking, so the kept blocks never have a gap. Ending the run
+        rewrites every later byte, which re-bills the cached history.
 
         A turn that isn't restored enters the digest as GAIA rebuilt it, which
         can differ from Claude's original, so later turns' thinking is dropped
@@ -749,10 +901,12 @@ class ClaudeProvider(LLMClient):
         assistant_turns: List[Tuple[int, Optional[bool]]] = []
         for message in cleaned:
             if message["role"] == "assistant":
-                restored = self._with_original_blocks(message, digest.hexdigest())
+                restored, verified = self._with_original_blocks(
+                    message, digest.hexdigest()
+                )
                 # None: the caller sent its own thinking, which is left alone.
                 kept: Optional[bool]
-                if restored is not message:
+                if verified:
                     kept = True
                 elif _has_thinking(message):
                     kept = None
@@ -775,54 +929,53 @@ class ClaudeProvider(LLMClient):
                 dropped += 1
         if dropped:
             logger.debug(
-                "Not replaying thinking for %d older tool turn(s): a later "
-                "assistant turn has no stored thinking, and a gap would be rejected",
+                "Not replaying thinking for %d older turn(s): a later "
+                "assistant turn could not be verified, and a gap would be rejected",
                 dropped,
             )
         return out, digest.hexdigest()
 
-    def _with_original_blocks(self, message: dict, prefix_digest: str) -> dict:
-        """The turn with its stored original blocks, or ``message`` itself when
-        they can't be restored."""
+    def _with_original_blocks(
+        self, message: dict, prefix_digest: str
+    ) -> Tuple[dict, bool]:
+        """``(turn to send, verified)``; verified means unchanged since Claude
+        produced it. A verified turn without thinking goes out as GAIA built it,
+        so a request with no thinking anywhere is unchanged byte for byte."""
         content = message.get("content")
-        if not isinstance(content, list):
-            return message
-        ids = tuple(
-            b.get("id")
-            for b in content
-            if isinstance(b, dict) and b.get("type") == "tool_use"
-        )
-        turn = self._replay_turns.get(ids) if ids else None
-        if turn is None:
-            return message
+        if isinstance(content, str):
+            blocks: List[Any] = [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            blocks = content
+        else:
+            return message, False
         if _has_thinking(message):
-            return message  # the caller already sent Anthropic-shaped thinking
-        if _turn_view(content) != turn.view:
+            return message, False  # the caller already sent Anthropic-shaped thinking
+        view = _turn_view(blocks)
+        key = _replay_key(view, prefix_digest)
+        turn = self._replay_turns.get(key)
+        if turn is None:
+            return message, False
+        if _view_digest(view) != turn.view_digest:
             logger.debug(
-                "Not replaying thinking for tool turn %s: its text or tool calls "
-                "were edited since Claude produced it",
-                list(ids),
+                "Not replaying thinking for a turn: its text or tool calls "
+                "were edited since Claude produced it"
             )
-            return message
+            return message, False
         if prefix_digest != turn.prefix_digest:
             logger.debug(
-                "Not replaying thinking for tool turn %s: the system prompt, tools "
-                "or earlier messages changed since Claude produced it",
-                list(ids),
+                "Not replaying thinking for a turn: the system prompt, tools "
+                "or earlier messages changed since Claude produced it"
             )
-            return message
-        return {**message, "content": copy.deepcopy(turn.blocks)}
+            return message, False
+        if turn.blocks is None:
+            return message, True
+        return {**message, "content": copy.deepcopy(turn.blocks)}, True
 
     def _remember_turn(
         self, blocks: List[dict], name_map: Dict[str, str], prefix_digest: str
     ) -> None:
-        """Keep a tool turn that carries thinking so the next request can send
-        it back verbatim. ``blocks`` are in the API's order and shape."""
-        if not any(b["type"] in _THINKING_BLOCK_TYPES for b in blocks):
-            return
-        ids = tuple(b["id"] for b in blocks if b["type"] == "tool_use")
-        if not ids:
-            return
+        """Keep a turn so later requests can send it back verbatim, thinking
+        included. ``blocks`` are in the API's order and shape."""
         unreplayable = sorted(
             {b["type"] for b in blocks if b["type"] not in _REPLAYABLE_BLOCK_TYPES}
         )
@@ -833,8 +986,8 @@ class ClaudeProvider(LLMClient):
         )
         if unreplayable or unsigned:
             logger.debug(
-                "Not keeping thinking for tool turn %s: %s",
-                list(ids),
+                "Not keeping turn %s: %s",
+                [b.get("id") for b in blocks if b["type"] == "tool_use"],
                 (
                     f"it holds {unreplayable} blocks"
                     if unreplayable
@@ -845,8 +998,14 @@ class ClaudeProvider(LLMClient):
         view = _turn_view(
             blocks, restore=lambda name: self._restore_tool_name(name_map, name)
         )
-        self._replay_turns[ids] = _ReplayTurn(blocks, view, prefix_digest)
-        self._replay_turns.move_to_end(ids)
+        if not view[0] and not view[1]:
+            return  # thinking only: GAIA's history keeps nothing of it
+        key = _replay_key(view, prefix_digest)
+        thinks = any(b["type"] in _THINKING_BLOCK_TYPES for b in blocks)
+        self._replay_turns[key] = _ReplayTurn(
+            blocks if thinks else None, _view_digest(view), prefix_digest
+        )
+        self._replay_turns.move_to_end(key)
         while len(self._replay_turns) > _MAX_REPLAY_TURNS:
             self._replay_turns.popitem(last=False)
 
@@ -1007,6 +1166,8 @@ class ClaudeProvider(LLMClient):
         text = "".join(text_parts)
         if not text:
             _check_empty_reply(stop_reason, api_blocks)
+        else:
+            self._remember_turn(api_blocks, name_map, prefix_digest)
         return text
 
     def _stream_chat(
@@ -1098,7 +1259,11 @@ class ClaudeProvider(LLMClient):
                     "content": "".join(text_parts) or None,
                 }
             )
-        elif not text_parts and saw_message_start:
+        elif text_parts:
+            self._remember_turn(
+                [api_blocks[i] for i in sorted(api_blocks)], name_map, prefix_digest
+            )
+        elif saw_message_start:
             _check_empty_reply(stop_reason, list(api_blocks.values()))
 
     def _capture_usage(self, usage: Any, elapsed: float) -> None:

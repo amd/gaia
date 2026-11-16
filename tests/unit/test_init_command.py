@@ -1363,6 +1363,50 @@ class TestCheckSetupStatus(unittest.TestCase):
             "http://localhost:51234/api/v1",
         )
 
+    def test_unreadable_model_list_is_a_server_problem_not_missing_models(self):
+        """#8058: a model list in the wrong shape made a finished install read
+        as first-run setup, with every downloaded model "not downloaded"."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        with (
+            self._embedded(self._running()),
+            patch.object(LemonadeClient, "health_check", return_value={}),
+            patch.object(
+                LemonadeClient,
+                "_send_request",
+                return_value={"object": "list", "data": "x"},
+            ) as send,
+        ):
+            status = check_setup_status(profile="chat")
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "server")
+        self.assertTrue(status.model_list_unread)
+        self.assertFalse(any("not downloaded" in r for r in status.reasons))
+        self.assertIn("expected shape", status.reasons[0])
+        self.assertEqual(status.to_json()["model_list_unread"], True)
+        self.assertTrue(send.call_args.args[1].endswith("/models?show_all=true"))
+
+    def test_a_server_gone_before_its_model_list_is_not_a_bad_list(self):
+        """Dying between /health and /models is an outage, not a bad list."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        with (
+            self._embedded(self._running()),
+            patch.object(LemonadeClient, "health_check", return_value={}),
+            patch.object(
+                LemonadeClient,
+                "_send_request",
+                side_effect=LemonadeClientError("connection refused"),
+            ),
+        ):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "server")
+        self.assertFalse(status.model_list_unread)
+
     AGENT_MISSING = "The GAIA agent is not installed -- run: gaia init"
 
     def _check_with_models(self, profile="gaia", have=True, **kwargs):
@@ -1712,13 +1756,13 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertEqual(status.reasons, [self.AGENT_MISSING])
 
     def test_only_the_tui_in_bin_still_needs_the_agent(self):
-        """A terminal install whose agent download failed leaves gaia-tui alone."""
+        """A terminal install whose agent download failed leaves gaia-cli alone."""
         from gaia.home import gaia_home
 
         self._remove_flagship()
         bin_dir = gaia_home() / "bin"
         bin_dir.mkdir(parents=True)
-        tui = "gaia-tui.exe" if sys.platform == "win32" else "gaia-tui"
+        tui = "gaia-cli.exe" if sys.platform == "win32" else "gaia-cli"
         (bin_dir / tui).write_bytes(b"x")
         self.host_key = "darwin-arm64"
         status, _ = self._check_with_models()
@@ -3222,7 +3266,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
 
         cmd = InitCommand(profile=profile, yes=True)
         cmd._is_hub_agent_available = MagicMock(return_value=agent_available)
-        cmd._tui_installed = MagicMock(return_value=True)
+        cmd._tui_command = MagicMock(return_value="gaia-cli")
         return cmd
 
     def _render(self, cmd, rich):
@@ -3267,7 +3311,7 @@ class TestPrintCompletionHeadlineGate(unittest.TestCase):
                     complete, out = self._render(cmd, rich)
                     self.assertTrue(complete)
                     self.assertIn("GAIA initialization complete!", out)
-                    self.assertIn("gaia-tui", out)
+                    self.assertIn("gaia-cli", out)
                     self.assertNotIn("not installed yet", out)
 
     def test_npu_profile_leads_with_the_flagship_not_the_chat_wheels(self):

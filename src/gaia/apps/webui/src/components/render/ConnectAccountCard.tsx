@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, ExternalLink, Link2, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
@@ -16,8 +16,9 @@ import { UnsupportedCard } from './UnsupportedCard';
  *
  * A mail or calendar tool that finds no usable account sends this card with
  * its result, so the Connect button is on screen whatever the model writes.
- * Pressing it starts sign-in for the access the asking agent declares, and
- * gives that agent access in the same step.
+ * Pressing it starts sign-in for the access the failed call needs (reading
+ * mail asks only to read it), and gives the asking agent access in the same
+ * step. A card that names no access asks for what the agent declares.
  */
 
 export const CONNECT_ACCOUNT_RENDER = 'connect_account';
@@ -28,6 +29,29 @@ interface ConnectAccountPayload {
     agent_id?: string;
     /** Providers connected already, whose fault is something signing in again fixes. */
     reconnect?: string[];
+    /** Per provider, the access the failed call needs. */
+    scopes?: Record<string, string[]>;
+}
+
+function isScopeMap(value: unknown, providers: unknown[]): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    return Object.entries(value as Record<string, unknown>).every(
+        ([p, s]) =>
+            providers.includes(p)
+            && Array.isArray(s)
+            && s.length > 0
+            && s.every((x) => typeof x === 'string' && x.length > 0),
+    );
+}
+
+/**
+ * What a Connect press asks for: what the call needs, plus what the connection
+ * already carries, so signing in again never takes access away. Empty when the
+ * card names nothing, so the backend asks for what the agent declares.
+ */
+export function requestScopes(needed: string[] | undefined, held: string[] | undefined): string[] {
+    if (!needed?.length) return [];
+    return [...new Set([...(held ?? []), ...needed])];
 }
 
 export function isConnectAccountPayload(value: unknown): value is ConnectAccountPayload {
@@ -40,7 +64,8 @@ export function isConnectAccountPayload(value: unknown): value is ConnectAccount
         v.providers.every((p) => typeof p === 'string' && p.length > 0) &&
         (v.agent_id === undefined || typeof v.agent_id === 'string') &&
         (v.reconnect === undefined
-            || (Array.isArray(v.reconnect) && v.reconnect.every((p) => typeof p === 'string')))
+            || (Array.isArray(v.reconnect) && v.reconnect.every((p) => typeof p === 'string'))) &&
+        (v.scopes === undefined || isScopeMap(v.scopes, v.providers))
     );
 }
 
@@ -109,25 +134,49 @@ function openAuthUrl(url: string): void {
 
 const POLL_MS = 4000;
 
+/** Sign-in refused because this PC has no OAuth client for the provider yet. */
+function isUnconfigured(e: unknown): boolean {
+    const err = e as { httpStatus?: number; body?: Record<string, unknown> | null };
+    return err?.httpStatus === 503 && err.body?.error === 'not_configured';
+}
+
 function ProviderRow({
     connectorId,
     name,
     connected,
+    needsSetup,
     grantAgents,
+    scopes,
     onOpened,
 }: {
     connectorId: string;
     name: string;
     connected: boolean;
+    /** No OAuth client on this PC yet, so sign-in cannot start. */
+    needsSetup: boolean;
     grantAgents: string[];
+    scopes: string[];
     onOpened: () => void;
 }) {
     const t = useT();
     const openSettings = useChatStore((s) => s.openSettings);
+    const openConnectorSettings = useChatStore((s) => s.openConnectorSettings);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [setup, setSetup] = useState(false);
+
+    // Set up in Settings since: the sentence no longer applies.
+    useEffect(() => {
+        if (!needsSetup) setSetup(false);
+    }, [needsSetup]);
 
     const connect = useCallback(async () => {
+        if (needsSetup) {
+            setError(null);
+            setSetup(true);
+            return;
+        }
+        setSetup(false);
         // With no agent to size the request, Settings is where access is chosen.
         if (grantAgents.length === 0) {
             openSettings('connectors');
@@ -136,17 +185,16 @@ function ProviderRow({
         setBusy(true);
         setError(null);
         try {
-            // No scopes: the backend asks for what the granted agent declares,
-            // never the connector's whole list.
-            const flow = await api.authorizeConnector(connectorId, [], grantAgents);
+            const flow = await api.authorizeConnector(connectorId, scopes, grantAgents);
             openAuthUrl(flow.authorization_url);
             onOpened();
         } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
+            if (isUnconfigured(e)) setSetup(true);
+            else setError(e instanceof Error ? e.message : String(e));
         } finally {
             setBusy(false);
         }
-    }, [connectorId, grantAgents, onOpened, openSettings]);
+    }, [connectorId, needsSetup, grantAgents, scopes, onOpened, openSettings]);
 
     const label = t(connected ? 'connectCard.reconnect' : 'connectCard.connect', { name });
     return (
@@ -170,6 +218,18 @@ function ProviderRow({
             )}
             {error && (
                 <div className="render-connect__error" role="alert">{error}</div>
+            )}
+            {setup && (
+                <div className="render-connect__setup" role="status">
+                    <span>{t('connectCard.needsSetup', { name })}</span>
+                    <button
+                        type="button"
+                        className="render-connect__settings"
+                        onClick={() => openConnectorSettings(connectorId)}
+                    >
+                        {t('connectCard.setUp', { name })}
+                    </button>
+                </div>
             )}
         </div>
     );
@@ -220,6 +280,14 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         return () => window.removeEventListener('focus', refresh);
     }, [valid, refresh]);
 
+    // Settings opens inside the app, so closing it brings no window focus back.
+    const settingsOpen = useChatStore((s) => s.settingsSection !== null);
+    const settingsWasOpen = useRef(settingsOpen);
+    useEffect(() => {
+        if (valid && settingsWasOpen.current && !settingsOpen) refresh();
+        settingsWasOpen.current = settingsOpen;
+    }, [valid, settingsOpen, refresh]);
+
     // While a sign-in tab is open, watch for the account to appear.
     useEffect(() => {
         if (!opened) return undefined;
@@ -238,10 +306,18 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
 
     const isConnected = (id: string) =>
         connectors.some((c) => c.id === id && !('error' in c) && c.configured);
+    const needsSetup = (id: string) =>
+        connectors.some(
+            (c) => c.id === id && !('error' in c) && !c.configured && c.configurable === false,
+        );
     const displayName = (id: string) =>
         PROVIDER_NAMES[id]
         ?? connectors.find((c) => c.id === id && !('error' in c))?.display_name
         ?? id;
+    const heldScopes = (id: string) => {
+        const row = connectors.find((c) => c.id === id);
+        return row && !('error' in row) ? row.scopes : undefined;
+    };
     const anyConnected = awaited(data).some(isConnected);
 
     let prompt = t('connectCard.prompt');
@@ -263,7 +339,12 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                         connectorId={id}
                         name={displayName(id)}
                         connected={isConnected(id)}
+                        needsSetup={needsSetup(id)}
                         grantAgents={grantIdsFor(agents, data.agent_id, id)}
+                        scopes={requestScopes(
+                            data.scopes?.[id],
+                            heldScopes(id),
+                        )}
                         onOpened={() => {
                             setEnded(null);
                             setOpened(true);

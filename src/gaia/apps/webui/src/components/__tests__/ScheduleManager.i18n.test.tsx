@@ -48,7 +48,7 @@ function leftoverEnglish(root: HTMLElement): string[] {
 
 const attrs = (root: HTMLElement) =>
     [...root.querySelectorAll('[title], [aria-label], [placeholder]')].flatMap((el) =>
-        ['title', 'aria-label', 'placeholder'].map((a) => el.getAttribute(a)).filter((v): v is string => !!v && v !== schedule.description));
+        ['title', 'aria-label', 'placeholder'].map((a) => el.getAttribute(a)).filter((v): v is string => !!v && v !== schedule.description && v !== schedule.name && v !== schedule.prompt));
 
 beforeEach(() => {
     act(() => useChatStore.getState().setLocale('ar'));

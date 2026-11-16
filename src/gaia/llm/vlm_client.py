@@ -210,6 +210,9 @@ class VLMClient:
 
 Instructions:
 1. Extract EVERY word you see - don't skip or paraphrase
+   - Keep the text in its original language and script. Do NOT translate or
+     transliterate it: Arabic stays Arabic, Chinese stays Chinese. Keep digits
+     as written (٢٠٢٤ stays ٢٠٢٤, 2024 stays 2024).
 2. Preserve exact formatting (headings, bold, bullets, tables)
 3. If it's a table, format as markdown table
 4. If it's a chart, describe what you see: [CHART: ...]

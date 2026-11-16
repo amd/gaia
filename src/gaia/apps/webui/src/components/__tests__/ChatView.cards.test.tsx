@@ -204,8 +204,7 @@ describe('ChatView streaming cards (#2108)', () => {
                 capturedCallbacks!.onDone({ type: 'done', content: 'Here is your inbox summary.' } as unknown as StreamEvent);
             });
 
-            // Advance past the 350ms streamEnding window (the 300ms refetch fires
-            // inside this same window), then flush the resolved-promise microtasks.
+            // Advance past the 300ms refetch, then flush the resolved-promise microtasks.
             act(() => {
                 vi.advanceTimersByTime(400);
             });
@@ -326,9 +325,8 @@ describe('ChatView streaming cards (#2108)', () => {
                 capturedCallbacks!.onDone({ type: 'done', content: 'partial answer text' } as unknown as StreamEvent);
             });
 
-            // Stay under the 3s message-poll interval so a stray poll doesn't
-            // clobber the partial message while still clearing the 350ms
-            // streamEnding window.
+            // Past the 300ms refetch, under the 3s message-poll interval so a
+            // stray poll doesn't clobber the partial message.
             act(() => {
                 vi.advanceTimersByTime(400);
             });

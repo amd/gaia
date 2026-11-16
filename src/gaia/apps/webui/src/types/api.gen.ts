@@ -132,6 +132,7 @@ export interface ApiSchemas {
   TaskCreate: TaskCreate;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
+  TurnRouteResponse: TurnRouteResponse;
   TurnSummaryCost: TurnSummaryCost;
   TurnSummaryDocument: TurnSummaryDocument;
   TurnSummaryFile: TurnSummaryFile;
@@ -237,6 +238,7 @@ export interface AgentListResponse {
  */
 export interface AgentStepResponse {
   active?: boolean;
+  autoDeclined?: boolean | null;
   commandOutput?: CommandOutputResponse | null;
   currentStep?: number | null;
   data?: unknown;
@@ -245,6 +247,7 @@ export interface AgentStepResponse {
   detail?: string | null;
   fileList?: FileListResponse | null;
   id: number;
+  kept?: boolean | null;
   label: string;
   latencyMs?: number | null;
   mcpOutput?: McpOutputResponse | null;
@@ -252,6 +255,7 @@ export interface AgentStepResponse {
   mcpServerLabel?: string | null;
   mcpTool?: string | null;
   narration?: string | null;
+  needsModel?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
@@ -713,6 +717,7 @@ export interface IndexFolderResponse {
   failed?: number;
   indexed?: number;
   skipped?: number;
+  skipped_images?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -739,10 +744,20 @@ export interface InferenceStatsResponse {
   output_tokens?: number;
   place?: string | null;
   retried?: boolean | null;
+  route?: TurnRouteResponse | null;
   seconds?: number | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
+}
+/**
+ * The model a ``hybrid`` turn was routed to, and why.
+ */
+export interface TurnRouteResponse {
+  degraded?: boolean;
+  model: string;
+  notice?: string;
+  reason?: string;
 }
 /**
  * Summary of a boot-time initialization task (embedded in SystemStatus).
@@ -750,6 +765,7 @@ export interface InferenceStatsResponse {
 export interface InitTaskInfo {
   name: string;
   status: string;
+  step?: string | null;
 }
 /**
  * Body for ``POST /api/agents/install``.
@@ -1101,7 +1117,9 @@ export interface PermissionModeRequest {
  * Structured Local only notice translated by the Agent UI.
  */
 export interface PolicyNotice {
+  cause?: string | null;
   code: string;
+  models?: string[] | null;
   reason?: string | null;
   severity: "info" | "warning";
   url?: string | null;

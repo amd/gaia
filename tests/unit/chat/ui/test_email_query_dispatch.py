@@ -22,6 +22,7 @@ import threading
 
 import pytest
 
+import gaia.ui._chat_helpers as chat_helpers
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
 from gaia.daemon.sidecars.errors import SidecarError
@@ -255,6 +256,48 @@ class TestDispatchEmailQuery:
         assert ("Settings > Privacy" in content) is local_only
         for developer_word in ("CLI", "agent card", "re-check", "lemonade-server.ai"):
             assert developer_word not in content
+
+    @pytest.mark.parametrize("local_only", [True, False])
+    def test_a_cloud_model_that_lost_its_key_is_not_called_not_downloaded(
+        self, monkeypatch, tmp_path, local_only
+    ):
+        """A cloud model can't be downloaded; the fix is to reconnect it."""
+        from gaia.llm import local_only as policy
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        policy.set_policy("local_ai_only" if local_only else "cloud_allowed")
+        model = "fireworks.big-model"
+        fake_handle = _FakeHandle(
+            api_version="2.4",
+            init_result=(
+                503,
+                {
+                    "ready": False,
+                    "hint": f"The model {model} is not downloaded.",
+                    "lemonade": {"reachable": True, "compatible": True},
+                    "model": {"id": model, "present": False},
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
+        monkeypatch.setattr(relay_module, "relay_query", lambda *a, **k: None)
+        monkeypatch.setattr(
+            chat_helpers, "_replay_cloud_key_for_relay", lambda *a, **k: None
+        )
+
+        handler = _FakeSSEHandler()
+        _dispatch_sidecar_query(handler, _make_request(), [], model, "email")
+
+        [event] = handler.events
+        content = event["content"]
+        assert event["type"] == "agent_error"
+        assert "downloaded" not in content
+        assert "big-model" in content
+        assert "Settings > Model" in content
+        assert ("Local only is on" in content) is local_only
+        assert ("Reconnect Fireworks AI" in content) is not local_only
 
     def test_cancelled_before_relay_short_circuits_no_relay_call(self, monkeypatch):
         fake_handle = _FakeHandle(api_version="2.4")

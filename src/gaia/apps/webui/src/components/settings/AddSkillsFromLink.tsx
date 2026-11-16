@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
+import { isMessageKey, ref } from '../../i18n/registry';
 import { useT, type Translate } from '../../i18n/useT';
 import { requestErrorText } from '../../utils/requestErrors';
 import type { FeaturedLibrary, LinkAddResult, LinkPreview, LinkSkill } from '../../types';
@@ -98,19 +99,24 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
         <div className="settings-card skill-link">
             <div className="skill-link-top">
                 <span className="settings-label">{t('settings.skills.link.title')}</span>
-                {featured.map((f) => (
-                    <button
-                        key={f.id}
-                        type="button"
-                        className="btn-secondary skill-link-chip"
-                        onClick={() => { setUrl(f.url); void read(f.url); }}
-                        disabled={busy !== null}
-                        title={f.description}
-                        aria-label={t('settings.skills.link.getAria', { name: f.name, description: f.description })}
-                    >
-                        {t('settings.skills.link.get', { name: f.name })}
-                    </button>
-                ))}
+                {featured.map((f) => {
+                    // A library the UI has no words for keeps the description the backend sent.
+                    const key = `settings.skills.link.featured.${f.id}`;
+                    const known = isMessageKey(key);
+                    return (
+                        <button
+                            key={f.id}
+                            type="button"
+                            className="btn-secondary skill-link-chip"
+                            onClick={() => { setUrl(f.url); void read(f.url); }}
+                            disabled={busy !== null}
+                            title={known ? t(key) : f.description}
+                            aria-label={t('settings.skills.link.getAria', { name: f.name, description: known ? ref(key) : f.description })}
+                        >
+                            {t('settings.skills.link.get', { name: f.name })}
+                        </button>
+                    );
+                })}
             </div>
             <form className="skill-link-form" onSubmit={(e) => { e.preventDefault(); void read(url); }}>
                 <input
@@ -123,7 +129,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                         const pasted = e.clipboardData.getData('text').trim();
                         if (pasted) { e.preventDefault(); setUrl(pasted); void read(pasted); }
                     }}
-                    placeholder={t('settings.skills.link.placeholder')}
+                    placeholder={t.bare('settings.skills.link.placeholder')}
                     title={t('settings.skills.link.hint')}
                     aria-label={t('settings.skills.link.aria')}
                     disabled={busy !== null}
@@ -184,7 +190,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                                                 {s.has_code && <span className="skill-link-tag">{t('settings.skills.link.tagCode')}</span>}
                                                 {s.verdict === 'REVIEW' && <span className="skill-link-tag">{t('settings.skills.link.tagReview')}</span>}
                                             </span>
-                                            {s.description && <span className="skill-row-desc skill-link-desc" title={s.description}><bdi>{s.description}</bdi></span>}
+                                            {s.description && <span className="skill-row-desc skill-link-desc" dir="auto" title={s.description}><bdi>{s.description}</bdi></span>}
                                             {s.permissions.length > 0 ? (
                                                 <span className="skill-link-perms">
                                                     <span className="skill-link-perms-label">{t('settings.skills.link.can')}</span>

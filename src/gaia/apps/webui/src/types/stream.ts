@@ -83,6 +83,8 @@ export interface StreamEvent {
     success?: boolean;
     /** On a `tool_result`: no answer came in time, so a "denied" status is not the user's no. */
     timed_out?: boolean;
+    /** On a `tool_result`: "agent" when GAIA turned the call down itself and showed no prompt. */
+    declined_by?: string;
     steps?: string[];
     /** One plain line per plan step, parallel to `steps` (for plan events). */
     step_narrations?: string[];

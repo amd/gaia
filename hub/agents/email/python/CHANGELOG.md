@@ -9,9 +9,42 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The sidecar stops when the GAIA daemon that started it is killed.** The
+  daemon now passes its pid in `GAIA_DAEMON_PID`; the sidecar polls it and
+  shuts down through its normal SIGINT path within seconds of the daemon dying,
+  instead of running until the next daemon reaps it.
+- **A Lemonade build suffix no longer leaks into the version number.** A
+  Lemonade build reporting `2026.48~1809.2d1f23e4` read its hash's leading
+  digit as the patch number; the `~`/`+` build suffix is now dropped before
+  the version is compared, matching core GAIA.
+
+- **`CONTRACT.md` now documents `GET /v1/email/briefing` (#3625).** The
+  briefing endpoint and its `cache_age_seconds`/`stale` fields were missing
+  from the reference, and the `2.14` history row now names the four response
+  fields that shipped under it without a version bump.
+- **Sender preferences now order a pre-scan across every connected mailbox
+  (#3623).** With two mailboxes, each was sorted on its own and the results
+  were joined in connection order, so the archive list could keep the first
+  mailbox's priority senders and drop the second's low-priority ones. The
+  merged lists are now sorted together before their caps.
+
+- **The search guidance no longer teaches Outlook queries that Microsoft
+  Graph rejects (#3587).** The `search_messages` description and the agent's
+  SEARCH prompt now say `label:` and `after:`/`before:` are Gmail-only, and
+  that one Outlook search cannot mix `from:`/`subject:` with
+  `is:`/`newer_than:`/`older_than:`. On Outlook they point at two separate
+  searches and at `newer_than:`/`older_than:` durations instead. The
+  translator is unchanged: the same queries still raise a named error.
+
 - **An email body can no longer break out of its untrusted-content fence
   (#2034).** Marker-like text inside a body is neutralized before the body is
   fenced, so the model keeps reading all of it as data.
+
+- **A fence marker's name spelled with look-alike letters is neutralized too
+  (#7853).** Letters from another script that read as Latin ones (Cyrillic,
+  Greek, Cherokee and so on), and ASCII swaps such as `rn` for `m`, are read as
+  the letters they imitate, so a near-copy of a marker no longer reaches the
+  model.
 
 - **Under the daemon, a forwarded-token hiccup no longer asks for a browser
   re-sign-in (#6995).** A token the daemon hasn't re-forwarded yet, or an
@@ -328,16 +361,17 @@ contract version is tracked separately as
   `outlook_backend.py` never parses Gmail operator syntax, so converting
   `w` to days has no effect there. Quoted Outlook `$search` values are
   escaped separately (see the Graph quote escape entry above).
-- **An Outlook search using `is:starred`, `after:`, `before:`, `label:`,
-  `has:`, or `in:` returned nothing instead of an error (#2996).** These
+- **An Outlook search using `is:starred`, `after:`, `before:`, `newer:`,
+  `older:`, `label:`, `has:`, or `in:` returned nothing instead of an error (#2996).** These
   Gmail-style operators have no Microsoft Graph translation, so
   `translate_query` let each one fall through to the `$search` bucket and
   reach Graph as inert literal text: Graph never errors on an unrecognised
   `$search` token, so the search silently matched nothing. The agent's own
-  tool description recommends several of these (`label:promotions`,
+  tool description recommended several of these (`label:promotions`,
   `after:YYYY/MM/DD`), so a model following its own instructions could hit
-  this. `translate_query` now raises an actionable error naming the
-  unsupported operator instead of degrading to a phrase match.
+  this; #3587 later scoped that guidance by backend. `translate_query` now
+  raises an actionable error naming the unsupported operator instead of
+  degrading to a phrase match.
 - **An Outlook search on an ordinary quoted phrase containing a colon word
   (`subject:"check in: monday"`) no longer raises the unsupported-operator
   error above (#3592).** The guard matched `is:`/`after:`/`has:`/etc.
