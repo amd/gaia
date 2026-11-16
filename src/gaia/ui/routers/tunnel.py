@@ -7,10 +7,12 @@ Manages ngrok tunnels for remote/mobile access to the local server.
 """
 
 import logging
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..dependencies import get_tunnel
+from ..models import WireModel
 from ..security import refuse_on_device_listener
 from ..tunnel import TunnelManager
 
@@ -19,7 +21,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["tunnel"])
 
 
-@router.post("/api/tunnel/start", dependencies=[Depends(refuse_on_device_listener)])
+class TunnelDevice(WireModel):
+    """The device behind the latest authenticated remote request."""
+
+    name: str
+    lastSeen: str
+
+
+class TunnelStatus(WireModel):
+    """The tunnel's state."""
+
+    active: bool
+    url: Optional[str]
+    token: Optional[str]
+    startedAt: Optional[str]
+    error: Optional[str]
+    reason: Optional[Literal["ngrok_not_installed"]]
+    installCommands: List[str]
+    publicIp: Optional[str]
+    device: Optional[TunnelDevice]
+
+
+class TunnelStopped(WireModel):
+    active: Literal[False]
+
+
+@router.post(
+    "/api/tunnel/start",
+    dependencies=[Depends(refuse_on_device_listener)],
+    response_model=TunnelStatus,
+    response_model_exclude_unset=True,
+)
 async def start_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
     """Start ngrok tunnel for mobile access."""
     try:
@@ -34,7 +66,12 @@ async def start_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
         )
 
 
-@router.post("/api/tunnel/stop", dependencies=[Depends(refuse_on_device_listener)])
+@router.post(
+    "/api/tunnel/stop",
+    dependencies=[Depends(refuse_on_device_listener)],
+    response_model=TunnelStopped,
+    response_model_exclude_unset=True,
+)
 async def stop_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
     """Stop ngrok tunnel."""
     try:
@@ -49,7 +86,12 @@ async def stop_tunnel(tunnel: TunnelManager = Depends(get_tunnel)):
         )
 
 
-@router.get("/api/tunnel/status", dependencies=[Depends(refuse_on_device_listener)])
+@router.get(
+    "/api/tunnel/status",
+    dependencies=[Depends(refuse_on_device_listener)],
+    response_model=TunnelStatus,
+    response_model_exclude_unset=True,
+)
 async def tunnel_status(tunnel: TunnelManager = Depends(get_tunnel)):
     """Get current tunnel status."""
     return tunnel.get_status()

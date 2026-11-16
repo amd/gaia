@@ -16,11 +16,11 @@ import os
 import sqlite3
 import sys
 import threading
-from typing import List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from gaia.agents.base.tool_grants import grant_scope
@@ -38,7 +38,7 @@ from .._chat_helpers import (
 )
 from ..database import ChatDatabase
 from ..dependencies import get_db
-from ..models import ChatRequest, ChatResponse
+from ..models import ChatRequest, ChatResponse, WireModel
 from ..restart_recovery import CANCELLED_TURN_NOTICE
 from ..run_manager import run_manager
 from ..security import (
@@ -92,7 +92,17 @@ def _server_mod():
     return sys.modules["gaia.ui.server"]
 
 
-@router.post("/api/chat/send")
+def _sse_response(description: str) -> dict:
+    return {200: {"content": {"text/event-stream": {}}, "description": description}}
+
+
+@router.post(
+    "/api/chat/send",
+    response_model=ChatResponse,
+    responses=_sse_response(
+        "The reply: JSON, or server-sent events when `stream` is true."
+    ),
+)
 async def send_message(
     request: ChatRequest,
     http_request: Request,
@@ -359,7 +369,19 @@ class ToolConfirmRequest(BaseModel):
     confirm_id: Optional[str] = None
 
 
-@router.post("/api/chat/confirm-tool")
+class ConfirmToolResponse(WireModel):
+    """The answer reached the waiting prompt; ``granted`` is what "always" allowed."""
+
+    status: Literal["ok"]
+    approved: bool
+    granted: Optional[str]
+
+
+@router.post(
+    "/api/chat/confirm-tool",
+    response_model=ConfirmToolResponse,
+    response_model_exclude_unset=True,
+)
 async def confirm_tool(request: ToolConfirmRequest, http_request: Request):
     """Answer the tool confirmation the agent is blocked on.
 
@@ -486,6 +508,37 @@ class PermissionModeRequest(BaseModel):
     mode: str
 
 
+PermissionMode = Literal[session_permissions.MODES]  # type: ignore[valid-type]
+
+
+class PermissionGrantResponse(WireModel):
+    """One "always allow" grant: its key and the label shown for it."""
+
+    key: str
+    label: str
+
+
+class SessionPermissionsResponse(WireModel):
+    """A chat's permission mode and its "always allow" grants."""
+
+    session_id: str
+    mode: PermissionMode
+    grants: List[PermissionGrantResponse]
+
+
+class PermissionsListResponse(WireModel):
+    """The default mode for new chats and every chat with non-default permissions."""
+
+    default_mode: PermissionMode
+    sessions: List[SessionPermissionsResponse]
+
+
+class DefaultPermissionModeResponse(WireModel):
+    """The mode new chats start in."""
+
+    default_mode: PermissionMode
+
+
 def _permissions_view(session_id: str) -> dict:
     perms = session_permissions.get(session_id)
     if perms is None:
@@ -502,7 +555,11 @@ def _require_session(db: ChatDatabase, session_id: str) -> None:
         raise HTTPException(status_code=404, detail=f"No chat {session_id!r}.")
 
 
-@router.get("/api/chat/permissions")
+@router.get(
+    "/api/chat/permissions",
+    response_model=PermissionsListResponse,
+    response_model_exclude_unset=True,
+)
 async def list_permissions():
     """Every chat with full access on or "always allow" grants, for Settings.
 
@@ -518,7 +575,12 @@ async def list_permissions():
     }
 
 
-@router.put("/api/chat/permissions", dependencies=[Depends(require_local_pc)])
+@router.put(
+    "/api/chat/permissions",
+    dependencies=[Depends(require_local_pc)],
+    response_model=DefaultPermissionModeResponse,
+    response_model_exclude_unset=True,
+)
 async def set_default_permission_mode(body: PermissionModeRequest):
     """Set the mode new chats start in: ``full_access`` in ``~/.gaia/config.json``.
 
@@ -546,14 +608,22 @@ async def set_default_permission_mode(body: PermissionModeRequest):
     return {"default_mode": session_permissions.default_mode()}
 
 
-@router.get("/api/chat/permissions/{session_id}")
+@router.get(
+    "/api/chat/permissions/{session_id}",
+    response_model=SessionPermissionsResponse,
+    response_model_exclude_unset=True,
+)
 async def get_permissions(session_id: str, db: ChatDatabase = Depends(get_db)):
     """This chat's permission mode and its "always allow" grants."""
     _require_session(db, session_id)
     return _permissions_view(session_id)
 
 
-@router.put("/api/chat/permissions/{session_id}")
+@router.put(
+    "/api/chat/permissions/{session_id}",
+    response_model=SessionPermissionsResponse,
+    response_model_exclude_unset=True,
+)
 async def set_permission_mode(
     session_id: str,
     body: PermissionModeRequest,
@@ -614,7 +684,11 @@ async def _sync_relayed_mode(session_id: str, enabled: bool) -> None:
         ) from exc
 
 
-@router.delete("/api/chat/permissions/{session_id}/grants")
+@router.delete(
+    "/api/chat/permissions/{session_id}/grants",
+    response_model=SessionPermissionsResponse,
+    response_model_exclude_unset=True,
+)
 async def revoke_grants(
     session_id: str, key: Optional[str] = None, db: ChatDatabase = Depends(get_db)
 ):
@@ -675,7 +749,18 @@ class UserInputRequest(BaseModel):
     value: str
 
 
-@router.post("/api/chat/user-input")
+class UserInputResponse(WireModel):
+    """The answer reached the waiting question."""
+
+    status: Literal["ok"]
+    request_id: str
+
+
+@router.post(
+    "/api/chat/user-input",
+    response_model=UserInputResponse,
+    response_model_exclude_unset=True,
+)
 async def user_input(request: UserInputRequest):
     """Answer a mid-run ``needs_input`` question from the agent (#2595).
 
@@ -748,7 +833,18 @@ class CancelStreamRequest(BaseModel):
     session_id: str
 
 
-@router.post("/api/chat/cancel")
+class CancelStreamResponse(WireModel):
+    """The running or queued turn was told to stop."""
+
+    status: Literal["ok"]
+    cancelled: Literal[True]
+
+
+@router.post(
+    "/api/chat/cancel",
+    response_model=CancelStreamResponse,
+    response_model_exclude_unset=True,
+)
 async def cancel_stream(request: CancelStreamRequest):
     """Cancel an active streaming chat session by setting its SSE handler cancelled flag.
 
@@ -774,7 +870,19 @@ async def cancel_stream(request: CancelStreamRequest):
     )
 
 
-@router.get("/api/chat/active")
+class ActiveRunsResponse(WireModel):
+    """Chats with a turn in flight, those waiting in line, and those paused on the user."""
+
+    session_ids: List[str]
+    queued: List[str]
+    awaiting_user: Dict[str, Literal["permission", "question"]]
+
+
+@router.get(
+    "/api/chat/active",
+    response_model=ActiveRunsResponse,
+    response_model_exclude_unset=True,
+)
 async def list_active_runs():
     """Return the chats with a turn in flight, and what each is waiting on.
 
@@ -802,7 +910,10 @@ async def list_active_runs():
     }
 
 
-@router.get("/api/chat/attach")
+@router.get(
+    "/api/chat/attach",
+    responses=_sse_response("The running turn's events so far, then the rest live."),
+)
 async def attach_stream(session_id: str):
     """Re-attach to an in-flight background run and stream its events (SSE).
 
@@ -834,7 +945,24 @@ class FollowUpRequest(BaseModel):
     text: str
 
 
-@router.post("/api/chat/followup")
+class FollowUpDelivered(WireModel):
+    """The running turn took the message."""
+
+    delivered: Literal[True]
+
+
+class FollowUpOutcome(WireModel):
+    """What the last finished turn did with the messages added to it."""
+
+    taken: List[str]
+    returned: List[str]
+
+
+@router.post(
+    "/api/chat/followup",
+    response_model=FollowUpDelivered,
+    response_model_exclude_unset=True,
+)
 async def send_followup(request: FollowUpRequest):
     """Hand a message to the session's running turn, picked up at its next step.
 
@@ -872,7 +1000,11 @@ async def send_followup(request: FollowUpRequest):
     return {"delivered": True}
 
 
-@router.get("/api/chat/followup/{session_id}")
+@router.get(
+    "/api/chat/followup/{session_id}",
+    response_model=FollowUpOutcome,
+    response_model_exclude_unset=True,
+)
 async def followup_outcome(session_id: str, db: ChatDatabase = Depends(get_db)):
     """What the chat's last finished turn did with the messages added to it.
 
@@ -892,7 +1024,94 @@ async def followup_outcome(session_id: str, db: ChatDatabase = Depends(get_db)):
     return followups.last_outcome(session_id)
 
 
-@router.get("/api/chat/context/{session_id}")
+class ExactTokenizer(WireModel):
+    exact: Literal[True]
+    model: str
+
+
+class EstimatedTokenizer(WireModel):
+    exact: Literal[False]
+    reason: str
+
+
+class ContextCategory(WireModel):
+    key: str
+    label: str
+    tokens: int
+
+
+class ToolLoading(WireModel):
+    """Tools sent with every request, and those loaded only when needed."""
+
+    loaded: List[str]
+    on_demand: List[str]
+
+
+class PutAwayContext(WireModel):
+    results: int
+    tokens: int
+
+
+class SummarizedContext(WireModel):
+    turns: int
+    tokens: int
+    summary_tokens: int
+
+
+class ContextState(WireModel):
+    """What the agent moved out of the window to keep going."""
+
+    put_away: Optional[PutAwayContext]
+    summarized: Optional[SummarizedContext]
+
+
+class ContextMeasured(WireModel):
+    """How full the model's context is for the chat's next message, by kind."""
+
+    available: Literal[True]
+    window: int
+    reply_reserve: int
+    system: int
+    skills: Optional[int] = None
+    memory: Optional[int] = None
+    tools: int
+    tool_definitions: Optional[int] = None
+    documents: int
+    history: int
+    query: int
+    used: int
+    history_budget: int
+    history_used: int
+    turns_in_view: int
+    turns_hidden: int
+    at_risk: List[str]
+    at_risk_tokens: int
+    tokenizer: Optional[
+        Annotated[
+            Union[ExactTokenizer, EstimatedTokenizer], Field(discriminator="exact")
+        ]
+    ] = None
+    categories: Optional[List[ContextCategory]] = None
+    tool_loading: Optional[ToolLoading] = None
+    model: Optional[str] = None
+    model_window: Optional[int] = None
+    context_state: Optional[ContextState] = None
+
+
+class ContextUnavailable(WireModel):
+    """Why the chat's context can't be measured now."""
+
+    available: Literal[False]
+    reason: str
+
+
+@router.get(
+    "/api/chat/context/{session_id}",
+    response_model=Annotated[
+        Union[ContextMeasured, ContextUnavailable], Field(discriminator="available")
+    ],
+    response_model_exclude_unset=True,
+)
 async def get_context_usage(session_id: str, db: ChatDatabase = Depends(get_db)):
     """How full the model's context is for this chat's next message, by kind."""
     if not db.get_session(session_id):
@@ -971,7 +1190,33 @@ class RetryWithRequest(BaseModel):
     model: str
 
 
-@router.post("/api/chat/retry-with")
+class RetryStats(WireModel):
+    """The retried answer's numbers; zero tokens means the server did not report them."""
+
+    model: str
+    retried: Literal[True]
+    seconds: float
+    load_seconds: float
+    input_tokens: int
+    output_tokens: int
+    tokens_per_second: float
+    time_to_first_token: float
+
+
+class RetryWithResponse(WireModel):
+    """The retried answer, held until ``/api/chat/retry-with/choose`` keeps one."""
+
+    message_id: int
+    model: str
+    content: str
+    stats: RetryStats
+
+
+@router.post(
+    "/api/chat/retry-with",
+    response_model=RetryWithResponse,
+    response_model_exclude_unset=True,
+)
 async def retry_with(
     request: RetryWithRequest,
     http_request: Request,
@@ -1080,7 +1325,26 @@ class RetryChoiceRequest(BaseModel):
     keep: Literal["original", "retry"]
 
 
-@router.post("/api/chat/retry-with/choose")
+class KeptOriginal(WireModel):
+    kept: Literal["original"]
+
+
+class KeptRetry(WireModel):
+    """The retried answer replaced the original."""
+
+    kept: Literal["retry"]
+    content: str
+    #: The turn's saved inference stats with the retry's numbers over them.
+    stats: Dict[str, Any]
+
+
+@router.post(
+    "/api/chat/retry-with/choose",
+    response_model=Annotated[
+        Union[KeptOriginal, KeptRetry], Field(discriminator="kept")
+    ],
+    response_model_exclude_unset=True,
+)
 async def choose_retry(request: RetryChoiceRequest, db: ChatDatabase = Depends(get_db)):
     """Keep the original or the retried answer; the chat continues from it."""
     sid = request.session_id

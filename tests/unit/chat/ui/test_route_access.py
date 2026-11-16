@@ -202,6 +202,7 @@ REMOTE = {
     "GET /api/onboarding/preflight",
     "GET /api/onboarding/start",
     "GET /api/providers/active",
+    "GET /api/providers/list",
     "GET /api/providers/local/context",
     "GET /api/providers/local/status",
     "GET /api/providers/{provider}/models",
@@ -540,6 +541,46 @@ def test_a_paired_device_reconnects_a_provider_only_as_the_pc_saved_it(
         assert resp.status_code == 403, fields
         assert "fw-secret-key" not in resp.text
     assert handed == []
+
+
+def test_a_paired_device_may_read_provider_summaries(setup, monkeypatch):
+    from gaia.ui.routers import providers
+
+    app, clients, _ = setup
+    entry = {
+        "name": "amd",
+        "base_url": "https://gw.example/v1",
+        "runtime_key_set": True,
+        "models_discovered": True,
+    }
+    monkeypatch.setattr(
+        providers, "_cloud_entry", lambda p: entry if p == "amd" else None
+    )
+    monkeypatch.setattr(
+        providers, "_install", lambda *a, **k: pytest.fail("registered a provider")
+    )
+    monkeypatch.setattr(providers, "_gateway_check_applies", lambda: False)
+    resp = clients["device"].get("/api/providers/list", headers={"X-Gaia-UI": "1"})
+    assert resp.status_code == 200, resp.text
+    listed = {p["id"]: p for p in resp.json()["providers"]}
+    assert listed["amd"]["configured"] is True
+    assert listed["fireworks"]["configured"] is False
+    assert all(
+        set(p)
+        == {
+            "id",
+            "name",
+            "remote",
+            "privacy_notice",
+            "configured",
+            "blocked",
+            "network",
+        }
+        for p in listed.values()
+    )
+    # Reachability only: the gateway's error text can name its address.
+    assert listed["amd"]["network"] == {"reachable": None}
+    assert "gw.example" not in resp.text
 
 
 def test_troubleshooting_report_stays_on_the_pc(setup):

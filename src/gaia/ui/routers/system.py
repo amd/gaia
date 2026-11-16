@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -49,6 +49,7 @@ from ..models import (
     SystemStatus,
     UnloadModelResponse,
     WarmUpStatus,
+    WireModel,
     WorkInProgress,
 )
 from ..run_manager import run_manager
@@ -1372,7 +1373,29 @@ async def update_settings(
     )
 
 
-@router.get("/api/health")
+class AgentUiHealthStats(WireModel):
+    """Row counts and indexed size in the chat database."""
+
+    sessions: int
+    messages: int
+    documents: int
+    total_chunks: int
+    total_size_bytes: int
+
+
+class AgentUiHealthResponse(WireModel):
+    """The server is up."""
+
+    status: Literal["ok"]
+    service: Literal["gaia-agent-ui"]
+    stats: AgentUiHealthStats
+
+
+@router.get(
+    "/api/health",
+    response_model=AgentUiHealthResponse,
+    response_model_exclude_unset=True,
+)
 async def health(db: ChatDatabase = Depends(get_db)):
     """Health check endpoint."""
     stats = db.get_stats()
@@ -1552,7 +1575,20 @@ def _chats_answering() -> list:
     return run_manager.active_sessions()
 
 
-@router.post("/api/system/load-model", status_code=202)
+class LoadModelResponse(WireModel):
+    """The load started in the background."""
+
+    status: Literal["loading"]
+    model: str
+    ctx_size: int
+
+
+@router.post(
+    "/api/system/load-model",
+    status_code=202,
+    response_model=LoadModelResponse,
+    response_model_exclude_unset=True,
+)
 async def load_model_endpoint(body: LoadModelRequest):
     """Trigger loading a model on Lemonade server (non-blocking).
 
@@ -1688,7 +1724,19 @@ class DownloadModelRequest(BaseModel):
     load_after: bool = False
 
 
-@router.post("/api/system/download-model", status_code=202)
+class DownloadModelResponse(WireModel):
+    """The download started in the background."""
+
+    status: Literal["downloading"]
+    model: str
+
+
+@router.post(
+    "/api/system/download-model",
+    status_code=202,
+    response_model=DownloadModelResponse,
+    response_model_exclude_unset=True,
+)
 async def download_model_endpoint(body: DownloadModelRequest):
     """Trigger downloading a model via Lemonade server (non-blocking).
 

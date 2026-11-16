@@ -11,13 +11,24 @@ agents so the next turn talks to the new server.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from gaia.llm.lemonade_choice import (
+    BAD_KEY,
+    MODE_EXTERNAL,
+    MODE_GAIA,
+    NEEDS_KEY,
+    NOT_LEMONADE,
+    OK,
+    TOO_OLD,
+    UNREACHABLE,
+)
 from gaia.logger import get_logger
 
+from ..models import WireModel
 from ..security import refuse_on_device_listener, require_ui_header, via_tunnel
 
 logger = get_logger(__name__)
@@ -29,6 +40,45 @@ WHAT_GAIA_DOES = (
     "GAIA downloads and runs its models on your server. It leaves your "
     "server's settings and your own models as they are."
 )
+
+
+class LemonadeTarget(WireModel):
+    """The Lemonade GAIA uses now, who chose it, and whether to offer a switch."""
+
+    mode: Literal[MODE_GAIA, MODE_EXTERNAL]
+    saved_mode: Optional[str]
+    source: Literal["env", "config", "gaia"]
+    base_url: Optional[str]
+    saved_base_url: Optional[str]
+    api_key_stored: bool
+    env_url_ignored: Optional[str]
+    env_override: Optional[str]
+    gaia_installed: bool
+    offer: bool
+    what_gaia_does: str
+
+
+class LemonadeTargetSwitched(LemonadeTarget):
+    """The new target, and what the daemon did (None when none runs)."""
+
+    daemon: Optional[Dict[str, Any]]
+
+
+class LemonadeProbe(WireModel):
+    """What answered at a URL, and whether GAIA can use it."""
+
+    url: str
+    status: Literal[OK, NEEDS_KEY, BAD_KEY, TOO_OLD, NOT_LEMONADE, UNREACHABLE]
+    version: Optional[str]
+    minimum: Optional[str]
+    message: str
+
+
+class LemonadeDetection(WireModel):
+    """A Lemonade found on the default ports, and the ports that didn't answer in time."""
+
+    found: Optional[LemonadeProbe]
+    unchecked: List[str]
 
 
 def _target() -> Dict[str, Any]:
@@ -50,14 +100,24 @@ def _target() -> Dict[str, Any]:
     }
 
 
-@router.get("/api/lemonade/target", dependencies=[Depends(require_ui_header)])
+@router.get(
+    "/api/lemonade/target",
+    dependencies=[Depends(require_ui_header)],
+    response_model=LemonadeTarget,
+    response_model_exclude_unset=True,
+)
 def get_target() -> Dict[str, Any]:
     """The Lemonade GAIA uses now, who chose it, and whether to offer a switch."""
     return _target()
 
 
 # Probes local ports, so a cross-site GET must not reach it.
-@router.get("/api/lemonade/detect", dependencies=[Depends(require_ui_header)])
+@router.get(
+    "/api/lemonade/detect",
+    dependencies=[Depends(require_ui_header)],
+    response_model=LemonadeDetection,
+    response_model_exclude_unset=True,
+)
 def detect() -> Dict[str, Any]:
     """A Lemonade the user already runs on this PC's default ports, if any."""
     from gaia.llm.lemonade_choice import detect_lemonade
@@ -82,6 +142,8 @@ class TargetRequest(BaseModel):
 @router.post(
     "/api/lemonade/target",
     dependencies=[Depends(require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=LemonadeTargetSwitched,
+    response_model_exclude_unset=True,
 )
 def set_target(body: TargetRequest, request: Request) -> Dict[str, Any]:
     """Switch servers. Nothing is saved unless the user's server checks out."""

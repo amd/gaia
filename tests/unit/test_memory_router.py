@@ -785,6 +785,7 @@ class TestConsolidateEndpoint:
         """POST /api/memory/consolidate returns 200 when _consolidate_fn is set."""
         memory_router_mod._consolidate_fn = lambda max_sessions=5: {
             "consolidated": 2,
+            "windows": 2,
             "extracted_items": 8,
         }
         resp = client.post("/api/memory/consolidate")
@@ -799,7 +800,7 @@ class TestConsolidateEndpoint:
 
         def mock_consolidate(max_sessions=5):
             captured["max_sessions"] = max_sessions
-            return {"consolidated": 0, "extracted_items": 0}
+            return {"consolidated": 0, "windows": 0, "extracted_items": 0}
 
         memory_router_mod._consolidate_fn = mock_consolidate
         resp = client.post("/api/memory/consolidate?max_sessions=10")
@@ -1020,7 +1021,13 @@ class TestReconcileEndpoint:
 
         def agent_reconcile(max_pairs):
             seen["max_pairs"] = max_pairs
-            return {"pairs_checked": 0}
+            return {
+                "pairs_checked": 0,
+                "reinforced": 0,
+                "contradicted": 0,
+                "weakened": 0,
+                "neutral": 0,
+            }
 
         memory_router_mod._reconcile_fn = agent_reconcile
 

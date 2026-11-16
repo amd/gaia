@@ -699,6 +699,54 @@ class TestMemlockFix:
         assert e.value.code == "not_linux"
 
 
+def _full_plan(**over):
+    """A complete plan, as ``build_plan`` returns it; *over* sets what a test checks."""
+    plan = {
+        "profile": "gaia",
+        "lemonade": {"mode": "gaia", "url": None, "reachable": False},
+        "chat_model": {
+            "id": "Gemma-4-E4B-it-GGUF",
+            "user_set": False,
+            "size_gb": None,
+            "downloaded": None,
+        },
+        "recommended_model": None,
+        "decided_after_server": True,
+        "memory_gb": None,
+        "memory_source": None,
+        "capacity_gb": None,
+        "disk": {"path": None, "free_gb": None, "source": None},
+        "download_gb": None,
+        "disk_warning": None,
+        "skipped_models": [],
+        "options": [],
+        "models": [],
+        "catalog": [],
+        "components": [],
+        "backends": [],
+        "npu": {"present": False, "ready": False, "problems": []},
+        "system": {
+            "gaia_build": {
+                "version": "0.0.0",
+                "kind": "source",
+                "rc": None,
+                "commit": None,
+            },
+            "gaia_version": "0.0.0",
+            "gaia_home": "/home/gaia",
+            "agent_version": None,
+            "lemonade_version": None,
+            "os": None,
+            "processor": None,
+            "physical_memory": None,
+            "devices": [],
+        },
+        "vision_model": None,
+    }
+    plan.update(over)
+    return plan
+
+
 class TestSetupEndpoints:
     @pytest.fixture
     def client(self, monkeypatch):
@@ -707,7 +755,9 @@ class TestSetupEndpoints:
 
         from gaia.ui.routers import setup as setup_router
 
-        monkeypatch.setattr(setup_router, "build_plan", lambda: {"npu": "plan"})
+        monkeypatch.setattr(
+            setup_router, "build_plan", lambda: _full_plan(recommended_model="npu-plan")
+        )
         app = FastAPI()
         app.include_router(setup_router.router)
         self.app = app
@@ -719,7 +769,7 @@ class TestSetupEndpoints:
         applied = MagicMock()
         monkeypatch.setattr(npu_linux, "apply_memlock_fix", applied)
         r = client.post("/api/setup/npu/memlock-fix", headers=self.UI)
-        assert r.status_code == 200 and r.json() == {"npu": "plan"}
+        assert r.status_code == 200 and r.json()["recommended_model"] == "npu-plan"
         applied.assert_called_once()
 
     def test_a_dismissed_prompt_is_a_409_with_its_code(self, client, monkeypatch):

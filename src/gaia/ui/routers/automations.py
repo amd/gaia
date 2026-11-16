@@ -12,13 +12,14 @@ that runs on this PC, and its prompts can carry private detail.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from gaia.automations import files, store
 from gaia.logger import get_logger
 
+from ..models import WireModel
 from ..security import require_local_pc, require_ui_header
 
 log = get_logger(__name__)
@@ -30,6 +31,34 @@ router = APIRouter(
 )
 
 HEARTBEAT_NAME = "heartbeat"
+
+
+class AutomationRow(WireModel):
+    """One automation, in raw values the app words and formats itself."""
+
+    id: str
+    name: str
+    #: One of ``store.KINDS``; the file is not checked on load, so not narrowed here.
+    kind: str
+    heartbeat: bool
+    paused: bool
+    every_seconds: int
+    next_at: float
+    last_run_at: float
+    runs: int
+    prompt: str
+    say: str
+    check: str
+    quiet: str
+    days: str
+    failures: int
+
+
+class AutomationList(WireModel):
+    """Every automation; ``delivers`` is null when Discord's state can't be read."""
+
+    automations: List[AutomationRow]
+    delivers: Optional[bool]
 
 
 def _row(item: store.Automation) -> Dict[str, Any]:
@@ -73,7 +102,7 @@ def _load():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("")
+@router.get("", response_model=AutomationList, response_model_exclude_unset=True)
 def list_automations() -> Dict[str, Any]:
     items = _load()
     return {"automations": [_row(a) for a in items], "delivers": _delivers()}
@@ -82,6 +111,8 @@ def list_automations() -> Dict[str, Any]:
 @router.post(
     "/{ref}/{action}",
     dependencies=[Depends(require_ui_header)],
+    response_model=AutomationRow,
+    response_model_exclude_unset=True,
 )
 def set_automation(ref: str, action: Literal["pause", "resume"]) -> Dict[str, Any]:
     try:
@@ -93,7 +124,12 @@ def set_automation(ref: str, action: Literal["pause", "resume"]) -> Dict[str, An
     return _row(item)
 
 
-@router.delete("/{ref}", dependencies=[Depends(require_ui_header)])
+@router.delete(
+    "/{ref}",
+    dependencies=[Depends(require_ui_header)],
+    response_model=AutomationRow,
+    response_model_exclude_unset=True,
+)
 def remove_automation(ref: str) -> Dict[str, Any]:
     try:
         item = store.remove(ref)
