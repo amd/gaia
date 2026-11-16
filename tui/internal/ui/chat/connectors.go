@@ -23,6 +23,7 @@ const (
 	connectorsShow        connectorsVerb = ""
 	connectorsPersonalize connectorsVerb = "personalize"
 	connectorsRevoke      connectorsVerb = "revoke"
+	connectorsRemove      connectorsVerb = "remove"
 	connectorsAdd         connectorsVerb = "add"
 	connectorsReconnect   connectorsVerb = "reconnect"
 	connectorsDefault     connectorsVerb = "default"
@@ -32,8 +33,10 @@ const (
 var connectorsAsk = map[connectorsVerb]string{
 	connectorsPersonalize: "Name a connected connector: /connectors personalize <id>. " +
 		"Type /connectors to see their ids.",
-	connectorsRevoke: "Name the connector to turn off GAIA's access to: /connectors revoke <id>, " +
-		"or one account of it: /connectors revoke <id> <address>. Type /connectors to see them.",
+	connectorsRevoke: "Name the connector to turn off GAIA's access to: /connectors revoke <id>. " +
+		"Type /connectors to see which ones GAIA can use.",
+	connectorsRemove: "Name the account to sign out of GAIA: /connectors remove <id> <address>. " +
+		"Type /connectors to see them.",
 	connectorsAdd: "Name the connector to add an account to: /connectors add <id>. " +
 		"Type /connectors to see their ids.",
 	connectorsReconnect: "Name the account to sign in again: /connectors reconnect <id> <address>. " +
@@ -121,9 +124,9 @@ type connectorsSignInMsg struct {
 }
 
 // startSignInCmd adds an account (account == "") or signs one in again.
-var startSignInCmd = func(c gaiaconnectors.Connector, account string) tea.Cmd {
+var startSignInCmd = func(ctx context.Context, c gaiaconnectors.Connector, account string) tea.Cmd {
 	return func() tea.Msg {
-		s, err := gaiaconnectors.StartSignIn(c, account)
+		s, err := gaiaconnectors.StartSignIn(ctx, c, account)
 		return connectorsSignInMsg{connector: c, signIn: s, err: err}
 	}
 }
@@ -195,11 +198,16 @@ func (m ChatModel) handleConnectorsList(msg connectorsListMsg) (tea.Model, tea.C
 	}
 	switch msg.req.verb {
 	case connectorsPersonalize:
+		if account != "" {
+			return m.statusNote(fmt.Sprintf("Personalize reads all of %s, not one account: "+
+				"/connectors personalize %s", c.DisplayName, c.ID)), nil
+		}
 		return m.personalizeConnector(c)
 	case connectorsRevoke:
 		switch c.Type {
 		case "oauth_pkce":
-			return m.removeAccount(c, account)
+			return m.statusNote(fmt.Sprintf("GAIA's access to %s comes with signing in. To sign an "+
+				"account out of GAIA: /connectors remove %s <address>", c.DisplayName, c.ID)), nil
 		case "mcp_server":
 			return m.revokeActivation(c)
 		}
@@ -207,19 +215,27 @@ func (m ChatModel) handleConnectorsList(msg connectorsListMsg) (tea.Model, tea.C
 			"under Connectors in the Agent UI to remove that.", c.DisplayName)), nil
 	}
 	if c.Type != "oauth_pkce" {
-		return m.statusNote(fmt.Sprintf("%s has no accounts to manage here. Set it up from Connectors "+
-			"in the Agent UI.", c.DisplayName)), nil
+		hint := "Set it up from Connectors in the Agent UI."
+		if msg.req.verb == connectorsRemove && c.Type == "mcp_server" {
+			hint = "To turn off GAIA's use of it: /connectors revoke " + c.ID
+		}
+		return m.statusNote(fmt.Sprintf("%s has no accounts to manage here. %s", c.DisplayName, hint)), nil
+	}
+	if msg.req.verb == connectorsRemove {
+		return m.removeAccount(c, account)
+	}
+	if c.Accounts == nil {
+		return m.statusNote(olderCLINote(c)), nil
 	}
 	if msg.req.verb == connectorsAdd {
-		return m.statusNote("Opening " + c.DisplayName + " sign-in…"), startSignInCmd(c, "")
+		return m.startSignIn(c, "", "Opening "+c.DisplayName+" sign-in…")
 	}
 	a, refusal := pickAccount(c, account, msg.req.verb)
 	if refusal != "" {
 		return m.statusNote(refusal), nil
 	}
 	if msg.req.verb == connectorsReconnect {
-		return m.statusNote("Opening " + c.DisplayName + " sign-in for " + a.Label() + "…"),
-			startSignInCmd(c, a.Label())
+		return m.startSignIn(c, a.Label(), "Opening "+c.DisplayName+" sign-in for "+a.Label()+"…")
 	}
 	if a.IsDefault {
 		return m.statusNote(a.Label() + " is already the default " + c.DisplayName + " account."), nil
@@ -249,22 +265,35 @@ func pickAccount(c gaiaconnectors.Connector, account string, verb connectorsVerb
 		c.DisplayName, len(c.Accounts), c.AccountChoices(), verb, c.ID)
 }
 
-// removeAccount disconnects one account of an OAuth connector: GAIA's access
-// to it comes with the sign-in, so ending that access is signing it out.
+// olderCLINote answers an account command on a CLI that lists no accounts,
+// which takes none of the account flags either.
+func olderCLINote(c gaiaconnectors.Connector) string {
+	return "This GAIA install can't manage " + c.DisplayName + " accounts one at a time. " +
+		"Update GAIA, or manage " + c.DisplayName + " under Connectors in the Agent UI."
+}
+
+// startSignIn opens a browser sign-in under the context Retire cancels.
+func (m ChatModel) startSignIn(c gaiaconnectors.Connector, account, note string) (tea.Model, tea.Cmd) {
+	if m.signIns == nil {
+		m.signIns, m.stopSignIns = context.WithCancel(context.Background())
+	}
+	return m.statusNote(note), startSignInCmd(m.signIns, c, account)
+}
+
+// removeAccount signs one account of an OAuth connector out of GAIA.
 func (m ChatModel) removeAccount(c gaiaconnectors.Connector, account string) (tea.Model, tea.Cmd) {
 	// An older CLI lists no accounts and takes no --account; plain disconnect
 	// is the same on both.
-	if len(c.Accounts) == 0 {
+	if c.Accounts == nil {
 		if !c.Configured {
 			return m.statusNote(c.DisplayName + " isn't connected."), nil
 		}
 		if account != "" {
-			return m.statusNote("This GAIA install can't remove one account at a time. " +
-				"Update GAIA, or disconnect " + c.DisplayName + " under Connectors in the Agent UI."), nil
+			return m.statusNote(olderCLINote(c)), nil
 		}
 		return m.statusNote("Disconnecting " + c.DisplayName + "…"), disconnectAccountCmd(c, "")
 	}
-	a, refusal := pickAccount(c, account, connectorsRevoke)
+	a, refusal := pickAccount(c, account, connectorsRemove)
 	if refusal != "" {
 		return m.statusNote(refusal), nil
 	}

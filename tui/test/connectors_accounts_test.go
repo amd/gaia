@@ -42,8 +42,9 @@ const twoGoogleAccounts = `[
   "accounts": [{"account_id": "3333", "email": "jane@example.org", "status": "ok", "is_default": true}]}]`
 
 // TestConnectorsShowsAndRemovesOneOfSeveralAccounts drives /connectors in the
-// running TUI against a stand-in CLI: the list names each account, a bare
-// revoke asks which one, and a named revoke disconnects only that account.
+// running TUI against a stand-in CLI: the list names each account, revoke
+// signs nothing out, a bare remove asks which account, and a named remove
+// disconnects only that one.
 func TestConnectorsShowsAndRemovesOneOfSeveralAccounts(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the stand-in CLI is a shell script")
@@ -82,6 +83,7 @@ esac
 		"jane.work@example.com (sign-in expired: /connectors reconnect google jane.work@example.com)",
 		"Microsoft (microsoft) connected as jane@example.org",
 		"/connectors add <id>",
+		"/connectors remove <id> <address>",
 	} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("the list is missing %q:\n%s", want, screen)
@@ -90,12 +92,16 @@ esac
 	saveCapture(t, tui, "connectors-list.svg")
 
 	send("/connectors revoke google")
-	tui.waitFor(map[string]any{"contains": "Google has 2 accounts"})
-	saveCapture(t, tui, "connectors-revoke-choices.svg")
+	tui.waitFor(map[string]any{"contains": "comes with signing in"})
+	saveCapture(t, tui, "connectors-revoke-points-to-remove.svg")
 
-	send("/connectors revoke google jane.work@example.com")
+	send("/connectors remove google")
+	tui.waitFor(map[string]any{"contains": "Google has 2 accounts"})
+	saveCapture(t, tui, "connectors-remove-choices.svg")
+
+	send("/connectors remove google jane.work@example.com")
 	tui.waitFor(map[string]any{"contains": "1 other account still connected"})
-	saveCapture(t, tui, "connectors-revoke-done.svg")
+	saveCapture(t, tui, "connectors-remove-done.svg")
 
 	raw, err := os.ReadFile(argsLog)
 	if err != nil {

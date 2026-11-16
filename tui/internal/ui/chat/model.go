@@ -510,6 +510,11 @@ type ChatModel struct {
 	// panel is on and what it has collected. Non-nil only between /slack setup
 	// and the flow finishing or being cancelled.
 	slackSetup *slackSetupState
+	// signIns is what every /connectors browser sign-in runs under, made on
+	// first use. Retire cancels it, so no CLI keeps waiting on the browser
+	// once the chat is gone.
+	signIns     context.Context
+	stopSignIns context.CancelFunc
 	// slackOffered records that the one-time Slack offer has already been shown
 	// this session, so a second launch-time probe cannot repeat it. The durable
 	// answer lives in `gaia slack decline`; this only stops a duplicate inside
@@ -2259,6 +2264,10 @@ func (m *ChatModel) dropCancellingNotice() {
 func (m *ChatModel) Retire() {
 	m.CancelActiveTurn()
 	m.StopReadAloud()
+	if m.stopSignIns != nil {
+		m.stopSignIns()
+		m.signIns, m.stopSignIns = nil, nil
+	}
 }
 
 // CancelActiveTurn stops any in-flight turn. The UI owns the per-turn context, so

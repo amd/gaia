@@ -10,18 +10,24 @@
 package gaiaconnectors
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
-// ListTimeout bounds the probe; it spawns a Python interpreter.
-const ListTimeout = 30 * time.Second
+// ListTimeout bounds the probe; it spawns a Python interpreter. A var so tests
+// can shorten it.
+var ListTimeout = 30 * time.Second
+
+// AccountTimeout bounds removing an account or changing the default, which
+// can wait on the provider to revoke a token.
+var AccountTimeout = 2 * time.Minute
 
 // Binary resolves the `gaia` CLI on PATH; a var so tests can stub it.
 var Binary = func() (string, error) {
@@ -177,18 +183,18 @@ func Deactivate(ctx context.Context, c Connector) error {
 
 func runActivations(ctx context.Context, what string, c Connector, sub string, extra ...string) error {
 	args := append([]string{"connectors", "activations", sub, c.ID, FlagshipAgentID}, extra...)
-	_, err := runCLI(ctx, what+" "+c.DisplayName, args...)
+	_, err := runCLI(ctx, ListTimeout, what+" "+c.DisplayName, args...)
 	return err
 }
 
 // runCLI runs `gaia <args>` and returns what it printed. what completes
 // "could not …" in the error.
-func runCLI(ctx context.Context, what string, args ...string) (string, error) {
+func runCLI(ctx context.Context, timeout time.Duration, what string, args ...string) (string, error) {
 	bin, err := Binary()
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(ctx, ListTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	var out, errBuf bytes.Buffer
@@ -211,33 +217,41 @@ func Disconnect(ctx context.Context, c Connector, account string) (string, error
 		args = append(args, "--account", account)
 		what = "remove " + account + " from " + c.DisplayName
 	}
-	return runCLI(ctx, what, args...)
+	return runCLI(ctx, AccountTimeout, what, args...)
 }
 
 // SetDefault makes account the one a connector uses when none is named.
 func SetDefault(ctx context.Context, c Connector, account string) (string, error) {
-	return runCLI(ctx, "make "+account+" the default "+c.DisplayName+" account",
+	return runCLI(ctx, AccountTimeout, "make "+account+" the default "+c.DisplayName+" account",
 		"connectors", "set-default", c.ID, account)
 }
 
 // SignInTimeout outlasts the CLI's own 15-minute wait for the browser.
 const SignInTimeout = 16 * time.Minute
 
+// signInWaitDelay is how long a finished sign-in waits for its output to
+// close. On Linux the browser the CLI opens inherits that output and keeps it
+// open long after the CLI exits, so the CLI's exit is what ends the sign-in.
+const signInWaitDelay = 2 * time.Second
+
 // SignIn is a browser sign-in that `gaia connectors connect` is waiting on.
 type SignIn struct {
 	// URL is the sign-in page. The CLI opens it in the browser too.
 	URL    string
-	cmd    *exec.Cmd
-	out    *bufio.Scanner
+	out    *signInOutput
 	stderr *bytes.Buffer
 	cancel context.CancelFunc
+	// done closes once the CLI has exited; err is how it exited.
+	done chan struct{}
+	err  error
 	// what completes "could not …"; command is what ran, for the error.
 	what, command string
 }
 
 // StartSignIn signs another account in (account == "") or signs a listed
 // account in again, and returns once the CLI has printed the sign-in link.
-func StartSignIn(c Connector, account string) (*SignIn, error) {
+// Cancelling ctx stops the CLI.
+func StartSignIn(ctx context.Context, c Connector, account string) (*SignIn, error) {
 	bin, err := Binary()
 	if err != nil {
 		return nil, err
@@ -248,26 +262,35 @@ func StartSignIn(c Connector, account string) (*SignIn, error) {
 		args = []string{"connectors", "connect", c.ID, "--account", account}
 		what = "reconnect " + account
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), SignInTimeout)
+	ctx, cancel := context.WithTimeout(ctx, SignInTimeout)
 	cmd := exec.CommandContext(ctx, bin, args...)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	s := &SignIn{cmd: cmd, out: bufio.NewScanner(stdout), stderr: &bytes.Buffer{}, cancel: cancel,
-		what: what, command: "gaia " + strings.Join(args, " ")}
+	cmd.WaitDelay = signInWaitDelay
+	s := &SignIn{out: &signInOutput{link: make(chan string, 1)}, stderr: &bytes.Buffer{},
+		cancel: cancel, done: make(chan struct{}), what: what, command: "gaia " + strings.Join(args, " ")}
+	cmd.Stdout = s.out
 	cmd.Stderr = s.stderr
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("could not %s (`%s` failed: %w)", s.what, s.command, err)
 	}
-	for s.out.Scan() {
-		line := strings.TrimSpace(s.out.Text())
-		if strings.HasPrefix(line, "https://") || strings.HasPrefix(line, "http://") {
-			s.URL = line
-			return s, nil
+	go func() {
+		err := cmd.Wait()
+		if errors.Is(err, exec.ErrWaitDelay) {
+			err = nil
 		}
+		s.out.flush()
+		s.err = err
+		close(s.done)
+	}()
+	select {
+	case s.URL = <-s.out.link:
+		return s, nil
+	case <-s.done:
+	}
+	select {
+	case s.URL = <-s.out.link:
+		return s, nil
+	default:
 	}
 	_, err = s.Wait()
 	if err == nil {
@@ -276,21 +299,66 @@ func StartSignIn(c Connector, account string) (*SignIn, error) {
 	return nil, err
 }
 
-// Wait blocks until the sign-in ends and returns the CLI's closing line,
-// such as "Added jane@example.com".
+// Wait blocks until the CLI exits and returns its closing line, such as
+// "Added jane@example.com".
 func (s *SignIn) Wait() (string, error) {
-	defer s.cancel()
-	last := ""
-	for s.out.Scan() {
-		if line := strings.TrimSpace(s.out.Text()); line != "" {
-			last = line
-		}
-	}
-	if err := s.cmd.Wait(); err != nil {
-		return "", fmt.Errorf("could not %s (`%s` failed: %w): %s", s.what, s.command, err,
+	<-s.done
+	s.cancel()
+	if s.err != nil {
+		return "", fmt.Errorf("could not %s (`%s` failed: %w): %s", s.what, s.command, s.err,
 			strings.TrimSpace(s.stderr.String()))
 	}
-	return last, nil
+	return s.out.lastLine(), nil
+}
+
+// signInOutput reads the CLI's output line by line: it hands the first link
+// to StartSignIn and keeps the last line for Wait.
+type signInOutput struct {
+	mu      sync.Mutex
+	partial []byte
+	last    string
+	link    chan string
+	linked  bool
+}
+
+func (o *signInOutput) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.partial = append(o.partial, p...)
+	for {
+		i := bytes.IndexByte(o.partial, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		o.line(string(o.partial[:i]))
+		o.partial = o.partial[i+1:]
+	}
+}
+
+// flush reads a last line that ended without a newline.
+func (o *signInOutput) flush() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.line(string(o.partial))
+	o.partial = nil
+}
+
+func (o *signInOutput) line(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	o.last = text
+	if !o.linked && (strings.HasPrefix(text, "https://") || strings.HasPrefix(text, "http://")) {
+		o.linked = true
+		o.link <- text
+	}
+}
+
+func (o *signInOutput) lastLine() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.last
 }
 
 // Find returns the connector whose id or display name matches, ignoring case.
@@ -351,7 +419,7 @@ func Render(rows []Connector) string {
 	}
 	b.WriteString("\nConnect one from Connectors in the Agent UI.")
 	if len(withAccounts) > 0 {
-		b.WriteString("\nAnother account: /connectors add <id>. Remove one: /connectors revoke <id> <address>.")
+		b.WriteString("\nAnother account: /connectors add <id>. Sign one out of GAIA: /connectors remove <id> <address>.")
 	}
 	if len(withSeveral) > 0 {
 		b.WriteString("\nChange which account GAIA uses when you don't say: /connectors default <id> <address>.")
@@ -378,7 +446,7 @@ func accountNote(c Connector, a Account) string {
 	case AccountExpired:
 		notes = append(notes, "sign-in expired: /connectors reconnect "+c.ID+" "+a.Label())
 	case AccountBroken:
-		notes = append(notes, "sign-in did not finish: /connectors revoke "+c.ID+" "+a.Label()+
+		notes = append(notes, "sign-in did not finish: /connectors remove "+c.ID+" "+a.Label()+
 			", then /connectors add "+c.ID)
 	}
 	return strings.Join(notes, " · ")

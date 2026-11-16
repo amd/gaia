@@ -6,9 +6,13 @@ package gaiaconnectors
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const sample = `INFO loading catalog
@@ -102,10 +106,29 @@ const fakeCLIArgsEnv = "GAIACONNECTORS_FAKE_CLI_ARGS"
 // fakeCLIStdoutEnv is what the stand-in prints, as the real CLI would.
 const fakeCLIStdoutEnv = "GAIACONNECTORS_FAKE_CLI_STDOUT"
 
+// fakeCLISleepEnv is how long the stand-in waits after printing, as the real
+// CLI waits on the browser.
+const fakeCLISleepEnv = "GAIACONNECTORS_FAKE_CLI_SLEEP"
+
+// fakeCLIBrowserEnv makes the stand-in start a long-lived child that holds its
+// stdout, as a browser the CLI opened on Linux does, and write the child's pid
+// to the named file.
+const fakeCLIBrowserEnv = "GAIACONNECTORS_FAKE_CLI_BROWSER_PID"
+
 func TestMain(m *testing.M) {
 	if out := os.Getenv(fakeCLIArgsEnv); out != "" {
 		_ = os.WriteFile(out, []byte(strings.Join(os.Args[1:], " ")), 0o600)
 		os.Stdout.WriteString(os.Getenv(fakeCLIStdoutEnv))
+		if pidFile := os.Getenv(fakeCLIBrowserEnv); pidFile != "" {
+			browser := exec.Command("sleep", "20")
+			browser.Stdout = os.Stdout
+			if browser.Start() == nil {
+				_ = os.WriteFile(pidFile, []byte(strconv.Itoa(browser.Process.Pid)), 0o600)
+			}
+		}
+		if d, err := time.ParseDuration(os.Getenv(fakeCLISleepEnv)); err == nil {
+			time.Sleep(d)
+		}
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
@@ -243,10 +266,10 @@ func TestRenderListsEachAccountWithItsStateAndTheDefault(t *testing.T) {
 		"Google (google)          connected, 3 accounts",
 		"      jane@example.com (default)\n",
 		"      jane.work@example.com (sign-in expired: /connectors reconnect google jane.work@example.com)",
-		"      3333 (sign-in did not finish: /connectors revoke google 3333, then /connectors add google)",
+		"      3333 (sign-in did not finish: /connectors remove google 3333, then /connectors add google)",
 		"Microsoft (microsoft)    needs signing in again",
 		"      jane@example.org (default · sign-in expired: /connectors reconnect microsoft jane@example.org)",
-		"Another account: /connectors add <id>. Remove one: /connectors revoke <id> <address>.",
+		"Another account: /connectors add <id>. Sign one out of GAIA: /connectors remove <id> <address>.",
 		"/connectors default <id> <address>",
 	} {
 		if !strings.Contains(out, want) {
@@ -312,7 +335,7 @@ func TestSignInHandsBackTheLinkThenTheOutcome(t *testing.T) {
 		argsFile := fakeCLI(t)
 		t.Setenv(fakeCLIStdoutEnv, "Open this URL to authorize google:\n  https://accounts.example.com/o?x=1\n"+
 			"Sign-in completes via a callback.\nAdded jane@example.com\n")
-		s, err := StartSignIn(google, account)
+		s, err := StartSignIn(context.Background(), google, account)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -332,8 +355,90 @@ func TestSignInHandsBackTheLinkThenTheOutcome(t *testing.T) {
 func TestSignInWithoutALinkFailsLoudly(t *testing.T) {
 	fakeCLI(t)
 	t.Setenv(fakeCLIStdoutEnv, "nothing useful\n")
-	if _, err := StartSignIn(Connector{ID: "google", DisplayName: "Google"}, ""); err == nil ||
+	if _, err := StartSignIn(context.Background(), Connector{ID: "google", DisplayName: "Google"}, ""); err == nil ||
 		!strings.Contains(err.Error(), "printed no sign-in link") {
 		t.Fatalf("want a loud error, got %v", err)
+	}
+}
+
+const signInText = "Open this URL to authorize google:\n  https://accounts.example.com/o?x=1\nAdded jane@example.com\n"
+
+// waitWithin runs s.Wait, failing the test if it takes longer than limit.
+func waitWithin(t *testing.T, s *SignIn, limit time.Duration) (string, error) {
+	t.Helper()
+	type result struct {
+		report string
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		report, err := s.Wait()
+		done <- result{report, err}
+	}()
+	select {
+	case r := <-done:
+		return r.report, r.err
+	case <-time.After(limit):
+		t.Fatalf("Wait still blocked after %s", limit)
+		return "", nil
+	}
+}
+
+func TestSignInEndsWhenTheCLIExitsThoughTheBrowserHoldsItsOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in browser is sleep(1)")
+	}
+	fakeCLI(t)
+	pidFile := filepath.Join(t.TempDir(), "browser.pid")
+	t.Setenv(fakeCLIStdoutEnv, signInText)
+	t.Setenv(fakeCLIBrowserEnv, pidFile)
+	t.Cleanup(func() {
+		if raw, err := os.ReadFile(pidFile); err == nil {
+			if pid, err := strconv.Atoi(string(raw)); err == nil {
+				if p, err := os.FindProcess(pid); err == nil {
+					_ = p.Kill()
+				}
+			}
+		}
+	})
+	s, err := StartSignIn(context.Background(), Connector{ID: "google", DisplayName: "Google"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := waitWithin(t, s, 8*time.Second)
+	if err != nil || report != "Added jane@example.com" {
+		t.Fatalf("outcome = %q, %v", report, err)
+	}
+}
+
+func TestSignInStopsWhenItsContextIsCancelled(t *testing.T) {
+	fakeCLI(t)
+	t.Setenv(fakeCLIStdoutEnv, signInText)
+	t.Setenv(fakeCLISleepEnv, "30s")
+	ctx, cancel := context.WithCancel(context.Background())
+	s, err := StartSignIn(ctx, Connector{ID: "google", DisplayName: "Google"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if _, err := waitWithin(t, s, 8*time.Second); err == nil {
+		t.Fatal("a cancelled sign-in must end with an error, not a report")
+	}
+}
+
+func TestAccountChangesOutlastTheListProbesBound(t *testing.T) {
+	prevList, prevAccount := ListTimeout, AccountTimeout
+	ListTimeout, AccountTimeout = 200*time.Millisecond, 10*time.Second
+	t.Cleanup(func() { ListTimeout, AccountTimeout = prevList, prevAccount })
+	fakeCLI(t)
+	t.Setenv(fakeCLIStdoutEnv, "Removed jane@example.com\n")
+	t.Setenv(fakeCLISleepEnv, "600ms")
+	google := Connector{ID: "google", DisplayName: "Google", Type: "oauth_pkce"}
+	if report, err := Disconnect(context.Background(), google, "jane@example.com"); err != nil ||
+		report != "Removed jane@example.com" {
+		t.Fatalf("disconnect = %q, %v", report, err)
+	}
+	if _, err := SetDefault(context.Background(), google, "jane@example.com"); err != nil {
+		t.Fatalf("set-default: %v", err)
 	}
 }

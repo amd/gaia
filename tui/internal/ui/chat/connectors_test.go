@@ -4,6 +4,7 @@
 package chat
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -150,6 +151,18 @@ var revokeRows = []gaiaconnectors.Connector{
 	{ID: "google", DisplayName: "Google", Type: "oauth_pkce", Configured: true},
 }
 
+func stubActivate(t *testing.T) *[]string {
+	t.Helper()
+	var calls []string
+	prev := activateConnectorCmd
+	activateConnectorCmd = func(c gaiaconnectors.Connector) tea.Cmd {
+		calls = append(calls, c.ID)
+		return func() tea.Msg { return connectorsActivatedMsg{connector: c} }
+	}
+	t.Cleanup(func() { activateConnectorCmd = prev })
+	return &calls
+}
+
 func stubDeactivate(t *testing.T) *[]string {
 	t.Helper()
 	var calls []string
@@ -242,7 +255,7 @@ var googleAccounts = gaiaconnectors.Connector{
 	},
 }
 
-// accountCalls records the CLI work each account command would start.
+// stubAccountCmds records the CLI work each account command would start.
 func stubAccountCmds(t *testing.T) *[]string {
 	t.Helper()
 	var calls []string
@@ -255,7 +268,7 @@ func stubAccountCmds(t *testing.T) *[]string {
 		calls = append(calls, "default "+c.ID+" "+account)
 		return func() tea.Msg { return connectorsReportMsg{} }
 	}
-	startSignInCmd = func(c gaiaconnectors.Connector, account string) tea.Cmd {
+	startSignInCmd = func(_ context.Context, c gaiaconnectors.Connector, account string) tea.Cmd {
 		calls = append(calls, "sign-in "+c.ID+" "+account)
 		return func() tea.Msg { return connectorsSignInMsg{connector: c} }
 	}
@@ -276,9 +289,9 @@ func runConnectorsCommand(t *testing.T, rows []gaiaconnectors.Connector, query s
 func TestAccountCommandsActOnTheNamedAccount(t *testing.T) {
 	rows := []gaiaconnectors.Connector{googleAccounts}
 	cases := map[string]string{
-		"/connectors revoke google jane.work@example.com":    "disconnect google jane.work@example.com",
-		"/connectors revoke Google JANE.WORK@example.com":    "disconnect google jane.work@example.com",
-		"/connectors revoke google 2222":                     "disconnect google jane.work@example.com",
+		"/connectors remove google jane.work@example.com":    "disconnect google jane.work@example.com",
+		"/connectors remove Google JANE.WORK@example.com":    "disconnect google jane.work@example.com",
+		"/connectors remove google 2222":                     "disconnect google jane.work@example.com",
 		"/connectors add google":                             "sign-in google ",
 		"/connectors reconnect google jane.work@example.com": "sign-in google jane.work@example.com",
 		"/connectors default google jane.work@example.com":   "default google jane.work@example.com",
@@ -294,7 +307,7 @@ func TestAccountCommandsActOnTheNamedAccount(t *testing.T) {
 func TestAccountCommandsWithSeveralAccountsAndNoneNamedShowTheChoices(t *testing.T) {
 	calls := stubAccountCmds(t)
 	rows := []gaiaconnectors.Connector{googleAccounts}
-	for _, verb := range []string{"revoke", "reconnect", "default"} {
+	for _, verb := range []string{"remove", "reconnect", "default"} {
 		text, cmd := runConnectorsCommand(t, rows, "/connectors "+verb+" google")
 		if cmd != nil {
 			t.Errorf("%s: must not act without a chosen account", verb)
@@ -305,7 +318,7 @@ func TestAccountCommandsWithSeveralAccountsAndNoneNamedShowTheChoices(t *testing
 			}
 		}
 	}
-	text, _ := runConnectorsCommand(t, rows, "/connectors revoke google nobody@example.com")
+	text, _ := runConnectorsCommand(t, rows, "/connectors remove google nobody@example.com")
 	if !strings.Contains(text, `no account "nobody@example.com"`) || !strings.Contains(text, "jane.work@example.com") {
 		t.Errorf("an unknown account must list the real ones: %s", text)
 	}
@@ -317,14 +330,14 @@ func TestAccountCommandsWithSeveralAccountsAndNoneNamedShowTheChoices(t *testing
 	}
 }
 
-func TestRevokeOfASingleAccountDisconnectsIt(t *testing.T) {
+func TestRemoveOfASingleAccountDisconnectsIt(t *testing.T) {
 	one := googleAccounts
 	one.Accounts = one.Accounts[:1]
 	// An older CLI lists no accounts; plain disconnect works there too.
 	older := gaiaconnectors.Connector{ID: "google", DisplayName: "Google", Type: "oauth_pkce", Configured: true}
 	for name, rows := range map[string][]gaiaconnectors.Connector{"one": {one}, "older": {older}} {
 		calls := stubAccountCmds(t)
-		_, cmd := runConnectorsCommand(t, rows, "/connectors revoke google")
+		_, cmd := runConnectorsCommand(t, rows, "/connectors remove google")
 		want := "disconnect google jane@example.com"
 		if name == "older" {
 			want = "disconnect google "
@@ -334,8 +347,8 @@ func TestRevokeOfASingleAccountDisconnectsIt(t *testing.T) {
 		}
 	}
 	calls := stubAccountCmds(t)
-	text, _ := runConnectorsCommand(t, []gaiaconnectors.Connector{older}, "/connectors revoke google jane@example.com")
-	if !strings.Contains(text, "can't remove one account at a time") || len(*calls) != 0 {
+	text, _ := runConnectorsCommand(t, []gaiaconnectors.Connector{older}, "/connectors remove google jane@example.com")
+	if !strings.Contains(text, "one at a time") || len(*calls) != 0 {
 		t.Errorf("an older CLI cannot take --account: %s %v", text, *calls)
 	}
 }
@@ -353,7 +366,7 @@ func TestAccountCommandsRefuseAToolServer(t *testing.T) {
 }
 
 func TestBareAccountCommandsAskWithoutProbing(t *testing.T) {
-	for _, verb := range []string{"add", "reconnect", "default"} {
+	for _, verb := range []string{"add", "remove", "reconnect", "default"} {
 		updated, cmd := slackModel(t).submit("/connectors " + verb)
 		if cmd != nil || !strings.Contains(lastStatus(t, updated.(ChatModel)), "/connectors "+verb+" <id>") {
 			t.Errorf("bare %s must ask for an id without probing", verb)
@@ -381,5 +394,101 @@ func TestSignInShowsTheLinkThenTheOutcome(t *testing.T) {
 	failed, _ := m.handleConnectorsReport(connectorsReportMsg{err: errors.New("exit status 5: pick one")})
 	if text := lastStatus(t, failed.(ChatModel)); !strings.Contains(text, "pick one") {
 		t.Fatalf("a failure must be shown: %s", text)
+	}
+}
+
+func TestRevokeOnAnAccountConnectorPointsToRemoveAndSignsNothingOut(t *testing.T) {
+	calls := stubAccountCmds(t)
+	rows := []gaiaconnectors.Connector{googleAccounts}
+	for _, query := range []string{"/connectors revoke google", "/connectors revoke google jane.work@example.com"} {
+		text, cmd := runConnectorsCommand(t, rows, query)
+		if cmd != nil || !strings.Contains(text, "/connectors remove google") {
+			t.Errorf("%s: want a pointer to /connectors remove, got %q", query, text)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("revoke must not sign an account out, ran %v", *calls)
+	}
+}
+
+func TestRemoveRefusesAToolServerAndPointsToRevoke(t *testing.T) {
+	calls := stubAccountCmds(t)
+	deactivations := stubDeactivate(t)
+	text, cmd := runConnectorsCommand(t, revokeRows, "/connectors remove mcp-slack")
+	if cmd != nil || !strings.Contains(text, "/connectors revoke mcp-slack") {
+		t.Errorf("want a pointer to revoke, got %q", text)
+	}
+	if len(*calls) != 0 || len(*deactivations) != 0 {
+		t.Fatalf("nothing should have run, got %v %v", *calls, *deactivations)
+	}
+}
+
+func TestPersonalizeRefusesAnAccount(t *testing.T) {
+	calls := stubActivate(t)
+	text, cmd := runConnectorsCommand(t, []gaiaconnectors.Connector{googleAccounts},
+		"/connectors personalize google jane.work@example.com")
+	if cmd != nil || !strings.Contains(text, "/connectors personalize google") {
+		t.Errorf("an account must be refused, not ignored: %q", text)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("nothing should have been activated, got %v", *calls)
+	}
+}
+
+func TestAccountCommandsOnAnOlderCLIAskForAnUpdate(t *testing.T) {
+	older := []gaiaconnectors.Connector{{ID: "google", DisplayName: "Google", Type: "oauth_pkce", Configured: true}}
+	calls := stubAccountCmds(t)
+	for _, query := range []string{
+		"/connectors add google",
+		"/connectors reconnect google jane@example.com",
+		"/connectors default google jane@example.com",
+		"/connectors remove google jane@example.com",
+	} {
+		text, cmd := runConnectorsCommand(t, older, query)
+		if cmd != nil || !strings.Contains(text, "Update GAIA") || strings.Contains(text, "/connectors add") {
+			t.Errorf("%s: want an update message, got %q", query, text)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("nothing should have run, got %v", *calls)
+	}
+	none := googleAccounts
+	none.Configured, none.Accounts = false, []gaiaconnectors.Account{}
+	if text, _ := runConnectorsCommand(t, []gaiaconnectors.Connector{none}, "/connectors default google"); !strings.Contains(text, "/connectors add google") {
+		t.Errorf("a current CLI with no accounts should offer to add one: %q", text)
+	}
+}
+
+func TestReconnectThatSignedInAnotherAccountShowsTheCLIsWords(t *testing.T) {
+	report := "Signed in as jane.other@example.com, which is a different account from jane.work@example.com, " +
+		"so it was added as a new account; jane.work@example.com still needs reconnecting"
+	done, _ := slackModel(t).handleConnectorsReport(connectorsReportMsg{report: report})
+	if text := lastStatus(t, done.(ChatModel)); text != report {
+		t.Fatalf("the CLI's explanation must reach the screen as written: %q", text)
+	}
+}
+
+func TestLeavingTheChatStopsAPendingSignIn(t *testing.T) {
+	var ctxs []context.Context
+	prev := startSignInCmd
+	startSignInCmd = func(ctx context.Context, _ gaiaconnectors.Connector, _ string) tea.Cmd {
+		ctxs = append(ctxs, ctx)
+		return func() tea.Msg { return nil }
+	}
+	t.Cleanup(func() { startSignInCmd = prev })
+	m := slackModel(t)
+	for _, query := range []string{"/connectors add google", "/connectors reconnect google jane.work@example.com"} {
+		req, _ := parseConnectorsCommand(query)
+		updated, _ := m.handleConnectorsList(connectorsListMsg{rows: []gaiaconnectors.Connector{googleAccounts}, req: req})
+		m = updated.(ChatModel)
+	}
+	if len(ctxs) != 2 || ctxs[0].Err() != nil || ctxs[1].Err() != nil {
+		t.Fatalf("both sign-ins should be running: %v", ctxs)
+	}
+	m.Retire()
+	for i, ctx := range ctxs {
+		if ctx.Err() == nil {
+			t.Errorf("sign-in %d still running after the chat retired", i)
+		}
 	}
 }
