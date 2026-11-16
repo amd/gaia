@@ -459,3 +459,22 @@ def test_any_other_request_error_is_still_a_clean_exit(capsys, exc):
     out = capsys.readouterr().out
     assert "Web extract failed" in out
     assert "Check your internet connection" not in out
+
+
+@pytest.mark.parametrize(
+    "status, hint", [(502, "may be down"), (404, "rejected the request")]
+)
+def test_a_duckduckgo_error_status_is_one_line_not_a_traceback(capsys, status, hint):
+    """With no Tavily key, a DuckDuckGo 5xx printed a traceback."""
+    from gaia.web.client import SearchStatusError
+
+    _FakeTavilyClient.on_search = _raiser(SearchStatusError("DuckDuckGo", status))
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_knowledge_command(_knowledge_args("search"))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert f"DuckDuckGo answered HTTP {status}" in out
+    assert hint in out
+    assert "Traceback" not in out

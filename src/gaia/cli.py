@@ -7550,7 +7550,7 @@ def handle_knowledge_command(args):
 
     import requests
 
-    from gaia.web.client import SearchUnavailableError
+    from gaia.web.client import SearchStatusError, SearchUnavailableError
     from gaia.web.tavily import (
         BudgetConfig,
         TavilyBudgetExceeded,
@@ -7586,7 +7586,7 @@ def handle_knowledge_command(args):
     except TavilyBudgetExceeded as e:
         print(f"🛑 {e}")
         sys.exit(1)
-    except (TavilyConfigError, SearchUnavailableError) as e:
+    except (TavilyConfigError, SearchUnavailableError, SearchStatusError) as e:
         print(f"❌ {e}")
         sys.exit(1)
     except (
