@@ -437,6 +437,19 @@ def main(argv=None) -> int:
         )
         return 0
 
+    try:
+        from gaia.sidecar import parent_watch
+    except ImportError:  # amd-gaia older than the daemon watch; the pin allows it
+        log.warning(
+            "This amd-gaia cannot watch the GAIA daemon, so the email sidecar "
+            "keeps running if the daemon is killed. Fix: pip install --upgrade amd-gaia"
+        )
+    else:
+        try:
+            parent_watch.start()
+        except ValueError as exc:
+            parser.error(str(exc))
+
     log.info("Starting GAIA email sidecar on http://%s:%d", args.host, args.port)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

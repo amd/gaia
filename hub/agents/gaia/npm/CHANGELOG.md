@@ -8,6 +8,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **The agent stops when the GAIA daemon that started it is killed.** It used
+  to keep running, holding memory and a port, until the next daemon started.
+  It now notices within seconds and shuts down normally.
 - **The Agent UI no longer calls a model server GAIA doesn't run "not
   installed".** When that server stopped answering, a run's `error` ended with
   this machine's start instruction, which on a PC with no Lemonade of its own
