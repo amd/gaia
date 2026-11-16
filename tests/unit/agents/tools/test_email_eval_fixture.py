@@ -67,9 +67,9 @@ def test_committed_mailbox_matches_its_builder():
 def test_access_reports_the_fixture_account(tools):
     out = tools("check_mailbox_access")
     assert out["success"] is True
-    assert out["provider_source"] == "eval-fixture"
-    assert out["address"] == fixture.FIXTURE_ADDRESS
-    assert (out["inbox_total"], out["inbox_unread"]) == (42, 20)
+    [account] = out["accounts"]
+    assert account["address"] == account["account"] == fixture.FIXTURE_ADDRESS
+    assert (account["inbox_total"], account["inbox_unread"]) == (42, 20)
 
 
 def test_inbox_flags_exactly_the_four_lures(tools):
@@ -240,8 +240,20 @@ def test_eval_mailbox_route(monkeypatch):
             json={"attached": False},
             headers={"X-Gaia-UI": "1"},
         )
-        assert resp.json() == {"path": str(MBOX), "exists": True, "attached": False}
+        assert resp.json() == {
+            "path": str(MBOX),
+            "exists": True,
+            "attached": False,
+            "multi_account": False,
+        }
         assert fixture.is_attached() is False
+        resp = client.post(
+            "/api/connectors/eval-mailbox",
+            json={"attached": True, "multi_account": True},
+            headers={"X-Gaia-UI": "1"},
+        )
+        assert resp.json()["multi_account"] is True
+        assert fixture.is_multi_account() is True
     finally:
         fixture.set_attached(True)
 
@@ -276,9 +288,9 @@ def test_runner_applies_the_scenario_mailbox_state(monkeypatch):
             return False
 
     def _urlopen(req, timeout):
-        attached = json.loads(req.data)["attached"]
-        sent.append((req.full_url, req.get_header("X-gaia-ui"), attached))
-        return _Resp(json.dumps({"attached": attached}).encode())
+        body = json.loads(req.data)
+        sent.append((req.full_url, req.get_header("X-gaia-ui"), body["attached"]))
+        return _Resp(json.dumps(body).encode())
 
     monkeypatch.setattr("urllib.request.urlopen", _urlopen)
     detached = {"setup": {"mailbox_fixture": "detached"}}
@@ -289,3 +301,88 @@ def test_runner_applies_the_scenario_mailbox_state(monkeypatch):
     assert "mailbox_fixture" in runner._apply_mailbox_fixture(
         "http://b", {"setup": {"mailbox_fixture": "on"}}
     )
+    several = {"setup": {"mailbox_fixture": "multi_account"}}
+    assert runner._apply_mailbox_fixture("http://b", several) is None
+    assert sent[-1][2] is True
+
+
+# --------------------------------------------------------------------------
+# Several accounts: what the multi_account scenarios assert
+# --------------------------------------------------------------------------
+
+WORK = fixture.FIXTURE_WORK_ADDRESS
+OUTLOOK = fixture.FIXTURE_OUTLOOK_ADDRESS
+
+
+@pytest.fixture
+def three(monkeypatch):
+    monkeypatch.setenv(fixture.EVAL_MAILBOX_ENV, str(MBOX))
+    fixture.set_attached(True, multi_account=True)
+    host = _FixtureMailHost()
+    yield host, lambda name, **kw: json.loads(host.tool(name)(**kw))
+    fixture.set_attached(True)
+
+
+class _FixtureMailHost(_Host):
+    def __init__(self):
+        self.register_email_tools()
+
+    @staticmethod
+    def tool(name):
+        return _TOOL_REGISTRY[name]["function"]
+
+
+def test_three_accounts_are_read_and_each_message_is_labelled(three):
+    _, tools = three
+    out = tools("list_inbox", limit=100)
+    assert out["accounts_read"] == [fixture.FIXTURE_ADDRESS, WORK, OUTLOOK]
+    by_account = {}
+    for message in out["messages"]:
+        by_account.setdefault(message["account"], []).append(message)
+    assert {a: len(m) for a, m in by_account.items()} == {
+        fixture.FIXTURE_ADDRESS: 34,
+        WORK: 4,
+        OUTLOOK: 3,
+    }
+    received = [m["received"] for m in out["messages"]]
+    assert received == sorted(received, reverse=True)
+    # The main inbox holds more than its share of 100, and the list says so.
+    assert out["accounts_with_more"] == [fixture.FIXTURE_ADDRESS]
+    assert (
+        len(tools("list_inbox", limit=100, account="user@example.com")["messages"])
+        == 42
+    )
+
+
+def test_the_lease_is_only_in_the_outlook_account(three):
+    _, tools = three
+    [hit] = tools("search_email", query="lease renewal")["messages"]
+    assert hit["account"] == OUTLOOK
+    body = tools("read_email", message_id=hit["id"])["message"]["body"]
+    for fact in ("November 14, 2026", "$2,150"):
+        assert fact in body
+
+
+def test_marcus_writes_to_every_account(three):
+    _, tools = three
+    marcus = tools("search_email", query="from:marcus")["messages"]
+    assert {(m["account"], m["subject"][:16]) for m in marcus} == {
+        (fixture.FIXTURE_ADDRESS, "Kestrel Logistic"),
+        (fixture.FIXTURE_ADDRESS, "Lunch Thursday?"),
+        (WORK, "Kestrel kickoff "),
+        (OUTLOOK, "Saturday hike?"),
+    }
+
+
+def test_new_mail_goes_out_from_the_default_account(three):
+    host, tools = three
+    assert tools("list_connected_mailboxes")["sends_from_by_default"] == (
+        fixture.FIXTURE_ADDRESS
+    )
+
+
+def test_untagged_ids_are_refused_with_three_accounts(three):
+    _, tools = three
+    out = tools("read_email", message_id="gaia-work-present")
+    assert out["success"] is False
+    assert "does not say which account" in out["error"]

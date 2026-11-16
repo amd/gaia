@@ -13,8 +13,13 @@ developer running the eval on a machine with a real connected mailbox cannot
 leak it into a scorecard.
 
 :func:`set_attached` lets one scenario detach the fixture and see exactly the
-"no mailbox is connected" answer a new user gets. It is process-wide state,
-flipped only by the eval admin endpoint.
+"no mailbox is connected" answer a new user gets, or attach three accounts at
+once: the main Gmail, a second Gmail and an Outlook account, each read from its
+own mbox beside the main one (``<stem>_work.mbox``, ``<stem>_outlook.mbox``).
+The Outlook account is served through the same Gmail fixture: the tools are
+provider-neutral above the backend, so what the scenarios test is which account
+mail came from and goes out of, not Graph's wire format. It is process-wide
+state, flipped only by the eval admin endpoint.
 
 Drafts and sends land in memory: a sent message gets the ``SENT`` label and joins
 the mailbox, and nothing leaves the process.
@@ -44,6 +49,7 @@ from urllib.parse import parse_qs
 
 import httpx
 
+from gaia.agents.tools._accounts import GOOGLE, MICROSOFT, ToolAccount, make_tags
 from gaia.agents.tools._email.errors import MailboxError
 from gaia.agents.tools._email.gmail import GMAIL_API_BASE, GmailWriteBackend
 
@@ -53,6 +59,15 @@ EVAL_MAILBOX_ENV = "GAIA_EVAL_MAILBOX"
 
 # The address check_mailbox_access reports for the fixture account.
 FIXTURE_ADDRESS = "user@example.com"
+FIXTURE_WORK_ADDRESS = "user.work@example.com"
+FIXTURE_OUTLOOK_ADDRESS = "user@outlook.example"
+
+# (address, provider, keyring slot, mbox suffix): the accounts beyond the main
+# one that the multi-account state attaches. The main account is the default.
+_EXTRA_ACCOUNTS = (
+    (FIXTURE_WORK_ADDRESS, GOOGLE, "id:eval-work", "work"),
+    (FIXTURE_OUTLOOK_ADDRESS, MICROSOFT, "id:eval-outlook", "outlook"),
+)
 
 _EXCLUDED_FROM_SEARCH = frozenset({"SPAM", "TRASH"})
 
@@ -94,6 +109,7 @@ _UNSUPPORTED_OPERATORS = frozenset(
 
 _state_lock = threading.Lock()
 _attached = True
+_multi_account = False
 
 
 class UnsupportedQuery(ValueError):
@@ -110,12 +126,30 @@ def is_attached() -> bool:
         return _attached
 
 
-def set_attached(attached: bool) -> None:
-    """Attach or detach the fixture for sessions whose mail tools start next."""
-    global _attached
+def is_multi_account() -> bool:
+    with _state_lock:
+        return _attached and _multi_account
+
+
+def set_attached(attached: bool, *, multi_account: bool = False) -> None:
+    """Attach or detach the fixture for sessions whose mail tools start next.
+
+    ``multi_account`` attaches the second Gmail and the Outlook account too.
+    """
+    global _attached, _multi_account
     with _state_lock:
         _attached = bool(attached)
-    logger.warning("eval fixture mailbox %s", "attached" if attached else "DETACHED")
+        _multi_account = bool(attached and multi_account)
+    state = "DETACHED"
+    if attached:
+        state = "attached with three accounts" if multi_account else "attached"
+    logger.warning("eval fixture mailbox %s", state)
+
+
+def extra_mbox_path(mbox_path: str, suffix: str) -> Path:
+    """Where an extra account's mbox sits, beside the main fixture mbox."""
+    path = Path(mbox_path).expanduser()
+    return path.with_name(f"{path.stem}_{suffix}{path.suffix}")
 
 
 def _tokenize(query: str) -> List[str]:
@@ -238,9 +272,10 @@ def _load_fake_gmail():
 class _FixtureGmailApi:
     """Answers the Gmail API v1 calls the Gmail backends make, from an mbox."""
 
-    def __init__(self, mbox_path: Path) -> None:
+    def __init__(self, mbox_path: Path, address: str = FIXTURE_ADDRESS) -> None:
         self._fake = _load_fake_gmail()
-        self._store = self._fake.FakeGmailBackend(mbox_path, user_email=FIXTURE_ADDRESS)
+        self.address = address
+        self._store = self._fake.FakeGmailBackend(mbox_path, user_email=address)
         self._messages: Dict[str, Dict[str, Any]] = self._store._messages
         self._drafts: Dict[str, str] = {}
         self._ids = itertools.count(1)
@@ -259,7 +294,7 @@ class _FixtureGmailApi:
         if rest[:1] == ["drafts"]:
             return self._read_draft(rest, query)
         if rest == ["profile"]:
-            return httpx.Response(200, json={"emailAddress": FIXTURE_ADDRESS})
+            return httpx.Response(200, json={"emailAddress": self.address})
         if rest == ["labels"]:
             return httpx.Response(200, json={"labels": self._labels()})
         if len(rest) == 2 and rest[0] == "labels":
@@ -408,7 +443,7 @@ class _FixtureGmailApi:
             return _LABEL_ALIASES.get(value, value.upper()) in labels
         if sep and field in _HEADER_OPERATORS:
             if field == "to" and value == "me":
-                value = FIXTURE_ADDRESS
+                value = self.address
             return value in _header(msg, field)
         if sep and field == "has":
             if value != "attachment":
@@ -433,7 +468,9 @@ class _FixtureGmailApi:
         return httpx.Response(code, json={"error": body})
 
 
-def build_fixture_backend(mbox_path: str) -> GmailWriteBackend:
+def build_fixture_backend(
+    mbox_path: str, address: str = FIXTURE_ADDRESS
+) -> GmailWriteBackend:
     """A ``GmailWriteBackend`` whose HTTP calls are answered from ``mbox_path``."""
     path = Path(mbox_path).expanduser()
     if not path.is_file():
@@ -442,7 +479,7 @@ def build_fixture_backend(mbox_path: str) -> GmailWriteBackend:
             "with `python tests/fixtures/gaia/email/build_mailbox.py`, or unset "
             f"{EVAL_MAILBOX_ENV} to use a connected mailbox."
         )
-    api = _FixtureGmailApi(path)
+    api = _FixtureGmailApi(path, address)
     client = httpx.Client(transport=httpx.MockTransport(api.handle))
     logger.warning("email tools are reading the eval fixture mailbox %s", path)
     backend = GmailWriteBackend(lambda: "eval-fixture-token", http_client=client)
@@ -450,12 +487,52 @@ def build_fixture_backend(mbox_path: str) -> GmailWriteBackend:
     return backend
 
 
+def fixture_accounts(mbox_path: str) -> List[Tuple[ToolAccount, Path]]:
+    """Every attached fixture account with its mbox, the default first."""
+    wanted = [(FIXTURE_ADDRESS, GOOGLE, "default", Path(mbox_path).expanduser())]
+    if is_multi_account():
+        wanted += [
+            (address, provider, slot, extra_mbox_path(mbox_path, suffix))
+            for address, provider, slot, suffix in _EXTRA_ACCOUNTS
+        ]
+    out: List[Tuple[ToolAccount, Path]] = []
+    for provider in (GOOGLE, MICROSOFT):
+        mine = [w for w in wanted if w[1] == provider]
+        tags = make_tags(provider, [slot for _, _, slot, _ in mine])
+        for position, ((address, _, _, path), tag) in enumerate(zip(mine, tags)):
+            account = ToolAccount(
+                provider=provider,
+                email=address,
+                ref=address,
+                tag=tag,
+                is_default=position == 0,
+            )
+            out.append((account, path))
+    return out
+
+
+def build_fixture_mailboxes(
+    mbox_path: str,
+) -> List[Tuple[ToolAccount, GmailWriteBackend]]:
+    """Every attached fixture account with its backend, the default first."""
+    return [
+        (account, build_fixture_backend(str(path), account.email))
+        for account, path in fixture_accounts(mbox_path)
+    ]
+
+
 __all__ = [
     "EVAL_MAILBOX_ENV",
     "FIXTURE_ADDRESS",
+    "FIXTURE_OUTLOOK_ADDRESS",
+    "FIXTURE_WORK_ADDRESS",
     "UnsupportedQuery",
     "build_fixture_backend",
+    "build_fixture_mailboxes",
+    "extra_mbox_path",
+    "fixture_accounts",
     "fixture_path",
     "is_attached",
+    "is_multi_account",
     "set_attached",
 ]

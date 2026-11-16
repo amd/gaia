@@ -1,6 +1,6 @@
 ---
 name: calendar
-description: See and change the user's Google or Outlook calendar with their approval. Use when the user asks what is on their calendar, when they are free, or to schedule, book, move or cancel a meeting or event.
+description: See and change the user's Google and Outlook calendars with their approval. Use when the user asks what is on their calendar, when they are free, or to schedule, book, move or cancel a meeting or event.
 license: MIT
 version: 1.0.0
 metadata:
@@ -10,7 +10,7 @@ metadata:
       python: ">=3.10"
     tools:
       - name: list_calendar_events
-        description: List events on the connected calendar, soonest first.
+        description: List events on every connected calendar, soonest first.
         parameters:
           start:
             type: string
@@ -24,6 +24,10 @@ metadata:
             type: integer
             required: false
             default: 25
+          account:
+            type: string
+            required: false
+            default: ""
         returns:
           type: string
         atomic: true
@@ -56,7 +60,8 @@ metadata:
             required: true
           calendar_account:
             type: string
-            required: true
+            required: false
+            default: ""
           location:
             type: string
             required: false
@@ -133,7 +138,7 @@ metadata:
 
 # Calendar
 
-Reads and changes the main calendar of the connected Google or Outlook account.
+Reads and changes the main calendar of each connected Google and Outlook account.
 Every create, move or cancel waits for the person to approve it, even under Full
 access or when tools are approved automatically; a run with nobody to ask
 is refused.
@@ -142,16 +147,20 @@ is refused.
 
 1. **Read before you answer.** What is on the calendar comes from
    `calendar/list_calendar_events` in this turn, and free time from
-   `calendar/check_calendar_availability`. Give times with their UTC offset,
-   e.g. `2026-11-03T09:00:00-05:00`. Say which account was checked: the result
-   names it, and other calendars were not read.
-2. **To create an event**, call `calendar/create_calendar_event` with
-   `calendar_account` set to the `account` the list returned, and everyone to
-   invite in `notify_attendees` (`[]` for nobody). They are emailed.
+   `calendar/check_calendar_availability`. Both read every connected account.
+   Give times with their UTC offset, e.g. `2026-11-03T09:00:00-05:00`. With
+   more than one account, say which account each event is on. If
+   `accounts_not_checked` is listed, free time is unknown: say which account
+   couldn't be checked and why, never that the person is free.
+2. **To create an event**, call `calendar/create_calendar_event` with everyone
+   to invite in `notify_attendees` (`[]` for nobody). They are emailed. Pass
+   `calendar_account` only when the user named the account; otherwise the
+   default account is used, and the approval shows which.
 3. **To move or cancel one**, list first, then call
    `calendar/update_calendar_event` or `calendar/cancel_calendar_event` with the
-   event's `id`, its title and start exactly as listed (without the untrusted
-   markers), and everyone the change notifies. A mismatch is refused before the
+   event's `id` exactly as listed (its account tag included), its title and
+   start as listed (without the untrusted markers), and everyone the change
+   notifies. The change is made on the account the event is on. A mismatch is refused before the
    person is asked, so retry with what the refusal names.
 4. **If a call returns an error, report it.** "Not connected" and "no calendar
    grant" errors carry the command that fixes them; pass it on. Never say an

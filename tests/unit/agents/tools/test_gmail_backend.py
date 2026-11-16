@@ -13,6 +13,7 @@ import json
 
 import httpx
 import pytest
+from _fake_accounts import tool_account
 
 from gaia.agents.tools._email.errors import MailboxAuthError, MailboxError
 from gaia.agents.tools._email.gmail import (
@@ -20,7 +21,7 @@ from gaia.agents.tools._email.gmail import (
     GmailReadBackend,
     _error_detail,
 )
-from gaia.agents.tools.email_tools import EmailToolsMixin
+from gaia.agents.tools.email_tools import EmailToolsMixin, Mailbox
 
 
 def make_backend(handler, **kwargs):
@@ -693,7 +694,8 @@ class _GmailHarness(EmailToolsMixin):
     """Minimal host for the mixin — no Agent machinery needed."""
 
     def __init__(self, backend):
-        self._email_backend = backend
+        self._email_mailboxes = [Mailbox(tool_account(provider="google"), backend)]
+        self._email_unusable = []
         self.tools = {}
 
     def _tool(self, name):

@@ -23,21 +23,25 @@ Provider support: Gmail and Outlook / Microsoft Graph, behind one set of tool
 names. Both backends return the same provider-neutral shape, so neither the
 skill nor the model has to care which mailbox is connected.
 
-Selection is connector-derived and has no override: a mailbox is eligible only
-if it is connected, carries a read scope, and this agent holds a grant for it. A
-write then resolves its own scope against that same mailbox.
-With both eligible, Gmail wins on registry order, and the way to change that is
-to revoke the grant — not to set an environment variable, which would bypass
-the gate that makes any of this checkable. The one exception is the scenario
-eval's offline fixture mailbox (``GAIA_EVAL_MAILBOX``, see ``_email/fixture.py``),
-which replaces the mailbox outright rather than choosing between real ones.
+Several accounts can be connected at once (two Gmails and an Outlook, say). An
+account is eligible only if it is connected, carries a read scope, and this
+agent holds a grant for its connector. Reads ask every eligible account and
+label each item with its account; a write acts for exactly one account, taken
+from the id it acts on (see ``_accounts.py``) or, for new mail, the account the
+user named or the default one. The one exception is the scenario eval's offline
+fixture mailbox (``GAIA_EVAL_MAILBOX``, see ``_email/fixture.py``), which
+replaces the connected accounts outright rather than choosing between them.
 """
 
 import json
 import logging
-from typing import Callable, Dict, List, Optional, Tuple
+import math
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.tools import _accounts
+from gaia.agents.tools._accounts import ToolAccount
 from gaia.agents.tools._email.outgoing import OutgoingMessage
 from gaia.agents.tools._email.phishing import (
     SUSPICIOUS_GUIDANCE,
@@ -208,6 +212,7 @@ def _broadening_ladder(query: str) -> List[str]:
 _CANDIDATE_FIELDS = (
     "id",
     "thread_id",
+    "account",
     "subject",
     "from",
     "received",
@@ -259,18 +264,41 @@ def _connect_targets() -> Tuple[List[str], List[str]]:
     return targets, connected
 
 
-def _classify_mailbox(provider: str, app: bool = False) -> Tuple[Optional[str], str]:
-    """``(resolved_scope, explanation)`` for one provider.
+def _connect_command(account: ToolAccount) -> str:
+    """The terminal command that signs this one account in again."""
+    command = f"gaia connectors connect {account.provider}"
+    return f"{command} --account {account.email}" if account.email else command
+
+
+def _classify_mailbox(
+    account: ToolAccount, app: bool = False
+) -> Tuple[Optional[str], str]:
+    """``(resolved_scope, explanation)`` for one account.
 
     A ``None`` scope means unusable, and the explanation names *that
-    provider's own* state and remedy — "grant it" is the wrong advice for a
+    account's own* state and remedy — "grant it" is the wrong advice for a
     mailbox that is not connected at all. In an app (``app``) the remedy is a
     button or a setting, never a command.
     """
     from gaia.connectors.api import get_connection
     from gaia.connectors.grants import list_agent_grants
 
-    conn = get_connection(provider)
+    provider = account.provider
+    if account.status == "reauth_required" and app:
+        return None, (
+            f"its sign-in expired or was revoked. Reconnect it under {CONNECTORS_SETTINGS}"
+        )
+    if account.status == "reauth_required":
+        return None, (
+            "its sign-in expired or was revoked. Reconnect with "
+            f"`{_connect_command(account)}`"
+        )
+    if account.status != "ok":
+        return None, (
+            "its sign-in never finished saving. Remove it and connect it again"
+            + (f" under {CONNECTORS_SETTINGS}" if app else "")
+        )
+    conn = get_connection(provider, account=account.ref)
     if not conn:
         return None, _not_connected(provider, app)
     if conn.get("error") == "busy":
@@ -286,7 +314,7 @@ def _classify_mailbox(provider: str, app: bool = False) -> Tuple[Optional[str], 
     if conn.get("error") == "configuration":
         return None, (
             "connected, but its OAuth client credentials are no longer "
-            f"configured. Reconnect with `gaia connectors connect {provider}`"
+            f"configured. Reconnect with `{_connect_command(account)}`"
         )
 
     conn_scopes = list(conn.get("scopes") or [])
@@ -302,7 +330,7 @@ def _classify_mailbox(provider: str, app: bool = False) -> Tuple[Optional[str], 
         union = sorted(set(conn_scopes) | set(DECLARED_SCOPES[provider]))
         return None, (
             "connected, but the connection carries no mail read scope. "
-            f"Reconnect with `gaia connectors connect {provider} --scopes "
+            f"Reconnect with `{_connect_command(account)} --scopes "
             f"{' '.join(union)}` (--scopes replaces, so keep the whole list)"
         )
 
@@ -326,16 +354,33 @@ def _classify_mailbox(provider: str, app: bool = False) -> Tuple[Optional[str], 
     return scope, "ready"
 
 
-def _no_mailbox_error(states: Dict[str, Tuple[Optional[str], str]]) -> str:
-    lines = "\n".join(f"  - {p}: {why}" for p, (_, why) in states.items())
+AccountState = Tuple[ToolAccount, Optional[str], str]
+
+
+def _state_lines(states: Sequence[AccountState], app: bool) -> List[Tuple[str, str]]:
+    """``(who, why)`` per account, and per provider with none connected."""
+    lines: List[Tuple[str, str]] = []
+    for provider in MAILBOX_PROVIDERS:
+        mine = [s for s in states if s[0].provider == provider]
+        if not mine:
+            lines.append((provider, _not_connected(provider, app)))
+        for account, _, why in mine:
+            lines.append((f"{provider} ({account.name})", why))
+    return lines
+
+
+def _no_mailbox_error(lines: Sequence[Tuple[str, str]]) -> str:
+    listed = "\n".join(f"  - {who}: {why}" for who, why in lines)
     return (
         "No readable mailbox is available, so the email tools cannot run.\n"
-        f"{lines}\n"
+        f"{listed}\n"
         f"See {_EMAIL_DOCS_URL}"
     )
 
 
-def _write_scopes(provider: str, operation: str, app: bool = False) -> Tuple[str, ...]:
+def _write_scopes(
+    account: ToolAccount, operation: str, app: bool = False
+) -> Tuple[str, ...]:
     """The scopes this write requests, or raise naming how to get them.
 
     The grant ledger matches exact strings, so a read-only connection and a
@@ -347,13 +392,16 @@ def _write_scopes(provider: str, operation: str, app: bool = False) -> Tuple[str
     from gaia.connectors.api import get_connection
     from gaia.connectors.grants import list_agent_grants
 
+    provider = account.provider
     name = _PROVIDER_NAMES[provider]
-    conn_scopes = list((get_connection(provider) or {}).get("scopes") or [])
+    conn = get_connection(provider, account=account.ref) or {}
+    conn_scopes = list(conn.get("scopes") or [])
     missing = missing_write_scopes(provider, operation, held_scopes=conn_scopes)
     if missing and app:
         raise MailboxError(
-            f"This {name} connection lacks {' '.join(missing)}, which GAIA needs "
-            f"to {'send' if operation == OPERATION_SEND else 'draft'} mail. Nothing "
+            f"The {name} connection for {account.name} lacks {' '.join(missing)}, "
+            f"which GAIA needs to "
+            f"{'send' if operation == OPERATION_SEND else 'draft'} mail. Nothing "
             f"was changed. Reconnecting {name} with reading, composing and sending "
             f"mail left ticked on {name}'s consent screen fixes it.",
             connect=(provider,),
@@ -364,12 +412,13 @@ def _write_scopes(provider: str, operation: str, app: bool = False) -> Tuple[str
     if missing:
         union = sorted(set(conn_scopes) | set(DECLARED_SCOPES[provider]))
         raise MailboxError(
-            f"This {name} connection lacks {' '.join(missing)}, which GAIA needs "
-            f"to {'send' if operation == OPERATION_SEND else 'draft'} mail. Nothing "
+            f"The {name} connection for {account.name} lacks {' '.join(missing)}, "
+            f"which GAIA needs to "
+            f"{'send' if operation == OPERATION_SEND else 'draft'} mail. Nothing "
             f"was changed. Reconnect {name} in Settings -> Connectors and approve "
             "reading, composing and sending mail, leaving that option ticked on "
-            f"{name}'s consent screen. In a terminal: `gaia connectors connect "
-            f"{provider} --scopes {' '.join(union)}`. See {_EMAIL_DOCS_URL}",
+            f"{name}'s consent screen. In a terminal: `{_connect_command(account)} "
+            f"--scopes {' '.join(union)}`. See {_EMAIL_DOCS_URL}",
             setup=True,
         )
     needed = WRITE_SCOPES[provider][operation]
@@ -390,22 +439,92 @@ def _write_scopes(provider: str, operation: str, app: bool = False) -> Tuple[str
     return needed
 
 
+@dataclass(frozen=True)
+class Mailbox:
+    """One readable account and the backend that reads it."""
+
+    account: ToolAccount
+    backend: Any  # GmailReadBackend | OutlookReadBackend
+
+
+def _share(limit: int, count: int) -> int:
+    """One account's share of ``limit``, so a busy inbox can't crowd out the rest."""
+    return max(1, math.ceil(limit / max(1, count)))
+
+
+def _labelled(
+    item: Dict, account: ToolAccount, keys: Sequence[str] = ("id", "thread_id")
+) -> Dict:
+    """``item`` with its ids tagged and the account it came from named."""
+    out = dict(item)
+    for key in keys:
+        if out.get(key):
+            out[key] = account.tag_id(out[key])
+    out["account"] = account.name
+    return out
+
+
+def _newest_first(groups: Sequence[Sequence[Dict]], limit: int) -> List[Dict]:
+    merged = [item for group in groups for item in group]
+    # Both backends write UTC as YYYY-MM-DDTHH:MM:SSZ, so text order is time order.
+    merged.sort(key=lambda m: m.get("received") or "", reverse=True)
+    return merged[:limit]
+
+
+def _interleaved(groups: Sequence[Sequence[Dict]]) -> List[Dict]:
+    """Relevance order across accounts: every account's best hit, then the next."""
+    out: List[Dict] = []
+    for rank in range(max((len(g) for g in groups), default=0)):
+        out.extend(group[rank] for group in groups if rank < len(group))
+    return out
+
+
+def _flag_capped(
+    payload: Dict, answers: Sequence[Tuple[ToolAccount, Sequence]], share: int
+) -> Dict:
+    """Say which accounts filled their share, so a cut list isn't read as all."""
+    capped = [a.name for a, found in answers if len(found) >= share]
+    if len(answers) > 1 and capped:
+        payload["accounts_with_more"] = capped
+        payload["more_note"] = (
+            f"Each account was read for at most {share} messages, and "
+            f"{', '.join(capped)} had at least that many. For more, call again "
+            "with `account` set to one of them."
+        )
+    return payload
+
+
+def _add_coverage(
+    payload: Dict, read: Sequence[ToolAccount], not_read: Sequence[Dict]
+) -> Dict:
+    """Name which accounts a read covered, so a gap is never silent."""
+    payload["accounts_read"] = [a.name for a in read]
+    if not_read:
+        payload["accounts_not_read"] = list(not_read)
+        names = ", ".join(entry["account"] for entry in not_read)
+        payload["accounts_note"] = (
+            f"{names} could not be read, so this answer leaves them out. Tell "
+            "the user, with the reason given for each."
+        )
+    return payload
+
+
 class EmailToolsMixin:
     """Mailbox tools (Gmail / Outlook): reading, and the writer the send-email
     skill drafts and sends through.
 
     Tool registration follows the GAIA pattern: ``register_email_tools()``.
 
-    The mixin builds its backend lazily on first use, so composing it costs an
+    The mixin builds its mailboxes lazily on first use, so composing it costs an
     agent nothing until a mail tool is actually called — an agent whose user
     never mentions email never touches the connectors layer.
     """
 
-    _email_backend = None  # GmailReadBackend | OutlookReadBackend, built lazily
-    _email_backend_is_owned = False
-    _email_provider: Optional[str] = None
-    _email_provider_source: Optional[str] = None
-    _email_alternatives: Optional[List[str]] = None
+    # Every readable account, built lazily (or set by a test or the eval).
+    _email_mailboxes: Optional[List[Mailbox]] = None
+    _email_unusable: Optional[List[Tuple[ToolAccount, str]]] = None
+    _email_mailboxes_owned = False
+    _email_mailboxes_turn = None
 
     # Per-turn mail-reading ledger. Reset whenever ``_turn_seq`` moves on.
     _email_turn_token = None
@@ -434,7 +553,9 @@ class EmailToolsMixin:
 
         Reuses ``Agent._truncation_budget`` — the same per-tool-result cap
         already applied to any other large tool output — so mail reading
-        inherits the real device profile instead of a new constant.
+        inherits the real device profile instead of a new constant. It is one
+        budget across every account: the context window does not grow with
+        the number of inboxes.
         """
         if hasattr(self, "_truncation_budget"):
             return self._truncation_budget()[0]
@@ -449,49 +570,47 @@ class EmailToolsMixin:
             self._email_turn_body_chars = 0
             self._email_turn_reads = 0
 
-    def _resolve_mailbox(self) -> Tuple[str, str, str, List[str]]:
-        """``(provider, scope, source, alternatives)``, or raise naming why not."""
-        from gaia.agents.tools._email import MailboxError
-
+    def _email_account_states(self) -> List[AccountState]:
+        """``(account, read scope or None, why)`` for every stored account."""
         app = in_app(self)
-        states = {p: _classify_mailbox(p, app) for p in MAILBOX_PROVIDERS}
-        usable = [p for p, (scope, _) in states.items() if scope]
+        return [
+            (account, *_classify_mailbox(account, app))
+            for account in _accounts.stored_accounts()
+        ]
 
-        if not usable:
-            # A terminal caller's remedy is already in each line above.
-            targets, connected = _connect_targets() if app else ((), ())
-            raise MailboxError(
-                _no_mailbox_error(states),
-                connect=targets,
-                reconnect=connected,
-                setup=True,
-            )
+    def _new_read_backend(self, account: ToolAccount, scope: str):
+        def _token() -> str:
+            return self._mint_token(account, [scope])
 
-        chosen = usable[0]
-        source = "only-granted" if len(usable) == 1 else "precedence"
-        return chosen, states[chosen][0], source, [p for p in usable if p != chosen]
+        if account.provider == GOOGLE_CONNECTOR_ID:
+            from gaia.agents.tools._email.gmail import GmailReadBackend
 
-    def _build_email_backend(self):
-        """Construct the mailbox backend, or fail with an actionable error."""
+            return GmailReadBackend(_token)
+        from gaia.agents.tools._email.graph import OutlookReadBackend
+
+        return OutlookReadBackend(_token)
+
+    def _build_email_mailboxes(
+        self,
+    ) -> Tuple[List[Mailbox], List[Tuple[ToolAccount, str]]]:
+        """``(readable mailboxes, unreadable accounts and why)``, or raise
+        naming what to fix when no account can be read."""
         from gaia.agents.tools._email import MailboxError, fixture
 
         eval_mailbox = fixture.fixture_path()
         if eval_mailbox:
             # Eval only: never consult connectors, so no real mailbox can leak in.
+            app = in_app(self)
             if not fixture.is_attached():
-                app = in_app(self)
                 raise MailboxError(
                     _no_mailbox_error(
-                        {p: (None, _not_connected(p, app)) for p in MAILBOX_PROVIDERS}
+                        [(p, _not_connected(p, app)) for p in MAILBOX_PROVIDERS]
                     ),
                     connect=MAILBOX_PROVIDERS if app else (),
                     setup=True,
                 )
-            backend = fixture.build_fixture_backend(eval_mailbox)
-            self._email_provider = GOOGLE_CONNECTOR_ID
-            self._email_provider_source = "eval-fixture"
-            self._email_alternatives = []
-            return backend
+            built = fixture.build_fixture_mailboxes(eval_mailbox)
+            return [Mailbox(account, backend) for account, backend in built], []
 
         try:
             import gaia.connectors.api  # noqa: F401  pylint: disable=unused-import
@@ -502,56 +621,155 @@ class EmailToolsMixin:
                 "(https://amd-gaia.ai/docs/guides/install) and retry."
             ) from exc
 
-        provider, scope, source, alternatives = self._resolve_mailbox()
+        app = in_app(self)
+        states = self._email_account_states()
+        boxes = [
+            Mailbox(account, self._new_read_backend(account, scope))
+            for account, scope, _ in states
+            if scope
+        ]
+        if not boxes:
+            # A terminal caller's remedy is already in each line above.
+            targets, connected = _connect_targets() if app else ((), ())
+            raise MailboxError(
+                _no_mailbox_error(_state_lines(states, app)),
+                connect=targets,
+                reconnect=connected,
+                setup=True,
+            )
+        return boxes, [(account, why) for account, scope, why in states if not scope]
 
-        def _token() -> str:
-            return self._mint_token(provider, [scope])
+    def _email_turn_key(self):
+        from gaia.agents.tools._email import fixture
 
-        if provider == GOOGLE_CONNECTOR_ID:
-            from gaia.agents.tools._email.gmail import GmailReadBackend
+        # The fixture's sent mail lives in its backends, so they are kept.
+        if fixture.fixture_path():
+            return "eval-fixture"
+        return getattr(self, "_turn_seq", None)
 
-            backend = GmailReadBackend(_token)
-        else:
-            from gaia.agents.tools._email.graph import OutlookReadBackend
+    def _email_boxes(self) -> List[Mailbox]:
+        """Every readable account, built on first use and again each turn, so
+        an account connected or removed mid-session counts from the next turn."""
+        stale = (
+            self._email_mailboxes_owned
+            and self._email_mailboxes_turn != self._email_turn_key()
+        )
+        if self._email_mailboxes is None or stale:
+            self._email_mailboxes, self._email_unusable = self._build_email_mailboxes()
+            self._email_mailboxes_owned = True
+            self._email_mailboxes_turn = self._email_turn_key()
+        return self._email_mailboxes
 
-            backend = OutlookReadBackend(_token)
+    def _email_refresh(self) -> None:
+        """Read the accounts again on next use, as an approval check must.
 
-        self._email_provider = provider
-        self._email_provider_source = source
-        self._email_alternatives = alternatives
-        return backend
+        The fixture's accounts can't change mid-run, and its drafts and sent
+        mail live in the built backends, so those are kept."""
+        if self._email_mailboxes_owned and self._email_turn_key() != "eval-fixture":
+            self._email_mailboxes = None
 
-    def _email(self):
-        """The mailbox backend for this agent, built on first use."""
-        if self._email_backend is None:
-            self._email_backend = self._build_email_backend()
-            self._email_backend_is_owned = True
-        return self._email_backend
-
-    def _email_call(self, method: str, *args, **kwargs):
-        """Run one backend read, re-resolving once if the mailbox rejects us.
-
-        A connect or grant made mid-session leaves the memoized backend stale;
-        re-selecting once is cheaper than telling the user to restart. The
-        second failure is surfaced, not retried.
-        """
-        return self._email_run(
-            lambda backend: getattr(backend, method)(*args, **kwargs)
+    def _email_box(self, account: ToolAccount) -> Mailbox:
+        for box in self._email_boxes():
+            if box.account.tag == account.tag:
+                return box
+        raise ValueError(
+            f"{account.name} is no longer connected, so nothing was read or "
+            "changed. List again to see the connected accounts."
         )
 
-    def _email_run(self, fn):
-        """``fn(backend)`` with the same one-shot re-resolve as ``_email_call``."""
+    def _email_pick(self, wanted: str) -> Mailbox:
+        """The readable mailbox ``wanted`` names (address, tag, "gmail", ...)."""
+        boxes = self._email_boxes()
+        try:
+            chosen = _accounts.pick([b.account for b in boxes], wanted)
+        except _accounts.AccountChoiceError:
+            key = wanted.strip().casefold()
+            for account, why in self._email_unusable or ():
+                if account.email.casefold() == key:
+                    raise ValueError(
+                        f"{account.name} can't be used right now: {why}."
+                    ) from None
+            raise
+        return self._email_box(chosen)
+
+    def _email_targets(self, account: str = "") -> List[Mailbox]:
+        """The mailboxes a read covers: all of them, or the one ``account`` names."""
+        if account and account.strip():
+            return [self._email_pick(account)]
+        return list(self._email_boxes())
+
+    def _email_run_on(self, box: Mailbox, fn: Callable[[Any], Any]) -> Any:
+        """``fn(backend)``, reading the accounts again once if the mailbox
+        rejects us. A connect or grant made mid-session leaves a built backend
+        stale; the second failure is surfaced, not retried."""
         from gaia.agents.tools._email import MailboxAuthError
 
         try:
-            return fn(self._email())
+            return fn(box.backend)
         except MailboxAuthError:
-            if not self._email_backend_is_owned:
+            if not self._email_mailboxes_owned:
                 raise
-            logger.info("email: re-resolving the mailbox after an auth failure")
-            self._email_backend = None
-            self._email_backend_is_owned = False
-            return fn(self._email())
+            logger.info("email: re-reading the accounts after an auth failure")
+            self._email_mailboxes = None
+            return fn(self._email_box(box.account).backend)
+
+    def _email_each(
+        self, targets: Sequence[Mailbox], fn: Callable[[Any], Any], *, narrowed: bool
+    ) -> Tuple[List[Tuple[ToolAccount, Any]], List[Dict]]:
+        """``fn(backend)`` per mailbox: ``(answers, accounts not read)``.
+
+        An account that fails is reported, never dropped quietly, and the
+        call fails as a whole only when no account answered.
+        """
+        answers: List[Tuple[ToolAccount, Any]] = []
+        not_read: List[Dict] = []
+        first: Optional[Exception] = None
+        for box in targets:
+            try:
+                answers.append((box.account, self._email_run_on(box, fn)))
+            except Exception as exc:  # reported in the result, raised if all fail
+                logger.warning("email: reading %s failed: %s", box.account.tag, exc)
+                first = first or exc
+                not_read.append(
+                    {
+                        "account": box.account.name,
+                        "provider": box.account.provider,
+                        "error": str(exc),
+                    }
+                )
+        if not answers:
+            raise first
+        if not narrowed:
+            not_read += [
+                {"account": a.name, "provider": a.provider, "error": why}
+                for a, why in self._email_unusable or ()
+            ]
+        return answers, not_read
+
+    def _email_locate(self, item_id: str, what: str) -> Tuple[Mailbox, str]:
+        """The mailbox an id belongs to, and the provider's own id inside it."""
+        boxes = self._email_boxes()
+        account, raw = _accounts.account_for_id(
+            str(item_id or ""),
+            [b.account for b in boxes],
+            what=what,
+            unusable=self._email_unusable or (),
+        )
+        return self._email_box(account), raw
+
+    def _email_item_account(self, item_id: str, what: str) -> Tuple[ToolAccount, str]:
+        box, raw = self._email_locate(item_id, what)
+        return box.account, raw
+
+    def _email_send_account(self, from_account: str = "") -> ToolAccount:
+        """The account new mail goes out from: the one named, else the default."""
+        from gaia.agents.tools._email import fixture
+
+        if from_account and from_account.strip():
+            return self._email_pick(from_account).account
+        usable = [b.account for b in self._email_boxes()]
+        stored = usable if fixture.fixture_path() else _accounts.stored_accounts()
+        return _accounts.default_account(stored, usable)
 
     def _new_write_backend(self, provider: str, token: Callable[[], str]):
         if provider == GOOGLE_CONNECTOR_ID:
@@ -562,8 +780,8 @@ class EmailToolsMixin:
 
         return OutlookWriteBackend(token)
 
-    def _email_writer(self, operation: str):
-        """A backend for one write, on the mailbox the reads use.
+    def _email_writer(self, operation: str, account: ToolAccount):
+        """A backend for one write, on ``account``'s mailbox.
 
         Built per call, under the scopes *operation* needs, so a reconnect
         mid-session takes effect at once. Never memoized with the read backend,
@@ -572,25 +790,28 @@ class EmailToolsMixin:
         from gaia.agents.tools._email import fixture
 
         if fixture.fixture_path():
-            return self._email()
+            return self._email_box(account).backend
 
-        provider = self._resolve_mailbox()[0]
-        scopes = list(_write_scopes(provider, operation, in_app(self)))
+        scopes = list(_write_scopes(account, operation, in_app(self)))
 
         def _token() -> str:
-            return self._mint_token(provider, scopes)
+            return self._mint_token(account, scopes)
 
-        return self._new_write_backend(provider, _token)
+        return self._new_write_backend(account.provider, _token)
 
-    def _mint_token(self, provider: str, scopes: List[str]) -> str:
+    def _mint_token(self, account: ToolAccount, scopes: List[str]) -> str:
         """An access token, or in an app an error that names no command."""
         import gaia.connectors.api as connectors_api
         from gaia.agents.tools._email import MailboxError
         from gaia.connectors.errors import ConnectorsError
 
+        provider = account.provider
         try:
             return connectors_api.get_access_token_sync(
-                provider=provider, scopes=scopes, agent_id=EMAIL_AGENT_ID
+                provider=provider,
+                scopes=scopes,
+                agent_id=EMAIL_AGENT_ID,
+                account=account.ref,
             )
         except ConnectorsError as exc:
             if not in_app(self):
@@ -599,73 +820,58 @@ class EmailToolsMixin:
             message, reconnect = token_fault(_PROVIDER_NAMES[provider], exc)
             fix = (provider,) if reconnect else ()
             raise MailboxError(
-                message, connect=fix, reconnect=fix, setup=reconnect
+                f"{account.name}: {message}",
+                connect=fix,
+                reconnect=fix,
+                setup=reconnect,
             ) from exc
 
-    def _email_account_label(self) -> str:
-        """The account a write goes through, as its prompt names it."""
-        from gaia.agents.tools._email import fixture
-
-        if fixture.fixture_path():
-            provider, address = GOOGLE_CONNECTOR_ID, fixture.FIXTURE_ADDRESS
-        else:
-            provider = self._resolve_mailbox()[0]
-            address = next(
-                s["account_email"]
-                for s in self._mailbox_states()
-                if s["provider"] == provider
-            )
-        name = _PROVIDER_NAMES[provider]
-        if not address:
-            return f"your {name} account (its address was not recorded)"
-        return f"{address} ({name})"
-
     def _mailbox_states(self) -> List[Dict]:
-        """Every mailbox provider's live state, without a network call.
+        """Every account's live state, without a network call.
 
-        Mirrors ``_resolve_mailbox``, so the first usable entry is the mailbox
-        the other tools read next. Under the eval fixture it never consults
-        the connectors.
+        One row per stored account, and one per provider with none, so a
+        question about connection state names everything. Under the eval
+        fixture it never consults the connectors.
         """
         from gaia.agents.tools._email import fixture
 
+        app = in_app(self)
         if fixture.fixture_path():
-            attached = fixture.is_attached()
-            states = []
-            for provider in MAILBOX_PROVIDERS:
-                live = attached and provider == GOOGLE_CONNECTOR_ID
-                states.append(
+            states = (
+                [
+                    (account, "fixture", "ready")
+                    for account, _ in fixture.fixture_accounts(fixture.fixture_path())
+                ]
+                if fixture.is_attached()
+                else []
+            )
+        else:
+            states = self._email_account_states()
+        rows = []
+        for provider in MAILBOX_PROVIDERS:
+            mine = [s for s in states if s[0].provider == provider]
+            if not mine:
+                rows.append(
                     {
                         "provider": provider,
-                        "connected": live,
-                        "account_email": fixture.FIXTURE_ADDRESS if live else None,
-                        "usable": live,
-                        "status": (
-                            "ready" if live else _not_connected(provider, in_app(self))
-                        ),
+                        "connected": False,
+                        "account_email": None,
+                        "usable": False,
+                        "status": _not_connected(provider, app),
                     }
                 )
-            return states
-
-        from gaia.connectors.api import get_connection
-        from gaia.connectors.store import DEFAULT_ACCOUNT
-
-        states = []
-        for provider in MAILBOX_PROVIDERS:
-            conn = get_connection(provider) or {}
-            scope, why = _classify_mailbox(provider, in_app(self))
-            email = conn.get("account_email") or None
-            states.append(
-                {
-                    "provider": provider,
-                    "connected": bool(conn),
-                    # The store's no-address sentinel is not an address.
-                    "account_email": None if email == DEFAULT_ACCOUNT else email,
-                    "usable": scope is not None,
-                    "status": why,
-                }
-            )
-        return states
+            for account, scope, why in mine:
+                rows.append(
+                    {
+                        "provider": provider,
+                        "connected": account.status == "ok",
+                        "account_email": account.email or None,
+                        "is_default": account.is_default,
+                        "usable": scope is not None,
+                        "status": why,
+                    }
+                )
+        return rows
 
     def register_email_tools(self) -> None:
         """Register read-only email tools."""
@@ -704,43 +910,56 @@ class EmailToolsMixin:
 
         @tool(atomic=True)
         def check_mailbox_access() -> str:
-            """Check whether a mailbox is connected and readable.
+            """Check that every connected mailbox can be read.
 
             Call this first when the user asks about email and you are
             unsure a mailbox is set up, or after an email tool fails.
 
-            `alternatives` non-empty means another usable mailbox lost on
-            precedence; the user switches by removing GAIA's access to the
-            active one under Settings > Connectors.
-
-            Returns the address and folder counts, or an error naming what
-            to fix.
+            Returns each account's address and inbox counts, or an error
+            naming what to fix.
             """
             try:
-                address = mixin._email_call("get_user_email")
-                folders = mixin._email_call("list_folders", limit=50)
-                inbox = next(
-                    (f for f in folders if (f["name"] or "").lower() == "inbox"), None
-                )
-                return json.dumps(
-                    {
-                        "success": True,
-                        "provider": mixin._email_provider,
-                        "provider_source": mixin._email_provider_source,
-                        "alternatives": mixin._email_alternatives or [],
-                        "address": address,
+                targets = mixin._email_targets()
+
+                def _probe(backend) -> Dict:
+                    folders = backend.list_folders(limit=50)
+                    inbox = next(
+                        (f for f in folders if (f["name"] or "").lower() == "inbox"),
+                        None,
+                    )
+                    return {
+                        "address": backend.get_user_email(),
                         "inbox_unread": inbox["unread"] if inbox else None,
                         "inbox_total": inbox["total"] if inbox else None,
                         "folder_count": len(folders),
-                    },
+                    }
+
+                answers, not_read = mixin._email_each(targets, _probe, narrowed=False)
+                payload = {
+                    "success": True,
+                    "accounts": [
+                        {
+                            "account": account.name,
+                            "provider": account.provider,
+                            "is_default": account.is_default,
+                            **probe,
+                        }
+                        for account, probe in answers
+                    ],
+                }
+                return json.dumps(
+                    _add_coverage(payload, [a for a, _ in answers], not_read),
                     indent=2,
                 )
             except Exception as exc:  # surfaced, not swallowed
                 return _fail(exc, "check_mailbox_access")
 
         @tool(atomic=True)
-        def list_inbox(limit: int = 25, unread_only: bool = False) -> str:
-            """List recent email in the inbox, newest first.
+        def list_inbox(
+            limit: int = 25, unread_only: bool = False, account: str = ""
+        ) -> str:
+            """List recent email in the inbox, newest first, across every
+            connected account; each message names its `account`.
 
             Start any mail question here. Returns sender, subject, time,
             unread and flagged state, attachment names and a preview — not
@@ -753,10 +972,21 @@ class EmailToolsMixin:
             Args:
                 limit: How many messages to return (1-100, default 25)
                 unread_only: Only return messages that are still unread
+                account: Only this account: its address, or "gmail"/"outlook" when the user has one of that kind. Empty for all
             """
             try:
-                messages = mixin._email_call(
-                    "list_inbox", limit=_clamp(limit), unread_only=bool(unread_only)
+                wanted = _clamp(limit)
+                targets = mixin._email_targets(account)
+                share = _share(wanted, len(targets))
+                answers, not_read = mixin._email_each(
+                    targets,
+                    lambda backend: backend.list_inbox(
+                        limit=share, unread_only=bool(unread_only)
+                    ),
+                    narrowed=bool(account),
+                )
+                messages = _newest_first(
+                    [[_labelled(m, a) for m in found] for a, found in answers], wanted
                 )
                 screened, flagged = _screen(messages)
                 payload = {
@@ -767,14 +997,18 @@ class EmailToolsMixin:
                 }
                 if flagged:
                     payload["suspicious_guidance"] = SUSPICIOUS_GUIDANCE
-                return json.dumps(payload, indent=2)
+                _flag_capped(payload, answers, share)
+                return json.dumps(
+                    _add_coverage(payload, [a for a, _ in answers], not_read),
+                    indent=2,
+                )
             except Exception as exc:
                 return _fail(exc, "list_inbox")
 
         @tool(atomic=True)
-        def search_email(query: str, limit: int = 25) -> str:
+        def search_email(query: str, limit: int = 25, account: str = "") -> str:
             """Find a sender, receipt, or thread the user half-remembers, in any
-            folder. Relevance order, NOT newest-first.
+            folder of every connected account. Relevance order, NOT newest-first.
 
             EVERY term is ANDed, so longer is NARROWER — send 2-3 rare
             nouns, never a sentence or paraphrase.
@@ -787,20 +1021,29 @@ class EmailToolsMixin:
             Args:
                 query: 2-3 distinctive keywords (e.g. 'Acme invoice')
                 limit: How many messages to return (1-100, default 25)
+                account: Only this account: its address, or "gmail"/"outlook" when the user has one of that kind. Empty for all
             """
             try:
                 wanted = _clamp(limit)
                 fetch = min(wanted + _THREAD_OVERFETCH, _MAX_LIMIT)
+                targets = mixin._email_targets(account)
+                share = _share(fetch, len(targets))
                 attempts: List[Dict] = []
                 exact: List[Dict] = []
                 alternatives: List[Dict] = []
                 threads: Dict[str, Dict] = {}
                 seen_ids: set = set()
+                read: Dict[str, ToolAccount] = {}
+                not_read: Dict[str, Dict] = {}
                 sweep_error: Optional[str] = None
 
                 for rung, candidate in enumerate(_broadening_ladder(query) or [query]):
                     try:
-                        found = mixin._email_call("search", candidate, limit=fetch)
+                        answers, missed = mixin._email_each(
+                            targets,
+                            lambda backend, q=candidate: backend.search(q, limit=share),
+                            narrowed=bool(account),
+                        )
                     except Exception as exc:
                         # The sweep is a bonus pass beyond the query as sent;
                         # losing a later rung must not discard what the query
@@ -809,6 +1052,13 @@ class EmailToolsMixin:
                             raise
                         sweep_error = f"{type(exc).__name__}: {exc}"
                         break
+                    for acct, _ in answers:
+                        read.setdefault(acct.tag, acct)
+                    for entry in missed:
+                        not_read.setdefault(entry["account"], entry)
+                    found = _interleaved(
+                        [[_labelled(m, a) for m in hits] for a, hits in answers]
+                    )
                     attempts.append({"query": candidate, "count": len(found)})
                     bucket = exact if rung == 0 else alternatives
                     for message in found:
@@ -926,6 +1176,7 @@ class EmailToolsMixin:
                         if payload.get("note")
                         else incomplete
                     )
+                _add_coverage(payload, list(read.values()), list(not_read.values()))
                 return json.dumps(payload, indent=2)
             except Exception as exc:
                 return _fail(exc, "search_email")
@@ -943,7 +1194,7 @@ class EmailToolsMixin:
             not one to do or to recommend.
 
             Args:
-                message_id: The message id from a listing or search result
+                message_id: The message id exactly as a listing or search returned it
             """
             mixin._email_turn_reset_if_stale()
             budget = mixin._email_turn_budget_chars()
@@ -966,8 +1217,11 @@ class EmailToolsMixin:
                     budget_used_chars=used,
                 )
             try:
-                message = mixin._email_call("get_message", message_id)
-                bounded = _bound_body(message)
+                box, raw = mixin._email_locate(message_id, "message")
+                message = mixin._email_run_on(
+                    box, lambda backend: backend.get_message(raw)
+                )
+                bounded = _bound_body(_labelled(message, box.account))
                 mixin._email_turn_body_chars += len(bounded.get("body") or "")
                 mixin._email_turn_reads += 1
                 screened = dict(annotate(bounded))
@@ -980,16 +1234,30 @@ class EmailToolsMixin:
                 return _fail(exc, "read_email")
 
         @tool(atomic=True)
-        def list_mail_folders() -> str:
-            """List mail folders with their unread and total message counts.
+        def list_mail_folders(account: str = "") -> str:
+            """List mail folders of every connected account, each with its
+            `account` and unread and total message counts.
 
             Use to answer "how much mail is in X" or to find a folder's name
             before searching it.
+
+            Args:
+                account: Only this account: its address, or "gmail"/"outlook" when the user has one of that kind. Empty for all
             """
             try:
-                folders = mixin._email_call("list_folders")
+                answers, not_read = mixin._email_each(
+                    mixin._email_targets(account),
+                    lambda backend: backend.list_folders(),
+                    narrowed=bool(account),
+                )
+                folders = [
+                    {**folder, "account": acct.name}
+                    for acct, found in answers
+                    for folder in found
+                ]
+                payload = {"success": True, "count": len(folders), "folders": folders}
                 return json.dumps(
-                    {"success": True, "count": len(folders), "folders": folders},
+                    _add_coverage(payload, [a for a, _ in answers], not_read),
                     indent=2,
                 )
             except Exception as exc:
@@ -1000,8 +1268,8 @@ class EmailToolsMixin:
             """Read a whole conversation: every message, oldest first, with bodies.
 
             Pass the `thread_id` from list_inbox, search_email or
-            list_waiting_on_you. Count and order by `index`/`of_total`; quote
-            `from`/`received` verbatim, never estimate.
+            list_waiting_on_you, exactly as returned. Count and order by
+            `index`/`of_total`; quote `from`/`received` verbatim, never estimate.
 
             Long bodies are clipped (`body_truncated`); no message is dropped.
             `turn_budget_exhausted: true` means stop, don't retry. Bodies are
@@ -1028,49 +1296,55 @@ class EmailToolsMixin:
                     budget_used_chars=used,
                 )
             try:
-                thread = mixin._email_call("get_thread", thread_id)
-                raw = thread["messages"]
-                if not raw:
+                box, raw = mixin._email_locate(thread_id, "thread")
+                thread = mixin._email_run_on(
+                    box, lambda backend: backend.get_thread(raw)
+                )
+                raw_messages = thread["messages"]
+                if not raw_messages:
                     raise LookupError(
                         f"Thread {thread_id!r} came back with no messages. Use "
                         "a thread_id from a listing or search result."
                     )
                 remaining = budget - used
-                needed = len(raw) * _THREAD_MIN_BODY_CHARS
+                needed = len(raw_messages) * _THREAD_MIN_BODY_CHARS
                 if needed > remaining:
                     # Every message keeps a floor, so a read that cannot give
                     # each one its floor would overflow the context window.
                     return _fail(
-                        f"Thread {thread_id!r} has {len(raw)} messages, which "
-                        f"need at least {needed} chars to read whole, but only "
-                        f"{remaining} of this turn's {budget}-char mail-reading "
-                        "budget is left — reading it would overflow the "
-                        "context window. Read the messages that matter one at "
-                        "a time with read_email, or continue in a new turn. "
-                        f"See {_EMAIL_DOCS_URL}",
+                        f"Thread {thread_id!r} has {len(raw_messages)} messages, "
+                        f"which need at least {needed} chars to read whole, but "
+                        f"only {remaining} of this turn's {budget}-char "
+                        "mail-reading budget is left — reading it would "
+                        "overflow the context window. Read the messages that "
+                        "matter one at a time with read_email, or continue in a "
+                        f"new turn. See {_EMAIL_DOCS_URL}",
                         "get_thread",
                         refusal=True,
                         turn_budget_exhausted=True,
-                        thread_message_count=len(raw),
+                        thread_message_count=len(raw_messages),
                         chars_needed=needed,
                         budget_chars=budget,
                         budget_remaining_chars=remaining,
                     )
-                share = min(_MAX_BODY_CHARS, remaining // len(raw))
+                share = min(_MAX_BODY_CHARS, remaining // len(raw_messages))
                 messages = []
-                for position, message in enumerate(raw, start=1):
-                    bounded = _bound_body(_public(message), limit=share)
+                for position, message in enumerate(raw_messages, start=1):
+                    bounded = _bound_body(
+                        _labelled(_public(message), box.account), limit=share
+                    )
                     mixin._email_turn_body_chars += len(bounded.get("body") or "")
                     screened = dict(annotate(bounded))
                     screened["body"] = wrap_untrusted_body(screened.get("body") or "")
                     screened["index"] = position
-                    screened["of_total"] = len(raw)
+                    screened["of_total"] = len(raw_messages)
                     messages.append(screened)
                 mixin._email_turn_reads += 1
                 flagged = sum(1 for m in messages if m.get("suspicious"))
                 payload = {
                     "success": True,
-                    "thread_id": thread_id,
+                    "thread_id": box.account.tag_id(raw),
+                    "account": box.account.name,
                     "count": len(messages),
                     "bodies_truncated": sum(
                         1 for m in messages if m.get("body_truncated")
@@ -1093,25 +1367,37 @@ class EmailToolsMixin:
 
         @tool(atomic=True)
         def list_connected_mailboxes() -> str:
-            """Report which mailboxes are connected, and which one mail tools use.
+            """Report which mail accounts are connected, which can be read, and
+            which one new mail goes out from by default.
 
-            Call for ANY question about connection state — "which account are
-            you on?", "is my Outlook connected?" — never answer that from your
-            own description. Read live, so a connect or revoke made a moment
-            ago shows. Makes no network call.
+            Call for ANY question about connection state — "which accounts
+            are you on?", "is my Outlook connected?" — never answer that from
+            your own description. Read live, so a connect or revoke made a
+            moment ago shows. Makes no network call.
 
-            `active` is the mailbox the other mail tools read; each `status`
-            says what makes that mailbox usable.
+            The other mail tools read every account marked `usable`; each
+            `status` says what makes that account usable.
             """
             try:
                 states = mixin._mailbox_states()
-                usable = [s["provider"] for s in states if s["usable"]]
-                payload = {
+                payload: Dict[str, Any] = {
                     "success": True,
                     "connected": any(s["connected"] for s in states),
-                    "active": usable[0] if usable else None,
+                    "reads": [
+                        s["account_email"] or s["provider"]
+                        for s in states
+                        if s["usable"]
+                    ],
                     "mailboxes": states,
                 }
+                if any(s["usable"] for s in states):
+                    try:
+                        payload["sends_from_by_default"] = (
+                            mixin._email_send_account().name
+                        )
+                    except _accounts.AccountChoiceError as exc:
+                        payload["sends_from_by_default"] = None
+                        payload["default_note"] = str(exc)
                 if not payload["connected"] and in_app(mixin):
                     payload["message"] = "No mailbox is connected."
                     with_connect_remedy(
@@ -1134,7 +1420,9 @@ class EmailToolsMixin:
                 return _fail(exc, "list_connected_mailboxes")
 
         @tool(atomic=True)
-        def list_waiting_on_you(max_inbox: int = 0, min_age_hours: int = 0) -> str:
+        def list_waiting_on_you(
+            max_inbox: int = 0, min_age_hours: int = 0, account: str = ""
+        ) -> str:
             """Find inbox threads where the user owes a reply, most overdue first.
 
             For "what's waiting on me?". Qualifies only when the latest
@@ -1143,58 +1431,70 @@ class EmailToolsMixin:
             newsletters and automated mail never qualify; an empty list is a
             real answer: no ongoing conversation is waiting.
 
-            Scans the `active` mailbox only. `scan_truncated`: older mail was
-            not scanned — say so.
+            Scans every connected inbox; each item names its `account`.
+            `scan_truncated`: older mail was not scanned — say so.
 
             Args:
-                max_inbox: Inbox messages to scan (0 = default 50; Gmail max 100, Outlook 200)
+                max_inbox: Messages to scan per inbox (0 = default 50; Gmail max 100, Outlook 200)
                 min_age_hours: Skip messages younger than this (0 = none)
+                account: Only this account: its address, or "gmail"/"outlook" when the user has one of that kind. Empty for all
             """
             try:
                 inbox_budget = max(
                     1,
                     min(int(max_inbox or DEFAULT_MAX_INBOX_SCAN), MAX_INBOX_SCAN_CAP),
                 )
-                result = mixin._email_run(
+                answers, not_read = mixin._email_each(
+                    mixin._email_targets(account),
                     lambda backend: detect_waiting_on_you(
                         backend,
                         max_inbox=inbox_budget,
                         min_age_hours=int(min_age_hours or 0),
-                    )
+                    ),
+                    narrowed=bool(account),
                 )
                 items = []
-                for item, latest in zip(
-                    result["waiting_on_you"], result["latest_messages"]
-                ):
-                    verdict = annotate(_public(latest))
-                    if verdict.get("suspicious"):
-                        item = {
-                            **item,
-                            "suspicious": True,
-                            "suspicious_reasons": verdict.get("suspicious_reasons"),
-                        }
-                    items.append(item)
+                unchecked: List[str] = []
+                for acct, result in answers:
+                    unchecked += [acct.tag_id(t) for t in result["threads_unchecked"]]
+                    for item, latest in zip(
+                        result["waiting_on_you"], result["latest_messages"]
+                    ):
+                        item = _labelled(item, acct, ("message_id", "thread_id"))
+                        verdict = annotate(_public(latest))
+                        if verdict.get("suspicious"):
+                            item = {
+                                **item,
+                                "suspicious": True,
+                                "suspicious_reasons": verdict.get("suspicious_reasons"),
+                            }
+                        items.append(item)
+                # Oldest ask first: the most overdue reply.
+                items.sort(key=lambda i: i.get("received") or "")
                 flagged = sum(1 for i in items if i.get("suspicious"))
+                results = [result for _, result in answers]
                 payload = {
                     "success": True,
-                    "provider": mixin._email_provider,
                     "count": len(items),
                     "waiting_on_you": items,
-                    "inbox_scanned": result["inbox_scanned"],
-                    "threads_checked": result["threads_checked"],
-                    "scan_truncated": result["scan_truncated"],
+                    "inbox_scanned": sum(r["inbox_scanned"] for r in results),
+                    "threads_checked": sum(r["threads_checked"] for r in results),
+                    "scan_truncated": any(r["scan_truncated"] for r in results),
                     "suspicious_count": flagged,
                 }
-                if result["threads_unchecked"]:
-                    payload["threads_unchecked"] = result["threads_unchecked"]
+                if unchecked:
+                    payload["threads_unchecked"] = unchecked
                     payload["note"] = (
-                        f"{len(result['threads_unchecked'])} conversation(s) "
-                        "were too long to read whole and were not checked. "
-                        "Tell the user the list may be incomplete."
+                        f"{len(unchecked)} conversation(s) were too long to read "
+                        "whole and were not checked. Tell the user the list may "
+                        "be incomplete."
                     )
                 if flagged:
                     payload["suspicious_guidance"] = SUSPICIOUS_GUIDANCE
-                return json.dumps(payload, indent=2)
+                return json.dumps(
+                    _add_coverage(payload, [a for a, _ in answers], not_read),
+                    indent=2,
+                )
             except Exception as exc:
                 return _fail(exc, "list_waiting_on_you")
 
