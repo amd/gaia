@@ -100,7 +100,7 @@ from .utils import (
     managed_documents_dir,
     resolve_upload_links,
 )
-from .warmup import wait_for_warm_up
+from .warmup import turn_ended, wait_for_warm_up
 
 logger = logging.getLogger(__name__)
 
@@ -1663,6 +1663,13 @@ def _canonical_agent_type(agent_type: str) -> str:
     if registry is None:
         return agent_type
     return registry.canonical_id(agent_type)
+
+
+def _follow_model_settings(agent) -> None:
+    """Apply a vision model chosen in Settings since this cached agent last ran."""
+    follow = getattr(agent, "follow_model_switch", None)
+    if callable(follow):
+        follow()
 
 
 def _get_cached_agent(
@@ -4327,6 +4334,7 @@ async def _get_chat_response(
             from gaia.agents.base.console import SilentConsole
 
             agent = cached_agent
+            _follow_model_settings(agent)
             # A prior streaming turn leaves its dead SSE console behind.
             agent.console = SilentConsole()
             with writing_tool_registry():
@@ -4652,6 +4660,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if slot is not None:
                     slot.close()
                 _stopping_sessions[session_id] = producer
+        # After the join: the thread may still have been reading from the model.
+        # Off the loop: a context size waiting on this turn reads Lemonade.
+        await asyncio.to_thread(turn_ended)
 
     try:
         # Create SSE handler for streaming events
@@ -4805,6 +4816,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if cached_agent is not None:
                     # -- Cache hit --
                     agent = cached_agent
+                    _follow_model_settings(agent)
                     if hasattr(agent, "config"):
                         agent.config.working_directory = working_directory
                     agent.console = sse_handler
