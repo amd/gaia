@@ -289,6 +289,12 @@ DRIFT_CORPUS = [
     "2026. 39.1",
     "2026.39. 1",
     "2026.39.1.4",
+    # PPA builds carry a "~<build>.<sha>" suffix; a short base must not borrow
+    # the suffix's digits as its patch number.
+    "2026.48.0~1809.2d1f23e4",
+    "2026.48~1809.2d1f23e4",
+    "2026.48.0+5.abc1234",
+    "~1809.2d1f23e4",
     "1.2",
     "not-a-version",
     "",
@@ -314,3 +320,110 @@ def test_the_email_sidecar_floor_matches_the_core_floor():
         and any(getattr(t, "id", None) == "MIN_LEMONADE_VERSION" for t in node.targets)
     ]
     assert values == [LEMONADE_MIN_VERSION]
+
+
+# -- PPA build suffix (``2026.48.0~1809.2d1f23e4``) -------------------------
+# The Ubuntu PPA's builds report this from /health while dpkg says 2026.48.0.
+# Every gate must read it as its release: not unknown, not a different version.
+
+PPA_BUILD_SUFFIX = "~1809.2d1f23e4"
+
+
+@pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
+def test_ppa_build_parses_as_its_release(parser):
+    assert parser("2026.48.0" + PPA_BUILD_SUFFIX) == (2026, 48, 0)
+
+
+@pytest.mark.parametrize("parser", PARSERS + [pytest.param(_email_parse, id="email")])
+def test_build_suffix_never_becomes_a_version_component(parser):
+    assert parser("2026.48" + PPA_BUILD_SUFFIX) == (2026, 48)
+
+
+@pytest.mark.parametrize(
+    "version, expected",
+    [
+        ("2026.48.0~1809.2d1f23e4", "2026.48.0"),
+        ("2026.48.0+5.abc1234", "2026.48.0"),
+        ("v2026.48.0", "2026.48.0"),
+        (" 2026.48.0 ", "2026.48.0"),
+        ("2026.48.0", "2026.48.0"),
+    ],
+)
+def test_base_version_drops_the_build_suffix(version, expected):
+    from gaia.version import base_version
+
+    assert base_version(version) == expected
+
+
+def test_ppa_build_of_the_floor_clears_every_min_version_gate():
+    from gaia.llm.lemonade_client import check_lemonade_version
+
+    suffixed = LEMONADE_MIN_VERSION + PPA_BUILD_SUFFIX
+    assert version_meets_min(suffixed, LEMONADE_MIN_VERSION) is True
+    check_lemonade_version(suffixed, "http://127.0.0.1:1/api/v1")
+    assert _client_gate(suffixed) is True
+
+
+def test_suffix_with_no_release_is_still_refused_with_a_remedy():
+    """Tolerating a suffix must not turn a version-less string into a pass."""
+    from gaia.llm.lemonade_client import check_lemonade_version
+
+    with pytest.raises(LemonadeVersionError) as excinfo:
+        check_lemonade_version(PPA_BUILD_SUFFIX, "http://127.0.0.1:1/api/v1")
+    message = str(excinfo.value)
+    assert PPA_BUILD_SUFFIX in message
+    assert "cannot read" in message
+
+
+def _loud_client_gate(actual):
+    import logging
+
+    client = LemonadeClient.__new__(LemonadeClient)
+    client.log = logging.getLogger("test_lemonade_calver")
+    client.base_url = "http://127.0.0.1:1/api/v1"
+    return LemonadeClient._check_version_compatibility(
+        client, LEMONADE_VERSION, actual_version=actual, quiet=False
+    )
+
+
+def test_ppa_build_of_the_pin_prints_no_version_mismatch(capsys):
+    """Same release, build suffix only: the user must not be told to update."""
+    assert _loud_client_gate(LEMONADE_VERSION + PPA_BUILD_SUFFIX) is True
+    assert "expected" not in capsys.readouterr().out
+
+
+def test_a_different_release_still_warns_and_shows_the_full_build(capsys):
+    newer = "2099.1.0" + PPA_BUILD_SUFFIX
+    assert _loud_client_gate(newer) is True
+    out = capsys.readouterr().out
+    assert f"v{newer} (expected v{LEMONADE_VERSION})" in out
+
+
+def test_external_probe_accepts_a_ppa_build(monkeypatch):
+    """``gaia init``'s "use my own Lemonade" probe must call it OK, not too old."""
+    import requests
+
+    from gaia.llm import lemonade_choice
+
+    version = LEMONADE_MIN_VERSION + PPA_BUILD_SUFFIX
+
+    class _Health:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        @staticmethod
+        def json():
+            return {"status": "ok", "version": version}
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Health())
+    result = lemonade_choice.probe("http://127.0.0.1:1")
+    assert result.status == lemonade_choice.OK
+    assert result.version == version
+
+
+def test_embedded_server_on_a_build_of_its_pin_is_not_a_mismatch(tmp_path):
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+
+    embedded = EmbeddedLemonade(version="2026.48.0", home=tmp_path)
+    assert embedded.is_version_mismatch("2026.48.0" + PPA_BUILD_SUFFIX) is False
+    assert embedded.is_version_mismatch("2026.47.0" + PPA_BUILD_SUFFIX) is True

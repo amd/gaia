@@ -384,3 +384,78 @@ def test_real_fallback_path_with_dropped_connection_passes_the_freeze_walk(
     out = capsys.readouterr().out
     assert "DuckDuckGo could not be reached" in out
     assert _load_smoke().broken_start(out) is None
+
+
+def test_a_server_error_is_not_blamed_on_the_users_connection(capsys):
+    """A 5xx means the network worked; it must not say to check the connection."""
+    response = requests.Response()
+    response.status_code = 503
+    _FakeTavilyClient.on_search = _raiser(
+        requests.exceptions.HTTPError("503 Server Error", response=response)
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_knowledge_command(_knowledge_args("search"))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "answered with 503" in out
+    assert "down for a moment" in out
+    assert "Check your internet connection" not in out
+    assert "Traceback" not in out
+
+
+def test_a_rejected_request_is_not_called_an_outage(capsys):
+    """A 4xx is not the service being down for a moment."""
+    response = requests.Response()
+    response.status_code = 400
+    _FakeTavilyClient.on_search = _raiser(
+        requests.exceptions.HTTPError("400 Client Error", response=response)
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_knowledge_command(_knowledge_args("search"))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "answered with 400" in out
+    assert "rejected the request" in out
+    assert "down for a moment" not in out
+    assert "Check your internet connection" not in out
+
+
+def test_a_connection_dropped_mid_response_is_a_dropped_connection(capsys):
+    _FakeTavilyClient.on_search = _raiser(
+        requests.exceptions.ChunkedEncodingError("Connection broken: IncompleteRead")
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_knowledge_command(_knowledge_args("search"))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "could not be reached" in out
+    assert "Traceback" not in out
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        requests.exceptions.TooManyRedirects("Exceeded 30 redirects."),
+        requests.exceptions.MissingSchema(
+            "Invalid URL 'example.com': No scheme supplied"
+        ),
+        requests.exceptions.ContentDecodingError("bad gzip"),
+    ],
+    ids=lambda e: type(e).__name__,
+)
+def test_any_other_request_error_is_still_a_clean_exit(capsys, exc):
+    _FakeTavilyClient.on_extract = _raiser(exc)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_knowledge_command(_knowledge_args("extract"))
+
+    assert excinfo.value.code == 1
+    out = capsys.readouterr().out
+    assert "Web extract failed" in out
+    assert "Check your internet connection" not in out
