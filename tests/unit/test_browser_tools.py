@@ -1489,7 +1489,13 @@ class TestDuckDuckGoFailuresAreNotEmptyResults:
 
     @pytest.mark.parametrize(
         "status, hint",
-        [(500, "may be down"), (502, "may be down"), (404, "Check the query")],
+        [
+            (500, "may be down"),
+            (502, "may be down"),
+            (404, "Check the query"),
+            (204, "Try again later"),
+            (302, "Try again later"),
+        ],
     )
     def test_an_error_status_carries_its_code_and_a_next_step(self, status, hint):
         from gaia.web.client import SearchStatusError

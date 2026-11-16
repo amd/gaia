@@ -640,11 +640,12 @@ class SearchStatusError(RuntimeError):
     """
 
     def __init__(self, service: str, status: int):
-        hint = (
-            "It may be down for a moment; try again later."
-            if status >= 500
-            else "Check the query and try again."
-        )
+        if status >= 500:
+            hint = "It may be down for a moment; try again later."
+        elif status >= 400:
+            hint = "Check the query and try again."
+        else:
+            hint = "Try again later."
         super().__init__(
             f"{service} answered HTTP {status}, so no results were read. {hint}"
         )
