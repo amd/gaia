@@ -304,6 +304,10 @@ the Agent UI won't connect a cloud provider or switch to a cloud model. Undo it
 with `gaia config set network_policy cloud_allowed`. Details and limits:
 [Local only](/reference/cli#local-only).
 
+On AMD's network, Claude never goes to Anthropic directly: direct `claude-*`
+models are refused with the gateway model to use instead (`amd.Claude-*`). See
+[On AMD's network](/guides/llm-gateway#on-amds-network-claude-only-goes-through-the-gateway).
+
 ## Keys and settings
 
 - A pasted key that connects is **kept in your OS credential store** (Windows

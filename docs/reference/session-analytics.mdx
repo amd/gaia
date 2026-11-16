@@ -36,6 +36,9 @@ extras). If not, follow the [Dev Guide](/reference/dev) first
 (`uv venv && uv pip install -e .`). The two optional LLM steps need the
 [Claude Code](https://claude.com/claude-code) CLI on your `PATH` — your existing
 subscription, not an API key. Set `GAIA_CLAUDE_BIN` if it lives somewhere unusual.
+On AMD's network those steps are refused unless `ANTHROPIC_BASE_URL` points
+Claude Code at the AMD LLM Gateway (`https://llm-api.amd.com/Anthropic`), because
+GAIA doesn't send Claude traffic to Anthropic directly from there.
 
 ## Quick start
 

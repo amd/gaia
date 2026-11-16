@@ -403,7 +403,8 @@ agent = MyAgent(
 
 <Accordion title="Option 2: Claude API - Best Reasoning">
 
-Uses Anthropic's Claude models:
+Uses Anthropic's Claude models. On AMD's network this is refused; use an
+`amd.Claude-*` model through the [AMD LLM Gateway](/guides/llm-gateway) instead.
 
 ```bash
 # Set your API key

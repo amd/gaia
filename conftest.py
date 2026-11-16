@@ -416,6 +416,23 @@ def _no_real_claude_login(monkeypatch):
     monkeypatch.setattr(claude_credential, "_announced", set())
 
 
+@pytest.fixture(autouse=True)
+def _off_amd_network(monkeypatch):
+    """Judge every test off AMD's network unless it says otherwise.
+
+    The real check reads this machine's gateway setup and probes
+    llm-api.amd.com; neither may decide a test. Tests of the guard patch
+    ``_gateway_configured`` / ``_gateway_answers`` themselves.
+    """
+    from gaia.llm import amd_network
+
+    amd_network.forget()
+    monkeypatch.setattr(amd_network, "_gateway_configured", lambda: None)
+    monkeypatch.setattr(amd_network, "_gateway_answers", lambda *_a, **_k: False)
+    yield
+    amd_network.forget()
+
+
 @pytest.fixture
 def claude_login(monkeypatch):
     """A ``claude`` CLI on PATH, logged in to a subscription."""

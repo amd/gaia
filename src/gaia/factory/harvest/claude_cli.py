@@ -26,6 +26,7 @@ import shutil
 import subprocess
 from typing import Optional
 
+from gaia.llm.amd_network import assert_claude_cli_allowed
 from gaia.llm.local_only import assert_provider_permitted
 
 # Sonnet is enough for labelling and summarising tables, and keeps a
@@ -67,6 +68,7 @@ def run_claude(
     """
 
     assert_provider_permitted("the Claude Code CLI")
+    assert_claude_cli_allowed(model, what="Session analysis (Claude Code)")
     exe = resolve_claude(binary)
     argv = [
         exe,

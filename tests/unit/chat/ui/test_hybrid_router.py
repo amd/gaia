@@ -1055,3 +1055,64 @@ def test_stats_say_what_they_cover(client):
     body = client.get("/api/hybrid/stats").json()
     assert body["scope"] == "agent_ui_chats"
     assert body["scope_label"].startswith("Agent UI chats only")
+
+
+# ── On AMD's network direct Claude is off; the gateway's Claude is used ─────
+
+
+@pytest.fixture
+def amd_network_on(monkeypatch):
+    from gaia.llm import amd_network
+
+    amd_network.forget()
+    monkeypatch.setattr(amd_network, "_gateway_configured", lambda: "test")
+    yield
+    amd_network.forget()
+
+
+def test_on_amd_network_direct_claude_models_are_listed_unavailable(
+    client, gateway, amd_network_on
+):
+    gateway["anthropic"] = True
+    rows = {m["id"]: m for m in client.get("/api/hybrid/settings").json()["models"]}
+    opus = rows["claude-opus-5-5"]
+    assert opus["provider"] == "claude" and opus["available"] is False
+    assert (
+        "AMD LLM Gateway" in opus["reason"] and "amd.Claude-Opus-5-5" in opus["reason"]
+    )
+    assert rows[DEFAULT_STRONG_MODEL]["available"] is True
+
+
+def test_on_amd_network_claude_direct_is_unavailable_even_without_a_key(
+    client, gateway, amd_network_on
+):
+    t = _templates(client)["claude-direct"]
+    assert t["available"] is False
+    assert "AMD LLM Gateway" in t["reason"] and "Anthropic API key" not in t["reason"]
+
+
+def test_on_amd_network_applying_claude_direct_is_409(client, gateway, amd_network_on):
+    gateway["anthropic"] = True
+    resp = client.post("/api/hybrid/templates/claude-direct/apply")
+    assert resp.status_code == 409 and "AMD LLM Gateway" in resp.json()["detail"]
+    assert _hybrid_models_saved() is None
+
+
+def test_on_amd_network_fireworks_never_picks_direct_claude(
+    client, gateway, amd_network_on
+):
+    gateway["anthropic"] = True
+    gateway["models"] = []
+    gateway["fireworks"] = ["fireworks.deepseek-v4p1-flash"]
+    t = _templates(client)["fireworks"]
+    assert t["strong_model"] == DEFAULT_STRONG_MODEL
+    assert t["available"] is False
+    assert "Anthropic key" not in t["reason"]
+
+
+def test_on_amd_network_saving_a_direct_claude_model_is_refused(
+    client, gateway, amd_network_on
+):
+    gateway["anthropic"] = True
+    resp = client.put("/api/hybrid/settings", json={"strong_model": "claude-opus-5-5"})
+    assert resp.status_code == 422 and "AMD LLM Gateway" in resp.json()["detail"]

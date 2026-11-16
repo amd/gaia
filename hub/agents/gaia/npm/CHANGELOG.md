@@ -8,6 +8,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **On AMD's network Claude only goes through the AMD LLM Gateway.** A turn
+  that would reach Anthropic directly (`provider: "claude"`, a `claude-*`
+  model, `--use-claude`) now fails with an error naming the gateway model to
+  use instead (`amd.Claude-*`). Off AMD's network nothing changes.
 - **A `hybrid` route says which side it went to.** `final.route` now carries
   `tier` (`cheap` or `strong`), so a host can count a session's cheap and
   strong turns without comparing model ids against the settings, which may

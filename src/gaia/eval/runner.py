@@ -52,6 +52,7 @@ from gaia.eval.fixture_env import localize
 from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
+from gaia.llm.amd_network import assert_claude_cli_allowed
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
 
 logger = logging.getLogger(__name__)
@@ -2347,6 +2348,7 @@ def run_scenario_subprocess(
     claude_bin = shutil.which("claude") or "claude"
 
     bare_flags, driver_env = _driver_auth()
+    model = resolve_claude_credential().cli_model(model, role="Claude eval driver")
     cmd = [claude_bin, "-p", *bare_flags]
     cmd.extend(
         [
@@ -2924,6 +2926,7 @@ def run_fix_iteration(scorecard, run_dir, iteration):
     cmd = [claude_cmd, "-p", prompt, "--dangerously-skip-permissions"]
 
     assert_provider_permitted("the Claude Code CLI")
+    assert_claude_cli_allowed(None, what="The eval fixer (Claude Code)")
     print(f"[FIX] Invoking Claude Code fixer (iteration {iteration})...")
     try:
         proc = subprocess.run(

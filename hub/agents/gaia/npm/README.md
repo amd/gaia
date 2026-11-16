@@ -17,7 +17,9 @@ terminal UI's *launch* flag `--use-claude`, which would pin the Anthropic API fo
 the life of the process, is refused for the agent this package installs. That is a
 limit on the launch flag, not on the agent: a caller can still ask for Anthropic
 per request with `/query`'s `provider` field (contract ≥ 2.14) — see
-[`SPEC.md` §5.5](./SPEC.md#55-other-transports).
+[`SPEC.md` §5.5](./SPEC.md#55-other-transports). On AMD's network GAIA refuses
+direct Anthropic either way and names the AMD LLM Gateway model (`amd.Claude-*`)
+to use instead.
 
 The terminal UI you get here is the published **`terminal-hub`** component — the
 exact same binary a full GAIA install runs as `gaia-cli`, not a separate build. So

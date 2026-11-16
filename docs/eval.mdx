@@ -244,6 +244,10 @@ The fixer subprocess (`claude -p fixer.md`) receives the `scorecard.json` path, 
     ```bash
     export ANTHROPIC_API_KEY=sk-ant-...
     ```
+
+    On AMD's network skip this: the judge goes through the AMD LLM Gateway
+    with your gateway key instead (see
+    [Which Claude account pays](/guides/eval#which-claude-account-pays)).
   </Step>
 
   <Step title="Start the Agent UI backend">

@@ -33,6 +33,10 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import gaia
 from gaia.eval.bench import sandbox, transcripts
 from gaia.eval.bench.leaks import agent_env
+from gaia.llm.amd_network import (
+    ANTHROPIC_DIRECT_BASE_URL,
+    assert_direct_anthropic_allowed,
+)
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 from gaia.utils.process_tree import launch
@@ -292,6 +296,11 @@ def _progress_steps(path: Path) -> int:
 
 def claude_code_command(prompt: str, model: str) -> List[str]:
     assert_provider_permitted("the Claude Code CLI")
+    if is_anthropic_model(model):
+        # conditions_env sends only non-Anthropic models through the local gateway.
+        assert_direct_anthropic_allowed(
+            model, ANTHROPIC_DIRECT_BASE_URL, what="The Claude Code bench arm"
+        )
     claude = _which("claude")
     return [
         claude,

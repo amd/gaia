@@ -416,6 +416,8 @@ Every eval that calls Claude (`gaia eval agent`, `gaia eval tasks`, email drafti
 
 With none of them, the run stops with an error naming all three. It never falls back to a weaker scorer.
 
+**On AMD's network** none of the three is used: Claude must not reach Anthropic directly from there, so the driver and judge go through the [AMD LLM Gateway's Anthropic route](/guides/llm-gateway#on-amds-network-claude-only-goes-through-the-gateway) with your gateway key, and the run prints which model, for example `Claude judge: amd.Claude-Opus-5 via AMD LLM Gateway`. The judge model must have a gateway equivalent (`claude-opus-5`, `claude-sonnet-5`, `claude-opus-5-5`, `claude-sonnet-5-5`); any other stops the run with that list. No gateway key stops it too, saying how to add one. Scorecards from the two routes use the same model, but compare them knowing the route differs. The auto-fix loop (`--fix`) runs Claude Code as a coding agent, not a judge, so on AMD's network it is refused unless `ANTHROPIC_BASE_URL` already points Claude Code at the gateway.
+
 On the subscription path, token counts and `total_cost_usd` come from the CLI's JSON output. The cost is the list price of those tokens, not money spent. Token counting (`count_tokens`) and inline PDF analysis exist only on the API path.
 
 ---

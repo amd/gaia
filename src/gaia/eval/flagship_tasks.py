@@ -1757,9 +1757,10 @@ def judge_command(model: str, env: Mapping[str, str]) -> List[str]:
             "The judge needs the Claude Code CLI on PATH. Install it with "
             "`npm install -g @anthropic-ai/claude-code`."
         )
-    cmd = [claude, "-p", "--model", model, "--output-format", "json"]
-    cmd += ["--tools", "", "--no-session-persistence"]
-    return cmd + resolve_claude_credential(env).cli_flags()
+    credential = resolve_claude_credential(env)
+    cmd = [claude, "-p", "--model", credential.cli_model(model), "--output-format"]
+    cmd += ["json", "--tools", "", "--no-session-persistence"]
+    return cmd + credential.cli_flags()
 
 
 def judge_batch(
