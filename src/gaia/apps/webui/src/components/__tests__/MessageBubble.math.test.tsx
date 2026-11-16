@@ -82,6 +82,7 @@ describe('normalizeMathDelimiters', () => {
         ['   $$x^2$$', '   $$\n   x^2\n   $$'],
         ['   \\[', '   $$'],
         ['$$a$$ and $$b$$', '$$a$$ and $$b$$'],
+        ['\\[a\\] and \\[b\\]', '$$a$$ and $$b$$'],
     ])('%s', (input, output) => {
         expect(normalizeMathDelimiters(input)).toBe(output);
     });
