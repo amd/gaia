@@ -437,18 +437,17 @@ def _prove_handshake(context: ssl.SSLContext) -> None:
             if finished == 2:
                 return
     except ssl.SSLError as e:
-        raise ListenerError(
-            "start_failed",
-            f"GAIA's listener for paired devices can't complete a TLS handshake "
-            f"({type(e).__name__}: {e}), so it didn't start. Restart GAIA; if "
-            "this persists, send `gaia diagnostics` with a bug report.",
-        ) from e
+        reason = f" ({type(e).__name__}: {e})"
+        error: Optional[BaseException] = e
+    else:
+        reason, error = "", None
     raise ListenerError(
         "start_failed",
-        "GAIA's listener for paired devices didn't finish a TLS handshake, so it "
-        "didn't start. Restart GAIA; if this persists, send `gaia diagnostics` "
-        "with a bug report.",
-    )
+        f"GAIA's listener for paired devices couldn't complete a TLS "
+        f"handshake{reason}, so it didn't start. Turn access off and on in "
+        "Settings, or restart GAIA; if it keeps failing, report it at "
+        "https://github.com/amd/gaia/issues.",
+    ) from error
 
 
 def _in_use(error: OSError) -> bool:
