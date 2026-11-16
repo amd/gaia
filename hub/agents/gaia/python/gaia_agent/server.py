@@ -754,7 +754,7 @@ def _worded(event: Dict[str, Any], surface: str) -> Dict[str, Any]:
     }
 
 
-def _terminal_error_detail(exc: BaseException) -> str:
+def _terminal_error_detail(exc: BaseException, surface: str) -> str:
     """Actionable copy for a run-killing exception.
 
     A model-server failure gets its classified wording, which names the fix in
@@ -766,7 +766,7 @@ def _terminal_error_detail(exc: BaseException) -> str:
 
     typed = model_server_failure(exc)
     if typed is not None:
-        return model_server_message(typed)
+        return model_server_message(typed, surface)
     return f"{type(exc).__name__}: {exc}"
 
 
@@ -783,7 +783,8 @@ def _start_failure(exc: BaseException, surface: str) -> HTTPException:
     logger.warning("%s /query could not start: %s", AGENT_ID, exc)
     # Not the caller's fault and not a bug: the model server is unavailable.
     return HTTPException(
-        status_code=503, detail=surface_wording(model_server_message(typed), surface)
+        status_code=503,
+        detail=surface_wording(model_server_message(typed, surface), surface),
     )
 
 
@@ -2040,10 +2041,12 @@ async def query(request: QueryRequest):
                         process_error.__traceback__,
                     ),
                 )
-                handler.print_error(_terminal_error_detail(process_error))
+                handler.print_error(
+                    _terminal_error_detail(process_error, _wording_surface(request))
+                )
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
-            handler.print_error(_terminal_error_detail(exc))
+            handler.print_error(_terminal_error_detail(exc, _wording_surface(request)))
         finally:
             run.context_done.set()
             handler.signal_done()
