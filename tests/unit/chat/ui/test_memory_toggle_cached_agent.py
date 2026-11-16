@@ -246,6 +246,9 @@ def test_scheduled_run_follows_the_memory_setting(monkeypatch, enabled):
         def process_query(self, _prompt):
             return {"result": "done"}
 
+        def close(self):
+            pass
+
     fake_mod = types.ModuleType("gaia_agent.agent")
     fake_mod.GaiaAgent = _Agent
     fake_mod.GaiaAgentConfig = SimpleNamespace

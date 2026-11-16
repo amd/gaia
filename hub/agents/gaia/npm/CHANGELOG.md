@@ -8,6 +8,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Closing an agent stops the MCP servers it started.** Each server is a
+  process tree (`uvx`, `uv`, the server), and it used to outlive the agent:
+  an agent built for one request left its servers running for good.
 - **The agent stops when the GAIA daemon that started it is killed.** It used
   to keep running, holding memory and a port, until the next daemon started.
   It now notices within seconds and shuts down normally.

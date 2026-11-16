@@ -21,6 +21,7 @@ load needs.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import threading
 import time
@@ -436,7 +437,12 @@ def _warm_new_chat_prefix(
     finally:
         close = getattr(agent, "close", None)
         if callable(close):
-            close()
+            # A first turn may be waiting on this warm-up: don't make it wait
+            # for MCP servers to exit too.
+            if "wait_for_mcp" in inspect.signature(close).parameters:
+                close(wait_for_mcp=False)
+            else:
+                close()
 
 
 def _load_for_relayed_chat(

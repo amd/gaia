@@ -358,7 +358,17 @@ def _run_scheduled_prompt(
     agent._cancel_event = cancel_event
     if console is not None:
         agent.console = console
-    result = agent.process_query(prompt)
+    try:
+        result = agent.process_query(prompt)
+    finally:
+        from gaia.agents.base.memory import drain_memory_extraction
+
+        # Save the run's memories now: a queued save would keep the agent alive.
+        drain_memory_extraction(agent)
+        try:
+            agent.close()
+        except Exception as exc:  # noqa: BLE001 — logged; the run's own result stands
+            logger.warning("Scheduled run: closing its agent failed: %s", exc)
     if isinstance(result, dict):
         val = result.get("result")
         answer = val if val is not None else result.get("answer", "")
