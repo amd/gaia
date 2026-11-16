@@ -501,8 +501,8 @@ def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:
 STATS_SCOPE = "agent_ui_chats"
 #: Shown verbatim by the apps next to the numbers.
 STATS_SCOPE_LABEL = (
-    "Agent UI chats only; turns from the terminal UI and `gaia -p` aren't "
-    "counted yet"
+    "Agent UI chats only; turns from the terminal UI and one-off command-line "
+    "prompts aren't counted yet"
 )
 
 

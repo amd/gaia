@@ -43,19 +43,25 @@ SETUP_HINTS = {
 SETTINGS_SCREEN = "Settings › Models › Hybrid"
 #: The CLI's words for each set-up hint above.
 CLI_SETUP_HINTS = {
-    SETUP_HINTS[LOCAL]: "Download one with `gaia download <model id>`",
     SETUP_HINTS[AMD]: "Connect it with `gaia gateway install` and `gaia gateway auth`",
     SETUP_HINTS[FIREWORKS]: "Add a Fireworks key with /provider in `gaia-cli`",
 }
 _DOWNLOAD_IN_SETTINGS = re.compile(r"Download (\S+) in Settings › Models(?! ›)")
-CLI_DOWNLOAD = r"Download \1 with `gaia download \1`"
+
+
+def _pull_hint(model: str) -> str:
+    """How to download *model* with the Lemonade client this machine has."""
+    from gaia.llm.lemonade_launcher import describe_client_hint
+
+    return describe_client_hint("pull", model).instruction
 
 
 def cli_text(text: str) -> str:
     """*text* with the apps' set-up advice reworded for the terminal."""
     for app, cli in CLI_SETUP_HINTS.items():
         text = text.replace(app, cli)
-    return _DOWNLOAD_IN_SETTINGS.sub(CLI_DOWNLOAD, text)
+    text = text.replace(SETUP_HINTS[LOCAL], _pull_hint("<model id>"))
+    return _DOWNLOAD_IN_SETTINGS.sub(lambda m: _pull_hint(m[1]), text)
 
 
 GATEWAY_SONNET = "amd.Claude-Sonnet-5-5"
