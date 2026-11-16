@@ -33,7 +33,7 @@ def start_hint():
         yield
 
 
-def test_not_installed_points_at_gaia_init(capsys, start_hint):
+def test_not_installed_points_at_gaia_init(capsys, start_hint, no_configured_url):
     with patch.object(LemonadeManager, "is_lemonade_installed", return_value=False):
         LemonadeManager.print_server_error()
 
@@ -42,7 +42,9 @@ def test_not_installed_points_at_gaia_init(capsys, start_hint):
     _assert_no_dead_remedy(err)
 
 
-def test_installed_but_stopped_prints_the_resolved_start_hint(capsys, start_hint):
+def test_installed_but_stopped_prints_the_resolved_start_hint(
+    capsys, start_hint, no_configured_url
+):
     with patch.object(LemonadeManager, "is_lemonade_installed", return_value=True):
         LemonadeManager.print_server_error()
 
@@ -135,3 +137,47 @@ def test_client_initialize_not_installed_points_at_gaia_init(capsys, no_configur
     assert status.running is False
     assert "gaia init" in out
     _assert_no_dead_remedy(out)
+
+
+@pytest.mark.parametrize("embedded_installed", [True, False])
+def test_print_server_error_unreachable_configured_url_is_not_uninstalled(
+    capsys, monkeypatch, start_hint, embedded_installed
+):
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+    with (
+        patch(
+            "gaia.llm.lemonade_embedded.EmbeddedLemonade.is_installed",
+            return_value=embedded_installed,
+        ),
+        patch("gaia.llm.lemonade_manager.LemonadeClient") as client_cls,
+    ):
+        LemonadeManager.print_server_error()
+
+    err = capsys.readouterr().err
+    assert "http://127.0.0.1:59999/api/v1 not reachable" in err
+    assert "unset LEMONADE_BASE_URL" in err
+    assert "not installed" not in err
+    assert "gaia init" not in err
+    assert START not in err
+    assert len(err.strip().splitlines()) == 1
+    _assert_no_dead_remedy(err)
+    client_cls.assert_not_called()
+
+
+def test_print_server_error_unreachable_saved_external_points_at_switch_back(
+    capsys, monkeypatch, start_hint
+):
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    with patch(
+        "gaia.llm.lemonade_choice.external_lemonade_url",
+        return_value="http://10.0.0.5:8000/api/v1",
+    ):
+        LemonadeManager.print_server_error()
+
+    err = capsys.readouterr().err
+    assert "http://10.0.0.5:8000/api/v1 not reachable" in err
+    assert "gaia config set lemonade_mode gaia" in err
+    assert "LEMONADE_BASE_URL" not in err
+    assert "gaia init" not in err

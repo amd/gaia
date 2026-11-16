@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _spec = importlib.util.spec_from_file_location(
     "stage_eval_env", REPO_ROOT / "tests" / "fixtures" / "gaia" / "stage_eval_env.py"
@@ -28,7 +30,10 @@ def staged(tmp_path_factory):
     stale.parent.mkdir()
     stale.write_text("left from an earlier run")
     # Never the checkout's fixture_hub/_prepared: xdist workers would share it.
-    skills_root = stage_eval_env.stage(home, hub_out=home / "fixture-hub")
+    # Module scope runs before the function-scoped user_terminal fixture.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.delenv("GAIA_AGENT_CHILD", raising=False)
+        skills_root = stage_eval_env.stage(home, hub_out=home / "fixture-hub")
     return home, skills_root
 
 

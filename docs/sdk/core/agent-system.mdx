@@ -457,7 +457,8 @@ archived whole and reaches the model as a chunk index:
 - `shown` — the parts kept verbatim, as `{offset, text}` segments.
 - `index` — one `{n, label, offset, length}` per part left out, numbered from 1
   in document order. `read_tool_output(artifact, entry=n)` returns exactly that
-  part; the result's `fetch` field says so.
+  part, and `entry=n, to_entry=m` a run of parts in one call; the result's
+  `fetch` field says so.
 - `artifact`, `continuation`, `total_chars`, `truncated`, `original_chars`,
   `omitted_chars` — as before. `archived_field` names the field the archive
   holds (`content`, `stdout`, `matches`); every other field is kept, including
@@ -1027,6 +1028,9 @@ run, or when the agent changed code and nothing checked it afterwards. In a
 project with a test suite only a test run covers a change, so a clean lint alone
 still gets the note. When every check passed, or nothing needed checking (a
 question, a lookup, a read, a notes file), the answer carries no note at all.
+An answer that itself reports the failed tests ("No, the suite fails: 1
+failed") and claims no success gets no note for them either; the
+`verification` data below still records the failure.
 
 The state is derived from the tool calls that actually executed during the
 turn — no extra model call — and is returned as data on the result, for
@@ -1083,11 +1087,37 @@ claim remains unsupported, or no correction step remains, the framework replaces
 it with an explicit incomplete result. Unsupported claims never become successful
 results merely because the correction budget ran out.
 
+A reply in the JSON text format that holds only a `thought` (no tool call, no
+plan steps, no answer, even inside a code fence) is never taken as the answer.
+The loop asks once for a tool call or the final answer; a second such reply in
+a row ends the turn with status `incomplete` and an answer saying the request
+is unfinished.
+
+Only a write that is clearly documentation, or the request's own output, leaves
+an earlier test run standing; every other write makes it stale. Documentation
+means prose (`.md`, `.mdx`, `.rst`), a `README`, `CHANGELOG`, `LICENSE` or
+similar file (bare or `.txt`), or a text or image file under a `docs` folder.
+The request's output is any non-code file it asked for (`OUTPUT.md`,
+`result.json`, `report.csv`). Neither applies to a file a test may read, so
+these always count as changes, even when the request named them as its output:
+any source file (`.py`, `.ts`, …, even one named `README.py`); a file under a
+folder, or with a name, that looks like test input (`tests`, `test_data`,
+`__tests__`, `spec`, `fixtures`, `data`, `mocks`, `samples`, `e2e`, `golden`,
+`expected_output.md`, …); a file anywhere below a folder that holds an
+`__init__.py` (a prompt `.md` the code loads); and build, install or test
+configuration (`requirements*.txt`, `pyproject.toml`, `pytest.ini`,
+`package.json`, `CMakeLists.txt`, …). A plain `.txt`, `.csv` or `.json` that the
+request didn't ask for counts too. Folder names are read below the project
+root. The verify-after-change nudge uses the same rule.
+
 A check that ran more than once in the turn is judged by its most recent run. A
 test that failed and then passed after a fix is `verified` and gets no note; one
 that passed and then failed after an edit reads `pytest didn't pass`. Only a
-rerun of the same command replaces an earlier run: if `pytest tests/` failed and
-`pytest tests/test_cart.py` then passed, the note still reports the failure.
+rerun of the same check replaces an earlier run. Output trimming (`| tail -40`,
+`2>&1`) and pytest flags that only change the report (`-q`, `-v`, `--tb`, `-rA`,
+`--color`, `--durations`) don't make a different check, but anything that picks
+tests does: if `pytest tests/` failed and `pytest tests/test_cart.py` then
+passed, the note still reports the failure.
 
 ### Grounding checks
 
@@ -1161,17 +1191,31 @@ candidates. These probes respect the read boundary and never read file contents.
 A successful executor call alone is not proof of a save; a failed call that
 changed an output invalidates earlier evidence. A file last modified during a
 successful executor call, such as `ls > listing.txt`, counts as written once it
-is read back; one touched by a failed call does not, and such a file proves only
-its own path, never a pathless "saved it to a file" claim. A requested file or
+is read back (a copy that keeps its source's modification time is dated by when
+it was made); one touched by a failed call does not, and such a file proves only
+its own path, never a pathless "saved it to a file" claim, unless the request
+names that path ("Write `C:\work\inventory.csv` with ..."). A requested file or
 folder that no tool reports writing is checked the same way, so a script that
 builds its output paths at run time still fulfils the save; files in the folder
 are found only within the read boundary. A bare folder name in the answer
 ("saved in `reports`") is fulfilled by files written inside any folder of that
 name. Cached transcripts are not new writes.
+A relative output is resolved against the folder the request names, not the
+agent's working directory: "set it up in `C:\work\project\` ... write
+`project\data\stats.csv`" means `C:\work\project\data\stats.csv`. A write to any
+path ending in a relative output also fulfils it, so a working folder that
+resolves it differently still counts; one no named folder ties down is named
+in a gap as the user typed it.
 Cleanup claims likewise need concrete paths observed disappearing during the
 turn; a general statement that everything was cleaned up is not proof. A claimed
 path that is absent and untouched already agrees with the claim, and removal from
 an index or list is not a file deletion.
+An answer that says it read every one of N files ("I read the actual content of
+every one", "I opened all 40 files") is compared with the files this turn's
+calls were given to read, not counting files it wrote. When fewer than half
+were opened, the answer is kept and a closing note says how many were, including
+on a turn that ends at the step limit or on an error. After a
+script or an indexer ran, any file may have been read, so the claim stands.
 
 The loop offers one bounded correction for missing artifact evidence. That
 correction reopens the turn, so writing the output, running the script that
@@ -1332,9 +1376,14 @@ SPDX-License-Identifier: MIT
 
 When a result exceeds the model budget, it carries an `artifact` handle, a
 numbered `index` of the parts left out, and `continuation: read_tool_output`.
-Call `read_tool_output(artifact, entry=n)` to get entry `n` verbatim. The index
-names every omitted part, so paging through a whole output is almost never
-needed. A part longer than 8,000 characters comes back in pages: the page sets
+Call `read_tool_output(artifact, entry=n)` to get entry `n` verbatim, or
+`read_tool_output(artifact, entry=n, to_entry=m)` to get entries `n`..`m` as one
+span in a single call. A run returns as many whole entries as fit the model's
+tool-result target and sets `to_entry` to the last one returned and
+`next_entry` to where to continue; a first entry larger than that target pages
+like a single entry, with no `next_entry` until it is read to its end. The
+index names every omitted part, so paging through a whole output is almost
+never needed. A part longer than 8,000 characters comes back in pages: the page sets
 `remaining`, and `read_tool_output(artifact, offset=next_offset,
 limit=remaining)` continues it. Without an entry, `offset` and `limit` (default
 2,000) read any span. An entry number outside the index is an error that names
@@ -1375,7 +1424,9 @@ The framework retains entries with exact source quotations and character spans,
 checks the source fingerprint again before completion, and appends the accumulated
 inventory to the final answer. A final model summary cannot drop retained entries.
 Ambiguous evidence keeps both entries and marks the possible repeat rather than
-dropping one. Reading every page without extracting an inventory is insufficient.
+dropping one. Reading every page without extracting an inventory is insufficient,
+with one exception: a file the request did not name, that `read_file` returned whole
+and that fits in one extraction page, owes no extraction pass.
 
 `save_extracted_items(file_path)` exports the retained inventory as JSON, CSV, or
 readable text, using the existing write permission gate. JSON records carry each

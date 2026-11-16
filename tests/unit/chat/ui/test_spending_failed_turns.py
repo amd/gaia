@@ -186,6 +186,13 @@ async def test_a_failure_notice_is_not_a_reply(db):
     [done] = [e for e in events if e.get("type") == "done"]
     assert done.get("failed") is True, done
     assert _month(db)["turns"] == 0
+    # The Context panel reads the stored performance, not the side rail's summary.
+    from gaia.ui import turn_insights
+
+    session_id = db.list_sessions()[0]["id"]
+    [turn] = db.turn_performance(session_id)
+    assert turn["cost"] == {"kind": "no_reply", "usd": None}
+    assert turn_insights.chat_totals([turn])["unpriced_turns"] == 0
 
 
 @pytest.mark.asyncio

@@ -252,11 +252,7 @@ jobs:
           node-version: '22'
 
       - name: Install Claude Code CLI (the eval's scenario driver)
-        run: |
-          npm install -g @anthropic-ai/claude-code
-          if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
-          claude --version
-          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+        uses: ./.github/actions/install-claude-cli
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade

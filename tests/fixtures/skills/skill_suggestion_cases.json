@@ -61,9 +61,16 @@
     {"request": "Compose a calm piano loop for my game's main menu", "expected": ["music-gen"], "acceptable": []},
     {"request": "Generate a footsteps-on-gravel sound effect as a WAV file", "expected": ["music-gen"], "acceptable": []},
     {"request": "Make an upbeat background track for my product video", "expected": ["music-gen"], "acceptable": []},
+    {"request": "Turn this quarterly report PDF into an MP3 I can listen to on my commute", "expected": ["dictation"], "acceptable": ["document-brief"]},
+    {"request": "Make an audiobook of the first chapter of my novel draft", "expected": ["dictation"], "acceptable": []},
+    {"request": "Read this employee handbook to me and save it as an audio file", "expected": ["dictation"], "acceptable": ["document-brief"]},
+    {"request": "Transcribe interview.mp3 into text for me", "expected": ["transcribe-meeting"], "acceptable": ["analyze-recording", "summarize"]},
     {"request": "Reply to Sam's email and tell him Thursday works", "expected": ["send-email"], "acceptable": ["inbox-triage"]},
     {"request": "Draft an email to my landlord asking about the broken heater", "expected": ["send-email"], "acceptable": []},
     {"request": "Forward the invoice email from Acme to my accountant", "expected": ["send-email"], "acceptable": ["inbox-triage"]},
+    {"request": "Remind me at 6pm to call the dentist", "expected": ["automations"], "acceptable": []},
+    {"request": "Every morning, send me a summary of my open pull requests", "expected": ["automations"], "acceptable": ["github-triage", "daily-brief"]},
+    {"request": "What reminders and alerts do you have set up for me? Pause the weather one.", "expected": ["automations"], "acceptable": []},
     {"request": "Who composed the Moonlight Sonata?", "expected": [], "acceptable": []},
     {"request": "What's a polite way to end a work email?", "expected": [], "acceptable": []},
     {"request": "Is a slide rule still useful now that everyone has a calculator?", "expected": [], "acceptable": []},
@@ -78,6 +85,7 @@
     {"request": "How many slides should a ten-minute talk have?", "expected": [], "acceptable": []},
     {"request": "What does an HTTP 502 error usually mean?", "expected": [], "acceptable": []},
     {"request": "Any tips for running shorter meetings?", "expected": [], "acceptable": []},
-    {"request": "What's the difference between a memo and a report?", "expected": [], "acceptable": []}
+    {"request": "What's the difference between a memo and a report?", "expected": [], "acceptable": []},
+    {"request": "What's a good way to remember friends' birthdays without an app?", "expected": [], "acceptable": []}
   ]
 }

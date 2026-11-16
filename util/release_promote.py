@@ -33,6 +33,10 @@ _UTIL = str(Path(__file__).resolve().parent)
 if _UTIL not in sys.path:
     sys.path.insert(0, _UTIL)
 
+from gh_retry import (  # noqa: E402  pylint: disable=wrong-import-position
+    RateLimitWaitExceeded,
+    run_command,
+)
 from release_tag import parse_tag  # noqa: E402  pylint: disable=wrong-import-position
 
 DRYRUN_WORKFLOW = "release_train_dryrun.yml"
@@ -46,23 +50,20 @@ class PromoteError(Exception):
 
 
 GH_TIMEOUT_S = 300
+# A spent API budget refills within the hour; wait for it at most that long.
+GH_RATE_LIMIT_WAIT_S = 3600
 
 
 def _gh(args: list[str]) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(
-            ["gh", *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-            timeout=GH_TIMEOUT_S,
-        )
+        return run_command(["gh", *args], GH_RATE_LIMIT_WAIT_S, timeout=GH_TIMEOUT_S)
     except subprocess.TimeoutExpired as e:
         raise PromoteError(
             f"`gh {' '.join(args)}` did not finish in {GH_TIMEOUT_S} s. GitHub's "
             "API is slow or down; re-run this job."
         ) from e
+    except RateLimitWaitExceeded as e:
+        raise PromoteError(str(e)) from e
 
 
 def _gh_json(args: list[str]) -> object:

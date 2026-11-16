@@ -63,6 +63,28 @@ def _run(*argv) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
+class TestConnectUnknownConnector:
+    """A connector name `connect` can't use is a one-line refusal, not a traceback."""
+
+    @pytest.mark.parametrize("extra", [[], ["--device"], ["--grant-agent", "email"]])
+    def test_a_misspelt_connector_names_the_ones_that_exist(self, extra):
+        rc, out, err = _run("connectors", "connect", "gogle", *extra)
+
+        assert rc == 1
+        assert out == ""
+        assert err == (
+            "Unknown connector 'gogle'. Known: google, microsoft, microsoft_work.\n"
+        )
+
+    def test_a_connector_that_is_not_oauth_says_so(self):
+        rc, _out, err = _run("connectors", "connect", "mcp-git")
+
+        assert rc == 1
+        assert "'mcp-git' is not an OAuth connector" in err
+        assert "google, microsoft, microsoft_work" in err
+        assert "Traceback" not in err
+
+
 class TestConnectSelfDocuments:
     """`gaia connectors connect google` with no client credentials must be
     self-documenting for a headless user (#2347) — the console setup steps and
@@ -1043,3 +1065,47 @@ class TestActivationsRejectOauth:
         )
         assert rc == 3
         assert "MCP-server" in err
+
+
+class TestListShowsActivations:
+    """``list --json`` carries each MCP server's per-agent activations, so a
+    front-end like the TUI can show a standing activation and revoke it (#7546).
+    """
+
+    @staticmethod
+    def _row(connector_id):
+        rc, out, err = _run("connectors", "list", "--json")
+        assert rc == 0, err
+        return next(r for r in json.loads(out) if r["id"] == connector_id)
+
+    def test_cold_state_has_no_activations(self):
+        assert self._row("mcp-github")["activations"] == {}
+
+    def test_activation_shows_and_deactivation_clears_it(self):
+        _run(
+            "connectors",
+            "activations",
+            "activate",
+            "mcp-github",
+            "installed:gaia",
+            "--scopes",
+            "use",
+        )
+        assert self._row("mcp-github")["activations"] == {"installed:gaia": True}
+        # Another server's row must not borrow this one's activation.
+        assert self._row("mcp-slack")["activations"] == {}
+
+        _run("connectors", "activations", "deactivate", "mcp-github", "installed:gaia")
+        assert self._row("mcp-github")["activations"].get("installed:gaia") is not True
+
+    def test_oauth_rows_carry_an_empty_map(self):
+        assert self._row("google")["activations"] == {}
+
+    def test_corrupt_ledger_fails_loudly_naming_the_file(self, tmp_path):
+        path = tmp_path / ".gaia" / "connectors" / "activations.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+        rc, out, err = _run("connectors", "list", "--json")
+        assert rc == 5
+        assert out == ""
+        assert "activations.json" in err

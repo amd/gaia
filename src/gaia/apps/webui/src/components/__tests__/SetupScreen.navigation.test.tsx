@@ -100,8 +100,10 @@ describe('moving between steps during a run', () => {
         await screen.findByRole('heading', { name: 'Connect a cloud provider' });
         fireEvent.click(screen.getByRole('button', { name: 'Back' }));
         await screen.findByRole('heading', { name: 'Your setup' });
-        expect(screen.getByRole('button', { name: 'Customize' })).toBeDisabled();
+        // The cloud is picked, so Customize (local models) isn't offered at all.
+        expect(screen.queryByRole('button', { name: 'Customize' })).toBeNull();
         expect(screen.getByRole('radio', { name: 'Use a cloud model' })).toBeDisabled();
+        expect(screen.getByRole('radio', { name: /^Run .* on this PC$/ })).toBeDisabled();
     });
 
     it('going back from the plan before any download stays on the checks', async () => {

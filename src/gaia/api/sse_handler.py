@@ -360,7 +360,7 @@ class SSEOutputHandler(OutputHandler):
                 "message": message,
             },
         )
-        return self.deny_tool_execution(tool_name, message)
+        return self.deny_tool_execution(tool_name, message, unattended=True)
 
     def get_events(self) -> List[Dict[str, Any]]:
         """

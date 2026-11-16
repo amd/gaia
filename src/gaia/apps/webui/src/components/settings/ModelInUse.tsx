@@ -22,6 +22,7 @@ interface Props {
 export function ModelInUse({ row, providerName, choices, labels, disabled, onSwitch }: Props) {
     const t = useT();
     const active = useModelStore((s) => s.active);
+    const readError = useModelStore((s) => s.error);
     const model = active?.model ?? null;
     const remote = !!active?.remote;
     const offered = choices.some((m) => sameModelId(model, m.id));
@@ -38,8 +39,10 @@ export function ModelInUse({ row, providerName, choices, labels, disabled, onSwi
             <span className="model-in-use-label">{t('settings.model.inUseTitle')}</span>
             {model ? (
                 <bdi className="model-in-use-name" title={model}>{row?.display_name || active?.display_name || displayModelName(model)}</bdi>
-            ) : (
+            ) : active || readError ? (
                 <span className="settings-hint">{t('settings.model.noneInUse')}</span>
+            ) : (
+                <span className="settings-hint">{t('settings.loading')}</span>
             )}
             {active?.config_error && <p className="settings-error" role="alert"><bdi>{active.config_error}</bdi></p>}
             {model && !remote && row?.available === false && (

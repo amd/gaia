@@ -593,10 +593,14 @@ class TestSettingsSave:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
+        from gaia.ui.dependencies import get_db
         from gaia.ui.routers import system as system_mod
 
         app = FastAPI()
         app.include_router(system_mod.router)
+        db = mock.Mock()
+        db.get_setting.return_value = None
+        app.dependency_overrides[get_db] = lambda: db
         r = TestClient(app).put(
             "/api/system/model-server/backend", json={"backend": "vulkan"}
         )

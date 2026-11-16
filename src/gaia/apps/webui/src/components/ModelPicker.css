@@ -4,6 +4,11 @@
 /* Model state, device and fit marks shared by the composer chip, Settings › Model
    and the sidebar's model status popover. */
 
+/* Anchored in a narrow chip, the menu would shrink to its min-width; grow to fit names up to max-width. */
+.popover.model-menu {
+    width: max-content;
+}
+
 .popover-row {
     display: flex;
     align-items: center;

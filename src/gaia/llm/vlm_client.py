@@ -73,6 +73,10 @@ class VLMExtractionError(RuntimeError):
         )
 
 
+class VisionModelMissingError(VLMExtractionError):
+    """The vision model isn't on this PC, so no image is read until it is downloaded."""
+
+
 class VLMClient:
     """
     VLM client for extracting text from images using Lemonade server.
@@ -206,6 +210,9 @@ class VLMClient:
 
 Instructions:
 1. Extract EVERY word you see - don't skip or paraphrase
+   - Keep the text in its original language and script. Do NOT translate or
+     transliterate it: Arabic stays Arabic, Chinese stays Chinese. Keep digits
+     as written (٢٠٢٤ stays ٢٠٢٤, 2024 stays 2024).
 2. Preserve exact formatting (headings, bold, bullets, tables)
 3. If it's a table, format as markdown table
 4. If it's a chart, describe what you see: [CHART: ...]
@@ -350,7 +357,7 @@ Output format: Clean markdown with the ACTUAL text from the image."""
 
         size = entry.get("size")
         size_hint = f" (about {size:g} GB)" if isinstance(size, (int, float)) else ""
-        raise VLMExtractionError(
+        raise VisionModelMissingError(
             f"Vision model '{self.vlm_model}' is not downloaded{size_hint}, so "
             "GAIA can't read images yet; it will not download it during image "
             f"analysis. {VISION_DOWNLOAD_HINT}",
