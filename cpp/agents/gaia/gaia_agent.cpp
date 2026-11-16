@@ -974,44 +974,50 @@ std::string GaiaAgent::keepScriptDollars(const std::string& command, const std::
     static const std::regex inlineScript(interpreter + R"((?:[^|;&\n"]*?\s)?(?:-[A-Za-z]*[cep]|--eval)\s*")");
     static const std::regex hereScript(interpreter + R"([^|;&\n]*?<<(-?)\s*([A-Za-z_]\w*)[^\n]*\n)");
 
-    // The spans of command the shell expands as script text.
-    std::vector<std::pair<size_t, size_t>> scripts;
-    for (auto it = std::sregex_iterator(command.begin(), command.end(), inlineScript); it != std::sregex_iterator();
-         ++it) {
-        const size_t from = static_cast<size_t>(it->position(0) + it->length(0));
-        size_t to = from;
-        while (to < command.size() && command[to] != '"') to += command[to] == '\\' ? 2 : 1;
-        scripts.emplace_back(from, std::min(to, command.size()));
-    }
-    for (auto it = std::sregex_iterator(command.begin(), command.end(), hereScript); it != std::sregex_iterator();
-         ++it) {
-        const size_t from = static_cast<size_t>(it->position(0) + it->length(0));
-        // The closing line is the delimiter alone; <<- lets tabs come before it.
-        const std::string delimiter = (*it)[2].str();
-        size_t close = std::string::npos;
-        for (size_t line = from; line < command.size();) {
-            size_t text = line;
-            if ((*it)[1].length()) {
-                while (text < command.size() && command[text] == '\t') ++text;
-            }
-            const size_t eol = std::min(command.find('\n', text), command.size());
-            if (command.compare(text, eol - text, delimiter) == 0) {
-                close = line;
-                break;
-            }
-            line = eol + 1;
+    // The spans of a command the shell expands as script text.
+    const auto scriptSpans = [](const std::string& command) {
+        std::vector<std::pair<size_t, size_t>> scripts;
+        for (auto it = std::sregex_iterator(command.begin(), command.end(), inlineScript);
+             it != std::sregex_iterator(); ++it) {
+            const size_t from = static_cast<size_t>(it->position(0) + it->length(0));
+            size_t to = from;
+            while (to < command.size() && command[to] != '"') to += command[to] == '\\' ? 2 : 1;
+            scripts.emplace_back(from, std::min(to, command.size()));
         }
-        scripts.emplace_back(from, close == std::string::npos ? command.size() : close);
-    }
+        for (auto it = std::sregex_iterator(command.begin(), command.end(), hereScript);
+             it != std::sregex_iterator(); ++it) {
+            const size_t from = static_cast<size_t>(it->position(0) + it->length(0));
+            // The closing line is the delimiter alone; <<- lets tabs come before it.
+            const std::string delimiter = (*it)[2].str();
+            size_t close = std::string::npos;
+            for (size_t line = from; line < command.size();) {
+                size_t text = line;
+                if ((*it)[1].length()) {
+                    while (text < command.size() && command[text] == '\t') ++text;
+                }
+                const size_t eol = std::min(command.find('\n', text), command.size());
+                if (command.compare(text, eol - text, delimiter) == 0) {
+                    close = line;
+                    break;
+                }
+                line = eol + 1;
+            }
+            scripts.emplace_back(from, close == std::string::npos ? command.size() : close);
+        }
+        return scripts;
+    };
+    const auto shellOnly = [&scriptSpans](std::string text) {
+        for (const auto& span : scriptSpans(text)) {
+            std::fill(text.begin() + static_cast<std::ptrdiff_t>(span.first),
+                      text.begin() + static_cast<std::ptrdiff_t>(span.second), ' ');
+        }
+        return text;
+    };
+    const auto scripts = scriptSpans(command);
     if (scripts.empty()) return command;
 
-    // Shell text only: an assignment inside the script is the script's, not the shell's.
-    std::string shellText = command;
-    for (const auto& span : scripts) {
-        std::fill(shellText.begin() + static_cast<std::ptrdiff_t>(span.first),
-                  shellText.begin() + static_cast<std::ptrdiff_t>(span.second), ' ');
-    }
-    shellText += "\n" + earlier;
+    // Shell text only: an assignment inside a script, this one or an earlier one, is not the shell's.
+    const std::string shellText = shellOnly(command) + "\n" + shellOnly(earlier);
 
     std::vector<size_t> blanked;  // each $ the shell would turn into nothing
     for (const auto& span : scripts) {

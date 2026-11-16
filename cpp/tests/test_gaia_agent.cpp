@@ -1257,6 +1257,10 @@ TEST(GaiaAgentShellExpansion, DollarsTheShellIsMeantToFillOrNeverSeesAreLeftAlon
     // A variable an earlier command of the turn exported is still set in the shell session.
     EXPECT_EQ(GaiaAgent::keepScriptDollars("python -c \"print($rate * 2)\"", "export rate=5\n"),
               "python -c \"print($rate * 2)\"");
+    // An assignment inside an earlier script set nothing in the shell.
+    EXPECT_EQ(GaiaAgent::keepScriptDollars("python -c \"print(f'| Meals | $total |')\"",
+                                           "python -c \"\nimport csv\nfor r in rows:\n    total=r[1]\n\"\n"),
+              "python -c \"print(f'| Meals | \\$total |')\"");
 }
 
 TEST(GaiaAgentTest, AClaimStillUntrueWhenStepsRunOutIsNotedOnTheClosingAnswer) {
