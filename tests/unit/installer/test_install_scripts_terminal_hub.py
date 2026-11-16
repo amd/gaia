@@ -1347,6 +1347,34 @@ def test_ps1_keeps_gaia_tui_working_for_an_install_that_had_it(
 
 
 @needs_powershell
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="a running exe locks only on Windows"
+)
+@pytest.mark.parametrize("running", ["gaia-tui.exe", "gaia-cli.exe"])
+def test_ps1_replaces_a_terminal_that_is_still_running(tmp_path, fake_hub, running):
+    """One window updating while another runs under the other name."""
+    bin_dir = tmp_path / "ps-bin"
+    bin_dir.mkdir()
+    (bin_dir / "gaia-tui.exe").write_text("the old terminal", encoding="utf-8")
+    ping = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "PING.EXE"
+    shutil.copyfile(ping, bin_dir / running)
+    held = subprocess.Popen(
+        [str(bin_dir / running), "-n", "120", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        result, _ = _run_ps1(tmp_path, fake_hub.base, "Install-Tui")
+    finally:
+        held.kill()
+        held.wait()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    for name in ("gaia-cli.exe", "gaia-tui.exe"):
+        assert RELEASE_TAG in (bin_dir / name).read_text(encoding="utf-8"), name
+
+
+@needs_powershell
 @pytest.mark.parametrize("tag", ["v0.25.0;id", "0.25.0", "v0.25.0/../x"])
 def test_ps1_refuses_a_malformed_tag(tmp_path, fake_hub, tag):
     result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui", tag=tag)

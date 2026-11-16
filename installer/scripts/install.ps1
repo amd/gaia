@@ -482,11 +482,14 @@ function Install-VerifiedBinary {
         if (-not (Test-Path $DestDir)) {
             New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
         }
+        $aside = $null
         try {
+            $aside = Move-Aside "$DestDir\$DestName"
             Move-Item -Path $tmpFile -Destination "$DestDir\$DestName" -Force
         }
         catch {
             Write-GaiaError "Downloaded and verified, but could not write $DestDir\$DestName`: $_"
+            Restore-Aside "$DestDir\$DestName" $aside
             Write-Host "  Fix:  close any running GAIA (and any tool scanning that" -ForegroundColor $COLOR_YELLOW
             Write-Host "        folder), then re-run this installer." -ForegroundColor $COLOR_YELLOW
             if ($Optional) { return $false }
@@ -497,6 +500,28 @@ function Install-VerifiedBinary {
     }
     finally {
         if (Test-Path $tmpDir) { Remove-Item -Path $tmpDir -Recurse -Force }
+    }
+}
+
+# A running exe can't be overwritten but can be renamed; the next install
+# deletes what was moved aside. Returns where it went, or $null.
+function Move-Aside([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $aside = "$Path.old"
+    if (Test-Path -LiteralPath $aside) { $aside = "$Path.$PID.old" }
+    Move-Item -LiteralPath $Path -Destination $aside -Force
+    return $aside
+}
+
+# Puts back what Move-Aside moved when nothing replaced it.
+function Restore-Aside([string]$Path, $Aside) {
+    if (-not $Aside -or (Test-Path -LiteralPath $Path)) { return }
+    try {
+        Move-Item -LiteralPath $Aside -Destination $Path
+    }
+    catch {
+        Write-GaiaError "$Path is missing: putting it back from $Aside failed: $_"
+        Write-Host "  Fix:  rename $Aside to $Path by hand." -ForegroundColor $COLOR_YELLOW
     }
 }
 
@@ -529,11 +554,14 @@ function Install-Tui {
     # its moved-aside binary back unless a new one is here.
     $legacy = "$GAIA_BIN\gaia-tui.exe"
     if ($LEGACY_TUI.Present -or (Test-LegacyTui)) {
+        $aside = $null
         try {
+            $aside = Move-Aside $legacy
             Copy-Item -LiteralPath "$GAIA_BIN\gaia-cli.exe" -Destination $legacy -Force
         }
         catch {
             Write-GaiaError "Could not update $legacy`: $_"
+            Restore-Aside $legacy $aside
             Write-Host "  Fix:  close GAIA, then re-run this installer. The command is now gaia-cli." -ForegroundColor $COLOR_YELLOW
             throw "GAIA install failed - see the error above."
         }
