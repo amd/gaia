@@ -525,10 +525,11 @@ describe('HybridSettings: end-to-end findings', () => {
     });
 
     it('says what the usage covers when the backend names it', async () => {
-        mockedApi.getHybridStats.mockResolvedValue({ ...STATS, scope: 'Counts hybrid turns from Agent UI chats.' });
+        mockedApi.getHybridStats.mockResolvedValue({ ...STATS, scope: 'agent_ui_chats', scope_label: 'Counts hybrid turns from Agent UI chats.' });
         render(<HybridSettings />);
         const usage = await screen.findByRole('region', { name: 'Usage' });
         await waitFor(() => expect(usage).toHaveTextContent('Counts hybrid turns from Agent UI chats.'));
+        expect(usage).not.toHaveTextContent('agent_ui_chats');
     });
 
     it('stays usable when the saved settings are broken, and saves the fix', async () => {

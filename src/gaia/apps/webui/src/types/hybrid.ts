@@ -153,6 +153,8 @@ export interface HybridStats {
     unpriced_turns: number;
     prices_fetched_at: string | null;
     prices_error: string | null;
-    /** What the numbers cover, in the backend's words (e.g. which surfaces' turns are recorded). */
-    scope?: string | null;
+    /** Which turns the numbers cover. */
+    scope?: 'agent_ui_chats' | 'all';
+    /** `scope` in plain language, shown as sent. */
+    scope_label?: string | null;
 }

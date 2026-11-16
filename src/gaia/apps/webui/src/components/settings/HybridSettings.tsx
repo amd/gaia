@@ -547,7 +547,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                     </div>
                 )}
                 {!stats && !statsError && <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}
-                {stats?.scope && <p className="settings-hint"><bdi>{stats.scope}</bdi></p>}
+                {stats?.scope_label && <p className="settings-hint"><bdi>{stats.scope_label}</bdi></p>}
                 {stats && stats.turns === 0 && <p className="settings-hint">{t('settings.hybrid.stats.none')}</p>}
                 {stats && stats.turns > 0 && (
                     <p className="settings-hint hybrid-stats">
