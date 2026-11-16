@@ -1630,6 +1630,10 @@ for (const locale of ['en', 'ar']) {
         const tail = page.locator('.doc-name-tail').first();
         await expect(tail).toHaveText(/finance\)\.pdf$/);
         await expect(tail).toBeInViewport();
+        // A cut name fades at its own end: the right for an English name, the left for an Arabic one, in either UI.
+        const fades = await page.locator('.doc-name-head').evaluateAll((els) =>
+            els.map((el) => getComputedStyle(el).getPropertyValue('--fade-to').trim()));
+        expect(fades).toEqual(['right', 'left']);
         // A name in the other script still starts at the UI's own edge.
         const other = page.locator('.doc-name-split').nth(locale === 'ar' ? 0 : 1);
         const [textBox, infoBox] = await other.evaluate((el) => {

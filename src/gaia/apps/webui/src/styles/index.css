@@ -520,6 +520,7 @@ textarea:focus-visible {
 :root {
     --fade-size: 2.5em;
 }
+/* :dir() resolves dir="auto" text by its own letters; vite.config's cssTarget keeps it native. */
 *:dir(ltr) {
     --fade-to: right;
 }

@@ -158,8 +158,10 @@
 .doc-name-head {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
     white-space: nowrap;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 .doc-name-tail { flex-shrink: 0; white-space: pre; }
 
