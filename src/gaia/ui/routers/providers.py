@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import requests
@@ -47,12 +47,15 @@ from gaia.logger import get_logger
 
 from ..database import ChatDatabase
 from ..dependencies import get_db
+from ..local_models import DOWNLOADED, LOADED, NOT_DOWNLOADED
+from ..models import DownloadProgress, WireModel
 from ..security import (
     on_device_listener,
     refuse_on_device_listener,
     require_ui_header,
     via_tunnel,
 )
+from .spending import PriceCard
 
 logger = get_logger(__name__)
 
@@ -465,19 +468,22 @@ def _gateway_check_applies() -> bool:
     return local and not urllib.request.getproxies()
 
 
-def _with_network(view: Dict[str, Any]) -> Dict[str, Any]:
-    """Say whether the AMD gateway can be reached, before anyone picks it."""
+def _gateway_network(base_url: Optional[str]) -> Dict[str, Any]:
+    """Whether the AMD gateway can be reached, and why not; ``None`` when unchecked."""
     from gaia.llm.gateway import GatewayUnreachable
 
     if not _gateway_check_applies():
-        view["network"] = {"reachable": None, "detail": None}
-        return view
+        return {"reachable": None, "detail": None}
     try:
-        check_gateway_reachable(view.get("base_url"))
+        check_gateway_reachable(base_url)
     except (GatewayUnreachable, ValueError) as e:
-        view["network"] = {"reachable": False, "detail": str(e)}
-    else:
-        view["network"] = {"reachable": True, "detail": None}
+        return {"reachable": False, "detail": str(e)}
+    return {"reachable": True, "detail": None}
+
+
+def _with_network(view: Dict[str, Any]) -> Dict[str, Any]:
+    """Say whether the AMD gateway can be reached, before anyone picks it."""
+    view["network"] = _gateway_network(view.get("base_url"))
     return view
 
 
@@ -997,6 +1003,306 @@ def reset_restore_state() -> None:
         _pending_context_reload.clear()
 
 
+# ── Response shapes ────────────────────────────────────────────────────────
+
+_Number = Union[int, float]
+_ProviderId = Literal[LOCAL, FIREWORKS, AMD]
+
+
+class ProviderNetwork(WireModel):
+    """Whether the AMD gateway's host can be reached; None when not checked."""
+
+    reachable: Optional[bool]
+    detail: Optional[str]
+
+
+class ProviderView(WireModel):
+    """A provider and its connection state; Local carries only the first four fields."""
+
+    id: _ProviderId
+    name: str
+    remote: bool
+    privacy_notice: str
+    registered: Optional[bool] = None
+    blocked: Optional[bool] = None
+    blocked_reason: Optional[str] = None
+    key_source: Optional[Literal["stored", "environment", "lemonade"]] = None
+    key_hint: Optional[str] = None
+    key_state: Optional[Literal["read", KEY_WAITING, KEY_LOCKED]] = None
+    key_message: Optional[str] = None
+    models_discovered: Optional[bool] = None
+    known_models: Optional[bool] = None
+    env_var: Optional[str] = None
+    key_from_gaia_env: Optional[bool] = None
+    base_url: Optional[str] = None
+    error: Optional[str] = None
+    network: Optional[ProviderNetwork] = None
+
+
+class ProviderActiveView(WireModel):
+    """The model new turns run, and where a new chat would be answered."""
+
+    provider: _ProviderId
+    model: Optional[str]
+    display_name: Optional[str]
+    label: Optional[str]
+    remote: bool
+    provider_name: Optional[str]
+    is_default: bool
+    config_error: Optional[str]
+    inference_remote: Optional[bool] = None
+    inference_description: Optional[str] = None
+
+
+class ProviderListResponse(WireModel):
+    """Every provider with its connection state, and the active model."""
+
+    providers: List[ProviderView]
+    active: ProviderActiveView
+    lemonade_error: Optional[str]
+
+
+class ProviderRestoreNotice(WireModel):
+    """Whether last run's model was restored; ``retry`` is set only on a failure."""
+
+    status: Literal["failed", "none", "restored", "pending"]
+    message: Optional[str]
+    retry: Optional[bool] = None
+
+
+class ActiveModelResponse(ProviderActiveView):
+    """The active model, whether it is downloaded, and the restore notice."""
+
+    downloaded: Optional[bool]
+    restore: ProviderRestoreNotice
+
+
+class ProviderConnectResponse(ProviderView):
+    """The connected provider, and whether its key was kept."""
+
+    remembered: bool
+    remember_error: Optional[str]
+
+
+class ProviderKeyForgotten(WireModel):
+    """Whether a stored key was removed."""
+
+    removed: bool
+
+
+class ProviderKeyStoreRetry(WireModel):
+    """Acknowledges that the next key read may ask the OS again."""
+
+    retrying: bool
+
+
+class ProviderPlacement(WireModel):
+    """Device and backend a model runs on, reported or expected."""
+
+    device: Optional[str]
+    backend: Optional[str]
+    label: Optional[str]
+    source: Optional[Literal["reported", "expected"]]
+    warning: Optional[str]
+
+
+class ProviderNpuProblem(WireModel):
+    """Something that keeps the NPU from running a model, and its fix."""
+
+    code: str
+    title: str
+    fix: str
+    params: Dict[str, str]
+
+
+class ProviderModelEntry(WireModel):
+    """A chat model; the local-only fields are absent from cloud lists."""
+
+    id: str
+    context_length: Optional[int]
+    downloaded: bool
+    labels: List[str]
+    recipe: Optional[str]
+    size_gb: Optional[_Number]
+    rank: Optional[int]
+    note: Optional[str]
+    evidence: Optional[str]
+    price: Optional[PriceCard]
+    custom: bool
+    source_url: Optional[str]
+    display_name: Optional[str] = None
+    state: Optional[Literal[LOADED, DOWNLOADED, NOT_DOWNLOADED]] = None
+    placement: Optional[ProviderPlacement] = None
+    fits: Optional[bool] = None
+    available: Optional[bool] = None
+    unavailable_reason: Optional[str] = None
+    npu_problems: Optional[List[ProviderNpuProblem]] = None
+    tokens_per_second: Optional[float] = None
+    download_progress: Optional[DownloadProgress] = None
+
+
+class ProviderModelsResponse(WireModel):
+    """A provider's chat models; ``blocked`` marks cloud under Local only, and the
+    memory fields come with the local list."""
+
+    provider: _ProviderId
+    models: List[ProviderModelEntry]
+    blocked: Optional[bool] = None
+    blocked_reason: Optional[str] = None
+    memory_gb: Optional[float] = None
+    memory_source: Optional[str] = None
+    capacity_error: Optional[str] = None
+
+
+class LocalContextView(WireModel):
+    """The context sizes a model may use on this PC, and the one in force."""
+
+    model: str
+    display_name: str
+    chosen: Optional[int]
+    automatic: int
+    min: Optional[int]
+    max_fit: Optional[int]
+    options: List[int]
+    loaded_ctx: Optional[int]
+    memory_source: str
+    note: Optional[str]
+
+
+class LocalContextReload(WireModel):
+    """Whether saving a size reloaded the loaded model, and why not."""
+
+    started: bool
+    reason: Optional[
+        Literal["already_loaded", "not_gaias_server", "warm_up", "busy", "restarting"]
+    ]
+
+
+class LocalContextResponse(LocalContextView):
+    """The saved context view; ``reload`` is None when the model isn't loaded."""
+
+    reload: Optional[LocalContextReload]
+
+
+class CustomModelCheck(WireModel):
+    """One thing verified about a pasted link."""
+
+    id: str
+    label: str
+    ok: bool
+    detail: str
+
+
+class CustomModelVariant(WireModel):
+    """One quantization of a pasted model and whether it fits."""
+
+    quant: str
+    file: str
+    size_gb: float
+    fits: bool
+    reason: Optional[str]
+
+
+class CustomModelReport(WireModel):
+    """What checking a pasted link found; the model fields are set once it is read."""
+
+    ok: bool
+    url: str
+    checks: List[CustomModelCheck]
+    warnings: List[str]
+    variants: List[CustomModelVariant]
+    error: Optional[str]
+    repo: Optional[str] = None
+    llamacpp_version: Optional[str] = None
+    flm_version: Optional[str] = None
+    architecture: Optional[str] = None
+    model_id: Optional[str] = None
+    display_name: Optional[str] = None
+    quant: Optional[str] = None
+    file: Optional[str] = None
+    checkpoint: Optional[str] = None
+    recipe: Optional[str] = None
+    mmproj: Optional[str] = None
+    vision: Optional[bool] = None
+    reasoning: Optional[bool] = None
+    tool_calling: Optional[bool] = None
+    size_gb: Optional[_Number] = None
+    context_length: Optional[int] = None
+
+
+class CustomModelEntry(WireModel):
+    """A model the user added from a link, as saved in config.json."""
+
+    id: str
+    display_name: str
+    checkpoint: str
+    recipe: str
+    mmproj: Optional[str]
+    vision: bool
+    reasoning: bool
+    tool_calling: bool
+    size_gb: Optional[_Number]
+    architecture: Optional[str]
+    context_length: Optional[int]
+    source_url: str
+    added_at: int
+
+
+class CustomModelAdded(WireModel):
+    """The saved model and the check that passed it."""
+
+    model: CustomModelEntry
+    report: CustomModelReport
+
+
+class CustomModelRemoved(WireModel):
+    """The removed model, and the config keys that pointed at it and were cleared."""
+
+    removed: str
+    display_name: str
+    cleared: List[Literal["default_model", "last_model"]]
+
+
+class LocalMemoryView(WireModel):
+    """Total and free memory of the pool models load into, and this model's share."""
+
+    source: str
+    total_gb: float
+    free_gb: Optional[float]
+    model_gb: Optional[float]
+
+
+class LocalStatusResponse(WireModel):
+    """Live state of the local model server and its chat model."""
+
+    state: Literal["stopped", "idle", "warming", "loaded"]
+    active_model: Optional[str]
+    active_display_name: Optional[str]
+    active_remote: bool
+    model: Optional[str]
+    display_name: Optional[str]
+    placement: Optional[ProviderPlacement]
+    ctx_size: Optional[int]
+    memory: Optional[LocalMemoryView]
+    memory_error: Optional[str]
+    error: Optional[str]
+    error_detail: Optional[str]
+    base_url: Optional[str]
+    owner: Optional[Literal["gaia", "user", "remote"]]
+    busy: bool
+    busy_reason: Optional[Literal["warm_up", "request"]]
+    restarting: bool
+    restart_error: Optional[str]
+
+
+class LocalRestartResponse(WireModel):
+    """A restart was started, and whether it also starts the stopped server."""
+
+    status: Literal["restarting"]
+    model: str
+    starting_server: bool
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────
 
 
@@ -1017,6 +1323,8 @@ def _known(provider: str) -> None:
 @router.get(
     "/api/providers",
     dependencies=[Depends(require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=ProviderListResponse,
+    response_model_exclude_unset=True,
 )
 def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """Every provider with its connection state, and the active model."""
@@ -1067,6 +1375,74 @@ def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         "active": _active_view(db),
         "lemonade_error": lemonade_error,
     }
+
+
+class ProviderSummaryNetwork(BaseModel):
+    """``reachable`` is None when the check doesn't apply to this PC."""
+
+    reachable: Optional[bool]
+
+
+class ProviderSummary(BaseModel):
+    """A provider as a paired device may see it: no key, key hint or address."""
+
+    id: str
+    name: str
+    remote: bool
+    privacy_notice: str
+    #: Lemonade has it registered and it lists models; always true for local.
+    configured: bool
+    #: Local only is on, so this cloud provider can't be used.
+    blocked: bool
+    #: AMD only: whether its gateway answers; no detail, which can name the address.
+    network: Optional[ProviderSummaryNetwork] = None
+
+
+class ProviderSummaryList(BaseModel):
+    providers: List[ProviderSummary]
+    #: Set when Lemonade could not be read; cloud providers then show unconfigured.
+    lemonade_error: Optional[str] = None
+
+
+@router.get(
+    "/api/providers/list",
+    response_model=ProviderSummaryList,
+    dependencies=[Depends(require_ui_header)],
+)
+def list_provider_summaries() -> Dict[str, Any]:
+    """Every provider and whether it is set up, with no key or address."""
+    entries: Dict[str, Optional[Dict[str, Any]]] = {}
+    lemonade_error = None
+    try:
+        for provider in (FIREWORKS, AMD):
+            entries[provider] = _cloud_entry(provider)
+    except ProviderError as e:
+        lemonade_error = str(e)
+    blocked = cloud_blocked()
+    summaries = []
+    for provider in PROVIDER_IDS:
+        entry = entries.get(provider)
+        summaries.append(
+            {
+                "id": provider,
+                "name": _NAMES[provider],
+                "remote": provider != LOCAL,
+                "privacy_notice": _PRIVACY[provider],
+                "configured": provider == LOCAL
+                or bool(entry and entry.get("models_discovered")),
+                "blocked": provider != LOCAL and blocked,
+                "network": (
+                    {
+                        "reachable": _gateway_network(
+                            entry.get("base_url") if entry else None
+                        )["reachable"]
+                    }
+                    if provider == AMD
+                    else None
+                ),
+            }
+        )
+    return {"providers": summaries, "lemonade_error": lemonade_error}
 
 
 def _needs_key(
@@ -1129,7 +1505,12 @@ def _install(provider: str, body: "ConnectRequest") -> None:
 
 
 # Can restore and persist the last model, so a cross-site GET must not reach it.
-@router.get("/api/providers/active", dependencies=[Depends(require_ui_header)])
+@router.get(
+    "/api/providers/active",
+    dependencies=[Depends(require_ui_header)],
+    response_model=ActiveModelResponse,
+    response_model_exclude_unset=True,
+)
 def active_model(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """The model new turns run, plus the once-per-run restore notice."""
     restore = restore_last_model(db)
@@ -1167,7 +1548,11 @@ class ConnectRequest(BaseModel):
     auth_header_prefix: Optional[str] = None
 
 
-@router.post("/api/providers/{provider}/connect")
+@router.post(
+    "/api/providers/{provider}/connect",
+    response_model=ProviderConnectResponse,
+    response_model_exclude_unset=True,
+)
 def connect_provider(
     provider: str, body: ConnectRequest, request: Request
 ) -> Dict[str, Any]:
@@ -1411,7 +1796,10 @@ def _connect_on_users_server(provider: str) -> Dict[str, Any]:
 
 
 @router.delete(
-    "/api/providers/{provider}/key", dependencies=[Depends(refuse_on_device_listener)]
+    "/api/providers/{provider}/key",
+    response_model=ProviderKeyForgotten,
+    response_model_exclude_unset=True,
+    dependencies=[Depends(refuse_on_device_listener)],
 )
 def forget_provider_key(provider: str) -> Dict[str, Any]:
     """Clear the key from Lemonade and from the OS credential store."""
@@ -1442,6 +1830,8 @@ def forget_provider_key(provider: str) -> Dict[str, Any]:
 @router.post(
     "/api/providers/key-store/retry",
     dependencies=[Depends(require_ui_header), Depends(refuse_on_device_listener)],
+    response_model=ProviderKeyStoreRetry,
+    response_model_exclude_unset=True,
 )
 def retry_key_store() -> Dict[str, Any]:
     """Let the next read ask the OS to unlock the key store again (Try again)."""
@@ -1451,7 +1841,11 @@ def retry_key_store() -> Dict[str, Any]:
     return {"retrying": True}
 
 
-@router.get("/api/providers/{provider}/models")
+@router.get(
+    "/api/providers/{provider}/models",
+    response_model=ProviderModelsResponse,
+    response_model_exclude_unset=True,
+)
 def provider_models(
     provider: str, db: ChatDatabase = Depends(get_db)
 ) -> Dict[str, Any]:
@@ -1600,7 +1994,11 @@ class SelectModelRequest(BaseModel):
     model: str
 
 
-@router.post("/api/providers/select")
+@router.post(
+    "/api/providers/select",
+    response_model=ProviderActiveView,
+    response_model_exclude_unset=True,
+)
 def select_model(
     body: SelectModelRequest, db: ChatDatabase = Depends(get_db)
 ) -> Dict[str, Any]:
@@ -1845,7 +2243,11 @@ def _context_view(model_id: str) -> Dict[str, Any]:
     }
 
 
-@router.get("/api/providers/local/context")
+@router.get(
+    "/api/providers/local/context",
+    response_model=LocalContextView,
+    response_model_exclude_unset=True,
+)
 def get_context(model: str) -> Dict[str, Any]:
     """The context sizes *model* may use on this PC, and the one in force."""
     return _context_view(model.strip())
@@ -1858,7 +2260,11 @@ class ContextRequest(BaseModel):
     ctx_size: Optional[int] = None
 
 
-@router.put("/api/providers/local/context")
+@router.put(
+    "/api/providers/local/context",
+    response_model=LocalContextResponse,
+    response_model_exclude_unset=True,
+)
 def set_context(body: ContextRequest) -> Dict[str, Any]:
     """Remember a context size for a model; says whether the loaded model must reload."""
     from gaia.config import GaiaConfigError
@@ -2018,13 +2424,21 @@ def _catalog_recipes(model_id: str) -> List[Optional[str]]:
     return recipes_in_catalog(model_id, entries, lambda: {"data": catalog})
 
 
-@router.post("/api/providers/local/custom/check")
+@router.post(
+    "/api/providers/local/custom/check",
+    response_model=CustomModelReport,
+    response_model_exclude_unset=True,
+)
 def check_custom_model(body: CustomModelRequest) -> Dict[str, Any]:
     """Check a pasted link without saving or downloading anything."""
     return _inspect_custom(body)
 
 
-@router.post("/api/providers/local/custom")
+@router.post(
+    "/api/providers/local/custom",
+    response_model=CustomModelAdded,
+    response_model_exclude_unset=True,
+)
 def add_custom_model(body: CustomModelRequest) -> Dict[str, Any]:
     """Check a pasted link and, when it passes, add the model to the list."""
     from gaia.config import GaiaConfigError
@@ -2062,7 +2476,11 @@ def _delete_from_lemonade(entry: Dict[str, Any]) -> None:
         )
 
 
-@router.delete("/api/providers/local/custom/{model_id}")
+@router.delete(
+    "/api/providers/local/custom/{model_id}",
+    response_model=CustomModelRemoved,
+    response_model_exclude_unset=True,
+)
 def remove_custom_model(
     model_id: str, db: ChatDatabase = Depends(get_db)
 ) -> Dict[str, Any]:
@@ -2217,7 +2635,12 @@ def _busy_reason(entry: Optional[Dict[str, Any]], warming: bool) -> Optional[str
 _LOADING_STATUSES = frozenset({"loading", "starting", "initializing", "warming"})
 
 
-@router.get("/api/providers/local/status", dependencies=[Depends(require_ui_header)])
+@router.get(
+    "/api/providers/local/status",
+    dependencies=[Depends(require_ui_header)],
+    response_model=LocalStatusResponse,
+    response_model_exclude_unset=True,
+)
 def local_status(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """Loaded / warming / idle / stopped, with device, memory and context window."""
     from gaia.llm.model_device import describe_placement
@@ -2348,7 +2771,12 @@ class RestartRequest(BaseModel):
     confirm: bool = False
 
 
-@router.post("/api/providers/local/restart", status_code=202)
+@router.post(
+    "/api/providers/local/restart",
+    status_code=202,
+    response_model=LocalRestartResponse,
+    response_model_exclude_unset=True,
+)
 def restart_local(
     body: Optional[RestartRequest] = None, db: ChatDatabase = Depends(get_db)
 ) -> Dict[str, Any]:

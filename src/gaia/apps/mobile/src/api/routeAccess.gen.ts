@@ -97,6 +97,7 @@ export const ROUTE_ACCESS: Readonly<Record<string, RouteAccessClass>> = {
     'GET /api/onboarding/start': 'not_on_listener',
     'GET /api/providers': 'not_on_listener',
     'GET /api/providers/active': 'not_on_listener',
+    'GET /api/providers/list': 'not_on_listener',
     'GET /api/providers/local/context': 'not_on_listener',
     'GET /api/providers/local/status': 'not_on_listener',
     'GET /api/providers/{provider}/models': 'not_on_listener',

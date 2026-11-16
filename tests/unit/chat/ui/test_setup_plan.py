@@ -1221,7 +1221,9 @@ def test_a_cloud_setup_is_not_refused_for_a_saved_npu_model(
     _flm_backend(fake, "unsupported")
     started = []
     monkeypatch.setattr(
-        setup_router.runner, "start", lambda *a, **k: started.append(a) or {}
+        setup_router.runner,
+        "start",
+        lambda *a, **k: started.append(a) or {"state": "running"},
     )
     r = client.post("/api/setup/run", json={"skip_chat_model": True}, headers=UI)
     assert r.status_code == 200

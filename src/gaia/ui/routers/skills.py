@@ -13,19 +13,51 @@ the running agent is asked instead.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from gaia.skills.format import SECURITY_TIERS
+from gaia.skills.listing import SKILL_SOURCES
+
+from ..models import WireModel
 from ..security import refuse_on_device_listener
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["skills"])
 
+SkillTier = Literal[SECURITY_TIERS]  # type: ignore[valid-type]
+SkillSource = Literal[SKILL_SOURCES]  # type: ignore[valid-type]
 
-@router.get("/api/skills")
+
+class SkillListEntry(WireModel):
+    """One installed skill in the Skills settings list."""
+
+    name: str
+    description: str
+    version: Optional[str]
+    tier: SkillTier
+    tools: List[str]
+    path: str
+    #: Absent from an agent binary that predates them.
+    always_on: Optional[bool] = None
+    source: Optional[SkillSource] = None
+
+
+class SkillsListResponse(WireModel):
+    """Installed skills, and any folder that failed to parse (path to message)."""
+
+    skills: List[SkillListEntry]
+    invalid: Dict[str, str]
+
+
+@router.get(
+    "/api/skills",
+    response_model=SkillsListResponse,
+    response_model_exclude_unset=True,
+)
 def list_skills() -> Dict[str, Any]:
     """Installed skills, and any folder that failed to parse."""
     from gaia.skills.errors import SkillError
@@ -85,7 +117,78 @@ class SkillLinkAddRequest(SkillLinkRequest):
     force: bool = False
 
 
-@router.get("/api/skills/featured")
+class SkillFeaturedLibrary(WireModel):
+    """A skills library offered as a one-click add."""
+
+    id: str
+    name: str
+    url: str
+    description: str
+
+
+class SkillFeaturedResponse(WireModel):
+    """Result of ``GET /api/skills/featured``."""
+
+    libraries: List[SkillFeaturedLibrary]
+
+
+class SkillLinkPermission(WireModel):
+    """One permission a linked skill declares, raw grant plus a sentence."""
+
+    grant: str
+    text: str
+
+
+class SkillLinkEntry(WireModel):
+    """One skill found behind a pasted link, and what its audit said."""
+
+    name: str
+    description: str
+    path: str
+    has_code: bool
+    permissions: List[SkillLinkPermission]
+    permissions_unreadable: bool
+    verdict: str
+    findings: List[str]
+    installed: bool
+    update: bool
+    error: Optional[str]
+
+
+class SkillLinkPreviewResponse(WireModel):
+    """Result of ``POST /api/skills/link/preview``; ``pin`` goes back on add."""
+
+    link: str
+    source: str
+    skills: List[SkillLinkEntry]
+    pin: str
+    warning: str
+
+
+class SkillLinkAdded(WireModel):
+    """One skill the add wrote to ``~/.gaia/skills``."""
+
+    name: str
+    updated: bool
+    path: str
+    verdict: str
+    has_code: bool
+    code_trusted: bool
+    findings: List[str]
+
+
+class SkillLinkAddResponse(WireModel):
+    """Result of ``POST /api/skills/link/add``; ``failed`` maps name to reason."""
+
+    added: List[SkillLinkAdded]
+    failed: Dict[str, str]
+
+
+@router.get(
+    "/api/skills/featured",
+    response_model=SkillFeaturedResponse,
+    response_model_exclude_unset=True,
+)
 def featured_skill_libraries() -> Dict[str, Any]:
     """Libraries the Skills panel offers as one-click adds."""
     from gaia.skills.link import FEATURED_LIBRARIES
@@ -93,7 +196,11 @@ def featured_skill_libraries() -> Dict[str, Any]:
     return {"libraries": FEATURED_LIBRARIES}
 
 
-@router.post("/api/skills/link/preview")
+@router.post(
+    "/api/skills/link/preview",
+    response_model=SkillLinkPreviewResponse,
+    response_model_exclude_unset=True,
+)
 def preview_skill_link(body: SkillLinkRequest) -> Dict[str, Any]:
     """List and audit the skills behind a pasted link. Writes nothing."""
     from gaia.skills.errors import SkillError
@@ -107,7 +214,12 @@ def preview_skill_link(body: SkillLinkRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.post("/api/skills/link/add", dependencies=[Depends(refuse_on_device_listener)])
+@router.post(
+    "/api/skills/link/add",
+    dependencies=[Depends(refuse_on_device_listener)],
+    response_model=SkillLinkAddResponse,
+    response_model_exclude_unset=True,
+)
 def add_skill_link(body: SkillLinkAddRequest) -> Dict[str, Any]:
     """Add the chosen skills behind a pasted link to ``~/.gaia/skills``.
 
@@ -141,7 +253,13 @@ def _link_error(e: Exception) -> str:
     return str(e)
 
 
-@router.delete("/api/skills/{name}")
+class SkillRemoved(WireModel):
+    removed: str
+
+
+@router.delete(
+    "/api/skills/{name}", response_model=SkillRemoved, response_model_exclude_unset=True
+)
 def remove_skill(name: str) -> Dict[str, Any]:
     """Remove a skill from ``~/.gaia/skills``; bundled skills are refused."""
     from gaia.skills.errors import SkillError, SkillNotFoundError
@@ -210,7 +328,31 @@ def _preference_schema_beside_the_agent_binary(name: str) -> Any:
         return None
 
 
-@router.get("/api/skills/preferences")
+class SkillPreferences(WireModel):
+    """A skill's saved preferences, keyed as its preferences schema names them."""
+
+    skill: str
+    preferences: Dict[str, Any]
+
+
+class SkillPreferencesList(WireModel):
+    """Every skill with saved preferences."""
+
+    skills: List[SkillPreferences]
+
+
+class SkillPreferencesReset(WireModel):
+    """``reset`` is false when the skill had nothing saved."""
+
+    skill: str
+    reset: bool
+
+
+@router.get(
+    "/api/skills/preferences",
+    response_model=SkillPreferencesList,
+    response_model_exclude_unset=True,
+)
 def list_skill_preferences() -> Dict[str, Any]:
     """Every skill with saved preferences."""
     from gaia.skills.errors import SkillError
@@ -221,7 +363,11 @@ def list_skill_preferences() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/api/skills/{name}/preferences")
+@router.get(
+    "/api/skills/{name}/preferences",
+    response_model=SkillPreferences,
+    response_model_exclude_unset=True,
+)
 def get_skill_preferences(name: str) -> Dict[str, Any]:
     """One skill's saved preferences (``{}`` when none)."""
     from gaia.skills.errors import SkillError
@@ -232,7 +378,11 @@ def get_skill_preferences(name: str) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-@router.put("/api/skills/{name}/preferences")
+@router.put(
+    "/api/skills/{name}/preferences",
+    response_model=SkillPreferences,
+    response_model_exclude_unset=True,
+)
 def update_skill_preferences(name: str, changes: Dict[str, Any]) -> Dict[str, Any]:
     """Merge *changes* into a skill's preferences; a ``null`` value removes a key."""
     from gaia.skills.errors import SkillError
@@ -245,7 +395,11 @@ def update_skill_preferences(name: str, changes: Dict[str, Any]) -> Dict[str, An
     return {"skill": name, "preferences": saved}
 
 
-@router.delete("/api/skills/{name}/preferences")
+@router.delete(
+    "/api/skills/{name}/preferences",
+    response_model=SkillPreferencesReset,
+    response_model_exclude_unset=True,
+)
 def reset_skill_preferences(name: str) -> Dict[str, Any]:
     """Forget every saved preference of a skill."""
     from gaia.skills.errors import SkillError
