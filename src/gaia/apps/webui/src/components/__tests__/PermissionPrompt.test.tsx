@@ -73,6 +73,23 @@ describe('PermissionPrompt', () => {
         expect(screen.getByTestId('perm-exact-text').textContent).toBe('To: a@b.co\nX-Odd: 1\n\nBody');
     });
 
+    it('reads the header behind two notes, and keeps both notes', () => {
+        const text = 'Hidden characters shown.\n\nAttachments were too large.\n\nFrom: jane@example.com\nTo: a@b.co\nSubject: Hi\n\nBody';
+        useNotificationStore.getState().addNotification(request({ tool: 'send_now', toolArgs: { _exact_text: text } }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(facts()).toEqual([['From', 'jane@example.com'], ['To', 'a@b.co'], ['Subject', 'Hi']]);
+        expect(screen.getByText(/Hidden characters shown\.\s+Attachments were too large\./)).toBeInTheDocument();
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe('Body');
+    });
+
+    it('shows notes with no header after them whole', () => {
+        const text = 'First note.\n\nSecond note.\n\nJust a body, no header.';
+        useNotificationStore.getState().addNotification(request({ tool: 'send_now', toolArgs: { _exact_text: text } }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.queryByTestId('perm-mail-header')).not.toBeInTheDocument();
+        expect(screen.getByTestId('perm-exact-text').textContent).toBe(text);
+    });
+
     it.each(['update_draft', 'send-email/update_draft'])('shows a relayed draft edit whole (%s)', (tool) => {
         useNotificationStore.getState().addNotification(request({ tool, toolArgs: {}, summary: 'Save this draft as:\n\nNew words' }));
         render(<PermissionPrompt sessionId="chat-1" />);

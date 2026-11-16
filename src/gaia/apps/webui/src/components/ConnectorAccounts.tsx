@@ -7,7 +7,7 @@ import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { useT } from '../i18n/useT';
 import type { ConnectorAccount, ConnectorRow } from '../types';
-import { middleCut, needsSignIn } from '../utils/connectorAccounts';
+import { accountRef, middleCut, needsSignIn } from '../utils/connectorAccounts';
 import { ConfirmSheet } from './setup/ConfirmSheet';
 import { ltrIn } from './setup/format';
 
@@ -72,14 +72,14 @@ export function ConnectorAccountList({
     };
 
     const makeDefault = (account: ConnectorAccount) =>
-        void run(`default:${account.account_id}`, async () => {
-            await api.setDefaultConnectorAccount(connector.id, account.account_id);
+        void run(`default:${accountRef(account)}`, async () => {
+            await api.setDefaultConnectorAccount(connector.id, accountRef(account));
             onChanged();
         });
 
     const disconnect = async (account: ConnectorAccount) => {
         const done = await run('disconnect', async () => {
-            await api.disconnectConnectorAccount(connector.id, account.account_id);
+            await api.disconnectConnectorAccount(connector.id, accountRef(account));
             onChanged();
         });
         if (done) setAsking(null);
@@ -88,48 +88,55 @@ export function ConnectorAccountList({
     return (
         <div className="connector-accounts">
             <ul aria-label={t('settings.connectors.accountList', { name })}>
-                {accounts.map((account) => (
-                    <li key={account.account_id} className={`connector-account${needsSignIn(account) ? ' connector-account--attention' : ''}`}>
-                        <span className="connector-account-who">
-                            <AccountAddress email={account.email || account.account_id} />
-                            {account.is_default && accounts.length > 1 && (
-                                <span className="connector-account-default">{t('settings.connectors.default')}</span>
-                            )}
-                        </span>
-                        <AccountStatus account={account} />
-                        <span className="connector-account-actions">
-                            {needsSignIn(account) && (
-                                <button
-                                    type="button"
-                                    className="btn-primary"
-                                    disabled={busy !== null}
-                                    onClick={() => void run(`signin:${account.account_id}`, () => onSignIn(account.account_id))}
-                                >
-                                    {busy === `signin:${account.account_id}` && <Loader2 size={12} className="spin" />}
-                                    {t('settings.connectors.reconnect')}
-                                </button>
-                            )}
-                            {!account.is_default && account.status === 'ok' && (
+                {accounts.map((account, i) => {
+                    const ref = accountRef(account);
+                    const address = { address: ltrIn(t.locale, account.email || account.account_id) };
+                    return (
+                        <li key={ref === 'default' ? `default:${i}` : ref} className={`connector-account${needsSignIn(account) ? ' connector-account--attention' : ''}`}>
+                            <span className="connector-account-who">
+                                <AccountAddress email={account.email || account.account_id} />
+                                {account.is_default && accounts.length > 1 && (
+                                    <span className="connector-account-default">{t('settings.connectors.default')}</span>
+                                )}
+                            </span>
+                            <AccountStatus account={account} />
+                            <span className="connector-account-actions">
+                                {needsSignIn(account) && (
+                                    <button
+                                        type="button"
+                                        className="btn-primary"
+                                        disabled={busy !== null}
+                                        aria-label={t('settings.connectors.reconnectNamed', address)}
+                                        onClick={() => void run(`signin:${ref}`, () => onSignIn(ref))}
+                                    >
+                                        {busy === `signin:${ref}` && <Loader2 size={12} className="spin" />}
+                                        {t('settings.connectors.reconnect')}
+                                    </button>
+                                )}
+                                {!account.is_default && account.status === 'ok' && (
+                                    <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        disabled={busy !== null}
+                                        aria-label={t('settings.connectors.makeDefaultNamed', address)}
+                                        onClick={() => makeDefault(account)}
+                                    >
+                                        {t('settings.connectors.makeDefault')}
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     className="btn-secondary"
                                     disabled={busy !== null}
-                                    onClick={() => makeDefault(account)}
+                                    aria-label={t('settings.connectors.disconnectNamed', address)}
+                                    onClick={() => setAsking(account)}
                                 >
-                                    {t('settings.connectors.makeDefault')}
+                                    {t('settings.connectors.disconnect')}
                                 </button>
-                            )}
-                            <button
-                                type="button"
-                                className="btn-secondary"
-                                disabled={busy !== null}
-                                onClick={() => setAsking(account)}
-                            >
-                                {t('settings.connectors.disconnect')}
-                            </button>
-                        </span>
-                    </li>
-                ))}
+                            </span>
+                        </li>
+                    );
+                })}
             </ul>
             {accounts.length > 1 && <p className="connector-account-hint">{t('settings.connectors.defaultHint')}</p>}
             {err && !asking && (

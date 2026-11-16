@@ -10,9 +10,9 @@ import * as api from '../../services/api';
 import { stripIsolates } from '../../i18n/registry';
 import { useChatStore } from '../../stores/chatStore';
 import type { AgentInfo, ConnectorAccount, ConnectorRow } from '../../types';
-import { referencedProviderConnected } from '../ConnectorRetryBanner';
+import { ConnectorRetryBanner, referencedProviderConnected } from '../ConnectorRetryBanner';
 import { EmailConnectCta } from '../email/EmailConnectCta';
-import { ConnectAccountCard } from '../render/ConnectAccountCard';
+import { ConnectAccountCard, isConnectAccountPayload } from '../render/ConnectAccountCard';
 
 vi.mock('../../services/api');
 vi.mock('../../hooks/useConnectorsSSE', () => ({ useConnectorsSSE: () => {} }));
@@ -62,7 +62,7 @@ afterEach(() => {
 describe('Connect card with several accounts', () => {
     it('reconnects the account that failed, or adds a different one, and never offers a fresh Connect', async () => {
         mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE, EXPIRED])] });
-        render(<ConnectAccountCard data={card} />);
+        render(<ConnectAccountCard data={{ ...card, account: { google: EXPIRED.account_id } }} />);
         const reconnect = await screen.findByRole('button', { name: /Reconnect/ });
         expect(stripIsolates(reconnect.textContent ?? '')).toBe('Reconnect jane.old@example.com');
         expect(screen.queryByRole('button', { name: 'Connect Google' })).not.toBeInTheDocument();
@@ -86,17 +86,79 @@ describe('Connect card with several accounts', () => {
         expect(screen.queryByRole('button', { name: 'Use a different account' })).not.toBeInTheDocument();
     });
 
-    it('signs in to the default account again when every account works', async () => {
+    it('never guesses the default when the card names no account', async () => {
         mocked.listConnectors.mockResolvedValue({ connectors: [google([WORK, JANE])] });
         render(<ConnectAccountCard data={{ ...card, reconnect: ['google'] }} />);
-        const reconnect = await screen.findByRole('button', { name: /Reconnect/ });
-        expect(stripIsolates(reconnect.textContent ?? '')).toBe('Reconnect jane@example.com');
+        expect(await screen.findByRole('button', { name: 'Reconnect Google' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Use a different account' })).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /Reconnect jane/ })).not.toBeInTheDocument();
+    });
+
+    it('offers the account the card names, even when it still reads as working', async () => {
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE, WORK])] });
+        render(<ConnectAccountCard data={{ ...card, reconnect: ['google'], account: { google: WORK.account_id } }} />);
+        const reconnect = await screen.findByRole('button', { name: /Reconnect jane/ });
+        expect(stripIsolates(reconnect.textContent ?? '')).toBe('Reconnect jane.work@example.com');
+        fireEvent.click(reconnect);
+        await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledWith(
+            'google', [], ['installed:gaia'], { account: WORK.account_id },
+        ));
+    });
+
+    it('finds the named account by its address too', async () => {
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE, WORK, EXPIRED])] });
+        render(<ConnectAccountCard data={{ ...card, account: { google: 'Jane.Work@example.com' } }} />);
+        const reconnect = await screen.findByRole('button', { name: /Reconnect jane/ });
+        expect(stripIsolates(reconnect.textContent ?? '')).toBe('Reconnect jane.work@example.com');
+        // Only the named one: the unrelated expired account is not offered.
+        expect(shown()).not.toContain('jane.old@example.com');
+    });
+
+    it('does not offer an unrelated expired account beside a working one', async () => {
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE, EXPIRED])] });
+        render(<ConnectAccountCard data={card} />);
+        expect(await screen.findByRole('button', { name: 'Use a different account' })).toBeInTheDocument();
+        expect(shown()).not.toContain('jane.old@example.com');
+    });
+
+    it('names an account stored without a stable id by its address', async () => {
+        const legacy = account('jane@example.com', { account_id: 'default', status: 'reauth_required', is_default: true });
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([legacy])] });
+        render(<ConnectAccountCard data={card} />);
+        fireEvent.click(await screen.findByRole('button', { name: /Reconnect jane/ }));
+        await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledWith(
+            'google', [], ['installed:gaia'], { account: 'jane@example.com' },
+        ));
+    });
+
+    it('drops a card whose account names a provider it does not offer', () => {
+        expect(isConnectAccountPayload({ ...card, account: { google: 'a' } })).toBe(true);
+        expect(isConnectAccountPayload({ ...card, account: { microsoft: 'a' } })).toBe(false);
+        expect(isConnectAccountPayload({ ...card, account: { google: '' } })).toBe(false);
+        expect(isConnectAccountPayload({ ...card, account: 'a' })).toBe(false);
+    });
+
+    it('asks again once the offered account is back, and stops watching', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const stale = account('jane.stale@example.com', { status: 'reauth_required' });
+        const failed = account('jane.work@example.com', { status: 'reauth_required' });
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE, stale, failed])] });
+        render(<ConnectAccountCard data={{ ...card, account: { google: failed.account_id } }} />);
+        fireEvent.click(await screen.findByRole('button', { name: /Reconnect jane.work/ }));
+        await waitFor(() => expect(shown()).toContain('A browser tab opened'));
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE, stale, { ...failed, status: 'ok' }])] });
+        await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+        await waitFor(() => expect(shown()).toContain('Your account is connected'));
+        const calls = mocked.listConnectors.mock.calls.length;
+        await act(async () => { await vi.advanceTimersByTimeAsync(20000); });
+        expect(mocked.listConnectors.mock.calls.length).toBe(calls);
+        vi.useRealTimers();
     });
 });
 
 describe('email Connect button with several accounts', () => {
-    it('offers the failed account and a different one, in Arabic too', async () => {
-        mocked.listConnectors.mockResolvedValue({ connectors: [google([JANE, EXPIRED])] });
+    it('offers the only account, expired, and a different one, in Arabic too', async () => {
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([EXPIRED])] });
         act(() => useChatStore.getState().setLocale('ar'));
         render(<EmailConnectCta content="AUTH_REQUIRED: Authentication required for google" />);
         await waitFor(() => expect(shown()).toContain('jane.old@example.com'));
@@ -113,12 +175,79 @@ describe('email Connect button with several accounts', () => {
         render(<EmailConnectCta content="NOT_CONNECTED: google is not currently connected." />);
         expect(await screen.findByRole('button', { name: 'Connect Google' })).toBeInTheDocument();
     });
+
+    it('holds the button until it knows the accounts, so a fast click never signs in blind', async () => {
+        let answer: (v: { connectors: ConnectorRow[] }) => void = () => {};
+        mocked.listConnectors.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+        render(<EmailConnectCta content="AUTH_REQUIRED: Authentication required for google" />);
+        const early = screen.getByRole('button', { name: 'Connect Google' });
+        expect(early).toBeDisabled();
+        fireEvent.click(early);
+        await act(async () => answer({ connectors: [google([{ ...JANE, status: 'reauth_required' }])] }));
+        const reconnect = await screen.findByRole('button', { name: /Reconnect jane/ });
+        expect(reconnect).toBeEnabled();
+        expect(mocked.authorizeConnector).not.toHaveBeenCalled();
+    });
+
+    it('reads the accounts again when the window comes back', async () => {
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([])] });
+        render(<EmailConnectCta content="AUTH_REQUIRED: Authentication required for google" />);
+        await screen.findByRole('button', { name: 'Connect Google' });
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([{ ...JANE, status: 'reauth_required' }])] });
+        act(() => { window.dispatchEvent(new Event('focus')); });
+        expect(await screen.findByRole('button', { name: /Reconnect jane/ })).toBeInTheDocument();
+    });
 });
 
 describe('the retry cue with several accounts', () => {
-    it('waits until the account that failed is signed in again', () => {
-        const reply = 'AUTH_REQUIRED: Authentication required for google';
-        expect(referencedProviderConnected(reply, [google([JANE, EXPIRED])])).toBe(false);
-        expect(referencedProviderConnected(reply, [google([JANE, WORK])])).toBe(true);
+    const reply = 'AUTH_REQUIRED: Authentication required for google';
+
+    it('is not held back by an unrelated expired account', () => {
+        const before = [google([EXPIRED])];
+        // A new account signed in; the stale one stays expired.
+        expect(referencedProviderConnected(reply, [google([JANE, EXPIRED])], ['google'], before)).toBe(true);
+        expect(referencedProviderConnected(reply, before, ['google'], before)).toBe(false);
+    });
+
+    it('waits for the account the card named', () => {
+        const failed = account('jane.work@example.com', { status: 'reauth_required' });
+        const before = [google([JANE, EXPIRED, failed])];
+        const named = { google: failed.account_id };
+        expect(referencedProviderConnected(reply, before, ['google'], before, named)).toBe(false);
+        expect(referencedProviderConnected(reply, [google([JANE, { ...EXPIRED, status: 'ok' }, failed])], ['google'], before, named)).toBe(false);
+        expect(referencedProviderConnected(reply, [google([JANE, EXPIRED, { ...failed, status: 'ok' }])], ['google'], before, named)).toBe(true);
+    });
+
+    it('with several accounts and none named, waits for one to start working', () => {
+        const before = [google([JANE, EXPIRED])];
+        expect(referencedProviderConnected(reply, before, ['google'], before)).toBe(false);
+        expect(referencedProviderConnected(reply, [google([JANE, { ...EXPIRED, status: 'ok' }])], ['google'], before)).toBe(true);
+    });
+
+    it('offers Ask again once the expired account is back, and stops polling', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        const stale = account('jane.stale@example.com', { status: 'reauth_required' });
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([stale])] });
+        render(<ConnectorRetryBanner content={reply} providers={['google']} onRetry={() => {}} />);
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        expect(screen.queryByRole('button', { name: 'Ask again' })).not.toBeInTheDocument();
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([stale, JANE])] });
+        await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+        expect(await screen.findByRole('button', { name: 'Ask again' })).toBeInTheDocument();
+        const calls = mocked.listConnectors.mock.calls.length;
+        await act(async () => { await vi.advanceTimersByTimeAsync(20000); });
+        expect(mocked.listConnectors.mock.calls.length).toBe(calls);
+        vi.useRealTimers();
+    });
+
+    it('stops polling after a while when nothing changes', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        mocked.listConnectors.mockResolvedValue({ connectors: [google([EXPIRED])] });
+        render(<ConnectorRetryBanner content={reply} providers={['google']} onRetry={() => {}} />);
+        await act(async () => { await vi.advanceTimersByTimeAsync(15 * 60_000); });
+        const calls = mocked.listConnectors.mock.calls.length;
+        await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+        expect(mocked.listConnectors.mock.calls.length).toBe(calls);
+        vi.useRealTimers();
     });
 });

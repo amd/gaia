@@ -76,7 +76,7 @@ describe('Settings with one account', () => {
         await open(google([{ ...JANE, status: 'reauth_required' }]));
         expect(within(tile()).getAllByText('Sign-in expired').length).toBeGreaterThan(0);
         expect(screen.queryByRole('button', { name: /^Connect$/ })).not.toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Reconnect jane@example.com' }));
         await vi.waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledWith(
             'google', expect.any(Array), [], { account: JANE.account_id },
         ));
@@ -100,19 +100,21 @@ describe('Settings with several accounts', () => {
         expect(rows).toHaveLength(3);
         expect(within(rows[0]).getByText('Default')).toBeInTheDocument();
         expect(within(rows[0]).getByText('Connected')).toBeInTheDocument();
-        expect(within(rows[0]).queryByRole('button', { name: 'Make default' })).not.toBeInTheDocument();
-        expect(within(rows[1]).getByRole('button', { name: 'Make default' })).toBeInTheDocument();
+        expect(within(rows[0]).queryByRole('button', { name: /^Make/ })).not.toBeInTheDocument();
+        // Each button names its account, so a screen reader can tell the rows apart.
+        expect(within(rows[1]).getByRole('button', { name: 'Make jane.work@example.com the default' })).toHaveTextContent('Make default');
         expect(within(rows[2]).getByText('Sign-in expired')).toBeInTheDocument();
-        expect(within(rows[2]).getByRole('button', { name: 'Reconnect' })).toBeInTheDocument();
+        expect(within(rows[2]).getByRole('button', { name: 'Reconnect jane@outlook-example.com' })).toHaveTextContent('Reconnect');
         // The whole-connector Disconnect gives way to one per account.
-        expect(rows.every((r) => within(r).queryByRole('button', { name: 'Disconnect' }))).toBe(true);
+        expect(rows.map((r) => within(r).getByRole('button', { name: /^Disconnect / }).getAttribute('aria-label')))
+            .toEqual(['Disconnect jane@example.com', 'Disconnect jane.work@example.com', 'Disconnect jane@outlook-example.com']);
         expect(screen.getByRole('button', { name: 'Add another Google account' })).toBeInTheDocument();
     });
 
     it('makes another account the default', async () => {
         mocked.setDefaultConnectorAccount.mockResolvedValue({ accounts: [] });
         await open(google([JANE, WORK]));
-        fireEvent.click(screen.getByRole('button', { name: 'Make default' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Make jane.work@example.com the default' }));
         await vi.waitFor(() => expect(mocked.setDefaultConnectorAccount).toHaveBeenCalledWith('google', WORK.account_id));
     });
 
@@ -120,7 +122,7 @@ describe('Settings with several accounts', () => {
         mocked.disconnectConnectorAccount.mockResolvedValue();
         await open(google([JANE, WORK]));
         const rows = within(screen.getByRole('list', { name: 'Google accounts' })).getAllByRole('listitem');
-        fireEvent.click(within(rows[1]).getByRole('button', { name: 'Disconnect' }));
+        fireEvent.click(within(rows[1]).getByRole('button', { name: 'Disconnect jane.work@example.com' }));
         const ask = screen.getByRole('alertdialog');
         expect(stripIsolates(ask.textContent ?? '')).toContain('Disconnect jane.work@example.com?');
         expect(ask).toHaveTextContent('Your other Google accounts keep working.');
@@ -128,6 +130,32 @@ describe('Settings with several accounts', () => {
         fireEvent.click(within(ask).getByRole('button', { name: 'Disconnect' }));
         await vi.waitFor(() => expect(mocked.disconnectConnectorAccount).toHaveBeenCalledWith('google', WORK.account_id));
         expect(mocked.disconnectConnector).not.toHaveBeenCalled();
+    });
+
+    it('names an account stored before GAIA told accounts apart by its address', async () => {
+        mocked.setDefaultConnectorAccount.mockResolvedValue({ accounts: [] });
+        mocked.disconnectConnectorAccount.mockResolvedValue();
+        const legacy = account('jane.old@example.com', { account_id: 'default' });
+        await open(google([JANE, legacy]));
+        const rows = within(screen.getByRole('list', { name: 'Google accounts' })).getAllByRole('listitem');
+        fireEvent.click(within(rows[1]).getByRole('button', { name: 'Make jane.old@example.com the default' }));
+        await vi.waitFor(() => expect(mocked.setDefaultConnectorAccount).toHaveBeenCalledWith('google', 'jane.old@example.com'));
+        const disconnect = within(rows[1]).getByRole('button', { name: 'Disconnect jane.old@example.com' });
+        await vi.waitFor(() => expect(disconnect).toBeEnabled());
+        fireEvent.click(disconnect);
+        fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Disconnect' }));
+        await vi.waitFor(() => expect(mocked.disconnectConnectorAccount).toHaveBeenCalledWith('google', 'jane.old@example.com'));
+    });
+
+    it('names each account on its buttons in Arabic too', async () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        await open(google([JANE, WORK]));
+        const rows = within(screen.getByRole('list', { name: /حسابات/ })).getAllByRole('listitem');
+        const label = within(rows[1]).getAllByRole('button').map((b) => stripIsolates(b.getAttribute('aria-label') ?? ''));
+        expect(label).toEqual([
+            expect.stringMatching(/^جعل jane\.work@example\.com الحساب الافتراضي/),
+            expect.stringMatching(/^قطع اتصال jane\.work@example\.com/),
+        ]);
     });
 
     it('cuts a long address in its middle and keeps it whole on hover', async () => {

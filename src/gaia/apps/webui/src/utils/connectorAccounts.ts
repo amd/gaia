@@ -17,17 +17,67 @@ export function showsAccountList(connector: Pick<ConnectorRow, 'accounts'>): boo
     return accounts.length > 1 || accounts.some(needsSignIn);
 }
 
+/** Stored before GAIA told accounts apart; the server can't pick one out by it. */
+const PLACEHOLDER_ID = 'default';
+
+/** How to name an account to the server: its stable id, or its address while the id is the placeholder. */
+export function accountRef(account: ConnectorAccount): string {
+    return account.account_id === PLACEHOLDER_ID && account.email ? account.email : account.account_id;
+}
+
+/** The account `ref` names, by stable id or by address. */
+function findAccount(accounts: ConnectorAccount[], ref: string): ConnectorAccount | undefined {
+    const address = ref.toLowerCase();
+    return accounts.find((a) => a.account_id === ref || (!!a.email && a.email.toLowerCase() === address));
+}
+
+const isOk = (account: ConnectorAccount) => account.status === 'ok';
+
+/** What a chat card offers for one provider. */
+export interface ConnectOffer {
+    /** Sign in to this account again, named on its button; null keeps the plain Connect button. */
+    account: ConnectorAccount | null;
+    /** "Use a different account" sits beside the offer. */
+    otherAccount: boolean;
+}
+
 /**
- * The accounts a chat card offers to sign in to again, beside "Use a different
- * account". `null` keeps the card's plain Connect button: no account yet, or
- * exactly one that works, so a one-account user sees what they always saw.
+ * The card's offer: the account the failed call named (`named`, an id or an
+ * address); else the only account, when it needs signing in; else the plain
+ * Connect button, with "Use a different account" once there are several.
+ * It never guesses which of several accounts failed, so one-account users see
+ * what they always saw.
  */
-export function reconnectOffer(row: ConnectorListEntry | undefined): ConnectorAccount[] | null {
+export function reconnectOffer(row: ConnectorListEntry | undefined, named?: string): ConnectOffer {
     const accounts = accountsOf(row);
-    const failing = accounts.filter(needsSignIn);
-    if (failing.length > 0) return failing;
-    if (accounts.length < 2) return null;
-    return [accounts.find((a) => a.is_default) ?? accounts[0]];
+    const account = (named ? findAccount(accounts, named) : undefined)
+        ?? (accounts.length === 1 && needsSignIn(accounts[0]) ? accounts[0] : null);
+    return { account, otherAccount: account !== null || accounts.length > 1 };
+}
+
+/**
+ * Whether the sign-in a card asked for has happened, comparing the connector
+ * now with `before`, as the card first saw it: the account it offered works
+ * again, or a new working account appeared. With nothing offered, any working
+ * account counts, except one that already worked among several.
+ */
+export function signInFixed(
+    row: ConnectorListEntry | undefined,
+    before: ConnectorListEntry | undefined,
+    named?: string,
+): boolean {
+    if (!row || 'error' in row) return false;
+    // A connector that predates per-account state says only whether it is set up.
+    if (!row.accounts) return row.configured;
+    const then = accountsOf(before);
+    const known = new Set(then.map(accountRef));
+    const working = row.accounts.filter(isOk);
+    if (working.some((a) => !known.has(accountRef(a)))) return true;
+    const offered = reconnectOffer(before, named).account;
+    if (offered) return working.some((a) => accountRef(a) === accountRef(offered));
+    if (then.length <= 1) return working.length > 0;
+    const workedThen = new Set(then.filter(isOk).map(accountRef));
+    return working.some((a) => !workedThen.has(accountRef(a)));
 }
 
 /** Cut a long address in its middle, keeping the domain whole when it is short. */

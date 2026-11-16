@@ -29,7 +29,8 @@ import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import { useT } from '../../i18n/useT';
 import { log } from '../../utils/logger';
-import { middleCut, reconnectOffer } from '../../utils/connectorAccounts';
+import { accountRef, middleCut, reconnectOffer } from '../../utils/connectorAccounts';
+import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
 import type { ConnectorListEntry } from '../../types';
 import { ltrIn } from '../setup/format';
 import './EmailConnectCta.css';
@@ -170,6 +171,7 @@ function ProviderButton({
     onDone,
     target,
     title,
+    ready,
 }: {
     connectorId: string;
     /** The button's whole text. */
@@ -180,6 +182,8 @@ function ProviderButton({
     /** Sign in to one stored account again, or to another account. */
     target?: api.AuthorizeTarget;
     title?: string;
+    /** The accounts are known; until then a click could sign in to the wrong one. */
+    ready: boolean;
 }) {
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
@@ -212,7 +216,7 @@ function ProviderButton({
             <button
                 className="email-connect-cta__button"
                 onClick={() => void handleConnect()}
-                disabled={busy}
+                disabled={busy || !ready}
                 title={title}
             >
                 {busy ? (
@@ -242,6 +246,13 @@ const PROVIDERS: ReadonlyArray<[EmailProvider, string]> = [
 
 const ADD_ACCOUNT: api.AuthorizeTarget = { addAccount: true };
 
+/** Re-reads the accounts on every connector change. Mounted only after a sign-in
+ *  opened: every chat reply with this button would otherwise hold a connection. */
+function ConnectorWatcher({ onChange }: { onChange: () => void }) {
+    useConnectorsSSE(onChange);
+    return null;
+}
+
 export function EmailConnectCta({
     content = '',
     connectorId,
@@ -259,11 +270,19 @@ export function EmailConnectCta({
     const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
     const markOpened = useCallback((id: string) => setOpened((prev) => new Set([...prev, id])), []);
     const [connectors, setConnectors] = useState<ConnectorListEntry[]>([]);
-    useEffect(() => {
+    const [ready, setReady] = useState(false);
+    const refresh = useCallback(() => {
         api.listConnectors()
             .then((res) => setConnectors(res.connectors || []))
-            .catch((err) => log.ui.warn('EmailConnectCta: connector fetch failed', err));
+            .catch((err) => log.ui.warn('EmailConnectCta: connector fetch failed', err))
+            .finally(() => setReady(true));
     }, []);
+    // Re-read on mount and when the window comes back from a sign-in tab.
+    useEffect(() => {
+        refresh();
+        window.addEventListener('focus', refresh);
+        return () => window.removeEventListener('focus', refresh);
+    }, [refresh]);
 
     // #2117 — this CTA is email-initiated, so connecting grants ONLY the email
     // agent the moment consent completes (no follow-up CLI grant, no "no grant
@@ -296,42 +315,31 @@ export function EmailConnectCta({
                 <AlertCircle size={14} className="email-connect-cta__icon" />
                 <span>{t(opened.size > 0 ? 'connectCard.opened' : 'emailCta.prompt')}</span>
             </div>
+            {opened.size > 0 && <ConnectorWatcher onChange={refresh} />}
             <div className="email-connect-cta__buttons">
                 {shown.map(([id, name]) => {
                     const offer = reconnectOffer(connectors.find((c) => c.id === id));
                     const done = opened.has(id);
-                    if (!offer) {
-                        return (
+                    const common = { connectorId: id, grantAgents: grantAgentsFor(id), onDone: () => markOpened(id), ready };
+                    return [
+                        offer.account ? (
+                            <ProviderButton
+                                key={`${id}:${offer.account.account_id}`}
+                                {...common}
+                                label={t('connectCard.reconnectAccount', { address: ltrIn(t.locale, middleCut(offer.account.email || offer.account.account_id)) })}
+                                title={offer.account.email || undefined}
+                                target={{ account: accountRef(offer.account) }}
+                            />
+                        ) : (
                             <ProviderButton
                                 key={id}
-                                connectorId={id}
+                                {...common}
                                 label={t(done ? 'emailCta.reopen' : 'connectCard.connect', { name })}
-                                grantAgents={grantAgentsFor(id)}
-                                onDone={() => markOpened(id)}
                             />
-                        );
-                    }
-                    // One account stopped working: sign in to it again, or add another; never connect afresh.
-                    return [
-                        ...offer.map((account) => (
-                            <ProviderButton
-                                key={`${id}:${account.account_id}`}
-                                connectorId={id}
-                                label={t('connectCard.reconnectAccount', { address: ltrIn(t.locale, middleCut(account.email || account.account_id)) })}
-                                title={account.email || undefined}
-                                target={{ account: account.account_id }}
-                                grantAgents={grantAgentsFor(id)}
-                                onDone={() => markOpened(id)}
-                            />
-                        )),
-                        <ProviderButton
-                            key={`${id}:other`}
-                            connectorId={id}
-                            label={t('connectCard.otherAccount')}
-                            target={ADD_ACCOUNT}
-                            grantAgents={grantAgentsFor(id)}
-                            onDone={() => markOpened(id)}
-                        />,
+                        ),
+                        offer.otherAccount && (
+                            <ProviderButton key={`${id}:other`} {...common} label={t('connectCard.otherAccount')} target={ADD_ACCOUNT} />
+                        ),
                     ];
                 })}
             </div>

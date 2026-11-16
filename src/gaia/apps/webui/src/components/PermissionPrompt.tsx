@@ -68,10 +68,11 @@ export interface MailHeader {
 export function splitMailHeader(text: string): MailHeader | null {
     const lines = text.split('\n');
     const opens = (line: string | undefined) => !!line && /^(From|To): /.test(line);
+    // Notes come first, each its own paragraph; the header is the first paragraph that opens like one.
     let start = 0;
-    if (!opens(lines[0])) {
-        const gap = lines.indexOf('');
-        if (gap < 0 || !opens(lines[gap + 1])) return null;
+    while (!opens(lines[start])) {
+        const gap = lines.indexOf('', start);
+        if (gap < 0) return null;
         start = gap + 1;
     }
     const fields: MailHeader['fields'] = [];
