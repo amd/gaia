@@ -5642,6 +5642,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     else explained
                 )
 
+        # A failed turn with no reply is not billed, wherever this turn is reported.
+        unanswered = turn_failed and not turn_replied
+
         # Use agent result if no streamed answer was captured
         if not full_response and result_holder["answer"]:
             full_response = _agent_ui_wording(result_holder["answer"])
@@ -5773,6 +5776,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         wall_seconds=_time.monotonic() - turn_started,
                         model_id=result_holder.get("model") or model_id,
                         loads=result_holder["model_loads"],
+                        failed=unanswered,
+                        stats=inference_stats,
                     )
                 except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
                     # The answer is still saved; the panel shows the turn as unmeasured.
@@ -5809,9 +5814,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # A relayed turn ran on the model it sent; with none, the sidecar picked.
                 relayed_location=turn_location if model_id else None,
             )
-            if spending.never_answered(
-                turn_failed and not turn_replied, inference_stats
-            ):
+            if spending.never_answered(unanswered, inference_stats):
                 spending.mark_no_reply(turn_summary)
 
             model_messages = result_holder.get("model_messages")
@@ -5850,7 +5853,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 db,
                 ran_on,
                 inference_stats,
-                failed=turn_failed and not turn_replied,
+                failed=unanswered,
             )
             # Fire-and-forget auto-titling, on the model this turn ran on.
             _spawn_after_turn_title(
