@@ -7713,6 +7713,9 @@ def handle_config_command(args):
         except GaiaConfigError as e:
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(1)
+        if isinstance(value, (dict, list)):
+            # JSON, so the output pastes back into `gaia config set`.
+            value = json.dumps(value)
         print(value if value is not None else "")
         return
 

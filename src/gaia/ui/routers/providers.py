@@ -1460,12 +1460,30 @@ def provider_models(
             "blocked_reason": "Local only is on; turn it off in Settings to use cloud models.",
         }
     try:
+        if provider == AMD:
+            _refresh_gateway_prices()
         models = _list_models(provider)
         if provider != LOCAL:
             return {"provider": provider, "models": models, "blocked": False}
         return {"provider": provider, **_local_report(models, db)}
     except ProviderError as e:
         _raise(e)
+
+
+def _refresh_gateway_prices() -> None:
+    """Read the gateway's price list when it is a day old, so its models show prices.
+
+    A failed read leaves the last prices (or none); the Hybrid settings say why.
+    """
+    from gaia.llm.gateway_prices import GatewayPriceError, ensure_fresh
+
+    try:
+        entry = _cloud_entry(AMD)
+        if not entry or not (entry.get("env_var_set") or entry.get("runtime_key_set")):
+            return
+        ensure_fresh()
+    except (ProviderError, GatewayPriceError) as e:
+        logger.warning("Gateway models listed without fresh prices: %s", e)
 
 
 def _read_system_info() -> Dict[str, Any]:

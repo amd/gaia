@@ -3193,9 +3193,11 @@ the same way.
     `measured` (the pairing is the one the shipped policies were tuned on),
     `measured_note` when it isn't, `classifier_note` when the classifier runs
     on this PC, `entry` (as `GET /api/hybrid/entry`), and `is_active` (a new
-    chat starts on `hybrid`). When the
-    saved settings can't be used, `config_error` says why and the values are
-    shown as saved, so they can be fixed.
+    chat starts on `hybrid`; `null` while config.json is invalid). When the
+    saved settings can't be used, including a hand-edited config.json that
+    fails to load, `config_error` says what's wrong and how to fix it and the
+    values are shown as saved, so a `PUT` can repair them. Only a config.json
+    that isn't JSON at all is a **500**.
   </Accordion>
 
   <Accordion title="PUT /api/hybrid/settings">
@@ -3263,7 +3265,10 @@ the same way.
     with no price, cached input with no cache-read rate, or a turn that
     reported no token counts — makes `cost` and `cost_if_all_strong` `null`,
     never $0; `unpriced_turns` counts them. Also carries `prices_fetched_at`
-    and `prices_error`.
+    and `prices_error`, plus `scope` and `scope_label`. `scope` is
+    `agent_ui_chats` (only Agent UI chats record their turns here; hybrid
+    turns in the terminal UI or `gaia -p` are not counted) or `all`;
+    `scope_label` says the same in plain words for the apps to show as is.
   </Accordion>
 </AccordionGroup>
 
@@ -3271,17 +3276,22 @@ the same way.
 
 What cloud models cost before one is picked, what this month's cloud chats
 cost, and an optional monthly limit. Prices are list prices per million
-tokens from GAIA's one rate card, the same one a turn's cost estimate uses. A
-model with no known price reads as unknown, never $0. Cloud models from
-`GET /api/providers/{provider}/models` also carry `price`.
+tokens, the same ones a turn's cost estimate uses: GAIA's rate card for
+Fireworks AI, the gateway's own price list for AMD LLM Gateway models (read
+from the gateway, as the [Hybrid settings](#hybrid-model) describe), and
+Anthropic's list price for direct `claude-*` models. A model with no known
+price reads as unknown, never $0, and a turn on it adds nothing to the month's
+total. Cloud models from `GET /api/providers/{provider}/models` also carry
+`price`; listing the gateway's models reads its price list again once it is a
+day old.
 
 <AccordionGroup>
   <Accordion title="GET /api/spending/prices/{provider}">
     List prices for a provider's models before it is connected: `models`
     (`model`, `name`, `rank`, `note`, `price` with `input_per_million`,
     `cached_input_per_million`, `output_per_million`), recommended first, and
-    their `source`. `amd` returns no models and a `note`: the gateway's prices
-    are set by the organization that runs it. **404** for another provider.
+    their `source`. `amd` returns no models and a `note`: its prices are read
+    from the gateway once it is connected. **404** for another provider.
   </Accordion>
 
   <Accordion title="GET /api/spending">

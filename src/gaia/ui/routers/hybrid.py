@@ -10,13 +10,15 @@ CLI and the TUI, and are validated by the same rules as ``gaia config set``.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from gaia.llm.hybrid import (
     CUSTOM_POLICY,
     DEFAULT_CHEAP_MODEL,
+    DEFAULT_CLASSIFIER_TIMEOUT_S,
+    DEFAULT_POLICY,
     DEFAULT_STRONG_MODEL,
     KIND_ORDER,
     MAX_CLASSIFIER_TIMEOUT_S,
@@ -56,15 +58,6 @@ MAX_PREVIEW_CHARS = 100_000
 
 def _unprocessable(message: str) -> HTTPException:
     return HTTPException(status_code=422, detail=surface_wording(message, "agent_ui"))
-
-
-def _load_config():
-    from gaia.config import GaiaConfig, GaiaConfigError
-
-    try:
-        return GaiaConfig.load()
-    except GaiaConfigError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 def _price(model_id: str) -> Dict[str, Any]:
@@ -187,27 +180,70 @@ def _models(inv, configured: List[str]) -> Dict[str, Any]:
     return {"models": rows, "models_error": None}
 
 
-def _is_active(db: ChatDatabase) -> bool:
-    """True when a new chat starts on ``hybrid``."""
+def _is_active(db: ChatDatabase) -> Optional[bool]:
+    """True when a new chat starts on ``hybrid``; None while config.json is invalid."""
     from gaia.config import GaiaConfigError
 
     from ..database import resolved_default_model
 
     chosen = (db.get_setting("custom_model") or "").strip()
+    if chosen:
+        return is_hybrid_model(chosen)
     try:
-        return is_hybrid_model(chosen or resolved_default_model())
+        return is_hybrid_model(resolved_default_model())
+    except GaiaConfigError:
+        return None
+
+
+def _raw_doc() -> Dict[str, Any]:
+    """config.json as saved, unvalidated; 500 only when it isn't JSON at all."""
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    path = GaiaConfig.config_path()
+    try:
+        text = GaiaConfig._read_text(path)
+        return {} if text is None else GaiaConfig._parse_doc(text, path)
     except GaiaConfigError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+def _settings_from(doc: Dict[str, Any]) -> HybridSettings:
+    """The hybrid settings in a raw config document; HybridConfigError says what's wrong."""
+    cheap = doc.get("hybrid_cheap_model") or DEFAULT_CHEAP_MODEL
+    policy = doc.get("hybrid_policy") or DEFAULT_POLICY
+    return HybridSettings(
+        cheap_model=cheap,
+        strong_model=doc.get("hybrid_strong_model") or DEFAULT_STRONG_MODEL,
+        classifier_model=doc.get("hybrid_classifier_model") or cheap,
+        classifier_timeout_s=doc.get(
+            "hybrid_classifier_timeout", DEFAULT_CLASSIFIER_TIMEOUT_S
+        ),
+        policy=policy.strip().lower() if isinstance(policy, str) else policy,
+        rules=doc.get("hybrid_rules"),
+    )
+
+
 def _view(db: ChatDatabase) -> Dict[str, Any]:
-    cfg = _load_config()
+    from gaia.config import GaiaConfig, GaiaConfigError
+
     try:
-        settings = HybridSettings.load(cfg)
-        error = None
-    except HybridConfigError as e:
-        # Shown with the values as saved, so the screen can still fix them.
-        settings, error = None, surface_wording(str(e), "agent_ui")
+        cfg = GaiaConfig.load()
+    except GaiaConfigError as invalid:
+        # Shown as saved, with what's wrong, so this screen can repair it.
+        cfg = None
+        doc = _raw_doc()
+        try:
+            _settings_from(doc)
+            error = surface_wording(str(invalid), "agent_ui")
+        except HybridConfigError as e:
+            error = surface_wording(str(e), "agent_ui")
+        settings = None
+    else:
+        try:
+            settings = HybridSettings.load(cfg)
+            error = None
+        except HybridConfigError as e:
+            settings, error = None, surface_wording(str(e), "agent_ui")
     if settings is not None:
         values = {
             "cheap_model": settings.cheap_model,
@@ -218,20 +254,24 @@ def _view(db: ChatDatabase) -> Dict[str, Any]:
             "rules": settings.table,
         }
     else:
-        cheap = cfg.hybrid_cheap_model or DEFAULT_CHEAP_MODEL
+        saved = (
+            {k: getattr(cfg, k) for k in FIELDS.values()} if cfg is not None else doc
+        )
+        cheap = saved.get("hybrid_cheap_model") or DEFAULT_CHEAP_MODEL
+        policy = saved.get("hybrid_policy") or DEFAULT_POLICY
         values = {
             "cheap_model": cheap,
-            "strong_model": cfg.hybrid_strong_model or DEFAULT_STRONG_MODEL,
-            "classifier_model": cfg.hybrid_classifier_model or cheap,
-            "classifier_timeout": cfg.hybrid_classifier_timeout,
-            "policy": cfg.hybrid_policy,
+            "strong_model": saved.get("hybrid_strong_model") or DEFAULT_STRONG_MODEL,
+            "classifier_model": saved.get("hybrid_classifier_model") or cheap,
+            "classifier_timeout": saved.get(
+                "hybrid_classifier_timeout", DEFAULT_CLASSIFIER_TIMEOUT_S
+            ),
+            "policy": policy,
             "rules": (
-                preset_rules(cfg.hybrid_policy)
-                if cfg.hybrid_policy in PRESETS
-                else cfg.hybrid_rules
+                preset_rules(policy) if policy in PRESETS else saved.get("hybrid_rules")
             ),
         }
-    from gaia.llm.hybrid_templates import notes, picker_entry
+    from gaia.llm.hybrid_templates import notes
 
     from .providers import ProviderError
 
@@ -255,10 +295,23 @@ def _view(db: ChatDatabase) -> Dict[str, Any]:
             values["classifier_model"],
             values["policy"],
         ),
-        "entry": picker_entry(inv, settings, error) if inv is not None else None,
+        "entry": _entry(inv, settings, error),
         "is_active": _is_active(db),
         "config_error": error,
     }
+
+
+def _entry(inv, settings, error) -> Optional[Dict[str, Any]]:
+    from gaia.config import GaiaConfigError
+    from gaia.llm.hybrid_templates import picker_entry
+
+    if inv is None:
+        return None
+    try:
+        return picker_entry(inv, settings, error)
+    except GaiaConfigError:
+        # config.json is invalid; config_error already says why.
+        return None
 
 
 @router.get("/api/hybrid/settings")
@@ -310,8 +363,11 @@ def _checked(field: str, value: Any) -> Any:
 def put_hybrid_settings(
     body: Any = Body(...), db: ChatDatabase = Depends(get_db)
 ) -> Dict[str, Any]:
-    """Change any of the hybrid settings; the rest keep their saved values."""
-    from gaia.config import GaiaConfigError
+    """Change any of the hybrid settings; the rest keep their saved values.
+
+    Validated against config.json as saved, so a hand-broken file can be fixed.
+    """
+    from gaia.config import GaiaConfig, GaiaConfigError
 
     if not isinstance(body, dict):
         raise _unprocessable("Send a JSON object of the settings to change.")
@@ -322,22 +378,21 @@ def put_hybrid_settings(
             f"{', '.join(sorted(FIELDS))}."
         )
     values = {FIELDS[f]: _checked(f, body[f]) for f in FIELDS if f in body}
-    cfg = _load_config()
-    policy = values.get("hybrid_policy", cfg.hybrid_policy)
-    rules = values.get("hybrid_rules", cfg.hybrid_rules)
-    if policy == CUSTOM_POLICY and rules is None:
+    for field in _MODEL_FIELDS:
+        key = FIELDS[field]
+        if key in values:
+            values[key] = GaiaConfig._check_hybrid_model(key, values[key], field)
+    doc = {**_raw_doc(), **values}
+    if (doc.get("hybrid_policy") or DEFAULT_POLICY) == CUSTOM_POLICY and doc.get(
+        "hybrid_rules"
+    ) is None:
         raise _unprocessable(
             "The custom policy needs rules: send rules with a rule for each of "
             f"the {len(KIND_ORDER)} kinds, or pick a preset policy."
         )
-    if values.get("hybrid_rules", "") is None:
-        # A cleared table goes after the policy that stops needing it.
-        values = {k: v for k, v in values.items() if k != "hybrid_rules"}
-        values["hybrid_rules"] = None
     try:
-        for key, value in values.items():
-            cfg.set(key, value)
-        HybridSettings.load(cfg)
+        _settings_from(doc)
+        GaiaConfig._from_doc(doc, GaiaConfig.config_path())
     except (GaiaConfigError, HybridConfigError) as e:
         raise _unprocessable(str(e)) from e
     chosen = [f for f in _MODEL_FIELDS if body.get(f)]
@@ -352,13 +407,15 @@ def put_hybrid_settings(
 
 
 def _save(values: Dict[str, Any]) -> None:
+    """Write *values* into config.json; the result is validated before it is."""
     from gaia.config import GaiaConfig, GaiaConfigError
 
-    if values:
-        try:
-            GaiaConfig.save_keys(values)
-        except GaiaConfigError as e:
-            raise HTTPException(status_code=500, detail=str(e)) from e
+    if not values:
+        return
+    try:
+        GaiaConfig.edit_doc(lambda doc: doc.update(values))
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.get("/api/hybrid/entry")

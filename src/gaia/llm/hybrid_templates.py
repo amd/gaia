@@ -409,8 +409,15 @@ def availability(models: Tuple[str, ...], inv: Inventory) -> Optional[str]:
 
 def describe(template: Template, inv: Inventory) -> Dict[str, Any]:
     """*template* resolved on this PC, with whether it can be used now."""
-    cheap, strong, classifier = _members(template, inv)
-    reason = availability((classifier, cheap, strong), inv)
+    from gaia.config import GaiaConfigError
+
+    try:
+        cheap, strong, classifier = _members(template, inv)
+        reason = availability((classifier, cheap, strong), inv)
+    except GaiaConfigError as e:
+        # Only local-plus-cloud reads config.json, for the local default model.
+        cheap = strong = classifier = None
+        reason = f"config.json can't be read, so your local model isn't known: {e}"
     if template.id == "fireworks" and inv.check(strong) and inv.check(CLAUDE_STRONG):
         reason = (
             f"{reason}. The strong model needs the AMD LLM Gateway or an "
@@ -427,11 +434,15 @@ def describe(template: Template, inv: Inventory) -> Dict[str, Any]:
         "classifier_model": classifier,
         "policy": template.policy,
         "providers_needed": list(
-            dict.fromkeys(provider_of(m) for m in (cheap, strong, classifier))
+            dict.fromkeys(provider_of(m) for m in (cheap, strong, classifier) if m)
         ),
         "available": reason is None,
         "reason": reason,
-        **notes(cheap, strong, classifier, template.policy),
+        **(
+            notes(cheap, strong, classifier, template.policy)
+            if cheap
+            else {"measured": False, "measured_note": None, "classifier_note": None}
+        ),
     }
 
 

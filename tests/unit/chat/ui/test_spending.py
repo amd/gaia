@@ -70,10 +70,10 @@ def test_prices_before_connecting(client):
     assert "list price" in body["source"]
 
 
-def test_gateway_prices_are_unknown_and_say_why(client):
+def test_gateway_prices_before_connecting_say_where_they_come_from(client):
     body = client.get("/api/spending/prices/amd").json()
     assert body["models"] == []
-    assert "organization" in body["note"]
+    assert "from it once it is connected" in body["note"]
 
 
 def test_unknown_provider_is_404(client):
@@ -502,3 +502,87 @@ def test_non_streaming_cloud_turns_are_recorded(db, monkeypatch, result, priced)
         )
     else:
         assert report["unreported_turns"] == 1
+
+
+# ── AMD LLM Gateway prices ──────────────────────────────────────────────────
+
+GATEWAY_MODEL = "amd.DeepSeek-V4.1-Flash"
+GATEWAY_PAYLOAD = {
+    "data": [
+        {
+            "id": "DeepSeek-V4.1-Flash",
+            "pricing": {
+                "source": "Enterprise",
+                "input_per_million": 0.255,
+                "output_per_million": 1.02,
+                "cache_read_input_per_million": 0.00544,
+            },
+        },
+        {
+            "id": "No-Cache-Rate",
+            "pricing": {"input_per_million": 1.0, "output_per_million": 2.0},
+        },
+    ]
+}
+
+
+@pytest.fixture
+def gateway_prices_read():
+    from gaia.llm import gateway_prices
+
+    gateway_prices.record(GATEWAY_PAYLOAD, "https://gw.example/v1")
+
+
+def test_a_gateway_model_is_priced_from_the_gateways_list(gateway_prices_read):
+    card = spending.price_card(GATEWAY_MODEL)
+    assert (
+        card["input_per_million"],
+        card["cached_input_per_million"],
+        card["output_per_million"],
+    ) == (0.255, 0.00544, 1.02)
+    assert "AMD LLM Gateway" in card["source"]
+    assert spending.turn_cost(
+        GATEWAY_MODEL, 1_000_000, 100_000, 400_000
+    ) == pytest.approx((600_000 * 0.255 + 400_000 * 0.00544 + 100_000 * 1.02) / 1e6)
+
+
+def test_a_gateway_turn_counts_toward_the_monthly_limit(db, gateway_prices_read):
+    spending.set_limit(db, 0.10)
+    _turn(db, model=GATEWAY_MODEL, inp=1_000_000, out=100_000)
+    report = spending.month_report(db)
+    assert report["total_usd"] == pytest.approx(0.357, abs=1e-6)
+    assert report["state"] == "reached" and report["unpriced_turns"] == 0
+    refusal = spending.limit_refusal(db, GATEWAY_MODEL)
+    assert "the AMD LLM Gateway" in refusal
+    # A hybrid turn is checked against the same total.
+    assert spending.limit_refusal(db, "hybrid") is not None
+
+
+def test_a_gateway_model_without_a_price_stays_unpriced(db, gateway_prices_read):
+    _turn(db, model="amd.Not-Priced")
+    report = spending.month_report(db)
+    assert report["total_usd"] == 0 and report["unpriced_turns"] == 1
+
+
+def test_cached_input_without_a_cached_rate_is_unknown(gateway_prices_read):
+    assert spending.turn_cost("amd.No-Cache-Rate", 1000, 100, 0) == pytest.approx(
+        (1000 * 1.0 + 100 * 2.0) / 1e6
+    )
+    assert spending.turn_cost("amd.No-Cache-Rate", 1000, 100, 500) is None
+
+
+def test_an_unreadable_gateway_price_list_leaves_prices_unknown(db):
+    from gaia.llm import gateway_prices
+
+    gateway_prices.prices_file().write_text("{broken", encoding="utf-8")
+    assert spending.price_card(GATEWAY_MODEL) is None
+    # Recording a turn still works; the turn counts as unpriced.
+    _turn(db, model=GATEWAY_MODEL)
+    assert spending.month_report(db)["unpriced_turns"] == 1
+
+
+def test_the_gateway_model_list_carries_its_prices(gateway_prices_read):
+    from gaia.ui.routers import providers
+
+    assert spending.price_card(GATEWAY_MODEL) is not None
+    assert providers.provider_of(GATEWAY_MODEL) == "amd"
