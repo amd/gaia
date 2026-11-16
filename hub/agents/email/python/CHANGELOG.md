@@ -14,6 +14,7 @@ contract version is tracked separately as
   other fraction width, now parse on Python 3.10. A meeting whose time still
   can't be read is returned in a new `unreadable` list so the agent says it
   couldn't check it.
+
 - **The sidecar stops when the GAIA daemon that started it is killed.** The
   daemon now passes its pid in `GAIA_DAEMON_PID`; the sidecar polls it and
   shuts down through its normal SIGINT path within seconds of the daemon dying,
