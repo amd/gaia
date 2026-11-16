@@ -597,6 +597,30 @@ Npm versions cannot be re-published with different bytes (see Notes), so a fix i
 
 ---
 
+## Internal summary (optional, after the final ships)
+
+**Goal:** a ~300-word momentum-and-capabilities update for AMD leadership, only when the maintainer asks for one. The public notes leave out activity stats and eval figures by design; this is where they go.
+
+### Steps
+
+1. Run the stats script from the previous final to the new final (fetch tags first):
+   ```bash
+   python .claude/skills/gaia-release/release_stats.py v<previous-final> v<version>
+   ```
+   `--no-github` skips the issue and star counts when `gh` isn't signed in.
+2. Take the user-facing themes from the release notes' `## What's New`.
+3. Add the release eval result, quoted from that release's eval run. The script never prints one; never estimate it.
+4. Write it in this order: bottom line, momentum, quality, what's new, what's next. Voice per [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate).
+
+### Rules
+
+- **Internal only** — never posted to GitHub, Discord, the release PR, or the notes.
+- **No competitor or partner names.**
+- **Contributor counts are git-author based** (bots excluded); say so if you quote one.
+- **Verify every count before quoting it** — re-run the script against the final tag, not an RC.
+
+---
+
 ## Output between phases
 
 After every phase, output:
