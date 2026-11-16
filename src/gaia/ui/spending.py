@@ -359,3 +359,150 @@ def price_list(provider: str) -> List[Dict[str, Any]]:
         )
     out.sort(key=lambda m: (m["rank"] is None, m["rank"] or 0, m["name"]))
     return out
+
+
+def _token_counts(stats: Dict[str, Any]) -> Optional[tuple]:
+    """(input, output, cached) a turn reported, or None when it reported none."""
+    inp, out = stats.get("input_tokens"), stats.get("output_tokens")
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in (inp, out)):
+        return None
+    cached = stats.get("cached_tokens")
+    if (
+        isinstance(cached, bool)
+        or not isinstance(cached, int)
+        or not 0 <= cached <= inp
+    ):
+        cached = 0
+    return inp, out, cached
+
+
+#: Where a gateway model's price comes from.
+GATEWAY_PRICE_SOURCE = "the AMD LLM Gateway's own price list"
+
+
+def model_price(model_id: str) -> Optional[Dict[str, Any]]:
+    """*model_id*'s price per million tokens, from the rate card or the gateway.
+
+    ``cache_read_per_million`` is the cached-input rate; ``None`` when unknown.
+    """
+    card = price_card(model_id)
+    if card is not None:
+        return {
+            "input_per_million": card["input_per_million"],
+            "output_per_million": card["output_per_million"],
+            "cache_read_per_million": card["cached_input_per_million"],
+            "source": card["source"],
+        }
+    if model_id.startswith("claude-"):
+        return _anthropic_price(model_id)
+    if cloud_provider(model_id) != "amd":
+        return None
+    from gaia.llm.gateway_prices import gateway_price
+
+    gateway = gateway_price(model_id)
+    if gateway is None:
+        return None
+    tier = f" ({gateway['source']})" if gateway.get("source") else ""
+    return {
+        "input_per_million": gateway["input_per_million"],
+        "output_per_million": gateway["output_per_million"],
+        "cache_read_per_million": gateway.get("cache_read_per_million"),
+        "source": f"{GATEWAY_PRICE_SOURCE}{tier}",
+    }
+
+
+def _anthropic_price(model_id: str) -> Optional[Dict[str, Any]]:
+    """Anthropic's list price for a direct ``claude-*`` model, or None."""
+    from gaia.eval.config import MODEL_PRICING
+
+    card = MODEL_PRICING.get(model_id)
+    if card is None:
+        return None
+    return {
+        "input_per_million": card["input_per_mtok"],
+        "output_per_million": card["output_per_mtok"],
+        # Anthropic's table: no cached rate means cached input bills as input.
+        "cache_read_per_million": card.get("cached_per_mtok", card["input_per_mtok"]),
+        "source": ANTHROPIC_PRICE_SOURCE,
+    }
+
+
+#: Where a direct Claude model's price comes from.
+ANTHROPIC_PRICE_SOURCE = "Anthropic list price (anthropic.com/pricing)"
+
+
+def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:
+    """Dollars for *counts* on *model* at its price; a local model costs nothing.
+
+    Cached input is charged at the cache-read rate; a turn with cached input on
+    a model whose cache-read rate is unknown has an unknown cost. Usage records
+    no cache writes, so none are charged.
+    """
+    if cloud_provider(model) is None and not model.startswith("claude-"):
+        return 0.0
+    card = model_price(model)
+    if card is None or not counts:
+        return None
+    inp, out, cached = counts
+    cache_rate = card["cache_read_per_million"]
+    if cached and cache_rate is None:
+        return None
+    return (
+        (inp - cached) * card["input_per_million"]
+        + cached * (cache_rate or 0.0)
+        + out * card["output_per_million"]
+    ) / 1e6
+
+
+def hybrid_stats(db, settings) -> Dict[str, Any]:
+    """How every recorded ``hybrid`` turn routed, and what it cost against all-strong.
+
+    Covers every hybrid answer still in the chat database (deleting a chat
+    removes its turns); ``since`` is when the oldest was answered. Costs are
+    the models' prices (:func:`model_price`): ``cost`` is what the turns cost on
+    the models they ran on, ``cost_if_all_strong`` the same tokens at the strong
+    model's price (the one *settings* name now). Either is None, never $0, when
+    any turn's price is unknown; ``unpriced_turns`` counts those turns.
+    """
+    turns = cheap = failed = unpriced = 0
+    cost: Optional[float] = 0.0
+    all_strong: Optional[float] = 0.0
+    since = None
+    for row in db.hybrid_turns():
+        route = row["stats"]["route"]
+        model = route.get("model")
+        if not isinstance(model, str) or not model:
+            continue
+        turns += 1
+        since = since or _parse_instant(row["created_at"]).isoformat()
+        # Records from before ``tier`` existed are told apart by today's cheap model.
+        tier = route.get("tier") or (
+            "cheap" if model == settings.cheap_model else "strong"
+        )
+        cheap += tier == "cheap"
+        # Only a failed classification carries a fix; an empty request does not.
+        if not route.get("classified") and route.get("fix"):
+            failed += 1
+        counts = _token_counts(row["stats"])
+        ran = _list_cost(model, counts)
+        strong = _list_cost(settings.strong_model, counts)
+        if ran is None or strong is None:
+            unpriced += 1
+        cost = None if cost is None or ran is None else cost + ran
+        all_strong = (
+            None if all_strong is None or strong is None else all_strong + strong
+        )
+    saving = None
+    if cost is not None and all_strong:
+        saving = round(100 * (1 - cost / all_strong), 1)
+    return {
+        "since": since,
+        "turns": turns,
+        "cheap_turns": cheap,
+        "strong_turns": turns - cheap,
+        "failed_closed": failed,
+        "cost": None if cost is None else round(cost, 6),
+        "cost_if_all_strong": None if all_strong is None else round(all_strong, 6),
+        "saving_pct": saving,
+        "unpriced_turns": unpriced,
+    }

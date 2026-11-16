@@ -944,6 +944,11 @@ class GatewayManager:
                 f"models endpoint: {e}"
             ) from e
         entries = body.get("data") if isinstance(body, dict) else body
+        if token and isinstance(body, dict) and isinstance(entries, list):
+            from gaia.llm.gateway_prices import record
+
+            # The same answer carries the gateway's prices; keep them.
+            record(body, base_url)
         return len(entries) if isinstance(entries, list) else 0
 
     def install(
