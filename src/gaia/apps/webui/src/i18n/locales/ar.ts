@@ -942,6 +942,7 @@ const messages: Messages = {
     'recording.leftMinutes': 'نحو {minutes} دقيقة متبقية',
     'docs.progress.reading': 'قراءة الصفحة {done} من {total}',
     'docs.progress.readingCount': 'قراءة الصفحة {done}',
+    'docs.progress.starting': 'بانتظار بدء خادم النماذج في GAIA',
     'docs.progress.embedding': 'تضمين المقاطع: {done} من {total}',
     'docs.progress.embeddingCount': 'تضمين المقطع {done}',
     'docs.cancelIndexing': 'إلغاء الفهرسة',

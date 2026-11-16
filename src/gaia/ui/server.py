@@ -546,6 +546,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         queue = DispatchQueue(max_workers=4)
         app.state.dispatch_queue = queue
+        from gaia.ui import dispatch as dispatch_mod
+
+        dispatch_mod.BOOT_QUEUE = queue
 
         # ── Model-slot broker (#2248) ───────────────────────────────────
         # The daemon exports the broker URL into its own environment, so only
@@ -857,6 +860,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await agent_loop.stop()
         logger.info("AgentLoop stopped")
         await queue.shutdown()
+        if dispatch_mod.BOOT_QUEUE is queue:
+            dispatch_mod.BOOT_QUEUE = None
         await monitor.stop()
         logger.info("Document file monitor stopped")
         from gaia.connectors.activation_watcher import stop_watcher

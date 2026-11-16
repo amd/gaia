@@ -942,6 +942,7 @@ export const enMessages = {
     'recording.leftMinutes': 'About {minutes} min left',
     'docs.progress.reading': 'Reading page {done} of {total}',
     'docs.progress.readingCount': 'Reading page {done}',
+    'docs.progress.starting': "Waiting for GAIA's model server to start",
     'docs.progress.embedding': 'Embedding {done} of {total}',
     'docs.progress.embeddingCount': 'Embedding chunk {done}',
     'docs.cancelIndexing': 'Cancel indexing',

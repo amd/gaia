@@ -10,6 +10,7 @@ const fmt = (n: number) => n.toLocaleString('en-US');
 
 /** "Reading page 37 of 229", "Embedding 412 of 1,180"; just the count when the total isn't known. */
 export function progressLabel(p: IndexProgress, t: Translate): string {
+    if (p.phase === 'starting') return t('docs.progress.starting');
     const done = fmt(p.done);
     if (p.phase === 'reading') {
         return p.total != null
