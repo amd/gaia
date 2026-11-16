@@ -905,7 +905,11 @@ def _check_model_available(model_id: str) -> Optional[str]:
 
 
 def _check_hybrid_available() -> Optional[str]:
-    """None when every model ``hybrid`` routes to can run now, else why not."""
+    """None when every model ``hybrid`` routes to can run now, else why not.
+
+    Raises :class:`_ServerNotReady` while the local model server is still
+    starting, as :func:`_check_model_available` does for other models.
+    """
     from gaia.llm.hybrid import HybridSettings
     from gaia.llm.hybrid_templates import availability
 
@@ -915,8 +919,14 @@ def _check_hybrid_available() -> Optional[str]:
         settings = HybridSettings.load()
     except HybridConfigError as e:
         return surface_wording(str(e), "agent_ui").rstrip(".")
+    try:
+        inv = inventory()
+    except ProviderError as e:
+        if e.status == 503 or isinstance(e, _ModelListFailed):
+            raise _ServerNotReady(str(e)) from e
+        return surface_wording(str(e), "agent_ui").rstrip(".")
     members = (settings.classifier_model, settings.cheap_model, settings.strong_model)
-    reason = availability(members, inventory())
+    reason = availability(members, inv)
     return surface_wording(reason, "agent_ui").rstrip(".") if reason else None
 
 

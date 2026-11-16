@@ -48,6 +48,17 @@ def cloud_provider(model_id: Optional[str]) -> Optional[str]:
     return _ui_cloud_provider(model_id)
 
 
+#: The provider a direct ``claude-*`` turn is billed by.
+ANTHROPIC = "anthropic"
+
+
+def billed_provider(model_id: Optional[str]) -> Optional[str]:
+    """Who bills a turn on *model_id*: a cloud provider, ``anthropic``, or None (local)."""
+    if model_id and model_id.startswith("claude-"):
+        return ANTHROPIC
+    return cloud_provider(model_id)
+
+
 def price_card(model_id: str) -> Optional[Dict[str, Any]]:
     """Price per million tokens for *model_id*, or None when unknown.
 
@@ -149,7 +160,7 @@ def record_turn(
 
     A *failed* turn that reported no tokens never got a reply, so it is left out.
     """
-    provider = cloud_provider(model_id)
+    provider = billed_provider(model_id)
     if provider is None:
         return
     stats = stats or {}
@@ -360,14 +371,17 @@ def limit_refusal(db, model_id: Optional[str]) -> Optional[str]:
     from gaia.llm.hybrid import candidate_models
 
     provider = next(
-        filter(None, (cloud_provider(m) for m in candidate_models(model_id))), None
+        filter(None, (billed_provider(m) for m in candidate_models(model_id))), None
     )
     if provider is None:
         return None
     report = month_report(db)
     if report["state"] != "reached":
         return None
-    name = "Fireworks AI" if provider == "fireworks" else "the AMD LLM Gateway"
+    name = {
+        "fireworks": "Fireworks AI",
+        ANTHROPIC: "Anthropic",
+    }.get(provider, "the AMD LLM Gateway")
     return (
         f"This month's cloud chats have cost about ${report['total_usd']:.2f} at "
         f"list price, which reaches your ${report['limit_usd']:.2f} monthly limit, "
@@ -458,7 +472,7 @@ def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:
 
     Usage records no cache writes, so none are charged.
     """
-    if cloud_provider(model) is None and not model.startswith("claude-"):
+    if billed_provider(model) is None:
         return 0.0
     if not counts:
         return None

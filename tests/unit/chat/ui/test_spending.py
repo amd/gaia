@@ -586,3 +586,47 @@ def test_the_gateway_model_list_carries_its_prices(gateway_prices_read):
 
     assert spending.price_card(GATEWAY_MODEL) is not None
     assert providers.provider_of(GATEWAY_MODEL) == "amd"
+
+
+# ── Direct Claude ─────────────────────────────────────────────────────────
+
+CLAUDE_MODEL = "claude-opus-5-5"
+
+
+def test_a_direct_claude_turn_is_recorded_at_anthropic_list_price(db):
+    _turn(db, model=CLAUDE_MODEL, inp=1_000_000, out=100_000)
+    report = spending.month_report(db)
+    assert report["turns"] == 1 and report["unpriced_turns"] == 0
+    assert report["total_usd"] == pytest.approx(4.00 + 0.1 * 20.00, abs=1e-6)
+    assert report["by_model"][0]["provider"] == spending.ANTHROPIC
+
+
+def test_a_direct_claude_model_without_a_price_counts_as_unpriced_never_zero(db):
+    _turn(db, model="claude-not-a-real-model")
+    report = spending.month_report(db)
+    assert report["turns"] == 1
+    assert report["unpriced_turns"] == 1 and report["total_usd"] == 0
+
+
+def test_a_direct_claude_turn_is_refused_once_the_limit_is_reached(db):
+    spending.set_limit(db, 0.01)
+    _turn(db, model=CLAUDE_MODEL, inp=1_000_000, out=100_000)
+    refusal = spending.limit_refusal(db, CLAUDE_MODEL)
+    assert "stopped before sending this to Anthropic" in refusal
+    # An unpriced direct Claude model is still a cloud turn the limit covers.
+    assert spending.limit_refusal(db, "claude-not-a-real-model") is not None
+
+
+def test_hybrid_falling_back_to_direct_claude_is_refused_over_the_limit(
+    db, monkeypatch
+):
+    from gaia.llm import hybrid
+
+    monkeypatch.setattr(
+        hybrid,
+        "candidate_models",
+        lambda model_id: ("Gemma-4-E4B-it-GGUF", CLAUDE_MODEL),
+    )
+    spending.set_limit(db, 0.01)
+    _turn(db, model=CLAUDE_MODEL, inp=1_000_000, out=100_000)
+    assert "Anthropic" in spending.limit_refusal(db, "hybrid")

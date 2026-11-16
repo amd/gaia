@@ -3300,7 +3300,7 @@ day old.
     so the total can read lower than the bill as well as higher: `total_usd`, `turns` (every counted turn, the next two kinds included), `unpriced_turns` (turns on a model with no
     known price, counted apart), `unreported_turns` (turns on a priced model that
     sent no usage, such as a stopped answer, also counted apart), `by_model` (each
-    entry carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`
+    entry's `provider` is `fireworks`, `amd` or `anthropic`, and it carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`
     (`no_limit`, `ok`, `near` at 80% of the limit, `reached`, or
     `allowed_over`). **500** when the saved limit is unreadable.
   </Accordion>
@@ -3325,8 +3325,9 @@ day old.
   <Accordion title="PUT /api/spending/limit">
     Set the monthly limit: `{"limit_usd": 10}`, or `null` for none. **422**
     for a limit of $0 or less. Once `total_usd` reaches it, a chat turn on a
-    cloud model is refused before anything is sent, with how to go on; models
-    on this PC are never stopped.
+    cloud model (Fireworks AI, the AMD LLM Gateway, or a direct `claude-*`
+    model, or `hybrid` when either of its models is one) is refused before
+    anything is sent, with how to go on; models on this PC are never stopped.
   </Accordion>
 
   <Accordion title="POST /api/spending/allow-month">
