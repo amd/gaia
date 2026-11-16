@@ -686,6 +686,16 @@ func (m Model) choices() []choice {
 	return filtered
 }
 
+// sentence is an error as one sentence: a trailing period added only when the
+// message lacks one, so none reads "..".
+func sentence(err error) string {
+	text := strings.TrimSpace(err.Error())
+	if strings.HasSuffix(text, ".") {
+		return text
+	}
+	return text + "."
+}
+
 func reasonOf(err error) string {
 	if err == nil {
 		return ""
@@ -838,19 +848,19 @@ func (m Model) View() string {
 			"Unclassified turns always go to the strong model."))
 	switch {
 	case m.statsErr != nil:
-		lines = append(lines, dimStyle.Render(m.statsErr.Error()+"."))
+		lines = append(lines, dimStyle.Render(sentence(m.statsErr)))
 	case m.stats != "":
 		lines = append(lines, dimStyle.Render(m.stats))
 	}
 	if m.loadErr != nil {
-		lines = append(lines, errStyle.Render("Your saved settings can't be used: "+m.loadErr.Error()+
+		lines = append(lines, errStyle.Render("Your saved settings can't be used: "+strings.TrimSuffix(sentence(m.loadErr), ".")+
 			". Showing the defaults; ctrl+s or a template replaces them."))
 	}
 
 	focusLine := -1
 	lines = append(lines, "", m.templatesHeading())
 	if m.templatesErr != nil {
-		lines = append(lines, errStyle.Render("  Templates couldn't be listed: "+m.templatesErr.Error()))
+		lines = append(lines, errStyle.Render("  Templates couldn't be listed: "+sentence(m.templatesErr)))
 	}
 	for i, t := range m.templates {
 		text := t.Name
@@ -938,7 +948,7 @@ func (m Model) View() string {
 	case m.previewBusy:
 		lines = append(lines, dimStyle.Render("  Asking the classifier…"))
 	case m.previewErr != nil:
-		lines = append(lines, errStyle.Render("  "+m.previewErr.Error()+"."))
+		lines = append(lines, errStyle.Render("  "+sentence(m.previewErr)))
 	case m.preview != nil:
 		lines = append(lines, "  "+okStyle.Render(PreviewLine(*m.preview)))
 		if m.preview.Reason != "" {
@@ -1080,10 +1090,15 @@ func (m Model) frame(lines []string, hint string, w, focusLine int) string {
 	if budget := m.height - 4; m.height > 0 && len(wrapped) > budget {
 		keep := max(1, budget-1)
 		start := len(wrapped) - keep
-		if focusLine >= 0 && focusAt < start+1 {
-			start = max(1, focusAt-keep/3)
+		if focusLine >= 0 {
+			// From the top while the focus fits there, so a notice above the
+			// first row is never cut in half.
+			start = min(max(1, focusAt-keep/3), len(wrapped)-keep)
+			if focusAt < keep+1 {
+				start = 1
+			}
 		}
-		wrapped = append(wrapped[:1], wrapped[start:min(len(wrapped), start+keep)]...)
+		wrapped = append(wrapped[:1], wrapped[start:start+keep]...)
 	}
 	wrapped = append(wrapped, "", dimStyle.Render(ansi.Truncate(hint, w, "…")))
 	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(wrapped, "\n"))

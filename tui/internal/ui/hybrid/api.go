@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -25,6 +26,32 @@ import (
 // reach a stub.
 var AgentUIURL = "http://localhost:4200"
 
+// AgentUIURLEnv points the TUI at an Agent UI started on another port
+// (`gaia chat --ui --ui-port N`).
+const AgentUIURLEnv = "GAIA_AGENT_UI_URL"
+
+// agentUIBase is the Agent UI address: AgentUIURLEnv when set, else
+// AgentUIURL. Only a loopback http address is accepted.
+func agentUIBase() (string, error) {
+	raw := strings.TrimSpace(os.Getenv(AgentUIURLEnv))
+	if raw == "" {
+		return strings.TrimRight(AgentUIURL, "/"), nil
+	}
+	u, err := url.Parse(raw)
+	host := ""
+	if err == nil {
+		host = u.Hostname()
+	}
+	ip := net.ParseIP(host)
+	loopback := host == "localhost" || (ip != nil && ip.IsLoopback())
+	if err != nil || u.Scheme != "http" || !loopback || u.Port() == "" || strings.Trim(u.Path, "/") != "" ||
+		u.User != nil || u.RawQuery != "" {
+		return "", fmt.Errorf("%s is %q, but it must be the Agent UI's loopback address, "+
+			"like http://localhost:4200. Fix or unset it, then reopen /hybrid", AgentUIURLEnv, raw)
+	}
+	return strings.TrimRight(u.Scheme+"://"+u.Host, "/"), nil
+}
+
 // ServerDownError is a preview or stats read that found no Agent UI server.
 type ServerDownError struct {
 	Base string
@@ -34,7 +61,7 @@ type ServerDownError struct {
 
 func (e *ServerDownError) Error() string {
 	return e.What + " needs the GAIA Agent UI server, which isn't answering at " + e.Base +
-		" (" + e.Err.Error() + "). Start it with `gaia chat --ui`, then try again"
+		". Start it with `gaia chat --ui` (or set " + AgentUIURLEnv + " to the address it runs on), then try again"
 }
 
 func (e *ServerDownError) Unwrap() error { return e.Err }
@@ -59,26 +86,61 @@ type Stats struct {
 	Cost            float64 `json:"cost"`
 	CostIfAllStrong float64 `json:"cost_if_all_strong"`
 	SavingPct       float64 `json:"saving_pct"`
+	// Scope is which chats the record covers; absent from a server that
+	// records only Agent UI turns.
+	Scope string `json:"scope"`
 }
 
 // Line is the stats in one line.
 func (s Stats) Line() string {
 	if s.Turns == 0 {
-		return "No hybrid turns recorded yet."
+		return s.scopeLabel() + ": no hybrid turns recorded yet."
 	}
 	line := fmt.Sprintf("%d %s: %d on the cheap model, %d on the strong",
 		s.Turns, plural(s.Turns, "turn"), s.CheapTurns, s.StrongTurns)
 	if s.FailedClosed > 0 {
 		line += fmt.Sprintf(" (%d unclassified)", s.FailedClosed)
 	}
-	line += fmt.Sprintf(" · $%.2f spent, $%.2f if all strong", s.Cost, s.CostIfAllStrong)
+	line += " · " + usd(s.Cost) + " spent, " + usd(s.CostIfAllStrong) + " if all strong"
 	if s.SavingPct > 0 {
 		line += fmt.Sprintf(" · %.0f%% saved", s.SavingPct)
 	}
 	if s.Since != "" {
-		line = "Since " + s.Since + ": " + line
+		line = "since " + day(s.Since) + ": " + line
 	}
-	return line
+	return s.scopeLabel() + ", " + line
+}
+
+// scopeLabel says whose turns the record holds. Until the server reports a
+// scope, only Agent UI chats are recorded, so this terminal's turns are not in it.
+func (s Stats) scopeLabel() string {
+	switch s.Scope {
+	case "", "agent_ui":
+		return "Agent UI chats (this terminal's turns aren't counted yet)"
+	case "all":
+		return "All chats"
+	}
+	return "Chats in " + s.Scope
+}
+
+// usd shows a cost to the cent, or to a hundredth of a cent below one cent,
+// so a small spend never reads as $0.00 beside a saving.
+func usd(c float64) string {
+	if c > 0 && c < 0.01 {
+		return fmt.Sprintf("$%.4f", c)
+	}
+	return fmt.Sprintf("$%.2f", c)
+}
+
+// day is an ISO timestamp as a date, "16 Nov 2026"; anything else is shown as sent.
+func day(ts string) string {
+	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return t.Local().Format("2 Jan 2006")
+	}
+	if t, err := time.Parse("2006-01-02", ts); err == nil {
+		return t.Format("2 Jan 2006")
+	}
+	return ts
 }
 
 func plural(n int, word string) string {
@@ -90,12 +152,14 @@ func plural(n int, word string) string {
 
 // api talks to the Agent UI's /api/hybrid routes.
 type api struct {
-	base string
-	http *http.Client
+	base    string
+	baseErr error
+	http    *http.Client
 }
 
 func newAPI() api {
-	return api{base: strings.TrimRight(AgentUIURL, "/"), http: &http.Client{
+	base, baseErr := agentUIBase()
+	return api{base: base, baseErr: baseErr, http: &http.Client{
 		// The preview waits on the classifier, whose limit is at most 120 s.
 		Timeout: 150 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -121,6 +185,9 @@ func (a api) Stats(ctx context.Context) (Stats, error) {
 }
 
 func (a api) call(ctx context.Context, method, path string, body any, out any, what string) error {
+	if a.baseErr != nil {
+		return fmt.Errorf("%s: %w", what, a.baseErr)
+	}
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)

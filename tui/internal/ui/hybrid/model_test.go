@@ -58,6 +58,7 @@ func open(t *testing.T, s lemonade.HybridSettings, readErr error, server http.Ha
 func openWith(t *testing.T, s lemonade.HybridSettings, readErr error, server http.Handler, c lemonade.HybridCatalog) (Model, *stubs) {
 	t.Helper()
 	st := &stubs{catalog: c}
+	t.Setenv(AgentUIURLEnv, "")
 	origRead, origSave, origLoad, origURL := readSettings, saveSettings, loadCatalog, AgentUIURL
 	t.Cleanup(func() {
 		readSettings, saveSettings, loadCatalog, AgentUIURL = origRead, origSave, origLoad, origURL
@@ -430,7 +431,7 @@ func TestPreviewPostsTheTextAndShowsTheRoute(t *testing.T) {
 		_, _ = io.WriteString(w, `{"model":"amd.DeepSeek-V4.1-Flash","kind":"write_prose","difficulty":1,"stakes":"low","reason":"a short email","classified":true,"seconds":0.8,"policy":"quality"}`)
 	})
 	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, mux)
-	if v := view(m); !strings.Contains(v, "Since 2026-11-01: 10 turns: 7 on the cheap model, 3 on the strong (1 unclassified)") ||
+	if v := view(m); !strings.Contains(v, "Agent UI chats (this terminal's turns aren't counted yet), since 1 Nov 2026: 10 turns: 7 on the cheap model, 3 on the strong (1 unclassified)") ||
 		!strings.Contains(v, "75% saved") {
 		t.Fatalf("stats line missing:\n%s", v)
 	}
@@ -498,7 +499,7 @@ func TestUnclassifiedPreviewSaysSo(t *testing.T) {
 }
 
 func TestStatsLineWithNoTurns(t *testing.T) {
-	if got := (Stats{}).Line(); got != "No hybrid turns recorded yet." {
+	if got := (Stats{}).Line(); got != "Agent UI chats (this terminal's turns aren't counted yet): no hybrid turns recorded yet." {
 		t.Fatal(got)
 	}
 }

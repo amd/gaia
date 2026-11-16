@@ -294,8 +294,12 @@ starts, and names the `hybrid_*` setting to change if one is unavailable.
 
 In the terminal UI, `/provider` lists hybrid as its own entry, named by its two
 models (**Hybrid (DeepSeek + Opus)**) and marked `(cloud)` or `(local)` by where
-they run; `/gateway` and `/model` offer it too. `/hybrid` opens its settings:
-templates at the top (DeepSeek + Opus is the one GAIA's policies were measured
+they run; `/gateway` and `/model` offer it too. As with any model, picking it
+in `/provider` or `/model` switches the running chat and is remembered as your
+last model once a turn completes on it; `/gateway`, like `gaia gateway use
+hybrid`, also makes it GAIA's `default_model` for every app.
+
+`/hybrid` opens its settings: templates at the top (DeepSeek + Opus is the one GAIA's policies were measured
 on; the rest say "not yet measured", and one that needs a model or key you
 don't have says which), then the cheap, strong and classifier models from every
 provider set up on this PC (local, AMD LLM Gateway, Fireworks, direct Claude),
@@ -303,8 +307,10 @@ the classifier's time limit, the policy, and for **Custom** a rules table you
 can start from Quality or Balanced. It saves to `~/.gaia/config.json` with the
 same checks as `gaia config set`, and notes when the classifier is a small
 local model, which may route less accurately. Its **Try a request** box and its
-routing stats need the Agent UI server running (`gaia chat --ui`); without it,
-templates are judged from what this PC's providers offer. Each hybrid answer
+routing stats need the Agent UI server running (`gaia chat --ui`; set
+`GAIA_AGENT_UI_URL`, e.g. `http://localhost:8080`, when it runs on another
+port). The stats cover Agent UI chats only for now, not the terminal's. Without
+the server, templates are judged from what this PC's providers offer. Each hybrid answer
 ends with where it ran, such as `→ DeepSeek (writing, d1)`.
 
 Before each turn, the cheap model labels your request: what kind of work it is,
