@@ -544,4 +544,27 @@ describe('HybridSettings: end-to-end findings', () => {
         fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
         await waitFor(() => expect(mockedApi.updateHybridSettings).toHaveBeenCalledWith({ rules: BALANCED }));
     });
+    it('says nothing about whether Hybrid is in use while config.json is invalid', async () => {
+        mockedApi.getHybridSettings.mockResolvedValue({
+            ...SETTINGS, is_active: null, config_error: 'config.json has an invalid default_model.',
+        });
+        await renderPanel();
+        expect(screen.getByRole('alert')).toHaveTextContent('config.json has an invalid default_model.');
+        expect(screen.queryByText('New chats use Hybrid.')).not.toBeInTheDocument();
+        expect(screen.queryByText('Pick Hybrid in the model list to use it.')).not.toBeInTheDocument();
+    });
+
+    it('lists a template whose models are unknown without naming a pair', async () => {
+        mockedApi.getHybridTemplates.mockResolvedValue([
+            template({
+                id: 'local-plus-cloud', name: 'This PC + cloud', cheap_model: null, strong_model: null, classifier_model: null,
+                available: false, reason: "config.json can't be read, so your local model isn't known",
+            }),
+        ]);
+        render(<HybridSettings />);
+        const item = (await screen.findByText('This PC + cloud')).closest('li')!;
+        expect(within(item).getByText("config.json can't be read, so your local model isn't known")).toBeInTheDocument();
+        expect(within(item).queryByText(/null/)).not.toBeInTheDocument();
+        expect(within(item).getByRole('button', { name: /This PC \+ cloud/ })).toBeDisabled();
+    });
 });

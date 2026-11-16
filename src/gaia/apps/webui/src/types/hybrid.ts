@@ -89,8 +89,8 @@ export interface HybridSettings extends HybridNotes {
     prices_error: string | null;
     /** Null when the model list couldn't be read. */
     entry: HybridEntry | null;
-    /** The default model is `hybrid`. */
-    is_active: boolean;
+    /** The default model is `hybrid`; null while config.json is invalid (see `config_error`). */
+    is_active: boolean | null;
     /** Why the saved settings can't be used; the values are shown as saved so they can be fixed. */
     config_error: string | null;
 }
@@ -110,9 +110,10 @@ export interface HybridTemplate extends HybridNotes {
     id: string;
     name: string;
     description: string;
-    cheap_model: string;
-    strong_model: string;
-    classifier_model: string;
+    /** Null when config.json can't be read, so the local default model isn't known. */
+    cheap_model: string | null;
+    strong_model: string | null;
+    classifier_model: string | null;
     policy: HybridPolicy;
     providers_needed: HybridProvider[];
     available: boolean;

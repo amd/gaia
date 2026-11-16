@@ -285,7 +285,9 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
     return (
         <div className="hybrid-settings">
             {saved.config_error && <p className="settings-error" role="alert"><bdi>{saved.config_error}</bdi></p>}
-            <p className="settings-hint">{saved.is_active ? t('settings.hybrid.active') : t('settings.hybrid.inactive')}</p>
+            {saved.is_active !== null && (
+                <p className="settings-hint">{saved.is_active ? t('settings.hybrid.active') : t('settings.hybrid.inactive')}</p>
+            )}
 
             <section className="settings-field" aria-labelledby={`${id}-templates`}>
                 <span className="settings-label" id={`${id}-templates`}>{t('settings.hybrid.templates')}</span>
@@ -313,8 +315,10 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                                     </div>
                                     <p className="settings-hint">{tpl.description}</p>
                                     <p className="hybrid-template-pair">
-                                        <bdi>{t('settings.hybrid.pair', { cheap: modelName(tpl.cheap_model), strong: modelName(tpl.strong_model) })}</bdi>
-                                        {' · '}{t(`settings.hybrid.policy.${tpl.policy}`)}
+                                        {tpl.cheap_model && tpl.strong_model && (
+                                            <><bdi>{t('settings.hybrid.pair', { cheap: modelName(tpl.cheap_model), strong: modelName(tpl.strong_model) })}</bdi>{' · '}</>
+                                        )}
+                                        {t(`settings.hybrid.policy.${tpl.policy}`)}
                                     </p>
                                     {tpl.measured_note && <p className="settings-hint"><bdi>{tpl.measured_note}</bdi></p>}
                                     {tpl.classifier_note && <p className="settings-hint"><bdi>{tpl.classifier_note}</bdi></p>}
