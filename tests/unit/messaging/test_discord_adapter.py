@@ -755,7 +755,7 @@ def test_the_agent_gets_only_a_gaia_shim_and_never_the_token(monkeypatch):
     from gaia.messaging.discord import credentials
 
     monkeypatch.setenv(credentials.BOT_TOKEN_ENV_VAR, "secret-token")
-    env = da._agent_env()
+    env = da.agent_env()
     assert credentials.BOT_TOKEN_ENV_VAR not in env
     first = env["PATH"].split(os.pathsep)[0]
     assert sorted(p.name for p in Path(first).iterdir()) in (["gaia"], ["gaia.exe"])
@@ -1246,7 +1246,7 @@ def test_a_file_write_path_cannot_break_the_code_block():
 def test_no_gaia_launcher_says_how_to_restore_it(monkeypatch):
     monkeypatch.setattr(da, "_gaia_launcher", lambda: None)
     with pytest.raises(RuntimeError, match="Reinstall GAIA"):
-        da._agent_env()
+        da.agent_env()
 
 
 # ----------------------------------------------------------------------

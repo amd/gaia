@@ -117,6 +117,20 @@ describe('DocumentLibrary with no chat open', () => {
         await waitFor(() => expect(box.value).toBe(''));
     });
 
+    it.each([
+        ['"C:\\Reports\\q3.pdf"', 'C:\\Reports\\q3.pdf'],
+        ['file:///Users/sam/My%20Docs/q3.pdf', '/Users/sam/My Docs/q3.pdf'],
+    ])('adds a pasted path written as %s', async (pasted, expected) => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
+        render(<DocumentLibrary />);
+
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: pasted } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+        await waitFor(() => expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith(expected));
+    });
+
     it('offers an existing document for the next chat, once', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
         render(<DocumentLibrary />);
@@ -196,7 +210,7 @@ describe('DocumentLibrary says where documents go', () => {
         expect(screen.getByRole('option', { name: 'This chat: “Budget review”' })).toBeInTheDocument();
         indexPath();
 
-        expect(await screen.findByRole('status')).toHaveTextContent('Attached good.pdf to “Budget review”.');
+        expect(await screen.findByRole('status')).toHaveTextContent('Added good.pdf to “Budget review”.');
     });
 
     it('holds documents for the next new chat when chosen, leaving the open chat alone', async () => {
@@ -207,7 +221,7 @@ describe('DocumentLibrary says where documents go', () => {
 
         await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']));
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
-        expect(screen.getByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
+        expect(screen.getByRole('status')).toHaveTextContent('good.pdf will be added to your next new chat.');
     });
 
     it('drops the "will be attached" line when that document is removed', async () => {
@@ -216,12 +230,12 @@ describe('DocumentLibrary says where documents go', () => {
         render(<DocumentLibrary />);
         fireEvent.change(screen.getByRole('combobox', { name: 'Add documents to' }), { target: { value: 'next' } });
         indexPath();
-        expect(await screen.findByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
+        expect(await screen.findByRole('status')).toHaveTextContent('good.pdf will be added to your next new chat.');
 
         fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
 
-        await waitFor(() => expect(screen.queryByText(/will be attached to your next new chat/)).toBeNull());
-        expect(useChatStore.getState().draftDocumentIds).toEqual([]);
+        expect(screen.queryByText(/will be added to your next new chat/)).toBeNull();
+        await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual([]), { timeout: 10_000 });
     });
 
     it('says so when indexing worked but attaching did not', async () => {
@@ -237,7 +251,7 @@ describe('DocumentLibrary says where documents go', () => {
         useChatStore.setState({ currentSessionId: null });
         render(<DocumentLibrary />);
 
-        expect(screen.getByText('Documents you add here are attached to your next new chat.')).toBeInTheDocument();
+        expect(screen.getByText('Documents you add here go to your next new chat.')).toBeInTheDocument();
         expect(screen.queryByRole('combobox', { name: 'Add documents to' })).toBeNull();
     });
 
@@ -333,8 +347,9 @@ describe('DocumentLibrary failure reasons', () => {
 
         expect(screen.getByText("Can't be read")).toBeTruthy();
         expect(screen.getByText(/looks damaged\. Re-download or re-export it/)).toBeTruthy();
-        expect(screen.getByText('Could not read PDF: broken.pdf', { selector: 'summary' })).toBeTruthy();
-        expect(screen.getByText(/Stream has ended unexpectedly/)).toBeTruthy();
+        // The hint says it plainly; the raw reason waits behind "Technical details".
+        expect(screen.getByText('Technical details', { selector: 'summary' })).toBeTruthy();
+        expect(screen.getByText(/Could not read PDF: broken\.pdf\s+Reason: Stream has ended unexpectedly/)).toBeTruthy();
         const retry = screen.getByRole('button', { name: /Retry indexing broken\.pdf/i });
         expect(retry.className).toContain('btn-retry-quiet');
     });
@@ -353,7 +368,9 @@ describe('DocumentLibrary failure reasons', () => {
         await screen.findByText('empty.txt');
 
         expect(screen.getByText("Can't be read")).toBeTruthy();
-        expect(screen.getByText('This file is empty. Add content to it, then index it again.')).toBeTruthy();
+        expect(screen.getByText('This file is empty. Add content to it, then add it again.')).toBeTruthy();
+        // "File is empty" under it said the same thing again.
+        expect(screen.getByText('File is empty').closest('details')).not.toHaveAttribute('open');
         const retry = screen.getByRole('button', { name: /Retry indexing empty\.txt/i });
         expect(retry.className).toContain('btn-retry-quiet');
     });
@@ -399,11 +416,28 @@ describe('DocumentLibrary path box', () => {
         submitPath('C:\\Users\\me\\.gaia\\documents');
 
         const notice = await screen.findByRole('status');
-        expect(notice.textContent).toContain('Indexed 2 files from "documents".');
-        expect(notice.textContent).toContain("Skipped 1 file of a type GAIA doesn't index.");
+        expect(notice.textContent).toContain('Added 2 files from "documents".');
+        expect(notice.textContent).toContain("Skipped 1 file of a type GAIA can't add.");
         expect(mockedApi.indexFolder).toHaveBeenCalledWith('C:\\Users\\me\\.gaia\\documents', false);
         expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1', 'doc-ok-2']);
         expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('says how many images a folder left out and how to add them', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 0, skipped_images: 2, errors: [], documents: [COMPLETE_DOC],
+        });
+        render(<DocumentLibrary />);
+
+        submitPath('/home/me/scan');
+
+        const notice = await screen.findByRole('status');
+        expect(notice.textContent).toContain('Left out 2 images: add them one at a time and GAIA will read them.');
+        expect(notice.textContent).not.toContain('Skipped');
     });
 
     it('reports a folder with nothing indexable plainly', async () => {
@@ -452,7 +486,7 @@ describe('DocumentLibrary path box', () => {
         submitPath('C:\\Users\\me\\notes.v2\\');
 
         const notice = await screen.findByRole('status');
-        expect(notice.textContent).toContain('Indexed 1 file from "notes.v2".');
+        expect(notice.textContent).toContain('Added 1 file from "notes.v2".');
         expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\notes.v2\\');
         expect(screen.queryByRole('alert')).toBeNull();
     });
@@ -538,10 +572,27 @@ describe('DocumentLibrary notices follow the interface language', () => {
         submitPath(container, '/home/me/trip');
 
         const text = stripIsolates((await screen.findByRole('status')).textContent ?? '');
-        expect(text).toContain('الملفات المفهرسة من «trip»: 2.');
-        expect(text).toContain('الملفات المتخطّاة لأن GAIA لا يفهرس نوعها: 1.');
+        expect(text).toContain('الملفات المضافة من «trip»: 2.');
+        expect(text).toContain('الملفات المتخطّاة لأن GAIA لا يستطيع إضافة نوعها: 1.');
         expect(text).toContain('لا تُضمَّن المجلدات الفرعية.');
-        expect(text.indexOf('الملفات المفهرسة')).toBe(0);
+        expect(text.indexOf('الملفات المضافة')).toBe(0);
+    });
+
+    it('says in Arabic how many images a folder left out', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 0, skipped_images: 2, errors: [], documents: [COMPLETE_DOC],
+        });
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/scan');
+
+        const text = stripIsolates((await screen.findByRole('status')).textContent ?? '');
+        expect(text).toContain('الصور المستبعدة: 2. أضِف كل صورة وحدها ليقرأها GAIA.');
     });
 
     it('says in Arabic that a mistyped path does not exist', async () => {

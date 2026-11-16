@@ -54,7 +54,10 @@ use an alert when it takes reading the web, mail or files and judging.
 
 Run each as its own `run_shell_command` call, with double quotes only. Refer to
 an automation by its name (or the id from `list`). `list` shows GitHub watches
-too, each with the command that changes or removes it.
+too, each with the command that changes or removes it. A `waiting:` row is not
+an automation: it is a message that already ran and reaches Discord when the
+bridge is back. Removing its automation drops it; to drop only the message,
+`gaia automation remove "waiting:<id>"`.
 
 For a watch, pin down which GitHub accounts are the user's own: their activity
 is not news to them. Use the ones they named; if none, ask once ("Which GitHub

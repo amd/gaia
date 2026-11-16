@@ -96,8 +96,8 @@ def load() -> str:
     except Exception as e:  # noqa: BLE001 - re-raised with the remedy below
         raise DiscordCredentialsError(
             f"Could not read the Discord bot token from the OS keyring: {e}. "
-            f"Set {BOT_TOKEN_ENV_VAR} instead, or connect Discord again in "
-            f"Settings → Messaging."
+            "Unlock the keyring, or connect Discord again in Settings → "
+            "Messaging."
         ) from e
     if not token:
         raise DiscordCredentialsError(

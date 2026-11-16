@@ -167,6 +167,12 @@ class Schedule:
     at: Optional[str] = None
     #: A one-time schedule's state, one of ``ONE_SHOT_STATES``.
     state: Optional[str] = None
+    #: A recurring schedule's runs that failed since its last successful one,
+    #: and the latest failure: when (ISO, UTC) and its error. A run that
+    #: succeeds clears them; ``last_run`` stays the last successful run.
+    failed_runs: int = 0
+    last_failed: Optional[str] = None
+    last_error: Optional[str] = None
 
     def __post_init__(self) -> None:
         if bool(self.skill) == bool(self.prompt):
@@ -245,6 +251,12 @@ class Schedule:
             d["resumed_at"] = self.resumed_at
         if self.missed_since:
             d["missed_since"] = self.missed_since
+        if self.failed_runs:
+            d["failed_runs"] = self.failed_runs
+        if self.last_failed:
+            d["last_failed"] = self.last_failed
+        if self.last_error:
+            d["last_error"] = self.last_error
         return d
 
     @classmethod
@@ -268,6 +280,9 @@ class Schedule:
             missed_at_least=bool(data.get("missed_at_least", False)),
             resumed_at=data.get("resumed_at"),
             missed_since=data.get("missed_since"),
+            failed_runs=int(data.get("failed_runs", 0)),
+            last_failed=data.get("last_failed"),
+            last_error=data.get("last_error"),
         )
 
 
@@ -305,6 +320,10 @@ class ScheduleStore(Protocol):
 
     def mark_run(
         self, name: str, last_run: str, next_run: Optional[str] = None
+    ) -> Schedule: ...
+
+    def mark_failed(
+        self, name: str, failed_at: str, error: str, next_run: Optional[str] = None
     ) -> Schedule: ...
 
     def account_missed(
@@ -423,8 +442,36 @@ class TomlScheduleStore:
             schedules[name].last_run = last_run
             if next_run is not None:
                 schedules[name].next_run = next_run
+            schedules[name].failed_runs = 0
+            schedules[name].last_failed = None
+            schedules[name].last_error = None
             self.save(schedules)
             return schedules[name]
+
+    def mark_failed(
+        self, name: str, failed_at: str, error: str, next_run: Optional[str] = None
+    ) -> Schedule:
+        """Record a recurring run of *name* that failed with *error*.
+
+        ``last_run`` keeps the last successful run. ``next_run`` moves on as
+        it does after a success, so the failed run is not later counted as
+        missed.
+        """
+        with store_lock(self.path):
+            schedules = self.load()
+            if name not in schedules:
+                raise KeyError(
+                    f"no schedule named {name!r} in {self.path}; "
+                    f"run `gaia schedule list` to see registered schedules"
+                )
+            schedule = schedules[name]
+            schedule.failed_runs += 1
+            schedule.last_failed = failed_at
+            schedule.last_error = error
+            if next_run is not None:
+                schedule.next_run = next_run
+            self.save(schedules)
+            return schedule
 
     def account_missed(
         self, name: str, decide: Callable[[Schedule], Optional[MissedRuns]]

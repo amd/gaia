@@ -374,6 +374,8 @@ def start_detached(
 ) -> int:
     """Start the bridge as its own process and wait until it reports in.
 
+    A start is also the user's word that it should come back with the apps.
+
     It outlives the TUI or Agent UI that started it: a hidden console of its
     own (never ``DETACHED_PROCESS``, which pops a window for every shell command
     the agent runs) and outside the caller's Windows job object.
@@ -383,6 +385,7 @@ def start_detached(
     # One start at a time across processes: the TUI and the Agent UI both
     # autostart at launch, and two spawns would each report the other as failed.
     with file_lock(state.start_lock_target(), timeout=DETACH_WAIT_SECONDS + 30):
+        _set_autostart(True)
         return _start_detached_locked(
             model=model, take_over=take_over, agent_command=agent_command, emit=emit
         )
@@ -440,8 +443,23 @@ def _start_detached_locked(
     return 0 if info["state"] in state.LIVE_STATES else 1
 
 
-def stop(*, wait_seconds: float = STOP_WAIT_SECONDS) -> bool:
-    """Ask a running bridge to stop; end it if it does not. True if it stopped."""
+def _set_autostart(value: bool) -> None:
+    config = state.load_config()
+    if config.connected and config.autostart != value:
+        config.autostart = value
+        state.save_config(config)
+
+
+def stop(
+    *, wait_seconds: float = STOP_WAIT_SECONDS, stay_stopped: bool = False
+) -> bool:
+    """Ask a running bridge to stop; end it if it does not. True if it stopped.
+
+    *stay_stopped* is the user's own Stop: the apps then leave it stopped at
+    their next launch instead of bringing it back.
+    """
+    if stay_stopped:
+        _set_autostart(False)
     if not state.is_running():
         return True
     path = stop_request_path()
@@ -487,7 +505,7 @@ def _kill_tree(pid: int) -> None:
 
 
 def run_stop(*, emit: Callable[[str], None] = print) -> int:
-    if stop():
+    if stop(stay_stopped=True):
         emit("Stopped the Discord bridge.")
         return 0
     emit(f"❌ The Discord bridge did not stop. {stop_failed_hint()}")
@@ -507,7 +525,7 @@ def ensure_started(*, emit: Callable[[str], None] = lambda _: None) -> Optional[
         state.write_status(
             state.STATE_CREDENTIALS_UNAVAILABLE,
             "The Discord token could not be read from the OS keyring. Unlock it, "
-            "then press Retry.",
+            "then start Discord again.",
         )
         return 2
     return start_detached(emit=emit)
@@ -583,6 +601,7 @@ def status(detect: bool = True) -> Dict[str, Any]:
         "bot_name": config.bot_name,
         "owner_name": config.owner_name,
         "autostart": config.autostart,
+        "always_allowed": sorted(set(state.always_labels())) if config.paired else [],
         "model": config.model,
         "portal_url": PORTAL_URL,
         "bot_page_url": (

@@ -226,6 +226,21 @@ def set_skipped(model_id: str, skipped: bool) -> List[str]:
 # ── fit and disk ───────────────────────────────────────────────────────────
 
 
+def download_size_gb(model_id: str, lemonade_size: Any) -> Optional[float]:
+    """The size to show for *model_id*: GAIA's own figure, else Lemonade's catalog size.
+
+    Lemonade lists GiB, so one model would read 21.7 in one place and 23.3 in another.
+    """
+    from gaia.llm.lemonade_client import find_model_requirement
+
+    requirement = find_model_requirement(model_id)
+    if requirement is not None and requirement.size_gb:
+        return requirement.size_gb
+    if isinstance(lemonade_size, (int, float)) and not isinstance(lemonade_size, bool):
+        return float(lemonade_size)
+    return None
+
+
 def to_decimal_gb(model_fit_gb: float) -> float:
     """A model_fit memory figure (Lemonade's GiB) in decimal GB, as the plan reports it.
 

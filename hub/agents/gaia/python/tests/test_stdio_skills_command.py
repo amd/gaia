@@ -110,6 +110,18 @@ def test_a_bad_link_ends_in_one_error_event(monkeypatch):
     assert sum(e["type"] in ("final", "error") for e in events) == 1
 
 
+def test_a_link_with_nothing_behind_it_names_no_terminal_command(monkeypatch):
+    """The terminal app's user may have no `gaia` on PATH either (#7973)."""
+
+    def missing(url, manager=None):
+        raise link.SkillLinkNotFoundError("Nothing found at https://x/y.")
+
+    monkeypatch.setattr(link, "preview_link", missing)
+    detail = _events(_Agent(), "/skills add acme/none")[-1]["detail"]
+    assert "gaia skill" not in detail
+    assert "skills folder inside .gaia" in detail
+
+
 @pytest.mark.parametrize("query", ["/skills add --allow-code", "/skills add confirm"])
 def test_add_without_a_link_explains_usage(query):
     events = _events(_Agent(), query)

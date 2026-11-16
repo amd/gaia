@@ -11,6 +11,7 @@ import {
     PATH_ACCESS_TOOL,
     PROJECT_TRUST_TOOL,
     permissionPromptText,
+    alwaysScopeText,
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -64,9 +65,10 @@ export function splitCommandSummary(summary: string): { command: string; folder:
 
 /** A grant's folder by its name alone, for a button; the full path stays in its tooltip. */
 export function shortScope(scope: string): string {
-    return scope.replace(/(\s)((?:[A-Za-z]:)?[\\/][^]*)$/, (_, space: string, path: string) => {
+    // A translated scope wraps its path in direction isolates (U+2068 ... U+2069).
+    return scope.replace(/(\s\u2068?)((?:[A-Za-z]:)?[\\/][^\u2069]*)(\u2069?)$/, (_, lead: string, path: string, close: string) => {
         const name = path.split(/[\\/]/).filter(Boolean).pop();
-        return name ? `${space}${name}` : `${space}${path}`;
+        return `${lead}${name ?? path}${close}`;
     });
 }
 
@@ -143,7 +145,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
     // Shell scopes are already the command itself, so only file and skill grants carry a label.
-    const scopeText = notification.alwaysLabel ?? scope ?? '';
+    const scopeText = alwaysScopeText(notification, t) ?? notification.alwaysLabel ?? scope ?? '';
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);

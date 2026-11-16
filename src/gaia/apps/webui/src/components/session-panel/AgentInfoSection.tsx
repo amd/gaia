@@ -12,7 +12,7 @@ import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
 import { requestErrorParam } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
-import { useTurnEnd } from '../../hooks/useTurnEnd';
+import { useRereadWhileStarting, useTurnEnd } from '../../hooks/useTurnEnd';
 import { PanelSection } from './PanelSection';
 import type { AgentTool } from '../../types/sessionPanel';
 import type { MessageKey, Param } from '../../i18n/registry';
@@ -91,6 +91,7 @@ function ToolList({ sessionId, busy }: AgentInfoSectionProps) {
     useEffect(load, [load]);
     // The agent starts with the first reply, and a reply can load a skill's tools.
     useTurnEnd(busy, load);
+    useRereadWhileStarting(busy, failure?.notRunning === true, load);
 
     // 409 is only ever "not running yet", every new chat's first state: say it in the UI's language.
     if (failure?.notRunning) return <p className="sp-meta" role="status">{t('tools.notRunning')}</p>;

@@ -12,14 +12,16 @@ import {
     pairDiscordAgain,
     startDiscord,
     stopDiscord,
+    restartDiscord,
+    forgetDiscordAlways,
     type DiscordStatus,
 } from '../../services/messagingApi';
 import { setVisibleInterval } from '../../utils/visibleInterval';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
 
 const POLL_MS = 3000;
-/** States the bridge moves out of by itself, so the card watches them. */
-const LIVE = new Set(['starting', 'pairing']);
+/** States the bridge can leave by itself (a crash included), so the card watches them. */
+const LIVE = new Set(['starting', 'pairing', 'connected']);
 /** States shown as a problem to fix. */
 const PROBLEMS = new Set(['error', 'taken_over', 'token_invalid', 'credentials_unavailable', 'conflict']);
 /** Where the card's own sentence can't say why, so the bridge's sentence is shown under it. */
@@ -38,7 +40,7 @@ const PORTAL = {
     forFriends: 'For me and my friends',
 };
 
-type Action = 'connect' | 'start' | 'takeOver' | 'stop' | 'pair' | 'disconnect';
+type Action = 'connect' | 'start' | 'takeOver' | 'stop' | 'restart' | 'forget' | 'pair' | 'disconnect';
 
 function errorText(err: unknown): string {
     if (err instanceof ApiError) return err.detail || err.message;
@@ -256,7 +258,8 @@ export function MessagingSettings() {
     // still reads "stopped" meanwhile; say it is starting, not that it is off.
     const startingNow = s.state === 'starting' || busy === 'start' || busy === 'takeOver';
     const explain: Partial<Record<DiscordStatus['state'], string>> = {
-        stopped: t('settings.messaging.state.stopped'),
+        // Stop turns autostart off, so stopped with it on means nobody stopped it.
+        stopped: t(s.autostart ? 'settings.messaging.state.crashed' : 'settings.messaging.state.stopped'),
         error: t('settings.messaging.state.error'),
         taken_over: t('settings.messaging.state.takenOver'),
         token_invalid: t('settings.messaging.state.tokenInvalid'),
@@ -283,7 +286,7 @@ export function MessagingSettings() {
                 )}
 
                 {explain[s.state] && s.connected && !startingNow && (
-                    <div className={PROBLEMS.has(s.state) ? 'settings-notice' : 'messaging-status'}>
+                    <div className={PROBLEMS.has(s.state) || (s.state === 'stopped' && s.autostart) ? 'settings-notice' : 'messaging-status'}>
                         <p>{explain[s.state]}</p>
                         {SHOW_DETAIL.has(s.state) && s.detail && <p className="settings-hint"><bdi dir="auto">{s.detail}</bdi></p>}
                         {fix}
@@ -331,9 +334,22 @@ export function MessagingSettings() {
                         <div className="settings-row">
                             {s.bot_profile_url && <LinkButton href={s.bot_profile_url} primary>{t('settings.messaging.openInDiscord')}</LinkButton>}
                             <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => run('stop', stopDiscord)}>{spinner('stop')}{t('settings.messaging.stop')}</button>
+                            <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => run('restart', restartDiscord)}>{spinner('restart')}{t('settings.messaging.restart')}</button>
                             <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => run('pair', pairDiscordAgain)}>{spinner('pair')}{t('settings.messaging.pairOther')}</button>
                         </div>
                     </>
+                )}
+
+                {s.connected && (s.always_allowed?.length ?? 0) > 0 && (
+                    <div className="messaging-status">
+                        <p>{t('settings.messaging.alwaysAllowed')}</p>
+                        <ul className="settings-hint messaging-always-list">
+                            {s.always_allowed.map((label) => <li key={label}><bdi dir="auto">{label}</bdi></li>)}
+                        </ul>
+                        <div className="settings-row">
+                            <button type="button" className="btn-secondary" disabled={busy !== null} onClick={() => run('forget', forgetDiscordAlways)}>{spinner('forget')}{t('settings.messaging.forgetAlways')}</button>
+                        </div>
+                    </div>
                 )}
 
                 {actionError && <p className="settings-error" role="alert"><bdi dir="auto">{actionError}</bdi></p>}

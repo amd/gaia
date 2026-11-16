@@ -27,6 +27,8 @@ if str(UTIL_DIR) not in sys.path:
 
 import publish_skills as ps  # noqa: E402  (path set above)
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 
 @pytest.fixture
 def hub(tmp_path):

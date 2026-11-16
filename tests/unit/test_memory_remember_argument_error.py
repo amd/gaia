@@ -119,15 +119,22 @@ def test_the_date_can_be_added_as_the_result_says(store):
 
 
 @pytest.mark.parametrize("category", ["profile", "system", "permission"])
-def test_a_privileged_category_is_still_refused(store, category):
-    """Not a slip of a label: these rows lead every prompt, so nothing is
-    saved under another name either."""
+def test_a_privileged_category_saves_the_fact_as_a_fact(store, category):
+    """A chat still can't write these rows, which lead every prompt. The fact
+    is kept as a plain one, so the answer and the Memory page agree: a refusal
+    read as "not in memory" while extraction stored the fact seconds later."""
     with _tools(_Host(store)) as tools:
         result = tools["remember"](fact=FACT, category=category)
 
-    assert result["status"] == "error"
-    assert result["message"].startswith("Not saved")
-    assert _rows(store) == []
+    assert result["status"] == "stored"
+    assert result["ignored"] == {"category": category}
+    assert _rows(store) == [(FACT, "fact", None)]
+    message = result["message"]
+    assert message.startswith("Saved.")
+    assert f"a chat can't write the '{category}' category" in message
+    assert "is not a category" not in message
+    assert str(sorted(EXTRACTABLE_CATEGORIES)) in message
+    assert not any(word in message.lower() for word in NOT_KEPT), message
 
 
 def test_valid_arguments_report_nothing_ignored(store):

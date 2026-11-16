@@ -20,7 +20,7 @@ per request with `/query`'s `provider` field (contract ≥ 2.14) — see
 [`SPEC.md` §5.5](./SPEC.md#55-other-transports).
 
 The terminal UI you get here is the published **`terminal-hub`** component — the
-exact same binary a full GAIA install runs as `gaia-tui`, not a separate build. So
+exact same binary a full GAIA install runs as `gaia-cli`, not a separate build. So
 however you arrive at the terminal UI, it behaves identically.
 
 ## What it actually does
@@ -113,7 +113,7 @@ never touch stdout, which the terminal UI owns.
 | --------------- | ---------------------------------------- |
 | Agent sidecar   | `~/.gaia/agents/gaia/gaia-agent[.exe]`   |
 | Install record  | `~/.gaia/agents/gaia/.installed`         |
-| Terminal UI     | `~/.gaia/npm-cache/gaia-<version>/gaia-tui[.exe]` |
+| Terminal UI     | `~/.gaia/npm-cache/gaia-<version>/gaia-cli[.exe]` |
 
 The sidecar goes into the GAIA daemon's own cache directory on purpose: the daemon
 is what spawns and supervises it, and it does its own SHA-256 check on the way. By
@@ -127,7 +127,7 @@ the binary was already cached, so an install left by an earlier version repairs
 itself the next time you run. A `--platform` fetch stages a binary for a
 *different* machine, so it deliberately leaves no record.
 
-The terminal UI is installed as `gaia-tui`, **never** as `gaia` — a file named
+The terminal UI is installed as `gaia-cli`, **never** as `gaia` — a file named
 `gaia` in a cache directory would shadow the `gaia` shim npm puts on your `PATH`.
 
 ## Ports
@@ -197,8 +197,10 @@ characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a 400. See
 and eviction behavior.
 
 **Attaching files to a conversation? Send them in `documents`** (contract ≥
-2.16): the absolute paths, the whole set on every turn. The agent indexes any it
-has not read yet before answering, and can read those exact files and nothing
+2.16): the absolute paths, the whole set on every turn, an empty list when none
+are left. The agent indexes any it has not read yet before answering (up to 100
+documents or 10,000 passages; it loads any other by name when asked about it),
+stops searching any you left out, and can read those exact files and nothing
 else beside them. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 **Private chat, or memory off? Send `memory` every turn** (contract ≥ 2.18):
@@ -285,7 +287,8 @@ reject `turns` with `422`.
 An answer ends with one line such as `I haven't confirmed this works — the
 tests didn't pass.` when a check failed or was blocked, or a change went
 unchecked. It appears only then; a confirmed or purely conversational turn has
-no such line. It is part of `final.answer`, so show it to the user rather than
+no such line, and neither has an answer that itself reports failed tests and
+claims no success. It is part of `final.answer`, so show it to the user rather than
 trimming it. Details in [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
@@ -302,7 +305,7 @@ version and a source URL for each:
 | Agent sidecar | the `gaia` agent, at this package's version | this package's release           |
 | Terminal UI   | the `terminal-hub` component, at its own version | the core GAIA release       |
 
-The terminal UI is **consumed, not rebuilt**. It is byte-for-byte the `gaia-tui`
+The terminal UI is **consumed, not rebuilt**. It is byte-for-byte the `gaia-cli`
 binary a core install ships, so there is no second copy that could lag behind or
 behave differently — which is the entire reason it is sourced this way.
 

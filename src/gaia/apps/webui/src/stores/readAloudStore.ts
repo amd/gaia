@@ -19,8 +19,9 @@ import { speechPieces } from '../utils/speechText';
 export type ReadAloudStatus = 'loading' | 'downloading' | 'playing';
 
 /** What went wrong, for a translated message: Lemonade unreachable (503),
- *  Lemonade failed to speak (502), the browser could not play it, or other. */
-export type ReadAloudErrorKind = 'unreachable' | 'speech' | 'playback' | 'other';
+ *  Lemonade failed to speak (502), the browser could not play it, the reply
+ *  has nothing to say (only code), or other. */
+export type ReadAloudErrorKind = 'unreachable' | 'speech' | 'playback' | 'nothing' | 'other';
 
 export interface ReadAloudError {
     messageId: string;
@@ -117,7 +118,10 @@ export const useReadAloudStore = create<ReadAloudState>((set, get) => ({
     read: async (messageId, markdown) => {
         get().stop();
         const pieces = speechPieces(markdown, speechApi.MAX_SPEECH_CHARS);
-        if (pieces.length === 0) return;
+        if (pieces.length === 0) {
+            set({ error: { messageId, kind: 'nothing', detail: '' } });
+            return;
+        }
         const mine: Run = { abort: new AbortController(), audio: null, urls: [] };
         run = mine;
         set({ messageId, status: 'loading', error: null });

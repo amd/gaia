@@ -125,9 +125,12 @@ button.setup-rail-step:hover {
     margin-inline-end: auto;
 }
 
-/* A long label wraps inside its button rather than running off the window. */
+/* A long label wraps inside its button rather than running off the window, and the button grows to hold it. */
 .setup-footer-row > button {
     max-inline-size: 100%;
+    block-size: auto;
+    min-block-size: 32px;
+    padding-block: 6px;
     white-space: normal;
 }
 
@@ -778,6 +781,9 @@ label.setup-choice {
     align-items: center;
     gap: 6px;
     max-inline-size: 100%;
+    block-size: auto;
+    min-block-size: 32px;
+    padding-block: 6px;
     white-space: normal;
     text-align: start;
 }

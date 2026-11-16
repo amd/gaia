@@ -31,6 +31,10 @@ describe('MessageBubble inline code wrapping', () => {
         expect(rule('.inline-code')).not.toMatch(/white-space:\s*(nowrap|pre)\b/);
     });
 
+    it('keeps a short span whole inside a table cell instead of splitting it', () => {
+        expect(rule('.md-table .inline-code')).toMatch(/overflow-wrap:\s*normal/);
+    });
+
     it('leaves fenced code blocks scrolling instead of wrapping', () => {
         expect(rule('.code-block pre')).not.toMatch(/overflow-wrap:\s*anywhere/);
     });

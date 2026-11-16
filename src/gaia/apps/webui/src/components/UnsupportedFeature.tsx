@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react';
 import { AlertTriangle, X, AlertCircle, Bug } from 'lucide-react';
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
 import { useT } from '../i18n/useT';
+import { serverFailureText } from '../utils/documentFailure';
 import './UnsupportedFeature.css';
 
 const GITHUB_NEW_ISSUE_URL = 'https://github.com/amd/gaia/issues/new';
@@ -213,16 +214,19 @@ export function bugReportUrl(title: string, errorDetail?: string): string {
 
 /** Failures retrying can't fix until the file changes (the backend's error kind), and what to do instead. */
 export const PERMANENT_FAILURE_HINTS: Record<string, string> = {
-    corrupted: 'The file looks damaged. Re-download or re-export it, then index the new copy.',
-    encrypted: 'The PDF needs a password to open. Save a copy without the password, then index that.',
-    empty: 'The PDF has no readable text, which usually means it is a scan. Run OCR on it, then index it again.',
-    empty_file: 'This file is empty. Add content to it, then index it again.',
-    unsupported_workbook: 'This is an old .xls workbook or has a password. Open it in Excel, save a copy as .xlsx without a password, then index that.',
+    corrupted: 'The file looks damaged. Re-download or re-export it, then add the new copy.',
+    encrypted: 'The PDF needs a password to open. Save a copy without the password, then add that.',
+    empty: 'The PDF has no readable text, which usually means it is a scan. Run OCR on it, then add it again.',
+    empty_file: 'This file is empty. Add content to it, then add it again.',
+    unsupported_workbook: 'This is an old .xls workbook or has a password. Open it in Excel, save a copy as .xlsx without a password, then add that.',
 };
 
 /** The backend's message without its leading category label, e.g. "File not found:". */
 function stripPrefix(message: string, prefix: string): string {
-    return message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+    if (!message.startsWith(prefix)) return message;
+    const rest = message.slice(prefix.length).trim();
+    // What follows the label is now the sentence's start.
+    return rest.charAt(0).toUpperCase() + rest.slice(1);
 }
 
 interface UploadErrorToastProps {
@@ -282,6 +286,17 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
     if (permanentHint) {
         title = `"${filename}" can't be read`;
         detail = permanentHint;
+        issueUrl = null;
+        Icon = AlertTriangle;
+    } else if (serverFailureText(kind, t)) {
+        // The file is fine; the model server didn't answer.
+        title = t('docs.notAddedServer', { name: filename });
+        detail = serverFailureText(kind, t) ?? error;
+        issueUrl = null;
+        Icon = AlertTriangle;
+    } else if (kind === 'too_large') {
+        title = t('docs.tooLarge', { name: filename });
+        detail = error;
         issueUrl = null;
         Icon = AlertTriangle;
     } else if (status === 404) {
