@@ -646,3 +646,40 @@ def test_an_ordinary_hard_link_does_not_block_a_search(home, monkeypatch):
     assert _refusal("grep -rn TODO .", clean, home) is None
     assert _refusal("findstr /s /n TODO *", clean, home) is None
     assert _refusal("cat b.txt", clean, home) is None
+
+
+def test_a_symlink_to_a_hard_linked_credential_file_is_refused(home, monkeypatch):
+    """A link in the searched folder, to a hard link outside it, still refuses."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    hidden = home / "elsewhere"
+    hidden.mkdir()
+    _hard_link(key, hidden / "copy.txt")
+    try:
+        os.symlink(hidden / "copy.txt", clean / "notes.txt")
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a symlink here: {exc}")
+
+    for command in ("cat *", "grep -Rn KEY ."):
+        refusal = _refusal(command, clean, home)
+        assert refusal is not None and refusal["executed"] is False, command
+
+
+def test_a_link_is_sized_by_the_file_it_reads(home, monkeypatch):
+    """The size filter follows the link: a symlink's own size is not the key's."""
+    from gaia import security
+
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    hidden = home / "elsewhere"
+    hidden.mkdir()
+    _hard_link(key, hidden / "copy.txt")
+    target = os.stat(hidden / "copy.txt")
+
+    class _LinkEntry:
+        path = str(hidden / "copy.txt")
+
+        def stat(self, follow_symlinks=True):
+            if follow_symlinks:
+                return target
+            return os.stat_result((0o120777, 0, 0, 1, 0, 0, 3, 0, 0, 0))
+
+    assert shell_tools._shares_secret(_LinkEntry(), security.linked_secret_files())

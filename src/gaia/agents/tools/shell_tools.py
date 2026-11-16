@@ -3725,7 +3725,7 @@ def _bulk_read_credential(
     """
     from gaia import security
 
-    linked = security.linked_secret_files()
+    linked = None  # listed on the first folder-wide read, not for every command
     for number, words in enumerate(_command_word_lists(argv)):
         for spec, includes, excludes, tree, links_only in _bulk_read_roots(
             words, rewritten and number == 0
@@ -3744,6 +3744,8 @@ def _bulk_read_credential(
             except (OSError, ValueError) as exc:
                 logger.debug("Cannot list %r for the credential check: %s", spec, exc)
                 continue
+            if linked is None:
+                linked = security.linked_secret_files()
             if tree:
                 found, complete = _tree_credential(
                     folder, pattern, includes, excludes, links_only, linked
@@ -3892,7 +3894,7 @@ def _shares_secret(entry: os.DirEntry, linked: Optional[dict]) -> bool:
     if not linked:
         return False
     try:
-        size = entry.stat(follow_symlinks=False).st_size
+        size = entry.stat().st_size  # a symlink's target is what gets read
     except OSError as exc:
         logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
         return False
