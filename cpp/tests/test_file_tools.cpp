@@ -96,6 +96,17 @@ TEST_F(FileToolsTest, FileRead_OneRepeatedCharacterIsDescribedNotReturned) {
     EXPECT_EQ(ranged.value("note", "").find("no real content"), std::string::npos);
 }
 
+TEST_F(FileToolsTest, FileRead_AMissingFileNamesTheNearMatchBesideIt) {
+    ToolInfo tool = FileIOTools::fileRead();
+    const std::string real = writeFile("q3_summary.md", "Revenue: 412,000\n");
+    const std::string typo = real.substr(0, real.size() - std::string("q3_summary.md").size()) + "q3_sumary.md";
+    const std::string error = tool.callback({{"path", typo}}).value("error", "");
+    EXPECT_NE(error.find("q3_summary.md"), std::string::npos) << error;
+    EXPECT_NE(error.find("tell the user"), std::string::npos) << error;
+    const std::string other = real.substr(0, real.size() - std::string("q3_summary.md").size()) + "budget.md";
+    EXPECT_EQ(tool.callback({{"path", other}}).value("error", "").find("q3_summary.md"), std::string::npos);
+}
+
 TEST_F(FileToolsTest, FileRead_ALaterVersionBesideTheFileIsPointedOut) {
     ToolInfo tool = FileIOTools::fileRead();
     const std::string v1 = writeFile("pricing_policy_v1.md", "Discount limit: 15%\n");

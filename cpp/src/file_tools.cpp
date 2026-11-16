@@ -200,6 +200,45 @@ std::string collapseWhitespace(const std::string& s) {
     return out;
 }
 
+/// A file in the same folder whose name is within two edits of the missing one, or "".
+std::string nearNamedFile(const std::string& path) {
+    std::error_code ec;
+    const fs::path asked = fs::u8path(path);
+    const fs::path dir = asked.has_parent_path() ? asked.parent_path() : fs::path(".");
+    if (fs::exists(asked, ec) || !fs::is_directory(dir, ec)) return "";
+    auto lower = [](std::string s) {
+        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    const std::string want = lower(asked.filename().u8string());
+    if (want.size() < 4) return "";
+    std::string best;
+    size_t bestDistance = 3, seen = 0;
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+        if (++seen > 2000) break;
+        if (!entry.is_regular_file(ec)) continue;
+        const std::string have = lower(entry.path().filename().u8string());
+        const size_t gap = have.size() > want.size() ? have.size() - want.size() : want.size() - have.size();
+        if (gap > 2) continue;
+        std::vector<size_t> row(have.size() + 1);
+        for (size_t j = 0; j <= have.size(); ++j) row[j] = j;
+        for (size_t i = 1; i <= want.size(); ++i) {
+            size_t diagonal = row[0];
+            row[0] = i;
+            for (size_t j = 1; j <= have.size(); ++j) {
+                const size_t above = row[j];
+                row[j] = std::min({row[j] + 1, row[j - 1] + 1, diagonal + (want[i - 1] != have[j - 1])});
+                diagonal = above;
+            }
+        }
+        if (row[have.size()] < bestDistance) {
+            bestDistance = row[have.size()];
+            best = entry.path().generic_u8string();
+        }
+    }
+    return best;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -533,6 +572,12 @@ json FileIOTools::doFileRead(const json& args) {
         // a second read could hash a version the model never saw.
         std::ifstream file(fs::u8path(path), std::ios::binary);
         if (!file.is_open()) {
+            const std::string near = nearNamedFile(path);
+            if (!near.empty()) {
+                return json{{"error", path + " does not exist. " + near + " is in the same folder and has nearly the "
+                                      "same name. If you read that one, tell the user the name they gave does not "
+                                      "exist and which file you used instead."}};
+            }
             return json{{"error", "Cannot open file: " + path}};
         }
 

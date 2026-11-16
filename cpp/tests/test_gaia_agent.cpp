@@ -795,6 +795,12 @@ TEST(GaiaAgentTest, AnOfferToReadInsteadOfReadingIsSentBack) {
     ASSERT_TRUE(note.has_value());
     EXPECT_NE(note->find("offers to read"), std::string::npos) << *note;
     EXPECT_TRUE(GaiaAgent::handBackNote("I haven't opened the reports yet. Shall I check them?", listed));
+    // A closing line that announces a read is a read that never happens.
+    EXPECT_TRUE(GaiaAgent::handBackNote(
+        "I cannot run make_report.py.\n\nTo get the totals another way, I will read the contents of `orders.csv`.\n",
+        listed));
+    EXPECT_FALSE(GaiaAgent::handBackNote(
+        "I will read orders.csv first.\n\nDone: the total across orders.csv is 4,200.", listed));
     EXPECT_TRUE(GaiaAgent::handBackNote("I can analyze sales.csv if you'd like.", {}));
     EXPECT_TRUE(GaiaAgent::handBackNote(
         "I found two policies. To answer I need to check their content. Which policy should I check?", listed));
