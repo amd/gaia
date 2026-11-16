@@ -742,7 +742,7 @@ static std::string tableSummary(const std::vector<std::string>& names,
         std::snprintf(buf, sizeof(buf), whole ? "%.0f" : "%.2f", v);
         return std::string(buf);
     };
-    constexpr size_t kMaxBytes = 2400;
+    static constexpr size_t kMaxBytes = 2400;
     std::string out = "Computed from all " + std::to_string(data.size()) + " data rows:";
     const size_t headerBytes = out.size();
     auto add = [&out](const std::string& line) {
