@@ -20,60 +20,10 @@ import { CheckCircle2, RefreshCw } from 'lucide-react';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import type { ConnectorListEntry } from '../types';
-import { detectProvider } from './email/EmailConnectCta';
+import { connectedProviderLabel, referencedProviderConnected } from '../utils/connectorRetry.core';
 import './ConnectorRetryBanner.css';
 
-/**
- * Given the error message and the current connector rows, decide whether the
- * provider the message referenced is now connected. Pure + exported for tests.
- *
- * ``detectProvider`` returns 'google' | 'microsoft' | 'microsoft_work' | 'all'
- * (ambiguous). For an ambiguous message, any of the three connecting is
- * enough to retry.
- */
-export function referencedProviderConnected(
-    content: string,
-    connectors: ConnectorListEntry[],
-    providers: string[] = [],
-): boolean {
-    const isConfigured = (id: string) =>
-        connectors.some((c) => c.id === id && !('error' in c) && c.configured);
-    // A Connect card names its connectors outright; no wording to read.
-    if (providers.length > 0) return providers.some(isConfigured);
-    const provider = detectProvider(content);
-    if (provider === 'google') return isConfigured('google');
-    if (provider === 'microsoft') return isConfigured('microsoft');
-    if (provider === 'microsoft_work') return isConfigured('microsoft_work');
-    return isConfigured('google') || isConfigured('microsoft') || isConfigured('microsoft_work');
-}
-
-/**
- * Human label for the connected provider, for the banner copy. An ambiguous
- * message resolves to whichever provider is actually configured, preferring
- * Google, then Microsoft, then Microsoft 365 (the connectors' canonical
- * display order).
- */
-export function connectedProviderLabel(
-    content: string,
-    connectors: ConnectorListEntry[],
-    providers: string[] = [],
-): string {
-    const isConfigured = (id: string) =>
-        connectors.some((c) => c.id === id && !('error' in c) && c.configured);
-    const named = providers.find(isConfigured);
-    if (named) {
-        const row = connectors.find((c) => c.id === named && !('error' in c));
-        return row && !('error' in row) ? row.display_name : named;
-    }
-    const provider = detectProvider(content);
-    if (provider === 'google') return 'Google';
-    if (provider === 'microsoft') return 'Microsoft';
-    if (provider === 'microsoft_work') return 'Microsoft 365';
-    if (isConfigured('google')) return 'Google';
-    if (isConfigured('microsoft')) return 'Microsoft';
-    if (isConfigured('microsoft_work')) return 'Microsoft 365';
-    return 'Google';
-}
+export { connectedProviderLabel, referencedProviderConnected };
 
 const POLL_MS = 4000;
 

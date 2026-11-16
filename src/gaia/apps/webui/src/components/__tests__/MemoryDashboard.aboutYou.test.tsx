@@ -404,6 +404,52 @@ describe('Profile saves refresh the other views (#4814)', () => {
     });
 });
 
+describe('Profile scan away from the PC', () => {
+    it('says the scan is PC-only and locks Start scan, not "connection error"', async () => {
+        const es: { onerror?: () => void; close: () => void } = { close: vi.fn() };
+        mockedApi.openDiscoveryStream.mockImplementation(() => es as unknown as EventSource);
+        mockedApi.streamRefusedAsPcOnly.mockResolvedValue(true);
+        await renderAbout();
+        fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'Start scan' }));
+
+        act(() => es.onerror!());
+
+        expect(await screen.findByRole('alert')).toHaveTextContent(/only that PC can run them/);
+        expect(screen.queryByText(/Connection error/)).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Start scan' })).toBeDisabled();
+    });
+
+    it('keeps the connection error when the stream failed for another reason', async () => {
+        const es: { onerror?: () => void; close: () => void } = { close: vi.fn() };
+        mockedApi.openDiscoveryStream.mockImplementation(() => es as unknown as EventSource);
+        mockedApi.streamRefusedAsPcOnly.mockResolvedValue(false);
+        await renderAbout();
+        fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'Start scan' }));
+
+        act(() => es.onerror!());
+
+        expect(await screen.findByText(/Connection error/)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Start scan' })).toBeEnabled();
+    });
+
+    it("doesn't re-request a stream that had opened, so a dropped scan on the PC never restarts", async () => {
+        const es: { onopen?: () => void; onerror?: () => void; close: () => void } = { close: vi.fn() };
+        mockedApi.openDiscoveryStream.mockImplementation(() => es as unknown as EventSource);
+        mockedApi.streamRefusedAsPcOnly.mockClear();
+        await renderAbout();
+        fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'Start scan' }));
+
+        act(() => es.onopen!());
+        act(() => es.onerror!());
+
+        expect(await screen.findByText(/Connection error/)).toBeInTheDocument();
+        expect(mockedApi.streamRefusedAsPcOnly).not.toHaveBeenCalled();
+    });
+});
+
 describe('Goals report failures (#4815)', () => {
     const GOAL = {
         id: 'g1', title: 'Ship the report', description: 'Quarterly', status: 'queued' as const,

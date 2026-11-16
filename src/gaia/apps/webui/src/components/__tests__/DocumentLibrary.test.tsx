@@ -128,7 +128,7 @@ describe('DocumentLibrary with no chat open', () => {
         fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: pasted } });
         fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
-        await waitFor(() => expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith(expected));
+        await waitFor(() => expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith(expected, null));
     });
 
     it('offers an existing document for the next chat, once', async () => {
@@ -418,7 +418,7 @@ describe('DocumentLibrary path box', () => {
         const notice = await screen.findByRole('status');
         expect(notice.textContent).toContain('Added 2 files from "documents".');
         expect(notice.textContent).toContain("Skipped 1 file of a type GAIA can't add.");
-        expect(mockedApi.indexFolder).toHaveBeenCalledWith('C:\\Users\\me\\.gaia\\documents', false);
+        expect(mockedApi.indexFolder).toHaveBeenCalledWith('C:\\Users\\me\\.gaia\\documents', false, null);
         expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1', 'doc-ok-2']);
         expect(screen.queryByRole('alert')).toBeNull();
     });
@@ -487,7 +487,7 @@ describe('DocumentLibrary path box', () => {
 
         const notice = await screen.findByRole('status');
         expect(notice.textContent).toContain('Added 1 file from "notes.v2".');
-        expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\notes.v2\\');
+        expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\notes.v2\\', null);
         expect(screen.queryByRole('alert')).toBeNull();
     });
 
@@ -504,7 +504,7 @@ describe('DocumentLibrary path box', () => {
 
         const toast = await screen.findByRole('alert');
         expect(toast.textContent).toContain('This image format cannot be indexed.');
-        expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\photo.heic');
+        expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith('C:\\Users\\me\\photo.heic', null);
         expect(mockedApi.indexFolder).not.toHaveBeenCalled();
     });
 });

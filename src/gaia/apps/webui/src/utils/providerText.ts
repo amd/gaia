@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { isMessageKey } from '../i18n/registry';
-import { tEn, type Translate } from '../i18n/useT';
+import { tEn, type Translate } from '../i18n/translator';
 import type { ProviderInfo } from '../types';
 
 /**
@@ -16,6 +16,10 @@ function providerText(t: Translate, key: string, server: string, bare = false): 
 
 export function providerName(t: Translate, provider: Pick<ProviderInfo, 'id' | 'name'>): string {
     return providerText(t, `providers.${provider.id}.name`, provider.name, true);
+}
+
+export function providerNameFull(t: Translate, provider: Pick<ProviderInfo, 'id' | 'name'>): string {
+    return providerText(t, `providers.${provider.id}.name`, provider.name);
 }
 
 /** What leaves the PC with this provider; shown before a cloud model is used. */

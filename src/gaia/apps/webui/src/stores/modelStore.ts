@@ -8,6 +8,7 @@ import { create } from 'zustand';
 import * as api from '../services/api';
 import { useChatStore } from './chatStore';
 import { log } from '../utils/logger';
+import { distinctLabels, sameModelId, shortModelName } from '../utils/modelList.core';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import type { ActiveModel, Session, WarmUpStatus } from '../types';
 
@@ -272,13 +273,6 @@ export function useModelNames(): Record<string, string> {
     return useModelStore((s) => s.names);
 }
 
-/** Same local model: Lemonade lists a registered `user.X` as `X`, in any case. */
-export function sameModelId(a: string | null | undefined, b: string | null | undefined): boolean {
-    if (!a || !b) return false;
-    const bare = (id: string) => id.toLowerCase().replace(/^user\./, '');
-    return bare(a) === bare(b);
-}
-
 /** The friendly name the backend gave a model, else its short id. */
 export function displayModelName(model: string): string {
     const state = useModelStore.getState();
@@ -383,40 +377,11 @@ export function selectChipModel(
     return session?.effective_model || active?.model || null;
 }
 
-/** The model id without its cloud provider prefix ("fireworks." or "amd."). */
-function stripProviderPrefix(model: string): string {
-    return /^(fireworks|amd)\./.test(model) ? model.slice(model.indexOf('.') + 1) : model;
-}
+export { sameModelId, shortModelName };
 
-/** The model name without its provider prefix or catalogue path. */
-export function shortModelName(model: string): string {
-    const withoutProvider = stripProviderPrefix(model);
-    return withoutProvider.slice(withoutProvider.lastIndexOf('/') + 1);
-}
-
-/**
- * A label per model for one list, keyed by id. Names already unique are kept;
- * models that would share one show as much of their id as tells them apart.
- */
+/** A label per model for one list, keyed by id; see `distinctLabels`. */
 export function distinctModelLabels(models: Array<{ id: string; display_name?: string | null }>): Record<string, string> {
-    const labels: Record<string, string> = {};
-    for (const m of models) labels[m.id] = m.display_name || displayModelName(m.id);
-    const byLabel = new Map<string, string[]>();
-    for (const m of models) byLabel.set(labels[m.id], [...(byLabel.get(labels[m.id]) ?? []), m.id]);
-    for (const ids of byLabel.values()) {
-        if (ids.length < 2) continue;
-        const paths = ids.map((id) => stripProviderPrefix(id).split('/'));
-        let tails = ids;
-        for (let n = 1; n <= Math.max(...paths.map((p) => p.length)); n++) {
-            const candidate = paths.map((p) => p.slice(-n).join('/'));
-            if (new Set(candidate).size === candidate.length) { tails = candidate; break; }
-        }
-        ids.forEach((id, i) => { labels[id] = tails[i]; });
-    }
-    return labels;
+    return distinctLabels(models, displayModelName);
 }
 
-/** A cloud provider's name as people know it; an unknown id is shown as given. */
-export function cloudProviderName(provider: string): string {
-    return provider === 'fireworks' ? 'Fireworks AI' : provider === 'amd' ? 'AMD LLM Gateway' : provider;
-}
+export { cloudProviderName } from '../utils/contextPanel.core';

@@ -21,6 +21,7 @@ import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
+import { handleDeviceEvent, useDeviceStore } from './stores/deviceStore';
 import { useScheduleStore } from './stores/scheduleStore';
 import { useGoalHealthStore } from './stores/goalHealthStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
@@ -37,6 +38,8 @@ import { getSessionHash } from './utils/format';
 import { lastSessionTarget, readUrlTarget, rememberLastSession, resolveUrlNavTarget } from './utils/sessionNav';
 import { NEW_CHAT_DRAFT_KEY, chatDraftKey, clearSavedDraft, readSavedDraft, writeSavedDraft } from './utils/savedDraft';
 import { getApiBase } from './utils/apiBase';
+import { NEW_CHAT_TITLE } from './utils/constants';
+import { requestErrorParam } from './utils/requestErrors';
 import { followBackendLifecycle, resyncBackend } from './stores/backendStore';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID, FlagshipMissing, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
@@ -104,7 +107,8 @@ async function waitForEmbeddedUpgrade(): Promise<void> {
 }
 
 function Loading() {
-    return <div className="loading-spinner" role="status" aria-label="Loading" />;
+    const t = useT();
+    return <div className="loading-spinner" role="status" aria-label={t('startup.loading')} />;
 }
 
 // First failure, then every 10th (~5 min at the 30 s cap), so a stuck read stays in the log.
@@ -353,7 +357,7 @@ function App() {
             slowCount.current = 0;
             slowSince.current = null;
             setBackendSlow(false);
-            setBackendError(`HTTP ${outcome.httpStatus}: ${outcome.message}`);
+            setBackendError(getT()('banner.httpError', { status: outcome.httpStatus, message: outcome.message }));
             setBackendConnected(true);
             return;
         }
@@ -496,6 +500,9 @@ function App() {
         };
     }, [setCurrentSession, setMessages]);
 
+    // Whether paired devices exist for this window: their section and indicator show only on the PC with pairing on.
+    useEffect(() => { void useDeviceStore.getState().refresh(); }, []);
+
     // Another client (MCP bridge) can ask this window to show a chat.
     useEffect(() => {
         let es: EventSource | null = null;
@@ -514,6 +521,7 @@ function App() {
                     log.api.warn('Malformed session event', err);
                     return;
                 }
+                if (handleDeviceEvent(data)) return;
                 if (data.type === 'set_active_session' && data.session_id
                     && data.session_id !== useChatStore.getState().currentSessionId) {
                     setCurrentSession(data.session_id);
@@ -558,7 +566,7 @@ function App() {
         let session;
         try {
             session = await api.createSession({
-                title: 'New chat',
+                title: NEW_CHAT_TITLE,
                 agent_type: FLAGSHIP_AGENT_ID,
                 document_ids: store.draftDocumentIds,
                 private: store.draftPrivate,
@@ -599,10 +607,7 @@ function App() {
         setMessages([]);
         setDraftText('');
         if (modeError) {
-            setCreateError(
-                `The chat was created, but its permission mode could not be set, so your message was not sent${
-                    session.private ? '' : " — it is in the chat's box"}: ${modeError instanceof Error ? modeError.message : modeError}`,
-            );
+            setCreateError(getT()(session.private ? 'newChat.modeFailed' : 'newChat.modeFailedKept', { error: requestErrorParam(modeError) }));
             return false;
         }
         store.resetDraftPermissionMode();
@@ -780,7 +785,7 @@ function App() {
             else setTunnelActive(true);
         } catch (err) {
             setTunnelSetup(null);
-            setTunnelError(err instanceof Error ? err.message : 'Could not start mobile access');
+            setTunnelError(err instanceof Error ? err.message : getT()('mobile.startFailed'));
         }
     }, [tunnelActive]);
 
@@ -790,7 +795,7 @@ function App() {
             setTunnelActive(false);
             setShowMobileAccess(false);
         } catch (err) {
-            setTunnelError(err instanceof Error ? err.message : 'Could not stop mobile access');
+            setTunnelError(err instanceof Error ? err.message : getT()('mobile.stopFailed'));
         }
     }, []);
 
@@ -813,9 +818,9 @@ function App() {
     if (showStartup) {
         return (
             <div className="app">
-                <main className="startup" role="status" aria-label="Starting GAIA">
+                <main className="startup" role="status" aria-label={t('engine.stage.start')}>
                     <div className="loading-spinner" aria-hidden="true" />
-                    <p className="startup-text">Starting GAIA…</p>
+                    <p className="startup-text">{t('startup.starting')}</p>
                 </main>
             </div>
         );
@@ -908,10 +913,10 @@ function App() {
                         <span>{restoreNotice.message}</span>
                         {!restoreNotice.ok && (
                             <button type="button" className="link-btn" onClick={() => { dismissRestoreNotice(); openSettings('model'); }}>
-                                Pick a model
+                                {t('startup.pickModel')}
                             </button>
                         )}
-                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label="Dismiss">
+                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label={t('banner.dismiss')}>
                             <X size={14} />
                         </button>
                     </div>

@@ -8,7 +8,7 @@ import { convertTemperatures } from './units';
 import type { UnitSystem } from './units';
 import type { GuideDoc } from './guideDoc';
 import { pluralKey } from '../../../i18n/registry';
-import type { Translate } from '../../../i18n/useT';
+import type { Translate } from '../../../i18n/translator';
 
 export interface GuideViewState {
     servings: number | null;

@@ -243,6 +243,8 @@ const ROUTES: Record<string, unknown> = {
  */
 /** Server-sent event streams the app subscribes to; each opens quiet. */
 const STREAMS = new Set(['GET /sessions/events', 'GET /connectors/events']);
+/** Device pairing is off unless a scene turns it on (`withDevices`): the backend answers 403, which hides it. */
+const PAIRING_OFF = new Set(['GET /devices/status', 'GET /devices']);
 
 /** A tenth of a second of silence: what POST /speech answers when a reply is read aloud. */
 function silentWav(): Buffer {
@@ -263,6 +265,10 @@ export async function mockApi(page: Page): Promise<string[]> {
         const key = `${route.request().method()} ${path}`;
         if (STREAMS.has(key)) {
             await route.fulfill({ status: 200, contentType: 'text/event-stream', body: ': no events\n\n' });
+            return;
+        }
+        if (PAIRING_OFF.has(key)) {
+            await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ detail: 'Device pairing is off.' }) });
             return;
         }
         if (key === 'POST /speech') {
@@ -491,6 +497,46 @@ export const DISCORD_STATES: Record<string, Record<string, unknown>> = {
     taken_over: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'taken_over', paired: true, owner_name: 'kalin', detail: 'Another PC is answering this Discord bot.' },
     token_invalid: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'token_invalid', paired: true, owner_name: 'kalin', detail: 'Discord rejected the bot token (HTTP 401). Reset the token in the Developer Portal and paste the new one.' },
 };
+
+const DEVICE_STATUS_BASE = {
+    listening: true, port: 4243, error_code: null, error_detail: null, pairing_open: false, pairing_expires_at: null,
+    idle_expiry_days: 90, pending_expiry_minutes: 10, failed_redemptions: [],
+};
+const AT_ISO = (minutesAgo: number) => new Date(NOW.getTime() - minutesAgo * 60_000).toISOString();
+const IPAD = { id: 'dev-ipad', name: "Someone's iPad Pro with a rather long name", platform: 'ipados', status: 'allowed', created_at: AT_ISO(9000), last_seen_at: AT_ISO(1500), expires_at: null };
+const PHONE = { id: 'dev-phone', name: 'هاتف سارة', platform: 'ios', status: 'pending', created_at: AT_ISO(1), last_seen_at: null, expires_at: new Date(NOW.getTime() + 9 * 60_000).toISOString() };
+
+/** Settings > Phones and tablets, one answer per state the pane shows. */
+export const DEVICE_STATES: Record<string, { status: Record<string, unknown>; devices: unknown[] }> = {
+    off: { status: { ...DEVICE_STATUS_BASE, listening: false }, devices: [] },
+    empty: { status: DEVICE_STATUS_BASE, devices: [] },
+    waiting: { status: DEVICE_STATUS_BASE, devices: [PHONE, IPAD] },
+    failed: {
+        status: { ...DEVICE_STATUS_BASE, failed_redemptions: [
+            { at: AT_ISO(3), address: '192.168.1.23', reason: 'expired' },
+            { at: AT_ISO(2), address: '192.168.1.40', reason: 'rate_limited' },
+        ] },
+        devices: [IPAD],
+    },
+    portInUse: { status: { ...DEVICE_STATUS_BASE, listening: false, error_code: 'port_in_use', error_detail: 'Port 4243 is in use.' }, devices: [IPAD] },
+};
+
+/** A pairing code as the PC shows it; never a real invitation. */
+export const DEVICE_OFFER = {
+    v: 1, name: 'OFFICE-DESKTOP', pc_id: 'pc-fixture', origins: ['https://192.168.1.10:4243'],
+    pin: 'a'.repeat(64), invite: 'fixture-invitation', exp: Math.floor(NOW.getTime() / 1000) + 600,
+};
+
+export async function withDevices(page: Page, state: { status: Record<string, unknown>; devices: unknown[] }): Promise<void> {
+    let status = state.status;
+    await page.route('**/api/devices/status', (route) => route.fulfill({ json: status }));
+    await page.route('**/api/devices', (route) => route.fulfill({ json: { devices: state.devices } }));
+    await page.route('**/api/devices/pairing', (route) => {
+        const opening = route.request().method() === 'POST';
+        status = { ...status, pairing_open: opening, pairing_expires_at: opening ? new Date(DEVICE_OFFER.exp * 1000).toISOString() : null };
+        return route.fulfill({ json: opening ? DEVICE_OFFER : status });
+    });
+}
 
 export async function withDiscord(page: Page, status: Record<string, unknown>): Promise<void> {
     await page.route('**/api/messaging/discord', (route) => route.fulfill({ json: status }));

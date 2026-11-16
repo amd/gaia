@@ -6,7 +6,9 @@ import type { Translate } from '../i18n/useT';
 import { useT } from '../i18n/useT';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { composeWithLinks } from '../utils/attachmentLinks';
 import { isMediaFile } from '../utils/mediaFiles';
+import { uploadRefusalText } from '../utils/uploadErrors';
 import type { Attachment } from '../types';
 
 /** Files attached to the message being composed, uploaded as soon as they are added. */
@@ -25,23 +27,10 @@ export interface UseAttachments {
     compose: (text: string) => string;
 }
 
-const MODERN_OFFICE: Record<string, string> = { '.doc': '.docx', '.xls': '.xlsx', '.ppt': '.pptx' };
-
 /** The upload refusal in the chosen language; a refusal this build doesn't know shows the server's own words. */
 function uploadErrorText(err: unknown, t: Translate): string {
     if (!(err instanceof api.ApiError)) return err instanceof Error ? err.message : t('composer.uploadFailed');
-    const { extension, size_mb: size, max_mb: max } = err.body ?? {};
-    switch (err.reason) {
-        case 'no_extension': return t('composer.upload.noExtension');
-        case 'unsupported_type': {
-            const modern = MODERN_OFFICE[String(extension)];
-            if (modern) return t('composer.upload.legacyOffice', { ext: String(extension), modern });
-            return t('composer.upload.unsupported', { ext: String(extension) });
-        }
-        case 'empty_file': return t('composer.upload.empty');
-        case 'too_large': return t('composer.upload.tooLarge', { size: String(size), max: String(max) });
-        default: return err.message;
-    }
+    return uploadRefusalText(err.reason, err.body, err.message, t);
 }
 
 function screenshotName(): string {
@@ -139,18 +128,8 @@ export function useAttachments(): UseAttachments {
     }, []);
 
     const compose = useCallback((text: string) => {
-        const links = attachments
-            .filter((a) => a.uploaded && a.serverUrl)
-            .map((a) => {
-                // A bracket in a file name ends the link early, and the agent never sees the file.
-                const label = a.name.replace(/[[\]]/g, ' ').trim();
-                return a.isImage ? `![${label}](${a.serverUrl})` : `[${label}](${a.serverUrl})`;
-            })
-            .join('\n');
-        if (!links) return text;
-        // A recording sent with no words still has an obvious request.
-        const ask = text || (attachments.some((a) => a.uploaded && a.isMedia) ? t('composer.mediaPrompt') : '');
-        return ask ? `${ask}\n\n${links}` : links;
+        const uploaded = attachments.filter((a): a is Attachment & { serverUrl: string } => a.uploaded && !!a.serverUrl);
+        return composeWithLinks(text, uploaded, t('composer.mediaPrompt'));
     }, [attachments, t]);
 
     return {

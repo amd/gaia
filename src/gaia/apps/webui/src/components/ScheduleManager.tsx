@@ -539,7 +539,7 @@ export function ScheduleManager() {
                         <h4>{t('schedules.list')}</h4>
                         {actionError && (
                             <div className="schedule-action-error" role="alert">
-                                <span><bdi>{actionError}</bdi></span>
+                                <span><bdi>{typeof actionError === 'string' ? actionError : t(actionError.ref, actionError.params)}</bdi></span>
                                 <button className="btn-icon" onClick={dismissActionError} aria-label={t('schedules.dismissError')}>
                                     <X size={14} />
                                 </button>

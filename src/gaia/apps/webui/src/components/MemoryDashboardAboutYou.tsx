@@ -4,90 +4,22 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pencil, Plus, Trash2, Undo2, Eye } from 'lucide-react';
 import * as memoryApi from '../services/memoryApi';
-import { ref, type MessageKey, type MessageRef } from '../i18n/registry';
-import { dateLocale, tEn, useT, type Translate } from '../i18n/useT';
+import { ref } from '../i18n/registry';
+import { useT } from '../i18n/useT';
 import { log } from '../utils/logger';
+import {
+    ABOUT_GROUPS,
+    ABOUT_PAGE_SIZE,
+    dueInputValue,
+    dueLabel,
+    oneLineQuote,
+    relativeDay,
+    sourceKey,
+    type AboutYouItem,
+} from '../utils/memoryFormat.core';
 
-/** One stored memory, as the knowledge endpoint returns it. */
-export interface AboutYouItem {
-    id: string;
-    category: string;
-    content: string;
-    domain: string | null;
-    source: string;
-    context: string;
-    entity: string | null;
-    sensitive: boolean;
-    created_at: string;
-    updated_at: string;
-    due_at?: string | null;
-}
-
-/** Rows per request; the knowledge endpoint serves at most 200. */
-const PAGE_SIZE = 200;
-
-/** Categories that describe the user, grouped under a plain heading. */
-const GROUPS: { title: MessageKey; categories: string[] }[] = [
-    { title: 'mem.about.group.preferences', categories: ['preference'] },
-    { title: 'mem.about.group.about', categories: ['fact', 'profile', 'skill'] },
-    { title: 'mem.about.group.reminders', categories: ['reminder'] },
-    { title: 'mem.about.group.notes', categories: ['note'] },
-];
-
-export const MEMORY_SOURCE_KEYS: Record<string, MessageKey> = {
-    user: 'mem.source.user',
-    tool: 'mem.source.tool',
-    llm_extract: 'mem.source.llm_extract',
-    consolidation: 'mem.source.consolidation',
-    inferred: 'mem.source.inferred',
-    discovery: 'mem.source.discovery',
-    error_auto: 'mem.source.error_auto',
-};
-
-/** Where a memory came from, in the user's words; an unknown source reads "Saved". */
-export function sourceKey(source: string): MessageKey {
-    return MEMORY_SOURCE_KEYS[source] ?? 'mem.source.other';
-}
-
-function relativeDay(iso: string, t: Translate): MessageRef | string | null {
-    const then = new Date(iso);
-    if (Number.isNaN(then.getTime())) return null;
-    const days = Math.floor((Date.now() - then.getTime()) / 86_400_000);
-    if (days <= 0) return ref('mem.day.today');
-    if (days === 1) return ref('mem.day.yesterday');
-    if (days < 30) return ref('mem.day.daysAgo', { n: days });
-    return then.toLocaleDateString(dateLocale(t), { month: 'short', day: 'numeric', year: 'numeric' });
-}
-
-/** A stored due date; a bare "YYYY-MM-DD" is local midnight, not UTC. */
-function parseDue(iso: string): Date | null {
-    const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
-    const due = bare ? new Date(+bare[1], +bare[2] - 1, +bare[3]) : new Date(iso);
-    return Number.isNaN(due.getTime()) ? null : due;
-}
-
-/** A stored due date as a date-and-time field shows it, in local time. */
-export function dueInputValue(iso: string | null | undefined): string {
-    const due = iso ? parseDue(iso) : null;
-    if (!due) return '';
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${due.getFullYear()}-${pad(due.getMonth() + 1)}-${pad(due.getDate())}T${pad(due.getHours())}:${pad(due.getMinutes())}`;
-}
-
-/** "Due Fri, Oct 30", or "Was due …" once past; a midnight due date counts as the whole day. */
-export function dueLabel(iso: string, now: Date = new Date(), t: Translate = tEn): { text: string; past: boolean } | null {
-    const due = parseDue(iso);
-    if (!due) return null;
-    const allDay = due.getHours() === 0 && due.getMinutes() === 0 && due.getSeconds() === 0;
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const past = allDay ? due.getTime() < startOfToday : due.getTime() < now.getTime();
-    const when = due.toLocaleString(dateLocale(t), {
-        weekday: 'short', month: 'short', day: 'numeric',
-        ...(due.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
-        ...(allDay ? {} : { hour: 'numeric', minute: '2-digit' }),
-    });
-    return { text: t(past ? 'mem.due.past' : 'mem.due.upcoming', { when }), past };
-}
+// Re-exported for the callers and tests that read them from here.
+export { dueLabel, FORGOTTEN_QUOTE_CHARS, MEMORY_SOURCE_KEYS, oneLineQuote, sourceKey, type AboutYouItem } from '../utils/memoryFormat.core';
 
 interface Props {
     memoryEnabled: boolean;
@@ -117,7 +49,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     // cannot put back an item the user just forgot.
     const generation = useRef(0);
     // How many rows to show; a reload after an edit keeps the pages already open.
-    const wanted = useRef(PAGE_SIZE);
+    const wanted = useRef(ABOUT_PAGE_SIZE);
 
     const load = useCallback(async (want?: number) => {
         const mine = ++generation.current;
@@ -129,7 +61,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
             let offset = 0;
             let found = 0;
             for (;;) {
-                const limit = Math.min(PAGE_SIZE, count - rows.length);
+                const limit = Math.min(ABOUT_PAGE_SIZE, count - rows.length);
                 // Filtered on the server, so paging never fills up with GAIA's own notes.
                 const data = await memoryApi.getKnowledge({
                     about_user: true,
@@ -167,7 +99,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     const showMore = useCallback(async () => {
         setLoadingMore(true);
         // Set before loading, so a reload that lands mid-way fetches the new page too.
-        wanted.current = Math.max(wanted.current, items?.length ?? 0) + PAGE_SIZE;
+        wanted.current = Math.max(wanted.current, items?.length ?? 0) + ABOUT_PAGE_SIZE;
         try {
             await load();
         } finally {
@@ -269,7 +201,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         );
     }
 
-    const grouped = GROUPS
+    const grouped = ABOUT_GROUPS
         .map(g => ({ ...g, rows: (items ?? []).filter(i => g.categories.includes(i.category)) }))
         .filter(g => g.rows.length > 0);
 
@@ -449,14 +381,4 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
 
 function errorText(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
-}
-
-/** How many characters of a forgotten memory the Undo bar quotes. */
-export const FORGOTTEN_QUOTE_CHARS = 80;
-
-/** A memory quoted on one line: its start, then an ellipsis when it is long. */
-export function oneLineQuote(text: string): string {
-    const flat = text.replace(/\s+/g, ' ').trim();
-    if (flat.length <= FORGOTTEN_QUOTE_CHARS) return flat;
-    return `${flat.slice(0, FORGOTTEN_QUOTE_CHARS - 1).trimEnd()}…`;
 }

@@ -7,7 +7,7 @@ import { UnsupportedCard } from './UnsupportedCard';
 import { respondToInput } from '../../services/api';
 import { useChatStore, type LiveQuestion } from '../../stores/chatStore';
 import { tEn, useT } from '../../i18n/useT';
-import { spokenDuration } from '../AnswerStats';
+import { spokenDuration } from '../../utils/spokenDuration.core';
 
 /**
  * NeedsInputCard — the answerable `needs_input` surface (#2595).

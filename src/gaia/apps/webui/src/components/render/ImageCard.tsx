@@ -3,34 +3,9 @@
 
 import { useState } from 'react';
 import { UnsupportedCard } from './UnsupportedCard';
-import { isOptionalString } from './primitiveShared';
+import { DATA_IMAGE_RE, isImagePayload } from '../../utils/renderCards.core';
 import { resolveMediaSrc } from './mediaSrc';
 import { useT } from '../../i18n/useT';
-
-/**
- * Inline base64 raster images, or an image GAIA generated
- * (`/api/media/image/<name>`) — SVG is deliberately excluded (it can carry
- * script), and remote/other schemes are rejected outright. There is no CSP in
- * this app, so this allowlist is the actual security boundary.
- */
-const DATA_IMAGE_RE = /^data:image\/(png|jpe?g|gif|webp);base64,/;
-
-interface ImagePayload {
-    src: string;
-    alt?: string;
-    caption?: string;
-}
-
-function isImagePayload(value: unknown): value is ImagePayload {
-    if (!value || typeof value !== 'object') return false;
-    const v = value as Record<string, unknown>;
-    return (
-        typeof v.src === 'string' &&
-        (DATA_IMAGE_RE.test(v.src) || resolveMediaSrc('image', v.src) !== null) &&
-        isOptionalString(v.alt) &&
-        isOptionalString(v.caption)
-    );
-}
 
 export function ImageCard({ data }: { data: unknown }) {
     const t = useT();

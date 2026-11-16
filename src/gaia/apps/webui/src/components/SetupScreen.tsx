@@ -16,6 +16,7 @@ import { useT, type Translate } from '../i18n/useT';
 import { isMessageKey, type MessageKey } from '../i18n/registry';
 import { ConfirmSheet } from './setup/ConfirmSheet';
 import { DownloadContents } from './setup/DownloadContents';
+import { FIREWORKS_KEYS_URL, GATEWAY_GUIDE_URL } from './setup/keyLinks';
 import { DownloadProgress, downloadsActive } from './setup/DownloadProgress';
 import { RunActivity } from './setup/RunActivity';
 import { formatFitGb, formatSize, totalMemory } from './setup/format';
@@ -39,9 +40,6 @@ import type {
 } from '../types';
 import './SetupScreen.css';
 import './setup/setup.css';
-
-const FIREWORKS_KEYS_URL = 'https://app.fireworks.ai/settings/users/api-keys';
-const GATEWAY_GUIDE_URL = 'https://amd-gaia.ai/docs/guides/llm-gateway';
 
 const CHOICES: Array<{ id: ProviderId; title: MessageKey | string; note: MessageKey }> = [
     { id: 'local', title: 'setup.where.local', note: 'setup.where.localNote' },

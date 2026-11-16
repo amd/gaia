@@ -25,6 +25,11 @@ import {
 import type { GaiaNotification, NotificationType } from '../types/agent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
+import { ApiError } from '../services/api';
+import { removeDevice } from '../services/devicesApi';
+import { useDeviceStore } from '../stores/deviceStore';
+import { useChatStore } from '../stores/chatStore';
+import { log } from '../utils/logger';
 import './NotificationCenter.css';
 
 interface NotificationCenterProps {
@@ -125,6 +130,28 @@ export function NotificationCenter({ onClose, onOpenChat }: NotificationCenterPr
     },
     [respondToPermission]
   );
+
+  // A device pairing notice: Review opens the device list; Deny unpairs it. Allowing happens only in Settings.
+  const handleDeviceReview = useCallback(() => {
+    onClose();
+    useChatStore.getState().openSettings('devices');
+  }, [onClose]);
+
+  const handleDeviceDeny = useCallback((notif: GaiaNotification) => {
+    if (!notif.deviceId) return;
+    const answered = () =>
+      useNotificationStore.setState((s) => ({
+        notifications: s.notifications.map((n) => (n.id === notif.id ? { ...n, response: 'deny', respondedAt: Date.now() } : n)),
+      }));
+    removeDevice(notif.deviceId)
+      .then(answered)
+      .catch((err) => {
+        // 404: already unpaired or expired, which is what Deny asks for.
+        if (err instanceof ApiError && err.httpStatus === 404) answered();
+        else log.ui.error('Denying the paired device failed', err);
+      })
+      .finally(() => void useDeviceStore.getState().refresh());
+  }, []);
 
   useEscapeToClose(true, onClose);
 
@@ -286,6 +313,33 @@ export function NotificationCenter({ onClose, onOpenChat }: NotificationCenterPr
                         {t('notifications.deny')}
                       </button>
                     </div>
+                  )}
+
+                  {n.deviceId && !n.response && (
+                    <div className="notification-actions">
+                      <button
+                        className="notification-action-btn notification-action-allow"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeviceReview();
+                        }}
+                      >
+                        {t('notifications.devices.review')}
+                      </button>
+                      <button
+                        className="notification-action-btn notification-action-deny"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeviceDeny(n);
+                        }}
+                      >
+                        <X size={14} />
+                        {t('notifications.deny')}
+                      </button>
+                    </div>
+                  )}
+                  {n.deviceId && n.response === 'deny' && (
+                    <span className="notification-response-badge response-deny">{t('notifications.denied')}</span>
                   )}
 
                   {/* Permission response badge */}

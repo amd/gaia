@@ -9,7 +9,8 @@
  */
 
 import type { ComponentType } from 'react';
-import { EmailPreScanCard, isPreScanPayload } from '../email/EmailPreScanCard';
+import { EmailPreScanCard } from '../email/EmailPreScanCard';
+import { isPreScanPayload, resolvePreScanPayload } from '../../utils/emailPreScan.core';
 import { UnsupportedCard } from './UnsupportedCard';
 import { TableCard } from './TableCard';
 import { KeyValueCard } from './KeyValueCard';
@@ -25,19 +26,6 @@ import { CalculatorCard } from './calculator/CalculatorCard';
 
 export type CardComponent = ComponentType<{ data: unknown }>;
 
-/** Unwrap the `{ok, data}` envelope form, if present; otherwise pass the
- *  payload through unchanged. */
-function resolveEmailPreScanPayload(data: unknown): unknown {
-    if (data && typeof data === 'object' && (data as Record<string, unknown>).kind === 'email_pre_scan') {
-        return data;
-    }
-    const enveloped = (data as { data?: unknown } | null | undefined)?.data;
-    if (enveloped && typeof enveloped === 'object' && (enveloped as Record<string, unknown>).kind === 'email_pre_scan') {
-        return enveloped;
-    }
-    return data;
-}
-
 /**
  * Adapter for the `email_pre_scan` render key. Contract-TARGET shapes only:
  * today's live wire still emits a {summary, success} stub for
@@ -46,7 +34,7 @@ function resolveEmailPreScanPayload(data: unknown): unknown {
  * without needing to change again once #2109 ships.
  */
 function EmailPreScanAdapter({ data }: { data: unknown }) {
-    const payload = resolveEmailPreScanPayload(data);
+    const payload = resolvePreScanPayload(data);
     if (!isPreScanPayload(payload)) {
         return <UnsupportedCard variant="invalid" render="email_pre_scan" data={data} />;
     }

@@ -3,7 +3,7 @@
 
 import { Fragment } from 'react';
 import { Check, Pause, Play } from 'lucide-react';
-import { findDurations, formatClock } from './durations';
+import { formatClock, splitAtDurations } from './durations';
 import type { Timers } from './useTimers';
 import { useT } from '../../../i18n/useT';
 
@@ -44,24 +44,17 @@ export function StepText({ text, stepIndex, timers, withTimers }: {
     withTimers: boolean;
 }) {
     if (!withTimers) return <>{text}</>;
-    const spans = findDurations(text);
-    let cursor = 0;
+    const { segments, tail } = splitAtDurations(text);
     return (
         <>
-            {spans.map((span, i) => {
-                const punctuation = /^[.,;:!?]+/.exec(text.slice(span.end))?.[0] ?? '';
-                const before = text.slice(cursor, span.end + punctuation.length);
-                const phrase = text.slice(span.start, span.end);
-                cursor = span.end + punctuation.length;
-                return (
-                    <Fragment key={i}>
-                        {before}
-                        {' '}
-                        <TimerChip id={timerId(stepIndex, i)} seconds={span.seconds} timers={timers} label={phrase} />
-                    </Fragment>
-                );
-            })}
-            {text.slice(cursor)}
+            {segments.map((segment, i) => (
+                <Fragment key={i}>
+                    {segment.before}
+                    {' '}
+                    <TimerChip id={timerId(stepIndex, i)} seconds={segment.seconds} timers={timers} label={segment.phrase} />
+                </Fragment>
+            ))}
+            {tail}
         </>
     );
 }
