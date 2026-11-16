@@ -1576,10 +1576,10 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         # pytest usually lives in a project's virtualenv, not on PATH, and the
         # coding skill is still the right guide without the shortcut.
         substitute=(
-            "`python -m pytest` is judged as `pytest`, so it is refused too. "
-            "Run the suite with execute_python_file and a script that calls "
-            "`import sys, pytest; sys.exit(pytest.main(['-q', 'tests/']))`, "
-            "which works wherever pytest is importable."
+            "`python -m pytest` still runs wherever pytest is importable, once "
+            "the user approves it. So does execute_python_file with a script "
+            "that calls "
+            "`import sys, pytest; sys.exit(pytest.main(['-q', 'tests/']))`."
         ),
         positional=Subcommand(
             path_operands=True,

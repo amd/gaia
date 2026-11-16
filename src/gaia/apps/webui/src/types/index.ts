@@ -387,8 +387,8 @@ export interface TurnPerformance {
     /** A null name is tool time measured outside any recorded step. */
     tools: Array<{ name: string | null; seconds: number | null }>;
     loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
-    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). */
-    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported'; usd: number | null };
+    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). `no_reply`: a cloud turn that failed or was stopped before any reply; spending leaves it out. */
+    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported' | 'no_reply'; usd: number | null };
     /** Why a value is unknown, keyed by field. */
     unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
 }
@@ -871,10 +871,14 @@ export interface AgentStep {
     result?: string;
     /** Whether this step completed successfully. */
     success?: boolean;
+    /** A finished status the user waited on, such as a download; drawn with the turn (for type='status'). */
+    kept?: boolean;
     /** The user said no to this call, so it never ran (for type='tool'). */
     declined?: boolean;
     /** Nobody answered its permission prompt in time, so it never ran (for type='tool'). */
     timedOut?: boolean;
+    /** GAIA turned this call down itself without asking, so it never ran (for type='tool'). */
+    autoDeclined?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
     /** Plan steps (for type='plan'). */

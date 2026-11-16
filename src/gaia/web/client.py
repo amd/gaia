@@ -632,6 +632,26 @@ class SearchUnavailableError(RuntimeError):
         self.status = status
 
 
+class SearchStatusError(RuntimeError):
+    """The search endpoint answered a status that is neither results nor a block.
+
+    A ``RuntimeError`` as before, with ``status`` so a caller can tell a server
+    error (5xx) from a refused request (4xx) without parsing the message.
+    """
+
+    def __init__(self, service: str, status: int):
+        if status >= 500:
+            hint = "It may be down for a moment; try again later."
+        elif status >= 400:
+            hint = "It rejected the request; check the query or URL and try again."
+        else:
+            hint = "Try again later."
+        super().__init__(
+            f"{service} answered HTTP {status}, so no results were read. {hint}"
+        )
+        self.status = status
+
+
 class _SearchGate:
     """Process-wide pacing for search requests, shared by every ``WebClient``.
 
@@ -1496,7 +1516,7 @@ class WebClient:
         Raises:
             SearchUnavailableError: every attempt was turned away.
             ToolCancelled: ``should_stop`` returned True during a wait.
-            RuntimeError: DDG answered another non-200 status.
+            SearchStatusError: DDG answered another non-200 status (a RuntimeError).
         """
         if not BS4_AVAILABLE:
             raise ImportError("beautifulsoup4 is required for web search.")
@@ -1516,10 +1536,7 @@ class WebClient:
                 blocked = _ddg_block_reason(response)
                 if blocked is None:
                     if response.status_code != 200:
-                        raise RuntimeError(
-                            f"DuckDuckGo answered HTTP {response.status_code}, so "
-                            "no results were read."
-                        )
+                        raise SearchStatusError("DuckDuckGo", response.status_code)
                     if reason:
                         log.warning(
                             "DuckDuckGo %s endpoint answered after an earlier "

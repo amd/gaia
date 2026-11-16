@@ -338,7 +338,7 @@ func (l localRunner) checkBinary(_ context.Context, cfg Config) Row {
 		// The URL rides in the action, not in Command: that field renders under
 		// `run:` and means "type this", and a URL is not a command.
 		Action: "Re-run the GAIA installer — it ships " + program +
-			" alongside gaia-tui: " + catalog.InstallerURL,
+			" alongside gaia-cli: " + catalog.InstallerURL,
 		Where: catalog.AgentDocsURL,
 	}
 	// No one-key fix: a TUI quietly fetching a ~90 MB binary over a path

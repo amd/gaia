@@ -403,6 +403,75 @@ class TestEnsureModelPulled:
             LemonadeASRClient(base_url=BASE).ensure_model()
 
 
+class TestNpuPart:
+    """Whisper on the NPU fetches a second file when it first loads."""
+
+    TURBO = {
+        "id": "Whisper-Large-v3-Turbo",
+        "labels": ["transcription"],
+        "downloaded": True,
+        "size": 1.62,
+        "checkpoints": {
+            "main": "ggerganov/whisper.cpp:ggml-large-v3-turbo.bin",
+            "npu_cache": "amd/whisper-large-turbo-onnx-npu:"
+            "ggml-large-v3-turbo-encoder-vitisai.rai",
+        },
+    }
+
+    @staticmethod
+    def system_info(state):
+        backends = {"cpu": {"state": "installed"}}
+        if state:
+            backends["npu"] = {"state": state}
+        return FakeResponse(body={"recipes": {"whispercpp": {"backends": backends}}})
+
+    def client(self):
+        return LemonadeASRClient(base_url=BASE, model="Whisper-Large-v3-Turbo")
+
+    @pytest.mark.parametrize("state", ["installed", "installable", "update_required"])
+    def test_an_npu_pc_gets_the_part_and_its_size(self, monkeypatch, state):
+        wire = Wire(monkeypatch, [catalog(self.TURBO), self.system_info(state)])
+
+        part = self.client().npu_part()
+
+        assert part is not None and part.size_gb == pytest.approx(0.74)
+        assert [r.url for r in wire.requests] == [
+            f"{BASE}/models?show_all=true",
+            f"{BASE}/system-info",
+        ]
+
+    @pytest.mark.parametrize("state", [None, "unsupported"])
+    def test_a_pc_without_the_npu_backend_has_none(self, monkeypatch, state):
+        Wire(monkeypatch, [catalog(self.TURBO), self.system_info(state)])
+
+        assert self.client().npu_part() is None
+
+    def test_a_model_without_an_npu_file_has_none(self, monkeypatch):
+        base = {k: v for k, v in self.TURBO.items() if k != "checkpoints"}
+        wire = Wire(monkeypatch, [catalog(base)])
+
+        assert self.client().npu_part() is None
+        assert len(wire.requests) == 1
+
+    def test_load_asks_for_the_model_by_name(self, monkeypatch):
+        wire = Wire(monkeypatch, [FakeResponse(body={"status": "success"})])
+
+        self.client().load()
+
+        assert wire.requests[0].url == f"{BASE}/load"
+        assert wire.json_body(0) == {"model_name": "Whisper-Large-v3-Turbo"}
+
+    @pytest.mark.parametrize(
+        "loaded,expected", [(["Whisper-Large-v3-Turbo"], True), (["Gemma"], False)]
+    )
+    def test_is_loaded_reads_health(self, monkeypatch, loaded, expected):
+        health = {"all_models_loaded": [{"model_name": m} for m in loaded]}
+        wire = Wire(monkeypatch, [FakeResponse(body=health)])
+
+        assert self.client().is_loaded() is expected
+        assert wire.requests[0].url == f"{BASE}/health"
+
+
 # ------------------------------------------------------------------ KokoroTTS
 
 

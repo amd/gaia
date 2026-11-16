@@ -62,14 +62,48 @@ def _job(schedule: Schedule, store: ScheduleStore) -> None:
             return
         schedule = current
         runner.fire(schedule)
-    except Exception:
+    except Exception as exc:
         log.exception("schedule %r failed", schedule.name)
+        _record_failure(schedule, store, exc)
         return
     store.mark_run(
         schedule.name,
         datetime.now(timezone.utc).isoformat(),
         next_run=next_fire_time(schedule.cron),
     )
+
+
+# How much of a failed run's error the schedule keeps; the daemon log has all of it.
+_ERROR_CHARS = 300
+
+
+def _error_summary(exc: BaseException) -> str:
+    """The first line of *exc*'s message, or its type when it has none."""
+    lines = str(exc).strip().splitlines()
+    text = lines[0].strip() if lines else type(exc).__name__
+    return text if len(text) <= _ERROR_CHARS else text[: _ERROR_CHARS - 1] + "…"
+
+
+def _record_failure(schedule: Schedule, store: ScheduleStore, exc: Exception) -> None:
+    """Record a failed recurring run on the schedule, so list/show say so.
+
+    Never raises: the failure is already logged, and recording it must not
+    stop the daemon.
+    """
+    try:
+        store.mark_failed(
+            schedule.name,
+            datetime.now(timezone.utc).isoformat(),
+            _error_summary(exc),
+            next_run=next_fire_time(schedule.cron) if schedule.cron else None,
+        )
+    except KeyError:
+        log.warning(
+            "schedule %r was removed while it ran; its failure was not recorded",
+            schedule.name,
+        )
+    except Exception:
+        log.exception("could not record the failure of schedule %r", schedule.name)
 
 
 def run_one_shot(schedule: Schedule, store: ScheduleStore) -> str:

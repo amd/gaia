@@ -22,6 +22,7 @@ import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
+from gaia.utils.text_decoding import decode_text
 
 # ---------------------------------------------------------------------------
 # Fixture: minimal mixin instance with helpers extracted
@@ -409,18 +410,11 @@ class TestReadTabularFile:
         columns = []
         error = None
 
-        content = None
-        for encoding in ("utf-8", "utf-8-sig", "latin-1", "cp1252"):
-            try:
-                with open(file_path, "r", encoding=encoding, newline="") as f:
-                    content = f.read()
-                break
-            except (UnicodeDecodeError, UnicodeError):
-                continue
-
-        if content is None:
-            error = "Could not decode file with any supported encoding (utf-8, latin-1, cp1252)"
-            return [], [], error
+        try:
+            with open(file_path, "rb") as f:
+                content = decode_text(f.read())[0]
+        except UnicodeDecodeError as exc:
+            return [], [], f"Could not decode {file_path} as text: {exc.reason}"
 
         try:
             try:
@@ -488,9 +482,9 @@ class TestReadTabularFile:
     def test_missing_file(self):
         """Trying to read a nonexistent path should raise FileNotFoundError.
 
-        In the source, the encoding loop catches only UnicodeDecodeError and
-        UnicodeError.  A missing file raises FileNotFoundError on the first
-        attempt, which is not caught, so it propagates.  This matches the
+        In the source, the decode catches only UnicodeDecodeError.  A missing
+        file raises FileNotFoundError on open, which is not caught, so it
+        propagates.  This matches the
         real behavior -- the caller (analyze_data_file tool) checks
         fp.exists() before calling _read_tabular_file.
         """
@@ -511,22 +505,14 @@ class TestReadTabularFile:
         assert "quotes" in rows[0]["description"]
 
     def test_csv_with_utf8_bom(self, tmp_path):
-        """UTF-8 BOM: the encoding loop tries utf-8 first, which succeeds
-        but includes the BOM character (U+FEFF) in the content.  The
-        utf-8-sig encoding would strip it, but utf-8 matches first.
-
-        This test documents the current behavior: the first column name
-        may include the BOM prefix.  Data rows are still parsed correctly.
-        """
+        """UTF-8 BOM: the BOM selects utf-8-sig, which strips it from the
+        first column name."""
         csv_file = tmp_path / "bom.csv"
         csv_file.write_bytes(b"\xef\xbb\xbfname,val\ntest,1\n")
 
         rows, columns, error = self._read_csv(str(csv_file))
         assert error is None
-        # The first column may have a BOM prefix (\ufeff) when utf-8
-        # encoding succeeds before utf-8-sig is tried.
-        assert len(columns) == 2
-        assert any("name" in col for col in columns)
+        assert columns == ["name", "val"]
         assert len(rows) == 1
         assert rows[0]["val"] == "1"
 
