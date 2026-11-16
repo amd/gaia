@@ -10,6 +10,7 @@
 package gaiaconnectors
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -42,11 +43,70 @@ type Connector struct {
 	Configured  bool   `json:"configured"`
 	// Enabled is false for an MCP connector that is configured but switched off.
 	// Absent from older CLIs, so it defaults to true.
-	Enabled   *bool  `json:"enabled"`
+	Enabled *bool `json:"enabled"`
+	// AccountID is the default account's address.
 	AccountID string `json:"account_id"`
+	// Accounts is every signed-in account of an OAuth connector, oldest first.
+	// Absent from older CLIs, which name only AccountID.
+	Accounts []Account `json:"accounts"`
 	// Activations maps agent id to whether it may use an MCP server's tools.
 	// Absent from older CLIs, which then show no access line.
 	Activations map[string]bool `json:"activations"`
+}
+
+// AccountStatus is how an account's sign-in stands.
+type AccountStatus string
+
+const (
+	AccountOK AccountStatus = "ok"
+	// AccountExpired was refused at refresh; signing in again fixes it.
+	AccountExpired AccountStatus = "reauth_required"
+	// AccountBroken is a sign-in that did not finish saving.
+	AccountBroken AccountStatus = "error"
+)
+
+// Account is one signed-in account of an OAuth connector.
+type Account struct {
+	ID        string        `json:"account_id"`
+	Email     string        `json:"email"`
+	Status    AccountStatus `json:"status"`
+	IsDefault bool          `json:"is_default"`
+}
+
+// Label is how the user names the account: its address, else its id.
+func (a Account) Label() string {
+	if a.Email != "" {
+		return a.Email
+	}
+	return a.ID
+}
+
+// FindAccount returns the account whose address or id matches, ignoring case.
+func (c Connector) FindAccount(name string) (Account, bool) {
+	for _, a := range c.Accounts {
+		if strings.EqualFold(a.Email, name) || strings.EqualFold(a.ID, name) {
+			return a, true
+		}
+	}
+	return Account{}, false
+}
+
+// AccountChoices lists the accounts' labels, for naming the choices.
+func (c Connector) AccountChoices() string {
+	labels := make([]string, len(c.Accounts))
+	for i, a := range c.Accounts {
+		labels[i] = a.Label()
+	}
+	return strings.Join(labels, ", ")
+}
+
+// listsAccounts reports whether /connectors shows a line per account: there
+// are several, or one whose sign-in is not working.
+func (c Connector) listsAccounts() bool {
+	if len(c.Accounts) > 1 {
+		return true
+	}
+	return len(c.Accounts) == 1 && c.Accounts[0].Status != AccountOK
 }
 
 // List runs `gaia connectors list --json`.
@@ -116,22 +176,121 @@ func Deactivate(ctx context.Context, c Connector) error {
 }
 
 func runActivations(ctx context.Context, what string, c Connector, sub string, extra ...string) error {
+	args := append([]string{"connectors", "activations", sub, c.ID, FlagshipAgentID}, extra...)
+	_, err := runCLI(ctx, what+" "+c.DisplayName, args...)
+	return err
+}
+
+// runCLI runs `gaia <args>` and returns what it printed. what completes
+// "could not …" in the error.
+func runCLI(ctx context.Context, what string, args ...string) (string, error) {
 	bin, err := Binary()
 	if err != nil {
-		return err
+		return "", err
 	}
 	ctx, cancel := context.WithTimeout(ctx, ListTimeout)
 	defer cancel()
-	args := append([]string{"connectors", "activations", sub, c.ID, FlagshipAgentID}, extra...)
 	cmd := exec.CommandContext(ctx, bin, args...)
-	var errBuf bytes.Buffer
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	if runErr := cmd.Run(); runErr != nil {
-		return fmt.Errorf("could not %s %s (`gaia connectors activations %s %s %s` "+
-			"failed: %w): %s", what, c.DisplayName, sub, c.ID, FlagshipAgentID, runErr,
-			strings.TrimSpace(errBuf.String()))
+		return "", fmt.Errorf("could not %s (`gaia %s` failed: %w): %s", what,
+			strings.Join(args, " "), runErr, strings.TrimSpace(errBuf.String()))
 	}
-	return nil
+	return strings.TrimSpace(out.String()), nil
+}
+
+// Disconnect signs one account of an OAuth connector out of GAIA. An empty
+// account disconnects the connector, which the CLI refuses when it has
+// several accounts. It returns the CLI's report.
+func Disconnect(ctx context.Context, c Connector, account string) (string, error) {
+	args := []string{"connectors", "disconnect", c.ID}
+	what := "disconnect " + c.DisplayName
+	if account != "" {
+		args = append(args, "--account", account)
+		what = "remove " + account + " from " + c.DisplayName
+	}
+	return runCLI(ctx, what, args...)
+}
+
+// SetDefault makes account the one a connector uses when none is named.
+func SetDefault(ctx context.Context, c Connector, account string) (string, error) {
+	return runCLI(ctx, "make "+account+" the default "+c.DisplayName+" account",
+		"connectors", "set-default", c.ID, account)
+}
+
+// SignInTimeout outlasts the CLI's own 15-minute wait for the browser.
+const SignInTimeout = 16 * time.Minute
+
+// SignIn is a browser sign-in that `gaia connectors connect` is waiting on.
+type SignIn struct {
+	// URL is the sign-in page. The CLI opens it in the browser too.
+	URL    string
+	cmd    *exec.Cmd
+	out    *bufio.Scanner
+	stderr *bytes.Buffer
+	cancel context.CancelFunc
+	// what completes "could not …"; command is what ran, for the error.
+	what, command string
+}
+
+// StartSignIn signs another account in (account == "") or signs a listed
+// account in again, and returns once the CLI has printed the sign-in link.
+func StartSignIn(c Connector, account string) (*SignIn, error) {
+	bin, err := Binary()
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"connectors", "connect", c.ID, "--add"}
+	what := "add a " + c.DisplayName + " account"
+	if account != "" {
+		args = []string{"connectors", "connect", c.ID, "--account", account}
+		what = "reconnect " + account
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), SignInTimeout)
+	cmd := exec.CommandContext(ctx, bin, args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	s := &SignIn{cmd: cmd, out: bufio.NewScanner(stdout), stderr: &bytes.Buffer{}, cancel: cancel,
+		what: what, command: "gaia " + strings.Join(args, " ")}
+	cmd.Stderr = s.stderr
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("could not %s (`%s` failed: %w)", s.what, s.command, err)
+	}
+	for s.out.Scan() {
+		line := strings.TrimSpace(s.out.Text())
+		if strings.HasPrefix(line, "https://") || strings.HasPrefix(line, "http://") {
+			s.URL = line
+			return s, nil
+		}
+	}
+	_, err = s.Wait()
+	if err == nil {
+		err = fmt.Errorf("could not %s: `%s` printed no sign-in link", s.what, s.command)
+	}
+	return nil, err
+}
+
+// Wait blocks until the sign-in ends and returns the CLI's closing line,
+// such as "Added jane@example.com".
+func (s *SignIn) Wait() (string, error) {
+	defer s.cancel()
+	last := ""
+	for s.out.Scan() {
+		if line := strings.TrimSpace(s.out.Text()); line != "" {
+			last = line
+		}
+	}
+	if err := s.cmd.Wait(); err != nil {
+		return "", fmt.Errorf("could not %s (`%s` failed: %w): %s", s.what, s.command, err,
+			strings.TrimSpace(s.stderr.String()))
+	}
+	return last, nil
 }
 
 // Find returns the connector whose id or display name matches, ignoring case.
@@ -152,26 +311,51 @@ func Render(rows []Connector) string {
 	var b strings.Builder
 	b.WriteString("Connectors\n\n")
 	anyConnected := false
-	var withAccess []string
+	var withAccess, withAccounts, withSeveral []string
 	for _, c := range rows {
 		status := "not connected"
 		switch {
 		case c.Usable():
 			anyConnected = true
 			status = "connected"
-			if c.AccountID != "" {
+			if len(c.Accounts) > 1 {
+				status += fmt.Sprintf(", %d accounts", len(c.Accounts))
+			} else if c.AccountID != "" && !c.listsAccounts() {
 				status += " as " + c.AccountID
 			}
 		case c.Configured:
 			status = "connected but switched off"
+		case len(c.Accounts) > 0:
+			status = "needs signing in again"
 		}
 		if c.Usable() && c.FlagshipCanUse() {
 			status += " · GAIA can use it"
 			withAccess = append(withAccess, c.ID)
 		}
 		fmt.Fprintf(&b, "  %-24s %s\n", c.DisplayName+" ("+c.ID+")", status)
+		if c.Type == "oauth_pkce" && len(c.Accounts) > 0 {
+			withAccounts = append(withAccounts, c.ID)
+		}
+		if len(c.Accounts) > 1 {
+			withSeveral = append(withSeveral, c.ID)
+		}
+		if c.listsAccounts() {
+			for _, a := range c.Accounts {
+				b.WriteString("      " + a.Label())
+				if note := accountNote(c, a); note != "" {
+					b.WriteString(" (" + note + ")")
+				}
+				b.WriteString("\n")
+			}
+		}
 	}
 	b.WriteString("\nConnect one from Connectors in the Agent UI.")
+	if len(withAccounts) > 0 {
+		b.WriteString("\nAnother account: /connectors add <id>. Remove one: /connectors revoke <id> <address>.")
+	}
+	if len(withSeveral) > 0 {
+		b.WriteString("\nChange which account GAIA uses when you don't say: /connectors default <id> <address>.")
+	}
 	if anyConnected {
 		b.WriteString("\nOptional: /connectors personalize <id> lets GAIA read recent activity, " +
 			"save what it learns to memory, and suggest automations. GAIA keeps access " +
@@ -182,6 +366,22 @@ func Render(rows []Connector) string {
 			strings.Join(withAccess, ", ") + ").")
 	}
 	return b.String()
+}
+
+// accountNote is the text beside an account on its own line.
+func accountNote(c Connector, a Account) string {
+	var notes []string
+	if a.IsDefault {
+		notes = append(notes, "default")
+	}
+	switch a.Status {
+	case AccountExpired:
+		notes = append(notes, "sign-in expired: /connectors reconnect "+c.ID+" "+a.Label())
+	case AccountBroken:
+		notes = append(notes, "sign-in did not finish: /connectors revoke "+c.ID+" "+a.Label()+
+			", then /connectors add "+c.ID)
+	}
+	return strings.Join(notes, " · ")
 }
 
 var sources = []struct{ prefix, what string }{

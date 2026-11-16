@@ -1070,6 +1070,12 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connectorsRevokedMsg:
 		return m.handleConnectorsRevoked(msg)
 
+	case connectorsSignInMsg:
+		return m.handleConnectorsSignIn(msg)
+
+	case connectorsReportMsg:
+		return m.handleConnectorsReport(msg)
+
 	case updateCheckedMsg:
 		return m.handleUpdateChecked(msg)
 
@@ -1898,11 +1904,8 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	if isSkillsCommand(query) {
 		return m.submitSkillsCommand(query)
 	}
-	if isConnectorsPersonalize(query) {
-		return m.startConnectorsPersonalize(query)
-	}
-	if isConnectorsRevoke(query) {
-		return m.startConnectorsRevoke(query)
+	if req, ok := parseConnectorsCommand(query); ok {
+		return m.startConnectorsCommand(req)
 	}
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {
