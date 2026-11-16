@@ -8,7 +8,7 @@ import { UpdatesSection, describeUpdateStatus } from '../UpdatesSection';
 import { translator } from '../../../i18n/useT';
 import { UpdateIndicator } from '../../UpdateIndicator';
 import { INITIAL_STATE } from '../../../hooks/useUpdateStatus';
-import type { UpdateState } from '../../../hooks/useUpdateStatus';
+import type { UpdateMode, UpdateState } from '../../../hooks/useUpdateStatus';
 
 let state: UpdateState;
 let listener: ((s: UpdateState) => void) | null;
@@ -29,7 +29,8 @@ const bridge = {
     installVersion: vi.fn(async () => state),
     revertUpdate: vi.fn(async () => state),
     resumeUpdates: vi.fn(async () => { push({ pinnedVersion: null }); return state; }),
-    setAutoUpdate: vi.fn(async (enabled: boolean) => { push({ autoUpdate: enabled }); return state; }),
+    setUpdateMode: vi.fn(async (mode: UpdateMode) => { push({ updateMode: mode }); return state; }),
+    skipUpdate: vi.fn(async () => { push({ skippedVersion: state.version }); return state; }),
     setIncludePrereleases: vi.fn(async (enabled: boolean) => { push({ includePrereleases: enabled }); return state; }),
     downloadUpdate: vi.fn(async () => { push({ status: 'downloading', progress: 0 }); return state; }),
     restart: vi.fn(async () => state),
@@ -44,7 +45,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 const rcSwitch = () => screen.getByRole('switch', { name: /include release candidates/i });
-const autoSwitch = () => screen.getByRole('switch', { name: /install updates automatically/i });
+const modeSelect = () => screen.getByRole('combobox', { name: /when an update is available/i });
 
 describe('UpdatesSection', () => {
     it('renders nothing outside the desktop app', () => {
@@ -94,20 +95,67 @@ describe('UpdatesSection', () => {
         expect(line).not.toContain('محدّث');
     });
 
-    it('shows auto-update off by default', async () => {
+    it('downloads and asks by default, and says nothing installs unasked', async () => {
         render(<UpdatesSection />);
         await waitFor(() => expect(screen.getByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' })).toBeInTheDocument());
-        expect(autoSwitch()).not.toBeChecked();
+        expect(modeSelect()).toHaveValue('ask');
+        expect(screen.getByText(/nothing installs until you say so/i)).toBeInTheDocument();
     });
 
-    it('turning auto-update on saves it', async () => {
+    it.each([
+        ['auto', /installs it the next time you restart or quit/i],
+        ['manual', /downloads it only when you ask/i],
+    ] as const)('choosing %s saves it and explains it', async (mode, hint) => {
         render(<UpdatesSection />);
-        await userEvent.click(autoSwitch());
-        expect(bridge.setAutoUpdate).toHaveBeenCalledWith(true);
-        await waitFor(() => expect(autoSwitch()).toBeChecked());
+        await userEvent.selectOptions(modeSelect(), mode);
+        expect(bridge.setUpdateMode).toHaveBeenCalledWith(mode);
+        await waitFor(() => expect(modeSelect()).toHaveValue(mode));
+        expect(screen.getByText(hint)).toBeInTheDocument();
     });
 
-    it('opting into release candidates leaves auto-update off', async () => {
+    it('still offers an update that was skipped on the chip', async () => {
+        state = { ...state, status: 'downloaded', version: '0.26.0', skippedVersion: '0.26.0' };
+        render(<UpdatesSection />);
+        expect(await screen.findByText(/you chose “not now” for gaia 0\.26\.0/i)).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', { name: /restart to install/i }));
+        expect(bridge.restart).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        ['a newer version is offered', { status: 'downloaded', version: '0.26.1' }],
+        ['nothing is offered', { status: 'idle', version: null }],
+    ] as const)('says nothing about a skipped version when %s', async (_label, patch) => {
+        state = { ...state, ...patch, skippedVersion: '0.26.0' };
+        render(<UpdatesSection />);
+        await screen.findByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' });
+        expect(screen.queryByText(/you chose/i)).toBeNull();
+    });
+
+    it('locks the mode choice when updates are turned off for this install', async () => {
+        state = { ...state, status: 'disabled' };
+        render(<UpdatesSection />);
+        await screen.findByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' });
+        expect(modeSelect()).toBeDisabled();
+    });
+
+    it('locks the mode choice while a change is being saved', async () => {
+        let finish: (s: UpdateState) => void = () => {};
+        bridge.setUpdateMode.mockImplementationOnce(() => new Promise<UpdateState>((r) => { finish = r; }));
+        render(<UpdatesSection />);
+        await userEvent.selectOptions(modeSelect(), 'auto');
+        expect(modeSelect()).toBeDisabled();
+        await act(async () => { finish(state); });
+        await waitFor(() => expect(modeSelect()).toBeEnabled());
+    });
+
+    it('still offers a skipped update that has not downloaded', async () => {
+        state = { ...state, updateMode: 'manual', status: 'available', version: '0.26.0', skippedVersion: '0.26.0' };
+        render(<UpdatesSection />);
+        await userEvent.click(await screen.findByRole('button', { name: /update to 0\.26\.0/i }));
+        expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('opting into release candidates leaves the update mode alone', async () => {
         render(<UpdatesSection />);
         await screen.findByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' });
         expect(rcSwitch()).not.toBeChecked();
@@ -116,8 +164,8 @@ describe('UpdatesSection', () => {
         await userEvent.click(rcSwitch());
         expect(bridge.setIncludePrereleases).toHaveBeenCalledWith(true);
         await waitFor(() => expect(rcSwitch()).toBeChecked());
-        expect(autoSwitch()).not.toBeChecked();
-        expect(bridge.setAutoUpdate).not.toHaveBeenCalled();
+        expect(modeSelect()).toHaveValue('ask');
+        expect(bridge.setUpdateMode).not.toHaveBeenCalled();
     });
 
     it('tells a release-candidate build it is offered newer candidates anyway', async () => {
@@ -152,11 +200,11 @@ describe('UpdatesSection', () => {
     });
 
     it('says why a failed save failed', async () => {
-        bridge.setAutoUpdate.mockRejectedValueOnce(new Error('disk is read-only'));
+        bridge.setUpdateMode.mockRejectedValueOnce(new Error('disk is read-only'));
         render(<UpdatesSection />);
-        await userEvent.click(autoSwitch());
+        await userEvent.selectOptions(modeSelect(), 'auto');
         expect(await screen.findByRole('alert')).toHaveTextContent(/disk is read-only/);
-        expect(autoSwitch()).not.toBeChecked();
+        expect(modeSelect()).toHaveValue('ask');
     });
 
     it('offers the way back only when there is an earlier version', async () => {
@@ -196,7 +244,7 @@ describe('UpdatesSection', () => {
         expect(link).toHaveAttribute('target', '_blank');
         expect(link).toHaveAccessibleDescription(/can't update itself on this mac/i);
         expect(screen.queryByRole('button', { name: /update to/i })).toBeNull();
-        expect(screen.queryByRole('switch', { name: /install updates automatically/i })).toBeNull();
+        expect(screen.queryByRole('combobox', { name: /when an update is available/i })).toBeNull();
         expect(rcSwitch()).toBeEnabled();
         expect(bridge.downloadUpdate).not.toHaveBeenCalled();
     });
@@ -269,8 +317,63 @@ describe('UpdateIndicator', () => {
     it('restarts into a downloaded update through the bridge', async () => {
         state = { ...state, status: 'downloaded', version: '0.26.0' };
         render(<UpdateIndicator />);
-        await userEvent.click(await screen.findByRole('button', { name: /restart to apply/i }));
+        expect(await screen.findByText(/gaia 0\.26\.0 is ready/i)).toBeInTheDocument();
+        await userEvent.click(screen.getByRole('button', { name: /restart to update/i }));
         expect(bridge.restart).toHaveBeenCalledTimes(1);
         expect(bridge.check).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['a downloaded', 'downloaded'],
+        ['an available', 'available'],
+    ] as const)('not now on %s update skips it, and the chip goes away', async (_label, status) => {
+        state = { ...state, status, version: '0.26.0' };
+        const { container } = render(<UpdateIndicator />);
+        await userEvent.click(await screen.findByRole('button', { name: /not now/i }));
+        expect(bridge.skipUpdate).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(container).toBeEmptyDOMElement());
+    });
+
+    it('stays away for a skipped version, and asks again about a newer one', async () => {
+        state = { ...state, status: 'downloaded', version: '0.26.0', skippedVersion: '0.26.0' };
+        const { container } = render(<UpdateIndicator />);
+        await waitFor(() => expect(bridge.getStatus).toHaveBeenCalled());
+        expect(container).toBeEmptyDOMElement();
+        act(() => push({ version: '0.26.1' }));
+        expect(await screen.findByText(/gaia 0\.26\.1 is ready/i)).toBeInTheDocument();
+    });
+
+    it('stays away while a skipped version downloads again', async () => {
+        state = { ...state, status: 'downloading', version: '0.26.0', progress: 40, skippedVersion: '0.26.0' };
+        const { container } = render(<UpdateIndicator />);
+        await waitFor(() => expect(bridge.getStatus).toHaveBeenCalled());
+        expect(container).toBeEmptyDOMElement();
+    });
+
+    it.each([
+        ['downloaded', /restart to update/i],
+        ['available', /update now/i],
+    ] as const)('has no not now on a %s update when updates install automatically', async (status, action) => {
+        state = { ...state, updateMode: 'auto', status, version: '0.26.0' };
+        render(<UpdateIndicator />);
+        await screen.findByRole('button', { name: action });
+        expect(screen.queryByRole('button', { name: /not now/i })).toBeNull();
+    });
+
+    it('keeps not now on a Mac, which never installs by itself', async () => {
+        state = { ...state, updateMode: 'auto', status: 'available', version: '0.26.0', manualInstall: true };
+        render(<UpdateIndicator />);
+        await userEvent.click(await screen.findByRole('button', { name: /not now/i }));
+        expect(bridge.skipUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([['downloaded'], ['available']] as const)('says why skipping a %s update failed', async (status) => {
+        state = { ...state, status, version: '0.26.0' };
+        bridge.skipUpdate.mockRejectedValueOnce(new Error('disk is read-only'));
+        render(<UpdateIndicator />);
+        await userEvent.click(await screen.findByRole('button', { name: /not now/i }));
+        const label = await screen.findByText(/couldn't save that/i);
+        expect(label.closest('[title]')).toHaveAttribute('title', expect.stringMatching(/disk is read-only/));
+        expect(screen.queryByText(/restart failed|update failed/i)).toBeNull();
     });
 });

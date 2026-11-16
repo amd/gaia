@@ -21,10 +21,13 @@
  *     `app.whenReady`)
  *   - Subsequent checks every 4 hours via re-scheduling setTimeout
  *   - Concurrent-check guard so checks never overlap
- *   - Auto-update is OFF by default (`autoUpdate` in ~/.gaia/update-config.json,
- *     shared with the Terminal UI). Off, a found update is only offered: the
- *     renderer's "Update now" calls downloadUpdate(). On, it downloads silently.
+ *   - Three modes (`updateMode` in ~/.gaia/update-config.json): "ask", the
+ *     default, downloads a found update and waits for the user to restart into
+ *     it; "auto" also installs it on the next quit; "manual" only offers it,
+ *     and "Update now" calls downloadUpdate(). `autoUpdate` in the same file
+ *     mirrors "auto" for the Terminal UI, which reads and writes only that.
  *   - On `update-downloaded`, the chip offers the restart; nothing interrupts
+ *   - skipUpdate() saves the offered version so the chip stops asking about it
  *   - Renderer integration via IPC channel `gaia:update:status`
  *   - Disabled entirely via GAIA_DISABLE_UPDATE=1 env var (CI / dev / corp)
  *   - macOS never downloads or installs: ad-hoc signed builds can't replace
@@ -41,7 +44,8 @@
  *   - installVersion(tag)     → downgrade/install a specific tagged release
  *   - clearPin()              → resume auto-updates (clear the version pin)
  *   - revertUpdate()          → go back to the version before the last update
- *   - setAutoUpdate(enabled)  → persist the auto-update preference
+ *   - setUpdateMode(mode)     → persist "ask", "auto" or "manual"
+ *   - skipUpdate()            → stop the chip asking about the offered version
  *   - downloadUpdate()        → download the offered update ("Update now")
  *   - restartToInstall()      → restart into a downloaded update
  *   - STATES                  → string constants for valid states
@@ -261,16 +265,27 @@ async function _fetchReleases(pages = 1) {
  * can name a zip that was never attached, so the file itself is checked.
  */
 async function _releaseHasUpdate(tag) {
+  if (releasesWithUpdate.has(tag)) return true;
   const base = `${RELEASE_DOWNLOADS}/${tag}`;
-  const manifest = await _githubFetch(`${base}/${_platformManifest()}`);
-  if (manifest.status === 404) return false;
-  if (!manifest.ok) throw _httpError(manifest.status);
-  const path = /^path:\s*(\S+)/m.exec(await manifest.text());
+  const path = await _manifestInstaller(tag);
   if (!path) return false;
-  const installer = await _githubFetch(`${base}/${path[1]}`, { method: "HEAD" });
+  const installer = await _githubFetch(`${base}/${path}`, { method: "HEAD" });
   if (installer.status === 404) return false;
   if (!installer.ok) throw _httpError(installer.status);
+  releasesWithUpdate.add(tag);
   return true;
+}
+
+// GitHub counts each HEAD of an installer as a download, so one is enough per run.
+const releasesWithUpdate = new Set();
+
+/** The installer `tag`'s manifest for this platform names, or null when it has none. */
+async function _manifestInstaller(tag) {
+  const manifest = await _githubFetch(`${RELEASE_DOWNLOADS}/${tag}/${_platformManifest()}`);
+  if (manifest.status === 404) return null;
+  if (!manifest.ok) throw _httpError(manifest.status);
+  const path = /^path:\s*(\S+)/m.exec(await manifest.text());
+  return path ? path[1] : null;
 }
 
 /** The user-facing sentence for a _fetchReleases failure while `doing`. */
@@ -343,7 +358,10 @@ const state = {
   pinnedVersion: null,
   previousVersion: null,
   startFailed: false,
-  autoUpdate: false,
+  // "ask" downloads and waits, "auto" also installs on quit, "manual" only offers.
+  updateMode: "ask",
+  // The version the user said "not now" to; the chip stays away for it.
+  skippedVersion: null,
   // Offer release candidates too; off by default. A release-candidate build
   // is offered newer candidates without it.
   includePrereleases: false,
@@ -376,6 +394,10 @@ let backgroundCheck = false;
 let askedCheck = false;
 // A routine check is running with this version already downloaded.
 let heldDownloadVersion = null;
+// The download electron-updater started by itself after a check, while it runs.
+let backgroundDownload = null;
+// The _onDownloaded call whose backend fetch the "preparing" flag stands for.
+let preparingFor = null;
 // The downloaded update was given up on, so quitting must not install it.
 let abandonedDownload = false;
 // The silent install failed, so the next try shows the installer's window.
@@ -451,19 +473,34 @@ function _loadPin() {
   }
 }
 
+const UPDATE_MODES = Object.freeze(["ask", "auto", "manual"]);
+
 /**
- * Off unless the user turned it on: the app still changes fast. An unreadable
- * file is reported (Settings shows it), and auto-update stays off until fixed.
+ * The Terminal UI only knows `autoUpdate`, so true there wins; turning it off
+ * there falls back to asking unless "manual" was saved here.
  */
-function _loadAutoUpdate() {
+function _modeFromConfig(cfg) {
+  if (cfg.autoUpdate === true) return "auto";
+  return cfg.updateMode === "manual" ? "manual" : "ask";
+}
+
+/**
+ * The saved update preferences; "ask" when nothing is saved. An unreadable
+ * file is reported (Settings shows it), and nothing downloads until it is fixed.
+ */
+function _loadPreferences() {
   if (!fs.existsSync(UPDATE_CONFIG_PATH)) {
-    return { autoUpdate: false, includePrereleases: false, error: null };
+    return { updateMode: "ask", includePrereleases: false, skippedVersion: null, error: null };
   }
   try {
     const cfg = JSON.parse(fs.readFileSync(UPDATE_CONFIG_PATH, "utf8"));
+    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) {
+      throw new Error("it does not hold a settings object");
+    }
     return {
-      autoUpdate: Boolean(cfg && cfg.autoUpdate === true),
-      includePrereleases: Boolean(cfg && cfg.includePrereleases === true),
+      updateMode: _modeFromConfig(cfg),
+      includePrereleases: cfg.includePrereleases === true,
+      skippedVersion: typeof cfg.skippedVersion === "string" ? cfg.skippedVersion : null,
       error: null,
     };
   } catch (err) {
@@ -471,7 +508,7 @@ function _loadAutoUpdate() {
       `${UPDATE_CONFIG_PATH} cannot be read (${(err && err.message) || err}), so auto-update is off — ` +
       "fix the file by hand or delete it.";
     log("error", error);
-    return { autoUpdate: false, includePrereleases: false, error };
+    return { updateMode: "manual", includePrereleases: false, skippedVersion: null, error };
   }
 }
 
@@ -480,9 +517,10 @@ function _loadAutoUpdate() {
  * auto-update off while this app runs, and that must stop the next download.
  */
 function _refreshPreferences() {
-  const loaded = _loadAutoUpdate();
+  const loaded = _loadPreferences();
   setState({
-    autoUpdate: loaded.autoUpdate,
+    updateMode: loaded.updateMode,
+    skippedVersion: loaded.skippedVersion,
     includePrereleases: loaded.includePrereleases,
     configError: loaded.error,
   });
@@ -503,13 +541,22 @@ function _refreshPreferences() {
 function _applyInstallPolicy() {
   if (!autoUpdaterRef) return;
   const selfInstalls = _selfInstalls();
-  autoUpdaterRef.autoDownload = selfInstalls && state.autoUpdate && !state.pinnedVersion;
+  autoUpdaterRef.autoDownload = selfInstalls && state.updateMode !== "manual" && !state.pinnedVersion;
+  // "ask" downloads too, but only a quit the user asked for may install.
   autoUpdaterRef.autoInstallOnAppQuit =
     selfInstalls &&
-    (state.autoUpdate || installRequested) &&
+    (state.updateMode === "auto" || installRequested) &&
     !abandonedDownload &&
     !wizardNextInstall &&
     !state.preparing;
+  // electron-updater hooks the quit only if the flag was on when the download ended.
+  if (
+    autoUpdaterRef.autoInstallOnAppQuit &&
+    state.status === STATES.DOWNLOADED &&
+    typeof autoUpdaterRef.addQuitHandler === "function"
+  ) {
+    autoUpdaterRef.addQuitHandler();
+  }
   autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
 }
 
@@ -551,6 +598,7 @@ const USER_ERROR_CODES = new Set([
   "checkBusy",
   "configBusy",
   "diskSpace",
+  "downloadBusy",
   "downloadFailed",
   "failedWith",
   "manualInstall",
@@ -792,7 +840,13 @@ async function _applyGithubFeed() {
   let tag = null;
   try {
     for (const release of _channelReleases(await _fetchReleases())) {
-      if (await _releaseHasUpdate(release.tag_name)) {
+      // Only a newer release can be offered, so only its installer is checked:
+      // a check that finds nothing new must not count as a download.
+      const notNewer = _compareVersions(release.tag_name, state.currentVersion) <= 0;
+      const usable = notNewer
+        ? Boolean(await _manifestInstaller(release.tag_name))
+        : await _releaseHasUpdate(release.tag_name);
+      if (usable) {
         tag = release.tag_name;
         break;
       }
@@ -942,6 +996,16 @@ async function installVersion(tag) {
     );
   }
 
+  // A download the user asked for can't be stopped here, and electron-updater
+  // would hand its file to this install.
+  if (state.status === STATES.DOWNLOADING && !state.preparing && !backgroundDownload) {
+    throw _userError(
+      "downloadBusy",
+      { version: state.version || "" },
+      `GAIA ${state.version || ""} is still downloading — pick a version once it has finished.`
+    );
+  }
+
   log("info", `Installing version ${tag} via targeted rollback`);
 
   // Persist pin before touching the feed/allowDowngrade so AC2 holds even if
@@ -961,13 +1025,17 @@ async function installVersion(tag) {
     );
   }
   setState({ pinnedVersion: tag, previousVersion: null, startFailed: false });
-  // A pin always stops background downloads; this one is downloaded below.
-  installRequested = true;
-  restartWhenDownloaded = true;
-  _applyInstallPolicy();
-
   checkInProgress = true;
   try {
+    // Left running, electron-updater would hand this install the newer download.
+    await _cancelBackgroundDownload();
+    // One that finished anyway must not be what the restart below installs.
+    downloadEpoch += 1;
+    setState({ preparing: false });
+    // A pin always stops background downloads; this one is downloaded below.
+    installRequested = true;
+    restartWhenDownloaded = true;
+    _applyInstallPolicy();
     autoUpdaterRef.allowDowngrade = true;
     autoUpdaterRef.setFeedURL(_releaseFeed(tag));
 
@@ -983,7 +1051,7 @@ async function installVersion(tag) {
     // Targeted check → update-available. autoDownload is off (default, and
     // always while pinned), so download explicitly; update-downloaded then
     // restarts into it.
-    await autoUpdaterRef.checkForUpdates();
+    _watchBackgroundDownload(await autoUpdaterRef.checkForUpdates());
     if (state.status !== STATES.AVAILABLE) {
       throw _userError(
         "noInstaller",
@@ -1000,7 +1068,7 @@ async function installVersion(tag) {
     restartWhenDownloaded = false;
     // Don't leave the app pinned to a version that never installed.
     const pinNote = _restorePinAfterFailedInstall(previousPin, tag);
-    const msg = (err && err.message) || String(err);
+    const msg = _reason(err);
     setState({ status: STATES.ERROR, error: msg });
     // A coded cause keeps its code; any other shows its own text.
     const coded = err && _isUserCode(err.code);
@@ -1081,15 +1149,15 @@ function clearPin() {
 // ── Auto-update preference / user-driven install ─────────────────────────────
 
 /**
- * Persist the auto-update preference. Throws when it can't be saved, so the
- * Settings toggle never shows a value the next launch won't honour.
+ * Persist the update mode. Throws when it can't be saved, so Settings never
+ * shows a choice the next launch won't honour.
  */
-async function setAutoUpdate(enabled) {
-  if (typeof enabled !== "boolean") {
-    throw new TypeError(`setAutoUpdate expects true or false, got ${typeof enabled}`);
+async function setUpdateMode(mode) {
+  if (!UPDATE_MODES.includes(mode)) {
+    throw new TypeError(`setUpdateMode expects one of ${UPDATE_MODES.join(", ")}, got ${String(mode)}`);
   }
   try {
-    _writeConfig({ autoUpdate: enabled });
+    _writeConfig({ updateMode: mode, autoUpdate: mode === "auto" });
   } catch (err) {
     if (err && err.code === "configBusy") throw err;
     const reason = (err && err.message) || String(err);
@@ -1099,13 +1167,44 @@ async function setAutoUpdate(enabled) {
       `Couldn't save the auto-update setting to ${UPDATE_CONFIG_PATH}: ${reason}`
     );
   }
-  setState({ autoUpdate: enabled });
+  setState({ updateMode: mode });
   _applyInstallPolicy();
-  log("info", `Auto-update ${enabled ? "enabled" : "disabled"}`);
-  // Turning it on with an update already offered means "install it".
-  if (enabled && _selfInstalls() && !state.pinnedVersion && state.status === STATES.AVAILABLE) {
-    await downloadUpdate();
+  log("info", `Update mode set to ${mode}`);
+  // A mode that downloads by itself fetches the update already on offer.
+  if (mode !== "manual" && _selfInstalls() && !state.pinnedVersion && state.status === STATES.AVAILABLE) {
+    try {
+      await _download({ install: false });
+    } catch (err) {
+      // The mode is saved; the status already shows the failed download.
+      log("warn", "The offered update didn't download:", err && err.message);
+    }
   }
+}
+
+/**
+ * "Not now": the chip stops asking about the offered version, across launches,
+ * and a quit won't install it unless the mode is "auto". Settings still offers it.
+ */
+async function skipUpdate() {
+  const offered = state.status === STATES.AVAILABLE || state.status === STATES.DOWNLOADED;
+  if (!offered || !state.version) {
+    throw new Error(`No update is on offer to skip (status: ${state.status}).`);
+  }
+  try {
+    _writeConfig({ skippedVersion: state.version });
+  } catch (err) {
+    if (err && err.code === "configBusy") throw err;
+    const reason = (err && err.message) || String(err);
+    throw _userError(
+      "saveFailed",
+      { path: UPDATE_CONFIG_PATH, reason },
+      `Couldn't save the skipped version to ${UPDATE_CONFIG_PATH}: ${reason}`
+    );
+  }
+  installRequested = false;
+  setState({ skippedVersion: state.version });
+  _applyInstallPolicy();
+  log("info", `GAIA ${state.version} skipped — Settings still offers it`);
 }
 
 /**
@@ -1396,16 +1495,25 @@ async function _prefetchBackend(version) {
 
 /** An update finished downloading: fetch its backend, then offer the restart. */
 async function _onDownloaded(info) {
-  abandonedDownload = false;
   const version = (info && info.version) || state.version;
+  // Every check re-reads a download it already has and reports it again. One
+  // whose backend fetch failed goes on, to try that again.
+  const ready = !prefetchBackendRef || !isBackendPrefetchedRef || isBackendPrefetchedRef(version);
+  if (state.status === STATES.DOWNLOADED && state.version === version && !restartWhenDownloaded && ready) {
+    return;
+  }
+  abandonedDownload = false;
   const epoch = downloadEpoch;
   if (prefetchBackendRef) {
+    const call = {};
+    preparingFor = call;
     // electron-updater has armed install-on-quit; a quit now would skip the checks below.
     setState({ status: STATES.DOWNLOADING, version, progress: 100, preparing: true });
     _applyInstallPolicy();
     await _prefetchBackend(version);
     if (epoch !== downloadEpoch) {
-      setState({ preparing: false });
+      // A later download may be preparing by now; its flag is not this one's to clear.
+      if (preparingFor === call) setState({ preparing: false });
       _applyInstallPolicy();
       log("info", `GAIA ${version} was given up on while its backend was fetched`);
       return;
@@ -1444,15 +1552,20 @@ async function downloadUpdate() {
       `No update is waiting to download (status: ${state.status}) — check for updates first.`
     );
   }
+  await _download({ install: true });
+}
+
+/** Download the offered update; `install` lets the next quit install it. */
+async function _download({ install }) {
   if (!_selfInstalls()) throw _manualInstallError(state.version);
-  log("info", `User asked to install ${state.version}`);
-  installRequested = true;
+  log("info", `Downloading ${state.version}${install ? " to install" : ""}`);
+  installRequested = install;
   _applyInstallPolicy();
   setState({ status: STATES.DOWNLOADING, progress: 0, error: null });
   try {
     await autoUpdaterRef.downloadUpdate();
   } catch (err) {
-    const message = (err && err.message) || String(err);
+    const message = _reason(err);
     installRequested = false;
     _applyInstallPolicy();
     setState({ status: STATES.ERROR, error: message });
@@ -1472,6 +1585,9 @@ async function restartToInstall() {
   await _requireInstallSpace();
   _requireNetwork();
   if (!(await confirmRestartRef())) {
+    // The user asked for this update, so the next quit may install it.
+    installRequested = true;
+    _applyInstallPolicy();
     log("info", "Restart put off: work is still running — will install on next quit");
     return;
   }
@@ -1516,8 +1632,8 @@ async function checkForUpdates({ background = false } = {}) {
   checkInProgress = true;
   backgroundCheck = background;
   askedCheck = !background;
-  // A routine check may replace the restart the chip offers, never remove it.
-  heldDownloadVersion = background && state.status === STATES.DOWNLOADED ? state.version : null;
+  // A check may replace the restart the chip offers, never remove it.
+  heldDownloadVersion = state.status === STATES.DOWNLOADED ? state.version : null;
   if (!heldDownloadVersion) setState({ status: STATES.CHECKING, error: null });
   try {
     // No configured feed: aim at the newest GitHub release on this channel,
@@ -1526,7 +1642,7 @@ async function checkForUpdates({ background = false } = {}) {
       return;
     }
     log("info", "Checking for updates...");
-    await autoUpdaterRef.checkForUpdates();
+    _watchBackgroundDownload(await autoUpdaterRef.checkForUpdates());
   } catch (err) {
     _recordFailure("Update check failed:", err);
   } finally {
@@ -1536,16 +1652,59 @@ async function checkForUpdates({ background = false } = {}) {
   }
 }
 
+/**
+ * Track the download a check started by itself. Its failure is reported through
+ * the "error" event; left unhandled, the rejected promise would crash the app.
+ */
+function _watchBackgroundDownload(result) {
+  if (!result || !result.downloadPromise) return;
+  // A check during a download is handed that same download, which only the
+  // first check's token can stop.
+  const earlier = backgroundDownload;
+  const download = {
+    cancel: () => {
+      if (earlier) earlier.cancel();
+      if (result.cancellationToken) result.cancellationToken.cancel();
+    },
+  };
+  download.settled = result.downloadPromise
+    .catch(() => {})
+    .then(() => {
+      if (backgroundDownload === download) backgroundDownload = null;
+    });
+  backgroundDownload = download;
+}
+
+/** Stop a download nobody asked for, and wait until electron-updater has let go of it. */
+async function _cancelBackgroundDownload() {
+  const download = backgroundDownload;
+  if (!download) return;
+  log("info", `Stopping the background download of ${state.version}`);
+  download.cancel();
+  await download.settled;
+}
+
+/**
+ * What went wrong, in one line. electron-updater appends the response headers
+ * and a stack trace to an HTTP error's message; the UI shows only the first line.
+ */
+function _reason(err) {
+  return String((err && err.message) || err).split("\n")[0].trim();
+}
+
 /** Show a failure the user asked to hear about; otherwise note it and go idle. */
 function _recordFailure(what, err) {
-  const message = (err && err.message) || String(err);
+  const message = _reason(err);
+  if (message !== ((err && err.message) || String(err))) log("warn", `${what} full error:`, err && err.message);
+  // The installer may be gone: look again before trusting the release.
+  releasesWithUpdate.clear();
   // electron-updater starts an automatic download without awaiting it, so the
   // failure can land before any progress and after the check has returned.
   const autoDownloading =
     !installRequested &&
     !askedCheck &&
     (state.status === STATES.DOWNLOADING ||
-      (state.status === STATES.AVAILABLE && state.autoUpdate));
+      (state.status === STATES.AVAILABLE && state.updateMode !== "manual"));
   if (heldDownloadVersion) {
     setState({ status: STATES.DOWNLOADED, version: heldDownloadVersion, lastCheckError: message });
     log("warn", `${what} ${message} — keeping the downloaded update`);
@@ -1589,6 +1748,11 @@ function wireAutoUpdaterEvents() {
       setState({ status: STATES.DOWNLOADED, lastCheckError: null });
       return;
     }
+    // Asking for one version is not asking for the next one a check finds.
+    if (installRequested && !restartWhenDownloaded && info.version !== state.version) {
+      installRequested = false;
+      _applyInstallPolicy();
+    }
     setState({
       status: STATES.AVAILABLE,
       version: info.version || null,
@@ -1602,7 +1766,7 @@ function wireAutoUpdaterEvents() {
 
   autoUpdaterRef.on("update-not-available", (info) => {
     // A release withdrawn since it downloaded must not install on quit.
-    if (heldDownloadVersion) _abandonDownload();
+    if (heldDownloadVersion || state.status === STATES.DOWNLOADED) _abandonDownload();
     downloadEpoch += 1;
     // Reset to idle so the UI hides any stale "available" chip.
     setState({
@@ -1672,9 +1836,15 @@ function registerIpcHandlers() {
     clearPin();
     return getState();
   });
-  ipcMain.handle("gaia:update:set-auto-update", async (_event, enabled) => {
-    await setAutoUpdate(enabled);
-    if (enabled) await checkForUpdates();
+  ipcMain.handle("gaia:update:set-mode", async (_event, mode) => {
+    await setUpdateMode(mode);
+    // An update already on offer is left alone: a check would drop its download.
+    const nothingOffered = state.status === STATES.IDLE || state.status === STATES.ERROR;
+    if (mode !== "manual" && nothingOffered) await checkForUpdates();
+    return getState();
+  });
+  ipcMain.handle("gaia:update:skip", async () => {
+    await skipUpdate();
     return getState();
   });
   ipcMain.handle("gaia:update:set-include-prereleases", async (_event, enabled) => {
@@ -1704,7 +1874,8 @@ function unregisterIpcHandlers() {
     "gaia:update:install-version",
     "gaia:update:revert",
     "gaia:update:resume",
-    "gaia:update:set-auto-update",
+    "gaia:update:set-mode",
+    "gaia:update:skip",
     "gaia:update:set-include-prereleases",
     "gaia:update:download",
     "gaia:update:restart",
@@ -1773,8 +1944,9 @@ function init(mainWindow, options = {}) {
     state.pinnedVersion = savedPin;
     log("info", `Found persisted version pin: ${savedPin} — autoDownload will be paused`);
   }
-  const loaded = _loadAutoUpdate();
-  state.autoUpdate = loaded.autoUpdate;
+  const loaded = _loadPreferences();
+  state.updateMode = loaded.updateMode;
+  state.skippedVersion = loaded.skippedVersion;
   state.includePrereleases = loaded.includePrereleases;
   state.configError = loaded.error;
   pinUnknown = Boolean(loaded.error);
@@ -1915,9 +2087,13 @@ function _initDisabled() {
 
 function _onBeforeQuit(event) {
   _refreshPreferences();
-  if (state.status !== STATES.DOWNLOADED || !autoUpdaterRef || !autoUpdaterRef.autoInstallOnAppQuit) {
+  if (!autoUpdaterRef) return;
+  if (state.status !== STATES.DOWNLOADED) {
+    // Only the update on offer may install; an earlier download must not.
+    autoUpdaterRef.autoInstallOnAppQuit = false;
     return;
   }
+  if (!autoUpdaterRef.autoInstallOnAppQuit) return;
   // The chip's checks, for an install nobody clicks.
   if ((_isOffline() && !_backendCached()) || _diskTooFullToInstall()) {
     log("info", "Can't finish an install now: leaving the update for a later quit");
@@ -1965,7 +2141,8 @@ module.exports = {
   reportStartFailure,
   clearStartFailure,
   clearPin,
-  setAutoUpdate,
+  setUpdateMode,
+  skipUpdate,
   setIncludePrereleases,
   downloadUpdate,
   restartToInstall,

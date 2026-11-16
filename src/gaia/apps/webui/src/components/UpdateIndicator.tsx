@@ -18,22 +18,25 @@ const RELEASES_PAGE = 'https://github.com/amd/gaia/releases';
  * normal use. Wires up to the Electron main process via `gaiaUpdater`
  * (see preload.cjs + services/auto-updater.cjs). Phase F.
  *
- * Auto-update is off by default, so an available update is offered here with
- * an "Update now" button rather than downloaded behind the user's back.
+ * By default an update downloads by itself and is offered here as a restart;
+ * the ✕ says "not now", after which only Settings offers that version.
  */
 export function UpdateIndicator() {
     const update = useUpdateStatus();
     const t = useT();
     const [dismissed, setDismissed] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
+    const [skipFailed, setSkipFailed] = useState(false);
 
-    const act = useCallback((what: 'downloadUpdate' | 'restart' | 'revertUpdate') => {
+    const act = useCallback((what: 'downloadUpdate' | 'restart' | 'revertUpdate' | 'skipUpdate') => {
         const updater = getUpdaterBridge();
         if (!updater) return;
         setActionError(null);
+        setSkipFailed(false);
         updater[what]().catch((err: unknown) => {
             log.system.error(`Update ${what} failed`, err);
             setActionError(updateErrorText(err, t));
+            setSkipFailed(what === 'skipUpdate');
         });
     }, [t]);
 
@@ -69,6 +72,12 @@ export function UpdateIndicator() {
         );
     }
     const offered = update.status === 'available' || update.status === 'downloaded';
+    // In "auto" the update installs on quit either way, so there is nothing to skip.
+    const canSkip = update.manualInstall || update.updateMode !== 'auto';
+    // Skipped: Settings still offers this version, the chip doesn't, even while it downloads again.
+    if ((offered || update.status === 'downloading') && update.version && update.version === update.skippedVersion) {
+      return null;
+    }
     if (installFailedDetail && !offered) {
         return (
             <div
@@ -129,7 +138,7 @@ export function UpdateIndicator() {
                 <Download size={13} className="update-chip__icon" />
                 <span className="update-chip__label">
                     {actionError
-                        ? t('update.chip.updateFailed')
+                        ? t(skipFailed ? 'update.chip.skipFailed' : 'update.chip.updateFailed')
                         : installFailedDetail
                           ? t('update.chip.installFailed')
                           : t('update.chip.available', { version: update.version ?? '' })}
@@ -152,14 +161,17 @@ export function UpdateIndicator() {
                         {t('update.chip.updateNow')}
                     </button>
                 )}
-                <button
-                    type="button"
-                    className="update-chip__dismiss"
-                    onClick={() => setDismissed(true)}
-                    aria-label={t('update.chip.dismiss')}
-                >
-                    <X size={11} />
-                </button>
+                {canSkip && (
+                    <button
+                        type="button"
+                        className="update-chip__dismiss"
+                        onClick={() => act('skipUpdate')}
+                        aria-label={t('update.chip.skip')}
+                        title={t('update.chip.skip')}
+                    >
+                        <X size={11} />
+                    </button>
+                )}
             </div>
         );
     }
@@ -172,18 +184,32 @@ export function UpdateIndicator() {
                 aria-live="polite"
             >
                 <RefreshCw size={13} className="update-chip__icon" />
+                <span className="update-chip__label" title={actionError || installFailedDetail || undefined}>
+                    {actionError
+                        ? t(skipFailed ? 'update.chip.skipFailed' : 'update.chip.restartFailed')
+                        : installFailedDetail
+                          ? t('update.chip.installFailedRetry')
+                          : t('update.chip.ready', { version: update.version ?? '' })}
+                </span>
                 <button
                     type="button"
                     className="update-chip__action"
                     onClick={() => act('restart')}
-                    title={actionError || installFailedDetail || t('update.chip.restartTitle')}
+                    title={t('update.chip.restartTitle')}
                 >
-                    {actionError
-                        ? t('update.chip.restartFailed')
-                        : installFailedDetail
-                          ? t('update.chip.installFailedRetry')
-                          : t('update.chip.ready')}
+                    {t('update.chip.restart')}
                 </button>
+                {canSkip && (
+                    <button
+                        type="button"
+                        className="update-chip__dismiss"
+                        onClick={() => act('skipUpdate')}
+                        aria-label={t('update.chip.skip')}
+                        title={t('update.chip.skip')}
+                    >
+                        <X size={11} />
+                    </button>
+                )}
             </div>
         );
     }

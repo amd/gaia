@@ -116,7 +116,7 @@ describe('useUpdateStatus — with bridge', () => {
             error: null,
             currentVersion: '0.21.0',
             pinnedVersion: null,
-            autoUpdate: false,
+            updateMode: 'ask',
         };
 
         await act(async () => {

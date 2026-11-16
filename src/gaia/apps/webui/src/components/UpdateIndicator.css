@@ -112,3 +112,9 @@
 .update-chip--error .i18n-gloss.i18n-gloss {
     color: inherit;
 }
+
+/* "Not now" is a choice, not decoration: keep it readable on either chip. */
+.update-chip--available .update-chip__dismiss,
+.update-chip--ready .update-chip__dismiss {
+    opacity: 0.85;
+}
