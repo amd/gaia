@@ -62,6 +62,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
     ConnectorsError,
     ScopeMismatchError,
@@ -104,9 +105,14 @@ class _AgentSession:
     second turn can't corrupt the cached agent's conversation state.
     """
 
-    def __init__(self, session_id: str, agent: Any) -> None:
+    def __init__(
+        self, session_id: str, agent: Any, model_id: Optional[str] = None
+    ) -> None:
         self.session_id = session_id
         self.agent = agent
+        # The model a caller asked for when this agent was built, so a later
+        # turn that asks for a different one rebuilds instead of ignoring it.
+        self.model_id = model_id
         self.run_lock = threading.Lock()
         # (user_message, assistant_answer) pairs, oldest first.
         self.history: List[Tuple[str, str]] = []
@@ -182,7 +188,9 @@ class _SessionRegistry:
                 _close_agent(agent)
                 self._last_used[session_id] = time.monotonic()
                 return existing
-            session = _AgentSession(session_id, agent)
+            session = _AgentSession(
+                session_id, agent, model_id=config_kwargs.get("model_id")
+            )
             self._sessions[session_id] = session
             self._last_used[session_id] = time.monotonic()
             return session
@@ -406,6 +414,40 @@ class AutonomyUndoRequest(_Strict):
 # Endpoints
 # ---------------------------------------------------------------------------
 
+# The stateful routes share these failure modes; declaring them keeps the
+# published OpenAPI contract aligned with the HTTP errors callers can handle.
+_SESSION_NOT_FOUND = {404: {"description": "No such email-agent session."}}
+_ACTIVE_RUN_NOT_FOUND = {404: {"description": "No active run for this session."}}
+_CONFIRM_RESPONSES = {
+    404: {"description": "No active run awaits confirmation."},
+    409: {"description": "The run has no pending tool confirmation."},
+}
+_CONNECTOR_ERRORS = {
+    401: {
+        "description": "Mailbox authentication is missing, revoked, or needs renewal."
+    },
+    403: {"description": "The mailbox connection lacks the required permission."},
+    500: {"description": "The mailbox connector failed unexpectedly."},
+    503: {
+        "description": "Mailbox configuration is unavailable or the connection is busy.",
+        "headers": {
+            "Retry-After": {
+                "description": "Seconds to wait before retrying a busy connection.",
+                "schema": {"type": "string"},
+            }
+        },
+    },
+}
+_AGENT_QUERY_RESPONSES = {
+    200: {
+        "description": "Server-Sent Events stream for the stateful email-agent turn.",
+        "content": {"text/event-stream": {"schema": {"type": "string"}}},
+    },
+    409: {"description": "A turn is already in progress for this session."},
+    500: {"description": "The agent turn could not be started."},
+    502: {"description": "The email-agent session could not be created."},
+}
+
 
 def _connectors_error_to_http(exc: ConnectorsError) -> HTTPException:
     """Map a ``ConnectorsError`` escaping mailbox I/O to its HTTP status.
@@ -416,6 +458,11 @@ def _connectors_error_to_http(exc: ConnectorsError) -> HTTPException:
     was never the status code — it was letting the exception (and its
     already-actionable message) escape uncaught as a textless 500.
     """
+    if isinstance(exc, ConnectionBusyError):
+        # Transient: another GAIA operation is saving the connection.
+        return HTTPException(
+            status_code=503, detail=str(exc), headers={"Retry-After": "1"}
+        )
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
     if isinstance(exc, AuthRequiredError):
@@ -455,7 +502,11 @@ def _memory_status(agent: Any) -> MemoryStatusResponse:
     )
 
 
-@router.post("/session", response_model=SessionResponse)
+@router.post(
+    "/session",
+    response_model=SessionResponse,
+    responses={502: {"description": "The email-agent session could not be created."}},
+)
 async def create_session(request: SessionRequest) -> SessionResponse:
     """Create (or reset) a session and eagerly build its agent.
 
@@ -485,7 +536,7 @@ async def create_session(request: SessionRequest) -> SessionResponse:
     )
 
 
-@router.delete("/session/{session_id}")
+@router.delete("/session/{session_id}", responses=_SESSION_NOT_FOUND)
 async def delete_session(session_id: str) -> Dict[str, Any]:
     """Evict a session and tear down its agent."""
     removed = await asyncio.to_thread(registry.delete, session_id)
@@ -494,7 +545,11 @@ async def delete_session(session_id: str) -> Dict[str, Any]:
     return {"status": "ok", "deleted": True, "session_id": session_id}
 
 
-@router.get("/session/{session_id}/history", response_model=HistoryResponse)
+@router.get(
+    "/session/{session_id}/history",
+    response_model=HistoryResponse,
+    responses=_SESSION_NOT_FOUND,
+)
 async def session_history(session_id: str) -> HistoryResponse:
     """Return the session's conversation history (oldest first)."""
     session = registry.get(session_id)
@@ -506,7 +561,15 @@ async def session_history(session_id: str) -> HistoryResponse:
     )
 
 
-@router.post("/memory", response_model=MemoryStatusResponse)
+@router.post(
+    "/memory",
+    response_model=MemoryStatusResponse,
+    responses={
+        404: {"description": "No such email-agent session."},
+        409: {"description": "The requested memory state could not be applied."},
+        501: {"description": "This agent build has no memory toggle."},
+    },
+)
 async def toggle_memory(request: MemoryToggleRequest) -> MemoryStatusResponse:
     """Enable/disable the session agent's memory at runtime (#1666).
 
@@ -536,7 +599,11 @@ async def toggle_memory(request: MemoryToggleRequest) -> MemoryStatusResponse:
     return status
 
 
-@router.get("/memory/{session_id}", response_model=MemoryStatusResponse)
+@router.get(
+    "/memory/{session_id}",
+    response_model=MemoryStatusResponse,
+    responses=_SESSION_NOT_FOUND,
+)
 async def memory_status(session_id: str) -> MemoryStatusResponse:
     """Report the session agent's current memory state without changing it."""
     session = registry.get(session_id)
@@ -545,7 +612,13 @@ async def memory_status(session_id: str) -> MemoryStatusResponse:
     return _memory_status(session.agent)
 
 
-@router.get("/autonomy/{session_id}")
+@router.get(
+    "/autonomy/{session_id}",
+    responses={
+        404: {"description": "No such email-agent session."},
+        501: {"description": "This agent build has no autonomy surface."},
+    },
+)
 async def autonomy_status(session_id: str) -> Dict[str, Any]:
     """Inspectable snapshot: level, thresholds, and the earned-trust ledger.
 
@@ -563,7 +636,14 @@ async def autonomy_status(session_id: str) -> Dict[str, Any]:
     return status_fn()
 
 
-@router.post("/autonomy")
+@router.post(
+    "/autonomy",
+    responses={
+        404: {"description": "No such email-agent session."},
+        400: {"description": "The autonomy level is invalid."},
+        501: {"description": "This agent build has no autonomy surface."},
+    },
+)
 async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
     """Set the autonomy level at runtime — pause/resume/kill (``off``).
 
@@ -594,12 +674,15 @@ async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
 @router.post(
     "/autonomy/run",
     responses={
+        404: {"description": "No such email-agent session."},
         409: {
             "description": (
                 "Autonomy is off for this session — the kill switch refuses "
                 "the run instead of silently doing nothing (#2528)."
             )
-        }
+        },
+        501: {"description": "This agent build has no autonomy surface."},
+        **_CONNECTOR_ERRORS,
     },
 )
 async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
@@ -645,7 +728,16 @@ async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.post("/autonomy/undo")
+@router.post(
+    "/autonomy/undo",
+    responses={
+        400: {"description": "This action type has no reversal implemented."},
+        404: {"description": "No such email-agent session."},
+        409: {"description": "Unknown, expired, or already-undone action id."},
+        501: {"description": "This agent build has no autonomy undo."},
+        **_CONNECTOR_ERRORS,
+    },
+)
 async def undo_autonomy(request: AutonomyUndoRequest) -> Dict[str, Any]:
     """Undo one autonomy-executed action, feeding a correction to the trust
     ledger (#2529).
@@ -677,7 +769,7 @@ async def undo_autonomy(request: AutonomyUndoRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/confirm-tool")
+@router.post("/confirm-tool", responses=_CONFIRM_RESPONSES)
 async def confirm_tool(request: ToolConfirmRequest) -> Dict[str, Any]:
     """Approve or deny a tool call the agent is blocking on.
 
@@ -690,11 +782,19 @@ async def confirm_tool(request: ToolConfirmRequest) -> Dict[str, Any]:
         raise HTTPException(
             status_code=404, detail="No active run awaiting confirmation."
         )
-    session.handler.resolve_tool_confirmation(request.approved)
+    delivered = session.handler.resolve_tool_confirmation(request.approved)
+    if not delivered:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No tool confirmation is pending on this run"
+                " — it was already answered, timed out, or never asked."
+            ),
+        )
     return {"status": "ok", "approved": request.approved}
 
 
-@router.post("/cancel")
+@router.post("/cancel", responses=_ACTIVE_RUN_NOT_FOUND)
 async def cancel_run(request: CancelRequest) -> Dict[str, Any]:
     """Request cancellation of an in-flight run (cooperative, not a kill)."""
     session = registry.get(request.session_id)
@@ -713,7 +813,7 @@ def _extract_answer(result: Any) -> str:
     return str(result or "")
 
 
-@router.post("/query")
+@router.post("/query", responses=_AGENT_QUERY_RESPONSES)
 async def query(request: AgentQueryRequest) -> StreamingResponse:
     """Run one conversational turn and stream the agent loop as SSE.
 

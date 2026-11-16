@@ -14,6 +14,8 @@ So a grant is keyed on the *invocation*, not the tool name:
     run_shell_command  command="cd p && python -m pytest -q 2>&1"
                                                  ->  run_shell_command:pytest
     write_file         file_path="notes.md"      ->  write_file:notes.md
+    (safe host-resolved folder)                  ->  file_change:/project/*
+    (home/PATH/hidden safety path)               ->  write_file:/home/u/notes.md
 
 A shell grant covers a command *family*: the program and its subcommand,
 wherever it sits in a line. A ``cd``, a harmless redirection (``2>&1``) and a
@@ -36,17 +38,28 @@ it. Scoping keeps the affordance and takes away the blast radius.
 
 from __future__ import annotations
 
+import glob
+import ntpath
+import os
 import posixpath
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from gaia.agents.base.call_risk import DESTRUCTIVE, shell_command_risk
+from gaia.agents.base.call_risk import DESTRUCTIVE, RISK_NOTE_ARG, shell_command_risk
 from gaia.agents.base.command_facts import (
     PYTHON_BINARIES,
     binary_name,
     effective_argv,
+    line_words,
     read_command,
 )
+from gaia.agents.base.write_safety import (
+    has_hidden_part,
+    is_too_broad_folder,
+    lands_where_code_runs,
+)
+from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 #: Binaries whose name bounds nothing: they run whatever they are handed, so
 #: "allow `bash` this session" is "allow everything this session" wearing a
@@ -112,6 +125,78 @@ _READ_FILTERS = frozenset(
 #: a flag could redirect: `pytest -q tests/` is still `pytest`.
 _FLAG_FIRST_BINARIES = frozenset({"pytest", "ls", "grep", "unittest"})
 
+#: Families that run code the command itself does not show — test files, a
+#: Makefile, a package's setup script. Their grant label says so, because the
+#: code behind the same family can change between one prompt and the next.
+#: Matched against the family's leading words.
+_RUNS_CODE = {
+    "python -m": "runs that Python module",
+    "pytest": "runs the test code it finds",
+    "unittest": "runs the test code it finds",
+    "jest": "runs the test code it finds",
+    "vitest": "runs the test code it finds",
+    "mocha": "runs the test code it finds",
+    "tox": "runs the project's configured commands",
+    "nox": "runs the project's configured commands",
+    "make": "runs the Makefile's commands",
+    "gmake": "runs the Makefile's commands",
+    "nmake": "runs the Makefile's commands",
+    "ninja": "runs the build file's commands",
+    "cmake": "runs the project's build scripts",
+    "mvn": "runs the project's build scripts",
+    "gradle": "runs the project's build scripts",
+    "gradlew": "runs the project's build scripts",
+    "rake": "runs the Rakefile's tasks",
+    "go run": "builds and runs Go code",
+    "go test": "runs Go test code",
+    "go generate": "runs commands named in Go files",
+    "cargo run": "builds and runs Rust code",
+    "cargo test": "runs Rust test code",
+    "cargo build": "runs the crates' build scripts",
+    "dotnet run": "builds and runs .NET code",
+    "dotnet test": "runs .NET test code",
+    "npm run": "runs the package's scripts",
+    "npm test": "runs the package's scripts",
+    "npm start": "runs the package's scripts",
+    "npm install": "runs the package's scripts",
+    "npm i": "runs the package's scripts",
+    "npm ci": "runs the package's scripts",
+    "npm add": "runs the package's scripts",
+    "npm rebuild": "runs the package's scripts",
+    "pnpm run": "runs the package's scripts",
+    "pnpm test": "runs the package's scripts",
+    "pnpm start": "runs the package's scripts",
+    "pnpm install": "runs the package's scripts",
+    "pnpm i": "runs the package's scripts",
+    "pnpm ci": "runs the package's scripts",
+    "pnpm add": "runs the package's scripts",
+    "pnpm rebuild": "runs the package's scripts",
+    "yarn": "runs the package's scripts",
+    "pip install": "runs the package's setup code",
+    "pip3 install": "runs the package's setup code",
+    "uv pip": "runs the package's setup code",
+    "uv sync": "runs the project's setup code",
+    "uv build": "runs the project's setup code",
+    "poetry install": "runs the project's setup code",
+    "pipenv install": "runs the package's setup code",
+    "pdm install": "runs the project's setup code",
+}
+
+#: ``<tool> <verb>`` that runs whatever follows it, like a shell would. The
+#: family is the wrapper plus what it runs: `uv run pytest`, never `uv run`.
+_RUN_WRAPPERS = frozenset(
+    {
+        ("uv", "run"),
+        ("poetry", "run"),
+        ("pipenv", "run"),
+        ("pdm", "run"),
+        ("hatch", "run"),
+        ("rye", "run"),
+        ("conda", "run"),
+        ("bundle", "exec"),
+    }
+)
+
 #: How many words after the binary a shell grant may cover. Two is enough for
 #: the command-group/subcommand shape most CLIs use (``gh issue list``,
 #: ``git remote add``) and stops well short of the arguments.
@@ -121,12 +206,11 @@ _MAX_SHELL_SCOPE_WORDS = 2
 #: ``command`` is a shell command like any other — scoping the grant keeps
 #: "always" from becoming "any command, as long as you poll with it" or "as
 #: long as it runs in the background".
-_SHELL_TOOLS = frozenset(
-    {"run_shell_command", "run_cli_command", "wait_for_condition", "start_process"}
-)
+_SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition", "start_process"})
 
-#: Tools whose blast radius is one path. The grant is that exact path — not its
-#: directory: the prompt named a file, so the grant covers a file.
+#: Tools whose blast radius is one path. A prompt for a file inside a named
+#: folder may offer a chat-scoped folder grant; a bare filename stays exact so
+#: it cannot silently follow a changing working directory.
 PATH_TOOLS = frozenset(
     {
         "write_file",
@@ -139,6 +223,24 @@ PATH_TOOLS = frozenset(
         "save_extracted_items",
     }
 )
+
+#: Tools that change a text file in place. A folder grant on any of them is one
+#: grant, "changes to files in <folder>", so a write's "always" covers an edit there.
+_FILE_CHANGE_TOOLS = frozenset({"write_file", "write_markdown_file", "edit_file"})
+_FILE_CHANGE_FAMILY = "file_change"
+
+#: Programs that only rename or move a file. A plain call that keeps the file in
+#: one folder is a change there, and a folder grant covers it. Off Windows,
+#: ``rename`` is often Perl's, whose first argument is code it runs. On Windows
+#: only cmd.exe's built-ins: it runs an ``mv.bat`` in the folder ahead of PATH.
+_RENAME_PROGRAMS = (
+    frozenset({"ren", "rename", "move"}) if os.name == "nt" else frozenset({"mv"})
+)
+#: Of those, cmd.exe's, whose new name is a bare name in the source's own folder.
+_RENAME_IN_PLACE = frozenset({"ren", "rename"})
+#: Characters a shell acts on. cmd.exe does so inside single quotes too, where
+#: this module reads them as part of a name, so a line holding one is never plain.
+_RENAME_SHELL_CHARS = frozenset("'`^&|<>;,=()!%$~{}*?[]")
 
 _PATH_ARG_NAMES = ("file_path", "path", "filename", "file", "target_file")
 _COMMAND_ARG_NAMES = ("command", "cmd", "script", "command_line")
@@ -159,12 +261,26 @@ _SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
 #: become "always allow any path" — each new path is asked about on its own.
 PATH_ACCESS_PROMPT_TOOL = "allow_path_access"
 
-_UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
+#: The prompt asking whether to read a project folder's CLAUDE.md, AGENTS.md and
+#: skills (:mod:`gaia.project_trust`). Not a registered tool, and ungrantable: the
+#: answer is kept per folder in the trust store, never as an "always" grant.
+PROJECT_TRUST_PROMPT_TOOL = "trust_project_folder"
+
+_UNGRANTABLE_TOOLS = frozenset(
+    {"capture_skill", PATH_ACCESS_PROMPT_TOOL, PROJECT_TRUST_PROMPT_TOOL}
+)
+
+#: Prompt argument set by the agent (never the model) when a script it runs sits
+#: in its own scratch folder. Such a call is never offered "always".
+SCRATCH_ARG = "_scratch_dir"
+#: Prompt-only absolute target derived by the host's file preflight. It makes a
+#: folder grant stable without changing the tool's model-supplied arguments.
+RESOLVED_PATH_ARG = "_resolved_file_path"
 
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
 _FAMILY_TOOLS = {
-    "run_python": "Python snippets (run_python)",
+    "run_python": "Python snippets",
     "execute_python_file": "running Python files",
     "notify_desktop": "desktop notifications",
 }
@@ -182,6 +298,11 @@ class GrantScope:
 
     keys: Tuple[str, ...]
     label: str
+    #: The file or skill the grant names, for a front-end to phrase in its own words.
+    subject: str = ""
+    #: What "always" covers as a sentence says it ("changing files in X"), when the
+    #: tool's own verb would say less than the grant covers.
+    phrase: str = ""
 
     @property
     def key(self) -> str:
@@ -195,8 +316,15 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
     ``None`` means the UI must not offer "always" for this call.
     """
     args = tool_args if isinstance(tool_args, dict) else {}
-    if tool_name in _UNGRANTABLE_TOOLS:
+    if tool_name in _UNGRANTABLE_TOOLS or args.get(RISK_NOTE_ARG):
         return None
+    # Scratch writes never ask, so no prompt shows what a later run there does.
+    if args.get(SCRATCH_ARG):
+        return None
+    if tool_name == "run_shell_command":
+        renamed = _rename_scope(args)
+        if renamed is not None:
+            return renamed
     if tool_name in _SHELL_TOOLS:
         return _shell_scope(tool_name, args)
     if tool_name in PATH_TOOLS:
@@ -208,12 +336,247 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
     return None
 
 
+def is_inside_folder(path: str, folder: str) -> bool:
+    """True when *path* resolves to something strictly inside *folder*.
+
+    Both sides go through ``realpath``, so a symlink, junction, 8.3 name or
+    ``..`` is judged by where it really lands, never by how it is spelled. A
+    spelling ``realpath`` leaves distinct (``\\\\?\\``, a UNC share, a case
+    variant on macOS) is caught by file identity. A path that cannot be
+    resolved counts as inside: the caller then asks instead of trusting it.
+    """
+    if not path or not folder:
+        return False
+    try:
+        real_path = os.path.realpath(path)
+        real_folder = os.path.realpath(folder)
+    except (OSError, ValueError):
+        return True
+    case_path, case_folder = os.path.normcase(real_path), os.path.normcase(real_folder)
+    try:
+        if case_path != case_folder and (
+            os.path.commonpath([case_path, case_folder]) == case_folder
+        ):
+            return True
+    except ValueError:
+        pass  # different drives or roots: fall through to file identity
+    parent = os.path.dirname(real_path)
+    while True:
+        try:
+            if os.path.samefile(parent, real_folder):
+                return True
+        except OSError:
+            pass
+        up = os.path.dirname(parent)
+        if up == parent:
+            return False
+        parent = up
+
+
+#: Programs that move the rest of a line into another folder.
+_CHDIR = frozenset({"cd", "pushd", "chdir", "set-location", "sl"})
+
+#: Programs that return to a folder the line does not name.
+_CHDIR_BACK = frozenset({"popd", "pop-location"})
+
+#: A variable the shell may fill in that GAIA's own environment does not hold.
+_UNSET_VARIABLE = re.compile(r"\$(\{|[A-Za-z_])")
+_WHOLE_VARIABLE = re.compile(r"\$(\{\w+\}|\w+)")
+
+#: Wildcard matches checked before a word is counted as reaching the folder.
+_MAX_GLOB_MATCHES = 200
+
+
+def command_reaches_folder(command: str, cwds: Sequence[str], folder: str) -> bool:
+    """True when a shell line runs in *folder*, or any word of it lands there.
+
+    Every word — arguments, ``--opt=value`` and ``NAME=value`` values, a
+    ``PATH``-style list — is read as a path against each folder the line may
+    run in: the given ones and every ``cd`` target, so relative and ``..``
+    spellings count. Each is judged by :func:`is_inside_folder`, so links and
+    other spellings of *folder* do too. Anything that cannot be pinned down
+    counts as reaching it: an unreadable line, a variable the line sets
+    itself, ``cd -``, a network path.
+    """
+    if not folder or not isinstance(command, str) or not command.strip():
+        return False
+    lines = line_words(command)
+    if lines is None:
+        return True
+    lands = _Lands(folder)
+    bases = [c for c in cwds if c] or [os.getcwd()]
+    if any(lands(base) for base in bases):
+        return True
+    for words in lines:
+        program = binary_name(words[0])
+        if program in _CHDIR_BACK or (program in _CHDIR and "-" in words[1:]):
+            return True
+        if program in _CHDIR:
+            # Every word may be the target: `cd /d X` on cmd, `-Path X` on pwsh.
+            targets = [w for w in words[1:] if not w.startswith("-")] or ["~"]
+            if any(_UNSET_VARIABLE.search(_spellings(t)[-1]) for t in targets):
+                return True
+            moved = [
+                os.path.join(base, spelling)
+                for base in bases
+                for target in targets
+                for spelling in _spellings(target)
+            ]
+            if any(lands(path) for path in moved):
+                return True
+            bases.extend(moved)
+        for word in words:
+            for value in _path_candidates(word):
+                spellings = _spellings(value)
+                if _names_an_unknown_path(spellings[-1]):
+                    return True
+                for spelling in spellings:
+                    if any(lands(os.path.join(base, spelling)) for base in bases):
+                        return True
+    return False
+
+
+def _names_an_unknown_path(text: str) -> bool:
+    """True when the shell, not GAIA, decides which path *text* names.
+
+    `$A` or `$A/x` does; `awk '{print $NF}'` and `jq '$x'` name no path.
+    """
+    if not _UNSET_VARIABLE.search(text):
+        return False
+    return bool(_WHOLE_VARIABLE.fullmatch(text)) or "/" in text or "\\" in text
+
+
+def _path_candidates(word: str) -> List[str]:
+    """Every reading of one shell word that could name a path."""
+    found = [word]
+    if "=" in word:
+        found.append(word.split("=", 1)[1])
+    if word.startswith("-") and not word.startswith("--") and len(word) > 2:
+        found.append(word[2:])  # -Cdir, -rreq.txt
+    for value in list(found):
+        # A URL's `//host` is not a path list's second entry.
+        seps = (";", ",") if "://" in value else (os.pathsep, ";", ":", ",")
+        for sep in seps:
+            if sep in value:
+                found.extend(part for part in value.split(sep) if len(part) > 1)
+    return [value for value in found if value]
+
+
+def _spellings(word: str) -> List[str]:
+    """*word* as written, and with ``~`` and environment variables expanded."""
+    expanded = os.path.expandvars(os.path.expanduser(word))
+    return [word] if expanded == word else [word, expanded]
+
+
+def _is_network_path(path: str) -> bool:
+    """A Windows path on another machine: looking at it would contact that host."""
+    if os.name != "nt":
+        return False
+    path = path.replace("/", "\\")
+    if path.startswith(("\\\\?\\", "\\\\.\\")):
+        rest = path[4:]
+        return rest[:4].upper() == "UNC\\" or not (len(rest) > 1 and rest[1] == ":")
+    return path.startswith("\\\\")
+
+
+class _Lands:
+    """:func:`is_inside_folder` for one folder, or the folder itself.
+
+    One shell line asks about many paths under the same few folders, so the
+    folder's identity and each parent's are looked up once. A network path is
+    never looked at, and counts as landing there.
+    """
+
+    def __init__(self, folder: str) -> None:
+        self.folder = folder
+        try:
+            self.real = os.path.normcase(os.path.realpath(folder))
+            self.stat = os.stat(folder)
+        except (OSError, ValueError):
+            self.real, self.stat = "", None
+        self.seen: Dict[str, bool] = {}
+        self.asked: Dict[str, bool] = {}
+
+    def __call__(self, path: str) -> bool:
+        if path not in self.asked:
+            self.asked[path] = self._lands_any(path)
+        return self.asked[path]
+
+    def _lands_any(self, path: str) -> bool:
+        if _is_network_path(path):
+            return True
+        if not glob.has_magic(path):
+            return self._lands(path)
+        if self._lands(path):
+            return True
+        # `scratch-?/new.py` matches nothing yet, but its folder part does.
+        pattern = path
+        while glob.has_magic(pattern):
+            for count, match in enumerate(glob.iglob(pattern)):
+                if count >= _MAX_GLOB_MATCHES or self._lands(match):
+                    return True
+            pattern = os.path.dirname(pattern)
+        return False
+
+    def _lands(self, path: str) -> bool:
+        try:
+            real = os.path.normcase(os.path.realpath(path))
+        except (OSError, ValueError):
+            return True
+        if _is_network_path(real):
+            return True
+        if not self.real:
+            return is_inside_folder(path, self.folder)
+        try:
+            if os.path.commonpath([real, self.real]) == self.real:
+                return True
+        except ValueError:
+            pass  # different drives or roots: fall through to file identity
+        while True:
+            if real not in self.seen:
+                self.seen[real] = self._same(real)
+            if self.seen[real]:
+                return True
+            up = os.path.dirname(real)
+            if up == real:
+                return False
+            real = up
+
+    def _same(self, path: str) -> bool:
+        try:
+            return os.path.samestat(os.stat(path), self.stat)
+        except (OSError, ValueError):
+            return False
+
+
 def _first_str(args: Dict[str, Any], names: Sequence[str]) -> str:
     for name in names:
         value = args.get(name)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+#: GAIA's CLI under each name it answers to. ``gaia-cli`` stays because an
+#: install from before 0.26 still has it as an alias of the Python CLI.
+_GAIA_CLI_NAMES = frozenset({"gaia", "gaia-cli", "gaia.cli"})
+
+
+def _runs_gaia_unattended_family(segment: Sequence[str]) -> bool:
+    """True when *segment* reaches ``gaia automation`` or ``gaia discord``,
+    however GAIA's CLI is spelled (``python -m gaia.cli``, an old ``gaia-cli``)."""
+    words = list(segment)
+    return any(
+        _names_gaia_cli(word) and words[i + 1].lower() in ("automation", "discord")
+        for i, word in enumerate(words[:-1])
+    )
+
+
+def _names_gaia_cli(word: str) -> bool:
+    if word.startswith("-m") and len(word) > 2:  # python -mgaia.cli
+        word = word[2:]
+    path = word.replace("\\", "/").lower()
+    return binary_name(word) in _GAIA_CLI_NAMES or path.endswith("gaia/cli.py")
 
 
 def _shell_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
@@ -228,23 +591,50 @@ def _shell_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     if shell_command_risk(command) == DESTRUCTIVE:
         return None
 
+    # Each automation or watch runs unattended from then on; "always" for the
+    # family would approve every later one, whatever it checks or says.
+    if any(_runs_gaia_unattended_family(s) for s in facts.segments):
+        return None
+
     segments = [s for s in facts.segments if binary_name(s[0]) not in _TRANSPARENT]
     significant = [s for s in segments if binary_name(s[0]) not in _READ_FILTERS]
     # A line that only reads (`echo hello`, `cat x | head`) is granted as itself.
     chosen = significant or segments[:1] or facts.segments[:1]
 
+    families: List[str] = []
     labels: List[str] = []
     for segment in chosen:
-        label = _family(segment)
-        if label is None:
+        found = _family(segment)
+        if found is None:
             return None
-        if label not in labels:
+        family, label = found
+        if family not in families:
+            families.append(family)
             labels.append(label)
-    keys = tuple(f"{tool_name}:{label}" for label in labels)
+    keys = tuple(f"{tool_name}:{family}" for family in families)
     return GrantScope(keys=keys, label=", ".join(labels))
 
 
-def _family(argv: Tuple[str, ...]) -> Optional[str]:
+def _family(argv: Tuple[str, ...]) -> Optional[Tuple[str, str]]:
+    """``(family, label)`` for one simple command, or None if it has none.
+
+    The family is what the grant records; the label is what the prompt shows,
+    and it says when the family runs code the command line does not.
+    """
+    family = _family_name(argv)
+    if family is None:
+        return None
+    words = family.split()
+    if len(words) > 2 and (words[0], words[1]) in _RUN_WRAPPERS:
+        words = words[2:]
+    for n in (2, 1):
+        what = _RUNS_CODE.get(" ".join(words[:n]))
+        if what:
+            return family, f"{family} ({what})"
+    return family, family
+
+
+def _family_name(argv: Tuple[str, ...]) -> Optional[str]:
     """The family one simple command belongs to, or None if it has none."""
     binary = binary_name(argv[0])
     if binary in PYTHON_BINARIES:
@@ -261,12 +651,30 @@ def _family(argv: Tuple[str, ...]) -> Optional[str]:
         binary = argv[0]
         if binary in PYTHON_BINARIES:
             return "python (any script)"
+        # A module is found in the working folder first, so `python -m explore`
+        # runs whatever explore.py is there: it is never just "explore".
+        if binary not in _RUNS_CODE and binary not in ("pip", "pip3", "uv"):
+            if not all(_is_subcommand_word(part) for part in binary.split(".")):
+                return None
+            return f"python -m {binary}"
     elif binary in _INTERPRETERS:
         return f"{binary} (any script)"
     if not binary or binary in _UNBOUNDED_BINARIES:
         return None
 
     rest = argv[1:]
+    if rest and (binary, rest[0]) in _RUN_WRAPPERS:
+        inner = rest[1:]
+        # Flags here may take a value, so where the command starts is unknown.
+        if not inner or inner[0].startswith("-"):
+            return None
+        if not _is_subcommand_word(inner[0]):
+            return f"{binary} {rest[0]} (any script)"
+        inner_family = _family_name(tuple(inner))
+        if inner_family is None:
+            return None
+        return f"{binary} {rest[0]} {inner_family}"
+
     # A flag before any subcommand redirects what the command acts on —
     # `git -C /elsewhere commit` is not `git commit`. Neither scope is honest:
     # `git commit` hides the redirection, and a bare `git` covers every
@@ -303,13 +711,156 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     raw = path_argument(args)
     if not raw:
         return None
-    # Normalised for matching, never resolved: this must stay a pure function of
-    # the arguments, so it cannot depend on the filesystem or the process's cwd.
+    # The key is built from the arguments; only whether a folder grant may cover
+    # the file reads the filesystem, so a link out of the folder keeps asking.
     normalised = posixpath.normpath(raw.replace("\\", "/"))
-    display = posixpath.basename(normalised) or normalised
+    resolved_target = ""
+    resolved = args.get(RESOLVED_PATH_ARG)
+    if isinstance(resolved, str):
+        resolved_for_match = resolved.replace("\\", "/")
+        if ntpath.isabs(resolved) or posixpath.isabs(resolved_for_match):
+            resolved_target = posixpath.normpath(resolved_for_match)
+            parent = posixpath.dirname(resolved_target)
+            if (
+                parent not in ("", ".", "/")
+                and not re.fullmatch(r"[A-Za-z]:", parent)
+                and _folder_grant_is_safe(resolved_target, parent)
+            ):
+                if tool_name in _FILE_CHANGE_TOOLS:
+                    return _file_change_scope(parent, resolved)
+                return GrantScope(
+                    keys=(f"{tool_name}:{parent}/*",),
+                    label=f"{tool_name} on files in {parent}",
+                    subject=f"files in {parent}",
+                )
+    exact = resolved_target or normalised
+    exact_display = posixpath.basename(exact) or exact
     return GrantScope(
-        keys=(f"{tool_name}:{normalised}",), label=f"{tool_name} on {display}"
+        keys=(f"{tool_name}:{exact}",),
+        label=f"{tool_name} on {exact_display}",
+        subject=exact_display,
     )
+
+
+def _file_change_scope(parent: str, as_written: str) -> GrantScope:
+    """The one folder grant writes, edits and renames in *parent* share."""
+    shown = parent.replace("/", "\\") if "\\" in as_written else parent
+    return GrantScope(
+        keys=(f"{_FILE_CHANGE_FAMILY}:{parent}/*",),
+        label=f"changes to files in {shown}",
+        subject=f"files in {shown}",
+        phrase=f"changing files in {shown}",
+    )
+
+
+def _rename_operand(word: str, cwd: Any) -> Optional[str]:
+    """*word* as an absolute path, or None when the shell, not GAIA, decides it.
+
+    A network path, a device name, a name Windows rewrites or a path through
+    ``..`` is None too, and is checked before anything on disk is looked at.
+    """
+    if not word or word.startswith("-") or glob.has_magic(word):
+        return None
+    if any(ch in word for ch in "$%~`"):
+        return None
+    if os.path.isabs(word):
+        written = word
+    elif isinstance(cwd, str) and os.path.isabs(cwd):
+        written = os.path.join(cwd, word)
+    else:
+        return None
+    # `link/..` is the link target's parent on disk, not the folder it is spelled in.
+    if ".." in re.split(r"[\\/]", written):
+        return None
+    path = os.path.normpath(written)
+    if _is_network_path(word) or _is_network_path(path):
+        return None
+    try:
+        safe_path_segment(os.path.basename(path))
+    except UnsafePathSegment:
+        return None
+    return path
+
+
+def _rename_scope(args: Dict[str, Any]) -> Optional[GrantScope]:
+    """A plain rename that keeps a file in one safe folder, as that folder's change grant.
+
+    Only one program with exactly two path operands and nothing else on the
+    line: no flags, wildcards, variables, redirects or second command. Both
+    names must sit directly in the same folder, under the same safety rules a
+    folder write grant uses, and the new name must be free. Anything else
+    returns None and is asked about.
+    """
+    command = _first_str(args, _COMMAND_ARG_NAMES)
+    if any(ch in _RENAME_SHELL_CHARS or ord(ch) < 32 for ch in command):
+        return None
+    # Off Windows a backslash is an escape to the shell and part of a name here.
+    if os.name != "nt" and "\\" in command:
+        return None
+    facts = read_command(command)
+    if facts.opaque or facts.writes_file or len(facts.segments) != 1:
+        return None
+    argv = facts.segments[0]
+    # The bare word only: `./mv` or `mv.bat` is whatever file sits at that path.
+    program = argv[0].lower() if os.name == "nt" else argv[0]
+    if program not in _RENAME_PROGRAMS or len(argv) != 3:
+        return None
+    cwd = args.get("working_directory")
+    source = _rename_operand(argv[1], cwd)
+    if source is None:
+        return None
+    # A folder or a link is not one of the folder's files.
+    if not os.path.isfile(source) or os.path.islink(source):
+        return None
+    folder = os.path.dirname(source)
+    if program in _RENAME_IN_PLACE:
+        if "/" in argv[2] or "\\" in argv[2] or argv[2] in (".", ".."):
+            return None
+        dest = _rename_operand(os.path.join(folder, argv[2]), cwd)
+    else:
+        dest = _rename_operand(argv[2], cwd)
+    # A name already taken would be replaced, and a folder would take the file out.
+    if dest is None or os.path.lexists(dest):
+        return None
+    if os.path.normcase(os.path.dirname(dest)) != os.path.normcase(folder):
+        return None
+    if not all(_folder_grant_is_safe(path, folder) for path in (source, dest)):
+        return None
+    parent = posixpath.dirname(posixpath.normpath(source.replace("\\", "/")))
+    if parent in ("", ".", "/") or re.fullmatch(r"[A-Za-z]:", parent):
+        return None
+    return _file_change_scope(parent, source)
+
+
+def _folder_grant_is_safe(target: str, parent: str) -> bool:
+    """True when a grant on *parent* may cover writes to *target* unasked.
+
+    The write rules apply to where the file really lands as well as to the
+    folder that was asked about. A file whose resolved location is in another
+    folder, or that shares its content with another name, is asked about on
+    its own: a grant names one folder and covers nothing outside it.
+    """
+    try:
+        real_target = os.path.realpath(target)
+        real_parent = os.path.realpath(parent)
+    except (OSError, ValueError):
+        return False
+    if os.path.normcase(os.path.dirname(real_target)) != os.path.normcase(real_parent):
+        return False
+    if is_too_broad_folder(parent) or is_too_broad_folder(real_parent):
+        return False
+    for path in (target, real_target):
+        if has_hidden_part(path.replace("\\", "/").split("/")):
+            return False
+        if lands_where_code_runs(path):
+            return False
+    # Writes go into the file in place, so another name for it changes too.
+    try:
+        if os.path.isfile(real_target) and os.stat(real_target).st_nlink > 1:
+            return False
+    except OSError:
+        return False
+    return True
 
 
 def _named_scope(
@@ -318,13 +869,20 @@ def _named_scope(
     value = _first_str(args, names)
     if not value:
         return None
-    return GrantScope(keys=(f"{tool_name}:{value}",), label=f"{tool_name} {value}")
+    return GrantScope(
+        keys=(f"{tool_name}:{value}",), label=f"{tool_name} {value}", subject=value
+    )
 
 
 __all__ = [
     "GrantScope",
     "PATH_ACCESS_PROMPT_TOOL",
     "PATH_TOOLS",
+    "PROJECT_TRUST_PROMPT_TOOL",
+    "RISK_NOTE_ARG",
+    "SCRATCH_ARG",
+    "command_reaches_folder",
     "grant_scope",
+    "is_inside_folder",
     "path_argument",
 ]

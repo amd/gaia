@@ -49,7 +49,9 @@ if str(_REPO_ROOT) not in sys.path:
 
 pytest.importorskip("gaia_agent_email")
 
-from gaia_agent_email.tools import attention_tools as attention_tools_module  # noqa: E402
+from gaia_agent_email.tools import (  # noqa: E402
+    attention_tools as attention_tools_module,
+)
 from gaia_agent_email.tools import read_tools as read_tools_module  # noqa: E402
 from gaia_agent_email.tools.attention_tools import _needs_review_item  # noqa: E402
 from gaia_agent_email.tools.read_tools import (  # noqa: E402
@@ -216,7 +218,10 @@ class TestEveryEmittedRationaleIsClean:
             "category": "FYI",
             "rationale": "Looks like an automated update",
         }
-        prefs = {"priority_senders": {"boss@example.com"}, "low_priority_senders": set()}
+        prefs = {
+            "priority_senders": {"boss@example.com"},
+            "low_priority_senders": set(),
+        }
         out = _apply_session_preferences(decision, prefs)
         assert not _reason_violations(out["rationale"]), out["rationale"]
         # #2632 requires the rule stated explicitly ("category unchanged"),
@@ -282,7 +287,9 @@ class TestEveryEmittedRationaleIsClean:
         reason juxtaposed against a CONFIDENT verdict it now contradicts.
         The fix drops that parenthetical entirely."""
         gmail = FakeGmailBackend(user_email="me@example.com")
-        gmail.add_message(_msg("nosig-1"))  # no label/keyword signal -> heuristic unconfident
+        gmail.add_message(
+            _msg("nosig-1")
+        )  # no label/keyword signal -> heuristic unconfident
         out = triage_inbox_impl(
             gmail,
             max_messages=10,
@@ -302,7 +309,11 @@ class TestEveryEmittedRationaleIsClean:
 
     def test_needs_review_fallback_prefers_a_real_rationale_when_present(self):
         item = _needs_review_item(
-            {"id": "m1", "subject": "Random note", "rationale": "Looks like an automated update"},
+            {
+                "id": "m1",
+                "subject": "Random note",
+                "rationale": "Looks like an automated update",
+            },
             provider=None,
         )
         assert item["why"] == "Looks like an automated update"

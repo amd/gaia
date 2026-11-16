@@ -38,6 +38,43 @@ describe("gaia-ui help for release candidates", () => {
   });
 });
 
+// The backend registers with GAIA's daemon as part of this launcher, so the
+// daemon unloads GAIA's models once the launcher exits.
+describe("gaia-ui tells its backend which app it belongs to", () => {
+  test("the backend sees GAIA_APP_PID set to the launcher's pid", async () => {
+    const fs = require("fs");
+    const os = require("os");
+    const path = require("path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gaia-ui-env-"));
+    const probe = path.join(dir, "probe.cjs");
+    // Runs in the child before node looks for the (missing) "chat" module.
+    fs.writeFileSync(
+      probe,
+      'console.log("GAIA_APP_PID=" + process.env.GAIA_APP_PID); process.exit(3);'
+    );
+    const savedOptions = process.env.NODE_OPTIONS;
+    // Forward slashes: NODE_OPTIONS treats a backslash as an escape.
+    process.env.NODE_OPTIONS = `--require "${probe.split(path.sep).join("/")}"`;
+    const err = jest.spyOn(console, "error").mockImplementation(() => {});
+    const log = jest.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const code = await new Promise((resolve) => {
+        startBackend(process.execPath, 0, resolve);
+      });
+      expect(code).toBe(3);
+      expect(log.mock.calls.flat().join(" ")).toContain(
+        `GAIA_APP_PID=${process.pid}`
+      );
+    } finally {
+      if (savedOptions === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = savedOptions;
+      err.mockRestore();
+      log.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // A backend that dies at startup (e.g. a PATH `gaia` without the [ui] extras)
 // used to leave gaia-ui waiting 30 s, then suggest a dead URL and exit 0.
 describe("gaia-ui when the backend dies", () => {

@@ -53,5 +53,5 @@ def test_an_empty_batch_raises_instead_of_shifting_chunks():
             return {"data": []}  # whole batch came back empty
         return {"data": []} if texts == ["bb"] else _vectors(texts)
 
-    with pytest.raises(RuntimeError, match=r"returned 0/3 vectors"):
+    with pytest.raises(RuntimeError, match=r"no vectors"):
         _sdk(embeddings)._encode_texts(["a", "bb", "ccc"])

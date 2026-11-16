@@ -2,9 +2,106 @@
 
 What's new in `@amd-gaia/agent-email`, in plain language. For the technical detail
 behind any entry — API shapes, endpoints, and version semantics — see
-[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.6.0/hub/agents/email/npm/SPEC.md).
+[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-0.6.0/hub/agents/email/npm/SPEC.md).
 
 ## [Unreleased]
+
+- **The sidecar stops when the GAIA daemon that started it is killed.** It
+  used to keep running until the next daemon started; it now notices within
+  seconds and shuts down normally.
+- **With two mailboxes connected, `prescan()` now orders by sender preference
+  across both (#3623).** Each mailbox used to be sorted on its own and the
+  results joined, so the archive list could keep one mailbox's priority
+  senders and drop the other's low-priority ones.
+- **Warnings are marked as warnings.** A `status` event that warns the user now
+  carries `level: "warning"`, so a client can show it rather than treat it as
+  progress.
+- **Scheduled failures now tell you what happened (#5411).** A failed send, a failed snooze restore, and an interrupted send get different notices; an interrupted send warns that it may already have been delivered and tells you to check Sent before retrying.
+- **Private and memory-off email chats stay out of memory (#5482, schema 2.16).** `EmailQueryRequest` now accepts `memory: "on" | "private" | "off"`; private and memory-off turns stop the agent from reading or writing memory.
+- **The drafting eval's judge prefers your Claude Code login.** It now uses
+  the subscription before `ANTHROPIC_API_KEY`, and prints which credential
+  it uses. Only the eval changes; the agent itself does not call Claude.
+- **Needs Lemonade Server 2026.44.1 or newer.** `init()` reports the agent
+  not ready on an older Lemonade, and its hint says how to update it. GAIA
+  updates the Lemonade it installs on its own.
+- **Switching model mid-chat takes effect.** In a conversation that keeps its
+  session, a turn that asks for a different model now runs on that model
+  instead of the one the conversation started with.
+- **You can see what autonomy last did.** `gaia email autonomy status` now
+  shows when the last cycle finished and what it did: how many messages it
+  acted on, proposed or skipped, or why it failed. That includes cycles the
+  agent ran on its own schedule, and a run whose terminal gave up waiting.
+- **The binary no longer bundles GPL code.** It used to include PyInstaller's
+  own modules and Python's `readline` and `dbm` modules, which link GNU
+  Readline (GPL-3.0) and GDBM (GPL-3.0). They are excluded now, and the release
+  fails if any of them comes back. Nothing the agent does depended on them.
+- **Stateful agent routes are now in the published API description.** The
+  session, memory, autonomy, confirmation, cancel and streaming-query routes
+  under `/v1/email/agent/*` were always served but missing from
+  `openapi.email.json`, so generated clients can now discover them. The client
+  pinned schema 2.15 when it shipped (#6043).
+- **No stray "unmapped agent event" line.** A sentence the model wrote before
+  checking your mail showed up in the Agent UI as
+  `[unmapped agent event: commentary]`. It no longer does.
+- **Memory downloads its embedding model when it is missing.** On the first
+  start that uses memory, the agent now fetches the required embedding model
+  from Lemonade instead of silently running without memory; the initial
+  download can be about 300 MB.
+- **Sensitive credentials stay out of memory and the conversation log.** PINs,
+  card numbers, SSNs and other credential-shaped text are not saved as
+  memories, and logged turns replace matching spans with `[secret removed]`.
+- **Connect prompts name the right Settings tab.** They sent users to a
+  "Connections" tab in Settings, which the Agent UI doesn't have; they now say
+  "Settings → Connectors".
+- **A tool decision that reached no prompt is no longer reported as
+  delivered.** `POST /v1/email/agent/confirm-tool` answered `ok` even when
+  nothing was waiting for the decision (already answered, timed out, or never
+  asked). It now answers 409.
+- **One very long turn no longer vanishes from the conversation.** A turn
+  bigger than the whole history budget was dropped from what the model saw
+  next, answer included. It is now kept with its longest messages cut and a
+  note saying how much.
+- **SKILL.md examples include authorization headers.** The stateful-agent
+  and autonomy code examples in SKILL.md now send the session token required
+  by the sidecar, and the gotchas note lists `/v1/email/health` and
+  `/v1/email/version` as exempt.
+
+- **Answers stream as they are written.** `/v1/email/query` now emits `token`
+  events while the model writes, so a relayed turn shows text live instead of
+  "Waiting on the model", cancelling the run cuts the model call short, and a
+  stopped turn keeps what was written.
+- **A long conversation no longer overflows a small model window.** The
+  agent used the history you pushed as-is, so on a 32K window (an NPU model)
+  it plus the agent's own prompt could exceed the window and fail the turn.
+  It now keeps the newest whole turns that fit and says so in a `status`
+  event when older ones drop out of view.
+- **Token counts are exact in the published binary, offline too.** The
+  binary could not load its tokenizer and counted tokens by an estimate that
+  overcounts. The tokenizer and its data now ship inside the binary, so it
+  no longer downloads anything to count tokens.
+- **A mailbox connection being saved is reported as transient.** When another
+  GAIA process or request is mid-save on the mailbox connection, a mailbox
+  route now answers `502` with a detail saying the connection "is being saved
+  by another GAIA operation" (it used to answer `403`, as if the account needed
+  reconnecting), and the `/v1/email/agent/*` routes answer `503` with
+  `Retry-After`. Treat both as transient and retry; see SPEC.md.
+- **A request waiting for the model says so.** When another GAIA process or
+  request is using the local model, `/v1/email/query` now streams a `status`
+  every ~2 s with `phase: "model_queue"` and the request's place in line, who
+  holds the model and how long it has waited. Before, the stream went silent
+  for the whole wait. The request also goes ahead of background work, and
+  cancelling the run takes it out of the queue.
+- **A scheduled send or snooze cut off mid-fire no longer stays stuck.** If
+  the agent crashed while firing one, the job stayed "firing" forever and was
+  never reported. About 10 minutes later, a send is now marked failed with the
+  reason (it is still never sent twice) and listed when you ask for your
+  scheduled jobs, and a snooze runs again and brings the message back to the
+  inbox. A send another copy of the agent is still sending is left alone while that copy keeps checking in. If one is marked failed and then does go out, it changes to sent, so check your Sent folder before scheduling it again.
+
+- **A bulk archive, label, star or mark-read that changed nothing now says it
+  failed.** When every message in the batch failed, the agent used to report
+  the action as done. It now reports the failure with each message's reason,
+  and a batch where only some messages failed says how many and which.
 
 - **Gmail and Outlook work behind a corporate TLS-inspecting proxy.** The agent
   now trusts the operating system's certificate store, as pip does, so a proxy
@@ -85,6 +182,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   events list, so a caller couldn't tell a short calendar from a truncated
   page. The response now also carries `count` and `truncated`.
 
+- **Pre-scan lists now follow the user's sender preferences, so their
+  order changed.** In `prescan()`, priority senders come first and
+  low-priority senders last in `urgent`, `actionable` and `needs_review`.
+  `suggested_archives` runs the other way, low-priority first, so its cap
+  keeps the safest candidates. A host that shows these lists in response
+  order will see the new order (#2777).
+
 - **A daily briefing now tells you how old it is, so a cached one can't be
   shown as this morning's.** `GET /v1/email/briefing` and the agent's own
   `get_briefing` returned the last scheduled run with nothing to say when it
@@ -117,8 +221,8 @@ behind any entry — API shapes, endpoints, and version semantics — see
   as literal search text; they are now translated to the matching Graph
   query so `search({ query: "is:unread" })` and similar calls behave the
   way they do for Gmail (#2996).
-- **Searching Outlook with `is:starred`, `after:`, `before:`, `label:`,
-  `has:`, or `in:` now fails with a clear error instead of quietly matching
+- **Searching Outlook with `is:starred`, `after:`, `before:`, `newer:`,
+  `older:`, `label:`, `has:`, or `in:` now fails with a clear error instead of quietly matching
   nothing.** Microsoft Graph has no equivalent for these, so they used to be
   sent as plain search text and return zero results with no indication why
   (#2996).
@@ -132,6 +236,10 @@ behind any entry — API shapes, endpoints, and version semantics — see
   contract document didn't say so. It now declares the requirement (and marks
   `/health`, `/version`, and the other exempt routes as public) — nothing about
   which calls need a token, or when, has changed (#2993).
+
+- **The docs give the right undo window.** Archive and quarantine can be undone
+  for 120 seconds by default, not 30; set `GAIA_EMAIL_UNDO_WINDOW_SECONDS` to
+  change it.
 
 ## [0.6.0] - 2026-08-12
 
@@ -317,12 +425,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   integrator using this package is unaffected and keeps resolving the mailbox from
   the local GAIA connector store exactly as before (#2154).
 - **The agent's autonomy commands now work against the shipped binary.** `gaia
-  email autonomy status/set-level/pause/resume/run/undo/kill/trust` call REST
+  email autonomy status/set-level/pause/resume/run/kill/trust` call REST
   routes (`/v1/email/agent/autonomy*`) that did not exist in any previously
   published binary — a sidecar installed from 0.5.0 or earlier 404'd on every
-  one of them, with nothing telling the caller why. All eight subcommands now
+  one of them, with nothing telling the caller why. All seven subcommands now
   reach a real route and get back a 200, or a correct 409 when autonomy is
-  off (#2894).
+  off (#2894). Undo has no CLI subcommand; it is available over REST only, as
+  `POST /v1/email/agent/autonomy/undo`.
 - **Muting a sender no longer buries their genuinely urgent mail as
   promotional.** The category override for a muted (low-priority) sender was
   unconditional — every message from that sender was force-classified

@@ -315,7 +315,7 @@ def test_init_conforms_to_spec_when_ready(client, committed_spec):
     with (
         patch(
             "gaia_agent_email.api_routes._probe_lemonade_health",
-            return_value=(True, "http://localhost:8000/api/v1", "10.2.0", []),
+            return_value=(True, "http://localhost:13305/api/v1", "2026.44.1", []),
         ),
         patch(
             "gaia_agent_email.api_routes._probe_model_present",
@@ -1158,6 +1158,19 @@ def test_all_documented_paths_covered(committed_spec):
         # read-model. Conformance: test_attention_conforms_to_spec /
         # test_attention_without_mailbox_returns_503, above.
         ("get", "/v1/email/attention"),
+        # Stateful Agent UI surface published in schema 2.15 (#6043).
+        ("post", "/v1/email/agent/session"),
+        ("delete", "/v1/email/agent/session/{session_id}"),
+        ("get", "/v1/email/agent/session/{session_id}/history"),
+        ("post", "/v1/email/agent/memory"),
+        ("get", "/v1/email/agent/memory/{session_id}"),
+        ("get", "/v1/email/agent/autonomy/{session_id}"),
+        ("post", "/v1/email/agent/autonomy"),
+        ("post", "/v1/email/agent/autonomy/run"),
+        ("post", "/v1/email/agent/autonomy/undo"),
+        ("post", "/v1/email/agent/confirm-tool"),
+        ("post", "/v1/email/agent/cancel"),
+        ("post", "/v1/email/agent/query"),
     }
     assert documented == expected, (
         f"Spec has routes not covered by conformance tests: "

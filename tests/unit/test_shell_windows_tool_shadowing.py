@@ -120,16 +120,18 @@ def test_find_exe_spelling_is_pinned_too(system_root):
     assert pinned == f'"{system_root / "find.exe"}" /i x file.txt'
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        # cmd.exe sees three commands where the parser saw two.
-        "dir /b|find /c x | sort /r",
-        # The command word is not literally at the start of its segment.
-        'dir /b | "find" /c x',
-    ],
-)
-def test_a_segment_that_cannot_be_located_is_refused(system_root, text):
+def test_an_unspaced_pipe_is_a_segment_and_pinned_too(system_root):
+    text = "dir /b|find /c x | sort /r"
+
+    pinned = _pin_windows_tools(text, _segments(text))
+
+    find_exe, sort_exe = system_root / "find.exe", system_root / "sort.exe"
+    assert pinned == f'dir /b|"{find_exe}" /c x | "{sort_exe}" /r'
+
+
+def test_a_segment_that_cannot_be_located_is_refused(system_root):
+    # The command word is not literally at the start of its segment.
+    text = 'dir /b | "find" /c x'
     with pytest.raises(ValueError):
         _pin_windows_tools(text, _segments(text))
 

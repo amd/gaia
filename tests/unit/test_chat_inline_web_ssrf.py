@@ -87,7 +87,8 @@ def _fake_transport(sent):
     """Stand in for the socket layer *below* PinnedIPAdapter, recording requests."""
 
     def send(adapter, request, **kwargs):
-        sent.append(request)
+        # Copy: PinnedIPAdapter restores the original URL once send returns.
+        sent.append(request.copy())
         resp = requests.Response()
         resp.status_code = 200
         resp.headers["Content-Type"] = "text/html; charset=utf-8"
@@ -171,6 +172,13 @@ def test_open_url_opens_a_public_url(full_profile_tools):
     opener.assert_called_once_with("https://example.com/")
 
 
+def test_open_url_docstring_defers_to_the_policy_check(full_profile_tools):
+    _, registry = full_profile_tools
+    description = _tool(registry, "open_url").__doc__
+    assert "Call this tool for a URL the user supplied" in description
+    assert "do not refuse it based on this description alone" in description
+
+
 @pytest.mark.parametrize(
     "ip",
     ["100.64.0.1", "100.127.255.254", "::ffff:100.64.0.1", "::ffff:10.0.0.1"],
@@ -205,3 +213,14 @@ def test_open_url_reports_client_initialization_failure(full_profile_tools, fail
     assert result["status"] == "error"
     assert str(failure) in result["error"]
     opener.assert_not_called()
+
+
+def test_open_url_with_no_browser_to_launch_is_an_error(full_profile_tools):
+    _, registry = full_profile_tools
+    with (
+        patch.object(WebClient, "validate_url", return_value=None),
+        patch("webbrowser.open", return_value=False),
+    ):
+        result = _tool(registry, "open_url")("https://example.com/")
+    assert result["status"] == "error"
+    assert "No web browser could be opened" in result["error"]

@@ -1,13 +1,13 @@
 ---
 title: "Terminal UI — Developer Manual"
-description: "Build gaia-tui from source, drive it from a script through the control API, and debug it"
+description: "Build gaia-cli from source, drive it from a script through the control API, and debug it"
 icon: "wrench"
 ---
 
 # GAIA Terminal UI — Developer Manual
 
 For working *on* the TUI, or driving it from a test or an assistant. Using it
-day to day is the [user manual](/guides/terminal-hub).
+day to day is the [user manual](/guides/tui).
 
 ## What it is made of
 
@@ -15,7 +15,7 @@ Three processes, and knowing which one you are looking at saves most of the
 debugging time:
 
 ```
-gaia-tui            Go. The terminal app and the control API.
+gaia-cli            Go. The terminal app and the control API.
   └─ gaia-agent     Python subprocess, spawned once per session. The agent loop
                     and every tool.
        └─ Lemonade  HTTP server. Runs local models and routes cloud chat.
@@ -39,7 +39,7 @@ Needs `git`, [Go](https://go.dev/dl/), and a Python env with `gaia` installed.
 
 ```bash
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build          # -> tui/bin/gaia-tui
+cd tui && make build          # -> tui/bin/gaia-cli (.exe on Windows)
 ```
 
 Other targets: `test`, `test-race`, `lint`, `vet`, `cover`, `mock-agent`,
@@ -54,6 +54,13 @@ scripts/dev/run-tui.sh --dev --control
 `--dev` shows per-turn timings, steps, and tool arguments **on screen**;
 `--trace=<path>` writes the same events to JSONL instead. They are independent.
 
+To profile the TUI's own startup and rendering, add `--pprof 127.0.0.1:6060`
+(loopback addresses only) and read it with Go's profiler:
+
+```bash
+go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=20
+```
+
 ### Point it at your checkout, not the published sidecar
 
 `mode: user` runs the **published frozen sidecar**, which is routinely older
@@ -61,8 +68,8 @@ than source. When testing an agent from a checkout, set the matching mode on the
 TUI launch so its ensure request agrees:
 
 ```bash
-GAIA_GAIA_AGENT_MODE=dev gaia-tui     # flagship
-GAIA_EMAIL_AGENT_MODE=dev gaia-tui    # email
+GAIA_GAIA_AGENT_MODE=dev gaia-cli     # flagship
+GAIA_EMAIL_AGENT_MODE=dev gaia-cli    # email
 ```
 
 Starting a dev sidecar separately while the TUI still defaults to `user` creates
@@ -86,6 +93,30 @@ Stacked branches are siblings; no single branch has everything. A leaf build
 shows behaviour already fixed elsewhere — that has produced bug reports for
 things fixed on another branch. Build from a merged integration branch, or state
 explicitly which slice you tested.
+
+The header's `agent gaia v<x>` and the welcome line's `GAIA core <y>` come from
+the running agent only: the `agent_version` and `gaia_version` fields of its
+model-state `status` ping (stdio), or the peer's own version (HTTP). Never from
+`~/.gaia/agents/<id>/.installed`. No version on screen means the agent that
+answered predates those fields, which is itself the answer to "which build?".
+
+### Patched dependencies
+
+`tui/third_party/` holds patched copies of upstream modules, wired in with
+`replace` in `tui/go.mod`; its `README.md` lists each patch and why. Bubble Tea
+is one of them: v1.3.10's Windows console reader drops the Ctrl state on
+Backspace and Delete, so the copy reports Ctrl+Backspace as `ctrl+h` and adds a
+`ctrl+delete` key (also mapped from `ESC[3;5~` on VT terminals). Upgrading Bubble
+Tea means re-applying the lines marked `GAIA patch`, or dropping the copy once
+upstream has the fix.
+
+### Status and error lines
+
+A status or error line is one sentence on what is wrong plus the one next step.
+Daemon errors implement `daemon.Briefer`; render `daemon.Brief(err)` on the line
+and keep `err.Error()` (route, alternatives, log path) for a `d details` pane. In
+`--dev`, harness lines the user view hides (`Step 4/50`) show as they are, with
+no `[harness]` tag.
 
 ## The control API
 
@@ -166,6 +197,27 @@ drive (`GAIA_DAEMON_HOME` set) and relaunch.
 composer on an idle `chat`. With the `d` details pane open, it closes the pane
 first.
 
+## Copy and selection keys
+
+The terminal owns the mouse by default, so a plain drag is the terminal's own
+selection and the app never sees it. That selection can't scroll the
+transcript, which is why the app has its own.
+
+| Input | What happens | Code (`internal/ui/chat/`) |
+|---|---|---|
+| `Ctrl+T` | Toggles the app mouse (Cell-Motion capture); the status bar names the current owner | `selectmode.go`, `mousecapture.go` |
+| Drag, app mouse | In-app selection by content row, so it survives scrolling. Past the top or bottom edge a 50 ms tick scrolls up to 5 lines and extends it. Release copies over OSC 52 | `selection.go` |
+| `Shift`+click, app mouse | Extends the current selection and copies it | `selection.go` |
+| `Enter` / `Esc`, with a selection | Copies it again / clears it | `model.go` (`handleKey`) |
+| `/copy`, `/copy all` | Message picker (`↑`/`↓`, `Enter`, `Esc`) / whole transcript as markdown. Both run mid-turn | `copycmd.go` |
+| `Ctrl+Y`, `Ctrl+B` | Last answer / its last code block | `clipboard.go` |
+
+Copied text is plain: each message's span records its chrome (`msgSpan.gutter`,
+`bodyStart`/`bodyEnd`), and a message covered end to end is copied from its
+source markdown. The control API's `mouse` actions are single-point gestures, so
+a drag can't be driven through it; `selection_test.go` covers it, decoding the
+OSC 52 payload. OSC 52 is write-only, so a screen capture can't confirm a copy.
+
 ## Giving it a terminal
 
 The TUI queries terminal size and colour support at startup, so it needs a real
@@ -211,7 +263,8 @@ colour support, and the TUI then emits no escape sequences at all. It reads as
 - **Check which screen you are on** before sending keys. Keys sent to the wrong
   screen do nothing and read as "the binding is broken".
 - **Grep for the right words.** The confirmation prompt's first line is a
-  risk badge (`READ`, `WRITE`, `RUNS CODE`, `DESTRUCTIVE`) and a question. A
+  risk badge (`READ`, `WRITE`, `RUNS CODE`, `DESTRUCTIVE`, or `ACCESS` on a
+  prompt to use a file or folder outside the chat's) and a question. A
   tool the TUI knows gets a plain question — a shell command reads
   `RUNS CODE Run this command?`, a file write `WRITE Write this file?` — and
   any other tool reads `Allow <tool>?`. There is no `Confirm: <tool>` line.
@@ -254,7 +307,7 @@ gaia lemonade embedded status
 ```
 
 It is private: its URL and key are its own, and other configured servers never
-inherit them. Cloud routing needs 11.8.1 or later.
+inherit them.
 
 `gaia init --check` is the exact gate the preflight screen uses, and it names
 the missing model id:
@@ -266,15 +319,17 @@ NOT READY: profile 'gaia' needs setup
 
 <Warning>
 `user.`-prefixed models are **custom registrations**: pulling one requires
-`checkpoint` + `recipe` (+ `embedding` for an embedder). Built-in models are the
-opposite — pulling one *with* a recipe makes Lemonade treat it as a new
-registration and 400 (#1655). `gaia init` gets this right;
-`readiness.pull_model` posts `model_name` only and therefore cannot pull a
-`user.` model — it returns HTTP 500 `not registered with Lemonade Server`.
+`checkpoint` + `recipe` (+ `embedding` for an embedder, and `mmproj` / `vision`
+/ `reasoning` when the model needs them), unless Lemonade already lists it —
+then it is pulled by name. Built-in models are the opposite —
+pulling one *with* a recipe makes Lemonade treat it as a new registration and
+400 (#1655). `gaia init` sends those fields, and `readiness.pull_model` and
+the Agent UI Download button share one body (`pull_request_body`). A gateway
+model is refused before any request: there are no weights to fetch.
 </Warning>
 
 ## Related
 
-- [User manual](/guides/terminal-hub)
+- [User manual](/guides/tui)
 - [`tui/README.md`](https://github.com/amd/gaia/blob/main/tui/README.md) — install and binaries
 - [CLI reference](/reference/cli)

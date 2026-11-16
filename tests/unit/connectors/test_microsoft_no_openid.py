@@ -86,8 +86,7 @@ def test_openid_is_absent_from_every_microsoft_connect_scope_in_the_fixture():
     for connector_id in ("microsoft", "microsoft_work"):
         entry = fixture[connector_id]
         assert "openid" not in entry["connect_union"], connector_id
-        assert "openid" not in entry["identity_scopes"]["catalog"], connector_id
-        assert "openid" not in entry["identity_scopes"]["provider"], connector_id
+        assert "openid" not in entry["identity_scopes"], connector_id
 
 
 def test_offline_access_survives_the_removal(_ms_env):

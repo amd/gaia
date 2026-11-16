@@ -1135,3 +1135,100 @@ def test_error_report_redacts_email_straddling_truncation_boundary(tmp_path):
     error_text = report["errors"][0]["error"]
     assert "alice.smith" not in error_text
     assert "@realdomain" not in error_text
+
+
+# ---------------------------------------------------------------------------
+# The last cycle's outcome is persisted and inspectable (#2618)
+# ---------------------------------------------------------------------------
+
+
+def test_status_says_no_cycle_has_run_on_a_fresh_mailbox(tmp_path):
+    agent = _build_agent(tmp_path, [], level=LEVEL_SUGGEST)
+    assert agent.autonomy_status()["last_cycle"] is None
+
+
+def test_completed_cycle_is_recorded_with_its_counts(tmp_path):
+    agent = _build_agent(
+        tmp_path,
+        [_promo_message("m1", "deals@shop.com"), _urgent_message("m2", "b@x.com")],
+        level=LEVEL_SUGGEST,
+    )
+    with patch.object(agent, "propose"):
+        report = agent.run_autonomy_cycle()
+    last = agent.autonomy_status()["last_cycle"]
+    assert last["outcome"] == "completed"
+    assert last["level"] == LEVEL_SUGGEST
+    assert last["proposals"] == len(report["proposals"]) == 1
+    assert last["executed"] == 0
+    assert last["skipped"] == report["skipped"] == 1
+    assert last["finished_at"] >= last["started_at"] > 0
+    assert last["stopped"] is None
+
+
+def test_a_cycle_with_nothing_to_do_is_distinguishable_from_none(tmp_path):
+    agent = _build_agent(tmp_path, [_urgent_message("m1", "b@x.com")], level=LEVEL_FULL)
+    agent.run_autonomy_cycle()
+    last = agent.autonomy_status()["last_cycle"]
+    assert last is not None
+    assert last["outcome"] == "completed"
+    assert (last["executed"], last["proposals"], last["skipped"]) == (0, 0, 1)
+
+
+def test_the_summary_carries_no_mailbox_content(tmp_path):
+    agent = _build_agent(
+        tmp_path, [_promo_message("m1", "deals@shop.com")], level=LEVEL_FULL
+    )
+    agent.run_autonomy_cycle()
+    raw = agent.query(
+        "SELECT summary FROM email_autonomy_last_cycle WHERE id = 1", one=True
+    )["summary"]
+    assert "deals@shop.com" not in raw
+    assert "m1" not in raw
+    assert "Weekend sale" not in raw
+
+
+def test_a_failed_cycle_is_recorded_redacted_and_still_raises(tmp_path):
+    agent = _build_agent(tmp_path, [], level=LEVEL_FULL)
+    boom = RuntimeError("Gmail said no for alice@example.com")
+    with patch.object(agent, "_run_email_autonomy_cycle", side_effect=boom):
+        with pytest.raises(RuntimeError):
+            agent.run_autonomy_cycle()
+    last = agent.autonomy_status()["last_cycle"]
+    assert last["outcome"] == "failed"
+    assert last["error"].startswith("RuntimeError: ")
+    assert "alice@example.com" not in last["error"]
+
+
+def test_only_the_newest_cycle_is_kept(tmp_path):
+    agent = _build_agent(
+        tmp_path, [_promo_message("m1", "deals@shop.com")], level=LEVEL_FULL
+    )
+    agent.run_autonomy_cycle()
+    with patch.object(
+        agent, "_run_email_autonomy_cycle", side_effect=RuntimeError("down")
+    ):
+        with pytest.raises(RuntimeError):
+            agent.run_autonomy_cycle()
+    rows = agent.query("SELECT id FROM email_autonomy_last_cycle")
+    assert len(rows) == 1
+    assert agent.autonomy_status()["last_cycle"]["outcome"] == "failed"
+
+
+def test_a_scheduler_built_agent_sees_the_last_cycle(tmp_path):
+    # The scheduler builds a fresh agent on the same state.db; the record must
+    # be visible across instances, not held on the object that ran it.
+    first = _build_agent(
+        tmp_path, [_promo_message("m1", "deals@shop.com")], level=LEVEL_FULL
+    )
+    first.run_autonomy_cycle()
+    second = _build_agent(tmp_path, [], level=LEVEL_FULL)
+    assert second.autonomy_status()["last_cycle"]["outcome"] == "completed"
+
+
+def test_a_killed_cycle_is_recorded_as_stopped(tmp_path):
+    agent = _build_agent(
+        tmp_path, [_promo_message("m1", "deals@shop.com")], level=LEVEL_FULL
+    )
+    with patch.object(agent, "_autonomy_killed", return_value=True):
+        agent.run_autonomy_cycle()
+    assert agent.autonomy_status()["last_cycle"]["stopped"] == "autonomy_off"

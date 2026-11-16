@@ -133,14 +133,28 @@ data: {"type": "error", "content": "error description"}
 
 ### Schema
 
-Four tables with foreign key relationships:
+The main tables, with foreign key relationships:
 
 ```sql
 documents          -- Global document library
 sessions           -- Chat conversations
 session_documents  -- Many-to-many attachment relationship
 messages           -- Conversation messages with optional RAG metadata
+unfinished_turns   -- Turns (chat or scheduled) that have not saved a reply yet
 ```
+
+Work in progress names the server process that owns it (`unfinished_turns.owner`,
+`documents.indexing_owner`): pid, start (on Linux the boot id and start tick,
+which a clock step cannot move) and a per-process token. A turn's row is keyed
+by its question and is only ever updated or closed by its owner, or by another
+server once that owner has exited; saving the reply deletes it in the same
+transaction. On startup, and every 30 s after, the server turns what an ended
+process left unfinished into something visible (`restart_recovery.py`): each
+row becomes a reply holding the cleaned text streamed so far, which tools the
+turn had started, and "This answer was interrupted when GAIA closed. Send again
+to retry."; each document still `pending` or `indexing` becomes `failed` with a
+Retry message. Work owned by a live process, including another server on the
+same database, is left alone.
 
 ### Configuration
 
@@ -165,7 +179,7 @@ def _transaction(self):
 
 ### Document Deduplication
 
-Documents are deduplicated by SHA-256 file hash. If a document with the same hash already exists, the existing record is returned with an updated `last_accessed_at` timestamp.
+Documents are deduplicated by SHA-256 file hash. If a document with the same hash already exists, the existing record is returned with an updated `last_accessed_at` timestamp. A file already in the library at the same path but with new content keeps its row, which is updated to the new hash, size and chunk count.
 
 ### Document Upload Paths
 
@@ -174,7 +188,7 @@ The server exposes **two** document upload endpoints, each for a different sourc
 | Endpoint | Input | Used By | Storage |
 |----------|-------|---------|---------|
 | `POST /api/documents/upload-path` | JSON `{filepath}` — absolute server-side path | File browser (user picks an existing file) | Indexes in place; server does NOT own the file |
-| `POST /api/documents/upload` | `multipart/form-data` file blob | Drag-and-drop in browser mode / modern Electron | File is persisted under `$GAIA_HOME/documents/<id>_<name>.<ext>` (default `~/.gaia/documents/`) and owned by the server |
+| `POST /api/documents/upload` | `multipart/form-data` file blob | Drag-and-drop in browser mode / modern Electron | File is persisted under `$GAIA_HOME/documents/<name>.<ext>`, or `<id>_<name>.<ext>` when that name is taken (default `~/.gaia/documents/`) and owned by the server |
 
 The blob endpoint exists because browser `File` objects never expose a filesystem path, and since Electron 32 `File.path` has been removed as well (see issue [#728](https://github.com/amd/gaia/issues/728)). It streams the upload with a running size check (capped at 20 MB), computes a SHA-256 hash, short-circuits on dedup by hash, and only then promotes the file into the managed directory via an atomic `os.replace`. On failure, partial and orphan files are cleaned up.
 

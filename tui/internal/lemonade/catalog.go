@@ -16,7 +16,7 @@ import (
 
 // Entry is one row of the model picker: a catalog model, or a local
 // recommendation the catalog does not list yet (a custom model before its
-// first pull, or a built-in an older Lemonade lacks).
+// first pull).
 type Entry struct {
 	Model       Model
 	Recommended *Recommended
@@ -28,8 +28,39 @@ type Entry struct {
 	// FitUnknown is set when the PC or the model's size could not be read,
 	// so the row is blocked without having been judged too big.
 	FitUnknown bool
-	// NeedsUpgrade is set when this Lemonade is too old to load the model.
-	NeedsUpgrade bool
+}
+
+// NPUVerdict is what the setup plan says about this PC's Ryzen AI NPU, in the
+// four states that must stay distinct: ready, present but not ready, absent,
+// and not known because the plan could not be read.
+//
+// Known false is not "no NPU": it is "nobody measured", and it must not read as
+// absence. It is not permission either; the memory rule decides. Reasons is the
+// server's own words for what stops the NPU when it is present but not ready.
+//
+// Capacity cannot answer this. Its NPU memory is zero both for a PC with no NPU
+// and for one that has one Lemonade did not measure.
+type NPUVerdict struct {
+	Present bool
+	Ready   bool
+	Known   bool
+	Reasons []string
+}
+
+// Blocks reports whether a known verdict stops an NPU model from running here,
+// and why. Ready and unknown both return false: ready is permission, and
+// unknown is a gap that the memory check handles without claiming absence.
+func (v NPUVerdict) Blocks() (reason string, blocked bool) {
+	if v.Ready || !v.Known {
+		return "", false
+	}
+	if !v.Present {
+		return "runs on a Ryzen AI NPU, and Lemonade reports none on this PC", true
+	}
+	if len(v.Reasons) == 0 {
+		return "this PC's NPU is not ready to run a model yet", true
+	}
+	return v.Reasons[0], true
 }
 
 // SizeGB is the download size, from the catalog or the recommendation.
@@ -43,6 +74,17 @@ func (e Entry) SizeGB() float64 {
 	return 0
 }
 
+// Featured reports a row shown under "Recommended": a recommendation that is
+// not just an option.
+func (e Entry) Featured() bool {
+	return e.Recommended != nil && !e.Recommended.Option
+}
+
+// OnNPU reports a FastFlowLM model, which the NPU runs from system RAM.
+func (e Entry) OnNPU() bool {
+	return e.Model.Recipe == "flm" || (e.Recommended != nil && e.Recommended.Device == "npu")
+}
+
 // Selectable reports whether choosing the row can proceed: a downloaded local
 // model, a local model that fits (it downloads first), or a listed cloud model.
 func (e Entry) Selectable() bool {
@@ -52,13 +94,20 @@ func (e Entry) Selectable() bool {
 	if e.Model.Cloud() {
 		return true
 	}
-	return e.Model.Downloaded || e.Fits
+	// On a PC that can run it, a downloaded model need not be checked against
+	// memory; a known absent or not-ready NPU already set FitUnknown, so it
+	// stays blocked. An unknown verdict leaves the file selectable.
+	if e.Model.Downloaded && !e.FitUnknown {
+		return true
+	}
+	return e.Fits
 }
 
 // Unavailable reports a recommended built-in this Lemonade does not offer, as
 // opposed to one that does not fit this PC.
 func (e Entry) Unavailable() bool {
-	return !e.Listed && e.Recommended != nil && e.Recommended.RegisterAs == ""
+	// An FLM model is unlisted until Pull installs the NPU backend.
+	return !e.Listed && e.Recommended != nil && e.Recommended.RegisterAs == "" && e.Recommended.Device != "npu"
 }
 
 // NeedsDownload reports whether choosing the row must pull the model first.
@@ -77,24 +126,30 @@ func isChatModel(m Model) bool {
 	if m.ID == "" || strings.HasPrefix(m.Recipe, "collection.") {
 		return false
 	}
-	chat := false
+	chat, other := false, false
 	for _, label := range m.Labels {
 		switch label {
 		case "embeddings", "image", "reranker", "reranking", "audio", "tts", "stt", "transcription", "classification":
+			other = true
+		case "single-turn":
+			// FLM builds that answer one message at a time cannot hold a conversation.
 			return false
 		case "chat":
 			chat = true
 		}
 	}
+	// `chat` wins, as in the Agent UI: FLM omni models are labeled `chat` and `audio`.
 	// Cloud listings do not always carry labels; their provider prefix is enough.
-	return chat || m.Cloud()
+	return chat || (!other && m.Cloud())
 }
 
-// Catalog lists every chat model Lemonade offers for provider — downloaded or
-// not — with the recommendations first and each local model judged against
-// capacity. When capErr is set the machine could not be read, so no local
-// download is allowed: a model that cannot be shown to fit must not be pulled.
-func (c *Client) Catalog(ctx context.Context, provider string, capacity Capacity, capErr error) ([]Entry, error) {
+// Catalog lists every chat model Lemonade offers for provider, downloaded or
+// not, with the recommendations first and each local model judged against
+// capacity and the plan's NPU verdict. When capErr is set the machine could not
+// be read, so no local download is allowed: a model that cannot be shown to
+// fit must not be pulled. added are the models the user added from a link
+// (ReadCustomModels).
+func (c *Client) Catalog(ctx context.Context, provider string, capacity Capacity, capErr error, npu NPUVerdict, added ...Recommended) ([]Entry, error) {
 	var reply struct {
 		Data []Model `json:"data"`
 	}
@@ -112,13 +167,24 @@ func (c *Client) Catalog(ctx context.Context, provider string, capacity Capacity
 			models = append(models, m)
 		}
 	}
-	return BuildEntries(provider, models, capacity, capErr), nil
+	return BuildEntries(provider, models, capacity, capErr, npu, added...), nil
 }
 
 // BuildEntries orders and judges a provider's catalog: recommendations first
-// (including ones the catalog lacks), then the rest, selectable before not.
-func BuildEntries(provider string, models []Model, capacity Capacity, capErr error) []Entry {
+// (including ones the catalog lacks), then the models the user added, then
+// the rest, selectable before not.
+func BuildEntries(provider string, models []Model, capacity Capacity, capErr error, npu NPUVerdict, added ...Recommended) []Entry {
 	judge := func(e *Entry) {
+		// Readiness is a hardware check, so it runs before the ones that only
+		// decide whether a download is needed: a downloaded model skips those,
+		// never this.
+		if e.OnNPU() {
+			if reason, blocked := npu.Blocks(); blocked {
+				e.FitUnknown = true
+				e.Reason = reason
+				return
+			}
+		}
 		if e.Model.Cloud() || e.Model.Downloaded {
 			e.Fits = true
 			return
@@ -138,18 +204,33 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 		if e.Recommended != nil {
 			kv = e.Recommended.KVCacheGB()
 		}
-		e.Fits, e.Reason = capacity.Fit(size, kv)
-		// Version after fit: "upgrade Lemonade" only helps a model that fits.
-		if e.Fits && e.Recommended != nil {
-			if ok, why := capacity.SupportsModel(e.Recommended.MinLemonade); !ok {
-				e.Fits, e.NeedsUpgrade, e.Reason = false, true, why
+		pool := capacity
+		if e.OnNPU() {
+			npuMem, ok := capacity.NPU()
+			if !ok {
+				e.Reason = "it runs on a Ryzen AI NPU, and Lemonade reports no NPU memory for it"
+				return
 			}
+			pool = npuMem
 		}
+		e.Fits, e.Reason = pool.Fit(size, kv)
 	}
 
 	used := make([]bool, len(models))
-	var head []Entry
-	for _, rec := range RecommendedFor(provider) {
+	var head, rest []Entry
+	place := func(e Entry) {
+		if e.Featured() {
+			head = append(head, e)
+		} else {
+			rest = append(rest, e)
+		}
+	}
+	heads := RecommendedFor(provider)
+	_, hasNPUMemory := capacity.NPU()
+	if provider == "local" {
+		heads = append(heads, added...)
+	}
+	for _, rec := range heads {
 		rec := rec
 		matched := false
 		for i, m := range models {
@@ -157,7 +238,7 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 				used[i], matched = true, true
 				e := Entry{Model: m, Recommended: &rec, Listed: true}
 				judge(&e)
-				head = append(head, e)
+				place(e)
 			}
 		}
 		// A cloud recommendation the account does not list is simply absent.
@@ -166,15 +247,27 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 		}
 		e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec}
 		switch {
+		case rec.Device == "npu" && !rec.Custom && npu.Known && !npu.Present:
+			// A confirmed-absent NPU is not a broken option to explain; it is
+			// not an option. A custom model stays so the user can remove it.
+			continue
+		case rec.Device == "npu" && !rec.Custom && !npu.Known && (capErr != nil || !hasNPUMemory):
+			// An unknown verdict cannot vouch for an NPU, and with no NPU memory
+			// reported the row could never be selected. Hide it as before.
+			continue
+		case rec.Device == "npu":
+			// Lemonade lists FLM models only once its NPU backend is in; Pull
+			// installs it. A PC whose NPU is not ready, or whose verdict is
+			// unknown, keeps the row so the reason stays visible.
+			judge(&e)
 		case rec.RegisterAs == "":
 			// A built-in this Lemonade does not ship: it cannot be pulled by name.
 			e.Reason = "this Lemonade server does not offer it; update Lemonade with `gaia init`"
 		default:
 			judge(&e)
 		}
-		head = append(head, e)
+		place(e)
 	}
-	var rest []Entry
 	for i, m := range models {
 		if used[i] {
 			continue
@@ -243,6 +336,15 @@ func (c *Client) Pull(ctx context.Context, e Entry, progress func(PullProgress))
 	if err := validateURL(base, true); err != nil {
 		return err
 	}
+	if e.OnNPU() && !e.Listed {
+		// Lemonade lists no FLM model, and pulls none, until the backend is in.
+		// The install downloads a release, so like the pull only ctx bounds it.
+		installer := &Client{BaseURL: base, HTTP: &http.Client{CheckRedirect: c.HTTP.CheckRedirect}}
+		body := map[string]string{"recipe": "flm", "backend": "npu"}
+		if err := installer.request(ctx, "POST", "/install", body, nil); err != nil {
+			return fmt.Errorf("could not install Lemonade's NPU backend for %s: %w", e.Model.ID, err)
+		}
+	}
 	b, err := json.Marshal(PullRequest(e))
 	if err != nil {
 		return fmt.Errorf("could not encode the download request")
@@ -252,7 +354,11 @@ func (c *Client) Pull(ctx context.Context, e Entry, progress func(PullProgress))
 		return fmt.Errorf("invalid Lemonade address")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := APIKeyFor(base); key != "" {
+	key, err := APIKeyFor(ctx, base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	// A download runs for as long as it takes; ctx is the only bound.

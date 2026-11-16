@@ -49,7 +49,7 @@ class _RootValidator:
     def __init__(self, root):
         self.root = str(root)
 
-    def is_path_allowed(self, path: str) -> bool:
+    def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
         root = os.path.realpath(self.root)
         real = os.path.realpath(path)
         return real == root or real.startswith(root + os.sep)
@@ -196,7 +196,8 @@ def test_a_refused_segment_refuses_the_line_before_anything_runs(notes, monkeypa
     result = _run("ls && rm -rf /", notes)
 
     assert result["status"] == "error"
-    assert "not in the allowed list" in result["error"]
+    # No console here, so the confirmable `rm` fails closed, naming the line.
+    assert "`ls && rm -rf /` needs your approval" in result["error"]
     assert result["executed"] is False
     assert spawned == []
 
@@ -273,6 +274,64 @@ def test_single_quotes_do_not_smuggle_an_operator_past_the_split(command, notes)
     assert result["executed"] is False
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        # rc18 la3: ran as "(python get_rates.py" and "get_rates.py)".
+        "cd sub && (python get_rates.py || python get_rates.py)",
+        "(ls || ls) && ls",
+        "ls && (ls; ls)",
+        "ls&&(ls||ls)",
+        "((ls || ls)) && ls",
+        "ls && ((ls) || ls)",
+        # A quoted or escaped paren must not cancel out a real one.
+        "echo ')' && (ls || ls)",
+        r"echo \) && (ls || ls)",
+        '(ls || echo "(") && ls',
+    ],
+)
+def test_grouping_a_chain_in_parentheses_is_refused_with_a_way_out(command, notes):
+    (notes / "sub").mkdir()
+
+    result = _run(command, notes, host=_Confined(notes))
+
+    assert result["status"] == "error", result
+    assert result["executed"] is False
+    assert "( )" in result["error"]
+    assert "||" in result["hint"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'python -c "print(1 or 2)" || ls',
+        "echo (hi) && ls",
+        'findstr "a (b || c)" notes.txt',
+        "grep -n 'def foo(' notes.txt && ls",
+        "git log --format='%h (%an' && ls",
+        r"grep \( notes.txt && ls",
+        r"grep -c \) notes.txt || ls",
+        r"find . \( -name a -o -name b \) && ls",
+    ],
+)
+def test_parentheses_inside_one_step_are_left_alone(command, notes):
+    host = _Host()
+    error, _steps = host._line_verdict(command, str(notes))
+
+    assert error is None or "( )" not in error.get("error", ""), error
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["echo (hi) && ls", "grep -n 'def foo(' notes.txt && ls"],
+)
+def test_a_line_with_only_quoted_or_balanced_parentheses_clears(command, notes):
+    host = _Host()
+    error, _steps = host._line_verdict(command, str(notes))
+
+    assert error is None, error
+
+
 @pytest.mark.parametrize("command", ["ls &&", "&& ls", "ls ; ; ls"])
 def test_a_missing_operand_is_refused_not_guessed(command, notes):
     result = _run(command, notes)
@@ -304,8 +363,11 @@ def test_cd_outside_the_allowed_paths_is_refused(tmp_path):
 
     result = _run("cd ../outside && ls", root, host=_Confined(root))
 
+    # Outside the allowed folders is a one-time approval naming the folder;
+    # with nobody here to give it, nothing runs.
     assert result["status"] == "error", result
-    assert "denied" in result["error"].lower()
+    assert "needs your approval" in result["error"]
+    assert str((tmp_path / "outside").resolve()) in result["error"]
     assert result["executed"] is False
 
 
@@ -522,14 +584,25 @@ def test_a_confirm_tier_segment_makes_the_whole_line_one_prompt():
     assert _needs_modal(host, line) is True
 
 
+def test_a_segment_outside_the_policy_makes_the_line_a_one_time_prompt():
+    host = _Gated("gh")
+    line = "gh issue list && gh auth token"
+
+    assert host.policy_refusal_for_call("run_shell_command", {"command": line}) is None
+    error, _ = host._validate_shell_command(line)
+    assert error["tier"] == "confirm_once"
+    assert "auth token" in error["error"]
+
+
 def test_a_refused_segment_is_refused_before_the_prompt():
     host = _Gated("gh")
     error = host.policy_refusal_for_call(
-        "run_shell_command", {"command": "gh issue list && gh auth token"}
+        "run_shell_command",
+        {"command": "gh issue list && powershell -EncodedCommand ZQBjAGgAbwA="},
     )
 
     assert error is not None
-    assert "auth token" in error["error"]
+    assert "EncodedCommand" in error["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -559,11 +632,17 @@ def test_windows_never_hands_a_compound_line_to_cmd_exe_as_one_string(
             return "", ""
 
     def fake_popen(args, **kwargs):
-        calls.append((args, kwargs.get("shell", False)))
+        # cmd.exe is launched explicitly, reading the step from the environment.
+        text = (kwargs.get("env") or {}).get(shell_tools._CMD_TEXT_ENV)
+        calls.append((text[1:-1], True) if text else (args, kwargs.get("shell")))
         return _Exited(args)
 
     monkeypatch.setattr(shell_tools, "os", _WindowsOS())
     monkeypatch.setattr(shell_tools.subprocess, "Popen", fake_popen)
+    # Pinning a program to its PATH location has its own tests.
+    monkeypatch.setattr(shell_tools, "_program_on_path", lambda name, cwd: None)
+    # The cmd.exe launcher locates cmd and chcp under it, off Windows too.
+    monkeypatch.setenv("SystemRoot", os.environ.get("SystemRoot", r"C:\Windows"))
 
     _run("ls && cat notes.txt", notes)
 
@@ -571,3 +650,31 @@ def test_windows_never_hands_a_compound_line_to_cmd_exe_as_one_string(
     assert all(isinstance(args, str) for args, _ in calls)
     assert not any("&&" in args for args, _ in calls)
     assert [args for args, _ in calls] == ["ls", "cat notes.txt"]
+
+
+# ---------------------------------------------------------------------------
+# ~ means the home folder, as in a shell (#5700)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / "proj").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+def test_cd_to_a_home_relative_folder_runs_the_line(home, notes):
+    result = _run("cd ~/proj && echo hi", notes)
+
+    assert result["status"] == "success", result
+    assert "hi" in result["stdout"]
+
+
+def test_a_home_relative_working_directory_is_found(home):
+    result = _shell(_Host())(command="echo hi", working_directory="~/proj")
+
+    assert result["status"] == "success", result
+    assert "hi" in result["stdout"]

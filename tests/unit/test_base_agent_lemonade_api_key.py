@@ -13,6 +13,7 @@ it unauthenticated would 401 against any remote authenticated Lemonade.
 """
 
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -76,13 +77,13 @@ def test_is_loaded_ctx_too_small_omits_authorization_header_when_no_key(
     [
         ("npu", 32768, False),
         ("npu", 16384, True),
-        ("gpu", 32768, True),
-        (None, 32768, False),
+        ("gpu", 32768, False),
+        (None, 16384, True),
     ],
 )
 @patch("httpx.get")
 @patch("gaia.llm.lemonade_manager.LemonadeManager.get_base_url")
-def test_is_loaded_ctx_too_small_uses_active_device_profile(
+def test_is_loaded_ctx_too_small_judges_the_default_model_by_its_window(
     mock_get_base_url,
     mock_httpx_get,
     device,
@@ -90,7 +91,7 @@ def test_is_loaded_ctx_too_small_uses_active_device_profile(
     expected_too_small,
     monkeypatch,
 ):
-    """A correctly loaded NPU 32K model must not be routed to reload."""
+    """No model_id: the default model's own window decides, not the device."""
     from gaia.agents.base.agent import Agent
 
     class _DeviceAgent(Agent):
@@ -98,19 +99,20 @@ def test_is_loaded_ctx_too_small_uses_active_device_profile(
             return None
 
     agent = _DeviceAgent(skip_lemonade=True, silent_mode=True, device=device)
-    if device is None:
-        from types import SimpleNamespace
-
-        monkeypatch.setattr(
-            "gaia.config.GaiaConfig.load",
-            lambda: SimpleNamespace(default_device="npu"),
-        )
+    monkeypatch.setattr(
+        "gaia.agents.base.agent.resolve_default_chat_model",
+        lambda: "gemma4-it-e2b-FLM",
+    )
     mock_get_base_url.return_value = "http://localhost:13305/api/v1"
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.json.return_value = {
         "all_models_loaded": [
-            {"type": "llm", "recipe_options": {"ctx_size": loaded_ctx}}
+            {
+                "type": "llm",
+                "model_name": "gemma4-it-e2b-FLM",
+                "recipe_options": {"ctx_size": loaded_ctx},
+            }
         ]
     }
     mock_httpx_get.return_value = mock_resp
@@ -138,7 +140,9 @@ def test_is_loaded_ctx_too_small_judges_each_model_by_its_own_window(
         def _register_tools(self):
             return None
 
-    agent = _DeviceAgent(skip_lemonade=True, silent_mode=True, device="npu")
+    agent = _DeviceAgent(
+        skip_lemonade=True, silent_mode=True, device="npu", model_id=model_name
+    )
     mock_get_base_url.return_value = "http://localhost:13305/api/v1"
     mock_resp = MagicMock()
     mock_resp.status_code = 200
@@ -188,6 +192,159 @@ def test_cloud_startup_checks_server_without_loading_local_chat(monkeypatch, mod
     assert agent.model_id == model
     health.assert_called_once()
     local_init.assert_not_called()
+
+
+@pytest.mark.parametrize("warm_cache", [False, True])
+def test_catalog_discovered_cloud_agent_skips_local_preload(monkeypatch, warm_cache):
+    from gaia.agents.base.agent import CLOUD_MAX_OUTPUT_TOKENS, Agent
+    from gaia.llm.lemonade_client import LemonadeClient, record_cloud_models
+
+    class CloudAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    catalog = {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+    health = MagicMock(return_value={"status": "ok"})
+    local_init = MagicMock()
+    listed = MagicMock()
+
+    def list_models(self):
+        listed()
+        record_cloud_models(catalog)
+        return catalog
+
+    eviction_cloud = []
+
+    def context_eviction(mode, model, *, cloud):
+        eviction_cloud.append(cloud)
+        return False
+
+    monkeypatch.setattr(
+        "gaia.agents.base.agent.resolve_context_eviction", context_eviction
+    )
+    monkeypatch.setattr(LemonadeClient, "list_models", list_models)
+    monkeypatch.setattr(LemonadeClient, "health_check", health)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", local_init
+    )
+    record_cloud_models(catalog if warm_cache else {"data": []})
+    try:
+        agent = CloudAgent(model_id="opencode.big-model", silent_mode=True)
+        assert agent.model_id == "opencode.big-model"
+        assert agent.chat.config.max_tokens == CLOUD_MAX_OUTPUT_TOKENS
+        assert eviction_cloud == [True]
+        assert listed.call_count == (0 if warm_cache else 1)
+        health.assert_called_once()
+        local_init.assert_not_called()
+    finally:
+        record_cloud_models({"data": []})
+
+
+def test_cold_cloud_catalog_failure_never_falls_through_to_local_preload(monkeypatch):
+    from gaia.agents.base.agent import Agent
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        record_cloud_models,
+    )
+
+    class CloudAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    preload = MagicMock()
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", preload
+    )
+
+    def unavailable(self):
+        raise LemonadeClientError("catalog unavailable")
+
+    monkeypatch.setattr(LemonadeClient, "list_models", unavailable)
+    record_cloud_models({"data": []})
+    with pytest.raises(LemonadeClientError, match="opencode.big-model"):
+        CloudAgent(model_id="opencode.big-model", silent_mode=True)
+    # Starting a stopped server is allowed; loading the model locally is not.
+    assert preload.call_count == 1
+    assert preload.call_args.kwargs["preload"] is False
+
+
+def test_unregistered_dotted_local_model_starts_lemonade_then_classifies(
+    monkeypatch,
+):
+    """A stopped server is started before the catalog is asked a second time."""
+    from gaia.agents.base.agent import Agent
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        record_cloud_models,
+    )
+
+    class LocalAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    model = "Qwen3.5-35B-A3B-Unlisted-GGUF"
+    started = []
+    calls = []
+
+    def ensure_ready(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("preload") is False:
+            started.append(True)
+        return True
+
+    def list_models(self, **_kwargs):
+        if not started:
+            raise LemonadeClientError("connection refused")
+        return {"data": [{"id": model, "recipe": "llamacpp"}]}
+
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", ensure_ready
+    )
+    monkeypatch.setattr(LemonadeClient, "list_models", list_models)
+    record_cloud_models({"data": []})
+    LocalAgent(model_id=model, silent_mode=True)
+    assert [c.get("preload", True) for c in calls] == [False, True]
+    assert calls[1]["model"] == model
+
+
+def test_known_dotted_local_model_starts_before_catalog_classification(monkeypatch):
+    """A registered dotted local id can start Lemonade before catalog lookup."""
+    from gaia.agents.base.agent import Agent
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        record_cloud_models,
+    )
+
+    class LocalAgent(Agent):
+        def _register_tools(self):
+            return None
+
+    local_init = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready", local_init
+    )
+    monkeypatch.setattr(
+        LemonadeClient,
+        "_is_cloud_model",
+        lambda self, _model: (_ for _ in ()).throw(
+            LemonadeClientError("catalog unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.find_model_requirement",
+        lambda _model: SimpleNamespace(feature_tier="full"),
+    )
+    record_cloud_models({"data": []})
+    try:
+        LocalAgent(model_id="user.Llama-3.2-3B-GGUF", silent_mode=True)
+        assert local_init.call_count == 1
+        assert local_init.call_args.kwargs["model"] == "user.Llama-3.2-3B-GGUF"
+        assert "preload" not in local_init.call_args.kwargs
+    finally:
+        record_cloud_models({"data": []})
 
 
 def test_local_agent_hands_its_model_to_ensure_ready(monkeypatch):

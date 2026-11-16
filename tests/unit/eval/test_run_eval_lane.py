@@ -32,6 +32,8 @@ def test_a_gaia_lane_runs_the_fake_gh_from_the_staged_fixtures(tmp_path):
     first_on_path = p["env"]["PATH"].split(os.pathsep)[0]
     assert first_on_path == str(tmp_path / ".gaia-eval-bin")
     assert p["cwd"] == tmp_path / "gaia-eval"
+    assert p["env"]["GAIA_EVAL_ROOT"] == str(tmp_path / "gaia-eval")
+    assert p["env"]["GIT_CEILING_DIRECTORIES"] == str(tmp_path)
     assert p["extra_args"] == [
         "--exclude-tag",
         "live",
@@ -46,9 +48,42 @@ def test_a_plain_lane_gets_no_auto_approval_and_no_memory(tmp_path):
 
     assert "GAIA_AUTO_APPROVE_TOOLS" not in p["env"]
     assert "PATH" not in p["env"]
+    assert "GAIA_EVAL_ROOT" not in p["env"]
     assert p["cwd"] == REPO_ROOT
     assert p["env"]["GAIA_MEMORY_DISABLED"] == "1"
     assert not p["memory"]
+
+
+def _fetch(url):
+    import urllib.request
+
+    with urllib.request.urlopen(url, timeout=10) as resp:
+        return resp.status, resp.read()
+
+
+@pytest.mark.allow_network
+def test_two_runs_serve_their_own_hub_on_their_own_port(tmp_path):
+    hubs = []
+    for name in ("run-a", "run-b"):
+        hub = tmp_path / name / "fixture-hub"
+        hub.mkdir(parents=True)
+        (hub / "index.json").write_text(json.dumps({"run": name}))
+        hubs.append(hub)
+    servers = [run_eval_lane.start_fixture_server(hub) for hub in hubs]
+    try:
+        ports = [server.server_address[1] for server in servers]
+        assert len(set(ports)) == 2 and 8765 not in ports
+        for name, port in zip(("run-a", "run-b"), ports):
+            env = run_eval_lane.fixture_server_env(port)
+            assert env["GAIA_EVAL_FIXTURE_PORT"] == str(port)
+            status, body = _fetch(env["GAIA_HUB_URL"] + "/index.json")
+            assert status == 200 and json.loads(body) == {"run": name}
+            status, _ = _fetch(f"http://127.0.0.1:{port}/atlas.html")
+            assert status == 200
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
 
 
 def test_every_ci_lane_resolves():
@@ -67,3 +102,148 @@ def test_every_ci_lane_resolves():
 def test_an_unknown_lane_names_the_real_ones():
     with pytest.raises(SystemExit, match="gaia-signal"):
         run_eval_lane.lane_categories("no-such-lane")
+
+
+def test_each_category_gets_an_empty_home_with_the_staged_skills(tmp_path):
+    staged = tmp_path / "_staged"
+    (staged / "skills" / "word-count").mkdir(parents=True)
+    (staged / "skills" / "trusted-keys.json").write_text("{}")
+
+    env = run_eval_lane.category_home(tmp_path / "gaia_memory", staged)
+
+    home = tmp_path / "gaia_memory"
+    assert env["GAIA_HOME"] == str(home)
+    assert env["GAIA_MEMORY_DB"] == str(home / "memory.db")
+    assert env["GAIA_CONFIG_DIR"] == str(home)
+    assert env["GAIA_DAEMON_HOME"] == str(home / "host")
+    assert (home / "skills" / "trusted-keys.json").is_file()
+    assert not (home / "memory.db").exists()
+
+
+def test_agent_model_is_the_default_model_the_backend_resolves(tmp_path):
+    import subprocess
+
+    from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
+
+    env = run_eval_lane.category_home(tmp_path / "gaia_core", tmp_path / "_staged")
+    run_eval_lane.write_agent_model(tmp_path / "gaia_core", GPT_OSS_20B_MODEL_NAME)
+
+    resolved = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from gaia.llm.lemonade_client import resolve_default_chat_model as r;"
+            "print(r())",
+        ],
+        env={
+            **{k: v for k, v in os.environ.items() if k != "GAIA_CONFIG_FILE"},
+            **env,
+            "PYTHONPATH": str(REPO_ROOT / "src"),
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert resolved == GPT_OSS_20B_MODEL_NAME
+
+
+def test_a_category_home_that_already_exists_is_refused(tmp_path):
+    # A reused home is exactly how one run's memory reaches the next.
+    (tmp_path / "gaia_rag").mkdir()
+
+    with pytest.raises(SystemExit, match="already exists"):
+        run_eval_lane.category_home(tmp_path / "gaia_rag", tmp_path / "_staged")
+
+
+def test_children_import_this_checkout_first():
+    env = run_eval_lane.pin_checkout({"PYTHONPATH": "/elsewhere"})
+
+    entries = env["PYTHONPATH"].split(os.pathsep)
+    assert entries[0] == str(REPO_ROOT / "src")
+    assert str(REPO_ROOT / "hub" / "agents" / "gaia" / "python") in entries
+    assert entries[-1] == "/elsewhere"
+    run_eval_lane.require_checkout_imports({**os.environ, **env})
+
+
+def test_an_agent_package_from_another_checkout_is_refused(tmp_path):
+    for name in run_eval_lane.ANCHOR_MODULES:
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "__init__.py").write_text("")
+    env = {**os.environ, "PYTHONPATH": str(tmp_path)}
+    env.pop("GAIA_ALLOW_EXTERNAL_IMPORTS", None)
+
+    with pytest.raises(SystemExit, match="gaia_agent ->"):
+        run_eval_lane.require_checkout_imports(env)
+
+    run_eval_lane.require_checkout_imports({**env, "GAIA_ALLOW_EXTERNAL_IMPORTS": "1"})
+
+
+class _FakeSubprocess:
+    """Stands in for ``subprocess`` in run_eval_lane: the eval writes a scorecard."""
+
+    PIPE = STDOUT = None
+
+    def __init__(self, run_dir, statuses):
+        self.run_dir = run_dir
+        self.statuses = statuses
+
+    def run(self, cmd, **kwargs):
+        if cmd[:3] == ["gaia", "eval", "agent"]:
+            self.run_dir.mkdir(parents=True, exist_ok=True)
+            (self.run_dir / "scorecard.json").write_text(
+                json.dumps(
+                    {
+                        "scenarios": [
+                            {"scenario_id": f"s{i}", "status": status}
+                            for i, status in enumerate(self.statuses)
+                        ]
+                    }
+                )
+            )
+            kwargs["stdout"].write(f"Results: x\nOutput: {self.run_dir}\n")
+        return type("Done", (), {"returncode": 0})()
+
+    def Popen(self, *_args, **_kwargs):  # noqa: N802 - mirrors subprocess
+        return type("Proc", (), {"pid": 1, "poll": lambda self: None})()
+
+
+def _run_one_category(tmp_path, monkeypatch, statuses):
+    category = "error_recovery"
+    p = run_eval_lane.plan([category], tmp_path, 4200)
+    homes = tmp_path / "out" / "gaia-homes"
+    env = {
+        **os.environ,
+        **p["env"],
+        **run_eval_lane.category_home(homes / category, homes / "_staged"),
+    }
+    (homes / category / "gaia_chat.db").write_text("chat history")
+    health = iter([False, True])
+    monkeypatch.setattr(run_eval_lane, "_get", lambda _url: next(health))
+    monkeypatch.setattr(run_eval_lane, "_stop_tree", lambda _proc: None)
+    monkeypatch.setattr(run_eval_lane, "_require_empty_memory", lambda *_a: None)
+    monkeypatch.setattr(
+        run_eval_lane,
+        "subprocess",
+        _FakeSubprocess(tmp_path / "results" / "eval-1", statuses),
+    )
+    args = type(
+        "Args", (), {"port": 4200, "judge_model": "m", "out": tmp_path / "out"}
+    )()
+    run_eval_lane._run_category(category, env, p, args)
+    return homes / category, tmp_path / "out" / "kept-homes" / category
+
+
+def test_a_category_with_failures_keeps_its_gaia_home(tmp_path, monkeypatch):
+    home, kept = _run_one_category(tmp_path, monkeypatch, ["PASS", "TIMEOUT"])
+
+    assert not home.exists()
+    assert (kept / "gaia_chat.db").read_text() == "chat history"
+
+
+def test_a_category_that_passed_cleans_its_gaia_home_up(tmp_path, monkeypatch):
+    home, kept = _run_one_category(
+        tmp_path, monkeypatch, ["PASS", "SKIPPED_NO_DOCUMENT"]
+    )
+
+    assert not home.exists()
+    assert not kept.exists()

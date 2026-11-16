@@ -1,0 +1,124 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Every message and doc that sends users to Settings names the tab the UI
+actually shows, "Connectors", never "Connections" (#2115).
+"""
+
+import re
+from pathlib import Path
+
+import pytest
+
+_ROOT = Path(__file__).resolve().parents[2]
+_SCAN_ROOTS = [_ROOT / "src" / "gaia", _ROOT / "hub" / "agents", _ROOT / "docs"]
+# Any arrow spelling, with or without markdown or quotes around either word.
+_STALE_RE = re.compile(
+    r"Settings[*_`\"']*\s*(?:\([^)]*\)\s*)?(?:→|->|>|»|›|&rarr;|&gt;)\s*(?:scroll\s+to\s+)?[*_`\"']*Connections\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_python_literals(text: str) -> str:
+    """Join adjacent string literals, including f-strings, while preserving line numbers."""
+    return re.sub(r"[\"'][ \t]*\n[ \t]*[rfbu]*[\"']", "\n", text, flags=re.I)
+
+
+_SCAN_EXTENSIONS = {
+    ".py",
+    ".tsx",
+    ".ts",
+    ".js",
+    ".md",
+    ".mdx",
+    ".json",
+    ".yaml",
+    ".yml",
+}
+_SKIP_PATH_PARTS = {"node_modules", "dist", "__pycache__"}
+# The UI still recognises the old wording from agent builds released before the rename.
+_ALLOWED = {
+    Path("src/gaia/apps/webui/src/components/__tests__/EmailConnectCta.test.ts"),
+}
+
+
+def test_settings_path_names_the_connectors_tab():
+    assert all(root.is_dir() for root in _SCAN_ROOTS), _SCAN_ROOTS
+    offenders: list[str] = []
+    for root in _SCAN_ROOTS:
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix not in _SCAN_EXTENSIONS:
+                continue
+            if any(part in _SKIP_PATH_PARTS for part in path.parts):
+                continue
+            rel = path.relative_to(_ROOT)
+            if rel in _ALLOWED:
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            if path.suffix == ".py":
+                text = _normalize_python_literals(text)
+            for match in _STALE_RE.finditer(text):
+                line_num = text.count("\n", 0, match.start()) + 1
+                offenders.append(f"{rel}:{line_num}")
+    assert (
+        not offenders
+    ), "Settings has no Connections tab; say Settings → Connectors:\n  " + "\n  ".join(
+        offenders
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Settings → Connections",
+        "Settings -> Connections -> Google",
+        "Settings>Connections",
+        "Settings » Connections",
+        "Settings › Connections",
+        "Settings &rarr; Connections",
+        "Settings &gt; Connections",
+        "**Settings** → **Connections**",
+        "`Settings` → `Connections`",
+        "settings -> connections",
+        "Settings →\n  Connections",
+        "**Settings** (gear) → **Connections**",
+        "Settings (gear icon) → scroll to **Connections**",
+    ],
+)
+def test_stale_pattern_catches_every_spelling(text):
+    assert _STALE_RE.search(text)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        '"Settings → "\n    f"Connections"',
+        '"(or Settings -> "\n            "Connections in the Agent UI)."',
+        "'Settings → '\n    F\"Connections\"",
+        "\"Settings → \"\n    rb'Connections'",
+    ],
+)
+def test_split_python_literals_are_scanned_as_one_path(source):
+    assert _STALE_RE.search(_normalize_python_literals(source))
+
+
+def test_joining_split_literals_keeps_source_line_numbers():
+    source = 'x = 1\nmsg = ("Settings → "\n    f"Connections")\n'
+    joined = _normalize_python_literals(source)
+    match = _STALE_RE.search(joined)
+    assert match and joined.count("\n", 0, match.end()) == 2
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Settings → Connectors",
+        "Settings -> Connectors -> Google",
+        "one Connections panel spanning agents",
+        "stored connections for this client",
+        "Settings → ConnectionsX",
+        "Settings (gear) → Connectors",
+        "Settings (gear icon) → scroll to **Connectors**",
+    ],
+)
+def test_stale_pattern_leaves_correct_wording_alone(text):
+    assert not _STALE_RE.search(text)

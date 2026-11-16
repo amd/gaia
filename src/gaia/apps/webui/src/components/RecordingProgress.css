@@ -1,0 +1,161 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.recording-progress {
+    max-inline-size: 560px;
+    margin-block: 8px;
+    padding: 12px 14px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+}
+
+.recording-progress-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.recording-progress-row {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr) auto auto;
+    column-gap: 8px;
+    row-gap: 6px;
+    align-items: center;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+.recording-progress-row.is-running { font-weight: 600; }
+.recording-progress-row.is-waiting,
+.recording-progress-row.is-done { color: var(--text-muted); }
+
+.recording-progress-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.recording-progress-row.is-done .recording-progress-mark { color: var(--accent-green); }
+
+.recording-progress-dot {
+    inline-size: 6px;
+    block-size: 6px;
+    border-radius: var(--radius-full);
+    background: currentColor;
+    opacity: 0.45;
+}
+.recording-progress-row.is-running .recording-progress-dot {
+    background: var(--accent-solid);
+    opacity: 1;
+}
+
+.recording-progress-label { min-inline-size: 0; }
+.recording-progress-percent { font-variant-numeric: tabular-nums; }
+.recording-progress-left {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 400;
+    white-space: nowrap;
+}
+
+.recording-progress-track {
+    grid-column: 2 / -1;
+    block-size: 6px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    overflow: hidden;
+}
+
+/* Logical size, so the bar fills from the start edge in either direction. */
+.recording-progress-fill {
+    block-size: 100%;
+    inline-size: 0;
+    border-radius: inherit;
+    background: var(--accent-solid);
+    transition: inline-size var(--duration) var(--ease);
+}
+
+.recording-progress-row.is-running .recording-progress-track.is-indeterminate .recording-progress-fill {
+    inline-size: 35%;
+    animation: recordingProgressSweep var(--duration-shimmer) var(--ease-in-out) infinite;
+}
+.recording-progress-row.is-running .recording-progress-track.is-indeterminate:dir(rtl) .recording-progress-fill {
+    animation-name: recordingProgressSweepRtl;
+}
+
+@keyframes recordingProgressSweep {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(300%); }
+}
+@keyframes recordingProgressSweepRtl {
+    from { transform: translateX(100%); }
+    to { transform: translateX(-300%); }
+}
+
+.recording-found {
+    margin-block-start: 12px;
+    padding-block-start: 10px;
+    border-block-start: 1px solid var(--border-light);
+    max-block-size: 320px;
+    overflow-y: auto;
+}
+
+.recording-found-title {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 0 8px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.recording-found-count {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.recording-found-section + .recording-found-section { margin-block-start: 10px; }
+
+.recording-found-span {
+    display: flex;
+    gap: 8px;
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.recording-found-items {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.recording-found-items li {
+    display: flex;
+    gap: 8px;
+    min-inline-size: 0;
+}
+
+.recording-found-time {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .recording-progress-row.is-running .recording-progress-track.is-indeterminate .recording-progress-fill {
+        animation: none;
+        inline-size: 100%;
+        opacity: 0.4;
+    }
+}
+

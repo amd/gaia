@@ -12,9 +12,14 @@ import io
 import json
 import os
 import secrets
+import select
+import socket
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict
+import threading
+from contextlib import contextmanager
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
 # Add GAIA to path
@@ -28,10 +33,21 @@ from gaia.api.local_http import (  # pylint: disable=wrong-import-position
 )
 from gaia.llm import create_client  # pylint: disable=wrong-import-position
 from gaia.llm.lemonade_client import (  # pylint: disable=wrong-import-position
+    resolve_default_chat_model,
     resolve_lemonade_base_url,
+)
+from gaia.llm.reasoning import (  # pylint: disable=wrong-import-position
+    strip_reasoning,
+)
+from gaia.llm.retry import (  # pylint: disable=wrong-import-position
+    model_retry_notices,
 )
 from gaia.logger import get_logger  # pylint: disable=wrong-import-position
 from gaia.mcp.ports import MCP_BRIDGE_PORT  # pylint: disable=wrong-import-position
+from gaia.mcp.protocol import (  # pylint: disable=wrong-import-position
+    MCP_PROTOCOL_VERSION,
+    SUPPORTED_PROTOCOL_VERSIONS,
+)
 
 # pylint: enable=wrong-import-position
 
@@ -55,11 +71,72 @@ PUBLIC_PATHS = frozenset({"/health"})
 # origins are always allowed; everything else is refused, token or not.
 ALLOWED_ORIGINS_ENV_VAR = "GAIA_MCP_ALLOWED_ORIGINS"
 
-# Handshake-era MCP revisions; 2026-07-28 dropped `initialize`, so it is not offered.
-SUPPORTED_PROTOCOL_VERSIONS = frozenset(
-    {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"}
-)
-MCP_PROTOCOL_VERSION = "2025-11-25"
+# How long a client may go silent while sending its request. It bounds socket
+# reads only, never the tool call, which can wait minutes on a busy Lemonade.
+REQUEST_READ_TIMEOUT_SECONDS = 30
+
+# Largest request body the bridge reads; tool arguments are small JSON.
+DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+MAX_BODY_BYTES_ENV_VAR = "GAIA_MCP_MAX_BODY_BYTES"
+
+
+def resolve_max_body_bytes():
+    """The body-size limit: ``$GAIA_MCP_MAX_BODY_BYTES``, else 1 MiB."""
+    raw = os.environ.get(MAX_BODY_BYTES_ENV_VAR, "").strip()
+    if not raw:
+        return DEFAULT_MAX_BODY_BYTES
+    try:
+        limit = int(raw)
+    except ValueError as e:
+        raise ValueError(
+            f"{MAX_BODY_BYTES_ENV_VAR} must be a whole number of bytes; got "
+            f"{raw!r}. Fix or unset it."
+        ) from e
+    if limit <= 0:
+        raise ValueError(
+            f"{MAX_BODY_BYTES_ENV_VAR} must be greater than 0; got {limit}."
+        )
+    return limit
+
+
+# How often a call queued for its turn checks that its client is still there.
+QUEUE_CHECK_SECONDS = 0.5
+
+
+class ClientDisconnected(Exception):
+    """The MCP client hung up before its tool call finished."""
+
+
+def _never_gone():
+    return False
+
+
+def _readable_now(sock) -> bool:
+    """Whether *sock* has data or an EOF waiting, without blocking."""
+    # poll has no fd ceiling; select() refuses descriptors past 1023 on Linux.
+    if hasattr(select, "poll"):
+        poller = select.poll()
+        poller.register(sock, select.POLLIN)
+        return bool(poller.poll(0))
+    readable, _, _ = select.select([sock], [], [], 0)
+    return bool(readable)
+
+
+@contextmanager
+def _in_turn(lock, what, client_gone=_never_gone):
+    """Hold *lock*, logging when the caller has to queue for it.
+
+    A caller whose client hangs up while it waits leaves the queue.
+    """
+    if not lock.acquire(blocking=False):
+        logger.info("MCP %s queued behind another request on the bridge", what)
+        while not lock.acquire(timeout=QUEUE_CHECK_SECONDS):
+            if client_gone():
+                raise ClientDisconnected(f"the {what} was still queued")
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 class GAIAMCPBridge:
@@ -80,9 +157,13 @@ class GAIAMCPBridge:
         self.agents = {}
         self.tools = {}
         self.llm_client = None
-        self.chat_sdk = None
-        self.verbose = verbose
         self.chat_sdk = None  # Lazy initialized in _execute_chat
+        self.verbose = verbose
+        # Requests run on their own threads. The provider keeps per-call state on
+        # the instance, so queries take turns; local models run one at a time anyway.
+        self._llm_lock = threading.Lock()
+        # One AgentSDK holds one conversation, so chats take turns writing it.
+        self._chat_lock = threading.Lock()
         global VERBOSE
         VERBOSE = verbose
 
@@ -99,8 +180,8 @@ class GAIAMCPBridge:
             "capabilities": ["query", "stream", "model_selection"],
         }
         self.agents["chat"] = {
-            "module": "gaia.chat.app",
-            "function": "main",
+            "module": "gaia.chat.sdk",
+            "class": "AgentSDK",
             "description": "Interactive chat",
             "capabilities": ["conversation", "history", "context_management"],
         }
@@ -138,48 +219,96 @@ class GAIAMCPBridge:
             },
         }
 
-    def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a tool and return results."""
+    def execute_tool(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        client_gone: Callable[[], bool] = _never_gone,
+    ) -> Dict[str, Any]:
+        """Execute a tool and return results.
+
+        Raises ``ClientDisconnected`` once *client_gone* says the caller hung
+        up; the LLM client's waits (a busy server, a retry, a model load) end
+        early through the same check.
+        """
         try:
-            if tool_name == "gaia.query":
-                return self._execute_query(arguments)
-            elif tool_name == "gaia.chat":
-                return self._execute_chat(arguments)
-            else:
-                return {"error": f"Tool not implemented: {tool_name}"}
+            with model_retry_notices(lambda _notice: None, is_cancelled=client_gone):
+                if tool_name == "gaia.query":
+                    return self._execute_query(arguments, client_gone)
+                elif tool_name == "gaia.chat":
+                    return self._execute_chat(arguments, client_gone)
+                else:
+                    return {"error": f"Tool not implemented: {tool_name}"}
+        except ClientDisconnected:
+            raise
         except Exception as e:
+            if client_gone():
+                raise ClientDisconnected(str(e)) from e
             logger.error(f"Tool execution error: {e}")
             return {"error": str(e)}
 
-    def _execute_query(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _execute_query(
+        self, args: Dict[str, Any], client_gone: Callable[[], bool] = _never_gone
+    ) -> Dict[str, Any]:
         """Execute LLM query."""
-        if not self.llm_client:
-            self.llm_client = create_client("lemonade", base_url=self.base_url)
-
-        response = self.llm_client.generate(
-            prompt=args.get("query", ""),
-            model=args.get("model"),
-            max_tokens=args.get("max_tokens", 500),
-        )
+        with _in_turn(self._llm_lock, "query", client_gone):
+            if not self.llm_client:
+                self.llm_client = create_client("lemonade", base_url=self.base_url)
+            # Streamed so a hang-up can end the reply: closing it hangs up on Lemonade.
+            model = args.get("model") or resolve_default_chat_model()
+            reply = self.llm_client.generate(
+                prompt=args.get("query", ""),
+                model=model,
+                max_tokens=args.get("max_tokens", 500),
+                stream=True,
+            )
+            response = self._answer_from(reply, client_gone, model)
 
         return {"success": True, "result": response}
 
-    def _execute_chat(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _answer_from(
+        self, reply, client_gone: Callable[[], bool], model: Optional[str] = None
+    ) -> str:
+        """Read a streamed *reply* into the answer a non-streamed call returns."""
+        if isinstance(reply, str):
+            return reply
+        parts = []
+        try:
+            for piece in reply:
+                if client_gone():
+                    raise ClientDisconnected("the query was mid-reply")
+                parts.append(piece)
+        finally:
+            close = getattr(reply, "close", None)
+            if callable(close):
+                close()
+        answer = strip_reasoning("".join(parts))
+        # Matches the unstreamed reply: a finished answer a local model sent as
+        # reasoning wins, but a cloud model's reasoning is never the answer.
+        if (
+            not answer
+            and self.llm_client.get_last_finish_reason() == "stop"
+            and not self.llm_client.cloud_model_provider(model)
+        ):
+            answer = self.llm_client.get_last_reasoning() or ""
+        return answer
+
+    def _execute_chat(
+        self, args: Dict[str, Any], client_gone: Callable[[], bool] = _never_gone
+    ) -> Dict[str, Any]:
         """Execute chat interaction with conversation context."""
         try:
             from gaia.chat.sdk import AgentConfig, AgentSDK
 
-            # Initialize chat SDK if not already done
-            if self.chat_sdk is None:
-                # AgentSDK uses the global LLM configuration, not a base_url
-                config = AgentConfig()
-                self.chat_sdk = AgentSDK(config=config)
-
-            # Get the query
             query = args.get("query", "")
 
-            # Send message and get response
-            chat_response = self.chat_sdk.send(query)
+            with _in_turn(self._chat_lock, "chat", client_gone):
+                if self.chat_sdk is None:
+                    # AgentSDK uses the global LLM configuration, not a base_url
+                    self.chat_sdk = AgentSDK(
+                        config=AgentConfig(model=resolve_default_chat_model())
+                    )
+                chat_response = self.chat_sdk.send(query)
 
             # Extract the text response
             if hasattr(chat_response, "text"):
@@ -190,7 +319,11 @@ class GAIAMCPBridge:
                 response = str(chat_response)
 
             return {"success": True, "result": response}
+        except ClientDisconnected:
+            raise
         except Exception as e:
+            if client_gone():
+                raise ClientDisconnected(str(e)) from e
             logger.error(f"Chat execution error: {e}")
             return {"success": False, "error": str(e)}
 
@@ -198,9 +331,82 @@ class GAIAMCPBridge:
 class MCPHTTPHandler(BaseHTTPRequestHandler):
     """HTTP handler for MCP protocol."""
 
-    def __init__(self, *args, bridge: GAIAMCPBridge = None, **kwargs):
+    # Socket timeout: a client that stops sending mid-request is dropped instead
+    # of holding its handler thread forever.
+    timeout = REQUEST_READ_TIMEOUT_SECONDS
+    max_body_bytes = DEFAULT_MAX_BODY_BYTES
+
+    def __init__(
+        self, *args, bridge: GAIAMCPBridge = None, max_body_bytes=None, **kwargs
+    ):
         self.bridge = bridge or GAIAMCPBridge()
+        if max_body_bytes is not None:
+            self.max_body_bytes = max_body_bytes
         super().__init__(*args, **kwargs)
+
+    def parse_request(self):
+        """Answer 408 when a client stops sending partway through its headers."""
+        try:
+            return super().parse_request()
+        except TimeoutError:
+            self.close_connection = True
+            self.send_error(
+                HTTPStatus.REQUEST_TIMEOUT,
+                f"Request headers not received within {self.timeout}s",
+            )
+            return False
+
+    def _content_length(self):
+        """The declared body size, or None after replying 400/411/413."""
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            self.send_json(
+                411,
+                {
+                    "error": (
+                        "Chunked or other Transfer-Encoding bodies are not "
+                        "supported. Send the body with a Content-Length header."
+                    )
+                },
+            )
+            return None
+        values = {v.strip() for v in self.headers.get_all("Content-Length", [])}
+        if len(values) > 1:
+            self.close_connection = True
+            self.send_json(400, {"error": "Conflicting Content-Length headers"})
+            return None
+        raw = values.pop() if values else "0"
+        try:
+            length = int(raw)
+        except ValueError:
+            length = -1
+        if length < 0:
+            self.close_connection = True
+            self.send_json(
+                400, {"error": f"Invalid Content-Length header: {raw[:32]!r}"}
+            )
+            return None
+        if length > self.max_body_bytes:
+            logger.warning(
+                "Rejected oversized MCP request: %s %r (Content-Length %d > %d)",
+                self.command,
+                self.path,
+                length,
+                self.max_body_bytes,
+            )
+            self.close_connection = True
+            self.send_json(
+                413,
+                {
+                    "error": (
+                        f"Request body of {length} bytes exceeds the bridge's "
+                        f"{self.max_body_bytes}-byte limit. Send a smaller "
+                        f"request, or raise {MAX_BODY_BYTES_ENV_VAR}."
+                    )
+                },
+            )
+            return None
+        return length
 
     def log_request_details(self, method, path, body=None):
         """Log incoming request details if verbose mode is enabled."""
@@ -278,16 +484,31 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         return True
 
     def _drain_request_body(self):
-        """Consume any pending request body so the client can read our reply."""
+        """Consume any pending request body so the client can read our reply.
+
+        An oversized or stalled body is left unread and the connection closed
+        after the reply, so a rejected request never holds its thread.
+        """
+        self.close_connection = True
         try:
             length = int(self.headers.get("Content-Length", 0))
         except (TypeError, ValueError):
             return
-        while length > 0:
-            chunk = self.rfile.read(min(length, 65536))
-            if not chunk:
-                break
-            length -= len(chunk)
+        if length > self.max_body_bytes:
+            return
+        try:
+            while length > 0:
+                chunk = self.rfile.read(min(length, 65536))
+                if not chunk:
+                    break
+                length -= len(chunk)
+        except TimeoutError:
+            logger.warning(
+                "Rejected MCP request's body not received within %ss: %s %r",
+                self.timeout,
+                self.command,
+                self.path,
+            )
 
     def _reject_unauthenticated(self, path):
         """Send 401/403 for a credential-less request. True when rejected."""
@@ -384,11 +605,33 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         if self._reject_unauthenticated(parsed.path):
             return
 
-        content_length = int(self.headers.get("Content-Length", 0))
+        content_length = self._content_length()
+        if content_length is None:
+            return
         ctype = self.headers.get("content-type", "")
 
         if ctype.startswith("application/json") and content_length > 0:
-            body = self.rfile.read(content_length)
+            try:
+                body = self.rfile.read(content_length)
+            except TimeoutError:
+                logger.warning(
+                    "MCP request body not received within %ss: %s %r",
+                    self.timeout,
+                    self.command,
+                    self.path,
+                )
+                self.close_connection = True
+                self.send_json(
+                    408,
+                    {
+                        "error": (
+                            f"Request body not received within {self.timeout}s "
+                            f"(Content-Length {content_length}). Send the whole "
+                            "body, or fix the Content-Length header."
+                        )
+                    },
+                )
+                return
             try:
                 data = json.loads(body.decode("utf-8"))
                 self.log_request_details("POST", self.path, data)
@@ -407,12 +650,14 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self.handle_jsonrpc(data)
         elif parsed.path == "/chat":
             # Direct chat endpoint for conversations
-            result = self.bridge.execute_tool("gaia.chat", data)
-            self.send_json(200 if result.get("success") else 500, result)
+            result = self._run_tool("gaia.chat", data)
+            if result is not None:
+                self.send_json(200 if result.get("success") else 500, result)
         elif parsed.path == "/llm":
             # Direct LLM endpoint (no conversation context)
-            result = self.bridge.execute_tool("gaia.query", data)
-            self.send_json(200 if result.get("success") else 500, result)
+            result = self._run_tool("gaia.query", data)
+            if result is not None:
+                self.send_json(200 if result.get("success") else 500, result)
         else:
             self.send_json(404, {"error": "Not found"})
 
@@ -490,7 +735,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 )
                 return
             arguments = params.get("arguments", {})
-            tool_result = self.bridge.execute_tool(tool_name, arguments)
+            tool_result = self._run_tool(tool_name, arguments)
+            if tool_result is None:
+                return
             result = {
                 "content": [{"type": "text", "text": json.dumps(tool_result)}],
                 "isError": "error" in tool_result
@@ -528,17 +775,55 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _client_gone(self) -> bool:
+        """True once the client has closed its end of the connection.
+
+        A client that half-closes after sending its request counts as gone.
+        """
+        try:
+            if not _readable_now(self.connection):
+                return False
+            return self.connection.recv(1, socket.MSG_PEEK) == b""
+        except ConnectionError:
+            return True
+
+    def _run_tool(self, tool_name, arguments):
+        """Run a tool call; None when the client hung up, which needs no reply."""
+        try:
+            return self.bridge.execute_tool(
+                tool_name, arguments, client_gone=self._client_gone
+            )
+        except ClientDisconnected as e:
+            logger.warning(
+                "MCP client disconnected; stopped its %s call (%s)", tool_name, e
+            )
+            self.close_connection = True
+            return None
+
     def send_json(self, status, data):
         """Send JSON response."""
         if VERBOSE:
             logger.info(f"MCP Response: Status {status}")
             logger.debug(f"Response body: {json.dumps(data, indent=2)}")
 
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self._send_cors_headers()
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode("utf-8"))
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self._send_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode("utf-8"))
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            logger.warning(
+                "MCP client disconnected before its reply to %s %s was sent",
+                self.command,
+                self.path,
+            )
+            self.close_connection = True
+
+    def log_error(self, format, *args):
+        """Always log errors (timeouts, malformed requests), verbose or not."""
+        client_addr = self.client_address[0] if self.client_address else "unknown"
+        logger.warning("MCP bridge HTTP error from %s: %s", client_addr, format % args)
 
     def log_message(self, format, *args):
         """Override to control standard HTTP logging."""
@@ -546,8 +831,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         if VERBOSE:
             # We already log detailed info in log_request_details and send_json
             pass
-        elif "/health" not in args[0]:
-            # In non-verbose mode, skip health checks but log everything else
+        # Skip health checks; errors arrive through log_error instead.
+        elif "/health" not in str(args[0] if args else ""):
             super().log_message(format, *args)
 
 
@@ -580,6 +865,24 @@ def resolve_bind_host(host, authenticated=False):
     return host
 
 
+def create_server(bridge, bind_host, port):
+    """Build the bridge's HTTP server: one thread per request.
+
+    A tool call can sit behind another app's request on a shared Lemonade for
+    minutes, so ``/health`` and ``/status`` must not queue behind it.
+    """
+    max_body_bytes = resolve_max_body_bytes()
+
+    def handler(*args, **kwargs):
+        return MCPHTTPHandler(
+            *args, bridge=bridge, max_body_bytes=max_body_bytes, **kwargs
+        )
+
+    server = ThreadingHTTPServer((bind_host, port), handler)
+    server.daemon_threads = True
+    return server
+
+
 def start_server(
     host="localhost",
     port=MCP_BRIDGE_PORT,
@@ -600,14 +903,10 @@ def start_server(
     # Create bridge with verbose flag
     bridge = GAIAMCPBridge(host, port, base_url, verbose=verbose, auth_token=auth_token)
 
-    # Create handler with bridge
-    def handler(*args, **kwargs):
-        return MCPHTTPHandler(*args, bridge=bridge, **kwargs)
-
     # Start server - use bind_host for actual socket binding
     logger.info(f"Creating HTTP server on {bind_host}:{port}")
     try:
-        server = HTTPServer((bind_host, port), handler)
+        server = create_server(bridge, bind_host, port)
         logger.info(
             f"HTTP server created successfully, listening on {bind_host}:{port}"
         )
@@ -700,11 +999,16 @@ def build_parser():
 
 
 def main():
+    from gaia.logger import configure
+
+    configure()
+    from gaia.login_path import apply_login_path
     from gaia.tls import use_os_trust_store
 
     use_os_trust_store()
     parser = build_parser()
     args = parser.parse_args()
+    apply_login_path()
     start_server(
         args.host, args.port, args.base_url, args.verbose, auth_token=args.auth_token
     )

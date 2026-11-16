@@ -1,0 +1,228 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "gaia-cpp-framework",
+  "documentNamespace": "https://github.com/amd/gaia/cpp/SBOM.spdx.json",
+  "creationInfo": {
+    "created": "2026-11-01T00:00:00Z",
+    "creators": [
+      "Organization: Advanced Micro Devices, Inc."
+    ],
+    "comment": "Hand-maintained. util/check_cpp_sbom.py fails CI when cpp/CMakeLists.txt, cpp/third_party or cpp/vcpkg.json drift from it."
+  },
+  "documentDescribes": [
+    "SPDXRef-Package-gaia-cpp"
+  ],
+  "packages": [
+    {
+      "name": "gaia-cpp",
+      "SPDXID": "SPDXRef-Package-gaia-cpp",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "git+https://github.com/amd/gaia.git#cpp",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (C) 2025-2026 Advanced Micro Devices, Inc.",
+      "supplier": "Organization: Advanced Micro Devices, Inc.",
+      "primaryPackagePurpose": "LIBRARY"
+    },
+    {
+      "name": "nlohmann-json",
+      "SPDXID": "SPDXRef-Package-nlohmann-json",
+      "versionInfo": "3.11.3",
+      "downloadLocation": "https://github.com/nlohmann/json/archive/refs/tags/v3.11.3.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/nlohmann/json@v3.11.3"
+        }
+      ],
+      "comment": "FetchContent 'json'. Public dependency: JSON types appear in the gaia_core API."
+    },
+    {
+      "name": "cpp-httplib",
+      "SPDXID": "SPDXRef-Package-cpp-httplib",
+      "versionInfo": "0.15.3",
+      "downloadLocation": "https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.15.3.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "2121bbf38871bb2aafb5f7f2b9b94705366170909f434428352187cb0216124e"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/yhirose/cpp-httplib@v0.15.3"
+        }
+      ],
+      "comment": "FetchContent 'httplib'. HTTP/HTTPS client."
+    },
+    {
+      "name": "yaml-cpp",
+      "SPDXID": "SPDXRef-Package-yaml-cpp",
+      "versionInfo": "0.8.0",
+      "downloadLocation": "https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "fbe74bbdcee21d656715688706da3c8becfd946d92cd44705cc6098bb23b3a16"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/jbeder/yaml-cpp@0.8.0"
+        }
+      ],
+      "comment": "FetchContent 'yaml-cpp'. SKILL.md frontmatter parsing; linked into gaia_core."
+    },
+    {
+      "name": "ftxui",
+      "SPDXID": "SPDXRef-Package-ftxui",
+      "versionInfo": "6.1.9",
+      "downloadLocation": "https://github.com/ArthurSonzogni/FTXUI/archive/refs/tags/v6.1.9.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "45819c1e54914783d4a1ca5633885035d74146778a1f74e1213cdb7b76340e71"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/ArthurSonzogni/FTXUI@v6.1.9"
+        }
+      ],
+      "comment": "FetchContent 'ftxui'. Only built with GAIA_BUILD_TUI."
+    },
+    {
+      "name": "googletest",
+      "SPDXID": "SPDXRef-Package-googletest",
+      "versionInfo": "1.14.0",
+      "downloadLocation": "https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "8ad598c73ad796e0d8280b082cebd82a630d73e73cd3c70057938a6501bba5d7"
+        }
+      ],
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/google/googletest@v1.14.0"
+        }
+      ],
+      "comment": "FetchContent 'googletest'. Test-only; not shipped."
+    },
+    {
+      "name": "sqlite",
+      "SPDXID": "SPDXRef-Package-sqlite",
+      "versionInfo": "3.53.4",
+      "downloadLocation": "https://sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "blessing",
+      "copyrightText": "NOASSERTION",
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d"
+        }
+      ],
+      "comment": "Vendored amalgamation in cpp/third_party/sqlite, compiled into gaia_core. Public domain (SQLite blessing)."
+    },
+    {
+      "name": "openssl",
+      "SPDXID": "SPDXRef-Package-openssl",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/openssl"
+        }
+      ],
+      "comment": "Optional HTTPS support. Not pinned: vcpkg (cpp/vcpkg.json) on Windows, the system package on Linux/macOS. The license depends on the version found: Apache-2.0 for OpenSSL 3.x, OpenSSL AND SSLeay for 1.1.x."
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-gaia-cpp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-gaia-cpp",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-nlohmann-json"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-gaia-cpp",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-cpp-httplib"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-gaia-cpp",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-yaml-cpp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-ftxui",
+      "relationshipType": "OPTIONAL_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-gaia-cpp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-googletest",
+      "relationshipType": "TEST_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-gaia-cpp"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-gaia-cpp",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-sqlite"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-openssl",
+      "relationshipType": "OPTIONAL_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-gaia-cpp"
+    }
+  ]
+}

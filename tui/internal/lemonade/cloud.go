@@ -150,14 +150,37 @@ type Model struct {
 	Provider      string   `json:"cloud_provider"`
 	Downloaded    bool     `json:"downloaded"`
 	Labels        []string `json:"labels"`
+	// MaxContextWindow is the model's own window. For a cloud model it is the
+	// provider's, while ContextLength is the 4096 Lemonade "loaded" it at.
+	MaxContextWindow int `json:"max_context_window"`
 	// Size is the download size in GB as Lemonade's catalog reports it.
 	Size float64 `json:"size"`
 }
 
 func (m Model) Cloud() bool { return m.Recipe == "cloud" || m.Provider != "" || IsCloudID(m.ID) }
-func IsCloudID(id string) bool {
-	return strings.HasPrefix(id, "fireworks.") || strings.HasPrefix(id, "amd.")
+
+// Window is the context window to show: the provider's for a cloud model, the
+// configured one for a local model.
+func (m Model) Window() int {
+	if m.Cloud() {
+		return m.MaxContextWindow
+	}
+	return m.ContextLength
 }
+
+// IsCloudID is true for hybrid too: nothing named hybrid is downloaded or
+// loaded here. Whether hybrid sends turns off this PC depends on its models;
+// ask HybridCloudModels.
+func IsCloudID(id string) bool {
+	return strings.HasPrefix(id, "fireworks.") || strings.HasPrefix(id, "amd.") || IsHybridID(id)
+}
+
+// ChatProviders are the places chat can run, in the order they are offered:
+// this PC first, then the cloud providers Lemonade routes to.
+var ChatProviders = []string{"local", "fireworks", "amd"}
+
+// IsCloudProvider reports whether chat on provider leaves this PC.
+func IsCloudProvider(provider string) bool { return provider != "" && IsCloudID(provider+".") }
 func Label(provider string) string {
 	switch provider {
 	case "local":
@@ -166,9 +189,19 @@ func Label(provider string) string {
 		return "Fireworks AI"
 	case "amd":
 		return "AMD LLM Gateway"
+	case HybridProvider:
+		return "Hybrid routing"
 	}
 	return provider
 }
+
+// errProviderNotInstalled is Lemonade's 404 for a provider that was never
+// registered. Configure shows the panel remedy; Clear treats it as already
+// cleared so GAIA can still drop its own saved copy.
+var errProviderNotInstalled = errors.New(
+	"Cloud setup is unavailable: Lemonade has no cloud provider registered " +
+		"for this provider yet. Connect it again from this panel, then try again",
+)
 
 // ErrUnreachable is returned when nothing answered at the Lemonade address, so
 // a caller that knows Lemonade is not set up yet can say that instead.
@@ -177,6 +210,14 @@ var ErrUnreachable = errors.New("Lemonade did not respond. Start it, check its a
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client
+}
+
+// errorEnvelope is Lemonade's error body shape.
+type errorEnvelope struct {
+	Error struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error"`
 }
 
 func New(base string) *Client {
@@ -201,6 +242,9 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 	if err := validateURL(base, true); err != nil {
 		return err
 	}
+	if err := RefuseRequest(method, path); err != nil {
+		return err
+	}
 	var body io.Reader
 	if data != nil {
 		b, err := json.Marshal(data)
@@ -214,7 +258,11 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 		return fmt.Errorf("Invalid Lemonade address")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := APIKeyFor(base); key != "" {
+	key, err := APIKeyFor(ctx, base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	resp, err := c.HTTP.Do(req)
@@ -223,11 +271,27 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var env errorEnvelope
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&env)
 		switch resp.StatusCode {
 		case 401, 403:
 			return fmt.Errorf("Authentication was rejected. Check the Lemonade or provider credential and retry")
 		case 404:
-			return fmt.Errorf("Cloud setup is unavailable. Update Lemonade to 11.8.1 or later and retry")
+			// A 404 from /install means the endpoint is missing, so the server
+			// is older than the cloud API. On the auth routes, Lemonade uses a
+			// 404 for a provider that was never registered, which is a setup
+			// problem, not a version problem.
+			if path != "/install" && strings.Contains(env.Error.Message, "is not installed") {
+				return errProviderNotInstalled
+			}
+			if path == "/install" || env.Error.Type == "" || env.Error.Type == "not_found" {
+				return fmt.Errorf("Cloud setup is unavailable: this Lemonade is older than %s, "+
+					"the oldest version GAIA supports. %s", MinExternalVersion, UpgradeHint)
+			}
+			if env.Error.Message != "" {
+				return fmt.Errorf("Lemonade rejected the operation (HTTP 404): %s", env.Error.Message)
+			}
+			return fmt.Errorf("Lemonade rejected the operation (HTTP 404). Check provider settings and retry")
 		case 409:
 			return fmt.Errorf("Lemonade has an environment key for this provider. It takes precedence; the pasted key was not saved. Leave the key blank to use it")
 		default:
@@ -257,14 +321,17 @@ func (c *Client) Models(ctx context.Context, provider string) ([]Model, error) {
 	}
 	var out []Model
 	for _, m := range reply.Data {
-		chat := true
+		labeledChat, other := false, false
 		for _, label := range m.Labels {
 			switch label {
 			case "embeddings", "image", "reranker", "audio", "tts", "stt":
-				chat = false
+				other = true
+			case "chat":
+				labeledChat = true
 			}
 		}
-		if !chat || m.ID == "" {
+		// `chat` wins, as in isChatModel: FLM omni models are labeled `chat` and `audio`.
+		if (other && !labeledChat) || m.ID == "" {
 			continue
 		}
 		if provider == "local" {
@@ -293,6 +360,9 @@ func (c *Client) Configure(ctx context.Context, p Provider, key string) error {
 	if strings.TrimSpace(p.Header) == "" || strings.ContainsAny(p.Header+p.Prefix, "\r\n") {
 		return fmt.Errorf("Enter a valid authentication header and prefix")
 	}
+	if ExternalModeActive() {
+		return c.useRegistered(ctx, p, key)
+	}
 	target := c
 	if key != "" {
 		// Registration and key must land on the same server, and only one a key may reach.
@@ -311,9 +381,46 @@ func (c *Client) Configure(ctx context.Context, p Provider, key string) error {
 	}
 	return nil
 }
+
+// useRegistered is Configure on the user's own server: GAIA registers nothing
+// there and hands it no key, so it succeeds only when the provider is already
+// registered with these settings and the user pasted no key.
+func (c *Client) useRegistered(ctx context.Context, p Provider, key string) error {
+	what := "register " + Label(p.Name) + " there"
+	if key != "" {
+		return RefuseSetupChange("hand it your " + Label(p.Name) + " key")
+	}
+	providers, err := c.Providers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, have := range providers {
+		if have.Name != p.Name {
+			continue
+		}
+		// Header and prefix count only when the server reports them.
+		same := strings.EqualFold(strings.TrimRight(have.BaseURL, "/"), strings.TrimRight(p.BaseURL, "/")) &&
+			(have.Header == "" || (strings.EqualFold(have.Header, p.Header) && have.Prefix == p.Prefix))
+		if same {
+			return nil
+		}
+		what = "change its " + Label(p.Name) + " settings"
+	}
+	return RefuseSetupChange(what)
+}
+
 func (c *Client) Clear(ctx context.Context, provider string) error {
 	if provider != "fireworks" && provider != "amd" {
 		return fmt.Errorf("Unknown provider")
 	}
-	return c.request(ctx, "DELETE", "/cloud/auth/"+provider, nil, nil)
+	// The user's own server keeps its key; the caller still forgets GAIA's copy.
+	if ExternalModeActive() {
+		return nil
+	}
+	err := c.request(ctx, "DELETE", "/cloud/auth/"+provider, nil, nil)
+	if errors.Is(err, errProviderNotInstalled) {
+		// Lemonade has nothing to clear; GAIA's saved copy still must go.
+		return nil
+	}
+	return err
 }

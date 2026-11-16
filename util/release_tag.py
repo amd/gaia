@@ -19,6 +19,7 @@ Usage::
 
     python util/release_tag.py classify v0.25.0-rc1     # KEY=VALUE lines for $GITHUB_OUTPUT
     python util/release_tag.py stamp v0.25.0-rc1        # rewrite version.py + webui package files
+    git tag -l 'v0.25.0*' | python util/release_tag.py superseded v0.25.0-rc1   # exit 1 if newer
 """
 
 from __future__ import annotations
@@ -103,6 +104,30 @@ def parse_npm_version(version: str) -> ReleaseTag:
     if m.group("rc"):
         return parse_tag(f"v{m.group('base')}-rc{m.group('rc')}")
     return parse_tag(f"v{m.group('base')}")
+
+
+def superseded_by(tag: str, others: list[str]) -> str | None:
+    """The newest tag of the same X.Y.Z that outranks ``tag``, or None.
+
+    A final is never superseded. An RC is superseded by a later RC of its
+    version or by the final. Tags that are not release tags are ignored.
+    """
+    rel = parse_tag(tag)
+    if not rel.is_rc:
+        return None
+    newer: list[ReleaseTag] = []
+    for other in others:
+        try:
+            o = parse_tag(other.strip())
+        except ValueError:
+            continue
+        if o.base_version != rel.base_version:
+            continue
+        if not o.is_rc or o.rc_number > rel.rc_number:
+            newer.append(o)
+    if not newer:
+        return None
+    return max(newer, key=lambda o: (not o.is_rc, o.rc_number or 0)).tag
 
 
 def _read(path: Path) -> str:
@@ -208,12 +233,26 @@ def main(argv: list[str] | None = None) -> int:
     st = sub.add_parser("stamp", help="write an RC's versions into the tree")
     st.add_argument("tag")
     st.add_argument("--root", type=Path, default=REPO_ROOT)
+    sub.add_parser(
+        "superseded",
+        help="exit 1 if a newer tag of the same release is among the tags on stdin",
+    ).add_argument("tag")
     args = ap.parse_args(argv)
 
     try:
         if args.cmd == "classify":
             for key, value in parse_tag(args.tag).outputs().items():
                 print(f"{key}={value}")
+        elif args.cmd == "superseded":
+            newer = superseded_by(args.tag, sys.stdin.read().split())
+            if newer:
+                print(
+                    f"ERROR: {args.tag} is superseded by {newer}, so it stops "
+                    "before publishing; nothing was published.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"{args.tag} is the newest tag of its release", file=sys.stderr)
         else:
             rel = stamp(args.tag, args.root)
             print(

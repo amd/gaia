@@ -10,15 +10,29 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102). The
+# ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099). The
 # WebClient / BrowserToolsMixin tests below don't need it, so import it lazily
 # and skip only the ChatAgent integration class when the wheel is absent.
 try:
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 except ImportError:
     ChatAgent = ChatAgentConfig = None
 
-from gaia.web.client import WebClient
+from gaia.web import client as web_client
+from gaia.web.client import WebClient, _SearchGate
+
+
+@pytest.fixture(autouse=True)
+def _instant_search_backoff(monkeypatch):
+    """Search pacing and backoff are pinned in test_web_search_rate_limit.py."""
+    monkeypatch.setattr(
+        web_client, "_SEARCH_GATE", _SearchGate(min_interval=0.0, sleep=lambda s: None)
+    )
+    # A Tavily connector configured on the dev box must not answer these tests.
+    monkeypatch.setattr(
+        "gaia.connectors.mcp_server.is_mcp_server_configured", lambda _id: False
+    )
+
 
 # ===== WebClient Tests =====
 
@@ -336,6 +350,17 @@ class TestWebClientDuckDuckGo:
         assert results[0]["url"] == "https://example.com/page"
         assert results[1]["title"] == "Other Result"
 
+    def test_a_challenged_search_raises_instead_of_finding_nothing(self):
+        """DDG answers an automated-traffic check with 202 and no results."""
+        mock_response = MagicMock()
+        mock_response.text = "<html><body>challenge</body></html>"
+        mock_response.status_code = 202
+        mock_response.headers = {"Content-Type": "text/html"}
+
+        with patch.object(self.client, "_request", return_value=mock_response):
+            with pytest.raises(RuntimeError, match="HTTP 202"):
+                self.client.search_duckduckgo("test query")
+
 
 class TestWebClientDownload:
     """Test file download functionality."""
@@ -580,8 +605,9 @@ class TestDownloadFileToolScreensBeforeWriting:
             result = tools["download_file"]("https://evil.example/x", save_to=tmpdir)
 
         assert callable(captured["screen"])
-        assert "Error" in result
-        assert "blocked by security policy" in result
+        assert result["executed"] is False
+        assert result["status"] == "error"
+        assert "blocked by security policy" in result["error"]
 
     def test_allowed_filename_passes_the_screen(self):
         """An ordinary filename is not blocked."""
@@ -727,29 +753,166 @@ class TestBrowserToolsMixin:
         assert call_kwargs[1]["max_length"] is None
         assert len(result) < 20000
 
-    def test_nested_html_is_archived_before_text_extraction_cap(self):
-        import json
-
-        from gaia.agents.base.artifacts import store_for
+    def _serve(self, html):
         from gaia.web.client import WebClient
 
         self.agent._web_client = WebClient()
         response = MagicMock()
         response.headers = {"Content-Type": "text/html"}
-        response.text = (
+        response.text = html
+        self.agent._web_client.get = MagicMock(return_value=response)
+        return self.registered_tools["fetch_page"]
+
+    def test_a_long_page_is_read_to_the_end_by_following_the_marker(self):
+        import re
+
+        fetch = self._serve(
             "<blockquote><p>"
             + "x" * 10000
             + "</p></blockquote><p>REQUIRED-LAST-PARAGRAPH</p>"
         )
-        self.agent._web_client.get = MagicMock(return_value=response)
-        output = self.registered_tools["fetch_page"](
-            "https://example.com", max_length=1000
+        offset, pages = 0, []
+        while True:
+            out = fetch("https://example.com", max_length=1000, offset=offset)
+            pages.append(out)
+            marker = re.search(r"offset=(\d+)\) for the next part", out)
+            if not marker:
+                break
+            offset = int(marker.group(1))
+        assert "Truncated: showing characters 0-1,000" in pages[0]
+        assert pages[-1].rstrip().endswith("REQUIRED-LAST-PARAGRAPH")
+        assert len(pages) > 5
+
+    def test_length_reports_the_whole_page_not_the_excerpt(self):
+        fetch = self._serve("<p>" + "a" * 9000 + "</p>")
+        assert "Length: 9,000 chars" in fetch("https://example.com", max_length=1000)
+
+    def test_find_returns_the_passage_with_the_detail(self):
+        fetch = self._serve(
+            "<p>" + "menu " * 2000 + "</p><p>Unit price: $67.50 each</p>"
+            "<p>" + "footer " * 2000 + "</p>"
         )
-        excerpt = json.loads(output[output.index("{") :])
-        page = store_for(self.agent).read(
-            excerpt["artifact"], excerpt["original_chars"] - 23, 23
+        out = fetch("https://example.com", max_length=1000, find="unit price")
+        assert "$67.50" in out
+        assert "[at character" in out
+
+    def test_find_with_no_match_says_so_instead_of_guessing(self):
+        fetch = self._serve("<p>" + "no prices here " * 50 + "</p>")
+        out = fetch("https://example.com", find="$")
+        assert "No exact occurrence of '$'" in out
+        assert "not found" in out
+
+    def test_find_falls_back_to_a_passage_with_all_words(self):
+        fetch = self._serve(
+            "<p>Sunday departures leave from the east terminal. "
+            "The Pier 9 shuttle boards there at 10:30. " + "filler " * 30 + "</p>"
         )
-        assert page["content"].endswith("REQUIRED-LAST-PARAGRAPH")
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "Exact phrase 'Sunday Pier 9' was not found" in out
+        assert "Sunday departures" in out
+        assert "Pier 9 shuttle" in out
+
+    def test_text_mode_hints_when_a_page_has_many_links(self):
+        fetch = self._serve(
+            "<p>Choose a branch from this directory.</p>"
+            "<a href='/a'>A</a><a href='/b'>B</a><a href='/c'>C</a>"
+        )
+        out = fetch("https://example.com")
+        assert "3 links on this page" in out
+        assert "extract='links'" in out
+
+    def test_two_incidental_links_get_no_hint(self):
+        fetch = self._serve(
+            "<p>"
+            + "An article body. " * 20
+            + "</p><a href='/a'>A</a><a href='/b'>B</a>"
+        )
+        assert "extract='links'" not in fetch("https://example.com")
+
+    def test_all_words_fallback_ignores_word_order(self):
+        fetch = self._serve(
+            "<p>The Pier 9 shuttle runs on Sunday only. " + "filler " * 30 + "</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "Exact phrase 'Sunday Pier 9' was not found" in out
+        assert "Pier 9 shuttle runs on Sunday" in out
+
+    def test_all_words_fallback_window_reaches_back_but_not_too_far(self):
+        from gaia.agents.tools.browser_tools import FIND_CONTEXT_CHARS
+        from gaia.agents.tools.browser_tools import _find_all_words_spans as spans
+
+        gap = "x " * FIND_CONTEXT_CHARS  # 2 * FIND_CONTEXT_CHARS characters
+        assert spans("Pier " + gap[:-10] + "Sunday", "Sunday Pier")
+        assert not spans("Pier " + gap + "y " * 10 + "Sunday", "Sunday Pier")
+
+    def test_all_words_fallback_needs_the_words_near_each_other(self):
+        fetch = self._serve(
+            "<p>Sunday is busy. " + "filler " * 400 + "Pier 9 is open.</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "No exact occurrence of 'Sunday Pier 9'" in out
+        assert "Exact phrase" not in out
+
+    def test_a_single_word_miss_gets_no_all_words_fallback(self):
+        fetch = self._serve("<p>" + "nothing to see here " * 20 + "</p>")
+        out = fetch("https://example.com", find="harbour")
+        assert "No exact occurrence of 'harbour'" in out
+
+    def test_an_exact_match_is_preferred_over_the_all_words_fallback(self):
+        fetch = self._serve(
+            "<p>Sunday Pier 9 departs early. " + "filler " * 30 + "</p>"
+        )
+        out = fetch("https://example.com", find="Sunday Pier 9")
+        assert "Exact phrase" not in out
+        assert "Sunday Pier 9 departs" in out
+
+    def test_all_words_fallback_survives_case_folded_letters(self):
+        from gaia.agents.tools.browser_tools import _find_all_words_spans
+
+        # "ſ" (long s) matches "s" case-insensitively but never lowers to it.
+        assert _find_all_words_spans("ſ then x", "s x")
+
+    def test_all_words_fallback_stays_fast_on_a_long_page_of_common_words(self):
+        import time
+
+        from gaia.agents.tools.browser_tools import _find_all_words_spans
+
+        text = "the cat sat " * 40000
+        started = time.perf_counter()
+        spans = _find_all_words_spans(text, "the sat cat")
+        assert spans == [(0, len(text))]
+        assert time.perf_counter() - started < 5
+
+    def test_find_marks_matches_it_could_not_fit(self):
+        fetch = self._serve(
+            "".join(f"<p>{'pad ' * 200} price {i} {'pad ' * 200}</p>" for i in range(6))
+        )
+        out = fetch("https://example.com", max_length=2000, find="price")
+        assert "more passage(s) match 'price'" in out
+        assert "find='price', offset=" in out
+
+    def test_find_after_an_offset_does_not_claim_the_page_lacks_it(self):
+        fetch = self._serve("<p>price $5 " + "filler " * 300 + "</p>")
+        out = fetch("https://example.com", find="price", offset=1500)
+        assert "after character 1,500" in out
+
+    def test_a_page_with_almost_no_text_is_flagged(self):
+        fetch = self._serve("<title>Shop</title><div id='app'></div>")
+        out = fetch("https://example.com")
+        assert "rendered by JavaScript" in out
+
+    def test_offset_past_the_end_is_reported(self):
+        fetch = self._serve("<p>" + "b" * 600 + "</p>")
+        out = fetch("https://example.com", offset=5000)
+        assert "past the end" in out
+
+    def test_offset_and_find_are_text_mode_only(self):
+        self.agent._web_client = MagicMock()
+        out = self.registered_tools["fetch_page"](
+            "https://example.com", extract="links", offset=10
+        )
+        assert out.startswith("Error") and "text" in out
+        self.agent._web_client.get.assert_not_called()
 
     def test_search_web_clamps_num_results(self):
         """search_web clamps num_results to valid range."""
@@ -760,9 +923,10 @@ class TestBrowserToolsMixin:
 
         result = self.registered_tools["search_web"]("test", num_results=100)
         # Should have been clamped to 10
-        self.agent._web_client.search_duckduckgo.assert_called_once_with(
-            "test", num_results=10
-        )
+        self.agent._web_client.search_duckduckgo.assert_called_once()
+        call = self.agent._web_client.search_duckduckgo.call_args
+        assert call.args == ("test",) and call.kwargs["num_results"] == 10
+        assert callable(call.kwargs["should_stop"])
 
     def test_download_file_formats_size(self):
         """download_file formats file sizes correctly."""
@@ -1190,7 +1354,7 @@ class TestChatAgentBrowserIntegration:
     @pytest.fixture(autouse=True)
     def _require_chat_wheel(self):
         if ChatAgent is None:
-            pytest.skip("gaia-agent-chat wheel not installed (#1102)")
+            pytest.skip("gaia-agent-gaia wheel not installed (#6099)")
 
     def test_web_client_initialized_when_enabled(self):
         """ChatAgent creates WebClient when enable_browser=True."""
@@ -1201,8 +1365,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
         assert agent._web_client is not None
@@ -1217,8 +1381,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
         assert agent._web_client is None
@@ -1235,8 +1399,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
         assert agent._web_client._timeout == 60
@@ -1253,8 +1417,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
 
@@ -1274,8 +1438,8 @@ class TestChatAgentBrowserIntegration:
             enable_scratchpad=False,
         )
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(config)
 
@@ -1290,3 +1454,84 @@ class TestChatAgentBrowserIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestDuckDuckGoFailuresAreNotEmptyResults:
+    """Adversarial: a search that was not answered never reads as "no results"."""
+
+    @pytest.fixture(autouse=True)
+    def client(self):
+        pytest.importorskip("bs4")
+        self.client = WebClient()
+        yield
+        self.client.close()
+
+    def _respond(self, status, text="<html><body></body></html>"):
+        response = MagicMock()
+        response.status_code = status
+        response.text = text
+        response.headers = {"Content-Type": "text/html"}
+        response.encoding = "utf-8"
+        response.apparent_encoding = "utf-8"
+        return patch.object(self.client, "_request", return_value=response)
+
+    @pytest.mark.parametrize(
+        "status", [201, 202, 204, 206, 301, 302, 400, 403, 404, 418, 429, 500, 503]
+    )
+    def test_any_status_but_200_raises_naming_it(self, status):
+        page = (
+            "<div class='result'><a class='result__a' "
+            "href='https://example.com'>Looks like a hit</a></div>"
+        )
+        with self._respond(status, page):
+            with pytest.raises(RuntimeError, match=f"HTTP {status}"):
+                self.client.search_duckduckgo("test query")
+
+    @pytest.mark.parametrize(
+        "status, hint",
+        [
+            (500, "may be down"),
+            (502, "may be down"),
+            (404, "rejected the request"),
+            (204, "Try again later"),
+            (302, "Try again later"),
+        ],
+    )
+    def test_an_error_status_carries_its_code_and_a_next_step(self, status, hint):
+        from gaia.web.client import SearchStatusError
+
+        with self._respond(status, "<html></html>"):
+            with pytest.raises(SearchStatusError) as excinfo:
+                self.client.search_duckduckgo("test query")
+        assert excinfo.value.status == status
+        assert hint in str(excinfo.value)
+
+    def test_a_200_with_no_results_is_a_genuine_empty_answer(self):
+        with self._respond(200):
+            assert self.client.search_duckduckgo("xyzzy 12345") == []
+
+    def test_the_search_tool_does_not_say_no_results_for_a_blocked_search(self):
+        from gaia.agents.tools.browser_tools import BrowserToolsMixin
+
+        tools = {}
+
+        class _Host(BrowserToolsMixin):
+            def __init__(self, web_client):
+                self._web_client = web_client
+                self._path_validator = None
+                self._tools = {}
+
+        def capture(atomic=True):
+            def decorator(func):
+                tools[func.__name__] = func
+                return func
+
+            return decorator
+
+        with patch("gaia.agents.base.tools.tool", capture):
+            _Host(self.client).register_browser_tools()
+        with self._respond(429):
+            result = tools["search_web"]("test query")
+
+        assert "No results found" not in str(result)
+        assert "429" in str(result)

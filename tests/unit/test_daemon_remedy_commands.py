@@ -261,7 +261,13 @@ def test_the_stray_process_error_names_the_working_command_and_sigkill(
 
     class _Proc:
         def __init__(self, pid, exe):
-            self.info = {"pid": pid, "exe": exe, "cmdline": [exe]}
+            self.pid, self._exe = pid, exe
+
+        def exe(self):
+            return self._exe
+
+        def cmdline(self):
+            return [self._exe]
 
     install_dir = tmp_path / "agents" / "email"
     fake = [

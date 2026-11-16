@@ -24,9 +24,10 @@ carry `# FIXTURE-SYNC:` comments naming the fixture).
 
 ## Serving (routed layout — matches the scenario URLs exactly)
 
-Scenario URLs are root-relative on **http://127.0.0.1:8765** (the eval-run
-port; unit tests use the default `--port 0` = ephemeral; never
-4001/4200/8141/13305):
+Scenario URLs are root-relative on **http://127.0.0.1:8765** (the CI eval-run
+port; unit tests and `util/run_eval_lane.py` use the default `--port 0` =
+ephemeral, and the lane runner's scenarios are rewritten to the bound port;
+never 4001/4200/8141/13305):
 
 ```bash
 python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root <agent skills root>
@@ -43,6 +44,9 @@ eval backend runs from that folder, so it is a session's file scope. Scenario
 user messages reference files there (e.g. `~/gaia-eval/csv/sales.csv`). Nothing
 that holds an answer — ground truth, generators, this README, the fake gh's
 data — is staged, because the agent can read whatever is.
+`util/run_eval_lane.py` stages to `<--out>/eval-root/` instead (with its own
+`--hub-out` hub), so a local run never touches the real home and two runs with
+different `--out` folders never share fixtures.
 
 ## Planted facts (ground truth for judges)
 

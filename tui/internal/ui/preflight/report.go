@@ -137,6 +137,15 @@ const (
 	// FixInstallServer — setup's first step alone: install and start GAIA's
 	// Lemonade and download nothing, so the models are a step the user sees sized.
 	FixInstallServer
+	// FixChooseChat — open the "where should chat run?" choice.
+	FixChooseChat
+	// FixConnectProvider — hand off to the provider panel to connect the cloud
+	// provider the user chose and pick one of its models.
+	FixConnectProvider
+	// FixUseRunningLemonade — save the Lemonade already running here as GAIA's.
+	FixUseRunningLemonade
+	// FixUseGAIALemonade — save that GAIA uses its own Lemonade.
+	FixUseGAIALemonade
 )
 
 // Label is the key hint shown next to `f`.
@@ -154,6 +163,14 @@ func (k FixKind) Label() string {
 		return "set it up now"
 	case FixRestartSidecar:
 		return "restart it in this mode"
+	case FixChooseChat:
+		return "choose"
+	case FixConnectProvider:
+		return "connect it now"
+	case FixUseRunningLemonade:
+		return "use this Lemonade"
+	case FixUseGAIALemonade:
+		return "use GAIA's own"
 	default:
 		return ""
 	}
@@ -223,6 +240,8 @@ type Row struct {
 	Remedy Remedy
 	// Fix is what `f` does on this row, FixNone when nothing is safe.
 	Fix FixKind
+	// DeclineFix is what `g` does: the other answer to a choice `f` offers.
+	DeclineFix FixKind
 	// AutoFix marks a Fix the screen applies once on its own, without a
 	// keypress: starting a local daemon or agent that is simply not running.
 	AutoFix bool
@@ -303,6 +322,7 @@ const (
 	KeyLemonade         = "lemonade"
 	KeyModel            = "model"
 	KeyMailbox          = "mailbox"
+	KeyChat             = "chat"
 )
 
 // Report is the whole readiness answer: one row per precondition, in dependency
@@ -310,7 +330,9 @@ const (
 type Report struct {
 	AgentID   string
 	AgentName string
-	Rows      []Row
+	// CoreVersion is the GAIA release the verified daemon runs.
+	CoreVersion string
+	Rows        []Row
 	// Chat names the model chat will run on, and its size when it runs here —
 	// "Gemma-4-E4B-it-GGUF (3.2 GB, on this machine)". Empty when unknown.
 	Chat string
@@ -320,6 +342,9 @@ type Report struct {
 	// StepsDone counts first-run steps finished earlier this session, so the
 	// step left after them still reads "step 2 of 2", not "step 1 of 1".
 	StepsDone int
+	// ChatOptions are the answers to "where should chat run?", set when the
+	// report carries that step (a KeyChat row).
+	ChatOptions []ChatOption
 }
 
 // Ready reports whether every precondition proved OK. An indeterminate row is
@@ -535,7 +560,7 @@ func (r Report) Blocker() (Row, bool) {
 }
 
 // String renders the report as plain text — for `--debug` logs and for the
-// headless callers that never mount the screen.
+// headless callers that never mount the screen, so remedies carry no keystrokes.
 func (r Report) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s preflight: %s\n", r.AgentName, r.Summary())
@@ -544,8 +569,8 @@ func (r Report) String() string {
 		if row.State == StateOK {
 			continue
 		}
-		if row.Remedy.Action != "" {
-			fmt.Fprintf(&b, "        %s\n", row.Remedy.Action)
+		if action := headlessAction(row.Remedy.Action); action != "" {
+			fmt.Fprintf(&b, "        %s\n", action)
 		}
 		for _, c := range row.Remedy.Commands() {
 			fmt.Fprintf(&b, "        %s %s\n", c.Label(), c.Line)

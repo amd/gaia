@@ -58,6 +58,33 @@ on:
         required: false
         type: boolean
         default: false
+      # The release-train dry run builds its own commit twice in one run (a
+      # release candidate and its final-stamped twin) under tags that don't
+      # exist yet. Both default to empty, which is exactly what every other
+      # caller gets.
+      ref:
+        description: 'Commit to build, when `tag` names a version rather than an existing tag. Empty (the default) checks out the tag, or the caller''s ref.'
+        required: false
+        type: string
+        default: ''
+      artifact_prefix:
+        description: 'Prefix for every artifact this uploads or reads. Empty (the default) keeps today''s names.'
+        required: false
+        type: string
+        default: ''
+      # A release candidate is never held by tests; the smoke jobs that check
+      # the built installers still run.
+      skip_source_tests:
+        description: 'Skip the custom-agent MCP harness, which tests the source tree rather than the built installers'
+        required: false
+        type: boolean
+        default: false
+      # A release candidate's pre-release does not exist while it builds.
+      flagship:
+        description: 'artifact: an RC core''s real-engine check installs the gaia-agent-<platform> builds this run froze (see build_core.yml). Empty reads the published pre-release.'
+        required: false
+        type: string
+        default: ''
     # Explicit secret declarations. Callers (publish.yml) must forward
     # each one explicitly via `secrets:` — we intentionally do NOT use
     # `secrets: inherit` on the caller side so forks / PRs can't leak
@@ -100,6 +127,27 @@ on:
       - 'tests/electron/*-smoke.test.mjs'
       - 'tests/electron/fixtures/**'
       - 'src/gaia/version.py'
+      - 'src/gaia/frozen.py'
+      - '.github/workflows/build_core.yml'
+      - 'hub/agents/gaia/python/packaging/check_bundle_licenses.py'
+      - 'hub/agents/gaia/python/packaging/check_glibc.py'
+      - 'hub/agents/gaia/python/gaia-agent.yaml'
+      - 'hub/agents/gaia/python/gaia_agent/__init__.py'
+      - 'util/flagship_rc_assets.py'
+      - 'src/gaia/llm/lemonade_embedded.py'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'pyproject.toml'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'util/release_tag.py'
+      - 'util/check_release_assets.py'
+      # custom-agent-mcp-harness runs these against the built wheel.
+      - 'src/gaia/agents/base/console.py'
+      - 'src/gaia/agents/registry.py'
+      - 'src/gaia/mcp/**'
+      - 'tests/fixtures/mcp/dummy_server/**'
+      - 'tests/installer/test_custom_agent_mcp_harness.py'
 
 # Least-privilege default. Only the release-upload step needs `contents:
 # write`, and it's gated behind `inputs.publish_to_release` — which is
@@ -117,12 +165,23 @@ concurrency:
   # push on stale builds. Tag/release runs and manual dispatches must
   # NOT cancel — a mid-build cancel on a release tag leaves the draft
   # release in a partial state.
-  group: build-installers-${{ github.workflow }}-${{ github.ref }}
+  group: build-installers-${{ github.workflow }}-${{ github.ref }}${{ inputs.artifact_prefix }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The frozen `gaia` each installer ships, from the same commit and version.
+  core:
+    uses: ./.github/workflows/build_core.yml
+    with:
+      platforms: 'win32-x64 darwin-arm64 linux-x64'
+      tag: ${{ inputs.tag }}
+      ref: ${{ inputs.ref }}
+      artifact_prefix: ${{ inputs.artifact_prefix }}
+      flagship: ${{ inputs.flagship }}
+
   build:
     name: Build ${{ matrix.platform }} installer
+    needs: core
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     # Build job is strictly read-only — it produces workflow-run artifacts
@@ -140,6 +199,9 @@ jobs:
           - platform: windows
             runner: windows-latest
             npm_script: package:win
+            lemonade_platform: win-x64
+            core: win32-x64
+            core_exe: gaia.exe
             artifacts: |
               src/gaia/apps/webui/dist-app/*.exe
               src/gaia/apps/webui/dist-app/*.exe.blockmap
@@ -147,13 +209,21 @@ jobs:
           - platform: macos
             runner: macos-latest  # Apple Silicon (arm64)
             npm_script: package:mac
+            lemonade_platform: mac-arm64
+            core: darwin-arm64
+            core_exe: gaia
             artifacts: |
               src/gaia/apps/webui/dist-app/*.dmg
               src/gaia/apps/webui/dist-app/*.dmg.blockmap
+              src/gaia/apps/webui/dist-app/*.zip
+              src/gaia/apps/webui/dist-app/*.zip.blockmap
               src/gaia/apps/webui/dist-app/latest-mac.yml
           - platform: linux
             runner: ubuntu-latest
             npm_script: package:linux
+            lemonade_platform: linux-x64
+            core: linux-x64
+            core_exe: gaia
             artifacts: |
               src/gaia/apps/webui/dist-app/*.deb
               src/gaia/apps/webui/dist-app/*.AppImage
@@ -181,7 +251,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history for any version calculations
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
 
       # A vX.Y.Z-rcN tag builds X.Y.Z-rc.N installers (and an X.Y.ZrcN wheel)
       # from a tree committed at X.Y.Z. Never runs for a final or a PR build.
@@ -223,147 +293,43 @@ jobs:
         shell: bash
         run: npm ci
 
-      # ─── Fetch uv binary for Linux AppImage (issue #782) ────────────
-      # The AppImage bundles a pinned uv binary under build/vendor/uv so the
-      # after-pack hook and runtime can provision the Python env without
-      # requiring uv on the host. Pin + sha256 verify for supply-chain safety.
-      - name: Fetch uv binary (Linux)
-        if: matrix.platform == 'linux'
+      # ─── Bundle the frozen GAIA core ────────────────────────────────
+      # electron-builder.yml packs build/core as <resources>/core; the app runs
+      # that `gaia` and installs no Python package on the user's PC.
+      - name: Download the frozen core
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_prefix }}gaia-core-${{ matrix.core }}
+          path: gaia-core-download
+
+      # Relative paths: Git Bash's tar reads the `D:` of an absolute Windows path as a host.
+      - name: Unpack the frozen core
         shell: bash
         run: |
           set -euo pipefail
-          UV_VERSION="0.5.14"
-          UV_TARBALL="uv-x86_64-unknown-linux-gnu.tar.gz"
-          UV_SHA256="22034760075b92487b326da5aa1a2a3e1917e2e766c12c0fd466fccda77013c7"
-          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
-          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/linux-x64"
-          mkdir -p "${DEST_DIR}"
-          tmpdir="$(mktemp -d)"
-          curl -fsSL -o "${tmpdir}/${UV_TARBALL}" "${UV_URL}"
-          echo "${UV_SHA256}  ${tmpdir}/${UV_TARBALL}" | sha256sum -c -
-          tar -xzf "${tmpdir}/${UV_TARBALL}" -C "${tmpdir}"
-          cp "${tmpdir}/uv-x86_64-unknown-linux-gnu/uv" "${DEST_DIR}/uv"
-          chmod 0755 "${DEST_DIR}/uv"
-          "${DEST_DIR}/uv" --version
+          DEST=src/gaia/apps/webui/build/core
+          rm -rf "${DEST}" && mkdir -p "${DEST}"
+          tar -xzf "gaia-core-download/gaia-core-${{ matrix.core }}.tar.gz" -C "${DEST}"
+          rm -rf gaia-core-download
+          "${DEST}/${{ matrix.core_exe }}" --version
 
-      - name: Fetch uv binary (Windows)
-        if: matrix.platform == 'windows'
+      # ─── Bundle the embeddable Lemonade archive ─────────────────────
+      # electron-builder skips a missing extraResources source without failing,
+      # so this step and the packaged-archive check below are what enforce it.
+      - name: Fetch the pinned Lemonade archive
         shell: bash
         run: |
           set -euo pipefail
-          UV_VERSION="0.5.14"
-          UV_ZIP="uv-x86_64-pc-windows-msvc.zip"
-          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ZIP}"
-          # This must be set to the official tarball SHA256 (archive digest).
-          # DO NOT merge this PR without replacing the placeholder below
-          # with the real value — the build intentionally fails if the
-          # checksum is not provided so we never ship an unverified uv.
-          UV_TARBALL_SHA256="ee2468e40320a0a2a36435e66bbd0d861228c4c06767f22d97876528138f4ba0"
-
-          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/win-x64"
-          mkdir -p "${DEST_DIR}"
-          tmpdir="$(mktemp -d)"
-          echo "Downloading ${UV_URL}"
-          curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_ZIP}" "${UV_URL}"
-
-          if [ -z "${UV_TARBALL_SHA256}" ] || [ "${UV_TARBALL_SHA256}" = "REPLACE_ME_WIN_UV_TARBALL_SHA256" ]; then
-            echo "ERROR: UV_TARBALL_SHA256 is not set in the workflow. Set it to the upstream tarball SHA256 to proceed." >&2
-            exit 1
-          fi
-
-          echo "${UV_TARBALL_SHA256}  ${tmpdir}/${UV_ZIP}" | sha256sum -c -
-
-          unzip -q "${tmpdir}/${UV_ZIP}" -d "${tmpdir}"
-          # Copy uv.exe from extracted tree — fail if not found.
-          FOUND=$(find "${tmpdir}" -type f -iname uv.exe | head -n1 || true)
-          if [ -z "${FOUND}" ]; then
-            echo "ERROR: uv.exe not found in the downloaded archive" >&2
-            exit 1
-          fi
-          cp "${FOUND}" "${DEST_DIR}/uv.exe"
-          chmod 0755 "${DEST_DIR}/uv.exe"
-          "${DEST_DIR}/uv.exe" --version || true
-
-          # Compute SHA256 of the extracted binary and inject into source
-          BIN_SHA=$(sha256sum "${DEST_DIR}/uv.exe" | cut -d' ' -f1)
-          echo "Computed uv.exe SHA256: ${BIN_SHA}"
-          # Replace placeholder in backend-installer.cjs so runtime can verify
-          sed -i "s/<WIN_UV_EXTRACTED_SHA256_PLACEHOLDER>/${BIN_SHA}/g" src/gaia/apps/webui/services/backend-installer.cjs
-
-      - name: Fetch uv binary (macOS)
-        if: matrix.platform == 'macos'
-        shell: bash
-        run: |
-          set -euo pipefail
-          UV_VERSION="0.5.14"
-          UV_TARBALL="uv-aarch64-apple-darwin.tar.gz"
-          # Upstream tarball SHA256 (archive digest)
-          UV_SHA256="d548dffc256014c4c8c693e148140a3a21bcc2bf066a35e1d5f0d24c91d32112"
-          UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_TARBALL}"
-          DEST_DIR="src/gaia/apps/webui/build/vendor/uv/mac-arm64"
-          mkdir -p "${DEST_DIR}"
-          tmpdir="$(mktemp -d)"
-          echo "Downloading ${UV_URL}"
-          curl -fsSL --retry 3 --retry-delay 5 -o "${tmpdir}/${UV_TARBALL}" "${UV_URL}"
-          echo "${UV_SHA256}  ${tmpdir}/${UV_TARBALL}" | shasum -a 256 -c -
-          tar -xzf "${tmpdir}/${UV_TARBALL}" -C "${tmpdir}"
-          cp "${tmpdir}/uv-aarch64-apple-darwin/uv" "${DEST_DIR}/uv"
-          chmod 0755 "${DEST_DIR}/uv"
-          "${DEST_DIR}/uv" --version
-          # Echo the extracted-binary SHA (pre-codesign) for build logs only —
-          # there is no runtime pin to update for mac-arm64. Unlike
-          # linux-x64/win-x64, mac-arm64's BUNDLED_UV_SHA256 entry was removed:
-          # electron-builder re-signs this binary during packaging (ad-hoc
-          # identity=- on every CI build today), and ad-hoc codesign output is
-          # not deterministic across GitHub-hosted macos-latest runner image
-          # rollovers. ensureUv() and dmg-structural-smoke both verify this
-          # binary via `codesign --verify --strict` instead of a fixed digest.
-          shasum -a 256 "${DEST_DIR}/uv"
+          PY="$(command -v python || command -v python3)"
+          "$PY" installer/scripts/fetch_lemonade_embeddable.py \
+            --platform "${{ matrix.lemonade_platform }}" \
+            --out src/gaia/apps/webui/build/vendor/lemonade \
+            --attempts 3
 
       - name: Build frontend (Vite)
         working-directory: src/gaia/apps/webui
         shell: bash
         run: npm run build
-
-      # ─── Bundle Lemonade Server MSI (issue #774) ────────────────────
-      # The Windows NSIS installer embeds lemonade-server-minimal.msi so
-      # users get a working Lemonade setup on first launch with no runtime
-      # download. version.nsh exposes ${LEMONADE_VERSION} to NSIS for the
-      # DetailPrint message; the MSI itself is downloaded from the pinned
-      # upstream release. Both steps Windows-only — no impact on mac/linux.
-      - name: Generate installer/version.nsh (Windows)
-        if: matrix.platform == 'windows'
-        shell: bash
-        run: |
-          # Runs write_version_files() which emits installer/version.nsh containing
-          # !define LEMONADE_VERSION and !define GAIA_VERSION
-          python src/gaia/version.py
-          echo "Generated installer/version.nsh:"
-          cat installer/version.nsh
-
-      - name: Download Lemonade MSI (Windows)
-        if: matrix.platform == 'windows'
-        shell: bash
-        run: |
-          LEMONADE_VERSION=$(grep -oE 'LEMONADE_VERSION = "[^"]+"' src/gaia/version.py | cut -d'"' -f2)
-          if [ -z "$LEMONADE_VERSION" ]; then
-            echo "ERROR: Could not parse LEMONADE_VERSION from src/gaia/version.py" >&2
-            exit 1
-          fi
-          URL="https://github.com/lemonade-sdk/lemonade/releases/download/v${LEMONADE_VERSION}/lemonade-server-minimal.msi"
-          echo "Downloading Lemonade MSI v${LEMONADE_VERSION} from ${URL}"
-          curl -fsSL --retry 3 --retry-delay 5 "${URL}" -o installer/lemonade-server-minimal.msi
-          # Sanity check: the -minimal MSI is a bootstrap installer (~4-6MB) that
-          # fetches the Lemonade runtime on first run, so we guard against an
-          # obviously-truncated download (<1MB = not even an MSI header) rather
-          # than pinning to a specific upstream size that can change between
-          # minor releases.
-          SIZE=$(wc -c < installer/lemonade-server-minimal.msi)
-          echo "Downloaded MSI size: ${SIZE} bytes"
-          if [ "$SIZE" -lt 1048576 ]; then
-            echo "ERROR: MSI smaller than 1MB; download likely corrupt or 404 HTML body." >&2
-            exit 1
-          fi
 
       # ─── Code signing config (opt-in by secret presence) ─────────────
       - name: Detect Windows code signing
@@ -443,34 +409,29 @@ jobs:
             echo "(dist-app/ does not exist — build may have failed)"
           fi
 
-      # ─── Verify Lemonade MSI bundling (issue #774) ───────────────────
-      # Guards against regressions where the MSI stops being bundled.
-      # Uses 7z to inspect the NSIS installer archive. NSIS solid
-      # compression can prevent 7z from listing inner files — in that
-      # case we print a warning but do NOT fail the build (the NSIS File
-      # directive already fails compilation if the MSI was missing, so a
-      # built .exe is strong evidence of a successful bundle). We only
-      # fail if 7z CAN list contents but the MSI name is absent.
-      - name: Verify Lemonade MSI embedded in installer (Windows)
-        if: matrix.platform == 'windows'
+      - name: Verify the frozen core was packaged
+        working-directory: src/gaia/apps/webui
         shell: bash
         run: |
-          INSTALLER=$(ls src/gaia/apps/webui/dist-app/*.exe 2>/dev/null | head -1)
-          if [ -z "$INSTALLER" ]; then
-            echo "ERROR: No installer .exe found in dist-app/" >&2
+          set -euo pipefail
+          FOUND=$(find dist-app -ipath '*/resources/core/${{ matrix.core_exe }}' -type f)
+          if [ -z "${FOUND}" ]; then
+            echo "::error::No frozen core under resources/core in dist-app; check extraResources in electron-builder.yml." >&2
             exit 1
           fi
-          echo "Inspecting: ${INSTALLER}"
-          LISTING=$(7z l "${INSTALLER}" 2>&1)
-          STATUS=$?
-          if [ $STATUS -ne 0 ]; then
-            echo "WARNING: 7z could not list installer contents (NSIS solid compression?). Build passed — NSIS File directive is the compile-time gate."
-          elif echo "${LISTING}" | grep -q "lemonade-server-minimal.msi"; then
-            echo "OK: Lemonade MSI is confirmed bundled in the installer."
-          else
-            echo "ERROR: 7z can list the installer but lemonade-server-minimal.msi is NOT present." >&2
+          echo "${FOUND}"
+
+      - name: Verify the Lemonade archive was packaged
+        working-directory: src/gaia/apps/webui
+        shell: bash
+        run: |
+          set -euo pipefail
+          FOUND=$(find dist-app -ipath '*/resources/vendor/lemonade/lemonade-embeddable-*')
+          if [ -z "${FOUND}" ]; then
+            echo "::error::No Lemonade archive under resources/vendor/lemonade in dist-app; check extraResources in electron-builder.yml." >&2
             exit 1
           fi
+          echo "${FOUND}"
 
       # ─── Verify macOS code signature ─────────────────────────────────
       # Guards against shipping a broken .app bundle (the class of bug
@@ -513,7 +474,7 @@ jobs:
         id: upload-artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.platform }}-installer
+          name: ${{ inputs.artifact_prefix }}${{ matrix.platform }}-installer
           path: ${{ matrix.artifacts }}
           retention-days: 14
           if-no-files-found: error
@@ -575,7 +536,7 @@ jobs:
         if: matrix.platform == 'linux' && steps.build-wheel.outputs.path != ''
         uses: actions/upload-artifact@v7
         with:
-          name: gaia-wheel
+          name: ${{ inputs.artifact_prefix }}gaia-wheel
           path: /tmp/gaia-wheel/*.whl
           retention-days: 14
 
@@ -597,9 +558,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/artifacts
+          pattern: ${{ inputs.artifact_prefix != '' && format('{0}*', inputs.artifact_prefix) || '' }}
 
       - name: Validate artifact structure and sizes
         shell: bash
+        env:
+          PREFIX: ${{ inputs.artifact_prefix }}
         run: |
           set -euo pipefail
           ARTIFACTS="${RUNNER_TEMP}/artifacts"
@@ -610,7 +574,7 @@ jobs:
           echo ""
 
           # ── Windows artifacts ──────────────────────────────────────
-          WIN_DIR="${ARTIFACTS}/windows-installer"
+          WIN_DIR="${ARTIFACTS}/${PREFIX}windows-installer"
           if [ -d "${WIN_DIR}" ]; then
             echo "--- Windows ---"
             EXE=$(find "${WIN_DIR}" -maxdepth 1 -name "*.exe" | head -n1)
@@ -620,7 +584,7 @@ jobs:
             else
               SIZE=$(stat -c%s "${EXE}" 2>/dev/null || stat -f%z "${EXE}")
               echo "EXE: $(basename "${EXE}") (${SIZE} bytes)"
-              # NSIS installer should be >50MB with bundled Lemonade MSI
+              # The Electron runtime alone puts the NSIS installer past 50MB
               if [ "${SIZE}" -lt 52428800 ]; then
                 echo "::error::Windows .exe smaller than 50MB — likely missing bundled components"
                 FAIL=1
@@ -647,7 +611,7 @@ jobs:
           fi
 
           # ── macOS artifacts ────────────────────────────────────────
-          MAC_DIR="${ARTIFACTS}/macos-installer"
+          MAC_DIR="${ARTIFACTS}/${PREFIX}macos-installer"
           if [ -d "${MAC_DIR}" ]; then
             echo "--- macOS ---"
             DMG=$(find "${MAC_DIR}" -maxdepth 1 -name "*.dmg" | head -n1)
@@ -671,7 +635,7 @@ jobs:
           fi
 
           # ── Linux artifacts ────────────────────────────────────────
-          LINUX_DIR="${ARTIFACTS}/linux-installer"
+          LINUX_DIR="${ARTIFACTS}/${PREFIX}linux-installer"
           if [ -d "${LINUX_DIR}" ]; then
             echo "--- Linux ---"
             APPIMAGE=$(find "${LINUX_DIR}" -maxdepth 1 -name "*.AppImage" | head -n1)
@@ -707,7 +671,7 @@ jobs:
           fi
 
           # ── Python wheel (if present) ──────────────────────────────
-          WHEEL_DIR="${ARTIFACTS}/gaia-wheel"
+          WHEEL_DIR="${ARTIFACTS}/${PREFIX}gaia-wheel"
           if [ -d "${WHEEL_DIR}" ]; then
             echo "--- Python wheel ---"
             WHL=$(find "${WHEEL_DIR}" -maxdepth 1 -name "*.whl" | head -n1)
@@ -731,6 +695,27 @@ jobs:
           fi
           echo "All artifact validations passed."
 
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # Each platform's artifact must hold every file its latest*.yml names, at
+      # the size and sha512 recorded: the mac .zip was left out for months, so
+      # no Mac could update (#5682).
+      - name: Update manifests name only files the artifact carries
+        shell: bash
+        env:
+          PREFIX: ${{ inputs.artifact_prefix }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pyyaml
+          for platform in windows macos linux; do
+            python util/check_release_assets.py --dir "${RUNNER_TEMP}/artifacts/${PREFIX}${platform}-installer"
+          done
+
   # ─── AppImage smoke tests (issue #782) ──────────────────────────────
   # Consume the linux-installer artifact produced by the `build` matrix
   # and run structural + distro-level smoke checks against the AppImage.
@@ -740,7 +725,7 @@ jobs:
   #   AC1 — Ubuntu 24.04 minimal launches without curl / with libfuse2
   #   AC2 — Arch-equivalent launch (fedora row covers RPM-family SELinux)
   #   AC3 — pre-built dist/ ships (structural check)
-  #   AC4 — bundled uv present (structural check)
+  #   AC4 — the frozen gaia core ships and starts (structural check)
   #   AC5 — HTML fallback at / (tested separately by unit tests)
   #   AC6 — port-manager unit tests (tested separately)
   #   AC8 — Wayland visibility (DEFERRED — see wayland-visibility stub below)
@@ -758,7 +743,7 @@ jobs:
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: linux-installer
+          name: ${{ inputs.artifact_prefix }}linux-installer
           path: ${{ runner.temp }}/linux-installer
 
       - name: Locate AppImage
@@ -771,21 +756,15 @@ jobs:
           chmod +x "${APPIMAGE}"
           echo "appimage=${APPIMAGE}" >> "$GITHUB_OUTPUT"
 
-      - name: Structural smoke (chrome-sandbox, uv, dist, app.asar)
+      - name: Structural smoke (chrome-sandbox, core, dist, app.asar)
         env:
           GAIA_APPIMAGE: ${{ steps.locate.outputs.appimage }}
         run: node --test tests/electron/appimage-smoke.test.mjs
 
   # ─── DMG structural smoke (issue #941) ──────────────────────────────
-  # Mirrors appimage-structural-smoke for the macOS DMG. Catches the
-  # failure mode that bit v0.17.5: a darwin-arm64 install that hard-fails
-  # in ensure-uv on first launch because the bundled uv either was never
-  # shipped or fails `codesign --verify --strict` in backend-installer.cjs.
-  # (Prior to the mac-arm64 pin removal, this compared against a fixed
-  # BUNDLED_UV_SHA256[mac-arm64] digest — retired because ad-hoc codesign
-  # output is not deterministic across GitHub-hosted macos-latest runner
-  # image rollovers; see the BUNDLED_UV_SHA256 comment in
-  # backend-installer.cjs.)
+  # Mirrors appimage-structural-smoke for the macOS DMG: the frozen gaia core
+  # must ship, keep its executable bit, pass `codesign --verify --strict` and
+  # start, or the app has no backend on first launch.
   #
   # MUST be present in build-complete `needs:` below — without that
   # wiring, a failing DMG smoke does not block release-readiness.
@@ -804,7 +783,7 @@ jobs:
       - name: Download macOS installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: macos-installer  # ${{ matrix.platform }}-installer with platform=macos
+          name: ${{ inputs.artifact_prefix }}macos-installer  # ${{ matrix.platform }}-installer with platform=macos
           path: ${{ runner.temp }}/macos-installer
 
       - name: Locate DMG
@@ -816,7 +795,7 @@ jobs:
           echo "Found DMG: ${DMG}"
           echo "dmg=${DMG}" >> "$GITHUB_OUTPUT"
 
-      - name: Structural smoke (uv binary, mode, codesign, --version)
+      - name: Structural smoke (core binary, mode, codesign, --version)
         env:
           GAIA_DMG: ${{ steps.locate.outputs.dmg }}
         run: node --test tests/electron/dmg-smoke.test.mjs
@@ -834,7 +813,7 @@ jobs:
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: linux-installer
+          name: ${{ inputs.artifact_prefix }}linux-installer
           path: ${{ runner.temp }}/linux-installer
 
       # Download the Python wheel built alongside the installer so the
@@ -846,7 +825,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: gaia-wheel
+          name: ${{ inputs.artifact_prefix }}gaia-wheel
           path: ${{ runner.temp }}/gaia-wheel
 
       - name: Locate Python wheel
@@ -958,10 +937,10 @@ jobs:
               # first iteration. Fall back to 4200 for older builds.
               HEALTH_OK=0
               for i in $(seq 1 30); do
-                PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+")
+                PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+" || true)
                 PORT=${PORT:-4200}
                 # Use bash /dev/tcp instead of curl — curl is purged in this
-                # container to prove the bundled-uv path eliminates that dep.
+                # container to prove the app needs no host tooling.
                 # Avoid single quotes inside the outer single-quoted bash -c block
                 # by using a subshell ( ) with double-quoted printf instead.
                 RESPONSE=$( (exec 3<>/dev/tcp/127.0.0.1/${PORT} && printf "GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" >&3 && timeout 5 cat <&3) 2>/dev/null || true)
@@ -1059,7 +1038,7 @@ jobs:
               }
               HEALTH_OK=0
               for i in $(seq 1 30); do
-                PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+")
+                PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+" || true)
                 PORT=${PORT:-4200}
                 if curl -sSf "http://127.0.0.1:${PORT}/api/health" \
                     | grep -q "gaia-agent-ui"; then
@@ -1095,7 +1074,7 @@ jobs:
       - name: Download Linux installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: linux-installer
+          name: ${{ inputs.artifact_prefix }}linux-installer
           path: ${{ runner.temp }}/linux-installer
 
       - name: Download Python wheel
@@ -1103,7 +1082,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: gaia-wheel
+          name: ${{ inputs.artifact_prefix }}gaia-wheel
           path: ${{ runner.temp }}/gaia-wheel
 
       - name: Locate Python wheel
@@ -1167,7 +1146,7 @@ jobs:
           fi
           HEALTH_OK=0
           for i in $(seq 1 30); do
-            PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+")
+            PORT=$(grep -oE "ui-port[ =]+([0-9]+)" /tmp/stdout.log | head -n1 | grep -oE "[0-9]+" || true)
             PORT=${PORT:-4200}
             if curl -sSf "http://127.0.0.1:${PORT}/api/health" \
                 | grep -q "gaia-agent-ui"; then
@@ -1189,7 +1168,8 @@ jobs:
   custom-agent-mcp-harness:
     name: Custom agent MCP harness (${{ matrix.os }})
     needs: build
-    if: always() && needs.build.result == 'success'
+    # !skip, not == false: on a PR the input is unset (null), and null == false.
+    if: always() && needs.build.result == 'success' && !inputs.skip_source_tests
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -1221,7 +1201,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: custom-agent-mcp-harness-${{ matrix.os }}
+          name: ${{ inputs.artifact_prefix }}custom-agent-mcp-harness-${{ matrix.os }}
           path: ${{ runner.temp }}/gaia-installer-agent-harness
           if-no-files-found: ignore
 
@@ -1277,7 +1257,7 @@ jobs:
       - name: Download installer artifact
         uses: actions/download-artifact@v8
         with:
-          name: ${{ matrix.platform }}-installer
+          name: ${{ inputs.artifact_prefix }}${{ matrix.platform }}-installer
           path: release-assets
       - name: Upload to GitHub Release (draft)
         uses: softprops/action-gh-release@v3

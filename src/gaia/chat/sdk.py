@@ -8,16 +8,70 @@ Gaia Agent SDK - Unified text chat integration with conversation history
 
 import json
 import logging
+import os
+import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.chat.prompts import Prompts
+from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm import create_client
-from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
+from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_NAME,
+    GPU_CTX_SIZE,
+    LemonadeClient,
+    cloud_model_provider,
+    resolve_ctx_size,
+)
+from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
+from gaia.llm.providers.lemonade import _NATIVE_TC_KEY, NATIVE_TOOL_CALLS_PREFIX
+from gaia.llm.retry import stopped_by_user
 from gaia.logger import get_logger
+from gaia.utils import perf_trace
+
+#: Threads inside ``AgentSDK.side_request``; their calls are not the turn's.
+_SIDE_CALLS = threading.local()
+
+
+def _is_tool_call_envelope(chunk: str, tools: Optional[List[Dict]]) -> bool:
+    """Whether *chunk* is the provider's native tool-call envelope, not prose.
+
+    A cloud model on the in-text tool format gets no ``tools`` yet can still
+    call one natively; then only a whole JSON envelope counts, so a model
+    merely quoting the prefix stays text.
+    """
+    if not chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+        return False
+    if tools:
+        return True
+    try:
+        envelope = json.loads(chunk)
+    except ValueError:
+        return False
+    return isinstance(envelope, dict) and isinstance(envelope.get(_NATIVE_TC_KEY), list)
+
+
+class LLMCallCancelled(Exception):
+    """The caller cancelled a model call; nothing it produced is returned."""
+
+
+class RAGContextError(RuntimeError):
+    """Document context could not be added, so the question was not sent."""
+
+
+#: Below this many tokens of document context a RAG answer is not grounded.
+_MIN_RAG_CONTEXT_TOKENS = 500
+
+_TROUBLESHOOTING_URL = "https://amd-gaia.ai/docs/reference/troubleshooting"
+
+#: How to get a larger window, by where the window came from.
+_LARGER_WINDOW_HINT = {
+    "local": ", or load the model with a larger window (GAIA_CTX_SIZE)",
+    "pin": ", or raise the client's ctx_size_override",
+}
 
 
 @dataclass
@@ -33,9 +87,8 @@ class AgentConfig:
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Removed; True raises migration guidance
     use_local_llm: bool = (
-        True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
+        True  # Use local LLM (computed as not use_claude if not explicitly set)
     )
     claude_model: str = "claude-sonnet-5"  # Claude model when use_claude=True
     base_url: Optional[str] = (
@@ -106,7 +159,6 @@ class AgentSDK:
         # Initialize LLM client - factory auto-detects provider and validates
         self.llm_client = create_client(
             use_claude=self.config.use_claude,
-            use_openai=self.config.use_chatgpt,
             model=(
                 self.config.claude_model
                 if self.config.use_claude
@@ -367,12 +419,30 @@ class AgentSDK:
     #: Receives one timing dict per model request; set by the agent loop.
     llm_call_sink: Optional[Callable[[Dict[str, Any]], None]] = None
 
+    @staticmethod
+    @contextmanager
+    def side_request():
+        """Keep this thread's model calls out of the user turn's metrics.
+
+        A background call (memory extraction) can run while a turn is open;
+        recorded into it, its stats and timing replace the turn's own call's.
+        """
+        previous = getattr(_SIDE_CALLS, "active", False)
+        _SIDE_CALLS.active = True
+        try:
+            yield
+        finally:
+            _SIDE_CALLS.active = previous
+
+    def _turn_recorder(self) -> Optional[Any]:
+        return None if getattr(_SIDE_CALLS, "active", False) else self.turn_recorder
+
     def _report_llm_call(self, started: float, *, streamed: bool, ok: bool) -> None:
         """Hand the sink this request's wall time, ttft, finish reason, and
         the tokens from the response's own usage (never ``/stats``)."""
         seconds = time.perf_counter() - started
         sink = self.llm_call_sink
-        if sink is None:
+        if sink is None or getattr(_SIDE_CALLS, "active", False):
             return
         usage = self.llm_client.get_last_usage() if ok else None
         usage = usage if isinstance(usage, dict) else {}
@@ -391,7 +461,7 @@ class AgentSDK:
     def _recorder_begin(
         self, structured: List[Dict[str, Any]], tools: Optional[List[Dict]]
     ) -> None:
-        recorder = self.turn_recorder
+        recorder = self._turn_recorder()
         if recorder is None:
             return
         try:
@@ -411,7 +481,7 @@ class AgentSDK:
 
     def _recorder_mark(self) -> None:
         """Stop the clock on the open call before its stats are fetched."""
-        recorder = self.turn_recorder
+        recorder = self._turn_recorder()
         if recorder is None:
             return
         try:
@@ -419,10 +489,18 @@ class AgentSDK:
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             self.log.warning("turn recorder (mark) failed: %s", e)
 
+    def _timed_stats(self) -> Dict[str, Any]:
+        """``get_stats()``, booked on the open call as ``stats_fetch_s``."""
+        started = time.perf_counter()
+        try:
+            return self.get_stats()
+        finally:
+            perf_trace.note_wait("stats_fetch_s", time.perf_counter() - started)
+
     def _recorder_end(self, stats: Optional[Dict[str, Any]] = None) -> None:
         """Close the open call. A no-op once closed, so a ``finally`` can back
         up a normal close without recording the call twice."""
-        recorder = self.turn_recorder
+        recorder = self._turn_recorder()
         if recorder is None:
             return
         try:
@@ -436,6 +514,7 @@ class AgentSDK:
         messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
+        cancel: Optional[threading.Event] = None,
         **kwargs,
     ) -> AgentResponse:
         """
@@ -444,11 +523,21 @@ class AgentSDK:
         Args:
             messages: List of message dicts with 'role' and 'content' keys
             system_prompt: Optional system prompt to use (overrides config)
+            cancel: When given, the reply is streamed and the call is abandoned
+                as soon as the event is set, also while it waits for the model
+                slot, and ``LLMCallCancelled`` is raised.
             **kwargs: Additional arguments for LLM generation
 
         Returns:
             AgentResponse with the complete response
+
+        Raises:
+            LLMCallCancelled: *cancel* was set before the reply finished.
         """
+        if cancel is not None:
+            return self._send_messages_cancellable(
+                messages, system_prompt, tools, cancel, **kwargs
+            )
         try:
             messages = self._prepare_messages_for_llm(messages)
 
@@ -523,8 +612,54 @@ class AgentSDK:
             self.log.error(f"LLM connection error in send_messages: {e}")
             raise ConnectionError(f"Failed to connect to LLM server: {e}") from e
         except Exception as e:
-            self.log.error(f"Error in send_messages: {e}")
+            if stopped_by_user(e):
+                self.log.info(f"send_messages stopped by the user: {e}")
+            else:
+                self.log.error(f"Error in send_messages: {e}")
             raise
+
+    def _send_messages_cancellable(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: Optional[str],
+        tools: Optional[List[Dict]],
+        cancel: threading.Event,
+        **kwargs,
+    ) -> AgentResponse:
+        """``send_messages`` over a stream, checking *cancel* between chunks."""
+        if cancel.is_set():
+            raise LLMCallCancelled("model call cancelled before it started")
+        parts: List[str] = []
+        final: Optional[AgentResponse] = None
+        stream = self.send_messages_stream(
+            messages, system_prompt=system_prompt, tools=tools, **kwargs
+        )
+        try:
+            # A call cancelled while queued for the model must never be sent:
+            # on the NPU, hanging up on it once it streams restarts the engine.
+            with lease_cancel_scope(cancel):
+                for chunk in stream:
+                    if cancel.is_set():
+                        raise LLMCallCancelled("model call cancelled mid-reply")
+                    if chunk.is_complete:
+                        final = chunk
+                    else:
+                        parts.append(chunk.text)
+        except LeaseWaitCancelled as e:
+            raise LLMCallCancelled(str(e)) from e
+        finally:
+            # Ends the HTTP stream: cut off on a GPU, read to its end on the NPU.
+            stream.close()
+        if final is None:
+            raise RuntimeError("model stream ended without a final chunk")
+        return AgentResponse(
+            text="".join(parts) + final.text,
+            stats=final.stats,
+            usage=self.llm_client.get_last_usage(),
+            is_complete=True,
+            finish_reason=final.finish_reason,
+            reasoning=final.reasoning,
+        )
 
     def send_messages_stream(
         self,
@@ -590,11 +725,11 @@ class AgentSDK:
                 # would print raw JSON at the user — so it terminates the stream
                 # as the complete response, which is the shape the agent loop's
                 # native tool_calls branch already parses.
-                if tools and chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+                if _is_tool_call_envelope(chunk, tools):
                     self._recorder_mark()
                     call_reported = True
                     self._report_llm_call(call_started, streamed=True, ok=True)
-                    tool_call_stats = self.get_stats()
+                    tool_call_stats = self._timed_stats()
                     self._recorder_end(tool_call_stats)
                     yield AgentResponse(
                         text=chunk,
@@ -610,7 +745,7 @@ class AgentSDK:
             self._recorder_mark()
             call_reported = True
             self._report_llm_call(call_started, streamed=True, ok=True)
-            stats = self.get_stats()
+            stats = self._timed_stats()
             self._recorder_end(stats)
 
             yield AgentResponse(
@@ -621,6 +756,8 @@ class AgentSDK:
                 reasoning=self.llm_client.get_last_reasoning(),
             )
 
+        except LeaseWaitCancelled:
+            raise  # the caller stopped waiting: not an error
         except ConnectionError as e:
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages_stream: {e}")
@@ -628,7 +765,10 @@ class AgentSDK:
                 f"Failed to connect to LLM server (streaming): {e}"
             ) from e
         except Exception as e:
-            self.log.error(f"Error in send_messages_stream: {e}")
+            if stopped_by_user(e):
+                self.log.info(f"send_messages_stream stopped by the user: {e}")
+            else:
+                self.log.error(f"Error in send_messages_stream: {e}")
             raise
         finally:
             # Cancelling closes this generator at the yield; without this the
@@ -661,7 +801,9 @@ class AgentSDK:
                 raise ValueError("Message cannot be empty")
 
             # Enhance message with RAG context if enabled
-            enhanced_message, _rag_metadata = self._enhance_with_rag(message.strip())
+            enhanced_message, _rag_metadata = self._enhance_with_rag(
+                message.strip(), no_history=no_history
+            )
 
             if no_history:
                 # Build a prompt using only the current enhanced message
@@ -1079,6 +1221,7 @@ class AgentSDK:
             )
 
         # Create RAG config matching chat config
+        rag_kwargs.setdefault("base_url", self.config.base_url)
         rag_config = RAGConfig(
             model=self.config.model,
             show_stats=self.config.show_stats,
@@ -1095,13 +1238,16 @@ class AgentSDK:
         if documents:
             for doc_path in documents:
                 self.log.info(f"Indexing document: {doc_path}")
-                result = self.rag.index_document(doc_path)
+                result = self._index_named_document(doc_path)
 
                 if isinstance(result, dict) and result.get("success") is True:
                     indexed_count += 1
                     self.log.info(f"Successfully indexed: {doc_path}")
                 else:
-                    self.log.warning(f"Failed to index document: {doc_path}")
+                    reason = (
+                        result.get("error") if isinstance(result, dict) else None
+                    ) or f"unexpected index result {result!r}"
+                    self.log.warning(f"Failed to index document {doc_path}: {reason}")
 
         if indexed_count == document_count:
             self.log.info(f"RAG enabled with {document_count} documents")
@@ -1131,7 +1277,14 @@ class AgentSDK:
         if not self.rag_enabled or not self.rag:
             raise ValueError("RAG not enabled. Call enable_rag() first.")
 
-        return bool(self.rag.index_document(document_path).get("success"))
+        return bool(self._index_named_document(document_path).get("success"))
+
+    def _index_named_document(self, document_path: str) -> dict:
+        """Index a file the caller named, granting read access to that file only."""
+        # The RAG validator defaults to the working directory; naming the file is the grant.
+        if os.path.isfile(document_path):
+            self.rag.path_validator.add_allowed_path(document_path)
+        return self.rag.index_document(document_path)
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -1147,82 +1300,6 @@ class AgentSDK:
         # Rough approximation: ~4 characters per token for English text
         # This is conservative to avoid overrunning context
         return len(text) // 4
-
-    def summarize_conversation_history(self, max_history_tokens: int) -> Optional[str]:
-        """
-        Summarize conversation history when it exceeds the token budget.
-
-        Args:
-            max_history_tokens: Maximum allowed tokens for stored history
-
-        Returns:
-            The generated summary (when summarization occurred) or None
-        """
-        if max_history_tokens <= 0:
-            raise ValueError("max_history_tokens must be positive")
-
-        history_entries = list(self.chat_history)
-        if not history_entries:
-            return None
-
-        history_text = "\n".join(history_entries)
-        history_tokens = self._estimate_tokens(history_text)
-
-        if history_tokens <= max_history_tokens:
-            print(
-                "History tokens are less than max history tokens, so no summarization is needed"
-            )
-            return None
-
-        print(
-            "History tokens are greater than max history tokens, so summarization is needed"
-        )
-
-        self.log.info(
-            "Conversation history (~%d tokens) exceeds budget (%d). Summarizing...",
-            history_tokens,
-            max_history_tokens,
-        )
-
-        summary_prompt = (
-            "Summarize the following conversation between a user and the GAIA web "
-            "development agent. Preserve:\n"
-            "- The app requirements and inferred schema/data models\n"
-            "- Key implementation details already completed\n"
-            "- Outstanding issues, validation failures, or TODOs (quote error/warning text verbatim)\n"
-            "- Any constraints or preferences the user emphasized\n\n"
-            "Write the summary in under 400 tokens, using concise paragraphs, and include the exact text of any warnings/errors so future fixes have full context.\n\n"
-            "You have full access to the prior conversation history above; summarize it directly without restating the entire transcript."
-        )
-
-        # Use AgentSDK's send() so history formatting/ordering is handled consistently
-        # by the same path used for normal chat turns.
-        original_history = list(self.chat_history)
-        try:
-            chat_response = self.send(
-                summary_prompt,
-                max_tokens=min(self.config.max_tokens, 2048),
-                timeout=1200,
-            )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            self.log.error("Failed to summarize conversation history: %s", exc)
-            # Restore history to avoid dropping context on failure
-            self.chat_history.clear()
-            self.chat_history.extend(original_history)
-            return None
-
-        summary = chat_response.text.strip() if chat_response else ""
-        if not summary:
-            self.log.warning("Summarization returned empty content; keeping history.")
-            self.chat_history.clear()
-            self.chat_history.extend(original_history)
-            return None
-
-        self.chat_history.clear()
-        self.chat_history.append(
-            f"{self.config.assistant_name}: Conversation summary so far:\n{summary}"
-        )
-        return summary
 
     def _truncate_rag_context(self, context: str, max_tokens: int) -> str:
         """
@@ -1252,69 +1329,118 @@ class AgentSDK:
         )
         return truncated
 
-    def _enhance_with_rag(self, message: str) -> tuple:
+    def _context_window(self) -> tuple:
+        """(tokens, source) of the window the answering model runs in.
+
+        *source* is ``"claude"``, ``"cloud"``, ``"pin"`` or ``"local"``.
+        """
+        if self.config.use_claude:
+            return CLAUDE_CTX_SIZE, "claude"
+        model = self.config.model
+        backend = getattr(self.llm_client, "_backend", None)
+        lemonade = isinstance(backend, LemonadeClient)
+        cloud = (
+            backend.cloud_model_provider(model)
+            if lemonade
+            else cloud_model_provider(model)
+        )
+        if cloud:
+            # Remote admission policy, as for the agent's own history budget.
+            return GPU_CTX_SIZE, "cloud"
+        if lemonade:
+            pin = backend.ctx_size_override
+            if isinstance(pin, int) and not isinstance(pin, bool) and pin > 0:
+                return pin, "pin"
+        base_url = backend.current_base_url() if lemonade else self.config.base_url
+        return resolve_ctx_size(model=model, base_url=base_url), "local"
+
+    def _enhance_with_rag(self, message: str, *, no_history: bool = False) -> tuple:
         """
         Enhance user message with relevant document context using RAG.
 
         Args:
             message: Original user message
+            no_history: The turn is sent without stored history, so it takes
+                no room from the document budget
 
         Returns:
             Tuple of (enhanced_message, metadata_dict)
+
+        Raises:
+            RAGContextError: Retrieval failed, or the model's window leaves no
+                room for document context. The question is never sent
+                without the documents it asked about.
         """
         if not self.rag_enabled or not self.rag:
             return message, None
 
         try:
-            # Query RAG for relevant context with metadata
             rag_response = self.rag.query(message, include_metadata=True)
+        except Exception as e:
+            raise RAGContextError(
+                f"Document retrieval failed, so the question was not sent: {e}. "
+                "Fix that cause (if the index is damaged, re-index with "
+                "add_document()), or call disable_rag() to chat without the "
+                f"documents. See {_TROUBLESHOOTING_URL}"
+            ) from e
 
-            if rag_response.chunks:
-                # Build context with source information
-                context_parts = []
-                if rag_response.chunk_metadata:
-                    for i, (chunk, metadata) in enumerate(
-                        zip(rag_response.chunks, rag_response.chunk_metadata)
-                    ):
-                        context_parts.append(
-                            f"Context {i+1} (from {metadata['source_file']}, relevance: {metadata['relevance_score']:.2f}):\n{chunk}"
-                        )
-                else:
-                    context_parts = [
-                        f"Context {i+1}:\n{chunk}"
-                        for i, chunk in enumerate(rag_response.chunks)
-                    ]
+        if not rag_response.chunks:
+            self.log.debug("No relevant document context found")
+            return message, {"rag_used": True, "chunks_retrieved": 0}
 
-                context = "\n\n".join(context_parts)
-
-                # Check token limits
-                message_tokens = self._estimate_tokens(message)
-                template_tokens = 150  # Template text overhead
-                response_tokens = self.config.max_tokens
-                history_tokens = self._estimate_tokens(str(self.chat_history))
-
-                # Conservative context size for models
-                model_context_size = 32768
-                available_for_rag = (
-                    model_context_size
-                    - message_tokens
-                    - template_tokens
-                    - response_tokens
-                    - history_tokens
+        # Build context with source information
+        context_parts = []
+        if rag_response.chunk_metadata:
+            for i, (chunk, metadata) in enumerate(
+                zip(rag_response.chunks, rag_response.chunk_metadata)
+            ):
+                context_parts.append(
+                    f"Context {i+1} (from {metadata['source_file']}, relevance: {metadata['relevance_score']:.2f}):\n{chunk}"
                 )
+        else:
+            context_parts = [
+                f"Context {i+1}:\n{chunk}"
+                for i, chunk in enumerate(rag_response.chunks)
+            ]
 
-                # Ensure minimum RAG context
-                if available_for_rag < 500:
-                    self.log.warning(
-                        f"Limited space for RAG context: {available_for_rag} tokens"
-                    )
-                    available_for_rag = 500
+        context = "\n\n".join(context_parts)
 
-                # Truncate context if needed
-                context = self._truncate_rag_context(context, available_for_rag)
+        # Check token limits
+        context_window, window_source = self._context_window()
+        system_tokens = self._estimate_tokens(self.config.system_prompt or "")
+        message_tokens = self._estimate_tokens(message)
+        template_tokens = 150  # Template text overhead
+        # A cloud reply is written into the provider's own, larger window.
+        response_tokens = 0 if window_source == "cloud" else self.config.max_tokens
+        history_tokens = (
+            0 if no_history else self._estimate_tokens(str(self.chat_history))
+        )
+        available_for_rag = (
+            context_window
+            - system_tokens
+            - message_tokens
+            - template_tokens
+            - response_tokens
+            - history_tokens
+        )
 
-                # Build enhanced message
-                enhanced_message = f"""Based on the provided documents, please answer the following question. Use the context below to inform your response.
+        if available_for_rag < _MIN_RAG_CONTEXT_TOKENS:
+            raise RAGContextError(
+                f"No room for document context: {self.effective_model} is loaded "
+                f"with a {context_window}-token window, and the system prompt "
+                f"(~{system_tokens}), history (~{history_tokens}), question "
+                f"(~{message_tokens}) and reply reserve ({response_tokens}) leave "
+                f"{available_for_rag} tokens, under the {_MIN_RAG_CONTEXT_TOKENS} "
+                "needed. Shorten the system prompt, call clear_history() or lower "
+                f"max_tokens{_LARGER_WINDOW_HINT.get(window_source, '')}. "
+                f"See {_TROUBLESHOOTING_URL}"
+            )
+
+        # Truncate context if needed
+        context = self._truncate_rag_context(context, available_for_rag)
+
+        # Build enhanced message
+        enhanced_message = f"""Based on the provided documents, please answer the following question. Use the context below to inform your response.
 
 Context from documents:
 {context}
@@ -1323,38 +1449,27 @@ User question: {message}
 
 Note: When citing information, please mention which context number it came from."""
 
-                # Prepare metadata for return
-                metadata = {
-                    "rag_used": True,
-                    "chunks_retrieved": len(rag_response.chunks),
-                    "estimated_context_tokens": self._estimate_tokens(context),
-                    "available_tokens": available_for_rag,
-                    "context_truncated": (
-                        len(context) < sum(len(c) for c in rag_response.chunks)
-                        if rag_response.chunks
-                        else False
-                    ),
-                }
+        # Prepare metadata for return
+        metadata = {
+            "rag_used": True,
+            "chunks_retrieved": len(rag_response.chunks),
+            "estimated_context_tokens": self._estimate_tokens(context),
+            "available_tokens": available_for_rag,
+            "context_window": context_window,
+            "context_truncated": len(context)
+            < sum(len(c) for c in rag_response.chunks),
+        }
 
-                # Add query metadata if available
-                if rag_response.query_metadata:
-                    metadata["query_metadata"] = rag_response.query_metadata
+        # Add query metadata if available
+        if rag_response.query_metadata:
+            metadata["query_metadata"] = rag_response.query_metadata
 
-                self.log.debug(
-                    f"Enhanced message with {len(rag_response.chunks)} chunks from "
-                    f"{len(set(rag_response.source_files)) if rag_response.source_files else 0} documents, "
-                    f"~{metadata['estimated_context_tokens']} context tokens"
-                )
-                return enhanced_message, metadata
-            else:
-                self.log.debug("No relevant document context found")
-                return message, {"rag_used": True, "chunks_retrieved": 0}
-
-        except Exception as e:
-            self.log.warning(
-                f"RAG enhancement failed: {e}, falling back to direct query"
-            )
-            return message, {"rag_used": False, "error": str(e)}
+        self.log.debug(
+            f"Enhanced message with {len(rag_response.chunks)} chunks from "
+            f"{len(set(rag_response.source_files)) if rag_response.source_files else 0} documents, "
+            f"~{metadata['estimated_context_tokens']} context tokens"
+        )
+        return enhanced_message, metadata
 
 
 class SimpleChat:
@@ -1436,6 +1551,20 @@ class SimpleChat:
         return self._sdk.get_formatted_history()
 
 
+_SESSION_OVERRIDE_KEYS = frozenset(
+    {
+        "model",
+        "max_tokens",
+        "system_prompt",
+        "max_history_length",
+        "show_stats",
+        "logging_level",
+        "use_claude",
+        "assistant_name",
+    }
+)
+
+
 class AgentSession:
     """
     Session-based chat interface for managing multiple separate conversations.
@@ -1481,6 +1610,18 @@ class AgentSession:
         Returns:
             AgentSDK instance for the session
         """
+        unknown = sorted(set(config_kwargs) - _SESSION_OVERRIDE_KEYS)
+        if unknown:
+            raise TypeError(
+                f"create_session() got unexpected keyword argument(s): "
+                f"{', '.join(unknown)}. Allowed: "
+                f"{', '.join(sorted(_SESSION_OVERRIDE_KEYS))}."
+            )
+        if config is not None and config_kwargs:
+            raise TypeError(
+                "create_session() takes either config or keyword overrides, "
+                f"not both (got config and {', '.join(sorted(config_kwargs))})."
+            )
         if config is None:
             # Create config from defaults with overrides
             config = AgentConfig(
@@ -1502,9 +1643,6 @@ class AgentSession:
                 ),
                 use_claude=config_kwargs.get(
                     "use_claude", self.default_config.use_claude
-                ),
-                use_chatgpt=config_kwargs.get(
-                    "use_chatgpt", self.default_config.use_chatgpt
                 ),
                 assistant_name=config_kwargs.get(
                     "assistant_name", self.default_config.assistant_name
@@ -1603,10 +1741,3 @@ def quick_chat_with_memory(
         responses.append(response.text)
 
     return responses
-
-
-# Backwards-compatible aliases
-ChatSDK = AgentSDK
-ChatConfig = AgentConfig
-ChatResponse = AgentResponse
-ChatSession = AgentSession

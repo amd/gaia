@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import httpx
 import pytest
-
 from gaia_agent_email import forwarded_credentials
 from gaia_agent_email.gmail_backend import LiveGmailBackend
 

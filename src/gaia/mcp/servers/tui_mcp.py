@@ -9,10 +9,10 @@ reach a given state.
 
 The TUI boots straight into one agent -- splash, readiness gate, chat -- so
 there is nothing to browse and no agent to pick. The tools here are the generic
-drive-any-screen set; a launch is `gaia tui` itself, and a different agent is
-`gaia tui chat --agent <id>`.
+drive-any-screen set; a launch is `gaia-cli` itself, and a different agent is
+`gaia-cli chat --agent <id>`.
 
-The TUI must be started with its control server enabled (``gaia tui --control``).
+The TUI must be started with its control server enabled (``gaia-cli --control``).
 That server binds loopback on an ephemeral port and advertises itself in
 ``~/.gaia/tui/control.json`` (mode 0600), so every tool here starts by
 discovering and validating that file rather than assuming a fixed port.
@@ -78,10 +78,10 @@ MAX_WAIT_MS = 10 * 60 * 1000
 #: never outlive the client's own HTTP timeout.
 MAX_INJECTION_DELAY_MS = 10_000
 
-#: The TUI ships as its own binary; ``gaia tui`` is the packaged entry point and
-#: ``tui/bin/gaia`` the source build. Both spellings are given because a remedy
+#: The TUI ships as its own binary; ``gaia-cli`` is the packaged entry point and
+#: ``tui/bin/gaia-cli`` the source build. Both spellings are given because a remedy
 #: the reader cannot actually run is not a remedy.
-_START_CMD = "gaia tui --control (source build: ./tui/bin/gaia --control)"
+_START_CMD = "gaia-cli --control (source build: ./tui/bin/gaia-cli --control)"
 START_HINT = f"Start one with: {_START_CMD}"
 RESTART_HINT = f"Restart it with: {_START_CMD}"
 
@@ -254,7 +254,7 @@ def discover(
         return None, _err(
             f"The GAIA TUI control file at {disp} is malformed or unreadable, so it "
             f"cannot be trusted. Delete it and start a fresh TUI with: "
-            f"gaia tui --control"
+            f"gaia-cli --control"
         )
 
     if info["host"] not in LOOPBACK_HOSTS:
@@ -456,7 +456,7 @@ def _summarize(status: Dict[str, Any]) -> str:
         return (
             "NOT ACCEPTING INPUT — the TUI's event loop is not running (still "
             "starting up, or the user quit it). Reads still work; keys and text "
-            "are refused. Start a fresh one with: gaia tui --control"
+            "are refused. Start a fresh one with: gaia-cli --control"
         )
 
     overlay = state.get("overlay")
@@ -708,10 +708,10 @@ def _resize(cols: int, rows: int) -> Dict[str, Any]:
 def route_logging_to_stderr() -> None:
     """Move stdout log handlers to stderr — required before stdio transport.
 
-    Importing ``gaia`` installs a root log handler on **stdout**
-    (:mod:`gaia.logger`), and the MCP server itself logs one INFO line per
-    request. On stdio transport stdout carries JSON-RPC only, so those lines
-    land mid-stream and the client rejects every message that follows.
+    :mod:`gaia.logger` logs to stderr, but any root handler left on stdout
+    would put the MCP server's per-request INFO lines on the wire. On stdio
+    transport stdout carries JSON-RPC only, so those lines land mid-stream
+    and the client rejects every message that follows.
     """
     for handler in logging.getLogger().handlers:
         if isinstance(handler, logging.StreamHandler) and handler.stream is sys.stdout:
@@ -847,6 +847,9 @@ def create_tui_mcp() -> "MCPServer":
 
 
 def main():
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(description="GAIA TUI control MCP Server")
     parser.add_argument(
         "--port",

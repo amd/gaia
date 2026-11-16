@@ -224,15 +224,17 @@ class BrowserUseToolsMixin:
     def browser_origin_is_authenticated(self, url: str) -> bool:
         """True when this run holds a signed-in session for ``url``'s origin.
 
-        Read by the agent's confirmation gate: acting inside someone's logged-in
-        account is the case that needs a human, not browsing the open web.
+        Tells ``browser_open`` whether to restore a saved sign-in first. The
+        confirmation gate is ``browser_call_needs_confirmation``, not this.
         """
-        try:
-            from gaia.browser import session as session_store
+        from gaia.browser import session as session_store
+        from gaia.browser.errors import SessionStoreError
 
-            return session_store.origin_of(url) in self._authenticated_origins()
-        except Exception:  # noqa: BLE001 — a bad URL is not authenticated
-            return False
+        try:
+            origin = session_store.origin_of(url)
+        except SessionStoreError:
+            return False  # not a site, so there is no session for it
+        return origin in self._authenticated_origins()
 
     def _note_elements(self, snap: dict) -> None:
         """Remember ref -> label so the gate can see what it is about to click.
@@ -372,10 +374,11 @@ class BrowserUseToolsMixin:
             # Registering tools whose backend can never work would spend prompt
             # tokens on an unusable capability and give the model something to
             # fail with. Say why, once, and register nothing.
+            from gaia.browser.errors import browser_install_hint
+
             logger.info(
-                "Browser-use tools not registered: Playwright is not installed. "
-                "Install with: pip install 'amd-gaia[browser]' && "
-                "python -m playwright install chromium"
+                "Browser-use tools not registered: Playwright is not installed. %s",
+                browser_install_hint(),
             )
             return
 

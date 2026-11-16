@@ -7,7 +7,7 @@ Tests all endpoints using FastAPI TestClient with an injected in-memory
 MemoryStore — no real database file or running server required.
 
 Endpoints covered:
-  GET  /api/memory/stats              (v1 + v2 embedding/reconciliation)
+  GET  /api/memory/stats              (v1 + v2 embedding coverage)
   GET  /api/memory/activity
   GET  /api/memory/knowledge          (v1 + v2 include_superseded, time_from, time_to)
   POST /api/memory/knowledge
@@ -15,9 +15,7 @@ Endpoints covered:
   DELETE /api/memory/knowledge/{id}
   GET  /api/memory/entities
   GET  /api/memory/entities/{entity}
-  GET  /api/memory/contexts
   GET  /api/memory/tools
-  GET  /api/memory/errors
   GET  /api/memory/conversations
   GET  /api/memory/conversations/search
   GET  /api/memory/conversations/{session_id}
@@ -34,6 +32,7 @@ Endpoints covered:
 """
 
 import contextlib
+import json
 import sqlite3
 import sys
 from unittest.mock import MagicMock, patch
@@ -247,6 +246,8 @@ class TestKnowledgeCRUD:
         resp = client.delete(f"/api/memory/knowledge/{kid}")
         assert resp.status_code == 200
         assert resp.json()["status"] == "deleted"
+        # A dashboard delete is the user forgetting it (#4730).
+        assert memory_router_mod._store.is_forgotten("To be deleted")
 
         # Verify deletion
         listing = client.get("/api/memory/knowledge").json()
@@ -256,6 +257,64 @@ class TestKnowledgeCRUD:
     def test_delete_nonexistent_returns_404(self, client):
         resp = client.delete("/api/memory/knowledge/no-such-id")
         assert resp.status_code == 404
+
+    def test_delete_of_the_visible_copy_takes_the_sensitive_one(
+        self, client, test_store
+    ):
+        """Forget on the Memory page must not leave the hidden sensitive row."""
+        hidden = test_store.store(
+            category="fact",
+            content="My blood type is O negative.",
+            sensitive=True,
+            entity="person:user",
+            source="tool",
+        )
+        # A pair as rc18 stored it: the copy went in as its own, unflagged row.
+        visible = test_store.store(
+            category="fact",
+            content="User's blood type is O negative (sensitive medical info).",
+            entity="user",
+            context="apart",
+            source="llm_extract",
+        )
+        test_store._conn.execute(
+            "UPDATE knowledge SET context = 'global', sensitive = 0 WHERE id = ?",
+            (visible,),
+        )
+        test_store._conn.commit()
+
+        resp = client.delete(f"/api/memory/knowledge/{visible}")
+
+        assert resp.status_code == 200
+        assert set(resp.json()["knowledge_ids"]) == {hidden, visible}
+        assert test_store._conn.execute("SELECT 1 FROM knowledge").fetchall() == []
+
+    def test_delete_takes_every_copy_of_the_fact(self, client, test_store):
+        """A copy saved under another context must not keep the fact alive."""
+        kid = test_store.store(
+            category="fact",
+            content="User is allergic to mango",
+            sensitive=True,
+            entity="user",
+        )
+        copy = test_store.store(
+            category="fact", content="Allergic to mango.", context="personal"
+        )
+        apps = test_store.store(
+            category="fact", content="Allergic to mango", entity="app:slack"
+        )
+        other = test_store.store(
+            category="fact", content="User is allergic to green mango"
+        )
+
+        resp = client.delete(f"/api/memory/knowledge/{kid}")
+
+        assert resp.status_code == 200
+        assert set(resp.json()["knowledge_ids"]) == {kid, copy}
+        assert test_store.get_item(kid) is None
+        assert test_store.get_item(copy) is None
+        assert test_store.get_item(apps) is not None
+        assert test_store.get_item(other) is not None
 
 
 # ===========================================================================
@@ -285,17 +344,9 @@ class TestEntitiesAndContexts:
         assert isinstance(items, list)
         assert any("Bob" in item["content"] for item in items)
 
-    def test_contexts_returns_list(self, client):
-        _create_knowledge(client, "Work fact", context="work")
-        resp = client.get("/api/memory/contexts")
-        assert resp.status_code == 200
-        data = resp.json()
-        contexts = [c["context"] for c in data]
-        assert "work" in contexts
-
 
 # ===========================================================================
-# Tool Performance & Errors
+# Tool Performance
 # ===========================================================================
 
 
@@ -319,25 +370,6 @@ class TestToolPerformance:
         data = resp.json()
         names = [t["tool_name"] for t in data]
         assert "my_tool" in names
-
-    def test_tool_history(self, client, test_store):
-        test_store.log_tool_call(
-            session_id="s1",
-            tool_name="hist_tool",
-            args={"x": 1},
-            result_summary="done",
-            success=True,
-        )
-        resp = client.get("/api/memory/tools/hist_tool/history")
-        assert resp.status_code == 200
-        items = resp.json()
-        assert len(items) >= 1
-        assert items[0]["tool_name"] == "hist_tool"
-
-    def test_errors_returns_list(self, client):
-        resp = client.get("/api/memory/errors")
-        assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
 
 
 # ===========================================================================
@@ -799,25 +831,6 @@ class TestConsolidateEndpoint:
 class TestRebuildEmbeddingsEndpoint:
     """Test POST /api/memory/rebuild-embeddings endpoint."""
 
-    def test_rebuild_embeddings_returns_500_when_backfill_not_implemented(
-        self, client, test_store
-    ):
-        """POST /api/memory/rebuild-embeddings returns 500 when store lacks backfill_embeddings.
-
-        Unlike consolidate/reconcile which return 503 (no agent) or 501 (not
-        implemented), rebuild-embeddings always tries the LemonadeProvider path
-        and returns 500 for any error — including a missing store method.
-        """
-        if hasattr(test_store, "backfill_embeddings"):
-            pytest.skip("MemoryStore now implements backfill_embeddings")
-        mock_provider = MagicMock()
-        mock_provider.embed.return_value = [[0.1] * 768]
-        with patch(
-            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
-        ):
-            resp = client.post("/api/memory/rebuild-embeddings")
-        assert resp.status_code == 500
-
     def test_rebuild_embeddings_returns_200_when_implemented(self, client, test_store):
         """POST /api/memory/rebuild-embeddings returns 200 with mock method."""
         test_store.backfill_embeddings = lambda *args, **kwargs: {
@@ -1051,6 +1064,35 @@ class TestReconcileEndpoint:
         assert resp.status_code == 200
         assert resp.json()["pairs_checked"] == 0
 
+    @pytest.mark.parametrize(
+        "reply, checked",
+        [
+            ('<think>Same claim.</think>{"relationship": "reinforce"}', 1),
+            ("<think>Same claim, so", 0),
+            ('Same claim.</think>{"relationship": "reinforce"}', 1),
+            ('{"relationship": "reinforce"}', 1),
+        ],
+        ids=["paired", "unclosed", "lone-close", "no-tags"],
+    )
+    def test_standalone_reconcile_reads_past_the_reasoning(
+        self, client, test_store, reply, checked
+    ):
+        require_faiss()
+        import numpy as np
+
+        vec = np.ones(768, dtype=np.float32).tobytes()
+        for content in ("alpha fact one", "alpha fact two"):
+            kid = _create_knowledge(client, content)["knowledge_id"]
+            test_store.store_embedding(kid, vec)
+
+        fake_llm = MagicMock()
+        fake_llm.chat.return_value = reply
+        with patch("gaia.llm.create_client", return_value=fake_llm):
+            resp = client.post("/api/memory/reconcile")
+
+        assert resp.status_code == 200
+        assert resp.json()["reinforced"] == checked
+
     def test_a_memory_contradicting_two_others_is_penalised_once(
         self, client, test_store
     ):
@@ -1162,14 +1204,19 @@ class TestReconcileEndpoint:
 class TestEmbeddingCoverageEndpoint:
     """Test GET /api/memory/embedding-coverage endpoint."""
 
-    def test_embedding_coverage_returns_501_when_not_implemented(
-        self, client, test_store
-    ):
-        """GET /api/memory/embedding-coverage returns 501 without store method."""
-        if hasattr(test_store, "get_embedding_coverage"):
-            pytest.skip("MemoryStore now implements get_embedding_coverage")
+    def test_embedding_coverage_counts_real_store_items(self, client, test_store):
+        """GET /api/memory/embedding-coverage reports the store's own counts."""
+        _create_knowledge(client, "Embedded on create")
+        test_store.store(category="fact", content="Stored without a vector")
+
         resp = client.get("/api/memory/embedding-coverage")
-        assert resp.status_code == 501
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "total_items": 2,
+            "with_embedding": 1,
+            "without_embedding": 1,
+            "coverage_pct": 50.0,
+        }
 
     def test_embedding_coverage_returns_200_when_implemented(self, client, test_store):
         """GET /api/memory/embedding-coverage returns 200 with mock method."""
@@ -1371,16 +1418,6 @@ class TestStatsV2Fields:
         assert "without_embedding" in emb
         assert "coverage_pct" in emb
 
-    def test_stats_includes_reconciliation_section(self, client):
-        """GET /api/memory/stats response includes 'reconciliation' section."""
-        resp = client.get("/api/memory/stats")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "reconciliation" in data
-        recon = data["reconciliation"]
-        assert "pairs_checked" in recon
-        assert "contradictions_found" in recon
-
     def test_stats_embedding_populated_when_store_supports(self, client, test_store):
         """When store supports get_embedding_coverage, stats are populated."""
         test_store.get_embedding_coverage = lambda: {
@@ -1394,30 +1431,23 @@ class TestStatsV2Fields:
         assert data["embedding"]["total_items"] == 50
         assert data["embedding"]["coverage_pct"] == 90.0
 
-    def test_stats_reconciliation_populated_when_store_supports(
-        self, client, test_store
-    ):
-        """When store supports get_reconciliation_stats, stats are populated."""
-        test_store.get_reconciliation_stats = lambda: {
-            "last_run": "2026-04-01T10:00:00-07:00",
-            "pairs_checked": 25,
-            "contradictions_found": 3,
-        }
-        resp = client.get("/api/memory/stats")
-        data = resp.json()
-        assert data["reconciliation"]["pairs_checked"] == 25
-        assert data["reconciliation"]["contradictions_found"] == 3
+    def test_stats_has_no_reconciliation_zeros(self, client):
+        """The store never computed reconciliation stats; the zeros were made up (#4824)."""
+        data = client.get("/api/memory/stats").json()
+        assert "reconciliation" not in data
 
-    def test_stats_defaults_when_store_lacks_v2_methods(self, client, test_store):
-        """Stats returns safe defaults when store lacks v2 methods."""
-        v2_methods = ("get_embedding_coverage", "get_reconciliation_stats")
-        if all(hasattr(test_store, m) for m in v2_methods):
-            pytest.skip("MemoryStore now implements v2 stats methods")
+    def test_a_failed_coverage_query_is_an_error_not_zero(self, client, test_store):
+        def broken():
+            raise sqlite3.OperationalError("database disk image is malformed")
+
+        test_store.get_embedding_coverage = broken
         resp = client.get("/api/memory/stats")
+
+        assert resp.status_code == 200
         data = resp.json()
-        # Should still have embedding/reconciliation with default values
-        assert data["embedding"]["total_items"] == 0
-        assert data["reconciliation"]["pairs_checked"] == 0
+        assert data["embedding"] is None
+        assert "could not be read" in data["embedding_error"]
+        assert "knowledge" in data
 
 
 # ===========================================================================
@@ -1665,6 +1695,121 @@ class TestMemorySettings:
         assert data["memory_enabled"] is False
         assert data["mcp_memory_enabled"] is True
 
+    def test_put_system_discovery_consent_keeps_db_unchanged_when_json_save_fails(
+        self, client
+    ):
+        """The dashboard must not claim consent changed when its source of truth failed."""
+        with patch(
+            "gaia.agents.base.memory._save_memory_settings",
+            side_effect=RuntimeError("disk full"),
+        ):
+            resp = client.put(
+                "/api/memory/settings", json={"system_discovery_consent": True}
+            )
+
+        assert resp.status_code == 500
+        assert "Could not save system discovery setting" in resp.json()["detail"]
+        assert (
+            client.get("/api/memory/settings").json()["system_discovery_consent"]
+            is False
+        )
+
+
+class TestMemorySettingsFile:
+    def test_save_refuses_to_overwrite_malformed_settings(self, tmp_path, monkeypatch):
+        """A parse failure must preserve unrelated settings instead of replacing the file."""
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        malformed = "{not valid json"
+        settings_path.write_text(malformed, encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        with pytest.raises(RuntimeError, match="Could not read memory settings"):
+            memory_module._save_memory_settings({"system_context_enabled": False})
+
+        assert settings_path.read_text(encoding="utf-8") == malformed
+
+    def test_save_refuses_to_overwrite_non_object_root(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        settings_path.write_text("[1, 2]", encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        with pytest.raises(RuntimeError, match="must be an object"):
+            memory_module._save_memory_settings({"system_context_enabled": True})
+
+        assert settings_path.read_text(encoding="utf-8") == "[1, 2]"
+        assert memory_module._load_memory_settings() == {}
+
+    def test_save_raises_when_the_file_cannot_be_written(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        blocker = tmp_path / "not_a_dir"
+        blocker.write_text("", encoding="utf-8")
+        monkeypatch.setattr(
+            memory_module, "_MEMORY_SETTINGS_PATH", blocker / "memory_settings.json"
+        )
+
+        with pytest.raises(RuntimeError, match="Could not"):
+            memory_module._save_memory_settings({"system_context_enabled": True})
+
+    def test_save_merges_and_keeps_unrelated_keys(self, tmp_path, monkeypatch):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "sub" / "memory_settings.json"
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        memory_module._save_memory_settings({"onboarding_completed_at": "t0"})
+        memory_module._save_memory_settings({"system_context_enabled": True})
+
+        assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+            "onboarding_completed_at": "t0",
+            "system_context_enabled": True,
+        }
+
+    def test_failed_consent_save_applies_no_other_key(self, client):
+        """A 500 must not leave half the request applied."""
+        with patch(
+            "gaia.agents.base.memory._save_memory_settings",
+            side_effect=RuntimeError("read-only"),
+        ):
+            resp = client.put(
+                "/api/memory/settings",
+                json={
+                    "memory_enabled": False,
+                    "mcp_memory_enabled": True,
+                    "system_discovery_consent": True,
+                },
+            )
+
+        assert resp.status_code == 500
+        data = client.get("/api/memory/settings").json()
+        assert data["memory_enabled"] is True
+        assert data["mcp_memory_enabled"] is False
+        assert data["system_discovery_consent"] is False
+
+    def test_consent_withdrawal_writes_file_then_db(
+        self, client, tmp_path, monkeypatch
+    ):
+        from gaia.agents.base import memory as memory_module
+
+        settings_path = tmp_path / "memory_settings.json"
+        settings_path.write_text('{"keep": 1}', encoding="utf-8")
+        monkeypatch.setattr(memory_module, "_MEMORY_SETTINGS_PATH", settings_path)
+
+        resp = client.put(
+            "/api/memory/settings", json={"system_discovery_consent": False}
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["system_discovery_consent"] is False
+        assert json.loads(settings_path.read_text(encoding="utf-8")) == {
+            "keep": 1,
+            "system_context_enabled": False,
+        }
+
 
 # ===========================================================================
 # Clear All Memory Endpoint
@@ -1686,6 +1831,21 @@ class TestClearAllMemory:
         assert "knowledge" in data
         assert "tool_history" in data
         assert "conversations" in data
+
+    def test_clear_all_says_why_a_scrub_failed(self, client, test_store, mocker):
+        """A blocked scrub reaches the UI with its remedy, not just an error type."""
+        from gaia.agents.base.memory_store import MemoryScrubError
+
+        mocker.patch.object(
+            test_store,
+            "clear_all",
+            side_effect=MemoryScrubError(
+                "was erased, but ... Close other GAIA windows"
+            ),
+        )
+        resp = client.delete("/api/memory/all")
+        assert resp.status_code == 500
+        assert "Close other GAIA windows" in resp.json()["detail"]
 
     def test_clear_all_wipes_knowledge(self, client, test_store):
         """After DELETE /api/memory/all, knowledge list is empty."""
@@ -1747,8 +1907,8 @@ class TestStreamDiscoveryPlatformReporting:
             return client.get("/api/memory/stream-discovery")
 
     def test_unsupported_source_is_reported_by_name(self, client, tmp_path):
-        """On darwin, windows_userassist streams an explicit unsupported log."""
-        resp = self._stream(client, tmp_path, "darwin")
+        """On linux, where nothing reads app usage, the source says so by name."""
+        resp = self._stream(client, tmp_path, "linux")
         body = resp.text
 
         assert resp.status_code == 200
@@ -1758,11 +1918,35 @@ class TestStreamDiscoveryPlatformReporting:
             if "windows_userassist" in line and "no scanner" in line
         ]
         assert skipped, (
-            "windows_userassist must be reported as unsupported on darwin, "
+            "windows_userassist must be reported as unsupported on linux, "
             f"not silently empty. Body was:\n{body}"
         )
         assert '"type": "log"' in skipped[0]
-        assert "darwin" in skipped[0]
+        assert "linux" in skipped[0]
+        assert '"type": "done"' in body
+
+    @pytest.mark.parametrize(
+        "platform,other_os_source,label",
+        [
+            ("win32", "macos_app_usage", "App usage frequency (macOS)"),
+            ("darwin", "windows_userassist", "App usage frequency (Windows)"),
+        ],
+    )
+    def test_another_os_scanner_is_not_mentioned_when_this_os_has_its_own(
+        self, client, tmp_path, platform, other_os_source, label
+    ):
+        """Windows reads app usage itself; a macOS line there is only noise."""
+        own = {
+            "win32": "scan_windows_userassist",
+            "darwin": "scan_macos_app_usage",
+        }[platform]
+        mock_own = patch(
+            f"gaia.agents.base.discovery.SystemDiscovery.{own}", return_value=[]
+        )
+        body = self._stream(client, tmp_path, platform, extra_patches=[mock_own]).text
+
+        assert other_os_source not in body
+        assert label not in body
         assert '"type": "done"' in body
 
     def test_supported_source_is_not_reported_as_unsupported(self, client, tmp_path):
@@ -1784,11 +1968,11 @@ class TestStreamDiscoveryPlatformReporting:
         assert "App usage frequency (macOS)" in body
         assert '"type": "done"' in body
 
-    def test_macos_app_usage_is_reported_as_unsupported_on_windows(
+    def test_macos_app_usage_is_reported_as_unsupported_on_linux(
         self, client, tmp_path
     ):
-        """The mirror case: the macOS-only source is named when off darwin."""
-        resp = self._stream(client, tmp_path, "win32")
+        """The mirror case: the macOS-only source is named where no twin runs."""
+        resp = self._stream(client, tmp_path, "linux")
         body = resp.text
 
         skipped = [
@@ -1796,8 +1980,8 @@ class TestStreamDiscoveryPlatformReporting:
             for line in body.splitlines()
             if "macos_app_usage" in line and "no scanner" in line
         ]
-        assert skipped, f"macos_app_usage must be named on win32. Body:\n{body}"
-        assert "win32" in skipped[0]
+        assert skipped, f"macos_app_usage must be named on linux. Body:\n{body}"
+        assert "linux" in skipped[0]
 
 
 class TestStreamInferencePlatformReporting:
@@ -1830,9 +2014,8 @@ class TestStreamInferencePlatformReporting:
     @pytest.mark.parametrize(
         "platform,source",
         [
-            ("darwin", "windows_userassist"),
             ("linux", "windows_userassist"),
-            ("win32", "macos_app_usage"),
+            ("linux", "macos_app_usage"),
         ],
     )
     def test_unsupported_source_is_reported_by_name(
@@ -1869,6 +2052,27 @@ class TestStreamInferencePlatformReporting:
         ]
         assert not skipped, f"macos_app_usage must run on darwin. Body:\n{body}"
 
+    @pytest.mark.parametrize(
+        "platform,own,other_os_source",
+        [
+            ("win32", "scan_windows_userassist", "macos_app_usage"),
+            ("darwin", "scan_macos_app_usage", "windows_userassist"),
+        ],
+    )
+    def test_another_os_scanner_is_not_mentioned_when_this_os_has_its_own(
+        self, client, tmp_path, platform, own, other_os_source
+    ):
+        """The Windows log must not print a macOS scanner line, nor the reverse."""
+        ran = []
+        mock_own = patch(
+            f"gaia.agents.base.discovery.SystemDiscovery.{own}",
+            side_effect=lambda: ran.append(own) or [],
+        )
+        body = self._stream(client, tmp_path, platform, extra_patches=[mock_own]).text
+
+        assert ran == [own]
+        assert other_os_source not in body
+
     def test_scanner_failure_is_reported_with_a_correlation_id(self, client, tmp_path):
         """A crashing scanner was swallowed whole by `except Exception: pass`."""
         boom = patch(
@@ -1897,12 +2101,22 @@ class TestCollectSignalGate:
         def _must_not_run():
             raise AssertionError("scanner ran on a platform with no branch")
 
-        with patch("sys.platform", "darwin"):
+        with patch("sys.platform", "linux"):
             result = _collect_signal("windows_userassist", _must_not_run)
 
         assert result == []
         out = capsys.readouterr().out
-        assert "windows_userassist" in out and "darwin" in out
+        assert "windows_userassist" in out and "linux" in out
+
+    def test_another_os_twin_is_skipped_without_a_line(self, capsys):
+        from gaia.cli import _collect_signal
+
+        def _must_not_run():
+            raise AssertionError("scanner ran on a platform with no branch")
+
+        with patch("sys.platform", "win32"):
+            assert _collect_signal("macos_app_usage", _must_not_run) == []
+        assert capsys.readouterr().out == ""
 
     def test_supported_source_runs(self):
         from gaia.cli import _collect_signal
@@ -2115,11 +2329,32 @@ class TestPrivilegedAdminWriters:
 class TestStreamInferenceModel:
     """Profile inference runs on the machine's default local chat model."""
 
-    def _stream(self, client, tmp_path, default_model, custom_model=None):
+    def _stream(
+        self,
+        client,
+        tmp_path,
+        default_model,
+        custom_model=None,
+        reply="[]",
+        downloaded=True,
+        picked=None,
+    ):
+        """``downloaded=None`` leaves the download check to the patched catalog.
+
+        *picked* is ``last_model``: the model chat runs after a pick.
+        """
         apps = [{"content": "Installed app: Blender"}]
         fake_llm = MagicMock()
-        fake_llm.chat.return_value = "[]"
+        fake_llm.chat.return_value = reply
         with contextlib.ExitStack() as stack:
+            if downloaded is not None:
+                stack.enter_context(
+                    patch.object(
+                        memory_router_mod,
+                        "_downloaded_on_this_pc",
+                        return_value=downloaded,
+                    )
+                )
             stack.enter_context(patch("sys.platform", "darwin"))
             stack.enter_context(patch("pathlib.Path.home", return_value=tmp_path))
             stack.enter_context(patch("gaia.agents.base.discovery._MACOS_APP_DIRS", ()))
@@ -2143,11 +2378,66 @@ class TestStreamInferenceModel:
                     ),
                 )
             )
+            stack.enter_context(
+                patch(
+                    "gaia.llm.lemonade_client.resolve_chat_model",
+                    return_value=picked or default_model,
+                )
+            )
             create = stack.enter_context(
                 patch("gaia.llm.create_client", return_value=fake_llm)
             )
             resp = client.get("/api/memory/stream-inference")
         return resp, create
+
+    def test_uses_the_local_model_chat_was_switched_to(self, client, tmp_path):
+        """The default would load a second chat model behind the one in use."""
+        resp, create = self._stream(
+            client,
+            tmp_path,
+            default_model="Gemma-4-E4B-it-GGUF",
+            picked="gemma4-it-e4b-FLM",
+        )
+
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="gemma4-it-e4b-FLM")
+
+    def test_a_hybrid_pick_runs_on_its_cheap_model(self, client, tmp_path):
+        with patch(
+            "gaia.llm.hybrid.start_model",
+            side_effect=lambda m, *a, **k: "gemma4-it-e4b-FLM" if m == "hybrid" else m,
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="Gemma-4-E4B-it-GGUF", picked="hybrid"
+            )
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="gemma4-it-e4b-FLM")
+
+    def test_a_broken_hybrid_setting_leaves_inference_on_the_default(
+        self, client, tmp_path
+    ):
+        from gaia.llm.hybrid import HybridConfigError
+
+        with patch(
+            "gaia.llm.hybrid.start_model",
+            side_effect=HybridConfigError("no cheap model"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="Gemma-4-E4B-it-GGUF", picked="hybrid"
+            )
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="Gemma-4-E4B-it-GGUF")
+
+    def test_a_cloud_pick_leaves_inference_on_the_local_default(self, client, tmp_path):
+        resp, create = self._stream(
+            client,
+            tmp_path,
+            default_model="Gemma-4-E4B-it-GGUF",
+            picked="fireworks.accounts/fireworks/models/kimi-k2",
+        )
+
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="Gemma-4-E4B-it-GGUF")
 
     def test_uses_the_default_chat_model_not_the_cloud_custom_model(
         self, client, tmp_path
@@ -2172,4 +2462,383 @@ class TestStreamInferenceModel:
         assert resp.status_code == 200
         create.assert_not_called()
         assert '"type": "error"' in resp.text
-        assert "gaia config set default_model" in resp.text
+        assert "choose a local chat model" in resp.text
+
+    def test_a_discovered_cloud_default_model_is_refused_not_called(
+        self, client, tmp_path
+    ):
+        # A gateway GAIA only learns about at runtime has no known prefix.
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models(
+            {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+        )
+        try:
+            resp, create = self._stream(
+                client, tmp_path, default_model="opencode.big-model"
+            )
+        finally:
+            lc.record_cloud_models({"data": []})
+
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "choose a local chat model" in resp.text
+
+    def test_a_discovered_cloud_default_is_refused_on_a_cold_catalog(
+        self, client, tmp_path
+    ):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+
+        def read(self, show_all=False, timeout=None):
+            lc.record_cloud_models(payload)
+            return payload
+
+        lc.record_cloud_models({"data": []})
+        try:
+            with patch.object(
+                lc.LemonadeClient, "list_models", autospec=True, side_effect=read
+            ):
+                resp, create = self._stream(
+                    client, tmp_path, default_model="opencode.big-model"
+                )
+        finally:
+            lc.record_cloud_models({"data": []})
+
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_an_unreadable_catalog_refuses_rather_than_guessing_local(
+        self, client, tmp_path
+    ):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models({"data": []})
+        with patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=lc.LemonadeClientError("connection refused"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="opencode.big-model"
+            )
+
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "couldn't check" in resp.text
+        assert "connection refused" not in resp.text
+
+    def test_a_router_default_model_is_refused_not_called(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {"data": [{"id": "smart-router", "recipe": "collection.router"}]}
+        lc.record_cloud_models({"data": []})
+        with patch.object(lc.LemonadeClient, "list_models", return_value=payload):
+            resp, create = self._stream(client, tmp_path, default_model="smart-router")
+
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_a_malformed_catalog_refuses_rather_than_guessing_local(
+        self, client, tmp_path
+    ):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models({"data": []})
+        with patch.object(lc.LemonadeClient, "list_models", return_value=[]):
+            resp, create = self._stream(client, tmp_path, default_model="smart-router")
+
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "couldn't check" in resp.text
+
+    @pytest.mark.parametrize("default_model", ["", "   "])
+    def test_an_empty_default_model_fails_closed(self, client, tmp_path, default_model):
+        resp, create = self._stream(client, tmp_path, default_model=default_model)
+
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_a_local_lemonade_default_still_runs(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=AssertionError("catalog read for a known local model"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME
+            )
+
+        create.assert_called_once_with(model=lc.DEFAULT_MODEL_NAME)
+        assert '"type": "error"' not in resp.text
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"id": "Gemma-4-E4B-it-GGUF", "downloaded": False},
+            None,
+        ],
+        ids=["listed-not-downloaded", "not-listed"],
+    )
+    def test_a_default_model_not_downloaded_is_refused_not_pulled(
+        self, client, tmp_path, entry
+    ):
+        # #7218: Lemonade pulls a missing model on first use, unasked (5.6 GB).
+        from gaia.llm import lemonade_client as lc
+
+        payload = {"object": "list", "data": [entry] if entry else []}
+        with patch.object(
+            lc.LemonadeClient, "list_models", return_value=payload
+        ) as listing:
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME, downloaded=None
+            )
+
+        listing.assert_called_once_with(show_all=True)
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "isn't downloaded on this PC" in resp.text
+        assert "Manage downloads and disk space" in resp.text
+        assert "Calling local LLM" not in resp.text
+
+    def test_a_downloaded_default_model_runs(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {
+            "object": "list",
+            "data": [{"id": lc.DEFAULT_MODEL_NAME, "downloaded": True}],
+        }
+        with patch.object(lc.LemonadeClient, "list_models", return_value=payload):
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME, downloaded=None
+            )
+
+        create.assert_called_once_with(model=lc.DEFAULT_MODEL_NAME)
+        assert '"type": "error"' not in resp.text
+
+    def test_a_registered_model_listed_under_its_stripped_id_runs(
+        self, client, tmp_path
+    ):
+        # Lemonade lists ``user.X`` as ``X``; a downloaded copy must not be refused.
+        from gaia.llm import lemonade_client as lc
+
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "Other-Model-GGUF", "downloaded": True},
+                {"id": "my-model-gguf", "downloaded": True},
+            ],
+        }
+        with (
+            patch("gaia.ui._chat_helpers._runs_on_this_pc", return_value=True),
+            patch.object(lc.LemonadeClient, "list_models", return_value=payload),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="user.My-Model-GGUF", downloaded=None
+            )
+
+        create.assert_called_once_with(model="user.My-Model-GGUF")
+        assert '"type": "error"' not in resp.text
+
+    def test_another_downloaded_model_does_not_count(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "Qwen3-VL-4B-Instruct-GGUF", "downloaded": True},
+                {"id": lc.DEFAULT_MODEL_NAME, "downloaded": False},
+            ],
+        }
+        with patch.object(lc.LemonadeClient, "list_models", return_value=payload):
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME, downloaded=None
+            )
+
+        create.assert_not_called()
+        assert "isn't downloaded on this PC" in resp.text
+
+    def test_a_cloud_default_never_reads_the_download_catalog(self, client, tmp_path):
+        with patch.object(
+            memory_router_mod, "_downloaded_on_this_pc", side_effect=AssertionError
+        ) as check:
+            resp, create = self._stream(
+                client,
+                tmp_path,
+                default_model="fireworks.accounts/fireworks/models/x",
+                downloaded=None,
+            )
+
+        check.assert_not_called()
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_an_unreadable_download_check_refuses(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=lc.LemonadeClientError("connection refused"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME, downloaded=None
+            )
+
+        create.assert_not_called()
+        assert "couldn't check" in resp.text
+        assert "connection refused" not in resp.text
+
+    def test_a_cut_off_reply_still_streams_its_complete_insights(
+        self, client, tmp_path
+    ):
+        # #3835: local models stop part-way through the array.
+        reply = (
+            '[{"content": "Uses Blender for 3D work", "confidence": 0.9, '
+            '"domain": "personal"}, {"content": "Renders anim'
+        )
+        resp, _create = self._stream(
+            client, tmp_path, default_model="Qwen3.6-35B-A3B-GGUF", reply=reply
+        )
+
+        assert resp.status_code == 200
+        assert '"type": "error"' not in resp.text
+        assert resp.text.count('"type": "insight"') == 1
+        assert "Uses Blender for 3D work" in resp.text
+        assert "incomplete or malformed" in resp.text
+        assert '"total": 1' in resp.text
+
+    def test_word_confidences_are_mapped_and_unusable_ones_skipped(
+        self, client, tmp_path
+    ):
+        # #6637: models sometimes answer "high" instead of a number.
+        reply = json.dumps(
+            [
+                {"content": "Uses Blender for 3D work", "confidence": "HIGH "},
+                {"content": "Likes jazz", "confidence": "very sure"},
+                {"content": "Edits video", "confidence": 0.5},
+            ]
+        )
+        resp, _create = self._stream(
+            client, tmp_path, default_model="Qwen3.6-35B-A3B-GGUF", reply=reply
+        )
+
+        assert resp.status_code == 200
+        assert resp.text.count('"type": "insight"') == 2
+        assert '"confidence": 0.9' in resp.text
+        assert "Skipped insight 'Likes jazz'" in resp.text
+        assert '"total": 2' in resp.text
+
+
+# ===========================================================================
+# Failures the dashboard used to show as success (#4824)
+# ===========================================================================
+
+
+class TestFailuresAreReported:
+    def test_reinitialize_reports_a_failed_discovery(self, client, test_store):
+        _create_knowledge(client, "Wiped by reinitialize")
+        with patch.object(
+            memory_router_mod,
+            "_do_system_context_refresh",
+            side_effect=RuntimeError("WMI query timed out"),
+        ):
+            resp = client.post("/api/memory/reinitialize")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cleared"]["knowledge"] == 1
+        assert body["system_context"]["stored"] == 0
+        assert "system discovery failed" in body["system_context"]["error"]
+
+    def test_a_failed_inference_save_keeps_the_old_profile(self, client, test_store):
+        test_store.replace_by_source(
+            "inferred",
+            [{"category": "profile", "content": "Prefers concise answers"}],
+            allow_privileged=True,
+        )
+        real_insert = test_store._insert_bulk_locked
+
+        def insert_then_fail(rows):
+            real_insert(rows[:1])
+            raise sqlite3.OperationalError("disk I/O error")
+
+        test_store._insert_bulk_locked = insert_then_fail
+        resp = client.post(
+            "/api/memory/commit-inference",
+            json={
+                "insights": [
+                    {"content": "Works in finance", "confidence": 0.7},
+                    {"content": "Lives in Calgary", "confidence": 0.7},
+                ]
+            },
+        )
+
+        assert resp.status_code == 500
+        assert "previous one was kept" in resp.json()["detail"]
+        rows = [
+            r[0]
+            for r in test_store._conn.execute(
+                "SELECT content FROM knowledge WHERE source = 'inferred'"
+            )
+        ]
+        assert rows == ["Prefers concise answers"]
+
+    def test_a_good_inference_save_replaces_the_old_profile(self, client, test_store):
+        test_store.replace_by_source(
+            "inferred",
+            [{"category": "profile", "content": "Prefers concise answers"}],
+            allow_privileged=True,
+        )
+
+        resp = client.post(
+            "/api/memory/commit-inference",
+            json={"insights": [{"content": "Works in finance", "confidence": 0.7}]},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json() == {"stored": 1}
+        rows = [
+            r[0]
+            for r in test_store._conn.execute(
+                "SELECT content FROM knowledge WHERE source = 'inferred'"
+            )
+        ]
+        assert rows == ["Works in finance"]
+
+
+class TestDeleteForgetsOnlyFactsAboutTheUser:
+    def test_deleting_a_tool_lesson_forgets_nothing(self, client, test_store):
+        kid = test_store.store(
+            category="note",
+            content="read_file needs an absolute path",
+            source="tool_lesson",
+        )
+
+        assert client.delete(f"/api/memory/knowledge/{kid}").status_code == 200
+
+        assert test_store.get_item(kid) is None
+        assert test_store.get_forgotten() == []
+
+    def test_deleting_a_session_summary_forgets_nothing(self, client, test_store):
+        kid = test_store.store(
+            category="note",
+            content="The user prefers window seats and asked about flights",
+            source="consolidation",
+            domain="session:abcd1234",
+        )
+
+        assert client.delete(f"/api/memory/knowledge/{kid}").status_code == 200
+
+        assert not test_store.is_forgotten("User prefers window seats")
+
+    def test_about_user_filter(self, client, test_store):
+        test_store.store(category="fact", content="User lives in Calgary")
+        test_store.store(category="note", content="a lesson", source="tool_lesson")
+
+        data = client.get("/api/memory/knowledge?about_user=true").json()
+
+        assert [i["content"] for i in data["items"]] == ["User lives in Calgary"]

@@ -34,3 +34,7 @@ preview_bucket_name = "gaia-hub-preview"
 # Reject artifacts larger than this many bytes (default 250 MiB). Override per
 # environment. The PUBLISH_TOKENS secret is set separately via `wrangler secret`.
 MAX_ARTIFACT_BYTES = "262144000"
+# Ceiling for an artifact CI uploads straight to R2 and publishes by reference
+# (default 5 GiB, R2's single-part upload limit). Separate from the cap above,
+# which only applies to bytes sent through the Worker.
+MAX_REFERENCED_ARTIFACT_BYTES = "5368709120"

@@ -25,7 +25,6 @@ class _FakeProvider:
 
 
 def _patch_common(monkeypatch, *, granted=True, connection_scopes=None):
-    monkeypatch.setattr(api, "get_provider", lambda provider: _FakeProvider())
     monkeypatch.setattr(
         api, "check_agent_grant", lambda provider, agent, scopes: granted
     )
@@ -33,7 +32,9 @@ def _patch_common(monkeypatch, *, granted=True, connection_scopes=None):
         stored = None
     else:
         stored = {"scopes": list(connection_scopes), "account_email": "u@example.com"}
-    monkeypatch.setattr(api, "load_connection", lambda *a, **k: stored)
+    monkeypatch.setattr(
+        api, "load_current_connection", lambda *a, **k: (_FakeProvider(), stored)
+    )
 
 
 def test_returns_token_and_expiry_when_granted_and_covered(monkeypatch):

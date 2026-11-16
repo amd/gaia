@@ -534,3 +534,426 @@ def test_process_query_trace_and_summary_carry_the_breakdown(_clean_registry):
     )
     # The turn is over, so the SDK no longer reports into it.
     assert agent.chat.llm_call_sink is None
+
+
+def test_a_step_whose_tool_fails_still_records_its_stats(_clean_registry):
+    """The error-recovery path used to skip the step's record, losing its tool and tokens."""
+
+    @tool
+    def flaky_lookup() -> dict:
+        """Look something up, and fail."""
+        time.sleep(TOOL_DELAY)
+        return {"status": "error", "error": "Access denied"}
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    replies = [
+        json.dumps({"thought": "look", "tool": "flaky_lookup", "tool_args": {}}),
+        json.dumps({"thought": "done", "answer": "I couldn't look it up."}),
+    ]
+    provider = FakeProvider(
+        replies,
+        delay=LLM_DELAY,
+        usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        finish="stop",
+    )
+    agent.chat = _sdk(provider)
+
+    result = agent.process_query("What is the value?", max_steps=5)
+
+    records = [
+        m["content"]
+        for m in result["conversation"]
+        if m.get("role") == "system"
+        and isinstance(m.get("content"), dict)
+        and m["content"].get("type") == "stats"
+    ]
+    assert [r["step"] for r in records] == [1, 2]
+    assert records[0]["tools"][0]["name"] == "flaky_lookup"
+    assert result["timing_summary"]["tool_seconds"] == pytest.approx(
+        sum(t["seconds"] for r in records for t in r["tools"]), abs=1e-3
+    )
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 40
+
+
+def _native_tool_calls(*names):
+    """The envelope LemonadeProvider emits for native ``tool_calls``."""
+    return json.dumps(
+        {
+            "__tool_calls__": [
+                {
+                    "id": f"call_{i}",
+                    "type": "function",
+                    "function": {"name": name, "arguments": "{}"},
+                }
+                for i, name in enumerate(names)
+            ],
+            "finish_reason": "tool_calls",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "calls",
+    [("flaky_lookup",), ("good_lookup", "flaky_lookup"), ("flaky_lookup",) * 2],
+    ids=["one-failing", "one-of-two-failing", "all-failing"],
+)
+def test_a_step_whose_native_tool_call_fails_still_records_its_stats(
+    _clean_registry, calls
+):
+    """Native ``tool_calls`` (Gemma, Qwen, cloud) take a separate error path."""
+
+    @tool
+    def flaky_lookup() -> dict:
+        """Look something up, and fail."""
+        time.sleep(TOOL_DELAY)
+        return {"status": "error", "error": "Access denied"}
+
+    @tool
+    def good_lookup() -> dict:
+        """Look something up."""
+        time.sleep(TOOL_DELAY)
+        return {"status": "success", "value": 42}
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    replies = [
+        _native_tool_calls(*calls),
+        json.dumps({"thought": "done", "answer": "I couldn't look it up."}),
+    ]
+    provider = FakeProvider(
+        replies,
+        delay=LLM_DELAY,
+        usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        finish="stop",
+    )
+    agent.chat = _sdk(provider)
+
+    result = agent.process_query("What is the value?", max_steps=5)
+
+    records = [
+        m["content"]
+        for m in result["conversation"]
+        if m.get("role") == "system"
+        and isinstance(m.get("content"), dict)
+        and m["content"].get("type") == "stats"
+    ]
+    assert [r["step"] for r in records] == [1, 2]
+    assert [t["name"] for t in records[0]["tools"]] == list(calls)
+    assert result["timing_summary"]["tool_seconds"] == pytest.approx(
+        sum(t["seconds"] for r in records for t in r["tools"]), abs=1e-3
+    )
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 40
+
+
+def _stats_records(result):
+    return [
+        m["content"]
+        for m in result["conversation"]
+        if m.get("role") == "system"
+        and isinstance(m.get("content"), dict)
+        and m["content"].get("type") == "stats"
+    ]
+
+
+class _FinishPerCall(FakeProvider):
+    """Reports each reply's own finish reason, in order."""
+
+    def __init__(self, replies, finishes, **kwargs):
+        super().__init__(replies, **kwargs)
+        self.finishes = list(finishes)
+
+    def chat(self, messages, model=None, stream=False, **kwargs):
+        self.finish = self.finishes.pop(0)
+        return super().chat(messages, model=model, stream=stream, **kwargs)
+
+
+def test_a_step_cut_off_and_continued_keeps_its_tokens(_clean_registry):
+    """Any early exit after a model call records the step, not just tool failures."""
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    provider = _FinishPerCall(
+        ["The value is", json.dumps({"thought": "done", "answer": "Done."})],
+        ["length", "stop"],
+        delay=LLM_DELAY,
+        usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    )
+    agent.chat = _sdk(provider)
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    records = _stats_records(result)
+    assert result["timing_summary"]["llm_calls"] == len(records) == 2
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 40
+    assert sum(r["llm_seconds"] for r in records) == pytest.approx(
+        result["timing_summary"]["llm_seconds"], abs=1e-3
+    )
+
+
+def test_last_call_finished_tells_a_reply_from_a_failure():
+    clock = FakeClock()
+    timer = StepTimer(clock=clock)
+    timer.begin_step(1)
+    assert not timer.last_call_finished()
+    timer.record_llm_call(_call(1.0, finish=None, completion=None))
+    assert not timer.last_call_finished()
+    timer.record_llm_call(_call(1.0, finish="stop", completion=5))
+    assert timer.last_call_finished()
+
+
+class _UsagePerCall(_FinishPerCall):
+    """Reports each reply's own finish reason and usage, in order."""
+
+    def __init__(self, replies, finishes, usages, **kwargs):
+        super().__init__(replies, finishes, **kwargs)
+        self.usages = list(usages)
+
+    def chat(self, messages, model=None, stream=False, **kwargs):
+        self.usage = self.usages.pop(0)
+        return super().chat(messages, model=model, stream=stream, **kwargs)
+
+
+_USAGE = {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}
+
+
+def _cut_off_agent(provider, streaming=False):
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = streaming
+    agent.chat = _sdk(provider)
+    agent.console.print_final_answer = Mock()
+    return agent
+
+
+def _footer_output_tokens(agent):
+    return agent.console.print_final_answer.call_args.kwargs["total_tokens"]
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["non-streaming", "streaming"])
+def test_cut_offs_in_a_row_are_each_recorded_once(_clean_registry, streaming):
+    provider = _FinishPerCall(
+        ["The value", "is still", json.dumps({"thought": "d", "answer": "Done."})],
+        ["length", "length", "stop"],
+        delay=LLM_DELAY,
+        usage=_USAGE,
+    )
+    agent = _cut_off_agent(provider, streaming)
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1, 2, 3]
+    assert result["timing_summary"]["llm_calls"] == 3
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 60
+
+
+def test_a_step_that_records_itself_is_not_recorded_again(_clean_registry):
+    """The boundary check must not add a second record for an ordinary step."""
+    provider = _FinishPerCall(
+        [json.dumps({"thought": "d", "answer": "Done."})],
+        ["stop"],
+        usage=_USAGE,
+    )
+    agent = _cut_off_agent(provider)
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    assert [r["step"] for r in _stats_records(result)] == [1]
+
+
+_REJECTED_PLAN = json.dumps({"thought": "plan", "plan": "not a list"})
+
+
+def test_an_early_exit_on_the_last_step_counts_in_the_step_cap_footer(
+    _clean_registry,
+):
+    """Out of steps right after a rejected plan: the closing answer's footer
+    and the trace both carry the rejected step's tokens."""
+    provider = _FinishPerCall(
+        [_REJECTED_PLAN, json.dumps({"thought": "d", "answer": "Partial."})],
+        ["stop", "stop"],
+        usage=_USAGE,
+    )
+    agent = _cut_off_agent(provider)
+
+    result = agent.process_query("Go.", max_steps=1)
+
+    assert result["max_steps_reached"]
+    records = _stats_records(result)
+    assert sum(r["performance_stats"]["completion_tokens"] for r in records) == 40
+    assert _footer_output_tokens(agent) == 40
+
+
+def test_a_statless_early_exit_does_not_borrow_the_closing_calls_stats(
+    _clean_registry,
+):
+    """A rejected step with no stats of its own must not be filled with the
+    step-cap call's numbers, which already have their own record."""
+    provider = _UsagePerCall(
+        [_REJECTED_PLAN, json.dumps({"thought": "d", "answer": "Partial."})],
+        ["stop", "stop"],
+        [None, _USAGE],
+    )
+    agent = _cut_off_agent(provider)
+
+    result = agent.process_query("Go.", max_steps=1)
+
+    assert result["max_steps_reached"]
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1, 2]
+    assert (
+        sum(r["performance_stats"].get("completion_tokens", 0) for r in records) == 20
+    )
+    assert _footer_output_tokens(agent) == 20
+    assert result["timing_summary"]["llm_calls"] == 2
+
+
+def test_a_failed_call_keeps_its_time_and_borrows_no_tokens(_clean_registry):
+    """The server still reports the previous turn's request; a step whose own
+    call raised must not claim those tokens."""
+    provider = _FinishPerCall(
+        [json.dumps({"thought": "d", "answer": "A."}), RuntimeError("boom")],
+        ["stop", "stop"],
+        delay=LLM_DELAY,
+        usage=_USAGE,
+    )
+    agent = _cut_off_agent(provider)
+    agent.process_query("Go.", max_steps=3)
+
+    result = agent.process_query("Again.", max_steps=3)
+
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1]
+    assert records[0]["performance_stats"].get("completion_tokens") is None
+    assert result["timing_summary"]["llm_calls"] == 1
+
+
+def _closing_turn_agent(replies, usages, streaming, **agent_kwargs):
+    provider = _UsagePerCall(
+        replies, ["tool_calls"] * (len(replies) - 1) + ["stop"], usages
+    )
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _TimedAgent(silent_mode=True, skip_lemonade=True, **agent_kwargs)
+    agent.streaming = streaming
+    agent.chat = _sdk(provider)
+    agent.console.print_final_answer = Mock()
+    return agent
+
+
+_CLOSING = json.dumps({"thought": "d", "answer": "Here is what I did."})
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["non-streaming", "streaming"])
+@pytest.mark.parametrize("answered", [True, False], ids=["after-answer", "no-answer"])
+def test_a_statless_step_ended_by_the_turn_scope_does_not_borrow_the_closing_stats(
+    _clean_registry, streaming, answered
+):
+    """A tool that ends the turn: the closing call's 20 tokens are counted once."""
+
+    @tool
+    def wander() -> dict:
+        """Do something the request did not ask for."""
+        scope = agent._turn_scope
+        scope.answered = answered
+        scope.turn_should_end = True
+        scope.end_reason = "drift"
+        return {"status": "success"}
+
+    agent = _closing_turn_agent(
+        [_native_tool_calls("wander"), _CLOSING], [None, _USAGE], streaming
+    )
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1, 2]
+    assert records[0]["performance_stats"] == {}
+    assert _footer_output_tokens(agent) == 20
+    assert result["timing_summary"]["llm_calls"] == 2
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["non-streaming", "streaming"])
+def test_a_statless_step_stopped_by_the_loop_guard_does_not_borrow_the_closing_stats(
+    _clean_registry, streaming
+):
+    """Repeated identical calls end the turn: the closing call is counted once."""
+
+    @tool
+    def poke() -> dict:
+        """Poke the thing."""
+        return {"status": "success", "value": 1}
+
+    repeat = _native_tool_calls("poke")
+    agent = _closing_turn_agent(
+        [repeat] * 4 + [_CLOSING],
+        [None] * 4 + [_USAGE],
+        streaming,
+        max_consecutive_repeats=2,
+    )
+
+    result = agent.process_query("Go.", max_steps=10)
+
+    records = _stats_records(result)
+    assert agent.console.print_final_answer.called, result.get("result")
+    assert len({r["step"] for r in records}) == len(records)
+    assert (
+        sum(r["performance_stats"].get("completion_tokens", 0) for r in records) == 20
+    )
+    assert _footer_output_tokens(agent) == 20
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["non-streaming", "streaming"])
+def test_a_step_that_saved_its_stats_is_not_recorded_again_by_the_closing_call(
+    _clean_registry, streaming
+):
+    """With stats of its own, the ending step is recorded once and keeps them."""
+
+    @tool
+    def wander() -> dict:
+        """Do something the request did not ask for."""
+        scope = agent._turn_scope
+        scope.answered = True
+        scope.turn_should_end = True
+        scope.end_reason = "drift"
+        return {"status": "success"}
+
+    agent = _closing_turn_agent(
+        [_native_tool_calls("wander"), _CLOSING], [_USAGE, _USAGE], streaming
+    )
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1, 2]
+    assert [r["performance_stats"]["completion_tokens"] for r in records] == [20, 20]
+    assert _footer_output_tokens(agent) == 40
+
+
+def test_a_failing_closing_call_still_leaves_the_step_recorded_once(_clean_registry):
+    """The closing call raises: the ending step keeps one record, no borrowed tokens."""
+
+    @tool
+    def wander() -> dict:
+        """Do something the request did not ask for."""
+        scope = agent._turn_scope
+        scope.answered = True
+        scope.turn_should_end = True
+        scope.end_reason = "drift"
+        return {"status": "success"}
+
+    agent = _closing_turn_agent(
+        [_native_tool_calls("wander"), RuntimeError("closing call failed")],
+        [None, _USAGE],
+        False,
+    )
+
+    result = agent.process_query("Go.", max_steps=5)
+
+    records = _stats_records(result)
+    assert [r["step"] for r in records] == [1]
+    assert records[0]["performance_stats"] == {}
+    assert records[0]["llm_calls"] == 2
+    assert "couldn't be written" in result["result"]

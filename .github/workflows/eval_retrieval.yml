@@ -1,7 +1,7 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# The full RAG retrieval benchmark: FinanceBench, public AMD documents, XQuAD
+# The full RAG retrieval benchmark: public AMD documents, an arXiv paper, XQuAD
 # and Wikipedia distractors, with answer generation and the 10/100/1000-document
 # scale tiers. Too slow for pull requests; the offline `pr` subset gates those
 # from test_rag.yml. This run reports rather than gates: it fails only when the
@@ -9,11 +9,15 @@
 # run to the committed full-suite baseline with `--gate`, and replace that
 # baseline only with a results.json artifact from this workflow.
 
-name: Eval — RAG retrieval (nightly)
+name: Eval — RAG retrieval (release)
 
 on:
-  schedule:
-    - cron: '43 6 * * *'
+  # Release and RC tags plus dispatch only: evals do not run per-PR or nightly
+  # (the self-hosted pool is too scarce). `v*.*.*` also matches -rc tags.
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-rc*'
   workflow_dispatch:
     inputs:
       suite:
@@ -21,7 +25,7 @@ on:
         required: false
         default: 'full'
       extra_args:
-        description: 'Extra flags for gaia eval retrieval, e.g. --no-scale or --datasets financebench'
+        description: 'Extra flags for gaia eval retrieval, e.g. --no-scale or --datasets technical_docs'
         required: false
         default: ''
 
@@ -33,8 +37,26 @@ permissions:
   contents: read
 
 jobs:
+  # An RC tag annotated with `[skip eval]` skips the benchmark; a final release,
+  # a lightweight tag and a dispatch always run (util/eval_tag_gate.py).
+  eval-gate:
+    name: Eval gate (release tag)
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Read the tag annotation
+        id: gate
+        run: python util/eval_tag_gate.py
+
   retrieval-benchmark:
     name: RAG retrieval benchmark
+    needs: eval-gate
+    if: >-
+      !cancelled() && needs.eval-gate.result == 'success' &&
+      needs.eval-gate.outputs.run == 'true'
     runs-on:
       - self-hosted
       - Windows
@@ -52,7 +74,7 @@ jobs:
       uses: ./.github/actions/setup-venv
       with:
         python-version: '3.12'
-        install-package: '.[dev,rag,eval] ./hub/agents/chat/python'
+        install-package: '.[dev,rag,eval] ./hub/agents/gaia/python'
 
     - name: Install Lemonade Server
       uses: ./.github/actions/install-lemonade
@@ -63,6 +85,13 @@ jobs:
       shell: powershell
       run: |
         "GAIA_RETRIEVAL_CACHE=${{ runner.tool_cache }}\gaia-retrieval-corpus" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+    # A re-pinned upstream file leaves its old copy in the cache, which fetch refuses.
+    - name: Drop cached files the manifest no longer pins
+      shell: powershell
+      run: |
+        python -c "import sys; from gaia.eval.retrieval import sources as s; s.set_repo_root(sys.argv[1]); [print(f'Dropped stale cached file: {p}') for p in s.drop_stale()]" $env:GITHUB_WORKSPACE
+        if ($LASTEXITCODE -ne 0) { throw "Stale-cache cleanup failed with exit code $LASTEXITCODE" }
 
     - name: Download the corpora
       shell: powershell
@@ -79,7 +108,7 @@ jobs:
         chcp 65001 | Out-Null
 
         try {
-            .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+            .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -Port 13305 -NoModel
             if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
 
             # The answer model (the RAG default), the VLM that reads PDF images,

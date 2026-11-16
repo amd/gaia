@@ -54,9 +54,16 @@ class Query:
         return f"https://github.com/{self.repo}.git"
 
 
-def verified(ids: Sequence[str], work_root: Path) -> List[Query]:
-    """SWE-bench Verified instances as queries, from the bench's instance cache."""
-    rows = swebench.load_instances(list(ids), swebench.cache_dir(work_root))
+def verified(
+    ids: Sequence[str], work_root: Path, fetch: Optional[swebench.Fetcher] = None
+) -> List[Query]:
+    """SWE-bench Verified instances as queries.
+
+    The bench's instance cache never holds the gold patch, so it is fetched
+    separately and kept in memory only.
+    """
+    rows = swebench.load_instances(list(ids), swebench.cache_dir(work_root), fetch)
+    patches = swebench.gold_patches(list(ids), fetch)
     return [
         Query(
             id=r["instance_id"],
@@ -64,7 +71,7 @@ def verified(ids: Sequence[str], work_root: Path) -> List[Query]:
             repo=r["repo"],
             base_commit=r["base_commit"],
             text=r["problem_statement"],
-            patch=r["patch"],
+            patch=patches[r["instance_id"]],
         )
         for r in rows
     ]

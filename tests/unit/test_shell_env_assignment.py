@@ -221,6 +221,7 @@ def test_a_quoted_value_keeps_its_spaces():
         "NODE_OPTIONS",
         "PYTEST_ADDOPTS",
         "LESSOPEN",
+        "MORE",
         "GIT_CONFIG_COUNT",
         "GH_PAGER",
         "PYTHONSTARTUP",
@@ -246,7 +247,8 @@ def test_the_allowlist_still_decides_what_runs(tmp_path):
     result = _run("PYTHONPATH=. rm -rf x", tmp_path)
 
     assert result["status"] == "error", result
-    assert "'rm'" in result["error"], result
+    # No console to ask on, so the confirmable `rm` fails closed, naming it.
+    assert "`PYTHONPATH=. rm -rf x` needs your approval" in result["error"], result
     assert result["executed"] is False
 
 
@@ -289,7 +291,7 @@ def test_a_value_outside_the_allowed_paths_is_refused(tmp_path):
 
     class _Validator:
         @staticmethod
-        def is_path_allowed(path):
+        def is_path_allowed(path, prompt_user=True):
             return str(path).startswith(str(tmp_path))
 
     from gaia.agents.base.tools import get_tool_metadata

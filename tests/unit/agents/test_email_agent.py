@@ -341,18 +341,27 @@ class TestAC3LocalLLMOnly:
 
 
 class TestRegistryIntegration:
-    def test_connectors_demo_required_connections_are_proper_objects(self):
-        """#962 follow-up: the connectors_demo entry must use
+    def test_registered_required_connections_are_proper_objects(self):
+        """#962 follow-up: every hub agent declares its connectors as
         ``ConnectorRequirement`` objects, not bare strings.
         """
         from gaia.agents.registry import AgentRegistry
         from gaia.connectors.providers.base import ConnectorRequirement
 
+        hub_ids = {
+            p.name
+            for p in (Path(__file__).resolve().parents[3] / "hub" / "agents").iterdir()
+            if p.is_dir()
+        }
         reg = AgentRegistry()
-        demo = reg.get("connectors-demo")
-        if demo is None:
-            pytest.skip("connectors-demo not loaded")
-        for r in demo.required_connections:
-            assert isinstance(
-                r, ConnectorRequirement
-            ), f"connectors_demo declared bare-string requirement: {r!r}"
+        reg.discover()
+        declaring = [
+            a for a in reg.list() if a.id in hub_ids and a.required_connections
+        ]
+        if not declaring:
+            pytest.skip("no discovered agent declares a connector")
+        for agent in declaring:
+            for r in agent.required_connections:
+                assert isinstance(
+                    r, ConnectorRequirement
+                ), f"{agent.id} declared bare-string requirement: {r!r}"

@@ -204,10 +204,10 @@ def _structured_from_result(result) -> Dict[str, Any]:
     """Extract the tool's returned dict from a CallToolResult.
 
     FastMCP serializes a ``dict`` return both as a JSON text block in
-    ``content`` and (wrapped under ``result``) in ``structuredContent``. The
+    ``content`` and (wrapped under ``result``) in ``structured_content``. The
     text block is the clean, unwrapped JSON — parse that.
     """
-    assert not result.isError, f"tool call errored: {result.content}"
+    assert not result.is_error, f"tool call errored: {result.content}"
     assert result.content, "tool call returned no content"
     text = result.content[0].text
     return json.loads(text)
@@ -267,6 +267,7 @@ class TestEmailMcpStdioParity:
             "send_email",
         } <= set(names)
 
+    @pytest.mark.usefixtures("require_lemonade")
     def test_single_email_parity(self):
         """Single-email triage: MCP stdio output == REST service output."""
         rest = _rest_triage(SINGLE_REQUEST)
@@ -285,6 +286,7 @@ class TestEmailMcpStdioParity:
         assert parsed.result.usage is not None
         assert parse_response(rest).result.usage is not None
 
+    @pytest.mark.usefixtures("require_lemonade")
     def test_thread_parity(self):
         """Thread triage: MCP stdio output == REST service output."""
         rest = _rest_triage(THREAD_REQUEST)
@@ -295,6 +297,7 @@ class TestEmailMcpStdioParity:
         parsed = parse_response(mcp_out)
         assert parsed.request_kind == "thread"
 
+    @pytest.mark.usefixtures("require_lemonade")
     def test_batch_parity(self):
         """Batch triage (#1887): MCP stdio output == REST service output.
 
@@ -326,6 +329,7 @@ class TestEmailMcpStdioParity:
         assert mcp_out["results"][0]["result"]["usage"] is not None
         assert rest["results"][0]["result"]["usage"] is not None
 
+    @pytest.mark.usefixtures("require_lemonade")
     def test_suggested_action_present_on_both_surfaces(self):
         """Schema 2.0: suggested_action must be present in both REST and MCP stdio (#1615)."""
         rest = _rest_triage(SINGLE_REQUEST)

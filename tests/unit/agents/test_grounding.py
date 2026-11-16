@@ -26,7 +26,9 @@ from gaia.agents.base.claims import (
     admits_unverified,
     claims_success,
     passing_test_claim,
+    read_claims,
 )
+from gaia.agents.base.completion import mentioned_paths
 from gaia.agents.base.grounding import (
     ACTION,
     CONTENT,
@@ -170,10 +172,26 @@ def _locate(path):
         ("You are working in C:\\work\\toybox. Tidy it up.", []),
         ("Build a Node.js app that prints hello.", []),
         ("What does os.path.join() do? And print()?", []),
+        ("ما الذي يفعله toybox/dates.py؟", ["toybox/dates.py"]),
+        ("请检查 toybox/dates.py。", ["toybox/dates.py"]),
+        ("هل toybox/dates.py، يعمل؟", ["toybox/dates.py"]),
+        ("toybox/dates.py？", ["toybox/dates.py"]),
     ],
 )
 def test_named_targets_are_files_and_project_symbols(query, expected):
     assert named_targets(query) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        *(f"toybox/dates.py{mark}" for mark in ["؟", "。", "،", "；", "？", "！"]),
+        "请看 《toybox/dates.py》",
+        "请看 【toybox/dates.py】",
+    ],
+)
+def test_mentioned_paths_strip_unicode_sentence_punctuation(text):
+    assert mentioned_paths(text) == ["toybox/dates.py"]
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +250,38 @@ def test_a_file_an_earlier_turn_discussed_is_not_demanded_again():
     )
 
     assert findings == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # Out of scope: the validator looked on disk instead of asking (#8030).
+        "Not found: 'toybox/dates.py' does not exist, so access was not requested. "
+        "Check the name and folder, or ask the user where the file is.",
+        None,  # in scope: read_file's own missing-file error
+    ],
+    ids=["out-of-scope", "in-scope"],
+)
+def test_a_read_that_found_the_file_missing_backs_not_found(error, tmp_path):
+    """The read that came back "not found" is the look the claim needs."""
+    from gaia.agents.tools.path_access import missing_file_error, read_refusal
+
+    result = read_refusal(error) if error else missing_file_error("toybox/dates.py")
+    records = [_rec("read_file", {"file_path": "toybox/dates.py"}, result, True)]
+
+    assert records[0]["ran"] is False
+    assert (
+        look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, records, lambda p: None) == []
+    )
+
+
+def test_a_refused_read_of_a_file_that_exists_backs_nothing():
+    result = {"executed": False, "status": "error", "error": "Access denied: x"}
+    records = [_rec("read_file", {"file_path": "toybox/dates.py"}, result, True)]
+
+    findings = look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, records, lambda p: None)
+
+    assert "no search, listing or read ran" in " ".join(f.correction for f in findings)
 
 
 def test_not_found_without_any_lookup_is_caught_even_for_a_missing_file():
@@ -338,7 +388,8 @@ def test_rows_read_back_after_the_correction_are_grounded():
     assert content_findings(PRINTED_ROWS, records, REPORT_QUERY) == []
 
 
-def test_rows_the_model_itself_wrote_to_the_file_are_grounded():
+def test_rows_the_model_only_wrote_are_not_grounded_by_its_own_write():
+    # A tool's arguments are what the model sent, not what any tool showed.
     write = _rec(
         "write_file",
         {"file_path": "weekly_build_times.csv", "content": WEEKLY},
@@ -347,7 +398,11 @@ def test_rows_the_model_itself_wrote_to_the_file_are_grounded():
 
     records = [_read("build_times.csv", BUILD_TIMES), write]
 
-    assert content_findings(PRINTED_ROWS, records, REPORT_QUERY) == []
+    findings = content_findings(PRINTED_ROWS, records, REPORT_QUERY)
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "201.0" in findings[0].correction
+    read_back = records + [_read("weekly_build_times.csv", WEEKLY)]
+    assert content_findings(PRINTED_ROWS, read_back, REPORT_QUERY) == []
 
 
 def test_a_value_one_step_from_two_shown_values_is_grounded():
@@ -451,10 +506,50 @@ def test_versions_code_and_ordinals_are_not_data(answer):
         ("I reviewed the code in `dates.py`.", ["read"]),
         ("We ran into a problem with this approach before.", []),
         ("We have run out of options here.", []),
+        ("I ran two targeted searches of `employee_handbook.md`.", ["searched"]),
+        ("I ran a query against the indexed handbook.", ["searched"]),
+        ("We ran the script and it printed 4.", ["ran"]),
     ],
 )
 def test_action_claim_vocabulary(answer, kinds):
     assert [kind for kind, _ in action_claims(answer)] == kinds
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # rc18 round 3: the drive colon ended the clause at "I read C".
+        "C:/gtest/h18-m1/Documents/t/orders.csv",
+        "C:\\gtest\\h18-m1\\Documents\\t\\orders.csv",
+        "`C:\\gtest\\h18-m1\\Documents\\t\\orders.csv`",
+        "docs\\orders.csv",
+        "~/Documents/orders.csv",
+        "data/orders.csv",
+    ],
+)
+def test_a_read_claim_names_its_file_however_the_path_is_written(path):
+    answer = f"I read {path} and it has 4 data rows."
+    assert [kind for kind, _ in action_claims(answer)] == ["read"]
+    assert any("orders.csv" in clause for clause in read_claims(answer))
+    query = f"Use no tools. How many data rows does {path.strip('`')} have?"
+    findings = look_findings(answer, query, [], lambda p: None)
+    assert [f.note for f in findings] == [
+        f"I didn't read `{path.strip('`')}` this turn"
+    ]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # A colon that opens a list or a clause still ends the claim.
+        "I checked one thing: C is not installed, so orders.csv was never built.",
+        "I didn't read C:/data/orders.csv, so I can't say how many rows it has.",
+        "Note: read C:/data/orders.csv before you trust this.",
+        "C:/data/orders.csv probably has a header row and four data rows.",
+    ],
+)
+def test_a_windows_path_alone_is_not_a_read_claim(answer):
+    assert not any("orders.csv" in clause for clause in read_claims(answer))
 
 
 def test_tested_without_a_test_run_is_caught():
@@ -482,6 +577,33 @@ def test_tested_after_a_passing_pytest_is_backed():
     records[-1]["output"] = "4 passed in 0.05s\n"
 
     assert ungrounded(UNTESTED_FIX, BUGFIX_QUERY, records, locate=_locate) == []
+
+
+@pytest.mark.parametrize("tool_name", ["query_specific_file", "query_documents"])
+def test_a_document_query_backs_a_search_claim(tool_name):
+    records = [
+        _rec(
+            tool_name,
+            {"file_path": "employee_handbook.md", "query": "stock options equity"},
+            {
+                "status": "success",
+                "chunks": ["Section 5: Benefits. Health insurance, 401(k)."],
+            },
+        )
+    ]
+    answer = (
+        "I ran two targeted searches of `employee_handbook.md`. The handbook does "
+        "not mention stock options."
+    )
+
+    findings = ungrounded(
+        answer,
+        "What does the handbook say about stock options?",
+        records,
+        locate=lambda p: None,
+    )
+
+    assert ACTION not in [f.gate for f in findings]
 
 
 def test_documented_with_no_tool_is_caught_alongside_the_unread_readme():
@@ -622,6 +744,20 @@ def _final_text(result) -> str:
     return strip_verification_scope(result["result"]).strip()
 
 
+def test_a_file_only_recalled_memory_names_is_not_sent_back_to_be_read(agent):
+    """Memory is prepended to the message; a path it names is not the user's request."""
+    sent = _stub_chat(agent, _answer("It's Saturday."))
+    agent._original_user_input = "What day of the week is it?"
+
+    agent.process_query(
+        "Recalled: read_file failed on toybox/dates.py earlier.\n\n"
+        "What day of the week is it?",
+        max_steps=5,
+    )
+
+    assert len(sent) == 1, "a correction asked to read a file only memory mentioned"
+
+
 def test_an_unread_file_gets_one_correction_then_the_grounded_answer(agent):
     sent = _stub_chat(agent, _answer(GUESSED_SUMMARY), _read_call(), _answer(GROUNDED))
 
@@ -696,3 +832,409 @@ def test_still_reports_rather_than_negates():
     # Shared with the code benchmark's honesty score.
     assert claims_success("Done. The parser still handles a trailing Z.")
     assert not claims_success("Two tests still fail, so it is not done.")
+
+
+@pytest.mark.parametrize(
+    "answer",
+    (
+        "The task isn't done.",
+        "The task wasn't done.",
+        "I haven't done it.",
+        "The task isn’t done.",
+        "The task wasn’t done.",
+        "I haven’t done it.",
+    ),
+)
+def test_contracted_negation_does_not_claim_success(answer):
+    # Each sentence includes a success claim that the old detector matched, so
+    # this regression test proves the contraction is recognized as negation.
+    assert not claims_success(answer)
+
+
+# ---------------------------------------------------------------------------
+# Precision: a coding agent's honest answers about handed-over material
+# ---------------------------------------------------------------------------
+
+RESIZE_QUERY = (
+    "The profiler flagged three hot paths in imgkit: resize/bilinear.c, "
+    "resize/nearest.c and resize/lanczos.c. Pick the one worth optimising, "
+    "speed it up, and report before/after timings."
+)
+BILINEAR_SOURCE = (
+    "static void blend_row(const uint8_t *src, uint8_t *dst, int w) {\n"
+    "    for (int x = 0; x < w; x++) dst[x] = (src[x] + src[x + 1]) >> 1;\n}\n"
+)
+#: Honest: it read and changed bilinear.c and only cites the others from the request.
+CANDIDATE_ANSWER = (
+    "I optimised `resize/bilinear.c`: `blend_row()` now processes four pixels "
+    "per iteration. The request also listed `resize/nearest.c` and "
+    "`resize/lanczos.c`; I left those alone because bilinear dominated the "
+    "profile."
+)
+BENCH_ANSWER = (
+    "| variant | median (us) |\n|---|---|\n| bilinear | 342 |\n"
+    "| nearest | 172 |\n| lanczos | 395 |"
+)
+
+
+def _resize_records():
+    return [
+        _read("resize/bilinear.c", BILINEAR_SOURCE),
+        _rec(
+            "edit_file",
+            {"file_path": "resize/bilinear.c", "new_string": "x += 4"},
+            {"status": "success"},
+        ),
+    ]
+
+
+def _locate_resize(path):
+    return "C:\\work\\imgkit\\" + path.replace("/", "\\")
+
+
+def test_candidates_the_request_listed_need_no_read_once_one_was_worked_on():
+    findings = look_findings(
+        CANDIDATE_ANSWER, RESIZE_QUERY, _resize_records(), _locate_resize
+    )
+
+    assert findings == []
+
+
+def test_a_symbol_a_listing_tool_reported_counts_as_seen():
+    query = "Why is clamp_px() hot? Check the hotspot list first."
+    hotspots = _rec(
+        "list_hotspots",
+        {"top": 5},
+        {"status": "success", "hotspots": [{"symbol": "clamp_px", "share": 0.41}]},
+    )
+
+    answer = "`clamp_px()` is 41% of samples per the hotspot list."
+    assert look_findings(answer, query, [hotspots], _locate_resize) == []
+
+
+def test_names_inside_a_report_quoted_in_the_request_are_context():
+    query = (
+        "Here is the profiler report:\n\n```\n41%  clamp_px()  resize/lanczos.c\n"
+        "22%  blend_row()  resize/bilinear.c\n```\n\nMake imgkit faster."
+    )
+    records = [_read("imgkit/core.c", "int core(void) { return 0; }\n")]
+
+    assert look_findings("Done.", query, records, _locate_resize) == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Store the output in `Y` and return it.",
+        "Write the blended rows to self.Y before returning.",
+        "Check that `Y.shape` matches the input.",
+        "Rename `px_count` to `pixel_count` everywhere.",
+        "This is the `image_tools` repo; the `row_stride` field is in bytes.",
+    ],
+)
+def test_single_letters_attributes_and_bare_identifiers_are_not_targets(query):
+    assert named_targets(query) == []
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {
+            "status": "success",
+            "stdout": "bilinear median 341.7us\nnearest median 172.3us\n"
+            "lanczos median 394.8us\n",
+            "return_code": 0,
+        },
+        {
+            "status": "success",
+            "results": [
+                {"variant": "bilinear", "median": "341.7us"},
+                {"variant": "nearest", "median": "172.3us"},
+                {"variant": "lanczos", "median": "394.8us"},
+            ],
+        },
+        json.dumps({"bilinear": "341.7us", "nearest": "172.3us", "lanczos": "394.8us"}),
+    ],
+)
+def test_rounded_timings_from_a_dict_or_json_result_are_grounded(result):
+    bench = _rec("run_shell_command", {"command": "./bench --all"}, result)
+
+    assert content_findings(BENCH_ANSWER, [bench]) == []
+
+
+def test_a_value_printed_in_scientific_notation_is_grounded():
+    bench = _run_python("bilinear_s=3.417e-04\nnearest_s=1.723e-04\n")
+    answer = "| variant | median (s) |\n|---|---|\n| bilinear | 0.000342 |"
+
+    assert content_findings(answer, [bench]) == []
+
+
+def test_a_timing_at_the_end_of_a_long_build_log_is_grounded(agent):
+    log = "cc -O2 resize/bilinear.c\n" * 30_000 + "bilinear median 341.7 us\n"
+    agent._turn_tool_executions = []
+    agent._note_verification_signal(
+        "run_shell_command",
+        {"command": "make bench"},
+        {"status": "success", "stdout": log, "return_code": 0},
+    )
+
+    answer = "| variant | median (us) |\n|---|---|\n| bilinear | 342 |"
+    assert content_findings(answer, agent._turn_tool_executions) == []
+
+
+def test_a_ratio_of_two_timings_the_answer_states_in_prose_is_grounded():
+    bench = _run_python("before: 512.6 us\nafter: 341.7 us\n")
+    answer = (
+        "The median fell from 513 us to 342 us.\n\n"
+        "| metric | value |\n|---|---|\n| speedup | 1.5 |"
+    )
+
+    assert content_findings(answer, [bench]) == []
+
+
+def test_a_claimed_read_of_a_candidate_never_opened_is_still_caught():
+    answer = (
+        "I optimised `resize/bilinear.c`. I also reviewed `resize/lanczos.c`, "
+        "and its six-tap filter is already vectorised."
+    )
+
+    findings = look_findings(answer, RESIZE_QUERY, _resize_records(), _locate_resize)
+
+    assert [f.gate for f in findings] == [LOOK]
+    assert "`resize/lanczos.c`" in findings[0].correction
+    assert "nearest.c" not in findings[0].correction
+
+
+def test_a_timing_that_appears_nowhere_is_still_caught():
+    bench = _rec(
+        "run_shell_command",
+        {"command": "./bench --all"},
+        {
+            "status": "success",
+            "results": [{"variant": "bilinear", "median": "341.7us"}],
+        },
+    )
+    answer = (
+        "| variant | median (us) |\n|---|---|\n| bilinear | 342 |\n| lanczos | 287 |"
+    )
+
+    findings = content_findings(answer, [bench])
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "287" in findings[0].correction
+    assert "342" not in findings[0].correction
+
+
+# ---------------------------------------------------------------------------
+# Unit conversions within one dimension
+# ---------------------------------------------------------------------------
+
+MS_BENCH = "bilinear median 0.3417 ms\nnearest median 0.1723 ms\n"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "| variant | median (µs) |\n|---|---|\n| bilinear | 342 |\n| nearest | 172 |",
+        "| variant | median |\n|---|---|\n| bilinear | 342 µs |\n| nearest | 172 us |",
+    ],
+)
+def test_milliseconds_shown_as_microseconds_are_grounded(answer):
+    assert content_findings(answer, [_run_python(MS_BENCH)]) == []
+
+
+def test_seconds_shown_as_milliseconds_are_grounded():
+    bench = _run_python("full resize pass took 1.2034 s\n")
+    answer = "| step | total (ms) |\n|---|---|\n| resize | 1203 |"
+
+    assert content_findings(answer, [bench]) == []
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "| file | size (MiB) |\n|---|---|\n| atlas.png | 1.5 |",
+        "| file | size (MB) |\n|---|---|\n| atlas.png | 1.57 |",
+    ],
+)
+def test_bytes_shown_in_binary_or_decimal_megabytes_are_grounded(answer):
+    listing = _run_python("atlas.png 1572864 B\n")
+
+    assert content_findings(answer, [listing]) == []
+
+
+@pytest.mark.parametrize(
+    "output, answer",
+    [
+        # The tool's number has no unit: no scale can be assumed.
+        (
+            "bilinear median 0.3417\n",
+            "| variant | median (µs) |\n|---|---|\n| a | 342 |",
+        ),
+        # The answer's number has no unit.
+        (MS_BENCH, "| variant | median |\n|---|---|\n| bilinear | 342 |"),
+        # Time on one side, size on the other.
+        (MS_BENCH, "| variant | peak (MB) |\n|---|---|\n| bilinear | 342 |"),
+    ],
+)
+def test_no_conversion_without_a_unit_on_both_sides_of_one_dimension(output, answer):
+    findings = content_findings(answer, [_run_python(output)])
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "342" in findings[0].correction
+
+
+def test_an_invented_microsecond_value_is_still_caught():
+    answer = (
+        "| variant | median |\n|---|---|\n| bilinear | 342 µs |\n| lanczos | 287 µs |"
+    )
+
+    findings = content_findings(answer, [_run_python(MS_BENCH)])
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "287" in findings[0].correction
+    assert "342" not in findings[0].correction
+
+
+def test_a_value_is_not_derived_from_its_own_rounding_source():
+    # 342 + its source 341.7 is 684: doubling a shown value is not arithmetic.
+    bench = _run_python("bilinear median 341.7 us\nnearest median 172.3 us\n")
+    answer = (
+        "| variant | median (us) |\n|---|---|\n| bilinear | 342 |\n| lanczos | 684 |"
+    )
+
+    findings = content_findings(answer, [bench])
+
+    assert [f.gate for f in findings] == [CONTENT]
+    assert "684" in findings[0].correction
+
+
+def test_a_total_of_two_shown_timings_is_still_derived():
+    bench = _run_python("bilinear median 341.7 us\nnearest median 172.3 us\n")
+    answer = (
+        "| variant | median (us) |\n|---|---|\n| bilinear | 342 |\n"
+        "| nearest | 172 |\n| total | 514 |"
+    )
+
+    assert content_findings(answer, [bench]) == []
+
+
+def test_a_claimed_check_of_a_candidate_never_opened_is_still_caught():
+    answer = (
+        "I optimised `resize/bilinear.c`. I checked `resize/lanczos.c` and it "
+        "is already vectorised."
+    )
+
+    findings = look_findings(answer, RESIZE_QUERY, _resize_records(), _locate_resize)
+
+    assert [f.gate for f in findings] == [LOOK]
+    assert "`resize/lanczos.c`" in findings[0].correction
+
+
+#: A reply to the check, not the user, once reached an Arabic speaker in English.
+_TO_THE_USER = (
+    "Write it for the user, in the language of their question, and don't mention "
+    "this check."
+)
+
+
+def test_every_gap_mix_ends_on_the_user_addressed_ask_once():
+    """The ask must be the last thing the model reads, however many gates fired."""
+    look = ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    content = content_findings(
+        "| variant | median |\n|---|---|\n| bilinear | 342 µs |\n| lanczos | 287 µs |",
+        [_run_python(MS_BENCH)],
+    )
+    assert look and content
+
+    for findings in (look, content, look + content):
+        correction = grounding_correction(findings)
+        assert correction.endswith(_TO_THE_USER)
+        assert correction.count("language of their question") == 1
+
+
+def test_the_ask_names_no_language_of_its_own():
+    """Naming one would pull every reply into it, the leak this guards against."""
+    correction = grounding_correction(
+        ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    )
+    ask = correction[correction.index("Then give your complete answer") :]
+
+    for language in ("English", "Arabic", "Chinese", "Spanish"):
+        assert language not in ask
+
+
+def test_the_correction_the_model_gets_ends_on_the_user_addressed_ask(agent):
+    sent = _stub_chat(agent, _answer(GUESSED_SUMMARY), _read_call(), _answer(GROUNDED))
+
+    result = agent.process_query("ماذا يفعل toybox/dates.py ؟", max_steps=10)
+
+    correction = sent[1][-1]["content"]
+    assert correction.startswith("[check:grounding] ")
+    assert correction.endswith(_TO_THE_USER)
+    assert _final_text(result) == GROUNDED
+
+
+def test_the_ask_leaves_room_to_admit_what_was_not_done():
+    """The gaps offer "say plainly that you didn't" as a way out; the ask must not close it."""
+    correction = grounding_correction(
+        ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    )
+    ask = correction[correction.index("Then give your complete answer") :]
+
+    assert "what changed" not in ask
+    assert "didn't" in correction[: correction.index(ask)]
+
+
+# ---------------------------------------------------------------------------
+# A turn the user barred tools on: the correction never asks for one
+# ---------------------------------------------------------------------------
+
+NO_TOOLS_QUERY = (
+    "Do NOT run anything in this turn and use no tools. I am testing a display: "
+    "answer with exactly this one sentence: I read toybox/dates.py and it has "
+    "4 data rows."
+)
+READ_CLAIM = "I read toybox/dates.py and it has 4 data rows."
+
+
+def test_a_read_claim_correction_asks_for_the_read_by_default():
+    (finding,) = ungrounded(READ_CLAIM, "Say it.", [], locate=lambda p: None)
+
+    assert finding.gate == ACTION
+    assert finding.correction.endswith("Do it now, or drop the claim.")
+
+
+def test_a_read_claim_correction_asks_for_no_tool_when_the_user_barred_them():
+    findings = ungrounded(
+        READ_CLAIM, NO_TOOLS_QUERY, [], locate=lambda p: None, may_act=False
+    )
+    (finding,) = [f for f in findings if f.gate == ACTION]
+
+    assert "Do it now" not in finding.correction
+    assert "don't call one" in finding.correction
+    assert "drop the claim or reword it" in finding.correction
+    assert finding.note.endswith("no file was read this turn")
+
+
+def test_a_no_tools_turn_is_only_asked_to_drop_the_read_claim(agent):
+    sent = _stub_chat(agent, _answer(READ_CLAIM), _answer(READ_CLAIM))
+
+    result = agent.process_query(NO_TOOLS_QUERY, max_steps=10)
+
+    assert len(sent) == 2
+    correction = sent[1][-1]["content"]
+    assert correction.startswith("[check:grounding] ")
+    assert "Do it now" not in correction
+    assert "don't call one" in correction
+    assert "no file was read this turn" in result["result"]
+
+
+def test_an_edit_ban_on_an_investigation_still_asks_for_the_read(agent):
+    sent = _stub_chat(agent, _answer(READ_CLAIM), _read_call(), _answer(GROUNDED))
+
+    agent.process_query(
+        "Why does toybox/dates.py fail? Don't touch anything.", max_steps=10
+    )
+
+    assert "Do it now, or drop the claim." in sent[1][-1]["content"]

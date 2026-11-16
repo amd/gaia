@@ -14,6 +14,11 @@ unenforced:
   skill, per agent instance, restricted to the three-tier subcommand table in
   :data:`gaia.skills.binaries.BINARY_POLICIES`. The scope is mandatory: an
   unscoped ``shell:execute`` asks for the whole shell, which no bridge covers.
+- **Context-bridged** — ``program:run:<name>`` and ``scratch:write`` are what a
+  skill's own ``tools.py`` may do through :mod:`gaia.skills.context`: run one
+  named program (no shell, a scrubbed environment) and write inside a per-call
+  temporary folder. The helpers refuse anything the manifest did not declare,
+  and the audit flags code that does either without them.
 - ``filesystem`` / ``database`` / ``desktop`` / ``env`` are local-capability
   domains with no bridge. They need the Phase 2 sandbox, so a skill declaring
   one is **refused**.
@@ -58,6 +63,8 @@ DOMAIN_LEVELS: dict[str, frozenset[str]] = {
     "env": frozenset({"read", "none"}),
     "database": frozenset({"read", "write", "none"}),
     "desktop": frozenset({"control", "none"}),
+    "program": frozenset({"run", "none"}),
+    "scratch": frozenset({"write", "none"}),
 }
 
 #: Domains that map onto the connector grant model.
@@ -67,9 +74,16 @@ CONNECTOR_BRIDGED_DOMAINS = frozenset({"network", "mcp"})
 #: Only meaningful *with* a scope — see :attr:`Permission.is_binary_bridged`.
 BINARY_BRIDGED_DOMAINS = frozenset({"shell"})
 
+#: Domains a skill's code reaches only through :mod:`gaia.skills.context`.
+#: ``program:run`` needs a scope (the program's name); ``scratch:write`` has none.
+CONTEXT_BRIDGED_DOMAINS = frozenset({"program", "scratch"})
+
 #: Domains that need the Phase 2 sandbox — refused.
 LOCAL_CAPABILITY_DOMAINS = (
-    frozenset(DOMAIN_LEVELS) - CONNECTOR_BRIDGED_DOMAINS - BINARY_BRIDGED_DOMAINS
+    frozenset(DOMAIN_LEVELS)
+    - CONNECTOR_BRIDGED_DOMAINS
+    - BINARY_BRIDGED_DOMAINS
+    - CONTEXT_BRIDGED_DOMAINS
 )
 
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -159,6 +173,21 @@ class Permission:
 
         if domain in BINARY_BRIDGED_DOMAINS and level == "execute":
             _validate_binary_scope(scope, raw=raw, skill_name=skill_name)
+        if domain == "program" and level == "run":
+            if not scope:
+                raise SkillValidationError(
+                    f"Skill '{skill_name}' declares {raw!r} without naming the "
+                    "program. Scope it to the one executable its code runs, e.g. "
+                    "'program:run:soffice'. "
+                    f"Grammar: {FORMAT_DOCS_URL}#permission-model"
+                )
+            _validate_binary_scope(scope, raw=raw, skill_name=skill_name)
+        if domain == "scratch" and scope:
+            raise SkillValidationError(
+                f"Skill '{skill_name}' declares {raw!r}; 'scratch' takes no scope. "
+                "The folder is a fresh temporary one per tool call. Declare "
+                f"'scratch:write'. Grammar: {FORMAT_DOCS_URL}#permission-model"
+            )
 
         return cls(domain=domain, level=level, scope=scope)
 
@@ -217,7 +246,7 @@ def refuse_unbridged_permissions(
             f"binaries: {', '.join(sorted(BINARY_POLICIES)) or '(none)'}. The "
             "sandbox that would contain unrestricted shell is deferred to a later "
             f"phase. See {FORMAT_DOCS_URL}#permission-model and "
-            "https://github.com/amd/gaia/issues/1019 (Phase 2)."
+            "https://github.com/amd/gaia/issues/2863."
         )
     raise SkillPermissionError(
         f"Skill '{skill_name}' declares local-capability permission(s): {declared}. "
@@ -229,7 +258,7 @@ def refuse_unbridged_permissions(
         "To load it now, drop those permissions and use the agent's own tools for "
         "local access, or wait for the permission sandbox. "
         f"See {FORMAT_DOCS_URL}#permission-model and "
-        "https://github.com/amd/gaia/issues/1019 (Phase 2)."
+        "https://github.com/amd/gaia/issues/2863."
     )
 
 
@@ -337,3 +366,71 @@ def _catalog_ids() -> tuple[str, ...]:
     from gaia.connectors.registry import REGISTRY
 
     return tuple(spec.id for spec in REGISTRY.all())
+
+
+#: Plain-language noun per domain, for an explicit ``<domain>:none``.
+_DOMAIN_NOUNS: dict[str, str] = {
+    "filesystem": "your files",
+    "network": "the internet",
+    "shell": "the command line",
+    "mcp": "your connectors",
+    "env": "environment variables",
+    "database": "databases",
+    "desktop": "your screen, mouse and keyboard",
+    "program": "other programs",
+    "scratch": "a temporary folder",
+}
+
+
+def describe_permission(permission: Permission) -> str:
+    """One plain sentence saying what *permission* lets a skill do.
+
+    Shown wherever a user is asked to agree to a skill, next to the raw grant,
+    so the choice is made on what the skill can reach rather than on grammar.
+    """
+    domain, level, scope = permission.domain, permission.level, permission.scope
+    if permission.grants_nothing:
+        return f"Declares it uses nothing from {_DOMAIN_NOUNS[domain]}"
+    if domain == "network":
+        where = f"sites matching {scope}" if scope else "any website or web service"
+        if level == "read":
+            return f"Read pages and data from {where}"
+        return f"Send your data to {where}, which can carry it off this PC"
+    if domain == "mcp":
+        if scope:
+            return f"Use your '{scope}' connector and what it can reach"
+        return "Use any of your connectors"
+    if domain == "shell":
+        if not scope:
+            return "Run any command on this PC"
+        policy = BINARY_POLICIES.get(scope)
+        if policy is None:
+            return f"Run the '{scope}' command on this PC"
+        return f"Run the '{scope}' command: {policy.summary}"
+    if domain == "program":
+        return f"Start the program '{scope}' on this PC"
+    if domain == "scratch":
+        return "Write files in a temporary folder that is emptied after each use"
+    if domain == "filesystem":
+        where = f"under {scope}" if scope else "anywhere on this PC"
+        if level == "read":
+            return f"Read your files {where}"
+        return f"Change or delete your files {where}"
+    if domain == "env":
+        return "Read environment variables, which can hold passwords and keys"
+    if domain == "database":
+        what = f"the '{scope}' database" if scope else "databases"
+        if level == "read":
+            return f"Read {what}"
+        return f"Change or delete data in {what}"
+    if domain == "desktop":
+        return "Control your screen, mouse and keyboard"
+    raise ValueError(
+        f"No plain-language text for permission {permission}. Add one to "
+        "describe_permission in gaia/skills/permissions.py."
+    )
+
+
+def describe_permissions(permissions: Iterable[Permission]) -> list[dict[str, str]]:
+    """``[{"grant": "network:read", "text": "Read pages …"}, …]`` in declared order."""
+    return [{"grant": str(p), "text": describe_permission(p)} for p in permissions]

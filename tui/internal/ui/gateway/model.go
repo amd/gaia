@@ -92,6 +92,9 @@ type GatewayModel struct {
 	initErr  error
 	haveInit bool
 
+	// availability warns that the active model last answered "not found".
+	availability string
+
 	// pendingPersist saves the token once the gateway has accepted it. It is a
 	// closure over the token, never the token itself.
 	pendingPersist tea.Cmd
@@ -337,9 +340,15 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// returns 76 models and a new user has no way to know which of them
 		// streams; without this they leave the screen with nothing active and
 		// their next agent turn fails on whatever the old default was.
-		// An existing choice is never overridden.
+		// An existing choice is never overridden, and a model the gateway last
+		// answered 404 for is never picked on the user's behalf.
 		if m.state.ActiveModel == "" && len(m.models) > 0 {
-			chosen := m.models[0].ID // preference-ranked: the default model first
+			chosen := m.firstAvailable() // preference-ranked: the default model first
+			if chosen == "" {
+				m.errMsg = "Every discovered model last answered \"not found\". " +
+					"Press r to reload, or enter to pick one anyway."
+				return m, nil
+			}
 			m.state = m.state.SetActive(chosen)
 			if err := m.state.Save(); err != nil {
 				m.errMsg = err.Error()
@@ -351,6 +360,7 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.notice = chosen + " selected as the default. Press enter on another to change it."
 		}
+		m.availability = m.activeAvailability()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -358,6 +368,28 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m.forwardToInput(msg)
+}
+
+// firstAvailable is the best-ranked model with no recorded "not found".
+func (m GatewayModel) firstAvailable() string {
+	for _, model := range m.models {
+		if _, down := m.state.Unavailable(model.ID); !down {
+			return model.ID
+		}
+	}
+	return ""
+}
+
+// activeAvailability is the one-line warning for an active model the gateway
+// last answered "not found" for, or "" when there is nothing to say.
+func (m GatewayModel) activeAvailability() string {
+	id := m.state.ActiveModel
+	u, down := m.state.Unavailable(id)
+	if id == "" || !down {
+		return ""
+	}
+	return id + " " + u.Describe() + " — it may not be deployed any more. " +
+		"Press enter on another model to switch."
 }
 
 func (m GatewayModel) forwardToInput(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -461,6 +493,7 @@ func (m GatewayModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.notice = id + " is now the default model for GAIA."
+			m.availability = m.activeAvailability()
 			return m, nil
 		case "r":
 			m.busy = "Reloading models..."
@@ -519,6 +552,9 @@ func (m GatewayModel) View() string {
 	}
 	if m.notice != "" {
 		tail.WriteString("\n" + noticeStyle.Render(m.notice) + "\n")
+	}
+	if m.availability != "" && m.stage == stageModels {
+		tail.WriteString("\n" + busyStyle.Render(m.availability) + "\n")
 	}
 	if m.errMsg != "" {
 		tail.WriteString("\n" + errorStyle.Render(m.errMsg) + "\n")
@@ -607,6 +643,9 @@ func (m GatewayModel) renderModels(budget int) string {
 		name := model.ID
 		if model.ID == m.state.ActiveModel {
 			name = activeStyle.Render(model.ID + " (active)")
+		}
+		if _, down := m.state.Unavailable(model.ID); down {
+			name += errorStyle.Render(" (unavailable)")
 		}
 		star := ""
 		if model.Recommended() {

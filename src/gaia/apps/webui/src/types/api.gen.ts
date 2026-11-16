@@ -16,22 +16,31 @@ export interface ApiSchemas {
   AgentStepResponse: AgentStepResponse;
   AttachDocumentRequest: AttachDocumentRequest;
   AuthorizeRequest: AuthorizeRequest;
+  BackendOption: BackendOption;
   Body_upload_document_blob_api_documents_upload_post: BodyUploadDocumentBlobApiDocumentsUploadPost;
   Body_upload_file_api_files_upload_post: BodyUploadFileApiFilesUploadPost;
   BrowseResponse: BrowseResponse;
+  CancelRequest: CancelRequest;
   CancelStreamRequest: CancelStreamRequest;
+  ChatModelRequest: ChatModelRequest;
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
+  CommitRequest: CommitRequest;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
+  ContextRequest: ContextRequest;
+  CpuUsage: CpuUsage;
   CreateScheduleRequest: CreateScheduleRequest;
   CreateSessionRequest: CreateSessionRequest;
+  CustomModelRequest: CustomModelRequest;
+  DeviceUsage: DeviceUsage;
+  DiscordConnectRequest: DiscordConnectRequest;
+  DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
-  DownloadModelRequest: DownloadModelRequest;
   DownloadProgress: DownloadProgress;
   EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
@@ -39,10 +48,18 @@ export interface ApiSchemas {
   FilePreviewResponse: FilePreviewResponse;
   FileSearchResponse: FileSearchResponse;
   FileSearchResult: FileSearchResult;
+  FileStatusEntry: FileStatusEntry;
+  FileStatusRequest: FileStatusRequest;
+  FileStatusResponse: FileStatusResponse;
   FileUploadResponse: FileUploadResponse;
+  FolderRequest: FolderRequest;
+  FollowUpRequest: FollowUpRequest;
   ForwardConnectionRequest: ForwardConnectionRequest;
   GoalCreate: GoalCreate;
   GoalStatusUpdate: GoalStatusUpdate;
+  GpuMemoryApplyRequest: GpuMemoryApplyRequest;
+  GpuMemoryPendingRequest: GpuMemoryPendingRequest;
+  GpuMemoryRevertRequest: GpuMemoryRevertRequest;
   GrantRequest: GrantRequest;
   HTTPValidationError: HTTPValidationError;
   IndexFolderRequest: IndexFolderRequest;
@@ -52,41 +69,92 @@ export interface ApiSchemas {
   InferenceStatsResponse: InferenceStatsResponse;
   InitTaskInfo: InitTaskInfo;
   InstallRequest: InstallRequest;
+  InternetRequest: InternetRequest;
   KnowledgeCreate: KnowledgeCreate;
   KnowledgeUpdate: KnowledgeUpdate;
+  LimitRequest: LimitRequest;
   LoadModelRequest: LoadModelRequest;
+  LoadedModelInfo: LoadedModelInfo;
+  LogFileInfo: LogFileInfo;
+  LogLineInfo: LogLineInfo;
+  LogReadResponse: LogReadResponse;
+  LogSourceInfo: LogSourceInfo;
+  LogSourcesResponse: LogSourcesResponse;
+  McpOutputResponse: McpOutputResponse;
   MemorySettingsBody: MemorySettingsBody;
+  MemoryUsage: MemoryUsage;
   MessageListResponse: MessageListResponse;
   MessageResponse: MessageResponse;
+  ModelServerBackendRequest: ModelServerBackendRequest;
+  ModelServerInfo: ModelServerInfo;
   ModelStatus: ModelStatus;
+  NetworkUsage: NetworkUsage;
   OpenFileRequest: OpenFileRequest;
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
+  PolicyNotice: PolicyNotice;
   PreflightReport: PreflightReport;
+  PullRequestRequest: PullRequestRequest;
   QuickLink: QuickLink;
+  RemoveModelRequest: RemoveModelRequest;
+  ResourceUsage: ResourceUsage;
+  RestartRequest: RestartRequest;
+  RetryChoiceRequest: RetryChoiceRequest;
+  RetryWithRequest: RetryWithRequest;
+  RunningAnswer: RunningAnswer;
+  RunningIndexJob: RunningIndexJob;
+  ScheduleDescription: ScheduleDescription;
   ScheduleListResponse: ScheduleListResponse;
   ScheduleResponse: ScheduleResponse;
   ScheduleResultsResponse: ScheduleResultsResponse;
   ScriptedUserRequest: ScriptedUserRequest;
+  SearchSnippet: SearchSnippet;
   SelectModelRequest: SelectModelRequest;
   SessionListResponse: SessionListResponse;
+  SessionPinRequest: SessionPinRequest;
   SessionResponse: SessionResponse;
+  SessionSearchResponse: SessionSearchResponse;
+  SessionSearchResult: SessionSearchResult;
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
   SetupRunRequest: SetupRunRequest;
+  SkillLinkAddRequest: SkillLinkAddRequest;
+  SkillLinkRequest: SkillLinkRequest;
+  SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
-  StartAgentServerRequest: StartAgentServerRequest;
+  SpeakRequest: SpeakRequest;
+  SpeechModel: SpeechModel;
+  SpeechSettings: SpeechSettings;
+  SpeechSettingsUpdate: SpeechSettingsUpdate;
   SystemStatus: SystemStatus;
+  TargetRequest: TargetRequest;
   TaskCreate: TaskCreate;
-  TaskListResponse: TaskListResponse;
-  TaskResponse: TaskResponse;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
+  TurnRouteResponse: TurnRouteResponse;
+  TurnSummaryCost: TurnSummaryCost;
+  TurnSummaryDocument: TurnSummaryDocument;
+  TurnSummaryFile: TurnSummaryFile;
+  TurnSummaryLiveData: TurnSummaryLiveData;
+  TurnSummaryModel: TurnSummaryModel;
+  TurnSummaryOutput: TurnSummaryOutput;
+  TurnSummaryPage: TurnSummaryPage;
+  TurnSummaryResponse: TurnSummaryResponse;
+  UndoRequest: UndoRequest;
+  UndoSettings: UndoSettings;
+  UnloadModelRequest: UnloadModelRequest;
+  UnloadModelResponse: UnloadModelResponse;
   UpdateScheduleRequest: UpdateScheduleRequest;
   UpdateSessionRequest: UpdateSessionRequest;
   UserInputRequest: UserInputRequest;
   ValidationError: ValidationError;
+  VisionModelRequest: VisionModelRequest;
+  Voice: Voice;
+  WarmUpStatus: WarmUpStatus;
+  WorkInProgress: WorkInProgress;
+  gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
+  gaia__ui__routers__system__DownloadModelRequest: Gaia_Ui_Routers_System__DownloadModelRequest;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -170,15 +238,25 @@ export interface AgentListResponse {
  */
 export interface AgentStepResponse {
   active?: boolean;
+  autoDeclined?: boolean | null;
   commandOutput?: CommandOutputResponse | null;
+  currentStep?: number | null;
   data?: unknown;
   decision?: string | null;
+  declined?: boolean | null;
   detail?: string | null;
   fileList?: FileListResponse | null;
   id: number;
+  kept?: boolean | null;
   label: string;
   latencyMs?: number | null;
+  mcpOutput?: McpOutputResponse | null;
   mcpServer?: string | null;
+  mcpServerLabel?: string | null;
+  mcpTool?: string | null;
+  narration?: string | null;
+  needsModel?: string | null;
+  planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
   reason?: string | null;
@@ -187,6 +265,7 @@ export interface AgentStepResponse {
   result?: string | null;
   ruleIds?: string[] | null;
   success?: boolean | null;
+  timedOut?: boolean | null;
   timestamp?: number;
   tool?: string | null;
   type: string;
@@ -213,6 +292,13 @@ export interface FileListResponse {
   total?: number;
 }
 /**
+ * The text an MCP tool returned, capped for the tool row.
+ */
+export interface McpOutputResponse {
+  text?: string;
+  truncated?: boolean;
+}
+/**
  * Request to attach a document to a session.
  */
 export interface AttachDocumentRequest {
@@ -221,6 +307,13 @@ export interface AttachDocumentRequest {
 export interface AuthorizeRequest {
   grant_agents?: string[];
   scopes?: string[];
+}
+/**
+ * A llama.cpp backend this machine can run, with Lemonade's state for it.
+ */
+export interface BackendOption {
+  name: string;
+  state: string;
 }
 export interface BodyUploadDocumentBlobApiDocumentsUploadPost {
   file: string;
@@ -234,6 +327,7 @@ export interface BodyUploadFileApiFilesUploadPost {
 export interface BrowseResponse {
   current_path: string;
   entries: FileEntry[];
+  folder_refusal?: string | null;
   parent_path?: string | null;
   quick_links?: QuickLink[];
 }
@@ -259,8 +353,18 @@ export interface QuickLink {
   name: string;
   path: string;
 }
+export interface CancelRequest {
+  model_id?: string | null;
+}
 export interface CancelStreamRequest {
   session_id: string;
+}
+/**
+ * A chat model GAIA knows, or one already downloaded in Lemonade.
+ */
+export interface ChatModelRequest {
+  acknowledge_no_fit?: boolean;
+  model_id: string;
 }
 /**
  * Request to send a chat message.
@@ -271,6 +375,14 @@ export interface ChatRequest {
   message: string;
   session_id: string;
   stream?: boolean;
+}
+export interface CommitRequest {
+  /**
+   * True only after the user saw and confirmed the commit.
+   */
+  confirmed?: boolean;
+  message: string;
+  root: string;
 }
 export interface ConfigureRequest {
   config?: {
@@ -285,6 +397,24 @@ export interface ConnectRequest {
   auth_header_name?: string | null;
   auth_header_prefix?: string | null;
   base_url?: string | null;
+}
+/**
+ * ``ctx_size`` None returns the model to GAIA's automatic size.
+ */
+export interface ContextRequest {
+  ctx_size?: number | null;
+  model: string;
+}
+export interface CpuUsage {
+  /**
+   * Current clock speed, when the OS reports it.
+   */
+  ghz: number | null;
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  percent: number;
 }
 /**
  * Request to create a new scheduled task.
@@ -302,6 +432,10 @@ export interface CreateScheduleRequest {
    * The prompt to execute on each run
    */
   prompt: string;
+  /**
+   * IANA time zone the schedule's times are in, e.g. 'America/Los_Angeles'. Defaults to the server machine's zone.
+   */
+  timezone?: string | null;
 }
 /**
  * Request to create a new chat session.
@@ -310,11 +444,44 @@ export interface CreateSessionRequest {
   agent_type?: string | null;
   device?: string | null;
   document_ids?: string[];
+  folders?: string[];
   mail_provider?: string | null;
   model?: string | null;
   private?: boolean;
   system_prompt?: string | null;
   title?: string | null;
+}
+/**
+ * ``quant`` picks a quantization; None lets GAIA choose one that fits.
+ */
+export interface CustomModelRequest {
+  quant?: string | null;
+  url: string;
+}
+export interface DeviceUsage {
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  id: string;
+  kind: "gpu" | "npu";
+  /**
+   * Dedicated plus shared memory in use, when the OS reports it.
+   */
+  memory_used_bytes: number | null;
+  name: string;
+  /**
+   * Load of the device's busiest engine.
+   */
+  percent: number;
+}
+export interface DiscordConnectRequest {
+  model?: string | null;
+  token: string;
+}
+export interface DiscordStartRequest {
+  model?: string | null;
+  take_over?: boolean;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
@@ -346,6 +513,7 @@ export interface DocumentListResponse {
  */
 export interface DocumentResponse {
   chunk_count: number;
+  error_kind?: string | null;
   file_size: number;
   filename: string;
   filepath: string;
@@ -361,10 +529,6 @@ export interface DocumentResponse {
  */
 export interface DocumentUploadRequest {
   filepath: string;
-}
-export interface DownloadModelRequest {
-  force?: boolean;
-  model_name: string;
 }
 /**
  * Progress of an in-flight Lemonade model download.
@@ -433,6 +597,29 @@ export interface FileSearchResult {
   size_display: string;
 }
 /**
+ * Whether a file exists now, and when it last changed.
+ */
+export interface FileStatusEntry {
+  exists?: boolean | null;
+  mtime?: number | null;
+  path: string;
+}
+/**
+ * Paths whose current state the side rail re-checks.
+ */
+export interface FileStatusRequest {
+  /**
+   * @maxItems 50
+   */
+  paths: string[];
+}
+/**
+ * Current state of each requested path, in request order.
+ */
+export interface FileStatusResponse {
+  files: FileStatusEntry[];
+}
+/**
  * Response from a file upload.
  */
 export interface FileUploadResponse {
@@ -442,6 +629,16 @@ export interface FileUploadResponse {
   original_name: string;
   size: number;
   url: string;
+}
+export interface FolderRequest {
+  /**
+   * An absolute folder path.
+   */
+  path: string;
+}
+export interface FollowUpRequest {
+  session_id: string;
+  text: string;
 }
 /**
  * Body for ``POST /v1/connections/{provider}`` (#1292).
@@ -475,6 +672,22 @@ export interface GoalStatusUpdate {
   progress_notes?: string | null;
   status: string;
 }
+export interface GpuMemoryApplyRequest {
+  confirm?: boolean;
+  /**
+   * GPU memory to set, in decimal GB (10**9 bytes).
+   */
+  setting_gb: number;
+}
+export interface GpuMemoryPendingRequest {
+  /**
+   * GPU memory to set, in decimal GB (10**9 bytes).
+   */
+  setting_gb: number;
+}
+export interface GpuMemoryRevertRequest {
+  confirm?: boolean;
+}
 export interface GrantRequest {
   scopes?: string[];
 }
@@ -503,6 +716,8 @@ export interface IndexFolderResponse {
   errors?: string[];
   failed?: number;
   indexed?: number;
+  skipped?: number;
+  skipped_images?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -525,9 +740,24 @@ export interface InferenceCommitItem {
  */
 export interface InferenceStatsResponse {
   input_tokens?: number;
+  model?: string | null;
   output_tokens?: number;
+  place?: string | null;
+  retried?: boolean | null;
+  route?: TurnRouteResponse | null;
+  seconds?: number | null;
+  steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
+}
+/**
+ * The model a ``hybrid`` turn was routed to, and why.
+ */
+export interface TurnRouteResponse {
+  degraded?: boolean;
+  model: string;
+  notice?: string;
+  reason?: string;
 }
 /**
  * Summary of a boot-time initialization task (embedded in SystemStatus).
@@ -535,6 +765,7 @@ export interface InferenceStatsResponse {
 export interface InitTaskInfo {
   name: string;
   status: string;
+  step?: string | null;
 }
 /**
  * Body for ``POST /api/agents/install``.
@@ -543,6 +774,9 @@ export interface InstallRequest {
   id: string;
   trust_native?: boolean;
   version?: string | null;
+}
+export interface InternetRequest {
+  on: boolean;
 }
 export interface KnowledgeCreate {
   category?: string;
@@ -563,9 +797,72 @@ export interface KnowledgeUpdate {
   reminded_at?: string | null;
   sensitive?: boolean | null;
 }
+/**
+ * ``limit_usd`` None removes the limit.
+ */
+export interface LimitRequest {
+  limit_usd?: number | null;
+}
 export interface LoadModelRequest {
   ctx_size?: number | null;
+  force?: boolean;
   model_name: string;
+}
+/**
+ * One model Lemonade has loaded, as the Model server panel shows it.
+ */
+export interface LoadedModelInfo {
+  backend?: string | null;
+  backend_source?: string | null;
+  ctx_size?: number | null;
+  device?: string | null;
+  model_type?: string | null;
+  name?: string | null;
+  recipe?: string | null;
+}
+/**
+ * One log file a source offers.
+ */
+export interface LogFileInfo {
+  modified?: number | null;
+  name: string;
+  path: string;
+  size_bytes?: number | null;
+}
+/**
+ * One redacted log line.
+ */
+export interface LogLineInfo {
+  severity?: string | null;
+  tag?: string | null;
+  text: string;
+}
+/**
+ * A log's recent lines for the viewer, or a reason code when it can't be read.
+ */
+export interface LogReadResponse {
+  available?: boolean;
+  base_url?: string | null;
+  cursor?: string | null;
+  detail?: string | null;
+  dropped?: number;
+  lines?: LogLineInfo[];
+  log_path?: string | null;
+  owner?: string | null;
+  reason?: string | null;
+  reset?: boolean;
+  server_answering?: boolean | null;
+  source?: string | null;
+}
+/**
+ * A group of logs: model_server | gaia | service | agent | desktop | other.
+ */
+export interface LogSourceInfo {
+  files?: LogFileInfo[];
+  id: string;
+}
+export interface LogSourcesResponse {
+  sources: LogSourceInfo[];
 }
 /**
  * Typed request body for PUT /api/memory/settings.
@@ -574,6 +871,15 @@ export interface MemorySettingsBody {
   mcp_memory_enabled?: boolean | null;
   memory_enabled?: boolean | null;
   system_discovery_consent?: boolean | null;
+}
+export interface MemoryUsage {
+  /**
+   * Percent per sample, oldest first, one per interval_ms.
+   */
+  history: number[];
+  percent: number;
+  total_bytes: number;
+  used_bytes: number;
 }
 /**
  * List of messages for a session.
@@ -590,10 +896,13 @@ export interface MessageResponse {
   content: string;
   created_at: string;
   id: number;
+  library_notices?: string[] | null;
   rag_sources?: SourceInfo[] | null;
   role: string;
   session_id: string;
   stats?: InferenceStatsResponse | null;
+  stopped?: boolean;
+  turn_summary?: TurnSummaryResponse | null;
 }
 /**
  * RAG source citation.
@@ -606,17 +915,146 @@ export interface SourceInfo {
   score: number;
 }
 /**
+ * Sources, files and data flow of one turn, for the side rail (#5222).
+ */
+export interface TurnSummaryResponse {
+  cost: TurnSummaryCost;
+  documents?: TurnSummaryDocument[];
+  error?: string | null;
+  files?: TurnSummaryFile[];
+  live_data?: TurnSummaryLiveData;
+  model?: TurnSummaryModel | null;
+  outputs?: TurnSummaryOutput[];
+  pages?: TurnSummaryPage[];
+  sites?: string[];
+}
+/**
+ * What the turn cost.
+ */
+export interface TurnSummaryCost {
+  kind: string;
+  usd?: number | null;
+}
+/**
+ * A document the turn's answer drew passages from.
+ */
+export interface TurnSummaryDocument {
+  name: string;
+  pages?: number[];
+  passages?: number;
+  path: string;
+}
+/**
+ * A file the turn created or changed.
+ */
+export interface TurnSummaryFile {
+  mtime?: number | null;
+  name: string;
+  openable?: boolean;
+  path: string;
+}
+/**
+ * How the turn's internet tools fared.
+ */
+export interface TurnSummaryLiveData {
+  attempted?: number;
+  failed?: number;
+}
+/**
+ * Where the turn's model ran.
+ */
+export interface TurnSummaryModel {
+  name: string;
+  provider: string;
+  provider_name: string;
+  remote: boolean;
+}
+/**
+ * Something the turn made besides a file: an image, an indexed document,
+ * a memory or a scheduled task.
+ */
+export interface TurnSummaryOutput {
+  detail?: string | null;
+  kind: string;
+  name: string;
+  path?: string | null;
+  ref?: string | null;
+}
+/**
+ * A web page the turn read, or a search hit when it read none.
+ */
+export interface TurnSummaryPage {
+  kind: string;
+  title?: string | null;
+  url: string;
+}
+/**
+ * Choose the llama.cpp backend for chat models: ``auto`` or a backend name.
+ */
+export interface ModelServerBackendRequest {
+  backend: string;
+}
+/**
+ * Which Lemonade GAIA talks to and what it runs (Settings → Advanced).
+ */
+export interface ModelServerInfo {
+  available_backends?: BackendOption[];
+  base_url: string;
+  chat_model?: LoadedModelInfo | null;
+  default_backend?: string | null;
+  embedding_model?: LoadedModelInfo | null;
+  embedding_note?: string | null;
+  error?: string | null;
+  loaded_models?: LoadedModelInfo[];
+  owner: string;
+  port?: number | null;
+  preferred_backend?: string | null;
+  reachable?: boolean;
+  system_info_error?: string | null;
+  version?: string | null;
+}
+/**
  * Status of a custom model on the Lemonade server.
  */
 export interface ModelStatus {
+  checked?: boolean;
   downloaded?: boolean;
   found?: boolean;
   loaded?: boolean;
+}
+export interface NetworkUsage {
+  /**
+   * The adapter's hardware name.
+   */
+  description: string;
+  id: string;
+  kind: "ethernet" | "wifi" | "network";
+  /**
+   * The connection's name, such as "Ethernet 3".
+   */
+  name: string;
+  /**
+   * Bits per second received.
+   */
+  recv_bps: number;
+  /**
+   * Bits per second, oldest first.
+   */
+  recv_history: number[];
+  /**
+   * Bits per second sent.
+   */
+  send_bps: number;
+  /**
+   * Bits per second, oldest first.
+   */
+  send_history: number[];
 }
 /**
  * Request to open a file or folder in the system file explorer.
  */
 export interface OpenFileRequest {
+  launch?: boolean;
   path: string;
   reveal?: boolean;
 }
@@ -628,6 +1066,10 @@ export interface ParseScheduleRequest {
    * Natural language schedule description
    */
   input: string;
+  /**
+   * IANA time zone the schedule's times are in, e.g. 'America/Los_Angeles'. Defaults to the server machine's zone.
+   */
+  timezone?: string | null;
 }
 /**
  * Parsed schedule configuration.
@@ -635,18 +1077,52 @@ export interface ParseScheduleRequest {
 export interface ParseScheduleResponse {
   days_of_week?: number[] | null;
   description: string;
+  description_parts?: ScheduleDescription | null;
   end_hour?: number | null;
   interval_seconds: number;
   next_run_at?: string | null;
   start_hour?: number | null;
   time_of_day?: string | null;
+  timezone?: string | null;
   valid: boolean;
+}
+/**
+ * When a schedule runs, as data the UI words in its own language.
+ *
+ * ``every``: count + unit, optional days. ``window``: that plus start/end
+ * hour. ``days``: named days, optional time. ``daily``: a time each day.
+ */
+export interface ScheduleDescription {
+  count?: number | null;
+  /**
+   * 0=Monday … 6=Sunday
+   */
+  days?: number[] | null;
+  end_hour?: number | null;
+  kind: "every" | "window" | "days" | "daily";
+  start_hour?: number | null;
+  /**
+   * "HH:MM", 24-hour
+   */
+  time?: string | null;
+  unit?: ("second" | "minute" | "hour" | "day" | "week") | null;
 }
 /**
  * ``ask`` prompts for every gated tool; ``full_access`` runs them unasked.
  */
 export interface PermissionModeRequest {
   mode: string;
+}
+/**
+ * Structured Local only notice translated by the Agent UI.
+ */
+export interface PolicyNotice {
+  cause?: string | null;
+  code: string;
+  models?: string[] | null;
+  reason?: string | null;
+  severity: "info" | "warning";
+  url?: string | null;
 }
 /**
  * Result of the first-run hardware scan.
@@ -670,6 +1146,71 @@ export interface PreflightReport {
   tier?: string;
   warnings?: string[];
 }
+export interface PullRequestRequest {
+  body?: string;
+  /**
+   * True only after the user saw and confirmed the PR.
+   */
+  confirmed?: boolean;
+  root: string;
+  title: string;
+}
+export interface RemoveModelRequest {
+  model_id: string;
+}
+export interface ResourceUsage {
+  cpu?: CpuUsage | null;
+  devices?: DeviceUsage[];
+  /**
+   * Why GPUs and NPUs can't be read, when CPU and memory still can.
+   */
+  devices_error?: string | null;
+  interval_ms: number;
+  memory?: MemoryUsage | null;
+  networks?: NetworkUsage[];
+  /**
+   * Why network adapters can't be read, when CPU and memory still can.
+   */
+  networks_error?: string | null;
+  /**
+   * Why NPUs can't be read when they're read apart from GPUs (Linux).
+   */
+  npus_error?: string | null;
+  /**
+   * False until the first sample is in.
+   */
+  ready: boolean;
+}
+/**
+ * ``confirm`` is required to reload a model on a server GAIA does not run.
+ */
+export interface RestartRequest {
+  confirm?: boolean;
+}
+export interface RetryChoiceRequest {
+  keep: "original" | "retry";
+  message_id: number;
+  session_id: string;
+}
+export interface RetryWithRequest {
+  message_id: number;
+  model: string;
+  session_id: string;
+}
+/**
+ * A chat whose answer is still being written.
+ */
+export interface RunningAnswer {
+  session_id: string;
+  title?: string | null;
+}
+/**
+ * A document still being indexed.
+ */
+export interface RunningIndexJob {
+  document_id: string;
+  filename?: string | null;
+}
 /**
  * List of scheduled tasks.
  */
@@ -682,15 +1223,19 @@ export interface ScheduleListResponse {
  */
 export interface ScheduleResponse {
   created_at?: string | null;
+  description: string;
+  description_parts: ScheduleDescription;
   error_count?: number;
   id: string;
   interval_seconds: number;
+  last_error?: string | null;
   last_result?: string | null;
   last_run_at?: string | null;
   name: string;
   next_run_at?: string | null;
   prompt: string;
   run_count?: number;
+  running?: boolean;
   schedule_config?: string | null;
   session_id?: string | null;
   status: string;
@@ -707,6 +1252,14 @@ export interface ScheduleResultsResponse {
  */
 export interface ScriptedUserRequest {
   decline_commands?: string[];
+}
+/**
+ * Text around a search hit, split so the UI can highlight ``match``.
+ */
+export interface SearchSnippet {
+  after: string;
+  before: string;
+  match: string;
 }
 export interface SelectModelRequest {
   model: string;
@@ -732,14 +1285,41 @@ export interface SessionResponse {
   inference_provider?: string | null;
   inference_provider_name?: string | null;
   inference_remote?: boolean | null;
+  kind?: string;
+  last_run_status?: string | null;
   mail_provider?: string | null;
   message_count?: number;
   model: string;
+  pinned?: boolean;
   private?: boolean;
   system_prompt?: string | null;
   title: string;
   title_is_custom?: boolean;
+  unread?: boolean;
   updated_at: string;
+}
+/**
+ * Pin or unpin a chat.
+ */
+export interface SessionPinRequest {
+  pinned: boolean;
+}
+/**
+ * Chats matching a search query, newest first, at most ``limit``.
+ */
+export interface SessionSearchResponse {
+  query: string;
+  results: SessionSearchResult[];
+  truncated?: boolean;
+}
+/**
+ * One chat that matches a search, with where the first hit was.
+ */
+export interface SessionSearchResult {
+  field: "title" | "message";
+  session_id: string;
+  snippet: SearchSnippet;
+  title: string;
 }
 /**
  * Current user settings.
@@ -751,6 +1331,9 @@ export interface SettingsResponse {
   dynamic_tools?: boolean;
   dynamic_tools_locked?: boolean;
   model_status?: ModelStatus | null;
+  network_policy?: "cloud_allowed" | "local_ai_only";
+  policy_notices?: PolicyNotice[];
+  policy_warnings?: string[];
 }
 /**
  * Request to update user settings.
@@ -769,19 +1352,79 @@ export interface SettingsUpdateRequest {
    */
   custom_model?: string | null;
   /**
-   * Beta: enable the semantic dynamic tool loader (#1798), which trims each turn's tool prompt to a matched subset to cut first-turn TTFT. Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
+   * Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.
    */
   dynamic_tools?: boolean | null;
+  /**
+   * Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.
+   */
+  network_policy?: ("cloud_allowed" | "local_ai_only") | null;
 }
 /**
- * ``skip_chat_model`` when the chat runs on a cloud provider.
+ * ``skip_chat_model`` when the chat runs on a cloud provider;
+ * ``gaia_lemonade`` to set up GAIA's own server instead of the user's;
+ * ``acknowledge_low_disk`` to download past a too-small model drive;
+ * ``keep_trying`` to wait up to two minutes out a dropped connection;
+ * ``extra_models`` to pull models beside the plan's (the user ticked them);
+ * ``server_only`` to start the model server and stop, so the models can be
+ * chosen against it before anything downloads;
+ * ``upgrade_embedded`` to replace an older embedded server artifact without
+ * downloading the existing model cache again.
  */
 export interface SetupRunRequest {
+  acknowledge_low_disk?: boolean;
+  extra_models?: string[];
+  gaia_lemonade?: boolean;
+  keep_trying?: boolean;
+  server_only?: boolean;
   skip_chat_model?: boolean;
+  upgrade_embedded?: boolean;
 }
-export interface StartAgentServerRequest {
-  backend_url?: string;
-  port?: number;
+export interface SkillLinkAddRequest {
+  allow_code?: boolean;
+  force?: boolean;
+  names?: string[] | null;
+  pin: string;
+  url: string;
+}
+export interface SkillLinkRequest {
+  url: string;
+}
+export interface SkipModelRequest {
+  model_id: string;
+  skipped?: boolean;
+}
+export interface SpeakRequest {
+  speed?: number | null;
+  text: string;
+  voice?: string | null;
+}
+/**
+ * Whether the voice model is on this PC, so a first read can say it downloads.
+ */
+export interface SpeechModel {
+  downloaded: boolean;
+  size_gb?: number | null;
+}
+export interface SpeechSettings {
+  auto: boolean;
+  max_speed?: number;
+  min_speed?: number;
+  speed: number;
+  voice: string;
+  voices: Voice[];
+}
+export interface Voice {
+  accent: string;
+  gender: string;
+  id: string;
+  name: string;
+  quality: string;
+}
+export interface SpeechSettingsUpdate {
+  auto?: boolean | null;
+  speed?: number | null;
+  voice?: string | null;
 }
 /**
  * System readiness status.
@@ -790,6 +1433,7 @@ export interface SystemStatus {
   active_profile?: string;
   config_error?: string | null;
   context_size_sufficient?: boolean;
+  data_dir?: string | null;
   default_model_is_cloud?: boolean;
   default_model_name?: string | null;
   default_model_size_gb?: number | null;
@@ -804,8 +1448,9 @@ export interface SystemStatus {
   init_tasks?: InitTaskInfo[];
   initialized?: boolean;
   lemonade_error?: string | null;
+  lemonade_probe?: ("ok" | "down" | "timed_out" | "error") | null;
   lemonade_running?: boolean;
-  lemonade_url?: string;
+  lemonade_url?: string | null;
   lemonade_version?: string | null;
   memory_available_gb?: number | null;
   model_context_size?: number | null;
@@ -816,30 +1461,37 @@ export interface SystemStatus {
   model_size_gb?: number | null;
   probe_warnings?: string[];
   processor_name?: string | null;
+  setup_error?: string | null;
   start_command?: string | null;
   start_instruction?: string | null;
   time_to_first_token?: number | null;
   tokens_per_second?: number | null;
   version?: string;
+  warm_up?: WarmUpStatus | null;
+}
+/**
+ * Whether a new chat's first turn will find its prompt already read.
+ */
+export interface WarmUpStatus {
+  cached_tokens?: number | null;
+  device?: string | null;
+  elapsed_seconds?: number | null;
+  error?: string | null;
+  model?: string | null;
+  prompt_tokens?: number | null;
+  state: string;
+}
+/**
+ * ``mode`` "gaia" or "external"; the URL and key only for "external".
+ */
+export interface TargetRequest {
+  api_key?: string | null;
+  base_url?: string | null;
+  mode: string;
 }
 export interface TaskCreate {
   description: string;
   order_index?: number;
-}
-/**
- * List of background tasks.
- */
-export interface TaskListResponse {
-  tasks: TaskResponse[];
-}
-/**
- * A single background task visible to the frontend.
- */
-export interface TaskResponse {
-  error?: string | null;
-  id: string;
-  name: string;
-  status: string;
 }
 export interface TaskStatusUpdate {
   result?: string | null;
@@ -857,6 +1509,25 @@ export interface ToolConfirmRequest {
   approved: boolean;
   confirm_id?: string | null;
   session_id: string;
+}
+export interface UndoRequest {
+  /**
+   * Undo even files changed after the turn, losing those changes.
+   */
+  force?: boolean;
+}
+export interface UndoSettings {
+  max_mb: number;
+  retention_days: number;
+}
+export interface UnloadModelRequest {
+  model_name: string;
+}
+/**
+ * The model server dropped its models from memory.
+ */
+export interface UnloadModelResponse {
+  status: string;
 }
 /**
  * Request to update a scheduled task.
@@ -887,4 +1558,28 @@ export interface UserInputRequest {
   request_id: string;
   session_id: string;
   value: string;
+}
+/**
+ * A model that reads images, or null to go back to GAIA's choice.
+ */
+export interface VisionModelRequest {
+  model_id?: string | null;
+}
+/**
+ * Work that quitting or unloading the model would cut short.
+ */
+export interface WorkInProgress {
+  answers: RunningAnswer[];
+  indexing: RunningIndexJob[];
+  setup?: boolean;
+}
+export interface Gaia_Ui_Routers_Setup__DownloadModelRequest {
+  acknowledge_low_disk?: boolean;
+  keep_trying?: boolean;
+  model_id: string;
+}
+export interface Gaia_Ui_Routers_System__DownloadModelRequest {
+  force?: boolean;
+  load_after?: boolean;
+  model_name: string;
 }

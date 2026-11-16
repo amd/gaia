@@ -17,10 +17,8 @@ builds a REAL sdist with the real setuptools backend and reads its member
 list, so a regression in what actually ships is caught, not a string match
 against pyproject.toml/MANIFEST.in.
 
-This is a narrow, single-package sdist-*contents* guard, not a reversal of
-``publish_agents.yml``'s decision to stop building all 14 agent wheels on
-every PR (that build was "pure noise" per that workflow's own comment,
-deferring broken-wheel detection to release time) -- it runs one lightweight
+This is a narrow, single-package sdist-*contents* guard, not a return to
+building every agent wheel on every PR -- it runs one lightweight
 ``--sdist``-only build for the one package whose build depends on files
 outside its own package data.
 """

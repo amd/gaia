@@ -1,0 +1,54 @@
+// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import type { Translate } from '../i18n/useT';
+
+/** Live status lines the backend and ChatView write in English, matched whole. */
+const EXACT: Record<string, Parameters<Translate>[0]> = {
+    'Thinking...': 'msg.thinking',
+    'Reading your request': 'live.readingRequest',
+    'Reading the tool results': 'live.readingResults',
+    'Reasoning': 'live.reasoning',
+    'Reconnecting to the model server…': 'live.reconnectingServer',
+    'Waiting for GAIA to start this answer…': 'live.waitingStart',
+    'The model server stopped. GAIA is restarting it…': 'live.serverRestarting',
+    'Starting the model server…': 'live.serverStarting',
+};
+
+/**
+ * `label` in the chosen language when it is a status line GAIA knows; any other
+ * line (a tool's progress, a retry notice) is shown as the backend wrote it.
+ */
+export function localizeLiveStatus(t: Translate, label: string): string {
+    const key = EXACT[label];
+    if (key) return t(key);
+    let m = /^Reasoning — ([\d,]+) words so far$/.exec(label);
+    if (m) return t('live.reasoningWords', { n: m[1] });
+    m = /^Connection lost\. Reconnecting \(attempt (\d+) of (\d+)\)…$/.exec(label);
+    if (m) return t('live.reconnectingStream', { attempt: m[1], max: m[2] });
+    // A model id has no spaces, so "Downloading the embedding model …" is not one of these.
+    m = /^Loading (\S+) into memory$/.exec(label);
+    if (m) return t('live.loadingModel', { model: m[1] });
+    m = /^Reading page (\d+) of (\d+)…$/.exec(label);
+    if (m) return t('live.readingPage', { page: m[1], total: m[2] });
+    m = /^Downloading the speech model, one time \(([\d.]+) GB\)$/.exec(label);
+    if (m) return t('live.speechModelStart', { size: m[1] });
+    m = /^Downloading the speech model, one time — (\d+)% of ([\d.]+) GB$/.exec(label);
+    if (m) return t('live.speechModelPercent', { percent: m[1], size: m[2] });
+    m = /^Downloading the speech model, one time — (\d+)% of ([\d.]+) GB, then ([\d.]+) GB for the NPU$/.exec(label);
+    if (m) return t('live.speechModelPercentNpu', { percent: m[1], size: m[2], npu: m[3] });
+    m = /^Downloading the speech model's NPU part \(([\d.]+) GB\), no progress shown$/.exec(label);
+    if (m) return t('live.speechModelNpu', { size: m[1] });
+    if (label === "Downloading the speech model's NPU part, no progress shown") return t('live.speechModelNpuNoSize');
+    if (label === 'Loading the speech model') return t('live.speechModelLoading');
+    m = /^Downloaded the speech model \(([\d.]+) GB\)$/.exec(label);
+    if (m) return t('live.speechModelDone', { size: m[1] });
+    // Lemonade's catalog doesn't always give a size.
+    if (label === 'Downloading the speech model, one time') return t('live.speechModelStartNoSize');
+    m = /^Downloading the speech model, one time — (\d+)%$/.exec(label);
+    if (m) return t('live.speechModelPercentNoSize', { percent: m[1] });
+    if (label === 'Downloaded the speech model') return t('live.speechModelDoneNoSize');
+    m = /^Downloading (\S+)$/.exec(label);
+    if (m) return t('live.downloadingModel', { model: m[1] });
+    return label;
+}

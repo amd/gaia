@@ -1,114 +1,36 @@
 import asyncio
+import inspect
 import logging
 import os
-import signal
+import re
 import sys
 import threading
 import time
-import types
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, call
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("src"))
 
+from gaia.messaging import telegram as telegram_module
 from gaia.messaging.telegram import UNAUTHORIZED_REPLY, TelegramAdapter
 
 
 def test_run_telegram_scaffold_returns_adapter(mock_home, monkeypatch):
-    # Ensure local "src" directory is on sys.path for imports during tests
-    sys.path.insert(0, os.path.abspath("src"))
     from gaia.messaging.telegram import run_telegram
 
     # GAIA_TEST_MODE stops real polling; mock_home keeps the background pid/log
     # files out of the developer's real ~/.gaia (see test_telegram_background).
     monkeypatch.setenv("GAIA_TEST_MODE", "1")
 
-    # Run in background mode so the function does not block; in CI the
-    # python-telegram-bot runtime may not be available, so guard accordingly.
-    monkeypatch.setitem(sys.modules, "telegram", MagicMock())
-    monkeypatch.setitem(sys.modules, "telegram.ext", MagicMock())
     adapter = run_telegram(
         token="fake-token-123", allowed_users={12345}, background=True
     )
     assert adapter.token == "fake-token-123"
     assert 12345 in adapter.allowed_users
-    assert adapter.application is not None
-
-
-@pytest.mark.allow_network
-def test_background_start_keeps_polling_process_alive_until_stopped(
-    mock_home, monkeypatch
-):
-    poll_started = threading.Event()
-    poll_stopped = threading.Event()
-    signal_handlers = {}
-    polling_kwargs = {}
-
-    class FakeApplication:
-        def add_handler(self, handler):
-            pass
-
-        def run_polling(self, **kwargs):
-            polling_kwargs.update(kwargs)
-            poll_started.set()
-            asyncio.get_event_loop().run_forever()
-            poll_stopped.set()
-
-    app = FakeApplication()
-
-    class FakeBuilder:
-        def token(self, token):
-            assert token == "fake-token"
-            return self
-
-        def build(self):
-            return app
-
-    class FakeFilter:
-        def __and__(self, other):
-            return self
-
-        def __invert__(self):
-            return self
-
-    fake_telegram = types.ModuleType("telegram")
-    fake_ext = types.ModuleType("telegram.ext")
-    fake_ext.ApplicationBuilder = FakeBuilder
-    fake_ext.CommandHandler = lambda *args: object()
-    fake_ext.MessageHandler = lambda *args: object()
-    fake_ext.filters = SimpleNamespace(ALL=FakeFilter(), COMMAND=FakeFilter())
-    fake_telegram.ext = fake_ext
-    monkeypatch.setitem(sys.modules, "telegram", fake_telegram)
-    monkeypatch.setitem(sys.modules, "telegram.ext", fake_ext)
-
-    class FakeHTTPServer:
-        def __init__(self, address, handler):
-            self.timeout = 0.01
-
-        def handle_request(self):
-            time.sleep(self.timeout)
-
-    monkeypatch.setattr("http.server.HTTPServer", FakeHTTPServer)
-    monkeypatch.setattr(
-        "gaia.messaging.telegram.signal.signal",
-        lambda sig, handler: signal_handlers.__setitem__(sig, handler),
-    )
-
-    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
-    adapter.start(token="fake-token", background=True)
-
-    assert poll_started.wait(timeout=2)
-    assert adapter._poll_thread is not None
-    assert not adapter._poll_thread.daemon
-    assert signal.SIGTERM in signal_handlers
-    assert polling_kwargs == {"stop_signals": None}
-
-    signal_handlers[signal.SIGTERM](signal.SIGTERM, None)
-    adapter._poll_thread.join(timeout=2)
-    assert not adapter._poll_thread.is_alive()
-    assert poll_stopped.is_set()
+    # Test mode returns before any HTTP client exists, so none can leak.
+    assert adapter.api is None
 
 
 @pytest.mark.asyncio
@@ -164,59 +86,19 @@ async def test_allowed_user_gets_start_greeting():
     assert reply_text.await_args.args[0].startswith("Hello! I'm Gaia.")
 
 
-def test_every_registered_update_handler_enforces_the_allowlist(mock_home, monkeypatch):
-    """Every callback actually registered with Telegram must be guarded."""
-
-    class FakeHandler:
-        def __init__(self, *args):
-            self.callback = args[-1]
-
-    class FakeApplication:
-        def __init__(self):
-            self.handlers = []
-
-        def add_handler(self, handler):
-            self.handlers.append(handler)
-
-    app = FakeApplication()
-
-    class FakeBuilder:
-        def token(self, token):
-            assert token == "fake-token"
-            return self
-
-        def build(self):
-            return app
-
-    class FakeFilter:
-        def __and__(self, other):
-            return self
-
-        def __invert__(self):
-            return self
-
-    fake_telegram = types.ModuleType("telegram")
-    fake_ext = types.ModuleType("telegram.ext")
-    fake_ext.ApplicationBuilder = FakeBuilder
-    fake_ext.CommandHandler = FakeHandler
-    fake_ext.MessageHandler = FakeHandler
-    fake_ext.filters = SimpleNamespace(ALL=FakeFilter(), COMMAND=FakeFilter())
-    fake_telegram.ext = fake_ext
-    monkeypatch.setitem(sys.modules, "telegram", fake_telegram)
-    monkeypatch.setitem(sys.modules, "telegram.ext", fake_ext)
-    monkeypatch.setenv("GAIA_TEST_MODE", "1")
-
-    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
-    adapter.start(token="fake-token", background=True)
-
-    callbacks = [handler.callback for handler in app.handlers]
-    assert callbacks, "no Telegram handlers were registered"
+def test_every_dispatched_handler_enforces_the_allowlist():
+    """Every handler ``_dispatch`` can route an update to must be guarded."""
+    source = inspect.getsource(TelegramAdapter._dispatch)
+    handlers = set(re.findall(r"self\.(_handle_\w+)\(", source))
+    assert handlers, "no Telegram handlers are dispatched"
     unguarded = [
-        callback.__name__
-        for callback in callbacks
-        if not getattr(callback, "__gaia_allowlist_guarded__", False)
+        name
+        for name in sorted(handlers)
+        if not getattr(
+            getattr(TelegramAdapter, name), "__gaia_allowlist_guarded__", False
+        )
     ]
-    assert not unguarded, f"registered handlers missing @require_allowed: {unguarded}"
+    assert not unguarded, f"dispatched handlers missing @require_allowed: {unguarded}"
 
 
 @pytest.mark.asyncio
@@ -491,3 +373,99 @@ async def test_unsupported_media_type_replies_directly(monkeypatch, media_type):
     reply_text.assert_awaited_once_with(
         "Unsupported media type — I can handle photos and documents."
     )
+
+
+def _text_update(user_id, text, reply):
+    return SimpleNamespace(
+        effective_user=SimpleNamespace(id=user_id),
+        message=SimpleNamespace(
+            text=text,
+            photo=[],
+            document=None,
+            reply_text=AsyncMock(return_value=reply),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_stops_streaming_is_stopped_and_frees_the_bot(monkeypatch):
+    """Updates are handled one at a time, so a wedged reply held every chat."""
+    release = threading.Event()
+    closed = threading.Event()
+
+    class WedgedSession:
+        def send_stream(self, text):
+            try:
+                yield SimpleNamespace(text="Partial")
+                release.wait(10)
+                yield SimpleNamespace(text=" more")
+            finally:
+                closed.set()
+
+    stuck_session = WedgedSession()
+    monkeypatch.setitem(telegram_module._USER_SESSIONS, 1, stuck_session)
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session",
+        lambda uid: telegram_module._USER_SESSIONS[uid],
+    )
+    adapter = TelegramAdapter(token="t", allowed_users={1}, idle_limit=1.0)
+    reply = AsyncMock()
+    update = _text_update(1, "hello", reply)
+
+    started = time.monotonic()
+    await asyncio.wait_for(adapter._handle_message(update, None), timeout=8)
+    assert time.monotonic() - started < 8
+
+    final = reply.edit_text.await_args_list[-1].args[0]
+    assert final.startswith("Partial\n\n")
+    assert "without progress" in final
+    assert "new conversation" in final
+    # The stuck generation keeps its session; the next message gets a new one.
+    assert 1 not in telegram_module._USER_SESSIONS
+
+    # Once the stream yields again it is closed, not read further.
+    release.set()
+    assert await asyncio.to_thread(closed.wait, 5)
+    assert all(" more" not in c.args[0] for c in reply.edit_text.await_args_list)
+
+
+def test_idle_limit_must_be_positive():
+    with pytest.raises(ValueError, match="idle_limit"):
+        TelegramAdapter(token="t", allowed_users={1}, idle_limit=0)
+
+
+@pytest.mark.asyncio
+async def test_a_turn_stopped_before_its_thread_ran_never_sends_later(monkeypatch):
+    """The executor was busy, so the stopped turn's thread starts late. It must
+    not then send the old question, nor touch the user's session."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    sent = []
+
+    class Session:
+        def send_stream(self, text):
+            sent.append(text)
+            yield SimpleNamespace(text="ok")
+
+    session = Session()
+    monkeypatch.setitem(telegram_module._USER_SESSIONS, 1, session)
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session",
+        lambda uid: telegram_module._USER_SESSIONS[uid],
+    )
+    loop = asyncio.get_running_loop()
+    pool = ThreadPoolExecutor(1)
+    loop.set_default_executor(pool)
+    gate = threading.Event()
+    loop.run_in_executor(None, gate.wait)  # the one worker is held elsewhere
+
+    adapter = TelegramAdapter(token="t", allowed_users={1}, idle_limit=0.3)
+    old = _text_update(1, "old question", AsyncMock())
+    await adapter._handle_message(old, None)
+    gate.set()
+    await asyncio.sleep(0.3)  # the stale generation gets its thread now
+    await adapter._handle_message(_text_update(1, "new question", AsyncMock()), None)
+    pool.shutdown(wait=True)
+
+    assert sent == ["new question"]
+    assert telegram_module._USER_SESSIONS[1] is session

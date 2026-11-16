@@ -12,6 +12,7 @@ coexistence, and transaction atomicity.
 """
 
 import datetime
+import sqlite3
 from unittest.mock import patch
 
 import pytest
@@ -125,12 +126,12 @@ class TestCheckIntegrity:
         # Confirm the schema is healthy before we break it.
         assert service.table_exists("files")
 
-        # Patch query() so that the PRAGMA integrity_check returns a failure.
+        # Patch query() so that the PRAGMA quick_check returns a failure.
         original_query = service.query
 
         def _bad_integrity(sql, *args, **kwargs):
-            if "integrity_check" in sql:
-                return {"integrity_check": "*** corruption detected ***"}
+            if "quick_check" in sql:
+                return {"quick_check": "*** corruption detected ***"}
             return original_query(sql, *args, **kwargs)
 
         with patch.object(service, "query", side_effect=_bad_integrity):
@@ -145,18 +146,37 @@ class TestCheckIntegrity:
 
         service.close_db()
 
-    def test_integrity_check_exception_triggers_rebuild(self, tmp_path):
-        """When the PRAGMA itself raises, the database is rebuilt."""
+    def test_integrity_check_corruption_error_triggers_rebuild(self, tmp_path):
+        """When the PRAGMA reports a malformed database, it is rebuilt."""
         db_path = str(tmp_path / "exc_test.db")
         service = FileSystemIndexService(db_path=db_path)
 
-        with patch.object(service, "query", side_effect=RuntimeError("disk I/O error")):
+        malformed = sqlite3.DatabaseError("database disk image is malformed")
+        with patch.object(service, "query", side_effect=malformed):
             result = service._check_integrity()
 
         assert result is False
         assert service.table_exists("files")
 
         service.close_db()
+
+    def test_integrity_check_io_error_raises_and_keeps_the_file(self, tmp_path):
+        """A disk I/O error is not corruption: raise, close, keep the file."""
+        db_path = tmp_path / "exc_test.db"
+        service = FileSystemIndexService(db_path=str(db_path))
+        service.add_bookmark(str(tmp_path), label="keep me")
+
+        io_error = sqlite3.OperationalError("disk I/O error")
+        with patch.object(service, "query", side_effect=io_error):
+            with pytest.raises(sqlite3.OperationalError, match="disk I/O"):
+                service._check_integrity()
+
+        assert service._db is None
+        reopened = FileSystemIndexService(db_path=str(db_path))
+        try:
+            assert [b["label"] for b in reopened.list_bookmarks()] == ["keep me"]
+        finally:
+            reopened.close_db()
 
 
 class TestScratchpadIntegrity:
@@ -632,29 +652,23 @@ class TestSharedDatabase:
             index_svc.close_db()
 
 
-class TestSanitizeNameAllSpecialChars:
-    """Edge case: _sanitize_name with all-special-character input."""
+class TestValidateNameAllSpecialChars:
+    """Edge case: _validate_name with all-special-character input."""
 
-    def test_all_special_chars_becomes_underscores(self, scratchpad):
-        """A name made entirely of special characters becomes all underscores.
+    def test_all_special_chars_rejected(self, scratchpad):
+        """A name made entirely of special characters is refused."""
+        with pytest.raises(ValueError, match="Invalid table name"):
+            scratchpad._validate_name("!@#$%^&*()")
 
-        re.sub(r"[^a-zA-Z0-9_]", "_", "!@#$%^&*()") produces "__________".
-        Since the first character is '_' (not a digit), no 't_' prefix is added.
-        """
-        result = scratchpad._sanitize_name("!@#$%^&*()")
-        expected = "_" * len("!@#$%^&*()")
-        assert result == expected
+    def test_injection_attempt_rejected(self, scratchpad):
+        """SQL in a table name is refused before it reaches any statement."""
+        with pytest.raises(ValueError, match="Invalid table name"):
+            scratchpad.create_table("x; DROP TABLE files", "a TEXT")
 
-    def test_single_special_char(self, scratchpad):
-        """Single special character becomes a single underscore."""
-        result = scratchpad._sanitize_name("!")
-        assert result == "_"
-
-    def test_mixed_special_and_digits(self, scratchpad):
-        """Special chars mixed with leading digit gets t_ prefix."""
-        result = scratchpad._sanitize_name("1-2-3")
-        # "1-2-3" -> "1_2_3" then starts with digit -> "t_1_2_3"
-        assert result == "t_1_2_3"
+    def test_non_string_rejected(self, scratchpad):
+        """A non-string name is refused with the same rule."""
+        with pytest.raises(ValueError, match="letters, digits and underscores"):
+            scratchpad._validate_name(123)
 
 
 class TestCreateTableUnusualColumns:

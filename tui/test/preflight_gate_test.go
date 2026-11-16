@@ -16,6 +16,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 	"github.com/amd/gaia/tui/internal/ui/status"
@@ -304,7 +305,9 @@ func (d *rootDriver) transport() *gateTransport {
 // hold squeezed to keep the tests fast.
 func newRootDriver(t *testing.T, g preflight.Transport, w, h int) *rootDriver {
 	t.Helper()
-	return newRootDriverOpts(t, g, w, h, preflight.Options{ReadyHold: time.Millisecond})
+	// Full motion: go test's output is not a terminal, which would otherwise
+	// switch the gate's spinner off.
+	return newRootDriverOpts(t, g, w, h, preflight.Options{ReadyHold: time.Millisecond, Motion: &modelsetup.Motion{}})
 }
 
 // newRootDriverOpts is newRootDriver with the gate's options spelled out —

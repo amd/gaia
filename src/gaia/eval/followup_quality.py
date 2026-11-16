@@ -485,11 +485,6 @@ def default_followup_thresholds_path() -> Path:
     return resolve_repo_fixture("email", "followups_gate_thresholds.json")
 
 
-def load_default_followup_thresholds() -> FollowupThresholds:
-    """Load the committed follow-up-gate thresholds (loud if absent/malformed)."""
-    return load_followup_thresholds(default_followup_thresholds_path())
-
-
 def evaluate_followup_gate(
     aggregate: Mapping[str, Any], thresholds: FollowupThresholds
 ) -> dict[str, Any]:

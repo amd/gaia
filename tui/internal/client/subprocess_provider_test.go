@@ -165,6 +165,33 @@ func TestPendingCloudSelectionLaunchesAgainstEmbeddedEndpoint(t *testing.T) {
 	}
 }
 
+// GAIA's own, chosen in the Agent UI over LEMONADE_BASE_URL: the child is
+// pinned to GAIA's server and told it is GAIA's, like the Python agent.
+func TestSubprocessFollowsGAIAsOwnOverAnIgnoredLemonadeBaseURL(t *testing.T) {
+	dir := isolateSubprocessConnection(t)
+	t.Setenv("GAIA_CONFIG_FILE", "")
+	t.Setenv("GAIA_CONFIG_DIR", "")
+	t.Setenv("GAIA_LEMONADE_EMBEDDED", "")
+	cfg := `{"lemonade_mode":"gaia","lemonade_env_url_ignored":"http://127.0.0.1:59999/api/v1"}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(dir, "lemonade")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "state.json"), []byte(`{"port":63207,"api_key":"k"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+	if got := detectLemonadeURL(); got != "http://localhost:63207/api/v1" {
+		t.Fatalf("the child would be pinned to %q, want GAIA's own", got)
+	}
+	if !markEmbedded() {
+		t.Fatal("the child would treat GAIA's own endpoint as a chosen server")
+	}
+}
+
 func TestSubprocessLegacyDiscoveryAuthenticatesAndRefusesRedirects(t *testing.T) {
 	isolateSubprocessConnection(t)
 	t.Setenv("LEMONADE_API_KEY", "explicit-router-key")
@@ -199,6 +226,34 @@ func TestSubprocessDoesNotProbeWhileGAIAsLemonadeRestarts(t *testing.T) {
 	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("someone else's Lemonade was probed during the restart")
 		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer foreign.Close()
+	replaceSubprocessPorts(t, foreign.URL)
+	if got := detectLemonadeURL(); got != "" {
+		t.Fatalf("the child would be pinned to %q", got)
+	}
+}
+
+// With the user's own Lemonade saved, the child reads that choice itself; the
+// TUI must not pin it to GAIA's server or a probed port.
+func TestSubprocessLeavesTheSavedLemonadeToTheChild(t *testing.T) {
+	dir := isolateSubprocessConnection(t)
+	t.Setenv("GAIA_CONFIG_FILE", "")
+	t.Setenv("GAIA_CONFIG_DIR", "")
+	t.Setenv("GAIA_LEMONADE_EMBEDDED", "")
+	cfg := `{"lemonade_mode":"external","lemonade_base_url":"http://localhost:13305/api/v1"}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(dir, "lemonade")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "state.json"), []byte(`{"port":63207,"api_key":"k"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	foreign := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("a legacy port was probed in external mode")
 	}))
 	defer foreign.Close()
 	replaceSubprocessPorts(t, foreign.URL)

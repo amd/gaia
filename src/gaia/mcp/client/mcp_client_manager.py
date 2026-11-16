@@ -2,17 +2,23 @@
 # SPDX-License-Identifier: MIT
 """Manager for multiple MCP client connections."""
 
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FutureTimeoutError
 from concurrent.futures import as_completed
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from gaia.logger import get_logger
 
 from .config import MCPConfig
-from .mcp_client import MCPClient
+from .mcp_client import MCPClient, MCPToolDeclarationError, server_timeout
 
 logger = get_logger(__name__)
+
+
+#: How long load_from_config waits for every server to connect; generous
+#: for legitimate servers. One still connecting then is stopped.
+_CONNECT_TIMEOUT_S = 10.0
 
 
 class MCPClientManager:
@@ -79,7 +85,7 @@ class MCPClientManager:
             raise RuntimeError(f"Failed to connect to MCP server '{name}'{detail}")
 
         # Store client (in-memory only).
-        # Persistence to ~/.gaia/mcp_servers.json goes through the connectors
+        # Persistence to <gaia_home>/mcp_servers.json goes through the connectors
         # framework (see gaia.connectors.mcp_server.McpServerHandler.configure)
         # — this manager is a runtime registry, not a writer (#976).
         self._clients[name] = client
@@ -109,6 +115,18 @@ class MCPClientManager:
         # gaia.connectors.mcp_server.McpServerHandler.disconnect (#976).
 
         logger.debug(f"Successfully removed MCP server: {name}")
+
+    def refuse_server(self, name: str, error: str) -> None:
+        """Disconnect a connected server and report it failed with ``error``."""
+        logger.error("Refusing MCP server '%s': %s", name, error)
+        client = self._clients.pop(name, None)
+        if client is not None:
+            client.disconnect()
+        self._failed[name] = error
+
+    def failure(self, name: str) -> Optional[str]:
+        """Why ``name`` failed to load, or ``None`` if no failure is recorded."""
+        return self._failed.get(name)
 
     def get_client(self, name: str) -> Optional[MCPClient]:
         """Get a client by name.
@@ -150,6 +168,22 @@ class MCPClientManager:
         from gaia.connectors.activations import is_agent_active
 
         return [name for name in self._clients if is_agent_active(name, agent_id)]
+
+    def failed_servers_for_agent(self, agent_id: Optional[str]) -> Dict[str, str]:
+        """Return ``{name: error}`` for servers that failed to connect.
+
+        Filtered like :meth:`servers_for_agent`: a server not activated for
+        *agent_id* would not reach it even when connected.
+        """
+        if agent_id is None:
+            return dict(self._failed)
+        from gaia.connectors.activations import is_agent_active
+
+        return {
+            name: error
+            for name, error in self._failed.items()
+            if is_agent_active(name, agent_id)
+        }
 
     def tools_for_agent(self, agent_id: Optional[str]) -> Dict[str, List]:
         """Return ``{server_name: [MCPTool, ...]}`` filtered by activation.
@@ -266,42 +300,94 @@ class MCPClientManager:
         # A hard timeout prevents a hanging stdio server from blocking agent
         # construction indefinitely — the underlying readline() has no OS-level
         # timeout, so we impose one here at the futures layer.
-        _CONNECT_TIMEOUT = 10.0  # seconds; generous for legitimate servers
+
+        # Every client started, so one still connecting at the deadline can
+        # be stopped rather than left running with its pipes open.
+        started: Dict[str, MCPClient] = {}
+        # Names given up on at the deadline. A worker that finishes later
+        # stops its own server, so a late success never runs unrecorded.
+        abandoned: Set[str] = set()
+        abandon_lock = threading.Lock()
 
         def _connect_one(name, server_config):
             try:
                 client = MCPClient.from_config(name, server_config, debug=self.debug)
-                if client.connect():
-                    return name, client, None
-                return name, None, client.last_error
+                with abandon_lock:
+                    started[name] = client
+                connected = client.connect()
+                with abandon_lock:
+                    late = name in abandoned
+                if late:
+                    client.disconnect()
+                    return name, None, "connected after the deadline; stopped"
+                if not connected:
+                    return name, None, client.last_error
+                # Refused here too, so a reload can't bring a bad server back.
+                for tool in client.list_tools():
+                    try:
+                        tool.declared_dedup_key(name)
+                    except MCPToolDeclarationError as e:
+                        logger.error("Refusing MCP server '%s': %s", name, e)
+                        client.disconnect()
+                        return name, None, str(e)
+                return name, client, None
             except Exception as e:
                 return name, None, str(e)
 
+        # A server that asks for a longer handshake (a cold npx download) gets
+        # it; the shared deadline is the longest any server asks for. A server
+        # whose timeout is invalid fails on its own, not the whole load.
+        deadline_s = _CONNECT_TIMEOUT_S
+        for name, cfg in list(to_connect.items()):
+            try:
+                deadline_s = max(deadline_s, server_timeout(name, cfg, deadline_s))
+            except ValueError as e:
+                self._failed[name] = str(e)
+                logger.warning("Skipping MCP server '%s': %s", name, e)
+                del to_connect[name]
+        if not to_connect:
+            return
         pool = ThreadPoolExecutor(max_workers=len(to_connect))
         futures = {
             pool.submit(_connect_one, name, cfg): name
             for name, cfg in to_connect.items()
         }
+        handled = set()
+
+        def _record(future) -> None:
+            name, client, error = future.result()
+            handled.add(name)
+            if client is not None:
+                self._clients[name] = client
+                self._failed.pop(name, None)
+                logger.debug(f"Loaded MCP server: {name}")
+            else:
+                self._failed[name] = error or "Unknown error"
+                logger.debug(f"Failed to connect to server '{name}': {error}")
+
         try:
-            for future in as_completed(futures, timeout=_CONNECT_TIMEOUT):
-                name, client, error = future.result()
-                if client is not None:
-                    self._clients[name] = client
-                    self._failed.pop(name, None)
-                    logger.debug(f"Loaded MCP server: {name}")
-                else:
-                    self._failed[name] = error or "Unknown error"
-                    logger.debug(f"Failed to connect to server '{name}': {error}")
+            for future in as_completed(futures, timeout=deadline_s):
+                _record(future)
         except _FutureTimeoutError:
             for future, server_name in futures.items():
-                if not future.done():
+                if server_name in handled:
+                    continue
+                if future.done():
+                    # Finished between the deadline and this check.
+                    _record(future)
+                else:
                     self._failed[server_name] = (
-                        f"Connection timed out after {_CONNECT_TIMEOUT:.0f}s"
+                        f"Connection timed out after {deadline_s:.0f}s"
                     )
+                    with abandon_lock:
+                        abandoned.add(server_name)
+                        client = started.get(server_name)
+                    if client is not None:
+                        client.disconnect()
                     logger.warning(
                         "MCP server '%s' did not respond within %.0fs; skipping",
                         server_name,
-                        _CONNECT_TIMEOUT,
+                        deadline_s,
                     )
         finally:
             # wait=False: don't block on threads that are stuck in readline().

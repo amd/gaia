@@ -18,8 +18,6 @@ import pytest
 
 from gaia.daemon.broker import LeasePriority, ModelSlotBroker
 
-_LEMONADE_URL = "http://localhost:13305"
-
 
 def _downloaded_models(client):
     return [
@@ -32,7 +30,7 @@ def _downloaded_models(client):
 def test_broker_serializes_concurrent_real_loads(require_lemonade):
     from gaia.llm.lemonade_client import LemonadeClient
 
-    client = LemonadeClient(base_url=_LEMONADE_URL, verbose=False)
+    client = LemonadeClient(verbose=False)
     models = _downloaded_models(client)
     if not models:
         pytest.skip("no downloaded Lemonade models available to exercise the broker")

@@ -42,7 +42,9 @@ def test_complete_install_still_spawns(monkeypatch, no_daemon_running):
     spawned = []
     monkeypatch.setattr(client, "missing_daemon_deps", lambda: [])
     monkeypatch.setattr(
-        client, "_spawn_and_wait", lambda t, on_progress=None: spawned.append(t)
+        client,
+        "_spawn_and_wait",
+        lambda t, on_progress=None, drop_env=(): spawned.append(t),
     )
 
     client.start_or_attach(timeout=1)

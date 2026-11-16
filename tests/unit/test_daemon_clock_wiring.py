@@ -28,6 +28,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -134,6 +135,8 @@ def test_build_register_starts_refresher_then_clock_and_writes_instance(daemon_h
     lemonade_owner.ensure_in_background.side_effect = lambda: calls.append(
         "lemonade.ensure"
     )
+    lemonade_clients = mock.Mock()
+    lemonade_clients.start.side_effect = lambda: calls.append("clients.start")
 
     register = daemon_server._build_register(
         specs={},
@@ -145,10 +148,16 @@ def test_build_register_starts_refresher_then_clock_and_writes_instance(daemon_h
         refresher=refresher,
         clock=clock,
         lemonade_owner=lemonade_owner,
+        lemonade_clients=lemonade_clients,
     )
     register()
 
-    assert calls == ["refresher.start", "clock.start", "lemonade.ensure"]
+    assert calls == [
+        "refresher.start",
+        "clock.start",
+        "lemonade.ensure",
+        "clients.start",
+    ]
     inst = instance_mod.read_instance()
     assert inst is not None
     assert inst.pid == 4242
@@ -175,6 +184,7 @@ def test_build_register_rolls_back_refresher_and_instance_on_clock_start_failure
         refresher=refresher,
         clock=clock,
         lemonade_owner=mock.Mock(),
+        lemonade_clients=mock.Mock(),
     )
 
     with pytest.raises(RuntimeError, match="clock exploded"):
@@ -204,6 +214,7 @@ def test_build_register_rolls_back_instance_on_refresher_start_failure(daemon_ho
         refresher=refresher,
         clock=clock,
         lemonade_owner=mock.Mock(),
+        lemonade_clients=mock.Mock(),
     )
 
     with pytest.raises(RuntimeError, match="refresher exploded"):
@@ -235,6 +246,8 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
     lemonade.shutdown.side_effect = lambda: calls.append("lemonade.shutdown")
     lemonade_owner = mock.Mock()
     lemonade_owner.stop.side_effect = lambda: calls.append("lemonade_owner.stop")
+    lemonade_clients = mock.Mock()
+    lemonade_clients.stop.side_effect = lambda: calls.append("clients.stop")
 
     deregister = daemon_server._build_deregister(
         registry=registry,
@@ -244,6 +257,7 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
         clock=clock,
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,
+        lemonade_clients=lemonade_clients,
     )
     deregister()
 
@@ -252,6 +266,7 @@ def test_build_deregister_calls_in_exact_order(daemon_home):
     # server out from under it turns a clean shutdown into a wave of
     # connection errors in the logs.
     assert calls == [
+        "clients.stop",
         "refresher.stop",
         "clock.stop",
         "registry.shutdown_all",
@@ -278,6 +293,7 @@ def test_build_deregister_still_deregisters_when_lemonade_will_not_stop(daemon_h
         clock=mock.Mock(),
         lemonade=mock.Mock(),
         lemonade_owner=lemonade_owner,
+        lemonade_clients=mock.Mock(),
     )
     deregister()
 
@@ -432,3 +448,53 @@ def test_no_autonomy_reference_in_scheduler_wiring():
     assert offenders == [], (
         "found a forbidden 'autonomy' reference (case-insensitive) in: " f"{offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Pass hooks: GAIA automations ride the daemon clock
+# ---------------------------------------------------------------------------
+
+
+def test_build_clock_gives_automations_a_pass(daemon_home):
+    from gaia.automations.daemon_tick import AutomationsTick
+
+    clock = daemon_server._build_clock(str(paths.scheduler_db_path()))
+
+    assert [type(h) for h in clock._on_pass] == [AutomationsTick]
+
+
+def test_every_polling_pass_runs_the_hooks_and_a_failing_one_is_logged(
+    daemon_home, caplog
+):
+    calls = []
+
+    def boom():
+        calls.append("boom")
+        raise RuntimeError("hook broke")
+
+    clock = DaemonClock(
+        str(paths.scheduler_db_path()),
+        executors={},
+        poll_seconds=0.05,
+        on_pass=[boom, lambda: calls.append("ok")],
+    )
+    with caplog.at_level(logging.ERROR, logger="gaia.daemon.scheduler.clock"):
+        clock.start()
+        try:
+            deadline = time.time() + 5
+            while calls.count("ok") < 2 and time.time() < deadline:
+                time.sleep(0.02)
+        finally:
+            clock.stop()
+
+    assert calls.count("ok") >= 2, "one failing hook must not stop the others"
+    assert any("hook broke" in (r.exc_text or "") for r in caplog.records)
+
+
+def test_stopping_the_clock_stops_hooks_that_hold_something(daemon_home):
+    hook = mock.Mock()
+    clock = DaemonClock(str(paths.scheduler_db_path()), executors={}, on_pass=[hook])
+    clock.start()
+    clock.stop()
+
+    hook.stop.assert_called_once_with()

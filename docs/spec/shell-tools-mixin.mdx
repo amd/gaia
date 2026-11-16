@@ -29,8 +29,9 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 - `run_shell_command` is confirmation-gated, so interactively every call is shown to the user
 - Read-only list (`ALLOWED_COMMANDS`): what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
 - Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval unless the console's `full_access` is on
-- `TIER_REFUSE` for what a yes/no can't describe honestly (`gh auth token`, encoded PowerShell, `git -c`), however the program is spelled, and for shapes the runner can't execute (stray operators, broken quoting)
-- Every command on a line validated before any of it runs, so one `TIER_REFUSE` segment stops the whole line
+- `TIER_CONFIRM_ONCE` for what GAIA's own checks don't cover (`git push`, `git -c`, `python -c`, uninspectable PowerShell, shell operators, a path outside the allowed folders): the prompt shows the exact line and its full folder with a risk note, offers no "always", and an approval runs that line once through the shell. A multi-line command (a heredoc) is one of these too: the prompt shows every line, and each line is checked like the first. It is refused under a blanket pre-approval, and `wait_for_condition` never polls one
+- `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible characters or a carriage return, broken quoting, and on Windows a second line, which cmd.exe never runs), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), for a granted CLI's `never_offered_actions` (`gh issue close`, `gh pr merge`), and for any of these run through a launcher such as `sudo`, `env`, `timeout`, `nice` or `xargs` (an unfamiliar launcher option is read both ways, so it can't hide the command), and for folders no approval may open. A command refused on its text ends its hint with `NOT_APPROVABLE`, so the agent doesn't tell the user to approve it
+- Every command on a line validated before any of it runs, and the strictest segment decides the line: one `TIER_REFUSE` segment stops it, one `TIER_CONFIRM_ONCE` segment makes the whole line a one-time approval
 - Path validation for all file-like arguments
 - Git subcommand filtering (write subcommands are `TIER_CONFIRM`)
 - Rate limits prevent DOS attacks
@@ -56,6 +57,10 @@ refused command anywhere refuses the line before any of it runs, and one
 confirmation covers the line. The result carries the combined output, the exit
 code of the last command that ran, and a `steps` list giving each command and
 its own exit code.
+
+Grouping steps in parentheses, `(a || b) && c`, is refused before anything
+runs, with a hint to write the chain without them: each step runs on its own,
+so the parentheses would otherwise reach the commands as `(a` and `b)`.
 
 `2>&1` and `2>/dev/null` are the only redirections allowed, because they are
 the only two that name no file: they say where a command's stderr goes, and
@@ -94,7 +99,8 @@ allowed-paths rule as an argument, on every segment.
 
 Refused by name are the loader and hook variables — anything that changes
 *which* binary runs or what code one loads: `PATH`, `SHELL`, `ENV`, `IFS`,
-`PAGER`/`EDITOR`/`VISUAL`, and the `LD_*`, `DYLD_*`, `GIT_*`, `GH_*`,
+`PAGER`/`EDITOR`/`VISUAL`, `MORE` (macOS `more` is `less` and reads its options
+from it), and the `LD_*`, `DYLD_*`, `GIT_*`, `GH_*`,
 `PYTEST_*`, `BASH_*`, `NODE_*`, `PERL*`, `RUBY*`, `LESS*`, `JAVA*`, `PS*`
 families. Names match case-insensitively, because Windows matches environment
 names that way. An assignment with no command after it, and one in front of
@@ -112,6 +118,10 @@ travels in it, spelled `2>nul`, because there the shell owns the pipeline. A
 step carrying an environment assignment is the exception: `cmd.exe` would apply
 it to the whole string, so that step runs as argv on Windows too, and gives up
 `cmd.exe`'s built-in resolution (`dir`, `type`) to keep the assignment scoped.
+Any step that runs as argv on Windows starts, for each segment, the program
+PATH finds, never one in the working folder; a program missing from PATH, or
+found only as a `.bat`/`.cmd` that needs `cmd.exe`, fails the step before any
+of its segments starts.
 
 ---
 
@@ -244,13 +254,15 @@ class ShellToolsMixin:
 
         Returns:
             {
-                "status": "success" | "error",
+                "status": "success" | "error",   # "error" when a command failed
+                "error": str,    # On failure: "'<step>' exited with code N: <last stderr line>"
+                "expected_exit": str,  # A documented answer exit, e.g. grep's 1 (no match)
                 "command": str,
                 "stdout": str,   # every command's output, in order
                 "stderr": str,
                 "return_code": int,   # the last command that ran
                 "has_errors": bool,
-                "steps": list,   # [{"command": str, "return_code": int}, ...]
+                "steps": list,   # [{"command": str, "return_code": int, "expected_exit"?: str}, ...]
                 "duration_seconds": float,
                 "timeout": int,           # The applied timeout
                 "timeout_class": str,     # Which class it came from
@@ -301,6 +313,25 @@ class ShellToolsMixin:
         pass
 ```
 
+### Exit Status
+
+A command that ran and failed is `status: "error"`, and `error` names the first
+step that failed with nothing on the line handling it, its exit code, and the
+last line of its stderr. A timeout, a Stop, and a missing program are errors
+too. `stdout`, `stderr`, `return_code` and `steps` are filled in either way.
+
+- `a || b` handles a failure of `a`; `a; b` and `a && b` do not, so `pytest -q; ls`
+  is an error even though `ls` exits 0.
+- A test, lint or build runner whose own summary reports failures is an error
+  even at exit 0, as with `pytest | tail` under cmd.exe.
+- A few programs document exit 1 as an answer rather than a failure: `grep`,
+  `egrep`, `fgrep`, `rg` and `findstr` (nothing matched), `diff`, `cmp` and `fc`
+  (the inputs differ), `git grep`, and `git diff` with `--exit-code`, `--quiet`
+  or `--no-index`. That exit stays `status: "success"` and the result carries
+  `expected_exit` with the reason. In a pipeline only the last stage counts, and
+  on macOS and Linux, where GAIA runs each stage itself, only when every earlier
+  stage exited 0. Exit 2 or higher is still an error.
+
 ### Adaptive Timeouts
 
 A flat 30s timeout kills the commands that legitimately take minutes. The
@@ -312,14 +343,34 @@ classifies it and applies the class default. An explicit `timeout=` always wins.
 | `test` | 900s | pytest, tox, jest/vitest, `cargo test`, `go test`, `npm test`, `mvn test`, `gaia eval` |
 | `build` | 1800s | pip/uv/poetry/conda/apt installs, make, cmake, ninja, msbuild, tsc, `cargo build`, `npm ci`, `docker build` |
 | `network` | 300s | `git clone/fetch/pull/push`, gh, curl, wget, ssh/scp/rsync, `docker pull` |
+| `script` | 600s | a script run by an interpreter — `python x.py`, `python -m pkg`, `python -c`, node, Rscript, bash/pwsh scripts, `./x.sh` |
 | `default` | 30s | everything else — the read-only allowlist (ls, cat, grep, `git status`) |
 
 A pipeline takes the longest class of any segment: `pytest -q \| tail` is a test
 run whose output happens to be filtered. Wrappers are transparent, so
 `python -m pytest`, `uv run pytest` and `npx jest` all classify as `test`.
+Python launchers still count, though: `python -m mypkg` or `python analyze.py`
+runs a script, so it gets `script`, not the 30s default. A shell handed a command
+line (`bash -lc "pip install x"`, `cmd /c build.bat`) takes that command line's
+class.
+
+Dev servers stay at the 30s default whatever launches them: `python -m
+http.server`, `python app.py`, `manage.py runserver`, `node server.js`, `uvicorn`,
+`flask run`, `npm start`, `npm run dev`, bare `vite`. A server never exits, so a
+longer budget would only hold the turn longer with nothing to show.
 
 A timeout above the 3600s ceiling is **refused, not clamped** — a command killed
 at a limit its caller never chose is a failure with no visible cause.
+
+A command killed at its timeout still returns what it printed: commands run
+with `PYTHONUNBUFFERED=1` unless the command or the user's environment sets it,
+so a Python child's output isn't lost in its buffer. The result's `hint` never
+suggests a larger timeout. For a `test` or `script` command it names the files
+the turn changed and says to run the check on just those, or, with nothing
+changed, to narrow the run to one test file or the edited files: a repo-wide
+lint or test run that blew one budget usually blows a bigger one too. Any other
+class is pointed at a background run polled with `wait_for_condition`, or at
+shorter steps.
 
 ### Waiting Without Spinning
 
@@ -392,11 +443,24 @@ if cmd_base not in ALLOWED_COMMANDS:
     }
 ```
 
+Membership is by name, and a read-only name says nothing about its flags, so the
+flags that write, change system state, or run something are inspected per
+pipeline segment and sent to the prompt (`TIER_CONFIRM`) instead of running
+unasked: `find -exec`/`-delete`/`-fprint*`, `sort -o`/`--compress-program`, a
+second `uniq` operand, `wmic /output`/`/append`/`/record`, `date -s` or a date
+operand (Windows `date /t` only prints, so it still runs), `sysctl -w`/`-p`/`-f`/`--system`/`name=value`, `hostname NAME`/`-F`/`-b`,
+`ipconfig /release`/`/renew`/`/flushdns`/`/registerdns`/`/setclassid`, `file -C`,
+`less`/`more` `-o`/`-O`/`-k`/`--log-file`/`--lesskey-*`/`+command` (a `+N` or `+G`
+line jump still runs), and `arch` with any argument. Short-flag clusters are read
+letter by letter, so `-0C` is `-0 -C`. `date`, `sysctl`, `hostname` and `ipconfig`
+accept only their known read-only options, so an unknown flag also asks.
+
 ### Bypass Permissions
 
-Off by default. Turned on only by the flagship sidecar's `--bypass-permissions`
-launch flag or the TUI's `/bypass`, both of which set `full_access` on
-the session's output handler. `full_access_active()` reads that attribute live,
+Off by default. Turned on only by the flagship sidecar's `--full-access`
+launch flag or the TUI's `/full-access confirm` (a bare `/full-access` only
+explains the mode), both of which set `full_access` on the session's output
+handler. `full_access_active()` reads that attribute live,
 so a mid-session toggle takes effect on the next command.
 
 When on, `_validate_command` short-circuits the whole read-only policy above and
@@ -412,8 +476,9 @@ DEVELOPER_COMMANDS = frozenset({
 })   # "rm" deliberately excluded
 ```
 
-`git` is in the set, so its binary policy's outright refusals — push, reset,
-rebase — do not apply under bypass. That drops a tripwire, not a boundary:
+`git` is in the set, so the binary policy that holds `git push`, `git reset` and
+`git rebase` does not apply under bypass. Without bypass those commands ask once
+instead of failing. That drops a tripwire, not a boundary:
 `python` and `make` reach git by shelling out regardless. Leaving it out would
 also have made bypass *stricter* than the default tier, where git's read-only
 floor still runs `git status`.
@@ -490,12 +555,12 @@ Global-flag classes (`_git_policy_argv` in `shell_tools.py`):
 | `GIT_GLOBAL_FLAGS_WITH_VALUE` | `-C`, `--git-dir`, `--work-tree`, `--namespace` | Skipped with their value (`--opt=v` or `--opt v`); the paths then get the same allowed-paths check as `working_directory` |
 | `GIT_GLOBAL_FLAGS_NO_VALUE` | `-P`, `--no-pager`, `--bare`, `--literal-pathspecs`, … | Skipped |
 | `GIT_TERMINAL_FLAGS` | `--version`, `--help`, `-h`, `--man-path`, … | Are the whole command; nothing follows |
-| `GIT_FORBIDDEN_GLOBAL_FLAGS` | `-c`, `--config-env`, `--exec-path` | Always refused — each hands git arbitrary config or a different binary to execute, no matter how read-only the subcommand behind it looks |
+| `GIT_FORBIDDEN_GLOBAL_FLAGS` | `-c`, `--config-env`, `--exec-path` | Never stepped over — each hands git arbitrary config or a different binary to execute, no matter how read-only the subcommand behind it looks — so the call is a one-time approval (`TIER_CONFIRM_ONCE`), and refused if it also deletes or discards work |
 
 Matching on the subcommand alone, as the old allowlist did, let
 `git branch -D main` and `git remote add` through unprompted; the policy table
 reads the flags too. `git config` is outside the read-only floor for the same
-reason `-c` is refused: it writes values (`core.pager`, `alias.*`) that execute
+reason `-c` is never stepped over: it writes values (`core.pager`, `alias.*`) that execute
 commands.
 
 ### Path Traversal Prevention
@@ -576,7 +641,7 @@ def test_an_undescribable_invocation_is_refused():
 def test_run_shell_command_git_read_allowed(agent):
     """Test git read operations are allowed."""
     result = agent.run_shell_command("git status")
-    assert result["status"] == "success" or "not a git repository" in result["stderr"]
+    assert result["status"] == "success" or "not a git repository" in result["error"]
 
 def test_run_shell_command_path_traversal_blocked(agent, monkeypatch):
     """Test path traversal prevention."""

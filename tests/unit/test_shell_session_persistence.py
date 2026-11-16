@@ -91,7 +91,7 @@ class TestCwdPersistsAcrossCalls:
             def __init__(self, root):
                 self.root = str(root)
 
-            def is_path_allowed(self, path: str) -> bool:
+            def is_path_allowed(self, path: str, prompt_user: bool = True) -> bool:
                 root = os.path.realpath(self.root)
                 real = os.path.realpath(path)
                 return real == root or real.startswith(root + os.sep)

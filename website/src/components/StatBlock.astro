@@ -2,7 +2,7 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Row of mono figures: 30px numeral over an 11px uppercase label, 36px apart.
+// Row of figures: a 44px Antonio numeral over a 12.5px uppercase label.
 interface Props {
   stats: { value: string; label: string }[];
   class?: string;
@@ -14,7 +14,7 @@ const { stats, class: className = '' } = Astro.props;
 <div class={`flex flex-wrap gap-x-9 gap-y-5 ${className}`}>
   {stats.map((stat) => (
     <div>
-      <div class="mono text-[26px] font-medium leading-none tracking-[-0.02em] text-g-text sm:text-[30px]">
+      <div class="font-display text-[36px] font-semibold leading-none tracking-[0.01em] text-g-text sm:text-[44px]">
         {stat.value}
       </div>
       <div class="g-label mt-[7px]">{stat.label}</div>

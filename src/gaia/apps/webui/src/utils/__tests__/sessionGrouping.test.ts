@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, expect, it } from 'vitest';
-import { groupSessionsByRecency } from '../sessionGrouping';
+import { groupSessionsByRecency, groupSessionsForList, sessionRowStatus, type LiveRuns } from '../sessionGrouping';
 import type { Session } from '../../types';
 
 // Local time, so day boundaries match the function's calendar-day math in any TZ.
@@ -73,5 +73,35 @@ describe('groupSessionsByRecency', () => {
         const input = [at('old', daysAgo(40)), at('new', daysAgo(0))];
         groupSessionsByRecency(input, NOW);
         expect(input.map((s) => s.id)).toEqual(['old', 'new']);
+    });
+});
+
+describe('groupSessionsForList (#5221)', () => {
+    const idle: LiveRuns = { running: [], queued: [], awaiting: {}, prompting: [] };
+
+    it('puts Needs you, then Pinned, ahead of recency; each chat appears once', () => {
+        const sessions = [
+            { ...at('waiting-pinned', NOW), pinned: true }, { ...at('pinned', NOW), pinned: true }, at('plain', NOW),
+        ];
+        const groups = groupSessionsForList(sessions, { ...idle, awaiting: { 'waiting-pinned': 'permission' } }, { now: NOW });
+        expect(groups.map((g) => [g.label, g.sessions.map((s) => s.id)])).toEqual([
+            ['Needs you', ['waiting-pinned']],
+            ['Pinned', ['pinned']],
+            ['Today', ['plain']],
+        ]);
+    });
+
+    it('hides eval and scheduled runs unless asked', () => {
+        const sessions = [at('mine', NOW), { ...at('ev', NOW), kind: 'eval' as const }, { ...at('sc', NOW), kind: 'scheduled' as const }];
+        expect(groupSessionsForList(sessions, idle, { now: NOW }).flatMap((g) => g.sessions.map((s) => s.id))).toEqual(['mine']);
+        expect(groupSessionsForList(sessions, idle, { now: NOW, showAutomated: true })[0].sessions).toHaveLength(3);
+    });
+
+    it('a pause on the user outranks queued and running', () => {
+        const s = at('x', NOW);
+        expect(sessionRowStatus(s, { ...idle, running: ['x'], queued: ['x'], prompting: ['x'] })).toBe('waiting');
+        expect(sessionRowStatus(s, { ...idle, running: ['x'], queued: ['x'] })).toBe('queued');
+        expect(sessionRowStatus({ ...s, last_run_status: 'stopped' }, idle)).toBe('done');
+        expect(sessionRowStatus(s, idle)).toBeNull();
     });
 });

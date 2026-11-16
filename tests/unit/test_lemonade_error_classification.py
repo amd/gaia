@@ -21,13 +21,17 @@ timeout case correctly.
 
 from __future__ import annotations
 
+import pytest
+
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_LOAD_TIMEOUT,
+    LemonadeAuthError,
     LemonadeStatus,
     _cloud_request_error,
     resolve_ctx_size,
 )
 from gaia.llm.providers.lemonade import (
+    LemonadeAuthRejectedError,
     LemonadeCloudAccountError,
     LemonadeModelNotFoundError,
     LemonadeModelNotLoadedError,
@@ -35,6 +39,7 @@ from gaia.llm.providers.lemonade import (
     LemonadeUpstreamTimeoutError,
     _classify_lemonade_response,
 )
+from gaia.llm.surface_hints import surface_wording
 from gaia.ui._chat_helpers import _classify_chat_exception
 
 # ── Provider side: response-payload classification ──────────────────────
@@ -113,12 +118,10 @@ def test_upstream_timeout_user_message_is_actionable() -> None:
     # No silent fallback to a smaller model — must not appear in the remediation.
     assert "qwen3-0.6b" not in msg.lower()
     assert "smaller model" not in msg.lower()
-    # Concrete next steps the user can actually run.
-    # `gaia kill` only: the other branch of this `or` named a command
-    # Lemonade 10.7 removed, so the assertion would have kept passing
-    # against a dead remedy (CLAUDE.md, "Never hardcode how Lemonade is
-    # started").
-    assert "gaia kill" in msg
+    # The apps say what to do in the app; only the CLI names `gaia kill`.
+    assert "close GAIA and open it again" in msg
+    assert "gaia kill" not in msg
+    assert "gaia kill" in surface_wording(msg, "cli")
 
 
 # ── UI side: exception-string classification ────────────────────────────
@@ -174,7 +177,8 @@ def test_ui_classifier_routes_model_not_found_404_and_names_model() -> None:
     assert classified.model_id == "Qwen3.5-35B-A3B-GGUF"
     # The missing model id and a concrete remediation must both be surfaced.
     assert "Qwen3.5-35B-A3B-GGUF" in classified.user_message
-    assert "gaia init" in classified.user_message
+    assert "Settings > Setup" in surface_wording(classified.user_message, "agent_ui")
+    assert "gaia init" in surface_wording(classified.user_message, "cli")
 
 
 def test_ui_classifier_model_not_found_type_without_quoted_name() -> None:
@@ -270,6 +274,83 @@ def test_agent_says_billing_not_try_again_for_a_refused_account() -> None:
     assert "temporary" not in msg
 
 
+def test_rejected_key_is_not_retryable_and_keeps_its_remedy() -> None:
+    """A cloud 401/403 means a bad key or no model access; no retry fixes it."""
+    for status in (401, 403):
+        exc = RuntimeError(f"Error in send_messages: {_cloud_request_error(status)}")
+        err = _classify_chat_exception(exc)
+        assert isinstance(err, LemonadeAuthRejectedError)
+        assert err.retryable is False
+        assert err.user_message.startswith(
+            f"Cloud authentication or access was denied (HTTP {status})"
+        )
+        assert "/provider" in err.user_message
+        assert err.user_message.endswith("verify LEMONADE_API_KEY.")
+
+
+def test_agent_says_reconnect_not_try_again_for_a_rejected_key() -> None:
+    """Measured on the AMD gateway with a bad key: the 401 remedy arrived
+    prefixed with "This might be a temporary issue — try again in a moment"."""
+    from unittest.mock import MagicMock
+
+    from gaia.agents.base.agent import Agent
+
+    agent = MagicMock(spec=Agent)
+    agent._extract_lemonade_user_message = Agent._extract_lemonade_user_message.__get__(
+        agent
+    )
+
+    try:
+        raise RuntimeError("Error in send_messages") from _cloud_request_error(401)
+    except RuntimeError as outer:
+        msg = agent._extract_lemonade_user_message(outer)
+    assert msg is not None
+    assert "/provider" in msg
+    assert "temporary" not in msg
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Lemonade returned 401 Unauthorized for /chat/completions. "
+        "Verify LEMONADE_API_KEY is correct (currently set).",
+        # The streaming path, which the Agent UI and CLI take.
+        "Lemonade rejected the API key (401 Unauthorized) on "
+        "streaming chat completions. Verify LEMONADE_API_KEY is correct.",
+        "Lemonade rejected the API key (401 Unauthorized) on "
+        "streaming text completions. Verify LEMONADE_API_KEY is correct.",
+    ],
+)
+def test_local_lemonade_401_names_the_api_key(message: str) -> None:
+    # Typed, flattened to text, and chained under a wrapper: all three reach it.
+    flattened = RuntimeError(f"Error in send_messages: {message}")
+    try:
+        raise RuntimeError("Error in send_messages") from LemonadeAuthError(message)
+    except RuntimeError as outer:
+        chained = outer
+    for exc in (LemonadeAuthError(message), flattened, chained):
+        err = _classify_chat_exception(exc)
+        assert isinstance(err, LemonadeAuthRejectedError)
+        assert err.retryable is False
+        assert err.user_message == message
+
+
+def test_rejected_key_headline_drops_a_wrapper_s_trailing_advice() -> None:
+    err = _classify_chat_exception(
+        RuntimeError(
+            "Failed to load model 'Gemma-4-E4B-it-GGUF': Lemonade returned 401 "
+            "Unauthorized. Verify LEMONADE_API_KEY is correct (currently set). "
+            "Check that the model is available and the Lemonade server has "
+            "enough memory."
+        )
+    )
+    assert isinstance(err, LemonadeAuthRejectedError)
+    assert err.user_message == (
+        "Lemonade returned 401 Unauthorized. "
+        "Verify LEMONADE_API_KEY is correct (currently set)."
+    )
+
+
 # ── Agent loop: typed-message surfacing (no generic "try again" wrapper) ─
 
 
@@ -295,11 +376,7 @@ def test_agent_extract_lemonade_user_message_typed_direct() -> None:
     msg = agent._extract_lemonade_user_message(exc)
     assert msg is not None
     assert "didn't respond in time" in msg
-    # `gaia kill` only: the other branch of this `or` named a command
-    # Lemonade 10.7 removed, so the assertion would have kept passing
-    # against a dead remedy (CLAUDE.md, "Never hardcode how Lemonade is
-    # started").
-    assert "gaia kill" in msg
+    assert "close GAIA and open it again" in msg
 
 
 def test_agent_extract_lemonade_user_message_typed_in_cause_chain() -> None:
@@ -436,11 +513,12 @@ def test_agent_extract_lemonade_user_message_typed_in_cycle() -> None:
 # specific phrases is ALSO present (corroboration). A bare load failure must
 # classify as NOT corrupt and surface as an actionable error.
 
+import time
 from unittest.mock import patch
 
-import pytest
-
 from gaia.llm.lemonade_client import (
+    DEFAULT_MODEL_LOAD_RETRIES,
+    MODEL_LOAD_RETRY_BACKOFF,
     LemonadeClient,
     LemonadeClientError,
     ModelDownloadCancelledError,
@@ -544,10 +622,28 @@ class TestLoadModelCorruptRouting:
             "llama-server failed to start"
         )
 
+        # Swap only lemonade_client's ``time`` binding: patching ``time.sleep``
+        # also catches the log-file lock's poll on this same thread.
+        backoffs = []
+
+        class _ClientTime:
+            def __getattr__(self, name):
+                return getattr(time, name)
+
+            @staticmethod
+            def sleep(seconds):
+                backoffs.append(seconds)
+
+        def _fail_load(*_args, **_kwargs):
+            # Another module sleeping on this thread (the log lock) isn't a backoff.
+            time.sleep(0)
+            raise send_error
+
         with (
-            patch.object(client, "_send_request", side_effect=send_error),
+            patch.object(client, "_send_request", side_effect=_fail_load),
             patch.object(client, "delete_model") as mock_delete,
             patch.object(client, "pull_model_stream") as mock_pull,
+            patch("gaia.llm.lemonade_client.time", _ClientTime()),
         ):
             with pytest.raises(LemonadeClientError) as exc_info:
                 client.load_model(
@@ -557,6 +653,12 @@ class TestLoadModelCorruptRouting:
         # The destructive repair path must NOT have been touched.
         mock_delete.assert_not_called()
         mock_pull.assert_not_called()
+
+        # It backed off on the escalating schedule before giving up.
+        assert backoffs == [
+            MODEL_LOAD_RETRY_BACKOFF * n
+            for n in range(1, DEFAULT_MODEL_LOAD_RETRIES + 1)
+        ]
 
         # Error must name what failed so the user can act on it.
         assert "Qwen3-Coder-30B-A3B-Instruct-GGUF" in str(exc_info.value)
@@ -1100,3 +1202,21 @@ def test_agent_loop_shares_the_connection_pattern() -> None:
     from gaia.agents.base.agent import Agent
 
     assert Agent._LOOP_CONNECTION_RE is CONNECTION_FAILURE_RE
+
+
+# ---------------------------------------------------------------------------
+# A 401 from the model server's own key check is not a cloud auth failure
+# ---------------------------------------------------------------------------
+
+
+def test_the_servers_own_key_refusal_is_told_apart_from_a_providers():
+    from gaia.llm.lemonade_client import _own_key_refused
+
+    # Lemonade's own check: a bare string, before or after the SDK unwraps it.
+    assert _own_key_refused({"error": "Invalid or missing API key"})
+    assert _own_key_refused("Invalid or missing API key")
+    # A provider's 401 that Lemonade forwards is a structured envelope.
+    assert not _own_key_refused(
+        {"error": {"message": "unauthorized", "details": {"status_code": 401}}}
+    )
+    assert not _own_key_refused(None)

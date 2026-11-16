@@ -27,7 +27,7 @@ Chain sequentially (`run-1 && run-2`), never with background `&`. The judge LLM 
 - Running the agent eval harness with `gaia eval agent`
 - Running benchmarks with `gaia eval benchmark`
 - Writing transcript analysis or summarization metrics
-- Building performance visualizations (`gaia perf-vis`) and reports (`gaia report`)
+- Building performance visualizations (`gaia perf-vis`)
 - Writing eval workflow CI (`test_eval.yml`)
 
 ## When NOT to use
@@ -45,7 +45,7 @@ Chain sequentially (`run-1 && run-2`), never with background `&`. The judge LLM 
 | `.github/workflows/test_eval.yml` | Eval CI |
 | `gaia eval agent` | Run the agent eval harness (`--fix` auto-fixes failures) |
 | `gaia eval benchmark` | Run the model benchmark |
-| `gaia report` | Render eval reports |
+| `gaia eval tasks report` | Render the harness x model table from judged task runs |
 | `gaia perf-vis` | Visualize performance results |
 
 See `docs/reference/eval.mdx` for the user-facing reference.
@@ -55,8 +55,7 @@ See `docs/reference/eval.mdx` for the user-facing reference.
 1. **Define the task** — inputs, expected outputs, grading function
 2. **Run the agent eval** — `gaia eval agent --category <category>` (prints the run dir + `scorecard.json`). Every scenario scores the flagship `gaia` agent; `--agent-type` overrides that but its scorecard is then comparable only to other runs of the same agent
 3. **Compare to baseline** — `gaia eval agent --compare tests/fixtures/eval_baselines/gaia-flagship/scorecard_<category>.json <run-dir>/scorecard.json`. `--compare` only *diffs* two scorecards; it never runs an eval. The baseline is a single nightly run (59%, target 80%), so re-run a lone PASS→FAIL before calling it a regression, and report FAIL→PASS flips as progress. Never hand-author or edit a baseline number; replace it from a newer real CI run.
-4. **Report** — `gaia report` to render results
-5. **Visualize performance** — `gaia perf-vis`
+4. **Visualize performance** — `gaia perf-vis`
 
 ## Writing a new eval
 

@@ -17,7 +17,12 @@ def sdk():
 
         def completion(**kwargs):
             if kwargs["stream"]:
-                return iter([{"choices": [{"delta": {"content": "answer"}}]}])
+                return iter(
+                    [
+                        {"choices": [{"delta": {"content": "answer"}}]},
+                        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                    ]
+                )
             return {"choices": [{"message": {"content": "answer"}}]}
 
         backend.chat_completions.side_effect = completion
@@ -104,6 +109,7 @@ def test_custom_prompt_no_history_omits_previous_turns(sdk):
 
 @pytest.mark.parametrize("provider_name", ["lemonade", "claude"])
 def test_cloud_provider_receives_native_system_prompt(provider_name):
+    from collections import OrderedDict
     from unittest.mock import Mock
 
     from gaia.llm.providers.claude import ClaudeProvider
@@ -116,6 +122,7 @@ def test_cloud_provider_receives_native_system_prompt(provider_name):
     provider._client = Mock()
     provider._tool_name_map = {}
     if provider_name == "claude":
+        provider._replay_turns = OrderedDict()
         provider._parse_response = Mock(return_value="answer")
         create = provider._client.messages.create
     else:

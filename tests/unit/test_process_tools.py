@@ -176,14 +176,21 @@ class TestPolicyParity:
         assert background["executed"] is False
         assert not gated._process_table().all()
 
-    @pytest.mark.parametrize(
-        "command", ["echo hi > out.txt", "gh auth token", "git commit -m x"]
-    )
-    def test_pre_prompt_refusal_matches(self, gated, command):
-        args = {"command": command}
+    def test_pre_prompt_refusal_matches(self, gated):
+        args = {"command": "git commit -m x"}
         assert gated.policy_refusal_for_call(
             "start_process", args
         ) == gated.policy_refusal_for_call("run_shell_command", args)
+
+    @pytest.mark.parametrize("command", ["echo hi > out.txt", "gh auth token"])
+    def test_a_one_time_approval_never_starts_a_background_run(self, gated, command):
+        # The foreground asks for this exact line once; a process left
+        # running is not one supervised run, so the background refuses first.
+        args = {"command": command}
+        assert gated.policy_refusal_for_call("run_shell_command", args) is None
+        refusal = gated.policy_refusal_for_call("start_process", args)
+        assert refusal["tier"] == "refuse"
+        assert "can't be run in the background" in refusal["error"]
 
     @pytest.mark.parametrize(
         "console",
@@ -227,7 +234,7 @@ class TestPolicyParity:
         (tmp_path / "secret.txt").write_text("secret")
 
         class _Validator:
-            def is_path_allowed(self, path):
+            def is_path_allowed(self, path, prompt_user=True):
                 return os.path.realpath(path).startswith(os.path.realpath(allowed))
 
             def scratch_hint(self, path):
@@ -241,14 +248,21 @@ class TestPolicyParity:
                 command, working_directory=str(allowed)
             )
             background = _tool("start_process")(command, working_directory=str(allowed))
-            assert "Access denied" in foreground["error"]
+            assert foreground["executed"] is False
+            assert background["executed"] is False
             assert background["error"] == foreground["error"]
 
             outside = _tool("start_process")(
                 "git --version", working_directory=str(tmp_path)
             )
-            assert "not in allowed paths" in outside["error"]
             assert outside["executed"] is False
+            assert (
+                outside["error"]
+                == _tool("run_shell_command")(
+                    "git --version", working_directory=str(tmp_path)
+                )["error"]
+            )
+            assert not h._process_table().all()
         finally:
             h.close_background_processes()
 
@@ -790,14 +804,9 @@ class TestNotices:
 class TestPointsAtStartProcess:
     def test_a_trailing_ampersand_is_pointed_at_start_process(self, gated):
         gated._tools_registry = {"start_process": {}}
-        for refusal in (
-            _tool("run_shell_command")("npm run dev &"),
-            gated.policy_refusal_for_call(
-                "run_shell_command", {"command": "npm run dev &"}
-            ),
-        ):
-            assert refusal["executed"] is False
-            assert "start_process" in refusal["hint"]
+        refusal = _tool("run_shell_command")("npm run dev &")
+        assert refusal["executed"] is False
+        assert "start_process" in refusal["hint"]
 
     def test_no_pointer_to_a_tool_the_agent_lacks(self, gated):
         gated._tools_registry = {}
@@ -818,7 +827,7 @@ class TestPointsAtStartProcess:
         refusal = gated.policy_refusal_for_call(
             "run_shell_command", {"command": "git --version && echo x > out"}
         )
-        assert "trailing '&'" not in refusal.get("hint", "")
+        assert "trailing '&'" not in (refusal or {}).get("hint", "")
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="POSIX fork only")
@@ -877,3 +886,32 @@ def test_a_host_without_shell_tools_is_refused_by_name():
 
     with pytest.raises(TypeError, match="ShellToolsMixin"):
         Bare()._start_process("echo hi", None, "")
+
+
+def test_a_chain_spawns_the_pinned_programs_not_the_parsed_ones(monkeypatch):
+    # On Windows each segment's program is pinned to a full path, so one
+    # planted in the working folder never runs; the chain must spawn those.
+    step = SimpleNamespace(
+        segments=[["gh", "issue", "list"], ["sort"]],
+        envs=(),
+        stderr_modes=(),
+    )
+    pinned = [["C:/bin/gh.exe", "issue", "list"], ["C:/Windows/sort.exe"]]
+    monkeypatch.setattr(
+        shell_tools,
+        "_launch_for",
+        lambda *a: shell_tools.StepLaunch(
+            argv=None, shell=False, chained=True, stderr_mode="", segments=pinned
+        ),
+    )
+    spawned = []
+
+    class _Proc:
+        stdout = None
+
+        def __init__(self, argv, **kwargs):
+            spawned.append(argv)
+
+    monkeypatch.setattr(bp.subprocess, "Popen", _Proc)
+    bp._spawn(step, ".", 1, lambda p: None, frozenset(), False)
+    assert spawned == pinned

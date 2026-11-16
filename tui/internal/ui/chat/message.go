@@ -40,6 +40,9 @@ type Message struct {
 	InputTokens  int           // prompt tokens this turn sent; 0 => not reported
 	CachedTokens int           // prompt tokens served from the backend's cache
 
+	// DurationLabel names the time in the footnote; empty prints it bare.
+	DurationLabel string
+
 	// Metrics is the agent's per-turn performance record. Nil unless the agent
 	// ran with GAIA_TURN_LOG set — every ordinary turn, and every turn from an
 	// agent older than the record, leaves it nil.
@@ -134,4 +137,11 @@ type ActivityItem struct {
 	// Repeat counts additional consecutive occurrences folded into this item by
 	// the live work log; 0 means it happened once.
 	Repeat int
+	// RetryKey is what "the same kind of call" means for a failed step that a
+	// later success can settle (see retryKey). Empty means nothing to match
+	// on, so the failure is never marked retried.
+	RetryKey string
+	// Recovery is how a failed step reads given the rest of its turn — set at
+	// render time by settleFailures, never stored. "" is a plain failure.
+	Recovery string
 }

@@ -11,6 +11,7 @@ are never added to locally-counted ones.
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -395,3 +396,34 @@ def test_common_prefix_is_symmetric_and_bounded():
     n = _common_prefix_len(a, b)
     assert n == _common_prefix_len(b, a) == len("shared-head")
     assert 0 <= n <= min(len(a), len(b))
+
+
+# ── concurrent writers ─────────────────────────────────────────────────────
+
+
+def test_concurrent_turns_do_not_interleave_mid_record(tmp_path):
+    """Two agents in one process must not split each other's lines.
+
+    A record carrying a real user query runs past the ~4 KiB an append is
+    atomic below, so without serialization a concurrent write can land inside
+    another's JSON and leave the log unparseable. The query here is oversized
+    on purpose to make that failure reproducible rather than occasional.
+    """
+    log = tmp_path / "turns.jsonl"
+    writers, barrier = 8, threading.Barrier(8)
+
+    def _one(i: int) -> None:
+        rec = _recorder(query=f"q{i}-" + "x" * 20_000, path=log)
+        barrier.wait()  # maximize overlap on the append
+        rec.finish(answer="a" * 100, steps=1)
+
+    threads = [threading.Thread(target=_one, args=(i,)) for i in range(writers)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == writers
+    # Every line parses and is a whole record — the property interleaving breaks.
+    assert all(json.loads(line)["schema"] == SCHEMA for line in lines)

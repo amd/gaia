@@ -7,6 +7,11 @@ tools list that was always empty) that never said what the agent found or why
 it stopped. It now asks the model once more, with the same tools but
 ``tool_choice="none"``, and that reply is the answer. If that call fails, the
 canned note comes back with a line saying why.
+
+That call carries the whole conversation, so it is the likeliest one of a long
+turn to overflow. It gets the loop's own recovery — trim older results, retry
+once — and its failures reach the reader in the provider's words, never as a
+status code and a JSON body (#5064).
 """
 
 import json
@@ -17,10 +22,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import (
+    _CONTEXT_STILL_OVERFLOWING_MESSAGE,
+    Agent,
+    _ClosingOverflow,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.verification import VERIFICATION_NOTE_OPENER
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.providers.lemonade import LemonadeUpstreamTimeoutError
 
 _TOOL = "gh_issue_view_for_step_cap_test"
 _RATE_LIMITED = {
@@ -67,6 +77,15 @@ def clean_registry():
     _TOOL_REGISTRY.update(snapshot)
 
 
+_TOO_LONG = (
+    "Error in chat completions (status 400): "
+    '{"error":{"message":"the request (500 tokens) exceeds the available '
+    'context size (300 tokens)."}}'
+)
+_BIG_RESULT = "x" * 6000
+_TRIM_NOTE = "put away to save context"
+
+
 _NOTE = f"{VERIFICATION_NOTE_OPENER} — sentinel."
 
 
@@ -109,7 +128,7 @@ def _stub_chat(agent, *replies):
 
     def _stream(*_, **__):
         text = _next()
-        if text.startswith('{"__tool_calls__"'):
+        if isinstance(text, str) and text.startswith('{"__tool_calls__"'):
             yield SimpleNamespace(text=text, is_complete=True, stats=dict(_STATS))
             return
         yield SimpleNamespace(text=text, is_complete=False, stats=None)
@@ -261,7 +280,11 @@ def test_answer_before_the_cap_is_untouched(agent):
     [
         (
             ConnectionError("Lemonade Server not reachable at http://localhost:8000"),
-            "Lemonade Server not reachable at http://localhost:8000",
+            "Couldn't reach the local LLM",
+        ),
+        (
+            RuntimeError("Error in chat completions (status 503): upstream timeout"),
+            "The local LLM server answered with an error (HTTP 503)",
         ),
         ("", "empty reply"),
         (
@@ -270,10 +293,17 @@ def test_answer_before_the_cap_is_untouched(agent):
         ),
         (_tool_call(4), f"asked to run {_TOOL} instead of answering"),
     ],
-    ids=["call-raises", "empty-reply", "asks-for-a-tool", "calls-a-tool-anyway"],
+    ids=[
+        "call-raises",
+        "server-error",
+        "empty-reply",
+        "asks-for-a-tool",
+        "calls-a-tool-anyway",
+    ],
 )
 def test_failed_step_cap_call_returns_the_note_and_why(agent, caplog, reply, reason):
-    _stub_chat(agent, _tool_call(1), _tool_call(2), _tool_call(3), reply)
+    retry = () if isinstance(reply, BaseException) else (reply,)
+    _stub_chat(agent, _tool_call(1), _tool_call(2), _tool_call(3), reply, *retry)
 
     with caplog.at_level(logging.WARNING, logger="gaia.agents.base.agent"):
         result = agent.process_query("summarize issue 42", max_steps=3)
@@ -282,16 +312,14 @@ def test_failed_step_cap_call_returns_the_note_and_why(agent, caplog, reply, rea
     assert "I ran out of steps before I could finish — I used 3 of the 3" in answer
     assert "`--max-steps 53`" in answer
     assert f"{_TOOL}: 3x" in answer
-    failure_lines = [line for line in answer.splitlines() if reason in line]
+    failure_lines = [line for line in answer.splitlines() if "couldn't" in line]
     assert len(failure_lines) == 1
-    assert "couldn't" in failure_lines[0]
+    assert reason in failure_lines[0]
     assert len(_scope_lines(answer)) == 1
     assert result["status"] == "incomplete"
     assert result["max_steps_reached"] is True
-    assert any(
-        r.levelno == logging.WARNING and reason in r.getMessage()
-        for r in caplog.records
-    )
+    # The log keeps the exception itself, whatever words the answer uses.
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
 
 
 def test_max_steps_message_lists_the_tools_that_ran(agent):
@@ -357,3 +385,349 @@ def test_cancelled_run_skips_the_closing_call(agent):
         in result["result"]
     )
     assert "cancelled" in result["result"]
+
+
+# ---------------------------------------------------------------------------
+# A requested file was never written: the findings survive, the gap is listed
+# ---------------------------------------------------------------------------
+
+_FINDINGS = (
+    "Recommendation: the CM5 carrier board. Confirmed subtotal $9,000 for 40 "
+    "units; PSU and cooler prices are unverified."
+)
+
+
+def test_step_cap_keeps_the_findings_when_a_requested_file_is_missing(agent):
+    """The closing reply held the whole recommendation, and the gate
+    replaced it with only "I can't confirm this is done"."""
+    agent.tool_result = {"status": "success", "body": "datasheet text"}
+    _stub_chat(agent, _tool_call(1), _tool_call(2), _tool_call(3), _FINDINGS)
+
+    result = agent.process_query("Save the recommendation as report.md", max_steps=3)
+
+    answer = result["result"]
+    assert answer.startswith(_FINDINGS)
+    assert "I can't confirm this is done" in answer
+    assert "report.md" in answer.split(_FINDINGS, 1)[1]
+    assert result["status"] == "incomplete"
+    assert result["completion_gaps"]
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_failed_closing_call_still_carries_the_latest_findings():
+    """No closing summary: the model's last write-up goes into the note."""
+    agent = _make_agent(streaming=False, model_id=None)
+    calls = [
+        json.dumps(
+            {
+                "thought": f"Board {n} checked. {_FINDINGS}",
+                "tool": _TOOL,
+                "tool_args": {"number": n},
+            }
+        )
+        for n in (1, 2, 3)
+    ]
+    _stub_chat(agent, *calls, ConnectionError("gateway down"))
+
+    result = agent.process_query("Save the recommendation as report.md", max_steps=3)
+
+    answer = result["result"]
+    assert "I ran out of steps" in answer
+    assert f"Board 3 checked. {_FINDINGS}" in answer
+    assert "gateway down" in answer
+    assert "report.md" in answer
+
+
+# ---------------------------------------------------------------------------
+# The closing call is the biggest request of the turn: it gets the loop's
+# overflow recovery, and failures reach the reader in plain words (#5064)
+# ---------------------------------------------------------------------------
+
+
+def test_step_cap_closing_call_trims_old_results_and_retries_once(agent):
+    """The wrap-up request carries every result, so it is the first to overflow."""
+    agent.tool_result = {"status": "success", "body": _BIG_RESULT}
+    chat = _stub_chat(
+        agent,
+        _tool_call(1),
+        _tool_call(2),
+        OverflowError(_TOO_LONG),
+        _answer(_SUMMARY),
+    )
+
+    result = agent.process_query("summarize issue 42", max_steps=2)
+
+    assert result["result"].startswith(_SUMMARY)
+    assert "couldn't be written" not in result["result"]
+    closing = [
+        call
+        for call in _model_calls(agent, chat)
+        if call.kwargs.get("tool_choice") == "none"
+    ]
+    assert len(closing) == 2
+    retried = closing[1].kwargs["messages"]
+    assert _TRIM_NOTE in str(retried)
+    assert _BIG_RESULT not in str(retried)
+    # The results are restated, not dropped: every call the model made still
+    # has its message after it.
+    asked = [c["id"] for m in retried for c in m.get("tool_calls") or []]
+    answered = [m["tool_call_id"] for m in retried if m["role"] == "tool"]
+    assert asked == answered == ["call_1", "call_2"]
+    # The turn's own record keeps what the model actually saw.
+    assert _TRIM_NOTE not in str(result["model_messages"])
+
+
+def test_step_cap_closing_call_says_plainly_when_it_cannot_fit(agent):
+    """The step ran; only the wrap-up is refused, and trimming can't free enough."""
+    agent.tool_result = {"status": "success", "body": "short"}
+    chat = _stub_chat(agent, _tool_call(1), OverflowError(_TOO_LONG))
+
+    result = agent.process_query("summarize issue 42", max_steps=1)
+
+    answer = result["result"]
+    assert "I ran out of steps" in answer
+    # Its own paragraph, so it must open as a sentence with its subject.
+    assert (
+        "\n\nThe summary of what I found couldn't be written. "
+        f"{_CONTEXT_STILL_OVERFLOWING_MESSAGE}"
+    ) in answer
+    assert "status 400" not in answer
+    assert "{" not in answer
+    assert len(_model_calls(agent, chat)) == 2
+
+
+def test_closing_overflow_note_names_the_limit_without_the_backend_body(agent):
+    note = agent._closing_failure_note(
+        RuntimeError(_TOO_LONG), "The summary of what I did"
+    )
+    # Appended after a blank line, so the paragraph must open with its subject
+    # rather than a dangling "there wasn't enough room ... to write it".
+    assert note.startswith("The summary of what I did couldn't be written. ")
+    assert _CONTEXT_STILL_OVERFLOWING_MESSAGE in note
+    assert "status 400" not in note
+    assert "{" not in note
+
+
+def test_step_cap_closing_failure_uses_the_providers_words(agent):
+    timeout = LemonadeUpstreamTimeoutError()
+    _stub_chat(agent, _tool_call(1), timeout)
+
+    result = agent.process_query("summarize issue 42", max_steps=1)
+
+    # The server's own explanation of a timeout, not a bare exception text.
+    assert timeout.user_message.splitlines()[0] in result["result"]
+
+
+def test_no_tools_closing_retry_recovers_from_an_overflow_too(agent):
+    """The retry after a tool-call reply carries the same history, so it can overflow."""
+    agent.tool_result = {"status": "success", "body": _BIG_RESULT}
+    chat = _stub_chat(
+        agent,
+        _tool_call(1),
+        _tool_call(2),
+        _tool_call(3),
+        OverflowError(_TOO_LONG),
+        _answer(_SUMMARY),
+    )
+
+    result = agent.process_query("summarize issue 42", max_steps=2)
+
+    assert result["result"].startswith(_SUMMARY)
+    assert "couldn't be written" not in result["result"]
+    # The retry offers no tools at all, so it carries no ``tool_choice``.
+    retried = _model_calls(agent, chat)[-1].kwargs
+    assert retried["tools"] is None
+    assert "no longer available" in retried["messages"][-1]["content"]
+    assert _TRIM_NOTE in str(retried["messages"])
+    assert _BIG_RESULT not in str(retried["messages"])
+
+
+def test_no_tools_retry_reuses_the_trimmed_history(agent):
+    """A tool call on the trimmed retry must not resend, and re-trim, the full history."""
+    agent.tool_result = {"status": "success", "body": _BIG_RESULT}
+    chat = _stub_chat(
+        agent,
+        _tool_call(1),
+        _tool_call(2),
+        OverflowError(_TOO_LONG),
+        _tool_call(3),
+        _answer(_SUMMARY),
+    )
+
+    with patch.object(
+        agent, "_shrink_for_overflow_retry", wraps=agent._shrink_for_overflow_retry
+    ) as shrink:
+        result = agent.process_query("summarize issue 42", max_steps=2)
+
+    assert result["result"].startswith(_SUMMARY)
+    assert shrink.call_count == 1
+    retried = _model_calls(agent, chat)[-1].kwargs
+    assert retried["tools"] is None
+    assert _TRIM_NOTE in str(retried["messages"])
+    assert _BIG_RESULT not in str(retried["messages"])
+
+
+def test_closing_overflow_not_retried_when_the_trim_cannot_fit(agent):
+    """A retry that cannot fit only repeats the refusal; the error says why."""
+    chat = _stub_chat(agent, OverflowError(_TOO_LONG))
+    messages = [
+        {"role": "user", "content": "summarize issue 42"},
+        {
+            "role": "tool",
+            "name": _TOOL,
+            "tool_call_id": "call_1",
+            "content": _BIG_RESULT,
+        },
+    ]
+
+    # The closing request is 900 tokens against a 300-token window; trimming
+    # one result frees only 100, and the projection still lands past the
+    # window, so a retry would only hit the same refusal.
+    with patch(
+        "gaia.agents.base.agent.request_tokens",
+        side_effect=[900, 800],
+    ):
+        with pytest.raises(_ClosingOverflow) as caught:
+            agent._closing_answer(messages, [], "wrap up", 1)
+
+    assert str(caught.value) == _CONTEXT_STILL_OVERFLOWING_MESSAGE
+    # Only the first closing request was sent.
+    assert len(_model_calls(agent, chat)) == 1
+
+
+def test_closing_overflow_that_cannot_fit_archives_nothing(agent):
+    """A retry that won't run must not leave the results archived for real."""
+    messages = [
+        {"role": "user", "content": "summarize issue 42"},
+        {
+            "role": "tool",
+            "name": _TOOL,
+            "tool_call_id": "call_1",
+            "content": _BIG_RESULT,
+        },
+    ]
+    _stub_chat(agent, OverflowError(_TOO_LONG))
+
+    with patch(
+        "gaia.agents.base.agent.request_tokens",
+        side_effect=[900, 800],
+    ):
+        with pytest.raises(_ClosingOverflow):
+            agent._closing_answer(messages, [], "wrap up", 1)
+
+    # Sized in a throwaway store, so the real one never saw the trim.
+    assert agent._output_artifacts._items == {}
+    assert messages[1]["content"] == _BIG_RESULT
+
+
+def test_latest_findings_prefers_the_newest_prose(agent):
+    conversation = [
+        {"role": "assistant", "content": {"thought": "old"}},
+        {"role": "tool", "name": _TOOL, "content": "x"},
+        {"role": "assistant", "content": {"thought": "  ", "tool": _TOOL}},
+        {"role": "assistant", "content": {"answer": "newest", "thought": "t"}},
+        {"role": "user", "content": "ignored"},
+    ]
+    assert agent._latest_findings(conversation) == "newest"
+    assert agent._latest_findings([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# Budget notices reach the model but not the saved history
+# ---------------------------------------------------------------------------
+
+
+def test_budget_notices_are_sent_but_not_saved(agent):
+    agent.tool_result = {"status": "success", "body": "datasheet text"}
+    chat = _stub_chat(agent, *[_tool_call(n) for n in range(1, 9)], _SUMMARY)
+
+    result = agent.process_query("summarize issue 42", max_steps=8)
+
+    sent = [
+        m["content"]
+        for call in _model_calls(agent, chat)
+        for m in call.kwargs["messages"]
+        if isinstance(m.get("content"), str) and "Step budget" in m["content"]
+    ]
+    assert sent, "no budget notice reached the model"
+    assert all("Step budget" not in str(m) for m in result["model_messages"])
+
+
+# ---------------------------------------------------------------------------
+# The plan-iteration cap: never a forced stop with most of the budget unspent
+# ---------------------------------------------------------------------------
+
+
+def _plan(number: int) -> str:
+    return json.dumps(
+        {
+            "thought": f"plan {number}",
+            "goal": "read the claims",
+            "plan": [{"tool": _TOOL, "tool_args": {"number": number}}],
+            "tool": _TOOL,
+            "tool_args": {"number": number},
+        }
+    )
+
+
+def _forced_stops(agent, chat) -> list:
+    # The last request holds the whole turn's context.
+    return [
+        m["content"]
+        for m in _model_calls(agent, chat)[-1].kwargs["messages"]
+        if isinstance(m.get("content"), str)
+        and m["content"].startswith("No room for another plan")
+    ]
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_three_short_plans_do_not_force_a_stop_on_a_large_budget():
+    """Three plans in ~15 of 50 steps forced "the audit is not done"."""
+    agent = _make_agent(streaming=False, model_id=None)
+    agent.tool_result = {"status": "success", "body": "rows"}
+    chat = _stub_chat(agent, _plan(1), _plan(2), _plan(3), _plan(4), _answer("Done."))
+
+    result = agent.process_query("audit the claims", max_steps=50)
+
+    assert agent.plan_iterations == 4
+    assert _forced_stops(agent, chat) == []
+    assert result["result"].startswith("Done.")
+
+
+@pytest.mark.usefixtures("clean_registry")
+def test_the_plan_cap_still_binds_late_and_asks_for_the_deliverables():
+    agent = _make_agent(streaming=False, model_id=None)
+    agent.tool_result = {"status": "success", "body": "rows"}
+    chat = _stub_chat(agent, _plan(1), _plan(2), _plan(3), _answer("Partial."))
+
+    agent.process_query("audit the claims", max_steps=10)
+
+    forced = _forced_stops(agent, chat)
+    assert len(forced) == 1
+    assert "write them now from what you already have" in forced[0]
+    assert "unverified" in forced[0]
+    # Honest numbers: what is left of the budget, not a plan count it never hit.
+    assert "of 10 steps left after 3 plans" in forced[0]
+    assert "Maximum plan iterations" not in forced[0]
+
+
+@pytest.mark.parametrize(
+    "plans, cap, taken, limit, expected",
+    [
+        (3, 3, 15, 50, False),  # most of the budget left
+        (3, 3, 29, 50, False),
+        (3, 3, 30, 50, True),  # the first budget notice's 20 steps left
+        (2, 3, 49, 50, False),  # under the plan count
+        (9, 0, 49, 50, False),  # 0 = unlimited
+        (3, 3, 129, 150, False),
+        (3, 3, 130, 150, True),
+        # The long-horizon run: 500 of 1000 steps spent is not the end.
+        (9, 3, 530, 1000, False),
+        (9, 3, 979, 1000, False),
+        (9, 3, 980, 1000, True),
+    ],
+)
+def test_plan_cap_reached(agent, plans, cap, taken, limit, expected):
+    agent.plan_iterations = plans
+    agent.max_plan_iterations = cap
+    assert agent._plan_cap_reached(taken, limit) is expected

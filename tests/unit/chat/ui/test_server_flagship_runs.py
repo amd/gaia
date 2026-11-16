@@ -32,8 +32,9 @@ def test_start_model_server_owner_runs_the_daemon_start_in_a_daemon_thread(
     called = threading.Event()
     seen = {}
 
-    def ensure():
+    def ensure(**kwargs):
         seen["thread"] = threading.current_thread()
+        seen["kwargs"] = kwargs
         called.set()
 
     monkeypatch.setattr(lemonade_service, "ensure_daemon_owns_lemonade", ensure)
@@ -44,6 +45,8 @@ def test_start_model_server_owner_runs_the_daemon_start_in_a_daemon_thread(
     assert thread.name == "gaia-daemon-start"
     assert seen["thread"] is thread
     assert seen["thread"] is not threading.main_thread()
+    # Registered as an app: closing it unloads GAIA's models.
+    assert seen["kwargs"] == {"kind": "app", "name": "agent-ui"}
 
 
 def test_create_app_never_starts_the_daemon(monkeypatch):
@@ -128,20 +131,32 @@ def test_scheduled_runs_use_the_flagship(monkeypatch):
         def process_query(self, prompt):
             return {"result": f"did {prompt}"}
 
+        def close(self):
+            pass
+
     fake = types.ModuleType("gaia_agent.agent")
     fake.GaiaAgent = FakeGaiaAgent
     fake.GaiaAgentConfig = FakeConfig
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake)
-    chat_mod = types.ModuleType("gaia_agent_chat.agent")
+    chat_mod = types.ModuleType("gaia_agent.chat_agent")
 
     def _chat_agent(*_a, **_k):
         raise AssertionError("scheduled runs must not build ChatAgent")
 
     chat_mod.ChatAgent = chat_mod.ChatAgentConfig = _chat_agent
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.agent", chat_mod)
+    monkeypatch.setitem(sys.modules, "gaia_agent.chat_agent", chat_mod)
     monkeypatch.setattr(lemonade_service, "ensure_daemon_owns_lemonade", lambda: None)
 
     with TestClient(server.create_app(db_path=":memory:")) as client:
+        # An in-process (wheel) flagship, whatever this machine has installed.
+        monkeypatch.setattr(
+            helpers,
+            "_agent_registry",
+            types.SimpleNamespace(
+                get=lambda _id: types.SimpleNamespace(is_sidecar=False),
+                get_load_error=lambda _id: None,
+            ),
+        )
         executor = client.app.state.scheduler._executor
         assert asyncio.run(executor("summarize")) == "did summarize"
 

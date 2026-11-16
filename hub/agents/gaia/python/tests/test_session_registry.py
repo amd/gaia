@@ -422,3 +422,20 @@ def test_delete_claims_turn_lock_and_closes_outside_registry_lock(
     assert registry.delete("idle") is True
     assert observed == [None]
     assert session.run_lock.locked()
+
+
+def test_checkout_takes_the_turn_atomically_with_eviction(monkeypatch):
+    """A checked-out session is locked before any newcomer can evict it."""
+    monkeypatch.setattr(sr, "build_session_agent", lambda **kw: _FakeAgent(**kw))
+    reg = sr._SessionRegistry(max_sessions=1)
+    try:
+        session, took = reg.checkout("mine")
+        assert took and session.run_lock.locked()
+        with pytest.raises(RuntimeError, match="already active"):
+            reg.get_or_create("newcomer")
+
+        again, took_again = reg.checkout("mine")
+        assert again is session and not took_again
+    finally:
+        session.run_lock.release()
+        reg.clear()

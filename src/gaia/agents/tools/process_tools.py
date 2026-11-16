@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.checks import attach_check, check_from_command
+from gaia.agents.base.file_snapshots import SnapshotError, note_untracked
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.background_process import (
     EXITED,
@@ -355,7 +356,10 @@ class ProcessToolsMixin:
     def _start_process(
         self, command: str, working_directory: Optional[str], name: str
     ) -> Dict[str, Any]:
+        from gaia.agents.tools.shell_tools import _expand_home
+
         self._require_shell_host()
+        working_directory = _expand_home(working_directory)
         bypass = self.full_access_active()
         if self._nothing_could_have_confirmed():
             return {**unattended_refusal(), "command": command}
@@ -376,7 +380,9 @@ class ProcessToolsMixin:
                 "hint": "Stop one with stop_process, or wait for one to finish.",
             }
 
-        error, plan = self._prepare_shell_line(command, working_directory, bypass)
+        error, plan = self._prepare_shell_line(
+            command, working_directory, bypass, background=True
+        )
         if error is not None:
             return {**error, "command": command}
         if self._cancel_requested():
@@ -388,6 +394,19 @@ class ProcessToolsMixin:
                 "has_errors": True,
                 "cancelled": True,
             }
+        if plan.may_write:
+            try:
+                covered = self._snapshot_shell_deletes(plan.steps, plan.step_cwds)
+            except SnapshotError as e:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": str(e),
+                    "command": command,
+                    "has_errors": True,
+                }
+            if not covered:
+                note_untracked("shell", command)
 
         try:
             process = table.start(command, plan, (name or "").strip())

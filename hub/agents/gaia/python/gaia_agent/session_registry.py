@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from gaia.logger import get_logger
 
@@ -254,13 +254,31 @@ class _SessionRegistry:
             self._evicted_ids.pop(next(iter(self._evicted_ids)))
 
     def get_or_create(self, session_id: str, **config_kwargs: Any) -> _AgentSession:
+        session, _ = self._get_or_create(session_id, False, config_kwargs)
+        return session
+
+    def checkout(
+        self, session_id: str, **config_kwargs: Any
+    ) -> Tuple[_AgentSession, bool]:
+        """``get_or_create`` plus a try at the session's ``run_lock``.
+
+        Returns ``(session, took_turn)``. The lock is tried under the registry
+        lock, which eviction also holds, so nothing can evict the session
+        between finding it and taking its turn — a window that turned a live
+        conversation into a spurious "already running a turn".
+        """
+        return self._get_or_create(session_id, True, config_kwargs)
+
+    def _get_or_create(
+        self, session_id: str, take_turn: bool, config_kwargs: Dict[str, Any]
+    ) -> Tuple[_AgentSession, bool]:
         self.reap()
         evicted: Optional[_AgentSession] = None
         with self._lock:
             existing = self._sessions.get(session_id)
             if existing is not None:
                 self._last_used[session_id] = time.monotonic()
-                return existing
+                return existing, take_turn and existing.run_lock.acquire(blocking=False)
             # Racers for the SAME id share one reservation (a set), so the pair
             # costs one slot — which is what they will end up occupying.
             if len(self._sessions) + len(self._pending) >= self._max_sessions:
@@ -327,9 +345,10 @@ class _SessionRegistry:
                 session.reclaimed_after_eviction = reclaimed
                 self._sessions[session_id] = session
                 self._last_used[session_id] = time.monotonic()
+            took_turn = take_turn and session.run_lock.acquire(blocking=False)
         if lost_the_race is not None:
             close_agent(lost_the_race)
-        return session
+        return session, took_turn
 
     def _claim_lru_locked(self) -> Optional[_AgentSession]:
         """Pop the least-recently-used session whose ``run_lock`` this call

@@ -36,9 +36,9 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
-from gaia.logger import get_logger
-
 from gaia_agent_email.trust import AUTONOMY_LEVELS, LEVEL_EARN_TRUST, LEVEL_OFF
+
+from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 

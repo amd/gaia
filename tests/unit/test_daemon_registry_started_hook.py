@@ -20,7 +20,23 @@ from __future__ import annotations
 import logging
 import time as _t
 
+import pytest
+
+from gaia.daemon.sidecars import registry as registry_mod
+from gaia.daemon.sidecars.errors import StopFailedError
 from gaia.daemon.sidecars.spec import builtin_specs
+
+# Pids of fake sidecars that have not been shut down.
+_LIVE_FAKE_PIDS: "set[int]" = set()
+
+
+@pytest.fixture(autouse=True)
+def _fake_pid_liveness(monkeypatch):
+    # The fake pids are ordinary numbers a real process can hold (Windows CI hit 7007).
+    _LIVE_FAKE_PIDS.clear()
+    monkeypatch.setattr(registry_mod, "pid_alive", lambda pid: pid in _LIVE_FAKE_PIDS)
+    yield
+    _LIVE_FAKE_PIDS.clear()
 
 
 class _FakeManager:
@@ -48,6 +64,8 @@ class _FakeManager:
 
         return self._mode_override or os.environ.get(self.spec.mode_env_var) or "user"
 
+    uses_ignored_lemonade = False
+
     @property
     def is_running(self):
         return self._running
@@ -61,10 +79,12 @@ class _FakeManager:
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.started_at = _t.time()
         self._running = True
+        _LIVE_FAKE_PIDS.add(self.pid)
         return self.base_url
 
     def shutdown(self):
         self._running = False
+        _LIVE_FAKE_PIDS.discard(self.pid)
 
 
 def _registry(on_started, *, manager_cls=_FakeManager):
@@ -176,3 +196,35 @@ def test_server_on_started_closure_returns_early_without_base_url():
     reg.ensure("email")
 
     assert forwarder.calls == []  # no forward attempted without a base_url
+
+
+def test_a_sidecar_on_an_ignored_lemonade_is_restarted_on_ensure():
+    """Setup chose GAIA's own while the agent ran on LEMONADE_BASE_URL (#6671)."""
+    reg = _registry(lambda aid, mgr: None)
+    reg.ensure("email")
+    manager = reg._managers["email"][0]
+    assert manager.start_calls == 1
+    manager.uses_ignored_lemonade = True
+    reg.ensure("email")
+    assert manager.start_calls == 2 and manager.is_running
+
+
+def test_a_restart_whose_old_sidecar_survives_fails_loudly():
+    class _UnkillableManager(_FakeManager):
+        def shutdown(self):
+            self._running = False  # the kill "succeeded" but the pid lives on
+
+    reg = _registry(lambda aid, mgr: None, manager_cls=_UnkillableManager)
+    reg.ensure("email")
+    manager = reg._managers["email"][0]
+    manager.uses_ignored_lemonade = True
+    with pytest.raises(StopFailedError, match=f"pid {manager.pid} survived"):
+        reg.ensure("email")
+    assert manager.start_calls == 1
+
+
+def test_a_sidecar_on_the_right_lemonade_is_attached_not_restarted():
+    reg = _registry(lambda aid, mgr: None)
+    reg.ensure("email")
+    reg.ensure("email")
+    assert reg._managers["email"][0].start_calls == 1

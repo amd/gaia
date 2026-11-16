@@ -1,6 +1,6 @@
 ---
 name: gaia-tui-manual
-description: The GAIA terminal UI (gaia-tui) — how to build it, launch it with a real pty, drive it through the loopback control API, choose a local or cloud model provider, and read its logs. Use when running, testing, debugging, or documenting the TUI, when a preflight row blocks a launch, when driving the TUI from a script or assistant, or when a TUI question would otherwise be answered by guessing at the Go source.
+description: The GAIA terminal UI (gaia-cli) — how to build it, launch it with a real pty, drive it through the loopback control API, choose a local or cloud model provider, and read its logs. Use when running, testing, debugging, or documenting the TUI, when a preflight row blocks a launch, when driving the TUI from a script or assistant, or when a TUI question would otherwise be answered by guessing at the Go source.
 ---
 
 # GAIA Terminal UI
@@ -8,7 +8,7 @@ description: The GAIA terminal UI (gaia-tui) — how to build it, launch it with
 Two manuals carry the detail. **Read the matching one before touching the
 TUI** — both are written from verified runs, not from reading the source.
 
-- **[User manual](../../../docs/guides/terminal-hub.mdx)** (`docs/guides/terminal-hub.mdx`) —
+- **[User manual](../../../docs/guides/tui.mdx)** (`docs/guides/tui.mdx`) —
   install, the setup gate and what each row means, choosing where inference
   runs, day-to-day use, the permission prompt, troubleshooting.
 - **[Developer manual](../../../docs/reference/tui-dev.mdx)**
@@ -25,7 +25,7 @@ endpoint shapes.
 Each of these cost a real debugging session. They are in the manuals too — this
 is the short list worth carrying in your head.
 
-1. **The agent subprocess outlives your edits.** `gaia-tui` spawns `gaia-agent`
+1. **The agent subprocess outlives your edits.** `gaia-cli` spawns `gaia-agent`
    once. Change Python under `src/gaia/` or `hub/agents/` and the running
    session keeps executing the old code — a before/after measurement taken
    without a restart is two measurements of the same build. Restart the TUI.

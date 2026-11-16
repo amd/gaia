@@ -161,6 +161,77 @@ def _run_main(argv, monkeypatch, tmp_path):
     main()
 
 
+class TestIdleTimeoutSetting:
+    """`gaia config set lemonade_idle_timeout_minutes N` is what the docs give.
+
+    Only the keys that pick which Lemonade GAIA uses go to the "use my
+    Lemonade" handler; the idle timeout is an ordinary validated setting.
+    """
+
+    KEY = "lemonade_idle_timeout_minutes"
+
+    @pytest.fixture(autouse=True)
+    def _no_lemonade_switch(self, monkeypatch):
+        from gaia.llm import lemonade_choice
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("the Lemonade-choice handler was reached")
+
+        monkeypatch.setattr("gaia.cli._set_lemonade_config", refuse)
+        monkeypatch.setattr(lemonade_choice, "apply_to_daemon", refuse)
+
+    @pytest.mark.parametrize("value, stored", [("30", 30), ("0", 0), (" 5 ", 5)])
+    def test_whole_minutes_are_saved(
+        self, value, stored, monkeypatch, tmp_path, capsys
+    ):
+        _run_main(["config", "set", self.KEY, value], monkeypatch, tmp_path)
+
+        assert json.loads((tmp_path / "config.json").read_text())[self.KEY] == stored
+        assert f"{self.KEY} = {stored}" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("value", ["-1", "ten", "1.5", "", "true"])
+    def test_anything_else_is_refused_and_nothing_saved(
+        self, value, monkeypatch, tmp_path, capsys
+    ):
+        with pytest.raises(SystemExit) as exc:
+            _run_main(["config", "set", self.KEY, value], monkeypatch, tmp_path)
+
+        assert exc.value.code != 0
+        err = capsys.readouterr().err
+        assert self.KEY in err and "whole number of 0 or more" in err
+        assert not (tmp_path / "config.json").exists()
+
+    def test_the_daemon_reads_the_saved_timeout(self, monkeypatch, tmp_path):
+        from gaia.daemon.lemonade_clients import idle_timeout_seconds
+
+        _run_main(["config", "set", self.KEY, "0"], monkeypatch, tmp_path)
+        assert idle_timeout_seconds() is None
+        _run_main(["config", "set", self.KEY, "2"], monkeypatch, tmp_path)
+        assert idle_timeout_seconds() == 120.0
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("lemonade_mode", "external"),
+        ("lemonade_base_url", "http://localhost:13305"),
+        ("lemonade_api_key_stored", "true"),
+    ],
+)
+def test_lemonade_choice_keys_still_go_to_their_handler(
+    key, value, monkeypatch, tmp_path
+):
+    seen = []
+    monkeypatch.setattr(
+        "gaia.cli._set_lemonade_config", lambda *args: seen.append(args[:2])
+    )
+
+    _run_main(["config", "set", key, value], monkeypatch, tmp_path)
+
+    assert seen == [(key, value)]
+    assert not (tmp_path / "config.json").exists()
+
+
 class TestConfigCLI:
     def test_set_then_get(self, monkeypatch, tmp_path, capsys):
         _run_main(
@@ -191,6 +262,22 @@ class TestConfigCLI:
             _run_main(["config", "set", "bogus", "x"], monkeypatch, tmp_path)
         assert exc.value.code != 0
         assert "Unknown config key" in capsys.readouterr().err
+
+    def test_set_hybrid_policy_saves_a_known_value(self, monkeypatch, tmp_path, capsys):
+        _run_main(["config", "set", "hybrid_policy", "balanced"], monkeypatch, tmp_path)
+        data = json.loads((tmp_path / "config.json").read_text())
+        assert data["hybrid_policy"] == "balanced"
+
+    def test_set_unknown_hybrid_policy_exits_nonzero_and_saves_nothing(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        with pytest.raises(SystemExit) as exc:
+            _run_main(
+                ["config", "set", "hybrid_policy", "cheap"], monkeypatch, tmp_path
+            )
+        assert exc.value.code != 0
+        assert "quality, balanced" in capsys.readouterr().err
+        assert not (tmp_path / "config.json").exists()
 
     def test_get_unknown_key_exits_nonzero(self, monkeypatch, tmp_path, capsys):
         with pytest.raises(SystemExit) as exc:
@@ -365,41 +452,27 @@ class TestModelInjection:
 
 
 class TestConfigPathEnvOverride:
-    def test_env_overrides_file_path(self, tmp_path, monkeypatch):
-        import importlib
-
+    def test_env_overrides_file_path(self, tmp_path, monkeypatch, reload_module):
         target = tmp_path / "custom" / "myconfig.json"
         monkeypatch.setenv("GAIA_CONFIG_FILE", str(target))
 
         from gaia import config as config_mod
 
-        config_mod = importlib.reload(config_mod)
-        try:
-            assert config_mod.GAIA_CONFIG_FILE == target
-            config_mod.GaiaConfig(default_model="Env-GGUF").save()
-            assert target.exists()
-            assert config_mod.GaiaConfig.load().default_model == "Env-GGUF"
-        finally:
-            # Rebuild the constants from the session's own environment.
-            monkeypatch.undo()
-            importlib.reload(config_mod)
+        config_mod = reload_module(config_mod)
+        assert config_mod.GAIA_CONFIG_FILE == target
+        config_mod.GaiaConfig(default_model="Env-GGUF").save()
+        assert target.exists()
+        assert config_mod.GaiaConfig.load().default_model == "Env-GGUF"
 
-    def test_env_dir_override(self, tmp_path, monkeypatch):
-        import importlib
-
+    def test_env_dir_override(self, tmp_path, monkeypatch, reload_module):
         monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "cfgdir"))
         # GAIA_CONFIG_FILE outranks the dir; the root conftest sets it.
         monkeypatch.delenv("GAIA_CONFIG_FILE", raising=False)
 
         from gaia import config as config_mod
 
-        config_mod = importlib.reload(config_mod)
-        try:
-            assert config_mod.GAIA_CONFIG_FILE == tmp_path / "cfgdir" / "config.json"
-        finally:
-            # Rebuild the constants from the session's own environment.
-            monkeypatch.undo()
-            importlib.reload(config_mod)
+        config_mod = reload_module(config_mod)
+        assert config_mod.GAIA_CONFIG_FILE == tmp_path / "cfgdir" / "config.json"
 
 
 # ── `--config PATH` flag points at an explicit config file ────────────────

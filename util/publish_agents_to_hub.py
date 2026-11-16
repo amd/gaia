@@ -10,13 +10,13 @@ philosophy: exercise the CLI, never bypass it).
 
 Usage::
 
-    # Publish all 14 agents to a local worker
+    # Publish every agent to a local worker
     GAIA_HUB_TOKEN=dev-token python util/publish_agents_to_hub.py \\
         --hub-url http://localhost:8788
 
     # Subset, tolerating already-published versions
     python util/publish_agents_to_hub.py --hub-url http://localhost:8788 \\
-        --agents hello-world word-count --skip-existing
+        --agents email chat --skip-existing
 
     # Pack only, show what would be published
     python util/publish_agents_to_hub.py --hub-url http://localhost:8788 --dry-run

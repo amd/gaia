@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"errors"
+	"github.com/amd/gaia/tui/internal/gaiainit"
 	"strings"
 	"testing"
 
@@ -47,6 +48,17 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 			wantIn:  "local model server",
 		},
 		{
+			// #5083: an absent daemon route is an old core, not a service to check.
+			name: "a missing daemon route is an out-of-date core",
+			diagnose: func() Diagnosis {
+				return l.Error("restore the key", &daemon.RouteMissingError{
+					Op: "restore the fireworks key", Path: "/daemon/v1/providers/fireworks/authenticate"})
+			},
+			wantCmd: gaiainit.InstallCommand,
+			wantIn:  "out of date",
+			wantNot: "/daemon/v1/",
+		},
+		{
 			name: "version too old beats the model rung",
 			diagnose: func() Diagnosis {
 				return l.Text("check the local AI", "Lemonade 8.0.1 is older than the required 8.1.0 — upgrade it")
@@ -71,7 +83,7 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 				return l.Error("attach", &daemon.VersionError{
 					Have: "1.0", Want: "1.1", Reason: "predates the relay"})
 			},
-			wantCmd: "pip install --upgrade amd-gaia",
+			wantCmd: gaiainit.InstallCommand,
 			wantIn:  "v1.0",
 		},
 		{
@@ -83,8 +95,8 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 		{
 			name:     "404 means the agent is not registered",
 			diagnose: func() Diagnosis { return l.Status("call the agent", 404, `{"detail":"unknown agent"}`) },
-			wantCmd:  "gaia hub install email",
-			wantIn:   "email",
+			wantCmd:  "gaia daemon restart",
+			wantIn:   "gaia hub install email",
 		},
 		{
 			name:     "502 from a dead sidecar points at the sidecar",

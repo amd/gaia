@@ -116,9 +116,9 @@ def test_claim_is_atomic_no_double_fire(tmp_path):
     """A claimed job cannot be claimed again — the exactly-once guard."""
     db = _open_store(tmp_path)
     jid = store.register_job(db, source="test", kind=KIND_ONE_SHOT, fire_at=1.0)
-    assert store.claim_job(db, job_id=jid) is True
+    assert store.claim_job(db, job_id=jid) is not None
     # Second claim loses: the row is already firing, not pending.
-    assert store.claim_job(db, job_id=jid) is False
+    assert store.claim_job(db, job_id=jid) is None
 
 
 def test_in_memory_path_rejected():

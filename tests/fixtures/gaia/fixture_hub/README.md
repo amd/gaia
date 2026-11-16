@@ -48,5 +48,8 @@ Search behaviour: `search_skills("")` lists exactly the six; matching covers
 id, name, description, and declared tool names (e.g. `fetch_rss` →
 `rss-digest`).
 
-Rebuilding is cheap and idempotent — `prepare_fixture_hub.py` wipes and
-recreates `--out`, and regenerates the keypair (`force=True`) each run.
+Rebuilding is cheap and idempotent — `prepare_fixture_hub.py` builds a complete
+hub in a sibling temporary directory, then swaps it into `--out` under the
+shared file lock. A failed or concurrent run cannot expose a partial hub;
+recovery names any folders that need manual cleanup. The keypair is regenerated
+(`force=True`) each run.

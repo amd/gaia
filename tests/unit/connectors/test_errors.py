@@ -288,7 +288,7 @@ class TestOAuthClientNotConfiguredError:
         assert "<scope" not in s
         assert "amd-gaia.ai/docs/connectors/google" in s
         # UI path named too.
-        assert "Settings -> Connections -> Google" in s
+        assert "Settings -> Connectors -> Google" in s
 
     def test_example_block_is_optional(self):
         # Omitting the example drops the copy-paste block but keeps the generic

@@ -41,6 +41,9 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: home)
+    # The server list follows GAIA_HOME; a developer's own must not leak in.
+    monkeypatch.delenv("GAIA_HOME", raising=False)
+    monkeypatch.delenv("GAIA_CONFIG_DIR", raising=False)
     # MCPConfig overlays ./mcp_servers.json; keep the repo's cwd out of it.
     monkeypatch.chdir(tmp_path)
     return home
@@ -140,3 +143,21 @@ def test_install_refuses_a_malformed_config_instead_of_overwriting_it(fake_home)
     with pytest.raises(SystemExit, match="not valid JSON"):
         stage.install()
     assert config.read_text(encoding="utf-8") == "{not json"
+
+
+def test_install_writes_the_server_list_the_agent_reads_under_gaia_home(
+    fake_home, tmp_path, monkeypatch
+):
+    """The eval runs each category under its own GAIA_HOME; the stub must follow it."""
+    gaia_home = tmp_path / "category-home"
+    monkeypatch.setenv("GAIA_HOME", str(gaia_home))
+
+    stage.install()
+    try:
+        assert (gaia_home / "mcp_servers.json").is_file()
+        assert not (fake_home / ".gaia" / "mcp_servers.json").exists()
+        servers = MCPConfig().get_servers()
+        assert {"acme_orders", "acme_shipping"} <= set(servers)
+    finally:
+        stage.remove()
+    assert not {"acme_orders", "acme_shipping"} & set(MCPConfig().get_servers())

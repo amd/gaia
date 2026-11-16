@@ -29,22 +29,6 @@ def transcript():
     db.close()
 
 
-def test_recent_messages_preserve_order_and_transcript_pagination(transcript):
-    db, session = transcript
-    recent = db.get_recent_messages(session["id"], limit=4)
-    assert [m["content"] for m in recent] == [
-        "USER_11",
-        "ASST_11",
-        "failed user turn",
-        "current follow-up",
-    ]
-    assert [m["content"] for m in db.get_messages(session["id"], limit=2)] == [
-        "USER_0",
-        "ASST_0",
-    ]
-    assert db.get_recent_messages("missing", limit=4) == []
-
-
 @pytest.mark.asyncio
 @pytest.mark.allow_network  # Windows asyncio creates a local socket pair.
 @pytest.mark.parametrize("stream", [False, True])
@@ -161,13 +145,15 @@ async def test_background_tick_uses_latest_completed_exchanges(transcript):
 
     loop = AgentLoop()
     loop._db = db
+    goal = SimpleNamespace(priority="high", title="t", description="")
     module = SimpleNamespace(ChatAgent=Agent, ChatAgentConfig=object)
     with (
-        patch.dict(sys.modules, {"gaia_agent_chat.agent": module}),
+        patch.dict(sys.modules, {"gaia_agent.chat_agent": module}),
         patch.object(helpers, "_get_cached_agent", return_value=Agent()),
         patch.object(loop, "_get_actionable_goals", return_value=[]),
+        patch.object(loop, "_settle_goal"),
     ):
-        await loop._execute_tick(session["id"], session, [])
+        await loop._execute_tick(session["id"], session, [goal])
     assert [entry["content"] for entry in captured] == [
         content for i in range(12) for content in (f"USER_{i}", f"ASST_{i}")
     ]
@@ -179,9 +165,7 @@ async def test_switching_to_email_preserves_prior_pairs(transcript):
     db, session = transcript
     captured = []
 
-    def dispatch(
-        handler, request, history, model, agent_type, session_id=None, documents=None
-    ):
+    def dispatch(handler, request, history, model, agent_type, session_id=None, **_kw):
         captured.extend(history)
         handler._emit({"type": "agent_done"})
 

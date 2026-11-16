@@ -1,16 +1,37 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# CI-only: verifies the Python package builds correctly on every push/PR.
+# CI-only: verifies the Python package builds, on main and on PRs that change
+# what it packages.
 # Actual publishing to PyPI is handled by publish.yml on tag pushes.
 
 name: PyPI Build Check
 
 on:
+  # Release tags build in publish.yml; this checks main and PRs only.
   push:
-    tags-ignore:
-      - 'v*'
+    branches: [ main ]
+    paths:
+      # Everything the wheel and sdist package, plus the README that
+      # `long_description` reads and `twine check` validates.
+      - 'src/**'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'MANIFEST.in'
+      - 'README.md'
+      - 'util/verify_wheel_dist.py'
+      - '.github/workflows/pypi.yml'
   pull_request:
+    paths:
+      # Everything the wheel and sdist package, plus the README that
+      # `long_description` reads and `twine check` validates.
+      - 'src/**'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'MANIFEST.in'
+      - 'README.md'
+      - 'util/verify_wheel_dist.py'
+      - '.github/workflows/pypi.yml'
 
 jobs:
   build:

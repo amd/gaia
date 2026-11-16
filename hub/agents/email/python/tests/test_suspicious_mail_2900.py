@@ -750,7 +750,11 @@ class TestRewriteSuspiciousMailAnswer:
         """A clean negative carries no list to render, so the model's own
         (already-correct) prose is left alone — mirrors
         render_needs_you_list's ``if not items: return ""`` behavior."""
-        envelope = {"kind": "email_suspicious_scan", "suspicious": [], "suspicious_total": 0}
+        envelope = {
+            "kind": "email_suspicious_scan",
+            "suspicious": [],
+            "suspicious_total": 0,
+        }
         conversation = [_tool_entry("check_suspicious_mail", envelope)]
         model_answer = "Nothing flagged this scan."
         out = rewrite_suspicious_mail_answer(model_answer, conversation)
@@ -1160,7 +1164,7 @@ class TestRewriteSuspiciousMailAnswerZeroFindingsCoverageGap:
 
 class TestContractAdditivity:
     def test_schema_version_bumped(self):
-        assert SCHEMA_VERSION == "2.14"
+        assert SCHEMA_VERSION == "2.16"
 
     def test_pre_scan_item_accepts_phishing_and_spam_flags(self):
         item = PreScanItem(
@@ -1231,3 +1235,31 @@ class TestSystemPromptWording:
                 f"system prompt hardcodes example phrasing {phrase!r} — "
                 "this is exactly the router-table shortcut #2762 forbids"
             )
+
+
+class _HostWithFailedRefresh(_Host):
+    """An agent whose cached backends survived a refresh that now fails."""
+
+    def _refresh_mail_backends(self) -> None:
+        from gaia_agent_email.config import ConfigurationError
+
+        raise ConfigurationError("mail_provider names a provider that isn't connected")
+
+    def _pre_scan_all_backends(
+        self, *, max_messages: int, include_informational: bool = False
+    ):
+        raise AssertionError("a failed refresh must not scan the cached backends")
+
+
+class TestCheckSuspiciousMailRefreshFailure:
+    """#5771: the refresh error is the answer, not "no mailbox connected"."""
+
+    def test_the_real_refresh_error_reaches_the_caller(self):
+        host = _HostWithFailedRefresh({"google": FakeGmailBackend()})
+        fn = _tool(host, "check_suspicious_mail")
+
+        out = json.loads(fn(max_messages=25))
+
+        assert out["ok"] is False
+        assert "provider that isn't connected" in out["error"]
+        assert out["error"] != NO_MAILBOX_CONNECTED_MESSAGE

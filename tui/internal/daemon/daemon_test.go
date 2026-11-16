@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/filelock"
 )
 
 // sidecarSecret stands in for the sidecar bearer the daemon returns from
@@ -192,6 +194,10 @@ func (f *fakeDaemon) lastEnsureBody() []byte {
 // testClient builds a Client with fast timeouts and no real launcher.
 func testClient(t *testing.T, mutate func(*Options)) *Client {
 	t.Helper()
+	// Deferred restarts are remembered per process; start each test clean.
+	deferredMu.Lock()
+	deferredAt = map[string]time.Time{}
+	deferredMu.Unlock()
 	opts := Options{
 		ProbeTimeout:  2 * time.Second,
 		StartTimeout:  3 * time.Second,
@@ -643,7 +649,7 @@ func TestHelperProcess(t *testing.T) {
 			fmt.Fprintf(os.Stderr, "helper: %v\n", err)
 			os.Exit(2)
 		}
-		if ok, err := tryLock(f); err != nil || !ok {
+		if ok, err := filelock.TryLock(f); err != nil || !ok {
 			fmt.Fprintf(os.Stderr, "helper: start lock is held by the caller (%v)\n", err)
 			os.Exit(1)
 		}
@@ -1077,7 +1083,7 @@ func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
 	for _, want := range []string{
 		"https://amd-gaia.ai/install.sh",
 		"https://amd-gaia.ai/install.ps1",
-		"pip install amd-gaia",
+		"https://amd-gaia.ai/#install",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("remediation is missing %q:\n%s", want, msg)
@@ -1170,7 +1176,7 @@ func TestGaiaDaemonStartInstalledButUnresolvable(t *testing.T) {
 		}
 		// A way back to a working install, and the PATH tip for the user whose
 		// binary is merely in another shell. Both, because we cannot tell which.
-		for _, want := range []string{"curl -fsSL", "pip install amd-gaia", "PATH"} {
+		for _, want := range []string{"curl -fsSL", "https://amd-gaia.ai/#install", "PATH"} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("message must offer a way forward containing %q:\n%s", want, msg)
 			}
@@ -1220,7 +1226,7 @@ func TestVersionErrorNamesBothVersions(t *testing.T) {
 
 			// The version is a property of the installed core, so a restart
 			// relaunches the same one. Telling the user to restart loops forever.
-			if !strings.Contains(msg, "pip install --upgrade amd-gaia") {
+			if !strings.Contains(msg, "https://amd-gaia.ai/#install") {
 				t.Errorf("message does not name the upgrade that clears this:\n%s", msg)
 			}
 			if !strings.Contains(msg, "brings the same one back") {

@@ -27,9 +27,11 @@ from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 from gaia.connectors.store import (
     _CHUNK_CHARS,
     _CHUNK_SENTINEL,
+    _LEGACY_CHUNK_SENTINEL,
     SERVICE_NAME,
     _chunk_username,
     _connection_username,
+    _payload_crc,
     _provider_credentials_username,
     _secret_username,
     clear_provider_credentials,
@@ -756,3 +758,66 @@ class TestConstants:
         # "gaia.connections" even after the module rename to gaia.connectors.
         # Renaming the constant would orphan #915's existing keyring entries.
         assert SERVICE_NAME == "gaia.connections"
+
+
+class TestMacOSKeychainNulTruncation:
+    """The macOS backend cuts a stored value at the first NUL."""
+
+    @pytest.fixture(autouse=True)
+    def truncate_at_nul(self, monkeypatch):
+        real_set = keyring.set_password
+
+        def set_password(service, username, password):
+            real_set(service, username, password.split("\x00", 1)[0])
+
+        monkeypatch.setattr(keyring, "set_password", set_password)
+
+    def test_long_connection_survives(self):
+        big_token = "R" * (_CHUNK_CHARS * 2)
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token=big_token,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        loaded = load_connection("microsoft", current_client_id_hash="h")
+        assert loaded["refresh_token"] == big_token
+
+    def test_long_secret_survives(self):
+        save_secret("big", "z" * (_CHUNK_CHARS * 3))
+        assert peek_secret("big") == "z" * (_CHUNK_CHARS * 3)
+
+    def test_manifest_truncated_by_an_earlier_release_reads_as_not_connected(self):
+        username = _connection_username("microsoft", "default")
+        keyring.set_password(SERVICE_NAME, username, _LEGACY_CHUNK_SENTINEL + "2:ab")
+        keyring.set_password(SERVICE_NAME, _chunk_username(username, 0), "stale")
+
+        assert load_connection("microsoft", current_client_id_hash="h") is None
+
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token="fresh",
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
+
+
+def test_manifest_from_an_earlier_release_still_reads_where_nul_survives():
+    payload = "y" * (_CHUNK_CHARS + 5)
+    username = _secret_username("old")
+    keyring.set_password(
+        SERVICE_NAME, _chunk_username(username, 0), payload[:_CHUNK_CHARS]
+    )
+    keyring.set_password(
+        SERVICE_NAME, _chunk_username(username, 1), payload[_CHUNK_CHARS:]
+    )
+    keyring.set_password(
+        SERVICE_NAME, username, f"{_LEGACY_CHUNK_SENTINEL}2:{_payload_crc(payload)}"
+    )
+
+    assert peek_secret("old") == payload
+    delete_secret("old")
+    assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None

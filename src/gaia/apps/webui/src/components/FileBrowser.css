@@ -17,7 +17,8 @@
     display: flex;
     flex-direction: column;
     flex: 1;
-    overflow: hidden;
+    /* Scroll so the action buttons stay reachable on short windows (200% zoom). */
+    overflow-y: auto;
     padding: 0 16px 16px;
     gap: 10px;
 }
@@ -66,7 +67,7 @@
 
 .fb-search-icon {
     position: absolute;
-    left: 10px;
+    inset-inline-start: 10px;
     color: var(--text-muted);
     pointer-events: none;
 }
@@ -90,7 +91,7 @@
 
 .fb-search-clear {
     position: absolute;
-    right: 8px;
+    inset-inline-end: 8px;
     background: none;
     border: none;
     color: var(--text-muted);
@@ -121,9 +122,9 @@
     border: 1px solid var(--accent-fill);
     background: var(--accent-fill);
     color: var(--accent-fill-text);
-    font-size: 12px;
+    font-size: var(--fs-label);
     font-weight: 600;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     cursor: pointer;
     white-space: nowrap;
     transition: all var(--duration) var(--ease);
@@ -140,6 +141,27 @@
 }
 
 /* Breadcrumb */
+.fb-pathbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.fb-pathbar .fb-breadcrumb {
+    flex: 1;
+    min-width: 0;
+}
+
+.fb-hidden-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
 .fb-breadcrumb {
     display: flex;
     align-items: center;
@@ -179,7 +201,7 @@
 }
 
 .fb-up-btn {
-    margin-left: auto;
+    margin-inline-start: auto;
     background: none;
     border: 1px solid var(--border);
     color: var(--text-secondary);
@@ -245,7 +267,7 @@
     flex: 1;
     overflow: hidden;
     gap: 12px;
-    min-height: 300px;
+    min-height: min(300px, 40vh);
 }
 
 /* File List */
@@ -308,15 +330,16 @@
 }
 
 .fb-entry-size, .fb-entry-date {
-    font-size: 11px;
+    font-size: var(--fs-caption);
     color: var(--text-muted);
     white-space: nowrap;
     flex-shrink: 0;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
 }
 
-.fb-entry-size { min-width: 55px; text-align: right; }
-.fb-entry-date { min-width: 65px; text-align: right; }
+.fb-entry-size { min-width: 55px; text-align: end; }
+.fb-entry-date { min-width: 65px; text-align: end; }
 
 /* Checkbox */
 .fb-entry-checkbox {
@@ -386,10 +409,11 @@
     display: flex;
     gap: 10px;
     padding: 6px 12px;
-    font-size: 11px;
+    font-size: var(--fs-caption);
     color: var(--text-muted);
     border-bottom: 1px solid var(--border-light);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
 }
 
 .fb-preview-columns {
@@ -443,9 +467,9 @@
 }
 
 .fb-index-status {
-    font-size: 11px;
+    font-size: var(--fs-caption);
     color: var(--accent);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 
 .fb-action-btns {

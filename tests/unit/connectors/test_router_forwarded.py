@@ -329,6 +329,30 @@ class TestRouterDrivenScopeResolution:
         assert detail["error"] == "scope_mismatch"
         assert any("gmail.modify" in s for s in detail["missing_scopes"])
 
+    def test_a_scope_only_requested_does_not_block_a_forward(self, ui_api_client):
+        """A host forwarding mail alone keeps working after an agent starts
+        asking for calendar too: only ``required_scopes`` is enforced."""
+        from gaia.connectors.providers.base import ConnectorRequirement
+
+        mail = "https://www.googleapis.com/auth/gmail.readonly"
+        calendar = "https://www.googleapis.com/auth/calendar.events"
+        registry = make_fake_agent_registry(
+            connector_id="google", scopes=[mail], nsid="builtin:test"
+        )
+        registry.list()[0].required_connections[:] = [
+            ConnectorRequirement(
+                connector_id="google", scopes=[mail, calendar], required_scopes=[mail]
+            )
+        ]
+        ui_api_client.app.state.agent_registry = registry
+
+        resp = ui_api_client.post(
+            "/v1/connections/google",
+            json=_forward_body(scopes=[mail], grant_agents=["builtin:test"]),
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 201, resp.text
+
     def test_scope_satisfied_via_registry_returns_201(self, ui_api_client):
         """When the forwarded scopes cover the agent's declared requirements,
         the forward succeeds even though the default map would demand more."""

@@ -57,6 +57,14 @@ runs:
         print(f"{dist_name}: amd-gaia dependency present")
         PYEOF
 
+    - name: Verify flagship starter skills are in the wheel
+      if: inputs.dist == 'gaia-agent-gaia'
+      shell: bash
+      run: |
+        set -euo pipefail
+        python "${{ inputs.path }}/packaging/check_wheel_starter_skills.py" \
+          "${{ inputs.path }}/dist"/*.whl
+
     - name: Check with twine
       shell: bash
       run: |

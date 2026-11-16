@@ -306,7 +306,7 @@ func TestAConfirmedModelSwitchIsKeptForTheNextRespawn(t *testing.T) {
 			m, c := newSwitchRecordingModel(t)
 			updated, _ := m.submit("/model " + tc.target)
 			m = updated.(ChatModel)
-			m = feed(t, m, event.CanonicalStatusEvent{
+			feed(t, m, event.CanonicalStatusEvent{
 				Type: "status", ModelID: tc.target, ModelDisplay: tc.target, ModelBackend: tc.backend,
 			})
 			if len(c.recorded) != 1 || c.recorded[0] != tc.want {
@@ -323,7 +323,7 @@ func TestARefusedOrUnrequestedModelChangeIsNotKeptForRespawn(t *testing.T) {
 	updated, _ := m.submit("/model fireworks.not-a-model")
 	m = updated.(ChatModel)
 	m = feed(t, m, event.CanonicalErrorEvent{Type: "error", Detail: "Unknown Lemonade model 'fireworks.not-a-model'."})
-	m = feed(t, m, event.CanonicalStatusEvent{
+	feed(t, m, event.CanonicalStatusEvent{
 		Type: "status", ModelID: "Gemma-4-E4B-it-GGUF", ModelDisplay: "Gemma-4-E4B-it-GGUF", ModelBackend: "lemonade",
 	})
 	if len(c.recorded) != 0 {

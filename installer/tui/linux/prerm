@@ -1,0 +1,33 @@
+#!/bin/sh
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# GAIA Terminal UI (.deb and .rpm) pre-remove script.
+#
+# Stops each user's GAIA daemon that runs the gaia this package ships, before
+# the package removes or replaces it: the daemon reads its files as it runs.
+# A failure is reported, never fatal, and nothing under ~/.gaia is deleted.
+
+GAIA=/usr/lib/gaia/gaia
+
+for uid in $(ps -eo uid=,args= 2>/dev/null |
+    awk -v gaia="$GAIA" '$2 == gaia && $(NF-1) == "-m" && $NF == "gaia.daemon" { print $1 }' | sort -u); do
+    if ! entry=$(getent passwd "$uid"); then
+        echo "A GAIA daemon runs as uid $uid, which has no account; it was not stopped." >&2
+        continue
+    fi
+    user=$(echo "$entry" | cut -d: -f1)
+    home=$(echo "$entry" | cut -d: -f6)
+    echo "Stopping $user's GAIA daemon"
+    rc=0
+    runuser -u "$user" -- env HOME="$home" PYTHONIOENCODING=utf-8 \
+        timeout 120 "$GAIA" daemon stop || rc=$?
+    # 3: the daemon stopped; only GAIA's Lemonade Server did not.
+    if [ "$rc" -eq 3 ]; then
+        echo "$user's GAIA daemon stopped, but GAIA's Lemonade Server did not; the lines above say how to stop it." >&2
+    elif [ "$rc" -ne 0 ]; then
+        echo "Could not stop $user's GAIA daemon (exit $rc); it keeps running until the PC restarts." >&2
+    fi
+done
+
+exit 0

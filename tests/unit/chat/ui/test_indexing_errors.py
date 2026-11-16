@@ -114,6 +114,48 @@ class TestIndexDocumentErrorPropagation:
             with pytest.raises(RuntimeError, match="server down"):
                 await _index_document(Path("/tmp/test.txt"))
 
+    @pytest.mark.asyncio
+    async def test_rag_error_names_display_name(self):
+        """A failed index of a temp copy names the user's file, and RAG gets it."""
+        from gaia.ui._chat_helpers import _index_document
+
+        mock_rag = MagicMock()
+        mock_rag.index_document.return_value = {
+            "success": False,
+            "error": "Could not read notes.md",
+        }
+
+        with (
+            patch("gaia.rag.sdk.RAGSDK", return_value=mock_rag),
+            patch("gaia.rag.sdk.RAGConfig"),
+        ):
+            with pytest.raises(RuntimeError) as excinfo:
+                await _index_document(
+                    Path("/tmp/gaia_upload_xr1daipt.md"), display_name="notes.md"
+                )
+
+        assert str(excinfo.value).startswith("RAG indexing failed for notes.md:")
+        assert "gaia_upload_" not in str(excinfo.value)
+        assert mock_rag.index_document.call_args.kwargs["display_name"] == "notes.md"
+
+    @pytest.mark.asyncio
+    async def test_raised_error_hides_temp_copy(self):
+        """An exception quoting the temp copy's path is reworded to the user's name."""
+        from gaia.ui._chat_helpers import _index_document
+
+        temp = Path("/tmp/gaia_upload_xr1daipt.md")
+        mock_rag = MagicMock()
+        mock_rag.index_document.side_effect = OSError(f"cannot open {temp}")
+
+        with (
+            patch("gaia.rag.sdk.RAGSDK", return_value=mock_rag),
+            patch("gaia.rag.sdk.RAGConfig"),
+        ):
+            with pytest.raises(RuntimeError) as excinfo:
+                await _index_document(temp, display_name="notes.md")
+
+        assert str(excinfo.value) == "Failed to index notes.md: cannot open notes.md"
+
 
 # ── Upload endpoint failure handling tests ───────────────────────────────────
 
@@ -154,7 +196,7 @@ class TestUploadIndexingFailure:
         doc_file = home_tmp_dir / "test.txt"
         doc_file.write_text("hello world")
 
-        async def mock_index_fail(path):
+        async def mock_index_fail(path, display_name=None):
             raise RuntimeError("embedder not loaded")
 
         with patch("gaia.ui.server._index_document", mock_index_fail):
@@ -174,7 +216,7 @@ class TestUploadIndexingFailure:
         doc_file = home_tmp_dir / "report.txt"
         doc_file.write_text("hello world")
 
-        async def mock_index_fail(path):
+        async def mock_index_fail(path, display_name=None):
             raise RuntimeError("embedder unavailable")
 
         with patch("gaia.ui.server._index_document", mock_index_fail):
@@ -193,7 +235,7 @@ class TestUploadIndexingFailure:
         doc_file = home_tmp_dir / "empty.txt"
         doc_file.write_text("x")
 
-        async def mock_index_zero(path):
+        async def mock_index_zero(path, display_name=None):
             return 0
 
         with patch("gaia.ui.server._index_document", mock_index_zero):
@@ -212,7 +254,7 @@ class TestUploadIndexingFailure:
         doc_file = home_tmp_dir / "test.txt"
         doc_file.write_text("hello world")
 
-        async def mock_index_ok(path):
+        async def mock_index_ok(path, display_name=None):
             return 5
 
         with patch("gaia.ui.server._index_document", mock_index_ok):
@@ -231,7 +273,7 @@ class TestUploadIndexingFailure:
         # Create a file larger than LARGE_FILE_THRESHOLD (5MB)
         doc_file.write_bytes(b"x" * (6 * 1024 * 1024))
 
-        async def mock_index_zero(path):
+        async def mock_index_zero(path, display_name=None):
             return 0
 
         error_client = TestClient(app, raise_server_exceptions=False)

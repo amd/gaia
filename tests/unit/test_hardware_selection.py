@@ -7,6 +7,7 @@ import pytest
 from gaia.agents.base.agent import HardwareRequirement
 from gaia.llm.lemonade_client import LemonadeClient
 from gaia.llm.lemonade_manager import HardwareRequirementError, LemonadeManager
+from gaia.version import LEMONADE_VERSION
 
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "hardware")
 
@@ -21,7 +22,11 @@ def make_status(running=True, context_size=32768, loaded_models=None):
     if loaded_models is None:
         loaded_models = [{"id": "gemma", "labels": []}]
     return SimpleNamespace(
-        running=running, context_size=context_size, loaded_models=loaded_models
+        running=running,
+        context_size=context_size,
+        loaded_models=loaded_models,
+        busy=False,
+        version=LEMONADE_VERSION,
     )
 
 

@@ -44,6 +44,7 @@ from urllib.parse import urlsplit
 import httpx
 from aiohttp import web
 
+from gaia.connectors._refresh_lock import locked_write
 from gaia.connectors.errors import (
     ConnectorsError,
     ConsentDeniedError,
@@ -88,7 +89,9 @@ _ERROR_HTML = (
 )
 
 
-_FLOW_TIMEOUT_SECONDS = 120
+# Long enough for a first-time user to read an unverified-app consent screen
+# and click through Google's interstitial.
+_FLOW_TIMEOUT_SECONDS = 900
 
 
 @dataclass
@@ -105,11 +108,15 @@ class _PendingFlow:
     # (#2117). Maps a namespaced agent id → the scopes to grant for this
     # connector. Empty means "connect only" — the legacy behaviour.
     grant_agents: Dict[str, list[str]] = field(default_factory=dict)
+    # Ends a flow nobody awaits (the apps) when the user just closes the tab.
+    expiry: Optional[asyncio.TimerHandle] = None
 
 
 # v1 single-flow constraint per the plan: only one flow can be pending at
 # a time. The dict shape is forward-compat for v2 multi-flow.
 _pending: dict[str, _PendingFlow] = {}
+# Strong references, so a running expiry is not garbage-collected.
+_expiring: set[asyncio.Future] = set()
 
 
 def _decode_id_token_claims(id_token: str) -> Dict[str, Any]:
@@ -252,7 +259,9 @@ async def start_authorization(
     keep the event loop responsive), and returns immediately.
 
     The caller is expected to await ``complete_authorization(flow_id)``
-    to wait for the redirect.
+    to wait for the redirect. A flow nobody awaits (the apps) still ends
+    after ``_FLOW_TIMEOUT_SECONDS``: its port closes and
+    ``connector.oauth.error`` goes out with ``reason: timeout``.
 
     ``grant_agents`` (#2117) maps a namespaced agent id → the scopes to
     grant that agent for ``provider_id`` once the token exchange succeeds.
@@ -295,6 +304,8 @@ async def start_authorization(
 
     loop = asyncio.get_event_loop()
     future: "asyncio.Future[Dict[str, Any]]" = loop.create_future()
+    # The apps never await it; each failure also goes out as an event.
+    future.add_done_callback(lambda f: f.cancelled() or f.exception())
 
     app = web.Application()
 
@@ -302,7 +313,8 @@ async def start_authorization(
         return await _handle_callback(request, flow_id)
 
     app.router.add_get("/callback", callback)
-    runner = web.AppRunner(app)
+    # aiohttp's access log would write the code and state in the query string.
+    runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
@@ -332,6 +344,7 @@ async def start_authorization(
             agent_id: list(agent_scopes)
             for agent_id, agent_scopes in (grant_agents or {}).items()
         },
+        expiry=loop.call_later(_FLOW_TIMEOUT_SECONDS, _start_expiry, flow_id),
     )
 
     # Fire-and-forget the browser launch — A8: do not block the event
@@ -347,11 +360,12 @@ async def start_authorization(
             )
         except Exception as e:
             # Best-effort — the authorization_url is also returned to
-            # the caller for a copy-paste fallback.
+            # the caller for a copy-paste fallback. Type only: an OSError
+            # carries the URL, and with it the state.
             logger.warning(
                 "flow: webbrowser.open failed (%s); fall back "
                 "to copy-paste of authorization_url",
-                e,
+                type(e).__name__,
             )
             return
         if not opened:
@@ -373,7 +387,7 @@ async def start_authorization(
 
 async def complete_authorization(flow_id: str) -> Dict[str, Any]:
     """
-    Wait up to 120 seconds for the loopback callback to fulfil the flow.
+    Wait up to 15 minutes for the loopback callback to fulfil the flow.
 
     Returns a ``ConnectorState`` dict
     ``{provider, account_email, scopes, connected_at}`` once the token
@@ -394,12 +408,44 @@ async def complete_authorization(flow_id: str) -> Dict[str, Any]:
         try:
             return await asyncio.wait_for(flow.future, timeout=_FLOW_TIMEOUT_SECONDS)
         except asyncio.TimeoutError as e:
-            raise FlowTimeoutError(
-                f"OAuth flow {flow_id!r} timed out after "
-                f"{_FLOW_TIMEOUT_SECONDS}s. Restart the flow."
-            ) from e
+            raise _timeout_error(flow.provider_id) from e
     finally:
         await _teardown_flow(flow_id)
+
+
+def _timeout_error(provider_id: str) -> FlowTimeoutError:
+    return FlowTimeoutError(
+        f"Sign-in to {provider_id} was not finished within "
+        f"{_FLOW_TIMEOUT_SECONDS // 60} minutes, so the sign-in link you "
+        "were given no longer works. Run `gaia connectors connect "
+        f"{provider_id}` (or click Connect again) for a fresh link."
+    )
+
+
+def _start_expiry(flow_id: str) -> None:
+    task = asyncio.ensure_future(_expire_flow(flow_id))
+    _expiring.add(task)
+    task.add_done_callback(_expiring.discard)
+
+
+async def _expire_flow(flow_id: str) -> None:
+    """End a flow still pending at its deadline: close its port, tell the app."""
+    flow = _pending.get(flow_id)
+    if flow is None:
+        return
+    unfinished = not flow.future.done()
+    if unfinished:
+        flow.future.set_exception(_timeout_error(flow.provider_id))
+    await _teardown_flow(flow_id)
+    if unfinished:
+        await emit(
+            "connector.oauth.error",
+            {
+                "connector_id": flow.provider_id,
+                "reason": "timeout",
+                "error": "Sign-in did not finish in time.",
+            },
+        )
 
 
 async def cancel_flow(flow_id: str) -> None:
@@ -411,6 +457,8 @@ async def _teardown_flow(flow_id: str) -> None:
     flow = _pending.pop(flow_id, None)
     if flow is None:
         return
+    if flow.expiry is not None:
+        flow.expiry.cancel()
     try:
         await flow.runner.cleanup()
     except Exception as e:
@@ -562,6 +610,11 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     received_state = request.query.get("state")
     error = request.query.get("error")
     code = request.query.get("code")
+    logger.info(
+        "flow: callback flow_id=%s params=%s",
+        flow_id,
+        ",".join(sorted(request.query.keys())) or "none",
+    )
 
     # A8: explicit None guard. ``hmac.compare_digest(None, str)`` raises
     # ``TypeError`` and aiohttp would surface that as an unstructured 500.
@@ -578,6 +631,19 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
             flow.future.set_exception(
                 ConsentDeniedError(f"OAuth flow rejected by user: {error}")
             )
+        # The apps never await the flow, so they learn of the cancel this way.
+        await emit(
+            "connector.oauth.error",
+            {
+                "connector_id": flow.provider_id,
+                "reason": "cancelled" if error == "access_denied" else "rejected",
+                "error": (
+                    "Sign-in was cancelled."
+                    if error == "access_denied"
+                    else f"The provider refused the sign-in ({error})."
+                ),
+            },
+        )
         return web.Response(text=_ERROR_HTML, content_type="text/html", status=400)
 
     if code is None:
@@ -588,8 +654,13 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     try:
         result = await _exchange_code_for_tokens(flow, code)
     except Exception as e:
+        logger.warning("flow: sign-in to %s failed: %s", flow.provider_id, e)
         if not flow.future.done():
             flow.future.set_exception(e)
+        await emit(
+            "connector.oauth.error",
+            {"connector_id": flow.provider_id, "reason": "failed", "error": str(e)},
+        )
         return web.Response(text=_ERROR_HTML, content_type="text/html", status=502)
 
     if not flow.future.done():
@@ -725,7 +796,20 @@ def _resolve_granted_scopes(
 _MAX_PROVIDER_FIELD_LEN = 300
 
 
-def _structured_oauth_error(resp: Any) -> "tuple[str, str]":
+#: Real codes and verifiers are far longer; a short value would garble words.
+_MIN_SCRUB_LEN = 8
+
+
+def _scrub(text: str, secrets: Iterable[str]) -> str:
+    for secret in secrets:
+        if secret and len(secret) >= _MIN_SCRUB_LEN:
+            text = text.replace(secret, "[redacted]")
+    return text
+
+
+def _structured_oauth_error(
+    resp: Any, sent_secrets: Iterable[str] = ()
+) -> "tuple[str, str]":
     """The provider's RFC 6749 ``(error, error_description)``, bounded.
 
     Never falls back to the raw body (#3875): every request these responses
@@ -734,7 +818,8 @@ def _structured_oauth_error(resp: Any) -> "tuple[str, str]":
     bodies, so the body must not reach a log line or a user-visible error.
     Non-string fields are dropped rather than coerced, so a provider that
     nests an object under ``error`` yields no detail instead of a stringified
-    fragment of its body.
+    fragment of its body. ``sent_secrets`` (the code, verifier or device code
+    the request carried) are replaced if a provider echoes them in either field.
     """
     try:
         payload = resp.json()
@@ -744,9 +829,18 @@ def _structured_oauth_error(resp: Any) -> "tuple[str, str]":
         return "", ""
     error = payload.get("error")
     description = payload.get("error_description")
+    secrets = list(sent_secrets)
     return (
-        error[:_MAX_PROVIDER_FIELD_LEN] if isinstance(error, str) else "",
-        description[:_MAX_PROVIDER_FIELD_LEN] if isinstance(description, str) else "",
+        (
+            _scrub(error, secrets)[:_MAX_PROVIDER_FIELD_LEN]
+            if isinstance(error, str)
+            else ""
+        ),
+        (
+            _scrub(description, secrets)[:_MAX_PROVIDER_FIELD_LEN]
+            if isinstance(description, str)
+            else ""
+        ),
     )
 
 
@@ -764,7 +858,9 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         # Structured, bounded fields only (#2590) — the request this answers
         # carried the authorization code and PKCE verifier, so the raw body
         # never reaches the message (#3875).
-        error, description = _structured_oauth_error(response)
+        error, description = _structured_oauth_error(
+            response, (code, flow.code_verifier)
+        )
         raise OAuthProviderError(
             flow.provider_id,
             error=error,
@@ -788,7 +884,9 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     account_type = _resolve_account_type(provider, payload.get("id_token", ""))
     granted_scopes = _resolve_granted_scopes(payload, flow.scopes)
 
-    save_connection(
+    await locked_write(
+        flow.provider_id,
+        save_connection,
         provider=flow.provider_id,
         account_email=account_email or "default",
         refresh_token=refresh_token,
@@ -970,7 +1068,7 @@ async def poll_device_flow(
             if resp.status_code == 200:
                 payload = resp.json()
                 break
-            err, err_description = _structured_oauth_error(resp)
+            err, err_description = _structured_oauth_error(resp, (device_code,))
             if err == "authorization_pending":
                 pass
             elif err == "slow_down":
@@ -1016,7 +1114,9 @@ async def poll_device_flow(
     account_type = _resolve_account_type(provider, payload.get("id_token", ""))
     granted_scopes = _resolve_granted_scopes(payload, scopes_list)
 
-    save_connection(
+    await locked_write(
+        provider_id,
+        save_connection,
         provider=provider_id,
         account_email=account_email,
         refresh_token=refresh_token,

@@ -18,13 +18,37 @@ they serve a byte-for-byte identical ``/v1/gaia/*`` contract.
 
     GET /health   -> {"status": "ok", "service": "gaia-agent-gaia"}
     GET /version  -> {"apiVersion": <wire contract>, "agentVersion": <package>}
+
+A frozen build has no Python interpreter, so ``run_python`` re-launches this
+binary with ``--gaia-run-python-file <script>``. That argv runs the
+script and exits before the agent stack is imported or argv is parsed. So do
+the ``python`` forms a script uses to start ``sys.executable`` itself (``-m``,
+``-c``, a file); ``-m pip`` explains that nothing can be installed. A
+script's ``multiprocessing`` workers start the same way and are handed off by
+``freeze_support``; on Windows they cannot import functions defined in the
+script itself, so such a pool fails rather than runs.
 """
 
 from __future__ import annotations
 
+import multiprocessing
 import sys
 
-from gaia_agent.server import (  # noqa: F401  (re-exported for the freeze/daemon)
+from gaia_agent.python_runner import dispatch as python_dispatch
+
+if __name__ == "__main__":
+    # A script's multiprocessing workers re-launch this binary too.
+    multiprocessing.freeze_support()
+    # os.environ keeps the bundle's library path: this one-file binary's own
+    # relaunches reuse its bundle through it. Other programs get child_env().
+    _python_exit = python_dispatch(sys.argv[1:])
+    if _python_exit is not None:
+        sys.exit(_python_exit)
+
+from gaia.logger import configure  # noqa: E402
+
+configure()
+from gaia_agent.server import (  # noqa: E402,F401  (re-exported for the freeze/daemon)
     DEFAULT_HOST,
     DEFAULT_PORT,
     app,
@@ -32,5 +56,18 @@ from gaia_agent.server import (  # noqa: F401  (re-exported for the freeze/daemo
     main,
 )
 
+if __name__ != "__main__":
+    # The daemon's dev mode serves this module with `uvicorn server:app`,
+    # which never reaches main(), where the watch otherwise starts.
+    from gaia.sidecar import parent_watch
+
+    try:
+        parent_watch.start()
+    except ValueError as exc:  # one line, as main() prints it
+        raise SystemExit(f"gaia-agent: {exc}") from None
+
 if __name__ == "__main__":  # pragma: no cover
+    from gaia.sidecar.bundle_freshness import keep_unpacked_bundle_fresh
+
+    keep_unpacked_bundle_fresh()
     sys.exit(main())

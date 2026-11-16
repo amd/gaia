@@ -57,15 +57,18 @@ const (
 	rankOrient = 70
 	// What else the keyboard does. Genuinely useful, genuinely droppable.
 	rankAffordance = 40
-	// How to get the terminal's own drag-select back. Worth a column when
-	// there is one to spare — the app holds the mouse by default, so a user
-	// who tries to drag and gets nothing needs the way out — but it loses to
-	// every hint that says what is happening right now.
+	// Who owns the mouse, and how to switch (Ctrl+T). Worth a column when
+	// there is one to spare — a drag that stops at the window's edge needs a
+	// way past it — but it loses to every hint that says what is happening
+	// right now.
 	rankSecondary = 25
 	// The default "ask" mode and the key that leaves it. Worth a spare column,
 	// but it is the one mode nobody has to be warned about, so it yields to
 	// anything saying what is happening right now.
 	rankDefaultMode = 30
+	// The Connectors entry: the TUI's toolbar button, so it outlives the
+	// scroll and mouse hints but yields to anything about the current state.
+	rankToolbar = 50
 	// Numbers for whoever is tuning the machinery. First to go.
 	rankDiagnostic = 10
 )
@@ -78,6 +81,11 @@ func (m ChatModel) statusHints() []hint {
 	// the one row that is always drawn.
 	if m.fullAccess {
 		hints = append(hints, hint{text: "/full-access off", rank: rankFullAccess})
+	}
+	// A /models download running in the background, so the user can keep
+	// chatting and still see how far it is.
+	if dl := m.downloadHint(); dl != "" {
+		hints = append(hints, hint{text: dl, rank: rankMode + 1})
 	}
 	// A mode the user switched into outranks the scroll hints; the default one
 	// only takes a column nothing else wanted.
@@ -114,12 +122,19 @@ func (m ChatModel) statusHints() []hint {
 	// earlier turns; a user who does not know that concludes history is gone.
 	// The warm-up stage has no transcript to scroll or select — it replaces
 	// the transcript entirely.
+	if m.connectorsHintShown() {
+		hints = append(hints, hint{text: connectorsHint, rank: rankToolbar})
+	}
 	if !(m.warming && !m.warmHidden) {
 		hints = append(hints, hint{text: "↑↓/wheel scroll", rank: rankAffordance})
-		// Only while the app holds the mouse: then plain drag-select is what the
-		// user has lost, and this is the way to get it back.
-		if m.appMouse && m.confirmation == nil {
-			hints = append(hints, hint{text: "Ctrl+T drag-select", rank: rankSecondary})
+		// The terminal's drag-select stops at the window's edge; Ctrl+T is the
+		// way to select (and copy) past it, and the way back.
+		if m.confirmation == nil {
+			text := "Ctrl+T scroll-select"
+			if m.appMouse {
+				text = "Ctrl+T terminal mouse"
+			}
+			hints = append(hints, hint{text: text, rank: rankSecondary})
 		}
 		// Folded detail nobody knows how to open is detail thrown away. Idle only:
 		// mid-turn the row already says how to type on and how to stop.
@@ -130,6 +145,18 @@ func (m ChatModel) statusHints() []hint {
 			}
 			hints = append(hints, hint{text: text, rank: rankSecondary})
 		}
+		if _, ok := m.latestMediaCandidate(); ok {
+			hints = append(hints,
+				hint{text: "Ctrl+F open · Ctrl+G reveal", rank: rankSecondary},
+			)
+		}
+	}
+
+	switch {
+	case m.pick.open:
+		hints = append(hints, hint{text: "↑↓ pick · Enter copy · Esc cancel", rank: rankInterrupt})
+	case m.sel.active && !m.sel.dragging:
+		hints = append(hints, hint{text: "Enter copy · Esc clear", rank: rankOrient})
 	}
 
 	if m.confirmation != nil && m.confirmation.Pending() {

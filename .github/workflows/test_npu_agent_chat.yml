@@ -1,0 +1,230 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# One real agent turn on the NPU default model, sent the way the Agent UI sends
+# it, from a cold `gaia init --profile npu`. Users chatting on the NPU through
+# GAIA's own Lemonade hit "Couldn't reach the local LLM" on their first message
+# (#6632), and nothing here crossed that path: the cold-init job only sent a
+# direct `gaia llm` prompt to the small E2B model.
+#
+# util/check_npu_agent_chat.py does the whole run in one process, because a
+# Lemonade started in one step does not survive the step boundary on these
+# runners: init installs GAIA's Lemonade, its flm:npu backend, the model and the
+# gaia-agent binary; the real Agent UI backend then relays one message to that
+# binary's sidecar, which the daemon starts. It fails unless the answer is real,
+# nothing said the model was unreachable, and Lemonade shows the model loaded
+# with the flm recipe. The E2B model, the email agent's NPU default, then gets
+# one direct prompt as before.
+#
+# Not covered: the Electron shell, and the agent source in this checkout. The
+# sidecar is the published gaia-agent binary `gaia init` installs from the hub,
+# the one a user's install gets.
+#
+# Windows runs on PRs touching the agent's LLM path; Linux runs on tags, the
+# weekly schedule and dispatch, like the other jobs on that persistent pool
+# (#5157). A final release requires the Windows job and reports the Linux one
+# as advisory until its runners lock enough memory for the NPU model (#6764;
+# util/check_release_ci.py).
+name: NPU Agent Chat (Hardware)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 * * 1"    # Mondays 09:00 UTC: catches upstream Lemonade/FLM drift
+  push:
+    branches: [main]
+    tags: ['v*-rc*']
+    paths:
+      - '.github/workflows/test_npu_agent_chat.yml'
+      - '.github/actions/setup-venv/**'
+      - 'util/check_npu_agent_chat.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'src/gaia/version.py'
+      # gaia init --profile npu: GAIA's Lemonade, the FLM backend, the model pull.
+      - 'src/gaia/installer/**'
+      - 'src/gaia/llm/lemonade_embedded.py'
+      - 'src/gaia/llm/lemonade_launcher.py'
+      - 'src/gaia/llm/lemonade_manager.py'
+      - 'src/gaia/llm/lemonade_client.py'
+      - 'src/gaia/llm/lemonade_choice.py'
+      # The agent's model calls and which model and device a turn gets.
+      - 'src/gaia/llm/providers/**'
+      - 'src/gaia/llm/model_device.py'
+      - 'src/gaia/llm/model_fit.py'
+      # The Agent UI's chat path to the agent sidecar.
+      - 'src/gaia/ui/_chat_helpers.py'
+      - 'src/gaia/ui/dispatch.py'
+      - 'src/gaia/ui/sse_handler.py'
+      - 'src/gaia/ui/sse_translation.py'
+      - 'src/gaia/ui/routers/chat.py'
+      - 'src/gaia/ui/routers/sessions.py'
+      - 'src/gaia/ui/routers/system.py'
+      - 'src/gaia/ui/email_sidecar/**'
+      - 'src/gaia/daemon/sidecars/**'
+      - 'src/gaia/daemon/lemonade.py'
+  pull_request:
+    # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - '.github/workflows/test_npu_agent_chat.yml'
+      - '.github/actions/setup-venv/**'
+      - 'util/check_npu_agent_chat.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+      - 'src/gaia/version.py'
+      # gaia init --profile npu: GAIA's Lemonade, the FLM backend, the model pull.
+      - 'src/gaia/installer/**'
+      - 'src/gaia/llm/lemonade_embedded.py'
+      - 'src/gaia/llm/lemonade_launcher.py'
+      - 'src/gaia/llm/lemonade_manager.py'
+      - 'src/gaia/llm/lemonade_client.py'
+      - 'src/gaia/llm/lemonade_choice.py'
+      # The agent's model calls and which model and device a turn gets.
+      - 'src/gaia/llm/providers/**'
+      - 'src/gaia/llm/model_device.py'
+      - 'src/gaia/llm/model_fit.py'
+      # The Agent UI's chat path to the agent sidecar.
+      - 'src/gaia/ui/_chat_helpers.py'
+      - 'src/gaia/ui/dispatch.py'
+      - 'src/gaia/ui/sse_handler.py'
+      - 'src/gaia/ui/sse_translation.py'
+      - 'src/gaia/ui/routers/chat.py'
+      - 'src/gaia/ui/routers/sessions.py'
+      - 'src/gaia/ui/routers/system.py'
+      - 'src/gaia/ui/email_sidecar/**'
+      - 'src/gaia/daemon/sidecars/**'
+      - 'src/gaia/daemon/lemonade.py'
+
+# One run per ref; a superseded PR run would hold an NPU machine.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NPU_MODEL: gemma4-it-e4b-FLM
+  EMAIL_NPU_MODEL: gemma4-it-e2b-FLM
+
+jobs:
+  windows:
+    name: NPU agent chat (Windows, cold)
+    # Same-repo PRs only: fork code must never run on the lab pool.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
+    # `Windows` is load-bearing: most of the pool's Halos are Linux. The pool
+    # hands out a fresh machine per job, so two runs never share an NPU.
+    runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+
+      # [ui] and no flagship wheel: the backend must relay to the gaia-agent
+      # binary as the apps do, not import the agent in-process.
+      - name: Setup Python environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '.[ui]'
+
+      - name: Cold init, then one agent turn on the NPU
+        shell: powershell
+        env:
+          GAIA_HOME: ${{ runner.temp }}\gaia_home
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          # The machine is fresh, but FLM keeps its models outside GAIA_HOME and
+          # the image may carry them: --force-models pulls them again.
+          python util/check_npu_agent_chat.py `
+              --model $env:NPU_MODEL `
+              --also-llm-model $env:EMAIL_NPU_MODEL `
+              --force-models `
+              --logs "${{ runner.temp }}\npu-logs"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: npu-agent-chat-windows-logs
+          path: ${{ runner.temp }}/npu-logs
+          if-no-files-found: warn
+
+  linux:
+    name: NPU agent chat (Linux, cold)
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/tags/')
+    runs-on: [self-hosted, Linux, xsj-dispatch, strix-halo]
+    timeout-minutes: 150
+    # A persistent pool: never two of these on its NPUs at once.
+    concurrency:
+      group: npu-agent-chat-linux
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Paths for this run
+        run: |
+          {
+            echo "NPU_WORKDIR=$RUNNER_TEMP/npu-agent-chat"
+            echo "VENV=$RUNNER_TEMP/npu-agent-chat/venv"
+          } >> "$GITHUB_ENV"
+
+      # The pool's Halos lack curl, which setup-venv's uv installer needs.
+      - name: Install GAIA into a fresh venv
+        run: |
+          set -euo pipefail
+          echo "Host: $(hostname)"
+          mkdir -p "$NPU_WORKDIR/uv-bin"
+          python3 -c "import urllib.request, sys; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])" \
+            https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz \
+            "$NPU_WORKDIR/uv.tar.gz"
+          tar -xzf "$NPU_WORKDIR/uv.tar.gz" -C "$NPU_WORKDIR/uv-bin" --strip-components=1
+          "$NPU_WORKDIR/uv-bin/uv" venv "$VENV" --python 3.12 --seed
+          "$NPU_WORKDIR/uv-bin/uv" pip install --python "$VENV/bin/python" ".[ui]"
+
+      # An empty HOME and HF_HOME make the pull cold without --force-models,
+      # which would delete models other jobs on this box share.
+      - name: Cold init, then one agent turn on the NPU
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          export HOME="$NPU_WORKDIR/home"
+          export GAIA_HOME="$HOME/.gaia"
+          export HF_HOME="$HOME/hf"
+          mkdir -p "$HOME"
+          "$VENV/bin/python" util/check_npu_agent_chat.py \
+            --model "$NPU_MODEL" \
+            --also-llm-model "$EMAIL_NPU_MODEL" \
+            --logs "$NPU_WORKDIR/logs"
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: npu-agent-chat-linux-logs
+          path: ${{ runner.temp }}/npu-agent-chat/logs
+          if-no-files-found: warn
+
+      - name: Leave the machine clean
+        if: always()
+        run: |
+          leftovers=$(pgrep -f "$NPU_WORKDIR" || true)
+          if [ -n "$leftovers" ]; then
+            echo "::warning::Stopping processes the check left behind: $leftovers"
+            ps -o pid,cmd -p $leftovers || true
+            kill $leftovers || true
+            sleep 5
+            kill -9 $(pgrep -f "$NPU_WORKDIR") 2>/dev/null || true
+          fi
+          rm -rf "$NPU_WORKDIR"

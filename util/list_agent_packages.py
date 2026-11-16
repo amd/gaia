@@ -20,13 +20,13 @@ read from.
 
 Consumers:
 
-* ``.github/workflows/publish_agents.yml`` calls ``--format matrix`` to generate
-  the build/publish matrix, so adding an agent to ``setup.py``'s
-  ``AGENT_WHEEL_PACKAGES`` is all it takes to start publishing its wheel — no
-  second list to keep in sync.
-* ``tests/unit/test_agent_pypi_publish.py`` calls :func:`list_agent_packages`
-  to assert the published set, the on-disk packages, and their ``amd-gaia``
-  dependency all agree.
+* ``.github/workflows/build_agent_package.yml`` calls ``--format matrix --only``
+  to resolve one agent's path and distribution name.
+* ``util/publish_agents_to_hub.py`` calls :func:`list_agent_packages` to find
+  the set it packs and publishes.
+* ``tests/unit/test_agent_wheel_packages.py`` calls :func:`list_agent_packages`
+  to assert the list, the on-disk packages, and their ``amd-gaia`` dependency
+  all agree.
 
 Per ``CLAUDE.md`` (No Silent Fallbacks): a distribution listed with no
 matching ``hub/agents/<id>/python/`` directory, or a malformed ``setup.py``,
@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 
-# ``gaia-agent-chat`` -> id ``chat`` -> dir ``hub/agents/chat/python``.
+# ``gaia-agent-email`` -> id ``email`` -> dir ``hub/agents/email/python``.
 DIST_PREFIX = "gaia-agent-"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SETUP_PY = REPO_ROOT / "setup.py"

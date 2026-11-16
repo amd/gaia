@@ -182,25 +182,25 @@ describe('emailAgentGrantIds', () => {
             { connector_id: 'microsoft' },
         ],
     };
-    const connectorsDemo = {
-        id: 'connectors-demo',
-        namespaced_agent_id: 'installed:connectors-demo',
+    const customAgent = {
+        id: 'my-agent',
+        namespaced_agent_id: 'installed:my-agent',
         required_connections: [{ connector_id: 'google' }],
     };
 
     it('grants only the email agent, not co-installed agents that declare the connector', () => {
-        expect(emailAgentGrantIds([email, connectorsDemo], 'google')).toEqual([
+        expect(emailAgentGrantIds([email, customAgent], 'google')).toEqual([
             'installed:email',
         ]);
     });
 
     it('does not grant a co-installed agent even when the email agent is absent', () => {
-        // No silent fall-through to a sibling agent — returns empty, not the demo.
-        expect(emailAgentGrantIds([connectorsDemo], 'google')).toEqual([]);
+        // No silent fall-through to a sibling agent — returns empty, not the custom agent.
+        expect(emailAgentGrantIds([customAgent], 'google')).toEqual([]);
     });
 
     it('returns the email agent for microsoft too', () => {
-        expect(emailAgentGrantIds([email, connectorsDemo], 'microsoft')).toEqual([
+        expect(emailAgentGrantIds([email, customAgent], 'microsoft')).toEqual([
             'installed:email',
         ]);
     });

@@ -2,56 +2,45 @@
 # SPDX-License-Identifier: MIT
 """Shared text-file helpers for the file tool mixins.
 
-Decoding by byte-order mark, so UTF-16/UTF-32 text (what Windows PowerShell 5.1
-``>`` redirection and some Notepad saves write) reads as text, not binary; and
+Opening a file in the encoding :mod:`gaia.utils.text_decoding` detects (BOM,
+UTF-8, or a legacy code page such as CP1252, Windows-1256 or Shift-JIS), and
 bounding a matching line to an excerpt that still shows the match.
 """
 
-import codecs
 import os
 from typing import Tuple, Union
 
-# UTF-32 first: its little-endian BOM begins with the UTF-16 LE BOM.
-_BOMS = (
-    (codecs.BOM_UTF32_LE, "utf-32"),
-    (codecs.BOM_UTF32_BE, "utf-32"),
-    (codecs.BOM_UTF8, "utf-8-sig"),
-    (codecs.BOM_UTF16_LE, "utf-16"),
-    (codecs.BOM_UTF16_BE, "utf-16"),
-)
+from gaia.utils.text_decoding import file_encoding as text_encoding
+from gaia.utils.text_decoding import name_file
+
+__all__ = ["MATCH_EXCERPT_CHARS", "match_excerpt", "read_text", "text_encoding"]
 
 MATCH_EXCERPT_CHARS = 200
 _ELLIPSIS = "..."
-
-
-def text_encoding(path: Union[str, os.PathLike]) -> str:
-    """The codec to open *path* as text with: its BOM's codec, else UTF-8.
-
-    The BOM codecs (``utf-16``, ``utf-32``, ``utf-8-sig``) consume the BOM, so
-    it never reaches the decoded text.
-    """
-    with open(path, "rb") as stream:
-        head = stream.read(4)
-    for bom, encoding in _BOMS:
-        if head.startswith(bom):
-            return encoding
-    return "utf-8"
 
 
 def read_text(path: Union[str, os.PathLike]) -> Tuple[str, str]:
     """``(content, encoding)`` for a text file.
 
     Raises:
-        UnicodeDecodeError: the file is not text in its detected encoding.
+        UnicodeDecodeError: the file is not text in any encoding; the message
+            names *path*.
     """
     encoding = text_encoding(path)
-    with open(path, "r", encoding=encoding) as stream:
-        content = stream.read()
+    try:
+        with open(path, "r", encoding=encoding) as stream:
+            content = stream.read()
+    except UnicodeDecodeError as exc:
+        raise name_file(exc, path) from exc
     # Real UTF-16/32 text never decodes to NUL; binary that opens with FF FE does.
     nul = content.find("\x00") if encoding in ("utf-16", "utf-32") else -1
     if nul != -1:
         raise UnicodeDecodeError(
-            encoding, b"\x00", 0, 1, f"NUL at character {nul}: not a text file"
+            encoding,
+            b"\x00",
+            0,
+            1,
+            f"{os.fspath(path)} has NUL at character {nul}: not a text file",
         )
     return content, encoding
 

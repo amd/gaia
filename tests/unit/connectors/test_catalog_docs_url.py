@@ -53,3 +53,18 @@ def test_amd_gaia_docs_url_points_at_existing_mdx():
     assert (
         not offenders
     ), "Connector docs_url offenders (see issue #1058):\n  " + "\n  ".join(offenders)
+
+
+def test_every_catalog_connector_has_a_docs_page():
+    """Every shipped connector needs a ``docs_url`` ("Learn more" link) that
+    resolves to a page, so a new catalog entry can't ship undocumented (#937)."""
+    missing = [spec.id for spec in REGISTRY.all() if not spec.docs_url]
+    assert not missing, f"Connectors with no docs_url: {missing}"
+
+
+def test_connector_pages_are_in_navigation():
+    """A docs/connectors page absent from docs.json 404s on the site."""
+    docs_json = Path(__file__).resolve().parents[3] / "docs" / "docs.json"
+    nav = docs_json.read_text(encoding="utf-8")
+    for mdx in _DOCS_CONNECTORS_DIR.glob("*.mdx"):
+        assert f'"connectors/{mdx.stem}"' in nav, f"{mdx.name} missing from docs.json"

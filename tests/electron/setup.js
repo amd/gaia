@@ -19,6 +19,24 @@ if (!process.env.DEBUG) {
   };
 }
 
+// A throwaway home per test file: the services resolve ~/.gaia (tray-config.json,
+// crash-log.json, agents/) from os.homedir() when first required, and a test
+// must never read or write the developer's real one. Assigned, not spied, so
+// jest.restoreAllMocks() in a test can't hand back the real home; Jest's
+// sandboxed process.env never reaches os.homedir(), so HOME can't do this.
+{
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const realHomedir = os.homedir;
+  const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'gaia-electron-home-'));
+  os.homedir = () => testHome;
+  afterAll(() => {
+    os.homedir = realHomedir;
+    fs.rmSync(testHome, { recursive: true, force: true });
+  });
+}
+
 // Set test timeout
 jest.setTimeout(10000);
 

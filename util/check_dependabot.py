@@ -7,12 +7,18 @@ Per #1157, every ecosystem entry MUST be live (open-pull-requests-limit != 0) an
 npm entry MUST have a `groups:` stanza (without grouping, removing limit:0 produces
 one PR per outdated package and floods the queue).
 
+Per #3525, every tracked npm lockfile and Go module MUST have a matching entry, or
+sit in EXCLUDED with a reason. Validating only the entries that exist is how the
+published TUI, both hub npm packages, the website and the workers went unwatched.
+
 Runs as part of `python util/lint.py --all`. Run directly with
 `python util/check_dependabot.py`.
 """
 
 from __future__ import annotations
 
+import fnmatch
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,6 +28,81 @@ import yaml
 # convention in util/check_doc_versions.py and util/check_agent_conventions.py.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG = REPO_ROOT / ".github" / "dependabot.yml"
+
+# Manifest file name -> the Dependabot ecosystem that must watch its directory.
+MANIFEST_ECOSYSTEMS = {"package-lock.json": "npm", "go.mod": "gomod"}
+
+# Directories deliberately left unwatched. Every entry needs a reason; deleting a
+# lockfile's entry from dependabot.yml without adding it here fails the check.
+EXCLUDED = {
+    "tests/electron": "Jest harness for the Electron tests; never shipped.",
+    "tui/third_party/bubbletea": (
+        "vendored fork wired in by a `replace` in tui/go.mod; updated by "
+        "rebasing on upstream, not by Dependabot."
+    ),
+    "tui/third_party/reflow": (
+        "vendored fork wired in by a `replace` in tui/go.mod; updated by "
+        "rebasing on upstream, not by Dependabot."
+    ),
+}
+
+
+def _tracked_manifests() -> list[str]:
+    """Return repo-relative POSIX paths of every tracked manifest we police."""
+    patterns = [f"*{name}" for name in MANIFEST_ECOSYSTEMS]
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "-z", "--", *patterns],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            f"`git ls-files` failed in {REPO_ROOT} ({exc}); the Dependabot "
+            "coverage check needs a git checkout."
+        ) from exc
+    paths = [p for p in out.decode("utf-8").split("\0") if p]
+    return [p for p in paths if p.rsplit("/", 1)[-1] in MANIFEST_ECOSYSTEMS]
+
+
+def _directory_exists(directory: str) -> bool:
+    return (REPO_ROOT / directory).is_dir()
+
+
+def _entry_dirs(entry: dict) -> list[str]:
+    """Normalise `directory` / `directories` to repo-relative paths ('' = root)."""
+    dirs = entry.get("directories") or [entry.get("directory", "")]
+    return [str(d).strip().strip("/") for d in dirs]
+
+
+def _coverage_errors(updates: list) -> list[str]:
+    errors: list[str] = []
+    watched: dict[str, list[str]] = {}
+    for entry in updates:
+        ecosystem = entry.get("package-ecosystem", "")
+        for d in _entry_dirs(entry):
+            watched.setdefault(ecosystem, []).append(d)
+            if not any(ch in d for ch in "*?[") and not _directory_exists(d):
+                errors.append(
+                    f"{ecosystem} /{d}: directory does not exist. Remove the "
+                    f"entry or point it at the package's new location."
+                )
+
+    for path in sorted(_tracked_manifests()):
+        directory, _, name = path.rpartition("/")
+        if directory in EXCLUDED:
+            continue
+        ecosystem = MANIFEST_ECOSYSTEMS[name]
+        if any(fnmatch.fnmatchcase(directory, d) for d in watched.get(ecosystem, [])):
+            continue
+        errors.append(
+            f"{path}: no `{ecosystem}` entry watches /{directory}, so a "
+            f"vulnerable dependency here never gets a PR. Add an entry, or add "
+            f"the directory to EXCLUDED in util/check_dependabot.py with a "
+            f"reason (#3525)."
+        )
+    return errors
 
 
 def run_check() -> int:
@@ -69,6 +150,8 @@ def run_check() -> int:
                 f"grouping, Dependabot opens one PR per outdated package — "
                 f"see #1157."
             )
+
+    errors.extend(_coverage_errors(cfg["updates"]))
 
     if errors:
         print("[!] Dependabot configuration issues found:", file=sys.stderr)

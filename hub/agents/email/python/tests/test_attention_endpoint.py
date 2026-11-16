@@ -37,7 +37,6 @@ from gaia_agent_email import export_openapi  # noqa: E402
 from gaia_agent_email.contract import SCHEMA_VERSION  # noqa: E402
 
 from gaia.connectors.errors import ConnectorsError  # noqa: E402
-
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 USER_EMAIL = "user@example.com"

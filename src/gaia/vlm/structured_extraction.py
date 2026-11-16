@@ -134,7 +134,8 @@ class StructuredVLMExtractor:
         """
         from pathlib import Path
 
-        from gaia.utils import pdf_page_to_image
+        from gaia.utils import PdfRenderError, pdf_page_to_image
+        from gaia.utils.parsing import PDFIUM_LOCK
 
         doc_path = Path(document_path)
         if not doc_path.exists():
@@ -145,13 +146,21 @@ class StructuredVLMExtractor:
 
         # Get total pages
         if is_pdf:
-            import fitz
+            import pypdfium2 as pdfium
 
-            doc = fitz.open(str(doc_path))
-            try:
-                total_pages = len(doc)
-            finally:
-                doc.close()
+            with PDFIUM_LOCK:
+                try:
+                    doc = pdfium.PdfDocument(str(doc_path))
+                except pdfium.PdfiumError as e:
+                    raise PdfRenderError(
+                        f"could not open {doc_path}: {str(e).rstrip('.')}. The "
+                        "file may be damaged or password-protected; re-save it "
+                        "from a PDF viewer and try again."
+                    ) from e
+                try:
+                    total_pages = len(doc)
+                finally:
+                    doc.close()
         else:
             total_pages = 1
 
@@ -168,21 +177,21 @@ class StructuredVLMExtractor:
                 on_progress(i, len(pages_to_process))
 
             # Load page as image (internal)
+            render_error = "page could not be rendered to an image"
             if is_pdf:
-                image_bytes = pdf_page_to_image(
-                    doc_path, page=page_num - 1, scale=scale
-                )
+                try:
+                    image_bytes = pdf_page_to_image(
+                        doc_path, page=page_num - 1, scale=scale
+                    )
+                except PdfRenderError as e:
+                    logger.error("page %d could not be rendered: %s", page_num, e)
+                    image_bytes = b""
+                    render_error = f"page could not be rendered to an image: {e}"
             else:
                 image_bytes = doc_path.read_bytes()
 
             if not image_bytes:
-                # pdf_page_to_image logged why; the page must still count as failed.
-                pages_data.append(
-                    {
-                        "page": page_num,
-                        "error": "page could not be rendered to an image",
-                    }
-                )
+                pages_data.append({"page": page_num, "error": render_error})
                 failed_pages.append(page_num)
                 continue
 

@@ -1,0 +1,795 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""The Agent UI's warm-up primes exactly the prefix a new chat's first turn sends."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import threading
+import time
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+from gaia.ui import warmup
+
+# ── PrefixWarmer ────────────────────────────────────────────────────────────
+
+
+def _gate_job(result=None):
+    release = threading.Event()
+    calls = []
+
+    def job():
+        calls.append(1)
+        release.wait(5)
+        return result
+
+    return job, release, calls
+
+
+def test_one_warm_up_at_a_time():
+    job, release, calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+
+    assert warmer.request("a") is True
+    assert warmer.request("b") is False
+    assert warmer.snapshot()["state"] == warmup.WARMING
+    release.set()
+    assert warmer.wait(5)
+    assert calls == [1]
+    assert warmer.snapshot()["state"] == warmup.READY
+
+
+def test_a_repeat_right_after_a_warm_up_is_debounced():
+    warmer = warmup.PrefixWarmer(lambda: {"seconds": 0.1})
+    warmer.request("a")
+    warmer.wait(5)
+    assert warmer.request("b") is False
+
+
+def test_a_fresh_request_skips_the_debounce():
+    calls = []
+    warmer = warmup.PrefixWarmer(lambda: calls.append(1) or {"seconds": 0.1})
+    warmer.request("a")
+    warmer.wait(5)
+    assert warmer.request("model pick", fresh=True) is True
+    warmer.wait(5)
+    assert calls == [1, 1]
+
+
+def test_a_fresh_request_during_a_warm_up_runs_once_it_ends():
+    job, release, calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    warmer.request("a")
+    assert warmer.request("model pick", fresh=True) is False
+    assert warmer.request("model pick", fresh=True) is False
+    release.set()
+    deadline = time.monotonic() + 5
+    while len(calls) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert warmer.wait(5)
+    assert calls == [1, 1]
+
+
+def test_never_starts_while_a_chat_turn_runs():
+    calls = []
+    warmer = warmup.PrefixWarmer(lambda: calls.append(1) or {})
+    warmer.set_busy_check(lambda: True)
+    assert warmer.request("a") is False
+    assert warmer.snapshot()["state"] == warmup.IDLE
+    assert calls == []
+
+
+def test_a_pick_made_during_a_chat_turn_loads_when_the_turn_ends():
+    """It used to be dropped: the picked model stayed unloaded until a message."""
+    calls, busy = [], [True]
+    warmer = warmup.PrefixWarmer(lambda: calls.append(1) or {})
+    warmer.set_busy_check(lambda: busy[0])
+    assert warmer.request("model pick", fresh=True) is False
+
+    assert warmer.turn_ended() is False, "another chat is still answering"
+    busy[0] = False
+    assert warmer.turn_ended() is True
+    assert warmer.wait(5)
+    assert calls == [1]
+    assert warmer.turn_ended() is False, "the pick is loaded once, not per turn"
+
+
+def test_two_turns_ending_together_load_a_waiting_pick_once():
+    calls, busy = [], [True]
+    warmer = warmup.PrefixWarmer(lambda: calls.append(1) or {})
+    warmer.set_busy_check(lambda: busy[0])
+    warmer.request("model pick", fresh=True)
+    busy[0] = False
+    assert warmer.turn_ended() is True
+    assert warmer.turn_ended() is False
+    assert warmer.wait(5)
+    assert calls == [1]
+
+
+def test_a_turn_ending_starts_nothing_when_no_pick_waits():
+    calls, busy = [], [True]
+    warmer = warmup.PrefixWarmer(lambda: calls.append(1) or {})
+    warmer.set_busy_check(lambda: busy[0])
+    assert warmer.request("new chat") is False
+    busy[0] = False
+    assert warmer.turn_ended() is False
+    assert calls == []
+
+
+def test_a_pick_stops_the_warm_up_of_the_model_it_replaces():
+    job, release, calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    warmer.request("startup")
+    warmer.set_target("gemma4-it-e4b-FLM", "npu")
+
+    warmer.request("model pick", fresh=True, model="Gemma-4-E4B-it-GGUF")
+
+    assert warmer.cancel.is_set()
+    release.set()
+    deadline = time.monotonic() + 5
+    while len(calls) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert warmer.wait(5)
+    assert calls == [1, 1]
+
+
+def test_a_pick_of_the_model_being_warmed_leaves_it_running():
+    job, release, _calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    warmer.request("startup")
+    warmer.set_target("Gemma-4-E4B-it-GGUF", "gpu")
+    warmer.request("model pick", fresh=True, model="user.gemma-4-e4b-it-gguf")
+    assert not warmer.cancel.is_set()
+    release.set()
+    assert warmer.wait(5)
+
+
+def test_a_failure_is_reported_and_retried_next_time(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(
+        warmup.logger, "warning", lambda msg, *a, **k: warnings.append(msg % a)
+    )
+
+    def boom():
+        raise ConnectionError("Lemonade not reachable")
+
+    warmer = warmup.PrefixWarmer(boom)
+    warmer.request("a")
+    warmer.wait(5)
+    snap = warmer.snapshot()
+    assert snap["state"] == warmup.FAILED
+    assert "Lemonade not reachable" in snap["error"]
+    assert warnings and "Warm-up (a) failed" in warnings[0]
+    assert warmer.request("b") is True
+    warmer.wait(5)
+
+
+def test_nothing_to_warm_is_skipped():
+    warmer = warmup.PrefixWarmer(lambda: None)
+    warmer.request("a")
+    warmer.wait(5)
+    assert warmer.snapshot()["state"] == warmup.SKIPPED
+
+
+def test_a_turn_waits_for_the_running_warm_up(monkeypatch):
+    job, release, _calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    monkeypatch.setattr(warmup, "_warmer", warmer)
+    warmer.request("a")
+
+    waited = threading.Event()
+
+    def turn():
+        warmup.wait_for_warm_up(timeout=5)
+        waited.set()
+
+    t = threading.Thread(target=turn)
+    t.start()
+    assert not waited.wait(0.2), "the turn must not race the warm-up"
+    release.set()
+    t.join(5)
+    assert waited.is_set()
+
+
+def test_a_cloud_turn_does_not_wait_for_the_local_warm_up(monkeypatch):
+    """It does not use the model the warm-up is loading (#6582)."""
+    job, release, _calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    monkeypatch.setattr(warmup, "_warmer", warmer)
+    warmer.request("a")
+    try:
+        waited = threading.Event()
+
+        def turn():
+            warmup.wait_for_warm_up(timeout=5, model="fireworks.deepseek-v4p1-flash")
+            waited.set()
+
+        t = threading.Thread(target=turn)
+        t.start()
+        assert waited.wait(5), "the cloud turn waited on the local warm-up"
+        assert not warmer.wait(0), "the warm-up should still be running"
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def _warming(monkeypatch, target=None):
+    job, release, _calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    monkeypatch.setattr(warmup, "_warmer", warmer)
+    warmer.request("a")
+    if target:
+        warmer.set_target(target, "gpu")
+    return warmer, release
+
+
+def _turn(model):
+    waited = threading.Event()
+
+    def run():
+        warmup.wait_for_warm_up(timeout=5, model=model)
+        waited.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    return waited
+
+
+@pytest.mark.parametrize("model", ["Qwen3.6-35B-A3B-GGUF", "user.qwen3.6-35b-a3b-gguf"])
+def test_a_turn_on_the_warmed_model_waits_and_keeps_it(monkeypatch, model):
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    waited = _turn(model)
+    assert not waited.wait(0.3), "the turn must not race the warm-up"
+    assert not warmer.cancel.is_set(), "the turn's own model must stay warming"
+    release.set()
+    assert waited.wait(5)
+    assert warmer.snapshot()["state"] == warmup.READY
+
+
+def test_a_default_model_turn_waits_for_the_warm_up(monkeypatch):
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    waited = _turn(None)
+    assert not waited.wait(0.3)
+    assert not warmer.cancel.is_set()
+    release.set()
+    assert waited.wait(5)
+
+
+def test_a_turn_on_another_local_model_stops_the_warm_up(monkeypatch):
+    """Waiting would only end with the warm-up loading over the turn's model."""
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    try:
+        waited = _turn("Gemma-4-E4B-it-GGUF")
+        assert waited.wait(5), "the turn waited on another model's warm-up"
+        assert warmer.cancel.is_set()
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_turn_on_another_model_waits_out_a_load_under_way(monkeypatch):
+    """A load can't be stopped; starting the turn's own alongside it would find
+    the memory still held and shrink the turn's window or refuse it."""
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    warmer.set_phase("loading")
+    try:
+        waited = _turn("Gemma-4-E4B-it-GGUF")
+        assert not waited.wait(0.3), "the turn raced the warm-up's model load"
+        assert warmer.cancel.is_set(), "the warm-up must still stop after the load"
+        warmer.set_phase("priming")
+        assert waited.wait(5)
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_cloud_turn_does_not_wait_out_a_local_load(monkeypatch):
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    warmer.set_phase("loading")
+    try:
+        assert _turn("fireworks.deepseek-v4p1-flash").wait(5)
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_turn_before_the_warm_up_names_its_model_stops_once_it_does(monkeypatch):
+    warmer, release = _warming(monkeypatch)
+    try:
+        waited = _turn("Gemma-4-E4B-it-GGUF")
+        assert not waited.wait(0.3), "the warmed model may still be the turn's"
+        warmer.set_target("Qwen3.6-35B-A3B-GGUF", "gpu")
+        assert waited.wait(5)
+        assert warmer.cancel.is_set()
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_cloud_turn_stops_the_local_warm_up(monkeypatch):
+    warmer, release = _warming(monkeypatch, "Qwen3.6-35B-A3B-GGUF")
+    try:
+        assert _turn("fireworks.deepseek-v4p1-flash").wait(5)
+        assert warmer.cancel.is_set()
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_a_new_warm_up_forgets_the_last_turns_model(monkeypatch):
+    job, release, _calls = _gate_job(None)
+    warmer = warmup.PrefixWarmer(job)
+    monkeypatch.setattr(warmup, "_warmer", warmer)
+    warmer.request("a")
+    warmer.set_target("Qwen3.6-35B-A3B-GGUF", "gpu")
+    assert _turn("Gemma-4-E4B-it-GGUF").wait(5)
+    release.set()
+    warmer.wait(5)
+    release.clear()
+    assert warmer.request("b")
+    try:
+        warmer.set_target("Qwen3.6-35B-A3B-GGUF", "gpu")
+        assert not warmer.cancel.is_set()
+    finally:
+        release.set()
+        warmer.wait(5)
+
+
+def test_the_status_names_the_model_and_device_being_loaded():
+    job, release, _calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    warmer.request("a")
+    warmer.set_target("Qwen3.6-35B-A3B-GGUF", "gpu")
+    snap = warmer.snapshot()
+    assert (snap["model"], snap["device"]) == ("Qwen3.6-35B-A3B-GGUF", "gpu")
+    release.set()
+    warmer.wait(5)
+
+
+def test_a_new_warm_up_forgets_the_last_model():
+    warmer = warmup.PrefixWarmer(lambda: None)
+    warmer.set_target("Gemma-4-E4B-it-GGUF", "gpu")
+    warmer.request("a")
+    warmer.wait(5)
+    assert warmer.snapshot()["model"] is None
+
+
+def test_no_warm_up_before_first_run_setup_finishes(monkeypatch, tmp_path):
+    """It would load the floor model on a PC where setup picks another (#5181)."""
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+    calls = []
+    monkeypatch.setattr(warmup, "_warmer", warmup.PrefixWarmer(lambda: calls.append(1)))
+    assert warmup.request_warm_up("startup") is False
+    assert calls == []
+
+    from gaia.ui.setup_runner import mark_initialized
+
+    mark_initialized()
+    assert warmup.request_warm_up("startup") is True
+    warmup._warmer.wait(5)
+    assert calls == [1]
+
+
+class _Lemonade:
+    """Lemonade's catalog and /system-info, as the device check reads them."""
+
+    def __init__(self, recipe="llamacpp", default_backend="vulkan", error=None):
+        self.recipe, self.default_backend, self.error = recipe, default_backend, error
+
+    def list_models(self, show_all=False):
+        if self.error:
+            raise self.error
+        return {"data": [{"id": "Qwen3.6-35B-A3B-GGUF", "recipe": self.recipe}]}
+
+    def get_system_info(self, timeout=None):
+        return {"recipes": {"llamacpp": {"default_backend": self.default_backend}}}
+
+
+@pytest.mark.parametrize(
+    "lemonade, chosen, device",
+    [
+        (_Lemonade(default_backend="vulkan"), None, "gpu"),
+        (_Lemonade(default_backend="rocm"), None, "gpu"),
+        # A GPU in the PC doesn't mean the model runs there.
+        (_Lemonade(default_backend="cpu"), None, "cpu"),
+        (_Lemonade(default_backend="vulkan"), "cpu", "cpu"),
+        (_Lemonade(default_backend=None), None, None),
+        (_Lemonade(recipe="ryzenai-llm"), None, None),
+    ],
+)
+def test_device_follows_the_llamacpp_backend(monkeypatch, lemonade, chosen, device):
+    from gaia.llm import lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "preferred_llamacpp_backend", lambda: chosen)
+    assert warmup._device_for(lemonade, "Qwen3.6-35B-A3B-GGUF") == device
+
+
+def test_device_for_an_npu_model_and_an_unreachable_server():
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    assert warmup._device_for(_Lemonade(), "gemma4-it-e2b-FLM") == "npu"
+    down = _Lemonade(error=LemonadeClientError("down"))
+    assert warmup._device_for(down, "Qwen3.6-35B-A3B-GGUF") is None
+
+
+class _NoAgentsRegistry:
+    """A registry with the flagship registered that must never be built."""
+
+    def get(self, name):
+        return SimpleNamespace(is_sidecar=False)
+
+    def resolve_model(self, name):
+        return None
+
+    def create_agent(self, *args, **kwargs):
+        raise AssertionError("a skipped warm-up must not build the agent")
+
+
+class _EmptyDb:
+    def get_setting(self, key, default=None):
+        return default
+
+
+def test_a_catalog_cloud_model_is_never_warmed(monkeypatch):
+    """A cloud model only the catalog names (no built-in prefix) costs nothing."""
+    from gaia.llm import lemonade_client
+    from gaia.ui import _chat_helpers as chat
+
+    model = "acme.big-model"
+    monkeypatch.setattr(chat, "_agent_registry", _NoAgentsRegistry())
+    monkeypatch.setattr("gaia.ui.database.resolved_default_model", lambda: model)
+
+    def catalog(self, name):
+        monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {model: {}})
+        return {"id": name, "downloaded": True}
+
+    monkeypatch.setattr(lemonade_client.LemonadeClient, "get_model_info", catalog)
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    assert warmup._warm_new_chat_prefix(_EmptyDb()) is None
+
+
+def test_a_sidecar_flagship_is_loaded_but_never_built(monkeypatch, caplog):
+    """The Hub-installed flagship runs in its daemon sidecar; chat relays to it.
+
+    Building it here raised from the registry's stand-in factory and logged a
+    traceback on every boot and every new chat. Its model is still loaded:
+    skipping that left a model picked in the app unloaded until the next message.
+    """
+    from gaia.agents.registry import AgentRegistry
+    from gaia.llm import lemonade_client
+    from gaia.ui import _chat_helpers as chat
+
+    registry = AgentRegistry()
+    registry.register_sidecar("gaia", "GAIA", [])
+
+    def must_not_build(*args, **kwargs):
+        raise AssertionError("the warm-up built the sidecar agent in-process")
+
+    monkeypatch.setattr(registry, "create_agent", must_not_build)
+    monkeypatch.setattr(chat, "_agent_registry", registry)
+    monkeypatch.setattr(warmup, "preload_skip_reason", lambda: None)
+    monkeypatch.setattr(
+        lemonade_client.LemonadeClient,
+        "get_model_info",
+        lambda self, name: {"id": name, "downloaded": True},
+    )
+    monkeypatch.setattr(warmup, "_device_for", lambda client, model: "gpu")
+    loaded, targets = [], []
+    monkeypatch.setattr(
+        chat,
+        "_maybe_load_expected_model",
+        lambda model, **kwargs: loaded.append(model),
+    )
+    with caplog.at_level(logging.INFO, logger=warmup.logger.name):
+        result = warmup._warm_new_chat_prefix(
+            _EmptyDb(), lambda model, device: targets.append((model, device))
+        )
+    model = warmup.new_chat_model(_EmptyDb(), registry)[0]
+    assert loaded == [model]
+    assert targets == [(model, "gpu")]
+    assert result["primed"] is False
+    assert not any(r.exc_info for r in caplog.records)
+
+
+def test_a_sidecar_flagship_on_hybrid_loads_the_cheap_model(monkeypatch):
+    """Lemonade has no model called hybrid; loading it failed the pick."""
+    from gaia.agents.registry import AgentRegistry
+    from gaia.llm import hybrid, lemonade_client
+    from gaia.ui import _chat_helpers as chat
+
+    registry = AgentRegistry()
+    registry.register_sidecar("gaia", "GAIA", [])
+    monkeypatch.setattr(chat, "_agent_registry", registry)
+    monkeypatch.setattr(warmup, "preload_skip_reason", lambda: None)
+    monkeypatch.setattr(warmup, "new_chat_model", lambda db, registry: ("hybrid", None))
+    monkeypatch.setattr(
+        hybrid,
+        "start_model",
+        lambda m, *a, **k: "gemma4-it-e4b-FLM" if m == "hybrid" else m,
+    )
+    monkeypatch.setattr(
+        lemonade_client.LemonadeClient,
+        "get_model_info",
+        lambda self, name: {"id": name, "downloaded": True},
+    )
+    monkeypatch.setattr(
+        lemonade_client.LemonadeClient,
+        "get_status",
+        lambda self, **k: lemonade_client.LemonadeStatus(
+            running=True, loaded_models=[]
+        ),
+    )
+    monkeypatch.setattr(warmup, "_device_for", lambda client, model: "npu")
+    loaded = []
+    monkeypatch.setattr(
+        chat, "_maybe_load_expected_model", lambda model, **k: loaded.append(model)
+    )
+    warmup._warm_new_chat_prefix(_EmptyDb())
+    assert loaded == ["gemma4-it-e4b-FLM"]
+
+
+def test_a_sidecar_flagships_load_stops_for_a_turn_on_another_model(monkeypatch):
+    from gaia.agents.registry import AgentRegistry
+    from gaia.llm import lemonade_client
+    from gaia.ui import _chat_helpers as chat
+
+    registry = AgentRegistry()
+    registry.register_sidecar("gaia", "GAIA", [])
+    monkeypatch.setattr(chat, "_agent_registry", registry)
+    monkeypatch.setattr(warmup, "preload_skip_reason", lambda: None)
+    monkeypatch.setattr(
+        lemonade_client.LemonadeClient,
+        "get_model_info",
+        lambda self, name: {"id": name, "downloaded": True},
+    )
+    monkeypatch.setattr(warmup, "_device_for", lambda client, model: "gpu")
+    loaded = []
+    monkeypatch.setattr(
+        chat,
+        "_maybe_load_expected_model",
+        lambda model, **kwargs: loaded.append(model),
+    )
+    cancel = threading.Event()
+    cancel.set()
+    assert warmup._warm_new_chat_prefix(_EmptyDb(), None, cancel) is None
+    assert loaded == []
+
+
+def test_the_eval_cloud_provider_is_never_warmed(monkeypatch):
+    from gaia.ui import _chat_helpers as chat
+
+    monkeypatch.setenv("GAIA_EVAL_AGENT_PROVIDER", "claude")
+    monkeypatch.setenv("GAIA_EVAL_CLAUDE_MODEL", "claude-sonnet-5")
+    monkeypatch.setattr(chat, "_agent_registry", _NoAgentsRegistry())
+    assert warmup._warm_new_chat_prefix(_EmptyDb()) is None
+
+
+# ── Exact prefix ────────────────────────────────────────────────────────────
+
+_DIM = 768
+
+
+def _fake_embedding(text):
+    vec = np.zeros(_DIM, dtype=np.float32)
+    for word in str(text).lower().split():
+        vec[int(hashlib.md5(word.encode()).hexdigest(), 16) % _DIM] += 1.0
+    norm = np.linalg.norm(vec)
+    return vec / norm if norm else vec
+
+
+def _dump(value):
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
+def _prefix(messages, tools):
+    """System message and tool schemas: what a warm-up leaves in the cache."""
+    return _dump(messages[:1]) + _dump(tools)
+
+
+@pytest.fixture
+def ui_flagship(monkeypatch, tmp_path):
+    pytest.importorskip("gaia_agent")
+    pytest.importorskip("gaia_agent")
+    from gaia_agent.chat_agent import ChatAgent
+
+    from gaia.agents.base.memory import MemoryMixin
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.registry import AgentRegistry
+    from gaia.llm import lemonade_client
+    from gaia.ui import _chat_helpers as chat
+
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / "daemon"))
+    monkeypatch.setenv("GAIA_PROJECT_MAP_AUTO_INDEX", "0")
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9/api/v1")
+    monkeypatch.delenv("GAIA_DYNAMIC_TOOLS", raising=False)
+    monkeypatch.setattr(MemoryMixin, "_embed_text", lambda self, t: _fake_embedding(t))
+    monkeypatch.setattr(
+        ChatAgent,
+        "_embed_texts_batch",
+        lambda self, texts: np.stack([_fake_embedding(t) for t in texts]),
+    )
+    monkeypatch.setattr(
+        lemonade_client.LemonadeClient,
+        "get_model_info",
+        lambda self, name: {"id": name, "downloaded": True},
+    )
+    monkeypatch.setattr(chat, "_maybe_load_expected_model", lambda *a, **k: None)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+
+    saved = dict(_TOOL_REGISTRY)
+    registry = AgentRegistry()
+    registry.discover()
+    monkeypatch.setattr(chat, "_agent_registry", registry)
+
+    requests = []
+    agents = []
+    real_create = registry.create_agent
+
+    def create_and_capture(*args, **kwargs):
+        agent = real_create(*args, **kwargs)
+        agents.append(agent)
+
+        def fake_chat(messages, model=None, stream=False, **kw):
+            if kw.get("tools"):
+                requests.append(
+                    (
+                        json.loads(json.dumps(messages)),
+                        json.loads(json.dumps(kw["tools"])),
+                    )
+                )
+            reply = "OK"
+            return iter([reply]) if stream else reply
+
+        client = agent.chat.llm_client
+        monkeypatch.setattr(client, "chat", fake_chat)
+        monkeypatch.setattr(client._backend, "slot_count", lambda _model: 3)
+        for name, value in (
+            ("get_last_usage", None),
+            ("get_last_ttft_seconds", None),
+            ("get_last_finish_reason", "stop"),
+            ("get_last_reasoning", None),
+        ):
+            monkeypatch.setattr(client, name, lambda *a, _v=value, **k: _v)
+        monkeypatch.setattr(agent.chat, "get_stats", lambda: {})
+        return agent
+
+    monkeypatch.setattr(registry, "create_agent", create_and_capture)
+
+    class _Db:
+        def get_setting(self, key, default=None):
+            return default
+
+    try:
+        yield chat, registry, requests, agents, _Db()
+    finally:
+        for agent in agents:
+            agent.close()
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
+def test_ui_warm_up_primes_a_new_chats_first_turn(ui_flagship):
+    """The warm-up's prefix equals what a new chat's first turn sends.
+
+    The new chat is built the way the streaming chat path builds a registered
+    agent on a cache miss, under its own session id.
+    """
+    chat, registry, requests, agents, db = ui_flagship
+    from gaia.ui.database import resolved_default_model
+
+    result = warmup._warm_new_chat_prefix(db)
+    assert result is not None and len(requests) == 2
+    warm, full = requests
+    assert len(warm[1]) < len(full[1])
+
+    session = {"model": resolved_default_model(), "agent_type": "gaia", "device": "gpu"}
+    model_id, device_ctx = chat.resolve_session_model(session, "gaia", None, registry)
+    agent = registry.create_agent(
+        "gaia",
+        **chat._build_create_kwargs(
+            custom_model=None,
+            model_id=model_id,
+            streaming=True,
+            device="gpu",
+            min_context_size=device_ctx,
+        ),
+        **chat._session_agent_kwargs(
+            rag_file_paths=[],
+            library_paths=[],
+            allowed=chat._compute_allowed_paths([]),
+            session_id="0f6c2d0e-real-session",
+            memory_incognito=chat._memory_off(session, db),
+        ),
+    )
+    agent.process_query("hello")
+    first = requests[-1]
+
+    before, after = _prefix(*warm), _prefix(*first)
+    at = next(
+        (i for i, (a, b) in enumerate(zip(before, after)) if a != b),
+        min(len(before), len(after)),
+    )
+    assert before == after, (
+        f"warm-up prefix diverges from a new chat's first turn at char {at}:\n"
+        f"  warm: {before[max(0, at - 60): at + 120]!r}\n"
+        f"  turn: {after[max(0, at - 60): at + 120]!r}"
+    )
+
+
+def test_a_turn_never_races_a_warm_up_that_overruns(monkeypatch):
+    import threading
+
+    from gaia.ui import warmup as warmup_mod
+
+    release = threading.Event()
+    warmer = warmup_mod.PrefixWarmer(lambda: release.wait(10) and None)
+    monkeypatch.setattr(warmup_mod, "_warmer", warmer)
+    try:
+        assert warmer.request("test")
+        with pytest.raises(TimeoutError, match="did not start"):
+            warmup_mod.wait_for_warm_up(timeout=0.3)
+    finally:
+        release.set()
+
+
+def test_a_stopped_warm_up_loads_and_primes_nothing(ui_flagship, monkeypatch):
+    """A turn on another model named while the agent was built stops it."""
+    chat, _registry, requests, _agents, db = ui_flagship
+    loads = []
+    monkeypatch.setattr(chat, "_maybe_load_expected_model", loads.append)
+    cancel = threading.Event()
+
+    result = warmup._warm_new_chat_prefix(
+        db, lambda model, device: cancel.set(), cancel
+    )
+    assert result is None
+    assert loads == [] and requests == []
+
+
+def test_a_warm_up_stopped_mid_prompt_is_skipped(ui_flagship, monkeypatch):
+    from gaia.chat.sdk import LLMCallCancelled
+
+    chat, _registry, _requests, agents, db = ui_flagship
+    real_create = _registry.create_agent
+
+    def create(*args, **kwargs):
+        agent = real_create(*args, **kwargs)
+
+        def stopped(cancel=None, progress=None):
+            assert cancel is not None, "the warm-up must be stoppable"
+            raise LLMCallCancelled("stopped mid-prompt")
+
+        monkeypatch.setattr(agent, "warm_up", stopped)
+        return agent
+
+    monkeypatch.setattr(_registry, "create_agent", create)
+    assert warmup._warm_new_chat_prefix(db, None, threading.Event()) is None
+
+
+def test_the_warm_up_does_not_wait_for_mcp_servers_to_exit(ui_flagship, monkeypatch):
+    """A first turn waits on the warm-up, so its agent's MCP servers stop in the background."""
+    chat, _registry, _requests, _agents, db = ui_flagship
+    real_create = _registry.create_agent
+    closes = []
+
+    def create(*args, **kwargs):
+        agent = real_create(*args, **kwargs)
+        real_close = agent.close
+
+        def close(*, wait_for_mcp=True):
+            closes.append({"wait_for_mcp": wait_for_mcp})
+            real_close(wait_for_mcp=wait_for_mcp)
+
+        monkeypatch.setattr(agent, "close", close)
+        return agent
+
+    monkeypatch.setattr(_registry, "create_agent", create)
+    warmup._warm_new_chat_prefix(db)
+    assert closes == [{"wait_for_mcp": False}]

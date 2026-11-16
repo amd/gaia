@@ -94,12 +94,38 @@ def test_agent_ui_main_http_passes_host_and_port_to_run():
         patch.object(
             agent_ui_mcp.sys,
             "argv",
-            ["agent_ui_mcp", "--host", "0.0.0.0", "--port", "9877"],
+            ["agent_ui_mcp", "--host", "127.0.0.1", "--port", "9877"],
         ),
     ):
         agent_ui_mcp.main()
 
-    run.assert_called_once_with(transport="streamable-http", host="0.0.0.0", port=9877)
+    _assert_agent_ui_http_run(run, host="127.0.0.1", port=9877)
+
+
+def test_agent_ui_main_refuses_a_network_bind_without_opt_in(monkeypatch):
+    monkeypatch.setenv("GAIA_AGENT_UI_MCP_TOKEN", "t" * 40)
+    with (
+        patch.object(agent_ui_mcp, "create_agent_ui_mcp") as create,
+        patch.object(
+            agent_ui_mcp.sys,
+            "argv",
+            ["agent_ui_mcp", "--host", "0.0.0.0", "--port", "9877"],
+        ),
+        pytest.raises(SystemExit) as exc,
+    ):
+        agent_ui_mcp.main()
+    assert exc.value.code == 2
+    create.assert_not_called()
+
+
+def _assert_agent_ui_http_run(run, host, port):
+    """Bound as asked, and no web page can drive it (no origin is allowed)."""
+    run.assert_called_once()
+    kwargs = run.call_args.kwargs
+    security = kwargs.pop("transport_security")
+    assert kwargs == {"transport": "streamable-http", "host": host, "port": port}
+    assert security.enable_dns_rebinding_protection is True
+    assert security.allowed_origins == []
 
 
 def test_tui_main_http_passes_host_and_port_to_run():
@@ -121,7 +147,7 @@ def test_tui_main_http_passes_host_and_port_to_run():
 def test_cli_agent_ui_http_passes_host_and_port_to_run():
     server = MCPServer(name="test")
     args = SimpleNamespace(
-        backend="http://backend", stdio=False, host="0.0.0.0", port=9879
+        backend="http://backend", stdio=False, host="localhost", port=9879
     )
     with (
         patch(
@@ -132,7 +158,7 @@ def test_cli_agent_ui_http_passes_host_and_port_to_run():
     ):
         cli.handle_mcp_serve(args)
 
-    run.assert_called_once_with(transport="streamable-http", host="0.0.0.0", port=9879)
+    _assert_agent_ui_http_run(run, host="localhost", port=9879)
 
 
 def test_cli_tui_http_passes_host_and_port_to_run():

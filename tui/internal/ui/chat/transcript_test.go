@@ -150,6 +150,7 @@ func TestTheLiveLineNamesTheModelsPhase(t *testing.T) {
 		{phase("reading", 0), "Reading your request"},
 		{phase("loading_model", 0), "Loading Qwen3.6 35B into memory"},
 		{phase("reading", 0), "Reading your request"},
+		{phase("loading_tools", 0), "Loading more tools"},
 		{phase("reasoning", 0), "Reasoning"},
 		// Reasoning text is narration: folded, and it must not end the phase.
 		{event.CanonicalStatusEvent{Type: "status", Message: "The user wants revenue by region."}, "Reasoning"},
@@ -636,6 +637,41 @@ func TestANonZeroExitIsAFailedStep(t *testing.T) {
 	})
 	if item := m.activity[len(m.activity)-1]; item.Success == nil || !*item.Success {
 		t.Error("a zero exit must stay a success")
+	}
+}
+
+// The shell tool now reports a failed command as status "error", which the
+// SSE layer carries as success:false — that must read as a failure in words.
+func TestAFailedCommandReportedAsAnErrorIsAFailedStep(t *testing.T) {
+	m := feed(t, sizedChat(t, 120, 40), shellCall("python -m pytest -q"), event.CanonicalToolResultEvent{
+		Type: "tool_result", Tool: "run_shell_command",
+		Preview: "Command failed (exit 2): E   SyntaxError",
+		Data: json.RawMessage(`{"success":false,"summary":"Command failed (exit 2): E   SyntaxError",` +
+			`"command_output":{"return_code":2,"stderr":"E   SyntaxError"}}`),
+	})
+	item := m.activity[len(m.activity)-1]
+	if item.Success == nil || *item.Success {
+		t.Error("a command reported as an error ticked as a success")
+	}
+	if !strings.HasPrefix(item.Detail, "failed") {
+		t.Errorf("the outcome must say it failed in words: %q", item.Detail)
+	}
+}
+
+// grep exiting 1 means "no match": the tool marks it expected_exit, and a
+// search that found nothing is an answer, not a failed step.
+func TestAnExpectedExitStaysASuccess(t *testing.T) {
+	for _, data := range []string{
+		`{"success":true,"command_output":{"return_code":1,"expected_exit":"grep exits 1 when nothing matches"}}`,
+		`{"status":"success","return_code":1,"expected_exit":"grep exits 1 when nothing matches"}`,
+	} {
+		m := feed(t, sizedChat(t, 120, 40), shellCall("grep -r TODO src"), event.CanonicalToolResultEvent{
+			Type: "tool_result", Tool: "run_shell_command",
+			Preview: "grep exits 1 when nothing matches (exit 1)", Data: json.RawMessage(data),
+		})
+		if item := m.activity[len(m.activity)-1]; item.Success == nil || !*item.Success {
+			t.Errorf("%s: an expected exit ticked as a failure", data)
+		}
 	}
 }
 

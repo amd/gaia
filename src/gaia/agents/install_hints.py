@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Shared "agent wheel not installed" messaging.
 
-The ``gaia-agent-*`` wheels (gaia, chat, email) are built
-and packaged (``hub/agents/<id>/python/``) but publishing them to PyPI is
-still paused (see ``.github/workflows/publish_agents.yml``, tracked by
-#1179 / #1513). Until that lands, ``pip install gaia-agent-<id>`` and
+The ``gaia-agent-*`` wheels (gaia, email) are built
+and packaged (``hub/agents/<id>/python/``) but are not published to PyPI
+(#1179 / #1513). Until they are, ``pip install gaia-agent-<id>`` and
 ``pip install "amd-gaia[agents]"`` both fail on a clean environment (#2240)
 -- so every call site that used to recommend them needs to point at the one
 install path that actually resolves today: pip installing straight from the
@@ -31,7 +30,6 @@ from urllib.request import url2pathname
 # hub/agents/<subdir>/python for each wheel this module has a hint for. Keep
 # in sync with the directories under hub/agents/ (ls hub/agents/).
 _AGENT_SOURCE_SUBDIRS = {
-    "gaia-agent-chat": "chat",
     "gaia-agent-email": "email",
     "gaia-agent-gaia": "gaia",
 }
@@ -40,24 +38,16 @@ _AGENT_SOURCE_SUBDIRS = {
 # Needed because wheel names use hyphens but package directories use underscores,
 # and the mapping isn't always a simple replace (e.g. gaia-agent-gaia -> gaia_agent).
 _WHEEL_TOP_LEVEL_PACKAGE = {
-    "gaia-agent-chat": "gaia_agent_chat",
     "gaia-agent-email": "gaia_agent_email",
     "gaia-agent-gaia": "gaia_agent",
 }
 
-# Required sibling packages for each primary wheel. If one is missing, suggest
-# installing the primary wheel normally so dependency resolution installs it.
-_WHEEL_REQUIRED_SIBLINGS = {
-    "gaia-agent-gaia": ("gaia-agent-chat", "gaia_agent_chat"),
-}
-
 _REPO_URL = "https://github.com/amd/gaia.git"
 
-# Agent ids the ``gaia-agent-chat`` wheel registers — its three prompt
-# profiles. All three are ``hidden`` (resolvable, not selectable), so a stored
-# session can still ask for one on a box that never installed the wheel; the
-# answer there is this package's install command, not "pick another agent".
-CHAT_WHEEL_AGENT_IDS = frozenset({"chat", "doc", "file"})
+# ChatAgent's old profile ids. They resolve to the flagship (#6099), and every
+# historical session still carries one, so on a box without the flagship the
+# answer is its install command, not "pick another agent".
+LEGACY_FLAGSHIP_AGENT_IDS = frozenset({"chat", "doc", "file"})
 
 
 def _installed_version(package: str) -> Optional[str]:
@@ -140,6 +130,20 @@ def format_command(argv: Sequence[str]) -> str:
     return " ".join(f'"{a}"' if _NEEDS_QUOTES.search(a) else a for a in argv)
 
 
+#: Why nothing can be installed into a frozen (PyInstaller) GAIA binary.
+FROZEN_NO_INSTALL = (
+    "Python packages can't be installed into this GAIA build: it is a "
+    "self-contained binary, not a Python interpreter, so pip has nothing to "
+    "install into. Use a source install of GAIA to add packages "
+    "(https://amd-gaia.ai/docs/guides/install)."
+)
+
+
+def _frozen() -> bool:
+    """Whether this is a PyInstaller build, where ``sys.executable`` is the app."""
+    return bool(getattr(sys, "frozen", False))
+
+
 def resolve_pip_frontend() -> PipFrontend:
     """Pick the installer that can actually write into this interpreter.
 
@@ -149,8 +153,11 @@ def resolve_pip_frontend() -> PipFrontend:
     finds no environment and ``python -m pip`` does not exist.
 
     Raises:
-        PackageInstallerUnavailableError: pip is missing and no uv binary exists.
+        PackageInstallerUnavailableError: pip is missing and no uv binary
+            exists, or this is a frozen build with no interpreter to install into.
     """
+    if _frozen():
+        raise PackageInstallerUnavailableError(FROZEN_NO_INSTALL)
     if _pip_available():
         prefix = (sys.executable, "-m", "pip", "install")
         return PipFrontend(argv=prefix, display=prefix)
@@ -259,7 +266,10 @@ def pip_install_hint(*args: str) -> str:
 
     With no installer available yet, the text says to install uv first and
     then gives the uv command -- never a command that cannot run as printed.
+    A frozen build has no interpreter to install into, so it says that instead.
     """
+    if _frozen():
+        return FROZEN_NO_INSTALL
     try:
         return format_command([*resolve_pip_frontend().display, *args])
     except PackageInstallerUnavailableError:
@@ -267,6 +277,31 @@ def pip_install_hint(*args: str) -> str:
             ["uv", "pip", "install", "--python", sys.executable, *args]
         )
         return f"install uv ({_UV_INSTALL_DOCS}), then run: {command}"
+
+
+def missing_package_hint(*packages: str) -> str:
+    """How to get *packages* a tool needs, true for this kind of install.
+
+    A frozen build can only use what was bundled into it, so there the text
+    says the package is missing from the build rather than naming an install
+    command that would run the binary itself.
+    """
+    names = ", ".join(packages)
+    if _frozen():
+        return f"{names} isn't bundled in this GAIA build. {FROZEN_NO_INSTALL}"
+    return f"Install with: {pip_install_hint(*packages)}"
+
+
+def missing_extra_hint(*extras: str) -> str:
+    """How to add GAIA's optional *extras* (e.g. ``rag``), true for this install.
+
+    From source this is the install command for this interpreter; a frozen
+    build says the feature isn't bundled instead.
+    """
+    if _frozen():
+        names = ", ".join(f"GAIA[{e}]" for e in extras)
+        return f"{names} isn't bundled in this GAIA build. {FROZEN_NO_INSTALL}"
+    return f"Install with: {pip_install_hint(*gaia_extras_install_args(extras))}"
 
 
 def source_install_command(wheel: str, *, force_reinstall: bool = False) -> str:
@@ -297,7 +332,7 @@ def agent_not_installed_message(
     """Build the standard "agent not installed" error text for ``wheel``.
 
     ``subject`` is the complete first sentence, without a trailing period,
-    e.g. ``"The chat agent is not installed"`` or ``"The drafting eval needs
+    e.g. ``"The GAIA agent is not installed"`` or ``"The drafting eval needs
     the email agent"``. ``next_step`` is an optional trailing instruction,
     e.g. ``"Then re-run `gaia chat`."``.
 
@@ -362,10 +397,6 @@ def agent_import_error_message(
     package means the package is genuinely absent. Anything else -- a
     missing transitive dependency, or an ImportError from a version-skewed
     wheel -- means the package is installed but broken.
-
-    Also treats a missing *required sibling* wheel (e.g. gaia-agent-chat
-    for gaia-agent-gaia) as "not installed" so the reinstall hint includes
-    the sibling via normal dependency resolution (no --no-deps).
     """
     top_level = _WHEEL_TOP_LEVEL_PACKAGE.get(wheel, wheel.replace("-", "_"))
 
@@ -374,18 +405,5 @@ def agent_import_error_message(
         error.name == top_level or (error.name or "").startswith(top_level + ".")
     ):
         return agent_not_installed_message(subject, wheel, next_step=next_step)
-
-    # Missing required sibling (e.g. gaia_agent_chat for gaia-agent-gaia)?
-    siblings = _WHEEL_REQUIRED_SIBLINGS.get(wheel)
-    if siblings:
-        _, sib_pkg = siblings
-        if isinstance(error, ModuleNotFoundError) and (
-            error.name == sib_pkg or (error.name or "").startswith(sib_pkg + ".")
-        ):
-            # Reinstall the primary wheel with dependency resolution enabled;
-            # installing only the sibling would leave any other missing
-            # requirements undiscovered, while --no-deps would preserve this
-            # broken environment.
-            return agent_not_installed_message(subject, wheel, next_step=next_step)
 
     return agent_wheel_failed_message(subject, wheel, error, next_step=next_step)

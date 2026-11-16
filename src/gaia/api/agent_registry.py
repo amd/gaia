@@ -22,6 +22,7 @@ from typing import Any, Dict, List
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
 from gaia.agents.install_hints import source_install_command
+from gaia.api.flagship import api_unavailable_reason
 from gaia.api.sse_handler import SSEOutputHandler
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,6 @@ def _apply_env_overrides():
         GAIA_API_DEBUG: Enable debug logging and console output
         GAIA_API_SHOW_PROMPTS: Display prompts sent to LLM
         GAIA_API_STREAMING: Enable real-time streaming of LLM responses
-        GAIA_API_STEP_THROUGH: Enable step-through debugging mode
     """
     debug = os.environ.get("GAIA_API_DEBUG") == "1"
     show_prompts = os.environ.get("GAIA_API_SHOW_PROMPTS") == "1"
@@ -163,6 +163,9 @@ class AgentRegistry:
             return agent_class(**init_params)
         except ImportError as e:
             logger.error(f"Failed to load agent {model_id}: {e}")
+            reason = api_unavailable_reason()
+            if reason:
+                raise ValueError(reason) from e
             hint = ""
             if model_id == "gaia":
                 hint = (

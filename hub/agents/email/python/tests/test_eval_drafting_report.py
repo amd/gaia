@@ -101,6 +101,8 @@ def test_no_judge_credential_returns_1_no_judge_no_report(monkeypatch):
     _set_model_env(monkeypatch)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    # A `claude` CLI on PATH is a subscription transport too.
+    monkeypatch.setattr("gaia.eval.judge_client.shutil.which", lambda _name: None)
     summary = _summary(_gate(False))
     (
         fake_generate,
@@ -122,8 +124,8 @@ def test_no_judge_credential_returns_1_no_judge_no_report(monkeypatch):
     assert not _report_path().exists()
 
 
-def test_subscription_token_alone_satisfies_the_judge_guard(monkeypatch):
-    """CI blanks ANTHROPIC_API_KEY and passes only the subscription token."""
+def test_subscription_token_alone_satisfies_the_judge_guard(monkeypatch, claude_login):
+    """CI passes only the subscription token, and installs the `claude` CLI."""
     _set_model_env(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
@@ -132,6 +134,20 @@ def test_subscription_token_alone_satisfies_the_judge_guard(monkeypatch):
 
     assert mod.main() == 0
     assert fake_make_judge.called
+
+
+def test_a_token_without_the_cli_fails_loudly(monkeypatch):
+    """The token cannot drive the judge alone; the guard says how to fix it."""
+    _set_model_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-test")
+    monkeypatch.setattr("gaia.eval.judge_client.shutil.which", lambda _name: None)
+    summary = _summary(_gate(False))
+    _, _, fake_make_judge, _, _ = _install_fakes(monkeypatch, summary)
+
+    with pytest.raises(RuntimeError, match="npm install -g @anthropic-ai/claude-code"):
+        mod.main()
+    assert not fake_make_judge.called
 
 
 def test_gate_breach_returns_1(monkeypatch):

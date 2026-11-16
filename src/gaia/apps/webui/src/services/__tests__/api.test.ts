@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { listConnectors, disconnectConnector, authorizeConnector } from '../api';
+import { listConnectors, disconnectConnector, authorizeConnector, uploadDocumentBlob } from '../api';
 
 /**
  * Regression tests for `apiFetch`'s non-JSON handling (issue #983).
@@ -110,5 +110,71 @@ describe('authorizeConnector grant_agents', () => {
         );
         await authorizeConnector('google', ['openid']);
         expect(lastBody()).toEqual({ scopes: ['openid'], grant_agents: [] });
+    });
+});
+
+/**
+ * #2741 — a failed .xlsx upload showed only "Server error. Please try again."
+ * because the 500's `detail` (the real cause) was thrown away.
+ */
+describe('HTTP 500 error messages', () => {
+    const generic = 'Server error. Please try again.';
+
+    beforeEach(() => {
+        vi.stubGlobal('fetch', vi.fn());
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('shows the backend detail when a 500 carries one (apiFetch)', async () => {
+        (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+            jsonResponse({ detail: 'Failed to index document: openpyxl is not installed' }, 500),
+        );
+        await expect(listConnectors()).rejects.toThrow(
+            'Failed to index document: openpyxl is not installed',
+        );
+    });
+
+    it('shows the backend detail when an upload fails with a 500', async () => {
+        (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+            jsonResponse({ detail: 'Failed to index document: bad workbook' }, 500),
+        );
+        const file = new File(['x'], 'data.xlsx');
+        await expect(uploadDocumentBlob(file)).rejects.toThrow(
+            'Failed to index document: bad workbook',
+        );
+    });
+
+    it('renders a validation-shaped (array) detail as text, not [object Object]', async () => {
+        (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+            jsonResponse({ detail: [{ msg: 'field required' }, { msg: 'bad type' }] }, 500),
+        );
+        const err = await listConnectors().catch((e: Error) => e);
+        expect((err as Error).message).toBe('field required; bad type');
+    });
+
+    it('renders an object detail via its message field', async () => {
+        (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+            jsonResponse({ detail: { message: 'Index store is locked' } }, 500),
+        );
+        await expect(listConnectors()).rejects.toThrow('Index store is locked');
+    });
+
+    it.each([
+        ['an empty body', ''],
+        ["Starlette's bare body", 'Internal Server Error'],
+        ["the UI server's catch-all", JSON.stringify({ detail: 'Internal server error' })],
+        ['a proxy HTML page', '<html><body>Bad Gateway</body></html>'],
+        ['an empty JSON detail', JSON.stringify({ detail: '' })],
+        ['a JSON body with no detail', JSON.stringify({ error: 'boom' })],
+    ])('falls back to the generic message for %s', async (_label, body) => {
+        (fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+            new Response(body, { status: 500 }),
+        );
+        const err = await listConnectors().catch((e: Error) => e);
+        expect((err as Error).message).toBe(generic);
     });
 });

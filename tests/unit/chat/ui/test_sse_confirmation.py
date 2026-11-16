@@ -251,7 +251,6 @@ class TestConfirmToolEndpoint:
         # Note: the confirm-tool endpoint uses _chat_helpers._active_sse_handlers
         # (module-level dict), not app.state.
         app.state.session_locks = {}
-        app.state.chat_semaphore = None
         return app
 
     @pytest.fixture
@@ -447,7 +446,7 @@ class TestResolveRelayInput:
     def test_sidecar_rejection_propagates_uncaught(self, handler):
         """A stale/already-answered question (409) must reach the caller as
         an error -- never be swallowed into a silent no-op."""
-        from gaia.ui.email_sidecar.errors import SidecarHTTPError
+        from gaia.daemon.sidecars.errors import SidecarHTTPError
 
         proxy = _FakeRespondProxy(raises=SidecarHTTPError(409, "no longer pending"))
         handler.active_relay_proxy = proxy

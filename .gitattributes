@@ -44,3 +44,9 @@ src/gaia/apps/webui/src/types/api.schemas.json linguist-generated=true
 
 # The gaia_email fixture mailbox is checked byte-for-byte against its builder.
 tests/fixtures/gaia/email/*.mbox -text
+
+# Skills are signed over their exact bytes on Linux at release; a CRLF checkout
+# makes util/publish_skills.py see every published skill as changed.
+hub/skills/** text eol=lf
+# The eval's fixture hub copies of those skills are compared byte for byte.
+tests/fixtures/gaia/fixture_hub/sources/** text eol=lf

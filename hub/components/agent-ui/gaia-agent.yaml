@@ -1,12 +1,13 @@
-# The Electron desktop app — the GAIA Agent UI. Published to the Agent Hub R2
-# catalog as an app (not an agent): it is a front end that talks to agents over
-# the local API, so it registers no tools and loads no model of its own.
+# The Electron desktop app — the GAIA Agent UI, an app (not an agent): it is a
+# front end that talks to agents over the local API, so it registers no tools
+# and loads no model of its own.
 #
-# Version tracks src/gaia/apps/webui/package.json, which tracks the core GAIA
-# release. The publish workflow reads this file and asserts the two agree.
+# No longer published: the installers ship on the GitHub release, which is
+# where the website and users get them. Versions already on the Agent Hub stay
+# there. Nothing publishes it or bumps its version any more.
 id: agent-ui
 name: GAIA Agent UI
-version: 0.25.0
+version: 0.25.2
 description: "Desktop app for chatting with GAIA agents, with documents and RAG"
 author: AMD
 license: MIT

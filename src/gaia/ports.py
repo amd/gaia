@@ -14,9 +14,8 @@ Two rules make the targeting safe, and both live here:
 
 1. Only a socket in the LISTENING state whose *local* port is exactly the
    requested one counts. Columns are parsed; nothing is substring-matched.
-2. The owning process must run under a name GAIA's own servers use. Same
-   identity check :meth:`gaia.llm.lemonade_embedded.LemonadeEmbedded._daemon_alive`
-   makes before trusting a recorded pid. It is interpreter-level, so it
+2. The owning process must run under a name GAIA's own servers use. It is
+   interpreter-level, so it
    excludes a native service but not another Python or Node server —
    :func:`is_gaia_process` is the stricter check for callers that need one.
 """
@@ -31,13 +30,14 @@ from gaia.logger import get_logger
 
 log = get_logger(__name__)
 
-# Names that positively identify a GAIA or Lemonade process.
-GAIA_PROCESS_NAMES = (
-    "gaia",
+# Names that positively identify a Lemonade Server process.
+LEMONADE_PROCESS_NAMES = (
     "lemonade",
     "lemond",
     "llama-server",
 )
+# Names that positively identify a GAIA or Lemonade process.
+GAIA_PROCESS_NAMES = ("gaia",) + LEMONADE_PROCESS_NAMES
 # Interpreters GAIA's own servers run as. Matching one is NOT an identification:
 # a user's own Python or Node server on the port matches these too.
 INTERPRETER_PROCESS_NAMES = (
@@ -231,3 +231,9 @@ def terminate_pid(pid: int) -> None:
         )
     else:
         subprocess.run(["kill", "-9", str(pid)], shell=False, check=True, timeout=5)
+
+
+def is_lemonade_process(name: str) -> bool:
+    """Whether a process image name identifies a Lemonade Server itself."""
+    lowered = (name or "").lower()
+    return any(allowed in lowered for allowed in LEMONADE_PROCESS_NAMES)

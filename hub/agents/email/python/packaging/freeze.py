@@ -38,6 +38,10 @@ Design notes / gotchas baked in (see README.md for the why):
   never runs torch in-process, so we EXCLUDE the ML stack to keep the binary lean
   (~90 MB vs ~2 GB). If a future build genuinely needs these, drop them from
   ``EXCLUDES``.
+- tiktoken finds ``cl100k_base`` through a plugin it discovers at runtime and
+  downloads the encoding's data on first use -> hidden-import the plugin and
+  bundle the data (``gaia.utils.tiktoken_bundle``), or every token count in the
+  binary is an estimate.
 """
 
 from __future__ import annotations
@@ -48,6 +52,8 @@ import shutil
 import sys
 import time
 from pathlib import Path
+
+from gaia.utils import tiktoken_bundle
 
 HERE = Path(__file__).resolve().parent
 ENTRY = HERE / "server.py"
@@ -67,6 +73,9 @@ ADD_DATA = [
     # Staged INSIDE the package: at runtime the frozen agent has no package-root
     # directory above itself, so the source-checkout location does not exist.
     (PKG_ROOT / "gaia-agent.yaml", "gaia_agent_email"),
+    # Third-party licence notices for the libraries the binary bundles.
+    (REPO_ROOT / "THIRD_PARTY_NOTICES.md", "."),
+    (REPO_ROOT / "licenses", "licenses"),
 ]
 
 # Heavy ML stack reached only via the lazily-imported triage import graph. Real
@@ -79,6 +88,18 @@ ADD_DATA = [
 # excluded). ``faiss``/``faiss_cpu`` are therefore NOT excluded and are collected
 # in full below. numpy is a memory.py module-level import the analyzer already
 # follows.
+# GPL code GAIA must not ship: on Linux, readline links GNU Readline (reached via
+# doctest -> pdb) and _gdbm/_dbm link GNU dbm; PyInstaller's own package is
+# GPL-2.0 outside its bootloader. Every stdlib importer of these treats them as
+# optional. The flagship's packaging/check_bundle_licenses.py enforces it.
+GPL_EXCLUDES = [
+    "PyInstaller",
+    "readline",
+    "_gdbm",
+    "_dbm",
+    "dbm.gnu",
+    "dbm.ndbm",
+]
 EXCLUDES = [
     "torch",
     "transformers",
@@ -91,6 +112,7 @@ EXCLUDES = [
     "safetensors",
     "torchvision",
     "torchaudio",
+    *GPL_EXCLUDES,
 ]
 
 
@@ -132,6 +154,7 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         for d in (work, dist):
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
+    tiktoken_cache = tiktoken_bundle.stage_cache(work / tiktoken_bundle.BUNDLE_DIR)
 
     args = [
         str(ENTRY),
@@ -173,6 +196,11 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         # pydantic v2 ships a compiled core; collect data to be safe.
         "--collect-submodules",
         "pydantic",
+        # tiktoken's cl100k_base: the plugin is found by name, the data is a file.
+        "--hidden-import",
+        tiktoken_bundle.PLUGIN_MODULE,
+        "--add-data",
+        f"{tiktoken_cache}{os.pathsep}{tiktoken_bundle.BUNDLE_DIR}",
     ]
     for source, dest in ADD_DATA:
         if not source.exists():

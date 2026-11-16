@@ -28,9 +28,10 @@ import pytest
     ],
 )
 def test_powershell_switches_cannot_hide_executable_body(command):
+    # Never vouched for: refused, or shown verbatim for a one-time yes.
     error = ShellToolsMixin()._validate_shell_command(command)[0]
     assert error is not None
-    assert error.get("tier") == TIER_REFUSE, error
+    assert error.get("tier") in (TIER_REFUSE, TIER_CONFIRM_ONCE), error
 
 
 @pytest.mark.parametrize(
@@ -54,9 +55,11 @@ from gaia.agents.tools.shell_tools import (
     DANGEROUS_SHELL_OPERATORS,
     DEVELOPER_COMMANDS,
     TIER_CONFIRM,
+    TIER_CONFIRM_ONCE,
     TIER_REFUSE,
     ShellToolsMixin,
     _is_lone_granted_segment,
+    _strip_heredoc_bodies,
 )
 
 # ---------------------------------------------------------------------------
@@ -178,13 +181,13 @@ class TestBlockedCommands:
 
 
 class TestGitSubcommands:
-    def test_git_push_is_refused_outright(self):
-        # #3374 made push/reset/rebase refusals the git grant itself will not
-        # run, so no prompt can honestly offer them.
+    def test_git_push_is_asked_once_and_a_forced_push_is_refused(self):
+        # Outside the git policy, so it is shown verbatim for a one-time yes.
         result = validate("git push origin main")
-        assert result is not None
-        assert result["tier"] == TIER_REFUSE
-        assert "push" in result["error"].lower() or "grant" in result["error"].lower()
+        assert result["tier"] == TIER_CONFIRM_ONCE
+        assert result["risk_note"] == "Sends your commits to the remote repository."
+        # Discarding remote history is never offered.
+        assert validate("git push --force origin main")["tier"] == TIER_REFUSE
 
     def test_git_commit_needs_confirmation(self):
         result = validate("git commit -m 'msg'")
@@ -196,6 +199,111 @@ class TestGitSubcommands:
 
     def test_git_show_allowed(self):
         assert validate("git show HEAD") is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo gh issue close 1",
+        "sudo -u root gh pr merge 1",
+        "doas gh issue close 1",
+        "env GAIA_TEST=1 gh pr merge 1",
+        "env -- gh issue close 1",
+        "timeout 5 gh pr merge 1",
+        "setsid gh issue close 1",
+        "nohup gh pr merge 1",
+        "time gh issue close 1",
+        "nice -n 10 gh pr merge 1",
+        "exec gh issue close 1",
+        "command gh pr merge 1",
+        "xargs -n 1 gh issue close 1",
+    ],
+)
+def test_a_launcher_cannot_downgrade_an_irreversible_gh_command(command):
+    """A known wrapper carries the inner command's never-offered tier (#6905)."""
+    result = validate(command)
+    assert result is not None
+    assert result["tier"] == TIER_REFUSE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -E gh pr merge 1",
+        "sudo -n gh issue close 1",
+        "sudo -s gh pr merge 1",
+        "sudo -P gh issue close 1",
+        "timeout -k 5 10 gh pr merge 1",
+        "timeout --kill-after=5 10 gh issue close 1",
+        "xargs -n 1 gh issue close 1",
+        "xargs -L 1 gh pr merge 1",
+        "conda run -n myenv gh issue close 1",
+        "conda run --name=myenv gh pr merge 1",
+        "conda run -p /env gh issue close 1",
+    ],
+)
+def test_launcher_flags_do_not_hide_the_irreversible_inner_command(command):
+    """Each launcher skips its own operands before applying the refusal tier."""
+    result = validate(command)
+    assert result is not None
+    assert result["tier"] == TIER_REFUSE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -p pw gh pr merge 1",
+        "sudo -uroot gh issue close 1",
+        "sudo -Eu root gh pr merge 1",
+        "sudo --not-a-real-flag value gh pr merge 1",
+        "sudo -D /tmp gh issue close 1",
+        "/usr/bin/sudo gh pr merge 1",
+        "timeout -- 5 gh pr merge 1",
+        "timeout -v 5 gh issue close 1",
+        "env -P /usr/bin gh pr merge 1",
+        "env --unknown-option gh issue close 1",
+        "xargs --replace gh pr merge 1",
+        "sudo timeout -k 1 5 nice -n 3 env A=1 gh pr merge 1",
+    ],
+)
+def test_unfamiliar_launcher_spellings_still_keep_the_refusal(command):
+    """An option the parser doesn't know is read both ways; a refusal holds."""
+    result = validate(command)
+    assert result is not None
+    assert result["tier"] == TIER_REFUSE
+
+
+def test_deeply_nested_launchers_refuse_without_recursing():
+    result = validate("sudo " * 300 + "gh pr merge 1")
+    assert result is not None
+    assert result["tier"] == TIER_REFUSE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -p pw echo gh pr merge 1",
+        "env -u HOME echo gh pr merge 1",
+        "timeout -- 5 echo gh issue close 1",
+    ],
+)
+def test_known_launcher_operands_do_not_refuse_harmless_text(command):
+    result = validate(command)
+    assert result is None or result["tier"] != TIER_REFUSE
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -E echo gh pr merge 1",
+        "timeout -k 5 10 echo gh issue close 1",
+        "xargs -n 1 echo gh pr merge 1",
+    ],
+)
+def test_launcher_flags_do_not_refuse_harmless_text(command):
+    """Wrapper parsing must not mistake text in a harmless command for gh."""
+    result = validate(command)
+    assert result is None or result["tier"] != TIER_REFUSE
 
 
 # ---------------------------------------------------------------------------
@@ -488,16 +596,33 @@ class TestPowerShellFiltering:
 
 
 def refused(command: str) -> bool:
-    """True when the full validator refuses *command* outright.
+    """True when the full validator never vouches for *command*.
 
-    A block here must be ``TIER_REFUSE``: a ``TIER_CONFIRM`` one would reach the
-    confirmation prompt and run on a yes, which is not what these probes pin.
+    A block here is ``TIER_REFUSE`` or ``TIER_CONFIRM_ONCE``: refused, or shown
+    verbatim with a risk note for a one-time yes. Never ``TIER_CONFIRM``, whose
+    prompt offers "always" for a command family these probes do not describe.
     """
     error, _ = ShellToolsMixin()._validate_shell_command(command)
     if error is None:
         return False
-    assert error.get("tier") == TIER_REFUSE, error
+    assert error.get("tier") in (TIER_REFUSE, TIER_CONFIRM_ONCE), error
     return True
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "powershell -e ZQBjAGgAbwA=",
+        "powershell -ec ZQBjAGgAbwA=",
+        "powershell -enc ZQBjAGgAbwA=",
+        "powershell -encod ZQBjAGgAbwA=",
+        "powershell -EncodedCommand ZQBjAGgAbwA=",
+    ],
+)
+def test_an_encoded_script_is_refused_outright(command):
+    """No prompt can show what an encoded script runs, so none is offered."""
+    error, _ = ShellToolsMixin()._validate_shell_command(command)
+    assert error is not None and error["tier"] == TIER_REFUSE, error
 
 
 class TestUnspacedAmpersandIsAnOperator:
@@ -735,7 +860,9 @@ class TestDeveloperSetIsSeparate:
 class TestDeveloperBinariesRefusedByDefault:
     """With the flag OFF every developer binary is still refused, as today."""
 
-    @pytest.mark.parametrize("binary", DEVELOPER_BINARY_SAMPLES)
+    @pytest.mark.parametrize(
+        "binary", [b for b in DEVELOPER_BINARY_SAMPLES if b != "gh"]
+    )
     def test_refused_with_bypass_off(self, binary):
         result = check(f"{binary} --version", bypass=False)
         assert result is not None, f"{binary} leaked into the default tier"
@@ -751,12 +878,12 @@ class TestDeveloperBinariesRefusedByDefault:
         result = check("make build", bypass=False)
         assert "not in the allowed list for security reasons" in result["error"]
 
-    def test_gh_default_refusal_still_points_at_the_skill_grant(self):
-        # gh has a BINARY_POLICIES entry, so its refusal is the grant message,
-        # not the allowlist one. Bypass is an additional path to gh, not a
-        # replacement for skill_granted_binaries.
-        result = check("gh issue list", bypass=False)
-        assert "shell:execute:gh" in result["error"]
+    def test_gh_reads_run_by_default_and_the_policy_still_judges_the_rest(self):
+        # gh reads change nothing, so they need no skill (READS_WITHOUT_A_SKILL);
+        # what the read-only policy does not cover is asked about or refused.
+        assert check("gh issue list", bypass=False) is None
+        assert check("gh auth token", bypass=False)["tier"] == TIER_CONFIRM_ONCE
+        assert check("gh pr merge 1", bypass=False)["tier"] == TIER_REFUSE
 
 
 class TestBypassIsStillASet:
@@ -807,13 +934,17 @@ class TestOperatorsUnderBypass:
             "ls\necho hi",
         ],
     )
-    def test_shell_only_operators_still_refused_by_default(self, command):
+    def test_shell_only_operators_are_never_run_unasked_by_default(self, command):
         # What bypass actually lifts now: redirection, backgrounding,
         # substitution and the newline — the operators that only a shell can
-        # act on, and that no per-segment check can judge.
+        # act on, and that no per-segment check can judge. By default they are
+        # a one-time approval of the exact command, line breaks included; cmd
+        # refuses a line break, since it would run only the first line.
         result = check(command, bypass=False)
         assert result is not None
-        assert "Shell operators" in result["error"]
+        first_line_only = "\n" in command and shell_tools._pipe_dialect() == "cmd"
+        expected = TIER_REFUSE if first_line_only else TIER_CONFIRM_ONCE
+        assert result["tier"] == expected, result
 
     def test_a_pipe_is_refused_for_its_binary_not_for_the_pipe(self):
         # Pipes were never blocked. `pytest -q | tail -20` is refused with
@@ -823,11 +954,11 @@ class TestOperatorsUnderBypass:
         assert result is not None
         assert "Shell operators" not in result["error"]
         assert "pytest" in result["error"]
-        # The grant id is only the refusal a machine with pytest on PATH gets;
-        # where it is absent the "not installed" refusal fires first. Either
-        # way the pipe is not the reason, which is what this test is about.
+        # Asking is only the answer a machine with pytest on PATH gets; where it
+        # is absent the "not installed" refusal fires first. Either way the
+        # pipe is not the reason, which is what this test is about.
         if shutil.which("pytest"):
-            assert "shell:execute:pytest" in result["error"]
+            assert result["tier"] == TIER_CONFIRM
 
 
 class TestPerSegmentWalkSurvivesBypass:
@@ -949,6 +1080,247 @@ class TestHeredocUnderBypass:
         # they must see the text and refuse it rather than guess.
         command = "python3 - <<'EOF'\nprint(1 + 1)"
         assert check(command, bypass=True) is not None
+
+
+class TestHeredocCannotHideARefusedCommand:
+    """The developer-set refusal must hold for every line sh executes.
+
+    The body stripper used to open a heredoc wherever a ``<<`` token appeared,
+    including where sh reads it as data — so lines sh runs as commands were
+    dropped from the walk as if they were body text, and a refused binary
+    on them was never checked (#4464)."""
+
+    #: Shapes where sh runs ``rm -rf x`` as a command.
+    HIDING_SHAPES = [
+        # '<<' after a '#' is a comment to sh: no heredoc opens.
+        "echo hi # <<EOF\nrm -rf x\nEOF",
+        "echo hi;# <<EOF\nrm -rf x\nEOF",
+        # Arithmetic shift, not a heredoc.
+        "echo $((1<<2))\nrm -rf x\n2))",
+        "echo $((1 << EOF ))\nrm -rf x\nEOF",
+        "((x = 1 << EOF))\nrm -rf x\nEOF",
+        # Inside a parameter expansion.
+        "echo ${x:-<<EOF}\nrm -rf x\nEOF}",
+        # Inside a quote that spans lines.
+        'echo "x\n<<EOF\n" ; rm -rf x ; echo "\nEOF\n"',
+        "echo 'x\n<<EOF\n' ; rm -rf x ; echo '\nEOF\n'",
+        # A here-string has no body.
+        "cat <<<EOF\nrm -rf x\nEOF",
+        # The delimiter is '-', so EOF is an argument and rm runs.
+        "cat << - EOF\n-\nrm -rf x\nEOF",
+        # sh joins an unquoted body's backslash-newline into the terminator.
+        "cat <<EOF\nEO\\\nF\nrm -rf x\nEOF",
+        # The opener is continued onto the next line.
+        "cat <<EOF \\\n\nrm -rf x\nEOF",
+        # ANSI-C quoting escapes its own quote.
+        "echo $'\\'\ncat <<EOF\n'; rm -rf x; echo '\nEOF\n'",
+        # A line after the body runs.
+        "cat <<'EOF' > out.txt\nhello\nEOF\nrm -rf x",
+        # The second heredoc's body ends before rm.
+        "cat <<'A' <<'B'\none\nA\ntwo\nB\nrm -rf x",
+    ]
+
+    @pytest.mark.parametrize("command", HIDING_SHAPES)
+    def test_a_refused_binary_around_heredoc_syntax_is_still_refused(self, command):
+        assert check(command, bypass=True) is not None
+
+    @pytest.mark.parametrize("command", HIDING_SHAPES)
+    def test_the_executed_line_stays_in_the_walk(self, command):
+        # The gates and the audit record are built from this walk.
+        assert "rm -rf x" in _strip_heredoc_bodies(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cat <<EOF > notes.txt\nhello $USER; it's done\nEOF",
+            "cat <<'EOF' > notes.txt\nrm -rf / && echo it's fine | tee x\nEOF",
+            'cat <<"EOF" > notes.txt\nline\nEOF',
+            "cat > notes.txt <<-EOF\n\tindented; body\n\tEOF",
+            "cat<<EOF>notes.txt\nx\nEOF",
+            "python3 - <<'PY'\nimport os; print(os.getcwd())  # rm\nPY",
+            "cat <<'A' <<'B'\nrm one\nA\nrm two\nB",
+            "cat <<'EOF' > a.txt\none\nEOF\ncat <<'EOF' > b.txt\ntwo\nEOF",
+            "cat <<EOF > f.txt # write the file\nbody\nEOF",
+            "cat <<'EOF' > script.sh\nmake \\\n  all\nEOF",
+        ],
+    )
+    def test_ordinary_heredocs_still_run(self, command):
+        assert check(command, bypass=True) is None
+
+    #: Openers that name their target with a plain expansion.
+    EXPANSION_OPENERS = [
+        "cat > \"${OUT}/a.txt\" <<'EOF'\nhello world\nEOF",
+        'cat > "${OUT}/a.json" <<\'EOF\'\n{"a": 1}\nEOF',
+        "cat > ${OUT}/a.txt <<'EOF'\nhello world\nEOF",
+        'cat > "${DIR}/${NAME}.txt" <<EOF\nhello $USER\nEOF',
+        "cat > \"$(pwd)/a.txt\" <<'EOF'\nhello world\nEOF",
+        'cat > "$(dirname "$0")/a.txt" <<\'EOF\'\nhello world\nEOF',
+        "cat > \"$(git rev-parse --show-toplevel)/n.md\" <<'EOF'\n# Notes\nhi\nEOF",
+        "cat > \"${OUT}/$(date +%s).log\" <<'EOF'\nhello world\nEOF",
+        "cat > '${OUT}' <<'EOF'\nhello world\nEOF",
+        "git commit -m \"$(cat <<'EOF'\nfix: thing\n\nhello body\nEOF\n)\"",
+        # Operator-form expansions end where sh ends them, too.
+        "cat > \"${OUT:-.}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${VAR%/}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > ${1:-out}.txt <<'EOF'\nhello world\nEOF",
+        "cat > \"${FILE:?msg}\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${BASE/.md/.txt}\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${name,,}.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"part${#x}.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"part$((i+1)).txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${OUT:-${HOME}/out}/$(date +%s).log\" <<'EOF'\nhello world\nEOF",
+        'cat > "$(dirname "$(pwd)")/a.txt" <<\'EOF\'\nhello world\nEOF',
+        "cat > \"part$(( (i + 1) * 2 )).txt\" <<'EOF'\nhello world\nEOF",
+    ]
+
+    @pytest.mark.parametrize("command", EXPANSION_OPENERS)
+    def test_a_plain_expansion_on_the_opener_still_runs(self, command):
+        assert check(command, bypass=True) is None
+
+    #: Unquoted bodies with backslash-continued lines.
+    CONTINUED_BODIES = [
+        "cat > Dockerfile <<EOF\nFROM ubuntu\nRUN apt-get update \\\n"
+        "    && apt-get install -y curl\nEOF",
+        "cat > Makefile <<EOF\nall:\n\tgcc -o app \\\n\t  main.c\nEOF",
+        "cat > notes.txt <<EOF\nhello \\\n  world \\\n  again\nEOF",
+        "cat > notes.txt <<-EOF\n\thello \\\n\tworld\n\tEOF",
+        'cat > "${OUT}/Dockerfile" <<EOF\nRUN make \\\n  install\nEOF',
+        # A doubled backslash is an escaped backslash, not a continuation.
+        "cat > paths.txt <<EOF\nC:\\\\\\\\\nhello world\nEOF",
+    ]
+
+    @pytest.mark.parametrize("command", CONTINUED_BODIES)
+    def test_a_continued_body_line_still_runs(self, command):
+        assert check(command, bypass=True) is None
+
+    #: Expansions and continuations sh could read differently from the scan.
+    UNREADABLE_SHAPES = [
+        # A case pattern's ')' does not close the substitution.
+        'echo "$(case a in a) echo " <<EOF ;; esac)\n'
+        '"; rm -rf x; echo "\nEOF\n" ;; esac)"',
+        # '<<' quoted inside a substitution is data.
+        "echo $(echo '<<EOF')\nrm -rf x\nEOF",
+        # A heredoc inside a one-line substitution.
+        "echo $(cat <<EOF)\nrm -rf x\nEOF",
+        # An operator expansion can hide syntax.
+        "echo ${OUT}${x:-<<EOF}\nrm -rf x\nEOF",
+        # Shells disagree on whether a continued line can end the body.
+        "cat <<EOF\nhello \\\nEOF\nrm -rf x",
+        # A '<<' inside any expansion, quote or arithmetic is not an opener.
+        "echo `cat <<EOF`\nrm -rf x\nEOF",
+        'echo "${x:-<<EOF}"\nrm -rf x\nEOF',
+        "echo $(( $(cat) <<EOF ))\nrm -rf x\nEOF",
+        "[[ a <<EOF ]]\nrm -rf x\nEOF",
+        "cat <(cat <<EOF\nrm -rf x\nEOF\n)",
+        "echo $[1<<EOF]\nrm -rf x\nEOF",
+        # A comment inside $( ) can swallow its ')'.
+        "echo $(echo # ) <<EOF\nrm -rf x\nEOF\n)",
+        # Shells disagree on a quote inside ${ } inside double quotes.
+        'echo "${x:-"}"}" <<EOF\nrm -rf x\nEOF',
+        # Shells disagree on a brace inside ${ }.
+        "echo ${x:-{}<<EOF}\nrm -rf x\nEOF",
+        # A $(( closed by a single ')' is a subshell, not arithmetic.
+        "echo $((echo a) ; (echo b)) <<EOF\nrm -rf x\nEOF",
+        # Never balanced.
+        "echo ${x:-a <<EOF\nrm -rf x\nEOF",
+        "echo $(echo a <<EOF\nrm -rf x\nEOF",
+    ]
+
+    @pytest.mark.parametrize("command", UNREADABLE_SHAPES)
+    def test_an_unreadable_expansion_or_continuation_is_still_walked(self, command):
+        assert "rm -rf x" in _strip_heredoc_bodies(command)
+        assert check(command, bypass=True) is not None
+
+    #: Real-world heredocs main runs under full access; none may regress.
+    MAIN_ALLOWS_UNDER_FULL_ACCESS = [
+        'cat > Dockerfile <<EOF\nFROM python:${PY_VERSION}-slim\nWORKDIR /app\nCOPY . .\nRUN pip install -r requirements.txt && \\n    rm -rf /root/.cache\nCMD ["python", "app.py"]\nEOF',
+        "cat > Makefile <<'EOF'\nCC=gcc\nall: app\n\napp: main.o\n\t$(CC) -o $@ $^\n\nclean:\n\trm -f *.o app\nEOF",
+        "cat > .github/workflows/ci.yml <<'EOF'\nname: CI\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: pytest -q | tee out.txt\nEOF",
+        'cat > config.json <<EOF\n{\n  "name": "$NAME",\n  "version": "1.0.0",\n  "home": "${HOME}/app"\n}\nEOF',
+        "python - <<'PY'\nimport json, sys\nd = {'a': 1}; print(json.dumps(d))\nif d['a'] > 0 and True: print('ok')\nPY",
+        "git commit -m \"$(cat <<'EOF'\nfix(shell): read heredocs right\n\nBody line with it's apostrophe; and semicolons & pipes |.\nEOF\n)\"",
+        "cat > out.sh <<-EOF\n\t#!/bin/sh\n\techo hi; echo there\n\tEOF",
+        "cat > a.txt <<'EOF'\nalpha\nEOF\ncat > b.txt <<'EOF'\nbeta\nEOF\nls -la",
+        'cat > env.sh <<EOF\nexport PATH="$PATH:/opt/bin"\nexport BUILD=$(git rev-parse --short HEAD)\nEOF',
+        "cat <<'EOF' | grep -v '^#'\n# comment\nkeep me\nEOF",
+        "cat > a.py <<'EOF'\nprint('hi')\nEOF\npython a.py && echo done",
+        "cd build && cat > CMakeLists.txt <<'EOF'\ncmake_minimum_required(VERSION 3.10)\nproject(App)\nadd_executable(app main.cpp)\nEOF",
+        'cat > README.md <<"EOF"\n# Title\n`code` and $VAR stay literal\nEOF',
+        "cat > script.py <<'END_OF_SCRIPT'\nfor i in range(3):\n    print(i)\nEND_OF_SCRIPT",
+        "cat <<EOF >> ~/.bashrc\nalias ll='ls -la'\nEOF",
+        "python3 <<'EOF'\nimport re\nprint(re.sub(r'\\s+', ' ', 'a   b'))\nEOF",
+        "cat > notes.txt <<EOF\n    indented line\n  another\nEOF",
+        "node <<'JS'\nconst x = [1,2,3].map(n => n * 2);\nconsole.log(x.join(','));\nJS",
+        "cat > Dockerfile <<'EOF'\nFROM node:20\nRUN npm ci \\n && npm run build\nEOF",
+        "git commit -F - <<'EOF'\nchore: bump\n\nDetails here.\nEOF",
+        'gh pr create --title "fix: x" --body "$(cat <<\'EOF\'\n## Summary\n- one\n- two\nEOF\n)"',
+        'cat > run.sh <<EOF\nPORT=${PORT:-8080}\necho "listening on \\$PORT"\nEOF',
+        "cat > \"${OUT:-.}/x.txt\" <<'EOF'\nhello\nEOF",
+        "cat <<EOF\nhi\nEOF\n",
+        "python - <<'EOF'\nname = 'x'  # comment << not heredoc\nprint(f'{name}')\nEOF",
+        "cat > n.txt <<EOF\ncount=$((1 + 2))\nEOF",
+        "cat > n.txt <<EOF\nnow=`date`\nEOF",
+        "cat > \"${OUT:-.}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${OUT_DIR%/}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"$1\" <<'EOF'\nhello world\nEOF",
+        "cat > \"$HOME/.config/app.toml\" <<'EOF'\nhello world\nEOF",
+        "cat > ~/.config/app.toml <<'EOF'\nhello world\nEOF",
+        'export NAME=demo\ncat > "$NAME.txt" <<EOF\n$NAME\nEOF',
+        "cat > \"$(git rev-parse --show-toplevel)/.env\" <<'EOF'\nKEY=1\nEOF",
+        "cat > out.txt <<EOF\nlines: $(wc -l < in.txt)\nEOF",
+        "cat > out.txt <<EOF\n`whoami`\nEOF",
+        'cat >"$OUT" <<EOF\nhello world\nEOF',
+        "cat <<EOF | python -\nprint('${X:-y}')\nEOF",
+        "python - \"$@\" <<'EOF'\nimport sys; print(sys.argv)\nEOF",
+        "cat > \"${DIR}/a b.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > ${1:-out}.txt <<'EOF'\nhello world\nEOF",
+        "cat > \"$TMPDIR/$(date +%Y%m%d).log\" <<'EOF'\nhello world\nEOF",
+        "cat > x.sh <<'EOF'\n#!/usr/bin/env bash\nset -euo pipefail\necho \"${1:-none}\" | tr a-z A-Z\nEOF",
+        "cat > x.py <<'EOF'\nprint(\"a\" << 2 if False else 1)\nEOF",
+        "git commit -m \"$(cat <<'EOF'\nfeat: x\n\nUses ${VAR} and $(cmd) in text.\nEOF\n)\"",
+        "git tag -a v1 -m \"$(cat <<'EOF'\nRelease v1\nEOF\n)\"",
+        'cat <<EOF > "${OUT}"\nhello world\nEOF',
+    ]
+
+    def test_a_test_bracket_before_the_opener_keeps_the_body_out(self):
+        command = "[[ -d out ]] && cat > out/a.txt <<'EOF'\nhello world\nEOF"
+        assert "hello world" not in _strip_heredoc_bodies(command)
+
+    @pytest.mark.parametrize("command", MAIN_ALLOWS_UNDER_FULL_ACCESS)
+    def test_every_heredoc_main_runs_still_runs(self, command):
+        assert check(command, bypass=True) is None
+
+    @pytest.mark.parametrize(
+        "make_command",
+        [
+            lambda n: 'cat > "' + "${OUT:-x}" * n + "/a.txt\" <<'EOF'\nhello\nEOF",
+            lambda n: 'cat > "'
+            + "${a:-" * n
+            + "x"
+            + "}" * n
+            + "\" <<'EOF'\nhello\nEOF",
+            lambda n: "echo $((" + "(" * n + "1" + ")" * n + "))",
+            lambda n: 'cat > "' + "$(" * n + "x" + ")" * n + "\" <<'EOF'\nhello\nEOF",
+            # Many long names inside an unclosed or rejected $( ).
+            lambda n: 'echo "$('
+            + " $LONG_VARIABLE_NAME_" * n
+            + ' <x" <<EOF\nhello\nEOF',
+            lambda n: "echo $(" + " $LONG_VARIABLE_NAME_" * n + " <x <<EOF\nhello\nEOF",
+        ],
+    )
+    def test_the_scan_stays_linear(self, make_command):
+        # Growth ratio, not wall time: a loaded runner slows both sizes alike.
+        small, big = make_command(400), make_command(3200)
+        small_best = big_best = float("inf")
+        for _ in range(5):
+            start = time.perf_counter()
+            _strip_heredoc_bodies(small)
+            small_best = min(small_best, time.perf_counter() - start)
+            start = time.perf_counter()
+            _strip_heredoc_bodies(big)
+            big_best = min(big_best, time.perf_counter() - start)
+        # 8x the input: linear is ~8x the time, quadratic ~64x.
+        assert big_best < 24 * small_best + 0.005
 
 
 class TestReadOnlySubGuardsLiftUnderBypassOnly:
@@ -1090,8 +1462,9 @@ class TestExecutorUnderBypass:
 
         result = run(f"echo first > {target}", working_directory=str(tmp_path))
 
+        # Nobody approved this exact line, so it never reaches a shell.
         assert result["status"] == "error"
-        assert "Shell operators" in result["error"]
+        assert "needs your approval" in result["error"]
         assert not target.exists()
 
     def test_a_redirect_runs_under_bypass(self, shell_tool, tmp_path):
@@ -1220,12 +1593,12 @@ class TestRedirectionOnTheGrantedPath:
         assert check("gh issue list > out.txt", bypass=True) is None
         assert check("make build > out.txt", bypass=True) is None
 
-    def test_without_bypass_the_operator_blocklist_gets_there_first(self):
-        # The refusal only has to exist under bypass; by default `>` never
-        # reaches tokenisation at all.
+    def test_without_bypass_the_line_is_asked_about_once(self):
+        # By default an operator line runs only as the shell reads it, after a
+        # one-time yes — so the argv-only refusal above does not apply.
         error = check_granted("gh issue list > out.txt", bypass=False)
         assert error is not None
-        assert "Shell operators" in error["error"]
+        assert error["tier"] == TIER_CONFIRM_ONCE
 
     def test_the_pre_flight_and_the_executor_share_one_answer(self):
         # Extracted precisely so the refusal above and the executor's `use_shell`
@@ -1308,6 +1681,88 @@ def env_pre_approves(monkeypatch):
     )
 
 
+def _desktop_full_access_host():
+    """The Agent UI's Full access: prompts pre-approved, shell gates still on."""
+    host = _Host(auto_approve=True)
+    host.console.asks_past_preapproval = True
+    host.console.answers_confirmations = True
+    host.console.grants_paths = True
+    return host
+
+
+class TestMultiLineCommandsAreJudgedNotRefusedOnSight:
+    """A line break alone must not refuse a command before anyone is asked (#8028).
+
+    The Agent UI's Full access keeps the shell gates on, so a heredoc becomes a
+    one-time approval, and every one was refused for "line breaks" before the
+    prompt. The prompt shows the exact text with its lines, and sh runs every
+    line, so the line is judged like any other; cmd.exe runs only the first.
+    """
+
+    HEREDOCS = [
+        "cat <<'EOF' > hd_notes.txt\nhello heredoc\nEOF",
+        "cat > notes.txt <<'EOF'\none; two | three\nEOF",
+        "echo one\necho two",
+    ]
+
+    HIDDEN_DELETES = [
+        "cat <<'EOF' > out.txt\nhello\nEOF\nrm -rf x",
+        "echo hi\nrm -rf x",
+        "cat <<'A' <<'B'\none\nA\ntwo\nB\nrm -rf x",
+    ]
+
+    @pytest.fixture
+    def posix(self, monkeypatch):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "posix")
+
+    @pytest.mark.parametrize("command", HEREDOCS)
+    def test_desktop_full_access_puts_a_heredoc_to_the_person(self, posix, command):
+        host = _desktop_full_access_host()
+        assert (
+            host.policy_refusal_for_call("run_shell_command", {"command": command})
+            is None
+        )
+        shown = host.confirmation_args_for_call(
+            "run_shell_command", {"command": command}
+        )
+        assert shown["command"] == command
+        assert shown.get("_needs_person") is True
+
+    @pytest.mark.parametrize("command", HEREDOCS)
+    def test_ask_mode_offers_a_heredoc_once(self, posix, command):
+        assert refusal(command) is None
+
+    @pytest.mark.parametrize("command", HIDDEN_DELETES)
+    def test_a_delete_on_another_line_is_still_refused(self, posix, command):
+        for host in (_desktop_full_access_host(), _Host()):
+            error = host.policy_refusal_for_call(
+                "run_shell_command", {"command": command}
+            )
+            assert error is not None and error["tier"] == TIER_REFUSE, error
+            assert "rm -rf x" in error["error"]
+        assert refusal(command, full_access=True) is not None
+
+    @pytest.mark.parametrize(
+        "command", ["echo hi\recho there", "git commit -m wip\u2028echo x"]
+    )
+    def test_a_carriage_return_or_invisible_break_is_still_refused(
+        self, posix, command
+    ):
+        error = refusal(command)
+        assert error is not None and error["tier"] == TIER_REFUSE
+
+    @pytest.mark.parametrize("command", HEREDOCS)
+    def test_windows_says_it_runs_only_the_first_line(self, monkeypatch, command):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        error = _desktop_full_access_host().policy_refusal_for_call(
+            "run_shell_command", {"command": command}
+        )
+        assert error is not None and error["tier"] == TIER_REFUSE
+        assert "only the first line" in error["error"]
+        assert "invisible" not in error["error"]
+        assert "file tools" in error["hint"]
+
+
 class TestTiers:
     """A block is refused only when a yes/no prompt cannot honestly describe it."""
 
@@ -1326,18 +1781,20 @@ class TestTiers:
 
     @pytest.mark.parametrize(
         "command",
-        [
-            "git -c core.pager=evil.sh status",
-            "git --exec-path=/tmp/evil status",
-            "powershell -EncodedCommand aQBlAHgA",
-        ],
+        ["git -c core.pager=evil.sh status", "git --exec-path=/tmp/evil status"],
     )
-    def test_an_undescribable_escalation_is_refused(self, command):
-        assert validate(command)["tier"] == TIER_REFUSE
+    def test_an_uninspectable_call_is_asked_about_once(self, command):
+        assert validate(command)["tier"] == TIER_CONFIRM_ONCE
 
-    @pytest.mark.parametrize("command", ["echo hi > f", "cat 'unterminated"])
-    def test_what_the_runner_cannot_execute_is_refused(self, command):
-        error, _ = _Host()._validate_shell_command(command)
+    def test_an_encoded_script_is_refused(self):
+        assert validate("powershell -EncodedCommand aQBlAHgA")["tier"] == TIER_REFUSE
+
+    def test_a_shell_operator_line_is_asked_about_once(self):
+        error, _ = _Host()._validate_shell_command("echo hi > f")
+        assert error["tier"] == TIER_CONFIRM_ONCE
+
+    def test_what_the_runner_cannot_parse_is_refused(self):
+        error, _ = _Host()._validate_shell_command("cat 'unterminated")
         assert error["tier"] == TIER_REFUSE
 
     def test_a_block_with_no_tier_is_refused_not_asked(self, monkeypatch):
@@ -1370,8 +1827,16 @@ class TestASpellingDoesNotChangeTheTier:
             "/opt/homebrew/bin/gh auth token",
         ],
     )
-    def test_a_refused_invocation_stays_refused_by_path_or_alias(self, command):
-        assert refusal(command) is not None
+    def test_a_refused_invocation_stays_unvouched_by_path_or_alias(
+        self, command, request
+    ):
+        if "/gh " in command:
+            request.getfixturevalue("gh_on_path")
+        error, _ = _Host()._validate_shell_command(command)
+        assert error is not None
+        # An encoded script is refused by any spelling; the rest are asked once.
+        encoded = "-enc" in command.lower()
+        assert error["tier"] == (TIER_REFUSE if encoded else TIER_CONFIRM_ONCE), error
         assert refusal(command, full_access=True) is not None
 
     @pytest.mark.parametrize(
@@ -1383,8 +1848,12 @@ class TestASpellingDoesNotChangeTheTier:
             "/opt/homebrew/bin/gh issue list",
         ],
     )
-    def test_another_spelling_of_a_read_asks_rather_than_runs_unasked(self, command):
+    def test_another_spelling_of_a_read_asks_rather_than_runs_unasked(
+        self, command, request
+    ):
         """The no-prompt list names bare programs; nothing else joins it."""
+        if "/gh " in command:
+            request.getfixturevalue("gh_on_path")
         assert validate(command)["tier"] == TIER_CONFIRM
         assert refusal(command) is None
 
@@ -1412,11 +1881,13 @@ class TestConfirmableCommandsReachThePrompt:
     @pytest.mark.parametrize(
         "command", ["git -c core.pager=evil.sh status", "echo hi > f"]
     )
-    def test_an_escalation_is_refused_until_full_access_lifts_the_gates(self, command):
-        # Refused by default. Full access replaces the read-only policy with
-        # DEVELOPER_COMMANDS and lifts the operator block (#3373, #3374) — a
-        # set that already runs arbitrary code, so these are inside it.
-        assert refusal(command) is not None
+    def test_an_escalation_is_asked_about_once_until_full_access(self, command):
+        # By default it reaches the prompt as a one-time approval. Full access
+        # replaces the read-only policy with DEVELOPER_COMMANDS and lifts the
+        # operator block (#3373, #3374), so it runs unasked there.
+        error, _ = _Host()._validate_shell_command(command)
+        assert error["tier"] == TIER_CONFIRM_ONCE
+        assert refusal(command) is None
         assert refusal(command, full_access=True) is None
 
 
@@ -1433,16 +1904,26 @@ class TestBlanketApproval:
     ):
         error = refusal("rm notes.txt")
         assert error is not None
-        assert "GAIA_AUTO_APPROVE_TOOLS" in error["hint"]
+        assert error["tier"] == TIER_REFUSE
+        assert "`rm notes.txt` needs your approval" in error["error"]
+        assert "run the request interactively" in error["error"]
 
-    def test_an_embedders_opt_in_is_refused_the_same_way(self):
-        error = refusal("rm notes.txt", auto_approve=True)
+    def test_an_embedders_opt_in_is_refused_the_same_way(self, caplog):
+        with caplog.at_level("INFO", logger="gaia.agents.tools.shell_tools"):
+            error = refusal("rm notes.txt", auto_approve=True)
         assert error is not None
-        assert "auto_approve_gated_tools" in error["hint"]
+        assert "needs your approval" in error["error"]
+        # Which switch made the run unattended is for the log, not the user.
+        assert "auto_approve_gated_tools" not in error["error"]
+        assert "auto_approve_gated_tools" in caplog.text
 
     def test_the_no_prompt_list_still_runs_under_either(self, env_pre_approves):
         assert refusal("git status") is None
         assert refusal("git status", auto_approve=True) is None
+
+    def test_windows_date_print_runs_under_either(self, env_pre_approves):
+        assert refusal("date /t") is None
+        assert refusal("date /T", auto_approve=True) is None
 
     def test_full_access_is_a_person_deciding(self, env_pre_approves):
         # `cp`, not `rm`: full access swaps the read-only policy for
@@ -1468,3 +1949,511 @@ class TestBlanketApproval:
         result = run_tool(_Host(full_access=True), "cp src.txt made.txt", tmp_path)
         assert result["status"] == "success", result
         assert (tmp_path / "made.txt").exists()
+
+    def test_full_access_read_does_not_warn_that_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+
+        result = run_tool(_Host(full_access=True), "ls", tmp_path)
+
+        assert result["status"] == "success", result
+        assert notes == []
+
+    def test_full_access_write_still_warns_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+        (tmp_path / "src.txt").write_text("x")
+
+        result = run_tool(_Host(full_access=True), "cp src.txt made.txt", tmp_path)
+
+        assert result["status"] == "success", result
+        assert notes == [("shell", "cp src.txt made.txt")]
+
+    def test_full_access_redirect_still_warns_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+
+        result = run_tool(_Host(full_access=True), "echo x > made.txt", tmp_path)
+
+        assert result["status"] == "success", result
+        assert notes == [("shell", "echo x > made.txt")]
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "ls; touch made.txt",
+            "ls && touch made.txt",
+            "cat src.txt | tee made.txt",
+            "ls 2>made.txt",
+            "echo $(touch made.txt)",
+            "echo `touch made.txt`",
+            "find . -delete",
+            "sed -i s/x/y/ src.txt",
+            "sort -o made.txt src.txt",
+            "git log --output=made.txt",
+            "Remove-Item src.txt",
+            "Get-ChildItem | Remove-Item",
+            "cd .. && ls",
+            "ls\ntouch made.txt",
+        ],
+    )
+    def test_full_access_write_shapes_are_never_classified_read_only(self, command):
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command", ["ls", "cat src.txt", "git status", "wc -l src.txt"]
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_full_access_plain_reads_are_classified_read_only(
+        self, command, dialect, monkeypatch
+    ):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is True
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'echo "$(rm -rf sub)"',
+            'echo "`rm made.txt`"',
+            'cat "$(touch made.txt)"',
+            'ls "$(mv src.txt made.txt)"',
+            'echo "pre $(cp src.txt made.txt) post"',
+            'grep x "$(rm src.txt)"',
+            'echo "${X:=$(rm src.txt)}"',
+            "head \"$(sh -c 'rm src.txt')\"",
+            'printf "%s" "$(touch made.txt)"',
+            'wc -l "`touch made.txt`"',
+            'git status "$(touch made.txt)"',
+            'echo "$((1))$(touch made.txt)"',
+            'ls "a`touch made.txt`b"',
+            'echo "${HOME}$(touch made.txt)"',
+            'echo "$HOME"',
+        ],
+    )
+    def test_full_access_off_windows_quoted_substitution_may_write(
+        self, command, monkeypatch
+    ):
+        # sh expands these inside double quotes; the shell-less parse does not.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "posix")
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "dir",
+            "dir src\\sub",
+            "ls -la src",
+            "git status",
+            "cat a.txt",
+            "cat C:\\work\\a.txt",
+            "git log -n 5",
+        ],
+    )
+    def test_cmd_exe_plain_reads_stay_read_only(self, command, monkeypatch):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        assert _Host(full_access=True)._line_is_read_only(command) is True
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'power"shell" -c "Get-Content -Path (ri f)"',
+            '"power"shell -c "Get-Content -Path (ri f)"',
+            'pow"ers"hell.exe -c "Get-Content -Path (ri f)"',
+            'cat "a.txt"',
+            "cat 'a.txt'",
+            "dir src,sub",
+            "ls src=sub",
+            "dir @src",
+            "ls src\tsub",
+            "cat caf\u00e9.txt",
+            "cat a\uff0etxt",
+            'echo "$(rm -rf sub)"',
+            "cat (a)",
+            "git status (x)",
+        ],
+    )
+    def test_cmd_exe_line_with_any_metacharacter_may_write(self, command, monkeypatch):
+        # cmd.exe strips quotes and rewrites escapes before the program runs.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'power"shell" -c Get-ChildItem',
+            "pow'er'shell -c Get-ChildItem",
+            '"pow"er"sh"ell -c Get-ChildItem',
+        ],
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_a_quote_split_powershell_name_is_never_read_only(
+        self, command, dialect, monkeypatch
+    ):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'powershell -c "Get-Content -Path (ri f)"',
+            'powershell -c "Get-ChildItem,(ri f)"',
+            'powershell -c "Get-Date -Format (ri f)"',
+            "powershell -c \"Get-ChildItem -Path ('a'+(ri f))\"",
+            "powershell -c Get-ChildItem",
+            'POWERSHELL -c "Get-Content -Path (ri f)"',
+            'pwsh -c "Get-Date -Format (ri f)"',
+            "pwsh.exe -c Get-ChildItem",
+        ],
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_full_access_powershell_is_never_classified_read_only(
+        self, command, dialect, monkeypatch
+    ):
+        # Any cmdlet can run inside a subexpression, so no PowerShell line is a read.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "sort -^o made.txt src.txt",
+            "sort -%OS:Windows_NT=o% made.txt src.txt",
+            "find sub -dele^te",
+            "find sub %OS:Windows_NT=-delete%",
+            "find sub -delet%COMSPEC:~-1%",
+            "find sub !DEL_FLAG!",
+        ],
+    )
+    def test_full_access_cmd_escapes_and_expansion_may_write(
+        self, command, monkeypatch
+    ):
+        # cmd.exe rewrites these before the program sees them.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "find . {-delete,}",
+            "find . {-delete,-print}",
+            "sort {-o,}x f",
+            "git log {--output=x,}",
+            "find . -delet[e]",
+            "find . -delet?",
+            "git log --outpu[t]=x",
+            "sort -[o] x f",
+            "ls *",
+        ],
+    )
+    @pytest.mark.parametrize("dialect", ["posix", "cmd"])
+    def test_full_access_brace_and_glob_expansion_may_write(
+        self, command, dialect, monkeypatch
+    ):
+        # sh expands these off Windows; Git's GNU tools expand their own argv on it.
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
+        assert _Host(full_access=True)._line_is_read_only(command) is False
+
+    @pytest.mark.skipif(os.name == "nt", reason="needs sh to run the line")
+    def test_full_access_quoted_substitution_warns_undo_cannot_restore_it(
+        self, env_pre_approves, monkeypatch, tmp_path
+    ):
+        notes = []
+        monkeypatch.setattr(
+            shell_tools,
+            "note_untracked",
+            lambda kind, command: notes.append((kind, command)),
+        )
+        command = 'echo "$(touch made.txt)"'
+
+        result = run_tool(_Host(full_access=True), command, tmp_path)
+
+        assert result["status"] == "success", result
+        assert (tmp_path / "made.txt").exists()
+        assert notes == [("shell", command)]
+
+
+def _validate_argv(command: str):
+    """Like ``validate`` but tokenized as the tool does, so quoted values hold."""
+    import shlex
+
+    parts = shlex.split(command)
+    return ShellToolsMixin._validate_command(parts[0].lower(), parts, command)
+
+
+class TestStateChangingFlags:
+    """Read-only-by-name commands whose flags set system state or write (#2768).
+
+    Each must reach the confirmation prompt (TIER_CONFIRM), never run unasked.
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "date -s 2020-01-01",
+            "date -us now",
+            "date --set=2020-01-01",
+            "date --se 2020-01-01",
+            "date --s now",
+            "date 010112002020",
+            "date 0101",
+            "date -u 010112002020",
+            "date --d x",  # ambiguous --date/--debug: over-read, asked
+            "date -x",
+            "DATE -s now",
+            "date /t 01-01-2020",
+            "sysctl -w kern.maxfiles=1",
+            "sysctl kern.maxfiles=1",
+            "sysctl -n kern.x=1",
+            "sysctl -p",
+            "sysctl -p /tmp/evil.conf",
+            "sysctl -f /tmp/evil.conf",
+            "sysctl --system",
+            "sysctl --load=/tmp/x",
+            "sysctl -aw x=1",
+            "hostname evil",
+            "hostname -F /tmp/name",
+            "hostname --file /tmp/name",
+            "hostname -b evil",
+            "hostname --boot evil",
+            "ipconfig /release",
+            "ipconfig /renew",
+            "ipconfig -renew",
+            "ipconfig /RELEASE6",
+            "ipconfig /flushdns",
+            "ipconfig /registerdns",
+            "ipconfig /setclassid Ethernet x",
+            "ipconfig /all /release",
+            "file -C -m magic",
+            "file -bC",
+            "file --compile",
+            "file --comp",
+            "less -o /tmp/log file.txt",
+            "less -O/tmp/log file.txt",
+            "less -So/tmp/log file.txt",
+            "less --log-file=/tmp/log file.txt",
+            "less --LOG-FILE /tmp/log file.txt",
+            "less +!touch file.txt",
+            "less '+|touch' file.txt",
+            "arch -arm64 ls",
+            "arch -x86_64 /bin/sh",
+            "arch -arch arm64 ls",
+            "arch ls",
+            "arch --help",
+            "ARCH -arm64 ls",
+            "arch '-arm64' ls",
+            "sort --compress-program=gzip file",
+            "sort --compress-program gzip file",
+            "sort --compress-prog=gzip file",
+            "sort --co=gzip file",
+            "sort --co gzip file",
+            "sort -n --compress-program=gzip file",
+            "SORT --COMPRESS-PROGRAM=gzip file",
+            "sort '--compress-program=gzip' file",
+            "file -0C -m m",
+            "file -0bC",
+            "file -C0",
+            "file -z0C x",
+            "less -j5o/tmp/log file.txt",
+            "less -1O /tmp/log file.txt",
+            "less -k keys file.txt",
+            "less -Sk keys file.txt",
+            "less --lesskey-file=keys file.txt",
+            "less --lesskey-src keys file.txt",
+            "less --lesskey-content=x file.txt",
+            "less --lessk=x file.txt",
+            "less ++!touch file.txt",
+            "less +G!touch file.txt",
+            "more -o /tmp/log file.txt",
+            "more --log-file=/tmp/log file.txt",
+            "more --lesskey-content=x file.txt",
+            "more +!touch file.txt",
+        ],
+    )
+    def test_state_change_goes_to_prompt(self, command):
+        result = _validate_argv(command)
+        assert result is not None, command
+        assert result["status"] == "error"
+        assert result["tier"] == TIER_CONFIRM, result
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "date",
+            "date +%z",
+            "date -u +%Y-%m-%dT%H:%M",
+            "date -d 'next friday'",
+            "date --date 'next friday' +%F",
+            "date --date=@0",
+            "date -dtomorrow",
+            "date -r file.txt",
+            "date --reference file.txt",
+            "date -Iseconds",
+            "date --iso-8601=ns",
+            "date --rfc-3339=seconds",
+            "date -R",
+            "date --utc",
+            "date /t",
+            "date /T",
+            "DATE /T",
+            "sysctl -a",
+            "sysctl -n machdep.cpu.brand_string",
+            "sysctl -an",
+            "sysctl hw.memsize hw.ncpu",
+            "sysctl --all",
+            "hostname",
+            "hostname -s",
+            "hostname -fI",
+            "hostname --fqdn",
+            "ipconfig",
+            "ipconfig /all",
+            "ipconfig -all",
+            "ipconfig /displaydns",
+            "ipconfig /showclassid Ethernet",
+            "file x.bin",
+            "file -b --mime-type x.bin",
+            "less file.txt",
+            "less -N -S file.txt",
+            "less +100 file.txt",
+            "less +G file.txt",
+            "less -j5 file.txt",
+            "less -pfoo file.txt",
+            "less -Pprompt-o file.txt",
+            "less --line-numbers file.txt",
+            "more file.txt",
+            "more +10 file.txt",
+            "more -d file.txt",
+            "arch",
+            "sort file.txt",
+            "sort -k2 -n file.txt",
+            "sort -u -r file.txt",
+            "sort -t, -k1,1 file.txt",
+            "sort --check file.txt",
+            "file x.bin",
+            "file -0 x.bin",
+            "file -m/opt/Custom.mgc x.bin",
+            "file -mCustom.mgc x.bin",
+            "file -e compress x.bin",
+            "file -L -z x.bin",
+        ],
+    )
+    def test_read_forms_stay_unprompted(self, command):
+        assert _validate_argv(command) is None, command
+
+    @pytest.mark.parametrize(
+        "command",
+        ["wmic /record:/tmp/log os get caption", "wmic /RECORD:x cpu get name"],
+    )
+    def test_wmic_record_writes_a_file(self, command):
+        result = _validate_argv(command)
+        assert result is not None
+        assert result["tier"] == TIER_CONFIRM_ONCE
+
+    def test_wmic_role_is_not_mistaken_for_record(self):
+        assert _validate_argv("wmic /role:root/cimv2 os get caption") is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "ls | date -s now",
+            "date && sysctl -w x=1",
+            "/usr/bin/date -s now",
+            "date.exe -s now",
+            "ls | arch -arm64 ls",
+            "/usr/bin/arch -arm64 ls",
+            "arch.exe -arm64 ls",
+            "cat f | sort --compress-program=gzip",
+            "cat f | sort --co gzip",
+            "/usr/bin/sort --compress-program=gzip f",
+            "sort.exe --compress-program=gzip f",
+            "ls && file -0C -m m",
+            "/usr/bin/file -0C -m m",
+            "file.exe -0C -m m",
+            "cat f | less -k keys",
+            "/usr/bin/less --lesskey-content=x f",
+            "cat f | more -o /tmp/log",
+        ],
+    )
+    def test_guard_holds_in_pipelines_and_other_spellings(self, command):
+        error = ShellToolsMixin()._validate_shell_command(command)[0]
+        assert error is not None, command
+
+    def test_every_guarded_command_is_on_the_no_prompt_list(self):
+        # A guard for a command that is not on the list could never fire.
+        assert set(shell_tools.STATE_CHANGING_FLAG_GUARDS) <= ALLOWED_COMMANDS
+
+
+#: Entries reviewed for #2768 with no flag or operand that writes, deletes,
+#: sets system state, or executes when run non-interactively. A new entry must
+#: be reviewed and added here, or get a sub-guard.
+_REVIEWED_PLAIN_READS = {
+    "ls",
+    "dir",
+    "pwd",
+    "cd",
+    "cat",
+    "head",
+    "tail",
+    "grep",
+    "wc",
+    "diff",
+    "findstr",
+    "stat",
+    "du",
+    "df",
+    "whoami",
+    "uname",
+    "uptime",
+    "lscpu",
+    "lspci",
+    "lsblk",
+    "lsusb",
+    "free",
+    "nproc",
+    "sw_vers",
+    "system_profiler",
+    "systeminfo",
+    "tasklist",
+    "driverquery",
+    "ver",
+    "which",
+    "whereis",
+    "basename",
+    "dirname",
+    "echo",
+    "printf",
+    "ps",
+    "top",
+    "jobs",
+}
+#: Entries guarded by a dedicated branch in ``_validate_command``.
+_SUB_GUARDED = {"find", "sort", "uniq", "wmic", "powershell", "powershell.exe"}
+
+
+def test_every_allowed_command_was_reviewed_for_write_flags():
+    unreviewed = ALLOWED_COMMANDS - (
+        _REVIEWED_PLAIN_READS
+        | _SUB_GUARDED
+        | set(shell_tools.STATE_CHANGING_FLAG_GUARDS)
+    )
+    assert not unreviewed, (
+        f"{sorted(unreviewed)} added to ALLOWED_COMMANDS without a review of "
+        "its flags: add a sub-guard or list it in _REVIEWED_PLAIN_READS"
+    )

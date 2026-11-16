@@ -23,7 +23,8 @@ from gaia.web.client import WebClient
 SNI_FRONTED_HOSTS = [
     "https://example.com",
     "https://github.com/amd/gaia",
-    "https://pypi.org/simple/",
+    # One project's index: the full /simple/ listing is ~47 MB, past the body cap.
+    "https://pypi.org/simple/amd-gaia/",
     "https://amd-gaia.ai",
 ]
 
@@ -54,6 +55,10 @@ def test_fetches_sni_fronted_host(web_client, url):
         pytest.fail(f"TLS handshake failed for {url} — SNI regression? {exc}")
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
         pytest.skip(f"{url} unreachable: {exc}")
+
+    # The handshake worked but the host is having an outage — not our regression.
+    if response.status_code >= 500:
+        pytest.skip(f"{url} answered HTTP {response.status_code} (server error)")
 
     # 403 still proves the handshake succeeded (bot-blocking page).
     assert response.status_code in (200, 403), response.status_code

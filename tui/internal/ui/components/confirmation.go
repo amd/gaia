@@ -3,10 +3,12 @@ package components
 import (
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -32,6 +34,9 @@ const (
 	// has no table entry for. Not DESTRUCTIVE: nothing about `pytest` deletes
 	// anything, and saying so is what trains people to wave the real one through.
 	RiskExecute
+	// RiskAccess lets GAIA into one more file or folder. The call that raised
+	// it is as often a read as a write, so the card claims neither.
+	RiskAccess
 )
 
 // riskFromWire maps the agent's `risk` field onto a tier. The agent reads the
@@ -69,6 +74,8 @@ func (t RiskTier) Badge() string {
 		return badgeDestructiveStyle.Render("DESTRUCTIVE")
 	case RiskExecute:
 		return badgeExecuteStyle.Render("RUNS CODE")
+	case RiskAccess:
+		return badgeReadStyle.Render("ACCESS")
 	case RiskDenied:
 		return badgeDeniedStyle.Render("BLOCKED")
 	default:
@@ -108,14 +115,23 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"send_draft":                  RiskWrite,
 	"schedule_send":               RiskWrite,
 	"forward_message":             RiskWrite,
+	"reply_to_message":            RiskWrite,
+	"update_draft":                RiskWrite,
 	"accept_invite":               RiskWrite,
 	"decline_invite":              RiskWrite,
 	"create_event_from_email":     RiskWrite,
 	"permanent_delete":            RiskDestructive,
+	"discard_draft":               RiskDestructive,
 	"quarantine_phishing_message": RiskDestructive,
+	// The flagship's send-email skill, under its namespaced names.
+	"send-email/send_now":         RiskWrite,
+	"send-email/send_draft":       RiskWrite,
+	"send-email/forward_message":  RiskWrite,
+	"send-email/reply_to_message": RiskWrite,
+	"send-email/update_draft":     RiskWrite,
+	"send-email/discard_draft":    RiskDestructive,
 
 	"run_shell_command":   RiskDestructive,
-	"run_cli_command":     RiskDestructive,
 	"wait_for_condition":  RiskDestructive,
 	"start_process":       RiskDestructive,
 	"run_python":          RiskDestructive,
@@ -132,8 +148,12 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"update_gaia_md":      RiskWrite,
 	"install_skill":       RiskWrite,
 	"remove_skill":        RiskWrite,
+	// Erases every memory and past conversation; nothing brings them back.
+	"forget_everything": RiskDestructive,
 	// Not a tool: PathValidator asking to widen this session's scope by one path (reads and changes).
-	"allow_path_access": RiskWrite,
+	"allow_path_access": RiskAccess,
+	// Not a tool: the agent asking whether to read this folder's CLAUDE.md, AGENTS.md and skills.
+	"trust_project_folder": RiskWrite,
 }
 
 // actionTitles is the question the prompt asks, in words. The tool name is the
@@ -141,22 +161,42 @@ var confirmationRiskTiers = map[string]RiskTier{
 // saying "Run 'run_shell_command' with command=…" asked the same thing twice
 // before showing the one thing that mattered.
 var actionTitles = map[string]string{
-	"run_shell_command":   "Run this command?",
-	"run_cli_command":     "Run this command?",
-	"wait_for_condition":  "Poll with this command?",
-	"start_process":       "Start this command in the background?",
-	"run_python":          "Run this Python code?",
-	"execute_python_file": "Run this Python file?",
-	"write_file":          "Write this file?",
-	"write_python_file":   "Write this file?",
-	"write_markdown_file": "Write this file?",
-	"edit_file":           "Edit this file?",
-	"edit_python_file":    "Edit this file?",
-	"replace_function":    "Edit this file?",
-	"update_gaia_md":      "Update GAIA.md?",
-	"install_skill":       "Install this skill?",
-	"remove_skill":        "Remove this skill?",
-	"allow_path_access":   "Allow access to this location?",
+	"run_shell_command":    "Run this command?",
+	"wait_for_condition":   "Poll with this command?",
+	"start_process":        "Start this command in the background?",
+	"run_python":           "Run this Python code?",
+	"execute_python_file":  "Run this Python file?",
+	"write_file":           "Write this file?",
+	"write_python_file":    "Write this file?",
+	"write_markdown_file":  "Write this file?",
+	"edit_file":            "Edit this file?",
+	"edit_python_file":     "Edit this file?",
+	"replace_function":     "Edit this file?",
+	"update_gaia_md":       "Update GAIA.md?",
+	"install_skill":        "Install this skill?",
+	"remove_skill":         "Remove this skill?",
+	"forget_everything":    "Erase all of GAIA's memory?",
+	"allow_path_access":    "Allow access to this location?",
+	"trust_project_folder": "Trust this folder's instructions and skills?",
+	"send_now":             "Send this email?",
+	"send_draft":           "Send this email?",
+	"reply_to_message":     "Send this reply?",
+	"forward_message":      "Forward this email?",
+	"discard_draft":        "Delete this draft?",
+	"update_draft":         "Change this draft?",
+
+	"send-email/send_now":         "Send this email?",
+	"send-email/send_draft":       "Send this email?",
+	"send-email/reply_to_message": "Send this reply?",
+	"send-email/forward_message":  "Forward this email?",
+	"send-email/discard_draft":    "Delete this draft?",
+	"send-email/update_draft":     "Change this draft?",
+}
+
+// approveLabels names what y grants for a prompt whose yes outlasts the call.
+var approveLabels = map[string]string{
+	// Saved for the folder, so later sessions there are not asked again.
+	"trust_project_folder": "trust this folder",
 }
 
 // ActionTitle is the prompt's question for a gated action.
@@ -173,7 +213,6 @@ func ActionTitle(action string) string {
 // or as code decides which text on screen the warning points at.
 var unboundedRiskActions = map[string]string{
 	"run_shell_command":   "command",
-	"run_cli_command":     "command",
 	"wait_for_condition":  "command",
 	"start_process":       "command",
 	"run_python":          "code",
@@ -264,15 +303,23 @@ const ConfirmationTimeout = 30 * time.Second
 const DeliverableConfirmationTimeout = 10 * time.Minute
 
 // ConfirmationTimeoutMsg is the client-side auto-deny tick for one
-// confirmation. RunID lets a stale timer — left over from a confirmation that
-// already resolved, or was superseded by a newer one on the same run — be
-// told apart from the one it was started for.
-type ConfirmationTimeoutMsg struct{ RunID string }
+// confirmation. Seq names the prompt it was armed for: one run asks many
+// times, so RunID alone let an earlier prompt's timer deny a later one.
+type ConfirmationTimeoutMsg struct {
+	RunID string
+	Seq   uint64
+}
 
-func startConfirmationTimeoutIn(runID string, after time.Duration) tea.Cmd {
-	return tea.Tick(after, func(time.Time) tea.Msg {
-		return ConfirmationTimeoutMsg{RunID: runID}
-	})
+// confirmationSeq numbers every prompt this process builds; zero is never issued.
+var confirmationSeq atomic.Uint64
+
+// ExpiryMsg is the message this prompt's own timer delivers when it expires.
+func (m ConfirmationModel) ExpiryMsg() ConfirmationTimeoutMsg {
+	return ConfirmationTimeoutMsg{RunID: m.runID, Seq: m.seq}
+}
+
+func startConfirmationTimeoutIn(msg ConfirmationTimeoutMsg, after time.Duration) tea.Cmd {
+	return tea.Tick(after, func(time.Time) tea.Msg { return msg })
 }
 
 // TimeoutCmd arms this confirmation's auto-deny on ITS clock.
@@ -281,7 +328,7 @@ func startConfirmationTimeoutIn(runID string, after time.Duration) tea.Cmd {
 // pick the duration themselves: the modal knows whether its answer can be
 // delivered, and that is what sets the bound.
 func (m ConfirmationModel) TimeoutCmd() tea.Cmd {
-	return startConfirmationTimeoutIn(m.runID, m.timeout())
+	return startConfirmationTimeoutIn(m.ExpiryMsg(), m.timeout())
 }
 
 func (m ConfirmationModel) timeout() time.Duration {
@@ -297,6 +344,9 @@ func (m ConfirmationModel) timeout() time.Duration {
 type ConfirmationDecidedMsg struct {
 	RunID  string
 	Action string
+	// Seq is the prompt this decision resolved (see ConfirmationModel.Seq), so
+	// a decision still in flight cannot close the prompt that replaced it.
+	Seq uint64
 	// ConfirmID identifies the prompt this decision was typed against, so a
 	// late answer cannot resolve the confirmation that replaced it. Empty on
 	// transports that do not mint one.
@@ -326,6 +376,25 @@ type ConfirmationDecidedMsg struct {
 	Deliverable bool
 }
 
+// wholeTextActions are the prompts whose text IS the decision: an email is
+// approved as it will go out, so it can never be approved partly unseen. Mirrors
+// EXACT_SUMMARY_TOOLS in PermissionPrompt.tsx. The flagship runs them from its
+// send-email skill, so they arrive namespaced.
+var wholeTextActions = map[string]bool{
+	"send_now":                    true,
+	"send_draft":                  true,
+	"reply_to_message":            true,
+	"forward_message":             true,
+	"discard_draft":               true,
+	"update_draft":                true,
+	"send-email/send_now":         true,
+	"send-email/send_draft":       true,
+	"send-email/reply_to_message": true,
+	"send-email/forward_message":  true,
+	"send-email/discard_draft":    true,
+	"send-email/update_draft":     true,
+}
+
 // ConfirmationModel renders a needs_confirmation pause: the gated action, its
 // summary, a risk-tier badge, and a y/n/Esc prompt that auto-denies after
 // ConfirmationTimeout.
@@ -343,6 +412,7 @@ type ConfirmationDecidedMsg struct {
 // already documents avoiding for the one-shot surface.
 type ConfirmationModel struct {
 	runID     string
+	seq       uint64
 	action    string
 	summary   string
 	confirmID string
@@ -363,12 +433,19 @@ type ConfirmationModel struct {
 	modeHint string
 	state    ConfirmState
 	width    int
+	// maxRows is the height the chat view can spend on this prompt; zero means
+	// unconstrained. scroll and seen only move on a wholeTextActions prompt that
+	// doesn't fit: the first text line on screen, and how many have been shown.
+	maxRows int
+	scroll  int
+	seen    int
 }
 
 // NewConfirmationModel builds the modal for one needs_confirmation event.
 func NewConfirmationModel(runID, action, summary, confirmURL string) ConfirmationModel {
 	return ConfirmationModel{
 		runID:      runID,
+		seq:        confirmationSeq.Add(1),
 		action:     action,
 		summary:    summary,
 		confirmURL: confirmURL,
@@ -408,9 +485,9 @@ func (m *ConfirmationModel) SetModeHint(hint string) { m.modeHint = hint }
 func (m ConfirmationModel) Summary() string { return m.summary }
 
 func (m ConfirmationModel) RunID() string       { return m.runID }
+func (m ConfirmationModel) Seq() uint64         { return m.seq }
 func (m ConfirmationModel) Action() string      { return m.action }
 func (m ConfirmationModel) State() ConfirmState { return m.state }
-func (m ConfirmationModel) Tier() RiskTier      { return m.tier }
 func (m ConfirmationModel) Pending() bool       { return m.state == ConfirmationPending }
 
 // Deliverable reports whether answering this prompt actually reaches the agent.
@@ -429,7 +506,90 @@ func (m *ConfirmationModel) SetWidth(w int) {
 	if w < 24 {
 		w = 24
 	}
+	if w == m.width {
+		return
+	}
 	m.width = w
+	// Rewrapping renumbers every line, so what was seen can't be carried over.
+	m.scroll, m.seen = 0, 0
+	m.markSeen()
+}
+
+// SetMaxRows tells the prompt how many rows it may use. A prompt that must be
+// read whole scrolls inside them; any other is left to the caller to clip.
+func (m *ConfirmationModel) SetMaxRows(rows int) {
+	if rows < 1 {
+		rows = 1
+	}
+	m.maxRows = rows
+	m.scrollBy(0)
+}
+
+func (m ConfirmationModel) textLines() []string {
+	return strings.Split(WrapText(strings.TrimSpace(m.summary), m.innerWidth()), "\n")
+}
+
+func (m ConfirmationModel) innerWidth() int {
+	if inner := m.width - 4; inner > 16 {
+		return inner
+	}
+	return 16
+}
+
+// scrolls reports whether this prompt is shown as a window over its text.
+func (m ConfirmationModel) scrolls() bool {
+	return m.state == ConfirmationPending && wholeTextActions[m.action] &&
+		m.maxRows > 0 && lipgloss.Height(m.fullView()) > m.maxRows
+}
+
+// unread reports whether part of the text has not been on screen yet, which is
+// what keeps y from approving.
+func (m ConfirmationModel) unread() bool {
+	return m.scrolls() && m.seen < len(m.textLines())
+}
+
+// windowLayout is the pieces of a scrolling prompt that fit in maxRows: the rows
+// left for text, and whether the title and position line still get one. They go
+// in that order, because the text and the keys are what the decision needs.
+func (m ConfirmationModel) windowLayout() (rows int, title, position bool) {
+	inner := m.innerWidth()
+	rows = m.maxRows - lipgloss.Height(WrapText(m.styledKeyHint(), inner))
+	title, position = true, true
+	titleRows := lipgloss.Height(WrapText(m.titleLine(), inner))
+	if rows-titleRows-1 >= 1 {
+		return rows - titleRows - 1, title, position
+	}
+	title = false
+	if rows-1 >= 1 {
+		return rows - 1, title, position
+	}
+	if rows < 0 {
+		rows = 0
+	}
+	return rows, false, false
+}
+
+func (m *ConfirmationModel) markSeen() {
+	if !m.scrolls() {
+		return
+	}
+	rows, _, _ := m.windowLayout()
+	if rows > 0 && m.scroll+rows > m.seen {
+		m.seen = m.scroll + rows
+	}
+}
+
+func (m *ConfirmationModel) scrollBy(delta int) {
+	rows, _, _ := m.windowLayout()
+	limit := len(m.textLines()) - rows
+	m.scroll += delta
+	if m.scroll > limit {
+		m.scroll = limit
+	}
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+	m.markSeen()
 }
 
 // Update handles one key while the confirmation is pending. Only y/Y (approve
@@ -448,14 +608,34 @@ func (m ConfirmationModel) Update(msg tea.Msg) (ConfirmationModel, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	rows, _, _ := m.windowLayout()
 	switch key.String() {
 	case "y", "Y":
+		if m.unread() {
+			return m, nil
+		}
 		return m.decide(ConfirmationApproved, false)
 	case "a", "A":
-		if !m.allowAlways() {
+		if !m.allowAlways() || m.unread() {
 			return m, nil
 		}
 		return m.decide(ConfirmationAlways, false)
+	case "down", "j":
+		if m.scrolls() {
+			m.scrollBy(1)
+		}
+	case "up", "k":
+		if m.scrolls() {
+			m.scrollBy(-1)
+		}
+	case "pgdown", " ":
+		if m.scrolls() {
+			m.scrollBy(rows)
+		}
+	case "pgup":
+		if m.scrolls() {
+			m.scrollBy(-rows)
+		}
 	case "n", "N", "esc":
 		return m.decide(ConfirmationDenied, false)
 	}
@@ -475,13 +655,13 @@ func (m ConfirmationModel) allowAlways() bool {
 }
 
 // ResolveTimeout applies the auto-deny, but only if this confirmation is still
-// pending and msg was started for THIS run — a stale timer for an
-// already-resolved or superseded confirmation must not fire a second decision.
+// pending and msg was armed for THIS prompt — a timer left by an answered or
+// replaced prompt is a no-op, even on the same run.
 //
 // Every confirmation expires; deliverability sets how long, not whether (see
 // TimeoutCmd). A prompt that waited forever was a turn with no way to end.
 func (m ConfirmationModel) ResolveTimeout(msg ConfirmationTimeoutMsg) (ConfirmationModel, tea.Cmd) {
-	if m.state != ConfirmationPending || msg.RunID != m.runID {
+	if m.state != ConfirmationPending || msg.RunID != m.runID || msg.Seq != m.seq {
 		return m, nil
 	}
 	return m.decide(ConfirmationDenied, true)
@@ -496,6 +676,7 @@ func (m ConfirmationModel) decide(state ConfirmState, timedOut bool) (Confirmati
 	decided := ConfirmationDecidedMsg{
 		RunID:       m.runID,
 		Action:      m.action,
+		Seq:         m.seq,
 		ConfirmID:   m.confirmID,
 		ConfirmURL:  m.confirmURL,
 		Approved:    state == ConfirmationApproved || always,
@@ -526,13 +707,71 @@ var (
 // QuestionModel.View — handing the wrapped result to a width-constrained style
 // as well would re-wrap already-wrapped lines and shear the border.
 func (m ConfirmationModel) View() string {
-	inner := m.width - 4
-	if inner < 16 {
-		inner = 16
+	if m.scrolls() {
+		return m.windowView()
 	}
+	return m.fullView()
+}
+
+func (m ConfirmationModel) titleLine() string {
+	return m.tier.Badge() + " " + confirmationTitleStyle.Render(ActionTitle(m.action))
+}
+
+// windowView is a prompt too long for the screen: a window over its text, where
+// it stands, and the keys. It never exceeds maxRows, so nothing clips it. Its
+// height doesn't change once the text has been read, so the keys don't jump.
+func (m ConfirmationModel) windowView() string {
+	inner := m.innerWidth()
+	rows, title, position := m.windowLayout()
+	text := m.textLines()
 
 	var lines []string
-	lines = append(lines, m.tier.Badge()+" "+confirmationTitleStyle.Render(ActionTitle(m.action)))
+	if title {
+		lines = append(lines, WrapText(m.titleLine(), inner))
+	}
+	if rows > 0 {
+		end := m.scroll + rows
+		if end > len(text) {
+			end = len(text)
+		}
+		lines = append(lines, confirmationBodyStyle.Render(strings.Join(text[m.scroll:end], "\n")))
+	}
+	if position {
+		lines = append(lines, confirmationHintStyle.Render(ansi.Truncate(m.positionLine(rows, len(text)), inner, "…")))
+	}
+	lines = append(lines, lipgloss.PlaceVertical(
+		lipgloss.Height(WrapText(m.styledKeyHint(), inner)), lipgloss.Bottom,
+		WrapText(m.windowKeyHint(), inner)))
+	return confirmationPanelStyle.Width(m.width - confirmationBorderCols).Render(strings.Join(lines, "\n"))
+}
+
+func (m ConfirmationModel) positionLine(rows, total int) string {
+	end := m.scroll + rows
+	if end > total {
+		end = total
+	}
+	where := "lines " + strconv.Itoa(m.scroll+1) + "-" + strconv.Itoa(end) + " of " + strconv.Itoa(total)
+	if m.unread() {
+		return where + " · ↓ to read the rest"
+	}
+	return where + " · read to the end"
+}
+
+// windowKeyHint offers only the keys that work right now: y arrives once the
+// whole text has been on screen.
+func (m ConfirmationModel) windowKeyHint() string {
+	if !m.unread() {
+		return m.styledKeyHint()
+	}
+	return confirmationKeyStyle.Render("n/esc") + " " + confirmationBodyStyle.Render("deny")
+}
+
+// fullView is the whole prompt, however tall.
+func (m ConfirmationModel) fullView() string {
+	inner := m.innerWidth()
+
+	var lines []string
+	lines = append(lines, m.titleLine())
 
 	// The call itself, once. The title already says what kind of action it is.
 	if summary := strings.TrimSpace(m.summary); summary != "" {
@@ -583,7 +822,11 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 // empty scope hides the choice entirely.
 func (m ConfirmationModel) styledKeyHint() string {
 	type choice struct{ key, label string }
-	choices := []choice{{"y", "once"}}
+	approve, ok := approveLabels[m.action]
+	if !ok {
+		approve = "once"
+	}
+	choices := []choice{{"y", approve}}
 	if m.allowAlways() {
 		choices = append(choices, choice{"a", "always: " + m.alwaysScope + " (this session)"})
 	}

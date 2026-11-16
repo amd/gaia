@@ -116,12 +116,14 @@ class TestReadButUnansweredMailIsScanned:
         )
         scanned_ids = {
             item["message_id"]
-            for section in ("urgent", "actionable", "suggested_archives", "needs_review")
+            for section in (
+                "urgent",
+                "actionable",
+                "suggested_archives",
+                "needs_review",
+            )
             for item in out[section]
-        } | {
-            item["message_id"]
-            for item in out["needs_review"]
-        }
+        } | {item["message_id"] for item in out["needs_review"]}
         # informational messages aren't individually surfaced by id (only a
         # count), so check every bucket that DOES carry ids for the target.
         all_ids = set()
@@ -221,7 +223,13 @@ class TestTotalInboxField:
     def test_total_inbox_and_total_unread_come_from_one_get_label_call(self):
         gmail = FakeGmailBackend()
         gmail.add_message(
-            _msg("m1", subject="hi", sender="a@example.com", label_ids=["INBOX"], body="hi")
+            _msg(
+                "m1",
+                subject="hi",
+                sender="a@example.com",
+                label_ids=["INBOX"],
+                body="hi",
+            )
         )
         pre_scan_inbox_impl(gmail, max_messages=25)
         label_calls = [c for c in gmail.transport.calls if c[0] == "get_label"]
@@ -238,7 +246,9 @@ class TestTotalInboxField:
             def get_user_email(self) -> str:
                 return "me@example.com"
 
-            def list_messages(self, *, query=None, label_ids=None, max_results=25, page_token=None):
+            def list_messages(
+                self, *, query=None, label_ids=None, max_results=25, page_token=None
+            ):
                 return {"messages": [], "nextPageToken": None, "resultSizeEstimate": 0}
 
         out = pre_scan_inbox_impl(_NoGetLabelBackend(), max_messages=25)

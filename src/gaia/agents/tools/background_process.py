@@ -522,24 +522,25 @@ def _spawn(
         _captured_stderr,
         _launch_for,
         _segment_env,
+        shell_popen,
     )
 
-    launch = _launch_for(step, granted, bypass)
+    launch = _launch_for(step, granted, bypass, cwd)
     posix = os.name != "nt"
     flags = 0 if posix else _WindowsJob.creationflags
     envs = step.envs or ()
     modes = step.stderr_modes or ()
     if not launch.chained:
+        popen_args, kwargs = shell_popen(launch, _segment_env(envs[0] if envs else {}))
+        kwargs["creationflags"] = flags | kwargs.get("creationflags", 0)
         process = subprocess.Popen(  # pylint: disable=consider-using-with
-            launch.argv,
+            popen_args,
             cwd=cwd,
             stdin=subprocess.DEVNULL,
             stdout=out_fd,
             stderr=_captured_stderr(launch.stderr_mode, out_fd),
-            env=_segment_env(envs[0] if envs else {}),
-            shell=launch.shell,  # nosec B602 - same validated launch as run_shell_command
             start_new_session=posix,
-            creationflags=flags,
+            **kwargs,  # nosec B602 - same validated launch as run_shell_command
         )
         adopt(process)
         return [process]
@@ -547,8 +548,8 @@ def _spawn(
     procs: List[subprocess.Popen] = []
     upstream = None
     try:
-        for index, argv in enumerate(step.segments):
-            last = index == len(step.segments) - 1
+        for index, argv in enumerate(launch.segments):
+            last = index == len(launch.segments) - 1
             process = subprocess.Popen(  # pylint: disable=consider-using-with
                 argv,
                 cwd=cwd,
@@ -710,7 +711,7 @@ class BackgroundProcess:
                     cwd,
                     write_fd,
                     self._adopt,
-                    self.plan.granted,
+                    self.plan.launch_granted,
                     self.plan.bypass,
                 )
                 self._procs = procs

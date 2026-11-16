@@ -25,7 +25,11 @@ export default {
         'g-accent': 'rgb(var(--g-accent) / <alpha-value>)',
         'g-accent2': 'rgb(var(--g-accent2) / <alpha-value>)',
         'g-accent-text': 'rgb(var(--g-accent-text) / <alpha-value>)',
-        // Accent fill — same value in both themes, so it can carry white text.
+        // AMD red at full strength: display-size type and graphics only.
+        'g-brand': 'rgb(var(--g-brand) / <alpha-value>)',
+        // Release candidates only.
+        'g-rc': 'rgb(var(--g-rc) / <alpha-value>)',
+        // Accent fill — deepened so it carries white text.
         'g-accent-fill': 'rgb(var(--g-accent-fill) / <alpha-value>)',
         'g-accent-fill2': 'rgb(var(--g-accent-fill2) / <alpha-value>)',
         'g-on-accent': 'rgb(var(--g-on-accent) / <alpha-value>)',
@@ -42,24 +46,29 @@ export default {
         'g-border': 'var(--g-border)',
         'g-border2': 'var(--g-border2)',
         'g-accent-dim': 'var(--g-accent-dim)',
+        'g-rc-dim': 'var(--g-rc-dim)',
         'g-hdr': 'var(--g-hdr)',
       },
       fontFamily: {
-        // Space Grotesk carries the identity — headings and the wordmark only.
-        display: ['Space Grotesk', 'Inter', 'system-ui', 'sans-serif'],
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        // Antonio carries the identity: tall condensed caps for headings, the
+        // wordmark, buttons and figures. Titillium Web stands in for Klavika,
+        // AMD's licensed face, for everything that is read rather than scanned.
+        display: ['Antonio', '"Arial Narrow"', 'Arial', 'sans-serif'],
+        sans: ['"Titillium Web"', 'Arial', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'Consolas', 'monospace'],
       },
       maxWidth: {
         'g-content': '1200px',
       },
       borderRadius: {
-        'g-card': '14px',
-        'g-panel': '12px',
-        'g-btn': '9px',
-        'g-chip': '10px',
-        'g-chip-lg': '13px',
-        'g-badge': '5px',
+        // Near-square: the 45-degree cut (.g-corner, .g-chamfer-btn) is the shape motif,
+        // and rounded cards beside it read as two languages.
+        'g-card': '2px',
+        'g-panel': '2px',
+        'g-btn': '2px',
+        'g-chip': '2px',
+        'g-chip-lg': '2px',
+        'g-badge': '2px',
         'g-pill': '100px',
       },
       boxShadow: {
@@ -73,8 +82,8 @@ export default {
       },
       animation: {
         'g-pulse': 'g-pulse 0.5s ease-out 1',
-        'g-rise': 'g-rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both',
-        'g-marquee': 'g-marquee 34s linear infinite',
+        'g-rise': 'g-rise 1.2s cubic-bezier(0.2, 0.7, 0.2, 1) both',
+        'g-breathe': 'g-breathe 2.2s ease-in-out infinite',
       },
     },
   },

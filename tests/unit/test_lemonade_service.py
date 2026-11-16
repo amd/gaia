@@ -15,12 +15,19 @@ from __future__ import annotations
 import pytest
 
 from gaia.llm import lemonade_service as service
+from gaia.llm.lemonade_choice import SWITCH_BACK_HINT
+from gaia.llm.lemonade_client import resolve_lemonade_base_url
 from gaia.llm.lemonade_service import (
     LemonadeStartError,
     ensure_lemonade_running,
     install_supervisor,
 )
 from gaia.llm.lemonade_supervisor import LemonadeState
+from gaia.llm.surface_hints import (
+    APP_SERVICE_DOWN_HINT,
+    CLI_SERVICE_DOWN_HINT,
+    surface_wording,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -29,6 +36,16 @@ def _no_installed_supervisor():
     install_supervisor(None)
     yield
     install_supervisor(None)
+
+
+@pytest.fixture(autouse=True)
+def _no_gaia_lemonade_installed(tmp_path, monkeypatch):
+    """A system Lemonade's machine: GAIA's own server is not installed here.
+
+    test_lemonade_restart_keeps_port.py covers the machine where it is.
+    """
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
 
 
 class FakeClient:
@@ -139,7 +156,93 @@ def test_no_daemon_is_a_loud_error_naming_how_to_start_it(monkeypatch, down_clie
         ensure_lemonade_running(ctx_size=65536)
 
     assert "background service" in str(e.value)
-    assert "gaia daemon start" in str(e.value)
+    assert APP_SERVICE_DOWN_HINT in str(e.value)
+
+
+def test_a_configured_server_that_is_down_is_never_replaced_by_gaia_own(
+    monkeypatch, down_client
+):
+    """#8088: an endpoint the user named is authoritative.
+
+    The daemon answered "not up" by starting GAIA's own on another port, so a
+    typo in LEMONADE_BASE_URL looked like a working setup while the server the
+    user chose was never consulted again. The failure must name the URL the
+    user set, and never ask the daemon to start anything.
+    """
+    url = "http://lemonade.example:9000"
+    monkeypatch.setenv("LEMONADE_BASE_URL", url)
+    monkeypatch.setattr(
+        service, "_post_start", lambda *a, **k: pytest.fail("asked the daemon")
+    )
+
+    with pytest.raises(LemonadeStartError) as e:
+        ensure_lemonade_running(ctx_size=65536)
+
+    assert url in str(e.value)
+    assert "not reachable" in str(e.value)
+    assert "unset LEMONADE_BASE_URL" in str(e.value)
+
+
+def test_a_pinned_server_that_is_down_is_named_in_the_error(monkeypatch, down_client):
+    """An explicitly passed base_url is the same choice as the env var, and
+    gets the same refusal: name the address, point at the saved setting."""
+    url = "http://192.0.2.10:8000"
+    monkeypatch.setattr(
+        service, "_post_start", lambda *a, **k: pytest.fail("asked the daemon")
+    )
+
+    with pytest.raises(LemonadeStartError) as e:
+        ensure_lemonade_running(ctx_size=65536, base_url=url)
+
+    assert url in str(e.value)
+    assert SWITCH_BACK_HINT in str(e.value)
+
+
+def test_the_default_address_is_not_a_server_the_user_named(monkeypatch, down_client):
+    """#8122 review: the normal start path always passes the resolved default.
+
+    Treating that address as the user's choice made a stopped system Lemonade,
+    or a PC before ``gaia init``, fail as unreachable instead of letting the
+    daemon start a server. Only a non-default or configured address is external.
+    """
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
+        lambda base_url=None: False,
+    )
+    asked = {}
+
+    def fake_post(payload, timeout):
+        asked.update(payload)
+        return {
+            "status": "started",
+            "base_url": "http://localhost:13305/api/v1",
+            "pid": 77,
+            "waited_seconds": 5.0,
+        }
+
+    monkeypatch.setattr(service, "_post_start", fake_post)
+
+    state = ensure_lemonade_running(
+        ctx_size=65536, base_url=resolve_lemonade_base_url()
+    )
+
+    assert asked == {"ctx_size": 65536}
+    assert state.started is True
+    assert down_client.probes == 1
+
+
+def test_no_daemon_tells_a_cli_user_to_start_it(monkeypatch, down_client):
+    """`gaia daemon status` cannot start a service that is not running."""
+    monkeypatch.setattr("gaia.daemon.client.attach", lambda: None)
+
+    with pytest.raises(LemonadeStartError) as e:
+        ensure_lemonade_running(ctx_size=65536)
+
+    cli_text = surface_wording(str(e.value), "cli")
+    assert CLI_SERVICE_DOWN_HINT in cli_text
+    assert "gaia daemon start" in cli_text
+    assert "gaia daemon status" not in cli_text
+    assert "close GAIA" not in cli_text.lower()
 
 
 def test_a_readiness_check_never_boots_a_daemon(monkeypatch, down_client):

@@ -6,7 +6,7 @@
 // it is built. Both use this component, so the two lists cannot drift into
 // different type sizes, measures, or spacing.
 //
-// Each item opens with a hairline and an accent tick. Without them the bullets in
+// Each item opens with a hairline and a red tick. Without them the bullets in
 // a three-column grid have no edge between them: one body text runs straight
 // into the next item's title, which is exactly how it reads when the page is
 // selected or read aloud.
@@ -24,12 +24,12 @@ interface Props {
 const { title, body, link } = Astro.props;
 ---
 
-<li class="border-t border-g-border pt-5">
-  <h3 class="flex items-start gap-2.5 font-display text-[16.5px] font-semibold leading-[1.35] tracking-[-0.01em] text-g-text">
-    <span class="mt-[7px] h-[5px] w-[5px] flex-none rounded-full bg-g-accent" aria-hidden="true"></span>
+<li class="g-reveal border-t border-g-border pt-5">
+  <h3 class="flex items-start gap-3 font-display text-[22px] font-semibold uppercase leading-[1.15] tracking-[0.03em] text-g-text">
+    <span class="mt-[9px] h-1.5 w-1.5 flex-none bg-g-brand" aria-hidden="true"></span>
     {title}
   </h3>
-  <p class="mt-2.5 max-w-[40ch] pl-[19px] text-[14.5px] leading-[1.7] text-g-muted">
+  <p class="mt-2.5 max-w-[40ch] pl-[18px] text-[15px] leading-[1.7] text-g-muted">
     {body}{link && (
       <>
         {' '}

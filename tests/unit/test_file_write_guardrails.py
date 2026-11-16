@@ -1219,11 +1219,6 @@ class TestFileIOToolsMixinWriteFileGuardrails:
         mixin = FileIOToolsMixin()
         mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
         mixin.console = None
-        # FileIOToolsMixin expects _validate_python_syntax and _parse_python_code
-        mixin._validate_python_syntax = MagicMock(
-            return_value={"is_valid": True, "errors": []}
-        )
-        mixin._parse_python_code = MagicMock()
 
         saved_registry = dict(_TOOL_REGISTRY)
         _TOOL_REGISTRY.clear()
@@ -1336,10 +1331,6 @@ class TestFileIOToolsMixinEditFileGuardrails:
         mixin = FileIOToolsMixin()
         mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
         mixin.console = None
-        mixin._validate_python_syntax = MagicMock(
-            return_value={"is_valid": True, "errors": []}
-        )
-        mixin._parse_python_code = MagicMock()
 
         saved_registry = dict(_TOOL_REGISTRY)
         _TOOL_REGISTRY.clear()
@@ -1841,3 +1832,112 @@ class TestFailedBackupIsNotLearned:
         # The gate MemoryMixin._auto_store_error actually consults.
         assert result["executed"] is False, result
         assert not check_was_executed(result)
+
+
+# ============================================================================
+# 15. The Python syntax gate (#3955)
+# ============================================================================
+
+
+class TestPythonSyntaxGate:
+    """The gate that stops broken Python reaching a source file.
+
+    write_python_file, edit_python_file and replace_function parse the new
+    content with ast.parse before writing anything. These tests exercise the
+    real gate: valid Python writes through, invalid Python is refused with
+    the file left untouched, and validate=False bypasses the gate on
+    write_python_file. Before this fix the fixtures above mocked two helper
+    methods the code no longer calls, so the gate had no test behind it and
+    removing it would have kept CI green.
+    """
+
+    @pytest.fixture
+    def repo(self, tmp_path, mock_home):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "app.py").write_text(
+            "x = 1\n\n\ndef f():\n    return 1\n", encoding="utf-8"
+        )
+        return repo
+
+    def _tool(self, name, repo):
+        """*name* on a fresh host, reading an existing target first."""
+        from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+
+        tool, _ = TestEditingLeavesTheWorkspaceClean._tool(
+            FileIOToolsMixin, "register_file_io_tools", name, repo
+        )
+        return tool
+
+    def test_write_python_file_valid_writes_through(self, repo):
+        write_python_file = self._tool("write_python_file", repo)
+        result = write_python_file(file_path=str(repo / "new.py"), content="x = 2\n")
+        assert result["status"] == "success", result
+        assert (repo / "new.py").read_text(encoding="utf-8") == "x = 2\n"
+
+    def test_write_python_file_invalid_is_refused_and_creates_nothing(self, repo):
+        write_python_file = self._tool("write_python_file", repo)
+        target = repo / "new.py"
+        result = write_python_file(file_path=str(target), content="def broken(:\n")
+        assert result["status"] == "error", result
+        assert result["error"] == "Invalid Python syntax"
+        assert result["syntax_errors"]
+        assert not target.exists()
+
+    def test_write_python_file_invalid_leaves_existing_file_untouched(self, repo):
+        write_python_file = self._tool("write_python_file", repo)
+        before = (repo / "app.py").read_text(encoding="utf-8")
+        result = write_python_file(
+            file_path=str(repo / "app.py"), content="def broken(:\n"
+        )
+        assert result["status"] == "error", result
+        assert result["error"] == "Invalid Python syntax"
+        assert (repo / "app.py").read_text(encoding="utf-8") == before
+
+    def test_write_python_file_validate_false_bypasses_the_gate(self, repo):
+        write_python_file = self._tool("write_python_file", repo)
+        result = write_python_file(
+            file_path=str(repo / "new.py"), content="def broken(:\n", validate=False
+        )
+        assert result["status"] == "success", result
+        assert (repo / "new.py").read_text(encoding="utf-8") == "def broken(:\n"
+
+    def test_edit_python_file_valid_writes_through(self, repo):
+        edit_python_file = self._tool("edit_python_file", repo)
+        result = edit_python_file(
+            file_path=str(repo / "app.py"), old_content="x = 1", new_content="x = 2"
+        )
+        assert result["status"] == "success", result
+        assert (repo / "app.py").read_text(encoding="utf-8").startswith("x = 2\n")
+
+    def test_edit_python_file_invalid_is_refused_and_leaves_file_untouched(self, repo):
+        edit_python_file = self._tool("edit_python_file", repo)
+        before = (repo / "app.py").read_text(encoding="utf-8")
+        result = edit_python_file(
+            file_path=str(repo / "app.py"), old_content="x = 1", new_content="x = "
+        )
+        assert result["status"] == "error", result
+        assert result["error"] == "Edit would result in invalid Python syntax"
+        assert (repo / "app.py").read_text(encoding="utf-8") == before
+
+    def test_replace_function_valid_writes_through(self, repo):
+        replace_function = self._tool("replace_function", repo)
+        result = replace_function(
+            file_path=str(repo / "app.py"),
+            function_name="f",
+            new_implementation="def f():\n    return 2",
+        )
+        assert result["status"] == "success", result
+        assert "return 2" in (repo / "app.py").read_text(encoding="utf-8")
+
+    def test_replace_function_invalid_is_refused_and_leaves_file_untouched(self, repo):
+        replace_function = self._tool("replace_function", repo)
+        before = (repo / "app.py").read_text(encoding="utf-8")
+        result = replace_function(
+            file_path=str(repo / "app.py"),
+            function_name="f",
+            new_implementation="def f(:\n    return 2",
+        )
+        assert result["status"] == "error", result
+        assert result["error"] == "Replacement would result in invalid syntax"
+        assert (repo / "app.py").read_text(encoding="utf-8") == before

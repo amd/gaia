@@ -245,6 +245,15 @@ def inspect_provider(provider: str, *, probe: bool = True) -> Dict[str, Any]:
     granted = list(conn.get("scopes") or [])
     result["scopes"] = granted
 
+    if conn.get("error") == "busy":
+        # Mid-save by another GAIA operation: not gone, just not judgeable now.
+        result["state"] = STATE_ERROR
+        result["detail"] = (
+            f"The {label} connection is being saved by another GAIA operation "
+            "right now. Retry in a moment."
+        )
+        return result
+
     if conn.get("error") == "configuration":
         # A stored connection whose OAuth client credentials are gone (never
         # entered, rotated, or wiped). The store can't even report its scopes,
@@ -309,12 +318,30 @@ def _probe_forwarded(provider: str, scopes: List[str], label: str) -> tuple:
     """
     from gaia_agent_email import forwarded_credentials
 
+    from gaia.connectors.errors import ConnectorsError
+
     try:
         forwarded_credentials.get_forwarded_token(provider, scopes)
-    except Exception as exc:  # noqa: BLE001 — ConnectorsError, loudly
+    except forwarded_credentials.ForwardedScopesMissingError as exc:
+        return STATE_MISSING_SCOPES, str(exc), exc.missing_scopes
+    except forwarded_credentials.ForwardedTokenExpiredError as exc:
+        # The daemon re-forwards on its own; a browser sign-in would fix nothing.
+        return (
+            STATE_ERROR,
+            f"The {label} token is being renewed by the daemon: {exc}",
+            [],
+        )
+    except ConnectorsError as exc:
         return (
             STATE_REAUTH_REQUIRED,
             f"The daemon has not handed this agent a usable {label} token: {exc}",
+            [],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("mailbox_state: forwarded probe for %s failed: %s", provider, exc)
+        return (
+            STATE_ERROR,
+            f"I could not check the {label} credentials: {exc}",
             [],
         )
     return STATE_OK, f"{label} is connected and usable.", []

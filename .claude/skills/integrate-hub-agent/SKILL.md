@@ -27,8 +27,7 @@ ls hub/agents/email/           # an agent's runtimes (e.g. python, npm; cpp when
 
 Treat whatever the listing returns as authoritative. A missing runtime subdir just
 means the agent doesn't ship that shape today. `hub/agents/README.md` is a useful
-catalog of the python set and the example agents (`hello-world`, `word-count`,
-`connectors-demo`) if the developer is unsure what's available.
+catalog of the python set if the developer is unsure what's available.
 
 ## Step 2 — Identify which agent the developer wants
 

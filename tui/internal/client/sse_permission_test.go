@@ -23,7 +23,8 @@ import (
 func liveRun(t *testing.T, f *fakeRelay) (*SSEClient, func()) {
 	t.Helper()
 	// 2.14 is the contract that introduced /tool_decision and /bypass; below it
-	// the client refuses to call them at all.
+	// the client refuses to call them at all. Email currently reports 2.15 but
+	// still does not serve these routes.
 	f.contractVersion = "2.14"
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -267,7 +268,7 @@ func liveRunAtContract(t *testing.T, f *fakeRelay, version string) (*SSEClient, 
 	return c, func() { close(release); c.Close() }
 }
 
-// email also reports contract 2.14 but serves neither route, so a version-only
+// email reports contract 2.15 but serves neither route, so a version-only
 // gate would send it both — the advertised-then-refused shape.
 
 func TestTheEmailAgentAtTheSameContractIsNotAskedForPermission(t *testing.T) {

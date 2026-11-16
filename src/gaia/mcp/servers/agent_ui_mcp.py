@@ -23,8 +23,17 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import requests
 
+from gaia.credential_shapes import redact_file_content
 from gaia.logger import route_console_logging_to_stderr
 from gaia.mcp.ports import AGENT_UI_MCP_PORT
+from gaia.mcp.servers.agent_ui_control import (
+    REMOTE_TOKEN_ENV,
+    RemoteBindError,
+    TurnRegistry,
+    remote_app,
+    remote_token,
+    transport_security_settings,
+)
 from gaia.ui.sse_handler import (
     _RAG_RESULT_JSON_SUB_RE,
     _THINK_TAG_SUB_RE,
@@ -82,12 +91,14 @@ def _normalize_error(
     return {"status": "error", "detail": msg}
 
 
-def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
+def _api(
+    base_url: str, method: str, path: str, timeout: float = 120, **kwargs
+) -> Dict[str, Any]:
     """Make an API request to the GAIA Agent UI backend."""
     url = f"{base_url}/api{path}"
     headers = {**UI_HEADER, **kwargs.pop("headers", {})}
     try:
-        r = getattr(requests, method)(url, timeout=120, headers=headers, **kwargs)
+        r = getattr(requests, method)(url, timeout=timeout, headers=headers, **kwargs)
         r.raise_for_status()
         return r.json()
     except requests.exceptions.ConnectionError as e:
@@ -96,6 +107,11 @@ def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
         return _normalize_error(e, base_url)
     except Exception as e:
         return _normalize_error(e, base_url)
+
+
+#: Indexing a large PDF takes minutes; a shorter wait made the driver retry,
+#: and every retry re-embedded the document from scratch.
+INDEX_DOCUMENT_TIMEOUT_S = 900
 
 
 # Keep in sync with gaia.ui._chat_helpers (not imported here: gaia.ui pulls the
@@ -135,6 +151,60 @@ def _model_pin() -> Dict[str, Any]:
     return {"model": DEFAULT_MODEL_NAME}
 
 
+#: Longest card text a transcript carries; a full 100-item list fits.
+CARD_TEXT_MAX_CHARS = 8000
+
+_GUIDE_SECTIONS = {
+    "recipe": ("Ingredients", "Steps"),
+    "workout": ("Equipment", "Exercises"),
+    "howto": ("Materials", "Steps"),
+    "checklist": ("Items", "Steps"),
+    "itinerary": ("Packing", "Days"),
+}
+
+
+def _lines(value: Any) -> list:
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def card_text(render: Any, data: Any) -> Optional[str]:
+    """Plain text of a card a tool step showed the user, or ``None`` if none.
+
+    The reply beside a card is often just a tip, so whoever reads the
+    transcript instead of the screen needs the card's own content.
+    """
+    if not render:
+        return None
+    if render == "guide" and isinstance(data, dict):
+        guide_type = str(data.get("guideType") or "guide")
+        items_label, steps_label = _GUIDE_SECTIONS.get(guide_type, ("Items", "Steps"))
+        out = [f"[{guide_type} card shown to the user] {data.get('title') or ''}"]
+        for key in ("description", "notes"):
+            if data.get(key):
+                out.append(f"{key.capitalize()}: {data[key]}")
+        if data.get("servings") is not None:
+            out.append(f"Servings: {data['servings']}")
+        if _lines(data.get("items")):
+            out.append(f"{items_label}:")
+            out.extend(f"- {line}" for line in _lines(data.get("items")))
+        if _lines(data.get("steps")):
+            out.append(f"{steps_label}:")
+            out.extend(
+                f"{n}. {line}" for n, line in enumerate(_lines(data.get("steps")), 1)
+            )
+        text = "\n".join(out)
+    else:
+        text = f"[{render} card shown to the user] " + json.dumps(
+            data, ensure_ascii=False, default=str
+        )
+    if len(text) > CARD_TEXT_MAX_CHARS:
+        text = (
+            text[:CARD_TEXT_MAX_CHARS]
+            + f"\n... (card text cut at {CARD_TEXT_MAX_CHARS} characters)"
+        )
+    return text
+
+
 def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]:
     """Send a message via SSE stream and collect the full response."""
     url = f"{base_url}/api/chat/send"
@@ -162,6 +232,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     event_log = []
     current_tool = None
     inference_stats = None
+    turn_error = None
+    last_agent_error = None
 
     for line in r.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
@@ -181,6 +253,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
             full_content += event.get("content", "")
 
         elif etype == "thinking":
+            if event.get("retracts_answer"):
+                full_content = ""
             event_log.append(f"[thinking] {event.get('content', '')[:150]}")
 
         elif etype == "tool_start":
@@ -190,7 +264,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
 
         elif etype == "tool_args":
             detail = event.get("detail", "")[:200]
-            if detail:
+            # A no-argument call's detail is the tool's label, not its arguments.
+            if detail and event.get("args"):
                 event_log.append(f"  args: {detail}")
 
         elif etype == "tool_result":
@@ -210,6 +285,9 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
                     step_info["stderr"] = cmd["stderr"][:300]
                 if cmd.get("return_code", 0) != 0:
                     step_info["exit_code"] = cmd["return_code"]
+            card = card_text(event.get("render"), event.get("data"))
+            if card:
+                step_info["card"] = card
             agent_steps.append(step_info)
             icon = "OK" if success else "ERR"
             event_log.append(f"  result [{icon}]: {summary[:150]}")
@@ -220,22 +298,34 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
 
         elif etype == "answer":
             # Use the answer event content to override accumulated dirty chunks.
-            # The streaming filter (Case 1b in print_streaming_text) extracts a
-            # clean answer from {"answer": "..."} JSON; print_final_answer also
-            # fires at the end.  Both should carry clean extracted text, so the
-            # last non-empty answer wins over whatever chunk accumulation happened.
+            # print_final_answer fires at the end with the clean extracted
+            # text, so the last non-empty answer wins over whatever chunk
+            # accumulation happened.
             answer_content = event.get("content", "")
             if answer_content:
                 full_content = answer_content
 
         elif etype == "agent_error":
             event_log.append(f"[error] {event.get('content', '')}")
+            last_agent_error = event.get("content") or last_agent_error
+            if event.get("fatal"):
+                turn_error = last_agent_error or "The agent turn failed."
+
+        elif etype == "error":
+            turn_error = event.get("content") or "The agent turn failed."
+            event_log.append(f"[error] {turn_error}")
 
         # A judge scoring what the agent did after a "no" has to see the no,
         # and any question the agent put to the user.
         elif etype == "tool_confirm_denied":
             event_log.append(
                 f"[denied] {event.get('tool', '?')}: {event.get('message', '')[:200]}"
+            )
+
+        elif etype == "permission_request":
+            event_log.append(
+                f"[permission prompt] {event.get('tool', '?')}: "
+                f"{json.dumps(event.get('args') or {}, default=str)[:200]}"
             )
 
         elif etype == "user_input_request":
@@ -255,8 +345,17 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
             done_content = event.get("content", "")
             if done_content:
                 full_content = done_content
+            if event.get("failed") and not event.get("cancelled"):
+                turn_error = (
+                    turn_error
+                    or done_content
+                    or last_agent_error
+                    or "The agent turn failed."
+                )
 
         elif etype == "status":
+            if event.get("retracts_answer"):
+                full_content = ""
             msg = event.get("message", "")
             if msg:
                 event_log.append(f"[status] {msg}")
@@ -279,6 +378,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
         "agent_steps": agent_steps,
         "event_log": event_log,
     }
+    if turn_error:
+        result = {"status": "error", "detail": turn_error, **result}
     if inference_stats:
         result["stats"] = inference_stats
     return result
@@ -347,8 +448,12 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     # ── Messages ───────────────────────────────────────────────────
 
     @mcp.tool()
-    def get_messages(session_id: str) -> Dict[str, Any]:
-        """Get all messages in a session (with agent steps and tool outputs)."""
+    def get_messages(session_id: str, full_replies: bool = False) -> Dict[str, Any]:
+        """Get all messages in a session (with agent steps and tool outputs).
+
+        Message text is cut to 2000 characters. Pass full_replies=True to get
+        assistant replies whole, e.g. to judge a long answer.
+        """
         raw_messages = []
         total = None
         while total is None or len(raw_messages) < total:
@@ -384,20 +489,27 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
         for m in raw_messages:
             msg = {
                 "role": m["role"],
-                "content": m["content"][:2000],
+                "content": (
+                    m["content"]
+                    if full_replies and m["role"] == "assistant"
+                    else m["content"][:2000]
+                ),
             }
             steps = m.get("agent_steps") or []
             if steps:
-                msg["agent_steps"] = [
-                    {
+                msg["agent_steps"] = []
+                for s in steps:
+                    step = {
                         "type": s.get("type"),
                         "tool": s.get("tool"),
                         "label": s.get("label"),
                         "result": (s.get("result") or "")[:300],
                         "success": s.get("success"),
                     }
-                    for s in steps
-                ]
+                    card = card_text(s.get("render"), s.get("data"))
+                    if card:
+                        step["card"] = card
+                    msg["agent_steps"].append(step)
             stats = m.get("stats")
             if stats:
                 msg["stats"] = stats
@@ -408,12 +520,184 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     def send_message(session_id: str, message: str) -> Dict[str, Any]:
         """Send a message to the GAIA agent in a session and wait for the response.
         The conversation is stored and will be visible when the session is viewed.
-        Returns the agent's response, tool outputs, and an event log.
+        Returns the agent's response, tool outputs, and an event log. A turn
+        that failed also carries status "error" and the reason in "detail".
 
         Use list_sessions() first to get a session ID, or create_session() to make one.
         To make the session visible in the browser, call open_session_in_browser() first.
         """
         return _stream_chat(backend_url, session_id, message)
+
+    # ── Turn control (drive a turn without blocking) ───────────────
+
+    turns = TurnRegistry(backend_url, UI_HEADER)
+
+    @mcp.tool()
+    def start_message(session_id: str, message: str) -> Dict[str, Any]:
+        """Send a message and return as soon as the backend accepts the turn.
+
+        The turn runs on while you poll turn_status or block on
+        wait_for_turn. It uses the model the Agent UI uses (see
+        get_settings / set_model). One turn per session at a time.
+
+        Returns {session_id, turn_id, accepted, state}, or an error when the
+        session does not exist or is already busy.
+        """
+        return turns.start(session_id, message)
+
+    @mcp.tool()
+    def turn_status(session_id: str) -> Dict[str, Any]:
+        """What the session's turn is doing right now.
+
+        state is "streaming", "awaiting_permission", "awaiting_input" or
+        "idle". pending_prompt carries the prompt to answer: confirm_id, tool,
+        args, args_summary, risk, always_scope (present only when "always" is
+        offered) and expires_in_s. Also current_step, elapsed_s and outcome
+        ("completed", "cancelled", "error", "disconnected") once idle.
+
+        A turn started in the browser is attached to and reported too.
+        """
+        return turns.status(session_id)
+
+    @mcp.tool()
+    def wait_for_turn(
+        session_id: str,
+        until: str = "idle",
+        text: str = "",
+        timeout_ms: int = 60000,
+    ) -> Dict[str, Any]:
+        """Block until the turn reaches a condition, instead of polling.
+
+        Args:
+            session_id: The session to watch.
+            until: "idle" (turn over), "prompt" (a permission prompt waits),
+                "question" (the agent asked the user something), "attention"
+                (any of those three), or "text" (the answer contains `text`).
+            text: Substring to wait for when until="text".
+            timeout_ms: 1 to 600000 (10 minutes). Call again to wait longer.
+
+        Returns the turn status with matched=true, or an error with
+        timed_out=true (still running) or ended=true (the turn finished
+        without reaching the condition), carrying the status it had.
+        """
+        return turns.wait(session_id, until=until, text=text, timeout_ms=timeout_ms)
+
+    @mcp.tool()
+    def answer_prompt(
+        session_id: str,
+        confirm_id: str,
+        decision: str,
+        always_scope: str = "",
+    ) -> Dict[str, Any]:
+        """Answer the pending tool permission prompt, as the user's click would.
+
+        Args:
+            session_id: The session whose prompt this is.
+            confirm_id: pending_prompt.confirm_id from turn_status. Required.
+            decision: "allow_once", "always" or "deny".
+            always_scope: For "always", repeat pending_prompt.always_scope
+                exactly. The grant covers only that scope.
+
+        Refused without calling the backend when the prompt was already
+        answered, has expired or been replaced, belongs to another session,
+        or "always" names a different scope. The reply's ``refused`` field
+        names the reason.
+        """
+        return turns.answer_prompt(session_id, confirm_id, decision, always_scope)
+
+    @mcp.tool()
+    def answer_question(session_id: str, request_id: str, value: str) -> Dict[str, Any]:
+        """Answer a question the agent asked mid-turn (pending_question).
+
+        Args:
+            session_id: The session whose question this is.
+            request_id: pending_question.request_id from turn_status.
+            value: The answer -- one of the options' values, or free text when
+                allow_free_text is true.
+        """
+        return turns.answer_question(session_id, request_id, value)
+
+    @mcp.tool()
+    def stop_turn(session_id: str) -> Dict[str, Any]:
+        """Stop the running turn, like the UI's Stop button.
+
+        The run ends at its next check; wait_for_turn(until="idle") then
+        returns, and turn_view reports stopped=true if the stop ended it.
+        """
+        return turns.stop(session_id)
+
+    @mcp.tool()
+    def turn_view(session_id: str) -> Dict[str, Any]:
+        """The turn as the user sees it in the Agent UI.
+
+        content is the answer text. steps is the activity list (thinking,
+        tools with their arguments and results, status lines, errors) folded
+        the way the UI folds them. footer is the stats line under the answer
+        (latency, tok/s, TTFT, input -> output tokens), present once idle.
+        Works while the turn runs and after it ends.
+        """
+        return turns.view(session_id)
+
+    @mcp.tool()
+    def turn_metrics(session_id: str) -> Dict[str, Any]:
+        """Per-turn numbers: steps, tool_calls, tokens_in, tokens_out, time.
+
+        steps, tool_calls and agent_elapsed_s come from the agent's answer
+        event; tokens_in, tokens_out, tokens_per_second and
+        time_to_first_token_s from the done event (the final model call --
+        the numbers the UI footer shows); turn_output_tokens and
+        turn_input_tokens sum the whole turn. wall_s is measured here. A
+        value nobody reported is null, never a made-up zero.
+        """
+        return turns.metrics(session_id)
+
+    # ── Settings a test needs ──────────────────────────────────────
+
+    @mcp.tool()
+    def get_settings() -> Dict[str, Any]:
+        """The active model and provider, and which Lemonade Server GAIA uses."""
+        active = _api(backend_url, "get", "/providers/active")
+        if active.get("status") == "error":
+            return active
+        target = _api(backend_url, "get", "/lemonade/target")
+        if target.get("status") == "error":
+            return target
+        return {"active_model": active, "model_server": target}
+
+    @mcp.tool()
+    def list_models(provider: str = "local") -> Dict[str, Any]:
+        """Chat models a provider offers ("local", "fireworks" or "amd")."""
+        from urllib.parse import quote
+
+        return _api(backend_url, "get", f"/providers/{quote(provider, safe='')}/models")
+
+    @mcp.tool()
+    def set_model(model: str) -> Dict[str, Any]:
+        """Make `model` the one new turns run (the UI's model picker).
+
+        The backend refuses a model that is not available.
+        """
+        return _api(backend_url, "post", "/providers/select", json={"model": model})
+
+    @mcp.tool()
+    def set_model_server(
+        mode: str, base_url: str = "", api_key: str = ""
+    ) -> Dict[str, Any]:
+        """Switch which Lemonade Server GAIA uses (Settings > Model server).
+
+        Args:
+            mode: "gaia" for GAIA's own server, or "external" for yours.
+            base_url: The external server, e.g. http://localhost:13305.
+            api_key: The external server's key, if it has one.
+
+        Nothing is saved unless the external server checks out.
+        """
+        body: Dict[str, Any] = {"mode": mode}
+        if base_url:
+            body["base_url"] = base_url
+        if api_key:
+            body["api_key"] = api_key
+        return _api(backend_url, "post", "/lemonade/target", json=body)
 
     # ── Documents ──────────────────────────────────────────────────
 
@@ -432,7 +716,11 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
         agent won't treat it as session-specific.
         """
         result = _api(
-            backend_url, "post", "/documents/upload-path", json={"filepath": filepath}
+            backend_url,
+            "post",
+            "/documents/upload-path",
+            timeout=INDEX_DOCUMENT_TIMEOUT_S,
+            json={"filepath": filepath},
         )
         # If a session was specified, link the newly-indexed document to it so
         # the agent sees it as a session document (not just a library document).
@@ -492,7 +780,8 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     @mcp.tool()
     def preview_file(filepath: str) -> Dict[str, Any]:
         """Preview the contents of a file (first lines for text, metadata for binary)."""
-        return _api(backend_url, "get", "/files/preview", params={"path": filepath})
+        preview = _api(backend_url, "get", "/files/preview", params={"path": filepath})
+        return redact_file_content(preview)
 
     # ── Screenshot ──────────────────────────────────────────────
 
@@ -541,9 +830,11 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
         try:
             from PIL import Image, ImageGrab
         except ImportError:
+            from gaia.agents.install_hints import missing_package_hint
+
             return {
                 "status": "error",
-                "detail": "Pillow not installed. Run: pip install Pillow",
+                "detail": f"Pillow not installed. {missing_package_hint('Pillow')}",
             }
 
         try:
@@ -884,7 +1175,42 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     return mcp
 
 
+def http_bind_token(host: str, allow_remote: bool) -> Optional[str]:
+    """Check an HTTP bind up front; the bearer token a remote bind needs.
+
+    Raises :class:`RemoteBindError` for a non-loopback host without
+    ``--allow-remote`` and a token in ``GAIA_AGENT_UI_MCP_TOKEN``.
+    """
+    return remote_token(host, allow_remote, os.environ.get(REMOTE_TOKEN_ENV))
+
+
+def run_http(
+    mcp: "MCPServer", host: str, port: int, token: Optional[str] = None
+) -> None:
+    """Serve over streamable HTTP, refusing any request a web page sends.
+
+    This server can answer permission prompts, so the SDK's default -- which
+    trusts any ``http://localhost:*`` origin -- is too loose, and a
+    non-loopback bind is served only with a bearer token.
+    """
+    if token:
+        import uvicorn
+
+        uvicorn.run(remote_app(mcp, host, token), host=host, port=port)
+        return
+    remote_token(host, False, None)  # loopback only without a token
+    mcp.run(
+        transport="streamable-http",
+        host=host,
+        port=port,
+        transport_security=transport_security_settings(host),
+    )
+
+
 def main():
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(description="GAIA Agent UI MCP Server")
     parser.add_argument(
         "--port",
@@ -907,7 +1233,20 @@ def main():
         action="store_true",
         help="Use stdio transport instead of HTTP (for Claude Code integration)",
     )
+    parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help=f"Allow a non-loopback --host; requires a token in {REMOTE_TOKEN_ENV}",
+    )
     args = parser.parse_args()
+
+    token = None
+    if not args.stdio:
+        try:
+            token = http_bind_token(args.host, args.allow_remote)
+        except RemoteBindError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(2) from e
 
     mcp = create_agent_ui_mcp(backend_url=args.backend)
 
@@ -927,7 +1266,7 @@ def main():
             print(f"   Tools: {tool_count} registered\n")
         except AttributeError:
             logger.debug("MCPServer tool registry layout changed; skipping tool count")
-        mcp.run(transport="streamable-http", host=args.host, port=args.port)
+        run_http(mcp, args.host, args.port, token)
 
 
 if __name__ == "__main__":

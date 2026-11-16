@@ -4,6 +4,7 @@
 package lemonade
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -74,19 +75,45 @@ func embeddedDir() (string, bool) {
 	return filepath.Join(dir, "lemonade"), true
 }
 
-// ResolveBaseURL keeps an explicitly selected endpoint, then checks the
-// environment, the private runtime, and finally Lemonade's standard port.
+// ResolveBaseURL keeps an explicitly selected endpoint, then the user's choice
+// (LEMONADE_BASE_URL, else the saved external server), the private runtime
+// (running, or stopped on its last port), and finally Lemonade's standard port. Mirrors Python's
+// resolve_lemonade_base_url.
 func ResolveBaseURL(base string) string {
 	if base = strings.TrimSpace(base); base != "" {
 		return normalizeBaseURL(base)
 	}
-	if base = strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")); base != "" {
+	if base = configuredURL(); base != "" {
 		return normalizeBaseURL(base)
 	}
 	if state := ReadEmbedded(); state != nil {
 		return fmt.Sprintf("http://localhost:%d/api/v1", state.Port)
 	}
+	// Stopped, GAIA's own comes back on its last port; another Lemonade may
+	// hold the standard one.
+	if port := stoppedOwnPort(); port > 0 {
+		return fmt.Sprintf("http://localhost:%d/api/v1", port)
+	}
 	return DefaultBaseURL
+}
+
+// stoppedOwnPort is the port GAIA's installed server last ran on, or 0.
+func stoppedOwnPort() int {
+	dir, ok := embeddedDir()
+	if !ok || !EmbeddedInstalled() {
+		return 0
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "last_port.json"))
+	if err != nil {
+		return 0
+	}
+	var last struct {
+		Port int `json:"port"`
+	}
+	if json.Unmarshal(raw, &last) != nil || last.Port < 1024 || last.Port > 65535 {
+		return 0
+	}
+	return last.Port
 }
 
 // A bare Lemonade origin means its standard API. Preserve an explicitly
@@ -101,26 +128,43 @@ func normalizeBaseURL(base string) string {
 	return base
 }
 
-// APIKeyFor scopes automatically discovered credentials to the private
-// endpoint that issued them. A user-supplied environment key is an explicit
-// override and remains available for other configured Lemonade servers.
-func APIKeyFor(base string) string {
-	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" {
-		return key
+// APIKeyFor is the key to send to base: LEMONADE_API_KEY, else the key saved
+// for the user's own server (only to that server), else GAIA's own server's
+// key (only to its recorded endpoint). An error means a key was saved for base
+// but could not be fetched; sending none would only earn a confusing 401.
+func APIKeyFor(ctx context.Context, base string) (string, error) {
+	if key := strings.TrimSpace(os.Getenv("LEMONADE_API_KEY")); key != "" && !ownCredentials() && !EnvURLIgnored() {
+		return key, nil
+	}
+	if err := ChoiceError(); err != nil {
+		return "", err
+	}
+	target := ResolveBaseURL(base)
+	if key, ok, err := savedExternalKey(ctx, target); err != nil || ok {
+		return key, err
 	}
 	state := ReadEmbedded()
 	if state == nil || state.APIKey == "" {
-		return ""
+		return "", nil
 	}
-	u, err := url.Parse(ResolveBaseURL(base))
-	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Port() != strconv.Itoa(state.Port) {
-		return ""
+	if isEmbeddedEndpoint(target, state.Port) {
+		return state.APIKey, nil
+	}
+	return "", nil
+}
+
+// isEmbeddedEndpoint reports whether target is GAIA's own lemond on port. An
+// unparseable target is not.
+func isEmbeddedEndpoint(target string, port int) bool {
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Port() != strconv.Itoa(port) {
+		return false
 	}
 	// lemond binds localhost. Treat its IPv4/IPv6 spellings as the same
 	// endpoint, without extending that trust to arbitrary 127/8 addresses.
 	switch strings.ToLower(u.Hostname()) {
 	case "localhost", "127.0.0.1", "::1":
-		return state.APIKey
+		return true
 	}
-	return ""
+	return false
 }

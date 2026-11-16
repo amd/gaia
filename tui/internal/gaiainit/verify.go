@@ -38,6 +38,24 @@ type Model struct {
 	SizeGB *float64 `json:"size_gb"`
 	Loaded bool     `json:"loaded"`
 	Error  string   `json:"error"`
+	// Downloaded is whether the server already has it; nil from a gaia too old
+	// to say.
+	Downloaded *bool `json:"downloaded"`
+	// Kind is why a load failed: "memory", "stuck", "answer", "window", or
+	// "broken" (the file itself). Empty from a gaia too old to say.
+	Kind string `json:"kind"`
+}
+
+// Missing is the models the server does not have yet. A model whose state was
+// not reported counts as missing, as it always did.
+func (s Status) Missing() []Model {
+	var out []Model
+	for _, m := range s.Models {
+		if m.Downloaded == nil || !*m.Downloaded {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // Status is the answer to "is this profile set up, and does it load?".
@@ -46,6 +64,38 @@ type Status struct {
 	Stage   string   `json:"stage"`
 	Reasons []string `json:"reasons"`
 	Models  []Model  `json:"models"`
+	// AgentMissing is the GAIA agent being one of the things setup still has
+	// to install; false from a gaia too old to say.
+	AgentMissing bool `json:"agent_missing"`
+	// Warnings are true but no setup step, e.g. no GAIA agent build for this PC.
+	Warnings []string `json:"warnings"`
+	// NoAgentBuild is the hub having no GAIA agent build for this PC: setup
+	// finishes without it, so chat cannot run here.
+	NoAgentBuild bool `json:"no_agent_build"`
+	// ModelListUnread is a StageServer whose server answers but sends a model
+	// list GAIA cannot read; setup cannot fix it.
+	ModelListUnread bool `json:"model_list_unread"`
+}
+
+// AgentReasonPrefix starts the reason `gaia init --check` gives for a missing
+// GAIA agent.
+const AgentReasonPrefix = "The GAIA agent is not installed"
+
+// OtherReasons is every reason but the missing agent's.
+func (s Status) OtherReasons() []string {
+	var out []string
+	for _, r := range s.Reasons {
+		if !strings.HasPrefix(r, AgentReasonPrefix) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// AgentOnly reports that the GAIA agent is all setup still has to install:
+// every model it described is already on the server.
+func (s Status) AgentOnly() bool {
+	return s.AgentMissing && len(s.Missing()) == 0
 }
 
 // Chat returns the chat model, if the probe named one.
@@ -112,8 +162,8 @@ func Verify(ctx context.Context, claudeMode bool, chatModel string) (Status, err
 	return status, nil
 }
 
-// parseStatus reads the JSON object off the LAST line that holds one: GAIA's
-// logger shares stdout, so warnings can precede it.
+// parseStatus reads the JSON object off the LAST line that holds one, so a
+// stray line printed before it is skipped.
 func parseStatus(out string) (Status, error) {
 	lines := strings.Split(out, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {

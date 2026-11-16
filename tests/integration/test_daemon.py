@@ -18,6 +18,7 @@ state under a tmp ``GAIA_DAEMON_HOME`` and tears the daemon down in a finally.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -30,6 +31,7 @@ uvicorn = pytest.importorskip("uvicorn")
 
 from gaia.daemon import client, instance  # noqa: E402
 from gaia.daemon.constants import API_PREFIX, RESERVED_PORT, SERVICE_ID  # noqa: E402
+from gaia.daemon.errors import DaemonError  # noqa: E402
 from gaia.daemon.instance import DaemonInstance  # noqa: E402
 
 _REPO_SRC = os.path.join(
@@ -39,10 +41,14 @@ _REPO_SRC = os.path.join(
 
 @pytest.fixture()
 def daemon_home(tmp_path, monkeypatch):
-    """Isolate all daemon on-disk state under a tmp dir for one test."""
+    """Isolate all daemon on-disk state under a tmp dir for one test, and stop
+    the daemon the test left registered there, whether it passed or not."""
     home = tmp_path / "host"
     monkeypatch.setenv("GAIA_DAEMON_HOME", str(home))
-    return home
+    # Otherwise the daemon owns, and on exit stops, the real ~/.gaia Lemonade.
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
+    yield home
+    _stop(instance.read_instance())
 
 
 def _child_env(home) -> dict:
@@ -55,19 +61,15 @@ def _child_env(home) -> dict:
 
 
 def _stop(inst):
-    """Best-effort teardown of a running daemon."""
+    """Ask a running daemon to shut down, then kill whatever is left of it."""
     if inst is None:
         return
-    try:
-        client.request_shutdown(inst)
-        client.wait_until_gone(inst, timeout=5.0)
-    except Exception:
-        pass
-    try:
-        if instance.pid_alive(inst.pid):
-            instance.terminate_instance(inst)
-    except Exception:
-        pass
+    # Unreachable means dead or hung; terminate_instance settles both.
+    with contextlib.suppress(DaemonError):
+        if client.request_shutdown(inst):
+            client.wait_until_gone(inst, timeout=5.0)
+    if instance.pid_alive(inst.pid):
+        instance.terminate_instance(inst)
 
 
 def test_probe_rejects_pid_mismatch(daemon_home):

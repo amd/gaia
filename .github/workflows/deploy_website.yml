@@ -9,16 +9,11 @@
 #   project (Railway → project → Settings → Tokens → Project Token, production
 #   environment). Scopes the deploy to that project; no account login needed.
 #
-#   Railway variable HUB_CATALOG_URL=https://hub.amd-gaia.ai — REQUIRED. The
-#   website builds its Agent Hub pages from the live hub catalog and has NO
-#   bundled fixture fallback (website/src/data/catalog.ts), so the build FAILS
-#   LOUDLY if this is unset. Set it on the website service in Railway → Variables.
-#
-#   Railway variable GITHUB_TOKEN — OPTIONAL. The homepage stats row
-#   (website/src/data/github.ts) fetches public GitHub data at build time;
-#   unauthenticated is fine for a once-per-deploy build (well under the 60/hr
-#   cap), so this is not required. Add a GitHub PAT with no scopes only if the
-#   build starts hitting rate limits.
+#   Railway variable GITHUB_TOKEN — OPTIONAL. The download links and the stats
+#   row (website/src/data/github.ts) come from public GitHub data fetched at
+#   build time, with no bundled fallback; unauthenticated is fine for a
+#   once-per-deploy build (well under the 60/hr cap). Add a GitHub PAT with no
+#   scopes only if the build starts hitting rate limits.
 #
 # The service is built by Railway from website/railway.json, served by `serve
 # dist` from website/dependencies. Nixpacks runs `npm ci` itself as its install

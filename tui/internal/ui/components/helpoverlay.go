@@ -128,7 +128,10 @@ func renderCommandsSection(text string, commands []string) string {
 	for i := 0; i < len(lines); i++ {
 		if strings.HasPrefix(lines[i], helpCommandsLabel) {
 			out = append(out, wrapCommandLines(commands)...)
-			i++ // skip the fixed layout's second Commands line
+			// Skip the fixed layout's own continuation lines.
+			for i+1 < len(lines) && strings.HasPrefix(lines[i+1], helpCommandsIndent) {
+				i++
+			}
 			continue
 		}
 		out = append(out, lines[i])
@@ -284,27 +287,30 @@ const chatHelpText = `  GAIA Chat
   Esc twice   Give up waiting on the cancel
   Ctrl+C      Quit
 
-  Commands    /help /clear /full-access /slack /setup
-              /memory /model /provider /gateway /agents
+  Commands    /help /clear /full-access /slack /discord
+              /setup /memory /models /provider /gateway
+              /agents /model /gpu /read-aloud /voice
+              /connectors /sessions
   /cost       Session spend · /cost help for rates
-  /           On an empty line, browse commands —
-              hover/click or ↑/↓ to pick, Enter or
-              click to run, Esc or click out to close
+  /update     New GAIA release? · /update now
+  /           Browse commands on an empty line: ↑/↓ or
+              click to pick, Enter to run, Esc to close
 
   Scroll        ↑ / ↓ line · PgUp/PgDn page
-  Home / End    Top / bottom, if the composer is
-                empty — otherwise cursor keys
+  Home / End    Top / bottom when the composer's empty
   Mouse wheel   Scrolls
   Click         Picks a palette row or question
                 option · Ctrl+T to click links too
-  Ctrl+O        Each step in full, or folded
+  Ctrl+O  Fold · Ctrl+F/Ctrl+G open/reveal media
 
   Copy and paste
   ──────────────────
   Drag to select, then copy with your terminal's
   own Ctrl+Shift+C/Cmd+C (or right-click).
-  Ctrl+T      Mouse to GAIA — links open on
-              click, double-click copies a message
+  Ctrl+T      Mouse to GAIA: drag copies and scrolls
+              past the edge (Shift+click extends),
+              click opens links, double-click copies
+  /copy       Pick a message · /copy all: whole chat
   Ctrl+V      Paste — a clipboard screenshot pastes
               as a file path · Ctrl+Y copy answer ·
               Ctrl+B code

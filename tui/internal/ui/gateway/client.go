@@ -1,5 +1,5 @@
 // Package gateway is the TUI screen for connecting GAIA to the AMD LLM
-// gateway through Lemonade's cloud offload (Lemonade >= 11.8).
+// gateway through Lemonade's cloud offload.
 //
 // This file talks to Lemonade directly rather than through the daemon: the API
 // token is the whole point of the screen, and a direct call is one fewer
@@ -157,6 +157,9 @@ func (c *Client) do(method, path string, payload any, out any) error {
 		body = bytes.NewReader(nil)
 	}
 
+	if err := lemonade.RefuseRequest(method, path); err != nil {
+		return err
+	}
 	base, err := c.target()
 	if err != nil {
 		return err
@@ -167,7 +170,11 @@ func (c *Client) do(method, path string, payload any, out any) error {
 		return fmt.Errorf("could not build request for %s: %w", url, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := lemonade.APIKeyFor(base); key != "" {
+	key, err := lemonade.APIKeyFor(context.Background(), base)
+	if err != nil {
+		return err
+	}
+	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
@@ -210,10 +217,34 @@ func httpError(resp *http.Response, method, url, base string) error {
 				"accept a different token at runtime.\nEither keep using that key, "+
 				"or unset %s and restart Lemonade.", APIKeyEnv, APIKeyEnv)
 	}
-	if resp.StatusCode == http.StatusNotFound && strings.Contains(url, "cloud") {
-		return fmt.Errorf(
-			"Lemonade at %s has no cloud-provider API (needs >= 11.8.0).\n"+
-				"Upgrade with `gaia init` and try again.", base)
+	if resp.StatusCode == http.StatusNotFound {
+		// /install is the endpoint a Lemonade needs to register a cloud
+		// provider at all, so a 404 there means the server is older than the
+		// cloud API.
+		if strings.HasSuffix(url, "/install") {
+			return fmt.Errorf(
+				"Lemonade at %s has no cloud-provider API, so it is older than %s, "+
+					"the oldest version GAIA supports.\n%s",
+				base, lemonade.MinExternalVersion, lemonade.UpgradeHint)
+		}
+		if strings.Contains(url, "cloud") {
+			// Lemonade answers this until POST /install registers a provider:
+			// "Cloud provider 'amd' is not installed. Call POST /v1/install ..."
+			// Its type is invalid_request, so the message is the only marker.
+			if strings.Contains(env.Error.Message, "is not installed") {
+				return fmt.Errorf(
+					"Lemonade at %s has no cloud provider registered for this gateway, "+
+						"so it cannot accept a token yet.\nRun `gaia gateway install`, "+
+						"then try again.", base)
+			}
+			// An empty type is what an older server's 404 body looks like.
+			if env.Error.Type == "" || env.Error.Type == "not_found" {
+				return fmt.Errorf(
+					"Lemonade at %s has no cloud-provider API, so it is older than %s, "+
+						"the oldest version GAIA supports.\n%s",
+					base, lemonade.MinExternalVersion, lemonade.UpgradeHint)
+			}
+		}
 	}
 	if env.Error.Message != "" {
 		return fmt.Errorf("%s failed (HTTP %d): %s", method, resp.StatusCode, env.Error.Message)
@@ -324,6 +355,9 @@ func (r installResult) foundNone() bool {
 // Install registers the gateway with Lemonade as a cloud provider.
 func (c *Client) Install(baseURL string) (installResult, error) {
 	var result installResult
+	if err := lemonade.RefuseSetupChange("register the AMD LLM Gateway there"); err != nil {
+		return result, err
+	}
 	body := map[string]any{
 		"backend":  "cloud",
 		"provider": Provider,
@@ -419,6 +453,8 @@ func (c *Client) ListModels() ([]Model, error) {
 			Recipe        string   `json:"recipe"`
 			Labels        []string `json:"labels"`
 			ContextLength int      `json:"context_length"`
+			// The provider's window; context_length is the 4096 it was "loaded" at.
+			MaxContextWindow int `json:"max_context_window"`
 		} `json:"data"`
 	}
 	if err := c.do(http.MethodGet, "models", nil, &payload); err != nil {
@@ -431,10 +467,14 @@ func (c *Client) ListModels() ([]Model, error) {
 		if entry.Recipe != cloudRecipe || !strings.HasPrefix(entry.ID, prefix) {
 			continue
 		}
+		ctx := entry.ContextLength
+		if entry.MaxContextWindow > 0 {
+			ctx = entry.MaxContextWindow
+		}
 		models = append(models, Model{
 			ID:      entry.ID,
 			Labels:  entry.Labels,
-			CtxSize: entry.ContextLength,
+			CtxSize: ctx,
 		})
 	}
 	sort.SliceStable(models, func(i, j int) bool {

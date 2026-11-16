@@ -1,0 +1,141 @@
+# Three months with a parent planning meals for a family whose health facts
+# change: an allergy outgrown, a diagnosis corrected, a diet changed, a child's
+# age corrected. Traps: a visiting sister's diet, a hypothetical, a quoted text
+# from a friend — none of them is about the user.
+#
+# The pr suite scripts what a careful model proposes for those traps, so it
+# measures the storage path; whether a real model falls for them is the full
+# suite's job.
+id: sam_family_health
+title: Family meals as health facts change
+persona: Sam, parent of Ada and Leo, cooks for the family
+end: 2026-06-08T08:00
+
+sessions:
+  - id: s01
+    date: 2026-03-03T17:40
+    turns:
+      - user: "I do most of the cooking for my family. I'm allergic to peanuts, so please never suggest anything with them."
+        assistant: "Understood, no peanuts in anything I suggest. Who else are you cooking for?"
+        extract:
+          - {op: add, category: preference, content: "User is allergic to peanuts and wants recipes without them"}
+          - {op: add, category: fact, content: "User does most of the family cooking"}
+      - user: "My son Leo is 4 and lactose intolerant, and my daughter Ada is 6."
+        assistant: "Noted: dairy-free options for Leo. Any foods Ada refuses?"
+        extract:
+          - {op: add, category: fact, content: "User's son Leo is 4 and lactose intolerant", entity: "person:leo"}
+          - {op: add, category: fact, content: "User's daughter Ada is 6", entity: "person:ada"}
+      - user: "Ada won't touch mushrooms. Can you plan five weeknight dinners?"
+        assistant: "Five dinners: chicken stir-fry (no peanuts), lentil soup, sheet-pan salmon, tacos with dairy-free crema, pasta primavera without mushrooms."
+        extract:
+          - {op: add, category: fact, content: "User's daughter Ada won't eat mushrooms", entity: "person:ada"}
+
+  - id: s02
+    date: 2026-03-14T16:20
+    turns:
+      - user: "My sister Rina is visiting next week and she's vegetarian. What can I make that everyone eats?"
+        assistant: "Try a big vegetable curry with rice, black bean tacos, or a lasagna with dairy-free cheese for Leo."
+        extract:
+          - {op: add, category: fact, content: "User's sister Rina is vegetarian", entity: "person:rina"}
+      - user: "If I went fully vegan, how would I get enough protein?"
+        assistant: "Lentils, tofu, tempeh, seitan and soy milk cover it; aim for a protein source at every meal."
+      - user: "My friend Tom texted: 'I just moved to Denver and I already hate the snow.' What should I reply?"
+        assistant: "Something like: 'Welcome to winter! Want me to send you a care package of hot sauce?'"
+
+  - id: s03
+    date: 2026-03-30T18:05
+    turns:
+      - user: "Correction: Ada is 7 now, her birthday was last week on March 24."
+        assistant: "Happy belated birthday to Ada! I'll remember she's 7."
+        extract:
+          - {op: update, update_of: "daughter Ada is 6", category: fact, content: "User's daughter Ada is 7; her birthday is March 24", entity: "person:ada"}
+      - user: "Remind me that Ada's school play is on May 14 at 6pm."
+        assistant: "I'll remind you about Ada's school play on May 14 at 6pm."
+        remember:
+          - {fact: "Ada's school play is on May 14 at 6pm", category: reminder, due_at: "2026-05-14T18:00"}
+      - user: "Also we're going camping the first weekend of May."
+        assistant: "Camping in early May. Want a make-ahead meal list?"
+        extract:
+          - {op: add, category: fact, content: "User's family is going camping the first weekend of May"}
+
+  - id: s04
+    date: 2026-04-15T19:30
+    turns:
+      - user: "Great news, the allergist says I've outgrown my peanut allergy and I can eat peanuts again."
+        assistant: "That's great news! Peanuts are back on the menu for you."
+        extract:
+          - {op: update, update_of: "allergic to peanuts", category: fact, content: "User outgrew their peanut allergy in April 2026 and can eat peanuts"}
+      - user: "The pediatrician says Leo isn't lactose intolerant after all, it's a milk protein allergy, so no dairy at all, not even lactose-free milk."
+        assistant: "Understood: strictly dairy-free for Leo, including lactose-free products."
+        extract:
+          - {op: update, update_of: "Leo is 4 and lactose intolerant", category: fact, content: "User's son Leo has a milk protein allergy and must avoid all dairy, including lactose-free products", entity: "person:leo"}
+      - user: "Peanut noodles for dinner tonight then! Recipe please."
+        assistant: "Peanut noodles: rice noodles, peanut butter, soy, lime, garlic, chili. Use oil instead of butter for Leo."
+
+  - id: s05
+    date: 2026-05-02T12:00
+    turns:
+      - user: "I've stopped eating meat, but I still eat fish, so I'm pescatarian now."
+        assistant: "Pescatarian it is. I'll plan around fish and vegetables for you."
+        extract:
+          - {op: add, category: preference, content: "User is pescatarian: no meat, but eats fish"}
+      - user: "The kids still eat chicken though, so dinners need both options."
+        assistant: "Dinners with a fish or veggie option for you and chicken for the kids."
+        extract:
+          - {op: add, category: preference, content: "User's kids still eat chicken, so family dinners need both options"}
+      - user: "Plan the camping meals for this weekend."
+        assistant: "Grilled salmon packets, chicken skewers for the kids, foil potatoes, and fruit."
+
+consolidation:
+  s01:
+    summary: "Sam cooks for the family. Sam is allergic to peanuts; Leo, 4, is lactose intolerant; Ada, 6, won't eat mushrooms."
+    knowledge:
+      - {category: preference, content: "User is allergic to peanuts and wants recipes without them"}
+      - {category: fact, content: "User's daughter Ada is 6"}
+      - {category: fact, content: "User's son Leo is lactose intolerant"}
+  s02:
+    summary: "Sam planned meals for a visit from vegetarian sister Rina and asked about vegan protein."
+    knowledge: []
+  s03:
+    summary: "Ada turned 7 on March 24; her school play is May 14; the family is camping in early May."
+    knowledge: []
+
+probes:
+  - id: plan_dinners
+    at: end
+    kind: changed_fact
+    query: "Plan this week's family dinners for me."
+    seen: [pescatarian, [milk protein, all dairy]]
+    unseen: ["allergic to peanuts and wants", "lactose intolerant"]
+    mentions: [[fish, salmon, pescatarian, seafood]]
+    avoids: [peanut-free, "no peanuts"]
+
+  - id: ada_age
+    at: end
+    kind: changed_fact
+    query: "What's a good birthday present for Ada this year?"
+    seen: ["Ada is 7"]
+    unseen: ["Ada is 6"]
+
+  - id: no_stale_family_rows
+    at: end
+    kind: changed_fact
+    stored: ["Ada is 7", "milk protein", "outgrew"]
+    not_stored: ["daughter Ada is 6", "Leo is lactose intolerant", "Leo is 4 and lactose", "allergic to peanuts and wants"]
+
+  - id: not_the_users_diet
+    at: end
+    kind: attribution
+    not_stored: ["^User is vegetarian", "^User is vegan", "user .*(went|is going) vegan", "Denver", "hate the snow"]
+
+  - id: sister_is_vegetarian
+    at: end
+    kind: relationship
+    query: "My sister is coming for dinner again, ideas?"
+    seen: [[Rina, vegetarian]]
+
+  - id: school_play
+    at: s05
+    kind: reminder
+    query: "What's coming up for the kids?"
+    seen: [school play]

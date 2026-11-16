@@ -5,7 +5,7 @@
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from gaia.version import __version__ as _gaia_version
 
@@ -54,6 +54,9 @@ class SystemStatus(BaseModel):
     # Present when the Lemonade health/catalog query failed. This distinguishes
     # an unavailable server from a probe failure without inventing a verdict.
     lemonade_error: Optional[str] = None
+    # How the Lemonade probe ended: "ok", "down" (nothing answered the
+    # connection), "timed_out" (connected, no answer in time) or "error".
+    lemonade_probe: Optional[Literal["ok", "down", "timed_out", "error"]] = None
     model_loaded: Optional[str] = None
     embedding_model_loaded: bool = False
     disk_space_gb: float = 0.0
@@ -63,6 +66,8 @@ class SystemStatus(BaseModel):
     # any agent declaring ``min_memory_gb > 0`` would appear to be over budget.
     memory_available_gb: Optional[float] = None
     initialized: bool = False
+    # Why the desktop app's first-run ``gaia init`` failed; None when it did not.
+    setup_error: Optional[str] = None
     # A factory keeps the version out of the exported schema, which RC builds restamp.
     version: str = Field(default_factory=lambda: _gaia_version)
     # How to start Lemonade ON THIS HOST, resolved server-side by
@@ -73,7 +78,8 @@ class SystemStatus(BaseModel):
     # banner long after it stopped existing. ``start_command`` is None on hosts
     # requiring GUI/manual configuration, including service context changes,
     # and on Windows when Command Prompt and PowerShell need different lines.
-    # In those cases start_instruction carries the necessary steps.
+    # In those cases start_instruction carries the necessary steps. Both are
+    # None for GAIA's own server, which GAIA starts by itself.
     start_instruction: Optional[str] = None
     start_command: Optional[str] = None
     # Extended Lemonade info (settings modal)
@@ -103,7 +109,8 @@ class SystemStatus(BaseModel):
     # remnant from when the default was Qwen3.5-35B).
     default_model_size_gb: Optional[float] = None
     # Lemonade web UI origin; resolved per response (GAIA's server picks its port).
-    lemonade_url: str = Field(default_factory=_lemonade_web_origin)
+    # None when an unreadable config hides which server (``config_error`` says why).
+    lemonade_url: Optional[str] = Field(default_factory=_lemonade_web_origin)
     expected_model_loaded: bool = True  # False if a different model is loaded
     # Live download progress for ``default_model_name`` (or whatever is
     # currently being pulled). ``None`` when no pull is in flight.
@@ -111,6 +118,8 @@ class SystemStatus(BaseModel):
     # Boot-time initialization tracking (populated from DispatchQueue)
     init_state: str = "ready"  # "initializing" | "ready" | "degraded"
     init_tasks: List["InitTaskInfo"] = Field(default_factory=list)
+    # Priming of a new chat's prompt prefix; never blocks sending.
+    warm_up: Optional["WarmUpStatus"] = None
     # Multi-device support (issue #1220): hardware devices detected on this host.
     # Populated from Lemonade ``/system-info``. The frontend uses this to filter
     # which device options to show in the per-agent device dropdown.
@@ -123,31 +132,164 @@ class SystemStatus(BaseModel):
     # One message per status probe that failed (catalog, stats, device info,
     # disk space); the matching fields keep their "unknown" defaults.
     probe_warnings: List[str] = Field(default_factory=list)
+    # The folder that holds the chat database; None for an in-memory one.
+    data_dir: Optional[str] = None
+
+
+class LoadedModelInfo(BaseModel):
+    """One model Lemonade has loaded, as the Model server panel shows it."""
+
+    name: Optional[str] = None
+    model_type: Optional[str] = None
+    recipe: Optional[str] = None
+    device: Optional[str] = None
+    # vulkan | rocm | metal | cpu | npu | remote; None when Lemonade did not say.
+    backend: Optional[str] = None
+    # requested | launch | lemonade_default; None for remote/NPU/unknown.
+    backend_source: Optional[str] = None
+    ctx_size: Optional[int] = None
+
+
+class BackendOption(BaseModel):
+    """A llama.cpp backend this machine can run, with Lemonade's state for it."""
+
+    name: str
+    state: str  # installed | installable | update_required
+
+
+class ModelServerInfo(BaseModel):
+    """Which Lemonade GAIA talks to and what it runs (Settings → Advanced)."""
+
+    reachable: bool = False
+    # One plain sentence when Lemonade could not be read; None otherwise.
+    error: Optional[str] = None
+    base_url: str
+    port: Optional[int] = None
+    # gaia (GAIA's own embedded server) | user (another local one) | remote
+    owner: str
+    version: Optional[str] = None
+    chat_model: Optional[LoadedModelInfo] = None
+    embedding_model: Optional[LoadedModelInfo] = None
+    # Other loaded models, such as vision, speech, image, and reranking models.
+    loaded_models: List[LoadedModelInfo] = Field(default_factory=list)
+    # One plain sentence when GAIA chose the embedder's backend for a reason.
+    embedding_note: Optional[str] = None
+    default_backend: Optional[str] = None
+    available_backends: List[BackendOption] = Field(default_factory=list)
+    # The saved choice; None means Auto (Lemonade decides).
+    preferred_backend: Optional[str] = None
+    # Set when /system-info could not be read; backends then show as unknown.
+    system_info_error: Optional[str] = None
+
+
+class LogLineInfo(BaseModel):
+    """One redacted log line."""
+
+    text: str
+    # debug | info | warning | error; None for a line naming no level.
+    severity: Optional[str] = None
+    tag: Optional[str] = None
+
+
+class LogReadResponse(BaseModel):
+    """A log's recent lines for the viewer, or a reason code when it can't be read."""
+
+    # Model server only: gaia (GAIA's own) | user (another local one) | remote
+    owner: Optional[str] = None
+    base_url: Optional[str] = None
+    # file | stream; None when nothing was read.
+    source: Optional[str] = None
+    available: bool = False
+    lines: List[LogLineInfo] = Field(default_factory=list)
+    # Pass back as ``after`` for the lines written since.
+    cursor: Optional[str] = None
+    # The log started over since ``after``: replace the lines, don't append.
+    reset: bool = False
+    dropped: int = 0
+    log_path: Optional[str] = None
+    server_answering: Optional[bool] = None
+    # no_file | unreadable | not_running | remote | no_stream | stream_failed
+    reason: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class LogFileInfo(BaseModel):
+    """One log file a source offers."""
+
+    name: str
+    path: str
+    size_bytes: Optional[int] = None
+    modified: Optional[float] = None
+
+
+class LogSourceInfo(BaseModel):
+    """A group of logs: model_server | gaia | service | agent | desktop | other."""
+
+    id: str
+    files: List[LogFileInfo] = Field(default_factory=list)
+
+
+class LogSourcesResponse(BaseModel):
+    sources: List[LogSourceInfo]
+
+
+class ModelServerBackendRequest(BaseModel):
+    """Choose the llama.cpp backend for chat models: ``auto`` or a backend name."""
+
+    backend: str
 
 
 # ── Tasks ──────────────────────────────────────────────────────────────────
+
+
+class WarmUpStatus(BaseModel):
+    """Whether a new chat's first turn will find its prompt already read."""
+
+    state: str  # idle | warming | ready | failed | skipped
+    elapsed_seconds: Optional[float] = None
+    prompt_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    error: Optional[str] = None
+    model: Optional[str] = None  # what the warm-up loads, once resolved
+    device: Optional[str] = None  # npu | gpu | cpu; None when unknown
+
+
+class RunningAnswer(BaseModel):
+    """A chat whose answer is still being written."""
+
+    session_id: str
+    title: Optional[str] = None
+
+
+class RunningIndexJob(BaseModel):
+    """A document still being indexed."""
+
+    document_id: str
+    filename: Optional[str] = None
+
+
+class WorkInProgress(BaseModel):
+    """Work that quitting or unloading the model would cut short."""
+
+    answers: List[RunningAnswer]
+    indexing: List[RunningIndexJob]
+    #: Setup is downloading or checking models; quitting stops it part way.
+    setup: bool = False
+
+
+class UnloadModelResponse(BaseModel):
+    """The model server dropped its models from memory."""
+
+    status: str  # unloaded
 
 
 class InitTaskInfo(BaseModel):
     """Summary of a boot-time initialization task (embedded in SystemStatus)."""
 
     name: str
+    # The UI shows banner.boot.<step> in the user's language, never ``name``.
+    step: Optional[str] = None
     status: str  # pending | running | done | failed
-
-
-class TaskResponse(BaseModel):
-    """A single background task visible to the frontend."""
-
-    id: str
-    name: str
-    status: str  # pending | running | done | failed
-    error: Optional[str] = None
-
-
-class TaskListResponse(BaseModel):
-    """List of background tasks."""
-
-    tasks: List[TaskResponse]
 
 
 # ── Settings ────────────────────────────────────────────────────────────────
@@ -159,6 +301,20 @@ class ModelStatus(BaseModel):
     found: bool = False
     downloaded: bool = False
     loaded: bool = False
+    #: The model list was read, so ``found`` False means the id isn't in it.
+    checked: bool = False
+
+
+class PolicyNotice(BaseModel):
+    """Structured Local only notice translated by the Agent UI."""
+
+    code: str
+    severity: Literal["info", "warning"]
+    url: Optional[str] = None
+    reason: Optional[str] = None
+    # "model_server_down" when nothing answered; the UI words that itself.
+    cause: Optional[str] = None
+    models: Optional[List[str]] = None
 
 
 class SettingsResponse(BaseModel):
@@ -169,15 +325,22 @@ class SettingsResponse(BaseModel):
     context_size: Optional[int] = (
         None  # Persisted ctx_size override; None = use default
     )
-    # "manual" | "goal_driven". "autonomous" is unshipped (#2005) and rejected
-    # on write; legacy-stored values are reported as "goal_driven".
+    # "manual" | "goal_driven". "autonomous" is unshipped (#2005), rejected on
+    # write, and migrated to "goal_driven" when the database opens.
     agent_mode: str = "goal_driven"
-    # Beta dynamic tool loader (#1798). Effective value: env override
-    # (GAIA_DYNAMIC_TOOLS) wins when set, else the persisted setting.
+    # Dynamic tool loading. Effective value: env override
+    # (GAIA_DYNAMIC_TOOLS) wins when set, else ~/.gaia/config.json.
     dynamic_tools: bool = False
     # True when GAIA_DYNAMIC_TOOLS is set ⇒ the env wins ⇒ the UI toggle
     # reflects the effective value and disables (no silent no-op).
     dynamic_tools_locked: bool = False
+    # The shared policy file, not the Agent UI database. Local only clears
+    # saved cloud selections and removes runtime cloud keys when it is enabled.
+    network_policy: Literal["cloud_allowed", "local_ai_only"] = "cloud_allowed"
+    policy_warnings: List[str] = Field(default_factory=list)
+    # Structured informational or warning notices for the Agent UI; the UI
+    # translates these rather than rendering backend prose verbatim.
+    policy_notices: List[PolicyNotice] = Field(default_factory=list)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -185,12 +348,24 @@ class SettingsUpdateRequest(BaseModel):
 
     custom_model: Optional[str] = Field(
         None,
+        max_length=256,
         description=(
             "HuggingFace model ID to use instead of the default model. "
             "Example: huihui-ai/Huihui-Qwen3.5-35B-A3B-abliterated. "
             "Set to empty string or null to clear the override."
         ),
     )
+
+    @field_validator("custom_model")
+    @classmethod
+    def _one_line_model_id(cls, value: Optional[str]) -> Optional[str]:
+        # It is sent to the model server and logged on every turn.
+        if value and any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise ValueError(
+                "A model ID is a single line: remove the line break or control character."
+            )
+        return value
+
     context_size: Optional[int] = Field(
         None,
         description=(
@@ -212,10 +387,19 @@ class SettingsUpdateRequest(BaseModel):
     dynamic_tools: Optional[bool] = Field(
         None,
         description=(
-            "Beta: enable the semantic dynamic tool loader (#1798), which trims "
-            "each turn's tool prompt to a matched subset to cut first-turn TTFT. "
-            "Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. "
-            "Omit the field to leave the persisted value unchanged."
+            "Dynamic tool loading: send the tool list in short form and full "
+            "docs only as needed, to cut first-turn TTFT without breaking the "
+            "prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides "
+            "this at runtime when set. Omit the field to leave the persisted "
+            "value unchanged."
+        ),
+    )
+    network_policy: Optional[Literal["cloud_allowed", "local_ai_only"]] = Field(
+        None,
+        description=(
+            "Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud "
+            "models, clears saved cloud model choices, and removes cloud keys from "
+            "GAIA's running Lemonade server. Omit to leave the policy unchanged."
         ),
     )
 
@@ -252,7 +436,7 @@ class AgentInfo(BaseModel):
     # agents use ``custom:<sha256-prefix>:<id>``. The CLI and UI consent
     # dialog use this when calling ``grant_agent`` / ``revoke_agent_grant``.
     namespaced_agent_id: str = ""
-    # Agent Hub metadata — used by the frontend to render rich discovery cards.
+    # Display metadata in the /api/agents contract; the Agent UI renders none of it.
     category: str = "general"
     tags: List[str] = Field(default_factory=list)
     icon: str = ""  # lucide icon name
@@ -277,11 +461,14 @@ class AgentListResponse(BaseModel):
 
 # ── Sessions ────────────────────────────────────────────────────────────────
 
+#: Longest chat title the API accepts; the webui caps its rename box to match.
+MAX_SESSION_TITLE_CHARS = 200
+
 
 class CreateSessionRequest(BaseModel):
     """Request to create a new chat session."""
 
-    title: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=MAX_SESSION_TITLE_CHARS)
     model: Optional[str] = None
     system_prompt: Optional[str] = None
     document_ids: List[str] = Field(default_factory=list)
@@ -291,12 +478,14 @@ class CreateSessionRequest(BaseModel):
     # Mailbox provider for email-backed agents. Gmail by default; "microsoft"
     # routes the email agent to the Outlook backend (see EmailAgentConfig).
     mail_provider: Optional[str] = Field(None, pattern=r"^(google|microsoft)$")
+    # Folders the chat may read and write from its first message.
+    folders: List[str] = Field(default_factory=list)
 
 
 class UpdateSessionRequest(BaseModel):
     """Request to update a session."""
 
-    title: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=MAX_SESSION_TITLE_CHARS)
     # Pin state for the title (#2165). Omitted + title set → the server pins
     # (a rename is explicit). The webui's client-side auto-title sends False
     # so the server-side LLM titler can still improve the title later.
@@ -336,6 +525,20 @@ class SessionResponse(BaseModel):
     inference_provider: Optional[str] = None
     inference_provider_name: Optional[str] = None
     inference_description: Optional[str] = None
+    # The chat list as a queue (#5221).
+    pinned: bool = False
+    # A turn finished since the user last opened the chat.
+    unread: bool = False
+    # How the last turn ended: "done", "failed" or "stopped"; None before any.
+    last_run_status: Optional[str] = None
+    # "chat" for a person's chats; "eval" and "scheduled" are hidden by default.
+    kind: str = "chat"
+
+
+class SessionPinRequest(BaseModel):
+    """Pin or unpin a chat."""
+
+    pinned: bool
 
 
 class SessionListResponse(BaseModel):
@@ -343,6 +546,32 @@ class SessionListResponse(BaseModel):
 
     sessions: List[SessionResponse]
     total: int
+
+
+class SearchSnippet(BaseModel):
+    """Text around a search hit, split so the UI can highlight ``match``."""
+
+    before: str
+    match: str
+    after: str
+
+
+class SessionSearchResult(BaseModel):
+    """One chat that matches a search, with where the first hit was."""
+
+    session_id: str
+    title: str
+    field: Literal["title", "message"]
+    snippet: SearchSnippet
+
+
+class SessionSearchResponse(BaseModel):
+    """Chats matching a search query, newest first, at most ``limit``."""
+
+    query: str
+    results: List[SessionSearchResult]
+    #: More chats matched than ``limit``; only the newest are listed.
+    truncated: bool = False
 
 
 # ── Messages ────────────────────────────────────────────────────────────────
@@ -395,12 +624,27 @@ class FileListResponse(BaseModel):
     files: List[Dict[str, Any]] = []
     total: int = 0
 
+    @field_validator("files", mode="before")
+    @classmethod
+    def _names_as_entries(cls, files: Any) -> Any:
+        """``list_files`` reports bare names; keep them as ``{"name": ...}``."""
+        if not isinstance(files, list):
+            return files
+        return [{"name": f} if isinstance(f, str) else f for f in files]
+
+
+class McpOutputResponse(BaseModel):
+    """The text an MCP tool returned, capped for the tool row."""
+
+    text: str = ""
+    truncated: bool = False
+
 
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
     id: int
-    type: str  # 'thinking' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
+    type: str  # 'thinking' | 'commentary' | 'tool' | 'plan' | 'status' | 'error' | 'policy_alert'
     label: str
     detail: Optional[str] = None
     tool: Optional[str] = None
@@ -411,12 +655,24 @@ class AgentStepResponse(BaseModel):
     receiptId: Optional[str] = None
     result: Optional[str] = None
     success: Optional[bool] = None
+    # The user said no to this call; a reload must not show it as failed.
+    declined: Optional[bool] = None
+    # Nobody answered its prompt in time; it never ran either.
+    timedOut: Optional[bool] = None
+    # GAIA turned this call down itself; no prompt was shown, so not the user's no.
+    autoDeclined: Optional[bool] = None
     active: bool = False
     planSteps: Optional[List[str]] = None
+    planNarrations: Optional[List[str]] = None
+    currentStep: Optional[int] = None
+    narration: Optional[str] = None
     timestamp: int = 0
     commandOutput: Optional[CommandOutputResponse] = None
     fileList: Optional[FileListResponse] = None
     mcpServer: Optional[str] = None
+    mcpServerLabel: Optional[str] = None
+    mcpTool: Optional[str] = None
+    mcpOutput: Optional[McpOutputResponse] = None
     latencyMs: Optional[float] = None
     # Render-map card persistence (#2109): populated ONLY when the source
     # tool_result event carried a ``render`` kind (e.g. "email_pre_scan") —
@@ -427,6 +683,21 @@ class AgentStepResponse(BaseModel):
     # card from history.
     render: Optional[str] = None
     data: Optional[Any] = None
+    # A finished status the user waited on (a download); a reopened chat still shows it.
+    kept: Optional[bool] = None
+    # A model the call needed and didn't find; a reopened chat still offers it.
+    needsModel: Optional[str] = None
+
+
+class TurnRouteResponse(BaseModel):
+    """The model a ``hybrid`` turn was routed to, and why."""
+
+    model: str
+    reason: str = ""
+    # True once the classifier has failed several turns in a row.
+    degraded: bool = False
+    # A one-line warning for the user when ``degraded``; empty otherwise.
+    notice: str = ""
 
 
 class InferenceStatsResponse(BaseModel):
@@ -436,6 +707,98 @@ class InferenceStatsResponse(BaseModel):
     time_to_first_token: float = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    # The agent's own step count for the turn, not the number of activity rows.
+    steps: Optional[int] = None
+    # The model that wrote the answer; unset on answers saved before it was recorded.
+    model: Optional[str] = None
+    # Set when the answer was kept from "Retry with…": how long it took, loading included.
+    seconds: Optional[float] = None
+    # True only for an answer kept from "Retry with…".
+    retried: Optional[bool] = None
+    # Where the turn was answered, as the footer says it: "on your GPU", "via Fireworks AI".
+    place: Optional[str] = None
+    # Set on a ``hybrid`` session's turns.
+    route: Optional[TurnRouteResponse] = None
+
+
+class TurnSummaryPage(BaseModel):
+    """A web page the turn read, or a search hit when it read none."""
+
+    url: str
+    title: Optional[str] = None
+    kind: str  # page | search_result
+
+
+class TurnSummaryDocument(BaseModel):
+    """A document the turn's answer drew passages from."""
+
+    name: str
+    path: str
+    pages: List[int] = Field(default_factory=list)
+    passages: int = 0
+
+
+class TurnSummaryFile(BaseModel):
+    """A file the turn created or changed."""
+
+    path: str
+    name: str
+    # False for a script or program, which the default app would run.
+    openable: bool = False
+    # Modification time when the turn ended, to tell a later change or undo.
+    mtime: Optional[float] = None
+
+
+class TurnSummaryOutput(BaseModel):
+    """Something the turn made besides a file: an image, an indexed document,
+    a memory or a scheduled task."""
+
+    kind: str  # image | document | memory | schedule
+    name: str
+    path: Optional[str] = None
+    detail: Optional[str] = None
+    # The memory's id, so the panel can tell whether it was forgotten since.
+    ref: Optional[str] = None
+
+
+class TurnSummaryModel(BaseModel):
+    """Where the turn's model ran."""
+
+    remote: bool
+    provider: str
+    provider_name: str
+    name: str
+
+
+class TurnSummaryLiveData(BaseModel):
+    """How the turn's internet tools fared."""
+
+    attempted: int = 0
+    failed: int = 0
+
+
+class TurnSummaryCost(BaseModel):
+    """What the turn cost."""
+
+    # local | estimate | unknown | unreported (priced, no usage sent) | no_reply
+    kind: str
+    usd: Optional[float] = None
+
+
+class TurnSummaryResponse(BaseModel):
+    """Sources, files and data flow of one turn, for the side rail (#5222)."""
+
+    pages: List[TurnSummaryPage] = Field(default_factory=list)
+    documents: List[TurnSummaryDocument] = Field(default_factory=list)
+    files: List[TurnSummaryFile] = Field(default_factory=list)
+    sites: List[str] = Field(default_factory=list)
+    outputs: List[TurnSummaryOutput] = Field(default_factory=list)
+    live_data: TurnSummaryLiveData = Field(default_factory=TurnSummaryLiveData)
+    cost: TurnSummaryCost
+    # Absent when the turn's model location could not be determined.
+    model: Optional[TurnSummaryModel] = None
+    # Why the summary could not be built; the rest is then empty.
+    error: Optional[str] = None
 
 
 class MessageResponse(BaseModel):
@@ -449,6 +812,11 @@ class MessageResponse(BaseModel):
     rag_sources: Optional[List[SourceInfo]] = None
     agent_steps: Optional[List[AgentStepResponse]] = None
     stats: Optional[InferenceStatsResponse] = None
+    turn_summary: Optional[TurnSummaryResponse] = None
+    # Notices from indexing files into the document library during this turn.
+    library_notices: Optional[List[str]] = None
+    # The user's Stop ended this reply before it finished.
+    stopped: bool = False
 
 
 class MessageListResponse(BaseModel):
@@ -476,6 +844,11 @@ class DocumentResponse(BaseModel):
         "complete"  # pending | indexing | complete | failed | cancelled | missing
     )
     last_error: Optional[str] = None
+    # Set with last_error when retrying can't help until the file is fixed:
+    # "corrupted", "encrypted", "empty" (no extractable text), "empty_file"
+    # (nothing to index) or "unsupported_workbook" (.xls or password-protected).
+    # "model_server_down" / "model_server_busy": the file is fine; retry later.
+    error_kind: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):
@@ -528,6 +901,8 @@ class BrowseResponse(BaseModel):
     parent_path: Optional[str] = None
     entries: List[FileEntry]
     quick_links: List[QuickLink] = Field(default_factory=list)
+    # Why a chat can't be given this folder (home, a drive root, ...); None if it can.
+    folder_refusal: Optional[str] = None
 
 
 # ── Folder Indexing ────────────────────────────────────────────────────────
@@ -545,24 +920,15 @@ class IndexFolderResponse(BaseModel):
 
     indexed: int = 0
     failed: int = 0
+    # Files in the folder that aren't a type GAIA indexes.
+    skipped: int = 0
+    # Images in the folder: GAIA reads them only when picked one by one.
+    skipped_images: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 
 
 # ── File Search & Preview ─────────────────────────────────────────────
-
-
-class FileSearchRequest(BaseModel):
-    """Request to search for files across the filesystem."""
-
-    query: str = Field(..., description="Search pattern (file name or keywords)")
-    file_types: Optional[str] = Field(
-        None, description="Comma-separated extensions to filter (e.g., 'csv,xlsx,pdf')"
-    )
-    locations: Optional[List[str]] = Field(
-        None, description="Specific directories to search in"
-    )
-    max_results: int = Field(default=20, ge=1, le=100)
 
 
 class FileSearchResult(BaseModel):
@@ -592,6 +958,29 @@ class OpenFileRequest(BaseModel):
 
     path: str
     reveal: bool = True
+    # Open the file itself in its default app; documents and images only.
+    launch: bool = False
+
+
+class FileStatusRequest(BaseModel):
+    """Paths whose current state the side rail re-checks."""
+
+    paths: List[str] = Field(..., max_length=50)
+
+
+class FileStatusEntry(BaseModel):
+    """Whether a file exists now, and when it last changed."""
+
+    path: str
+    # None when the path is outside the home folder and was not checked.
+    exists: Optional[bool] = None
+    mtime: Optional[float] = None
+
+
+class FileStatusResponse(BaseModel):
+    """Current state of each requested path, in request order."""
+
+    files: List[FileStatusEntry]
 
 
 class FilePreviewResponse(BaseModel):

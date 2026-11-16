@@ -21,18 +21,16 @@ def sdk(monkeypatch):
     return instance
 
 
-@pytest.mark.parametrize("count", [0, 1, 24, 26])
-def test_short_or_extra_batch_retries_same_batch_then_fails(sdk, count):
+@pytest.mark.parametrize("count", [1, 24, 26])
+def test_short_or_extra_batch_fails_without_resending(sdk, count):
     sdk.embedder.embeddings.return_value = {"data": [{"embedding": [1, 2]}] * count}
     with pytest.raises(RuntimeError, match=f"{count}/25 vectors"):
         sdk._encode_texts([f"chunk {i}" for i in range(25)])
-    assert sdk.embedder.embeddings.call_count == 3
-    assert all(
-        len(call.args[0]) == 25 for call in sdk.embedder.embeddings.call_args_list
-    )
+    assert sdk.embedder.embeddings.call_count == 1
+    assert len(sdk.embedder.embeddings.call_args.args[0]) == 25
 
 
-@pytest.mark.parametrize("vectors", [[[], []], [[1, 2], [1]], [[1, 2], []]])
+@pytest.mark.parametrize("vectors", [[[1, 2], [1]], [[1, 2], []]])
 def test_empty_or_inconsistent_vectors_fail(sdk, vectors):
     sdk.embedder.embeddings.return_value = {"data": [{"embedding": v} for v in vectors]}
     with pytest.raises(RuntimeError, match="empty or inconsistent"):
@@ -53,7 +51,7 @@ def test_multiple_batches_preserve_every_text_position(sdk):
 def test_later_batch_cannot_change_dimension(sdk):
     sdk.embedder.embeddings.side_effect = [
         {"data": [{"embedding": [1, 2]}] * 25},
-        *[{"data": [{"embedding": [1]}]}] * 3,
+        {"data": [{"embedding": [1]}]},
     ]
     with pytest.raises(RuntimeError, match="empty or inconsistent"):
         sdk._encode_texts(["chunk"] * 26)

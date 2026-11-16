@@ -47,16 +47,25 @@ class TestCreateTable:
         assert "sales" in result
         assert "product TEXT, quantity INTEGER" in result
 
-    def test_create_table_sanitizes_name(self, scratchpad):
-        """Name with special characters gets cleaned to alphanumeric + underscore."""
-        result = scratchpad.create_table("my-data!@#table", "value TEXT")
+    def test_create_table_rejects_invalid_name(self, scratchpad):
+        """A name with punctuation is refused, not rewritten, and nothing is created."""
+        with pytest.raises(ValueError, match=r"\[A-Za-z_\]\[A-Za-z0-9_\]\*"):
+            scratchpad.create_table("my-data!@#table", "value TEXT")
 
-        # Special chars replaced with underscores
-        assert "my_data___table" in result
+        assert scratchpad.list_tables() == []
+
+    def test_names_differing_only_by_punctuation_do_not_collide(self, scratchpad):
+        """sales_2025 is created; sales-2025 is rejected instead of merging into it."""
+        scratchpad.create_table("sales_2025", "amount REAL")
+        scratchpad.insert_rows("sales_2025", [{"amount": 1.0}])
+
+        with pytest.raises(ValueError, match="Invalid table name 'sales-2025'"):
+            scratchpad.create_table("sales-2025", "amount REAL")
+        with pytest.raises(ValueError, match="Invalid table name 'sales-2025'"):
+            scratchpad.insert_rows("sales-2025", [{"amount": 2.0}])
 
         tables = scratchpad.list_tables()
-        assert len(tables) == 1
-        assert tables[0]["name"] == "my_data___table"
+        assert [(t["name"], t["rows"]) for t in tables] == [("sales_2025", 1)]
 
     def test_create_table_rejects_empty_columns(self, scratchpad):
         """Raises ValueError when columns string is empty."""
@@ -90,6 +99,36 @@ class TestCreateTable:
         assert isinstance(result, str)
         tables = scratchpad.list_tables()
         assert len(tables) == 1
+
+    def test_create_table_same_columns_says_already_exists(self, scratchpad):
+        """Re-creating with the same columns is a no-op and says so."""
+        first = scratchpad.create_table("dup", "id INTEGER, name TEXT")
+        scratchpad.insert_rows("dup", [{"id": 1, "name": "a"}])
+        second = scratchpad.create_table("dup", "id INTEGER, name TEXT")
+
+        assert "created" in first
+        assert "already exists" in second
+        assert "created" not in second
+        assert scratchpad.query_data("SELECT id FROM scratch_dup") == [{"id": 1}]
+
+    def test_create_table_type_case_and_spacing_ignored(self, scratchpad):
+        """The same types written in another case or spacing are not a conflict."""
+        scratchpad.create_table("dup", "id INTEGER, code VARCHAR(10)")
+        second = scratchpad.create_table("dup", "id integer, code varchar (10)")
+
+        assert "already exists" in second
+
+    def test_create_table_different_columns_refused(self, scratchpad):
+        """Re-creating with other columns raises and leaves the table alone."""
+        scratchpad.create_table("dup", "id INTEGER, name TEXT")
+
+        with pytest.raises(ValueError, match="already exists with different columns"):
+            scratchpad.create_table("dup", "id INTEGER, amount REAL")
+
+        columns = [
+            r["name"] for r in scratchpad.query("PRAGMA table_info(scratch_dup)")
+        ]
+        assert columns == ["id", "name"]
 
 
 # ---------------------------------------------------------------------------
@@ -328,39 +367,57 @@ class TestDropTable:
 # ---------------------------------------------------------------------------
 
 
-class TestSanitizeName:
-    """Tests for _sanitize_name."""
+class TestValidateName:
+    """Tests for _validate_name."""
 
-    def test_sanitize_name_special_chars(self, scratchpad):
-        """Verify _sanitize_name cleans special characters to underscores."""
-        assert scratchpad._sanitize_name("hello-world") == "hello_world"
-        assert scratchpad._sanitize_name("my table!") == "my_table_"
-        assert scratchpad._sanitize_name("test@#$%") == "test____"
+    @pytest.mark.parametrize(
+        "name, suggestion",
+        [
+            ("hello-world", "hello_world"),
+            ("my table!", "my_table_"),
+            ("test@#$%", "test____"),
+            ("123abc", "t_123abc"),
+            ("1-2-3", "t_1_2_3"),
+            ("!", "_"),
+        ],
+    )
+    def test_invalid_names_rejected_with_rule_and_example(
+        self, scratchpad, name, suggestion
+    ):
+        """The error names the allowed characters, the pattern and a valid example."""
+        with pytest.raises(ValueError) as exc:
+            scratchpad._validate_name(name)
+        message = str(exc.value)
+        assert f"Invalid table name {name!r}" in message
+        assert "letters, digits and underscores" in message
+        assert "[A-Za-z_][A-Za-z0-9_]*" in message
+        assert f"For example: '{suggestion}'" in message
+        assert "db_tables" not in message
 
-    def test_sanitize_name_digit_prefix(self, scratchpad):
-        """Name starting with digit gets t_ prefix."""
-        assert scratchpad._sanitize_name("123abc") == "t_123abc"
-        assert scratchpad._sanitize_name("9tables") == "t_9tables"
+    def test_valid_names_unchanged(self, scratchpad):
+        """Valid identifiers pass through exactly as given."""
+        for name in ("my_table", "TestData", "a1b2c3", "_private", "t_123abc"):
+            assert scratchpad._validate_name(name) == name
 
-    def test_sanitize_name_valid_name_unchanged(self, scratchpad):
-        """Valid names with only alphanumerics and underscores pass through."""
-        assert scratchpad._sanitize_name("my_table") == "my_table"
-        assert scratchpad._sanitize_name("TestData") == "TestData"
-        assert scratchpad._sanitize_name("a1b2c3") == "a1b2c3"
-
-    def test_sanitize_name_empty_raises(self, scratchpad):
+    def test_empty_raises(self, scratchpad):
         """Empty or None name raises ValueError."""
         with pytest.raises(ValueError, match="empty"):
-            scratchpad._sanitize_name("")
+            scratchpad._validate_name("")
 
         with pytest.raises(ValueError, match="empty"):
-            scratchpad._sanitize_name(None)
+            scratchpad._validate_name(None)
 
-    def test_sanitize_name_truncates_long_names(self, scratchpad):
-        """Names longer than 64 characters are truncated."""
-        long_name = "a" * 100
-        result = scratchpad._sanitize_name(long_name)
-        assert len(result) == 64
+    def test_long_names_rejected_not_truncated(self, scratchpad):
+        """Truncation would also merge distinct names, so long names are refused."""
+        assert scratchpad._validate_name("a" * 64) == "a" * 64
+        with pytest.raises(ValueError, match="limit is 64"):
+            scratchpad._validate_name("a" * 65)
+
+    def test_table_created_by_old_rewrite_still_reachable(self, scratchpad):
+        """Stored names from the old rewrite (e.g. t_2025) are valid identifiers."""
+        scratchpad.execute("CREATE TABLE scratch_t_2025 (amount REAL)")
+        assert scratchpad.insert_rows("t_2025", [{"amount": 3.0}]) == 1
+        assert scratchpad.drop_table("t_2025") == "Table 't_2025' dropped."
 
 
 # ---------------------------------------------------------------------------
@@ -408,21 +465,27 @@ class TestGetSizeBytes:
     """Tests for get_size_bytes estimation."""
 
     def test_get_size_bytes_empty(self, scratchpad):
-        """Empty scratchpad returns 0 bytes."""
-        assert scratchpad.get_size_bytes() == 0
+        """A fresh scratchpad is a few pages, not zero and not a row estimate."""
+        size = scratchpad.get_size_bytes()
+        assert 0 <= size < 64 * 1024
 
     def test_get_size_bytes_with_data(self, scratchpad):
-        """Scratchpad with data returns nonzero estimate."""
+        """Size is the real database size and grows with the stored data."""
         scratchpad.create_table("sized", "val TEXT")
-        scratchpad.insert_rows(
-            "sized",
-            [{"val": f"row_{i}"} for i in range(10)],
-        )
+        baseline = scratchpad.get_size_bytes()
+        scratchpad.insert_rows("sized", [{"val": "x" * 1000} for _ in range(100)])
 
-        size = scratchpad.get_size_bytes()
-        assert size > 0
-        # 10 rows * 200 bytes estimated = 2000
-        assert size == 10 * 200
+        # 100 KB of text cannot fit in less than 100 KB of pages.
+        assert scratchpad.get_size_bytes() - baseline >= 100 * 1000
+
+    def test_get_size_bytes_excludes_freed_pages(self, scratchpad):
+        """Dropping a table stops its pages counting before any VACUUM."""
+        scratchpad.create_table("sized", "val TEXT")
+        baseline = scratchpad.get_size_bytes()
+        scratchpad.insert_rows("sized", [{"val": "x" * 1000} for _ in range(100)])
+        scratchpad.drop_table("sized")
+
+        assert scratchpad.get_size_bytes() < baseline + 8 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -473,11 +536,11 @@ class TestTotalSizeLimit:
         could accumulate up to 100 tables * 1M rows (≈20 GB) while staying
         under each individual cap. Make the cap real.
         """
-        # Shrink the cap to 1 KB so the test doesn't actually allocate 100 MB.
-        monkeypatch.setattr(scratchpad, "MAX_TOTAL_SIZE_BYTES", 1024)
+        # 1 MB cap; 50 rows of 100 KB is ~5 MB of real data, ~500 times the
+        # old 200-bytes-per-row guess (10 KB).
+        monkeypatch.setattr(scratchpad, "MAX_TOTAL_SIZE_BYTES", 1024 * 1024)
         scratchpad.create_table("big", "val TEXT")
-        # 10 rows * 200 bytes = 2000 bytes > 1024 cap
-        scratchpad.insert_rows("big", [{"val": f"row_{i}"} for i in range(10)])
+        scratchpad.insert_rows("big", [{"val": "x" * 100_000} for _ in range(50)])
 
         # Next insert should be rejected.
         with pytest.raises(ValueError, match="size limit reached"):
@@ -502,9 +565,17 @@ class TestReadOnlyAndFailLoud:
         assert scratchpad.query_data("SELECT val FROM scratch_t") == [{"val": "a"}]
 
     def test_get_size_bytes_does_not_hide_errors(self, scratchpad):
-        with patch.object(scratchpad, "list_tables", side_effect=RuntimeError("io")):
+        with patch.object(scratchpad, "query", side_effect=RuntimeError("io")):
             with pytest.raises(RuntimeError, match="io"):
                 scratchpad.get_size_bytes()
+
+    def test_insert_refused_when_size_check_fails(self, scratchpad):
+        """A failing size check stops the insert instead of waving it through."""
+        scratchpad.create_table("t", "val TEXT")
+        with patch.object(scratchpad, "get_size_bytes", side_effect=RuntimeError("io")):
+            with pytest.raises(RuntimeError, match="io"):
+                scratchpad.insert_rows("t", [{"val": "a"}])
+        assert scratchpad.query_data("SELECT val FROM scratch_t") == []
 
 
 class TestOpenOrRebuild:

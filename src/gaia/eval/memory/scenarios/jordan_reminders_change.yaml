@@ -1,0 +1,104 @@
+# Six weeks of someone using GAIA as their memory for appointments: things get
+# rescheduled, cancelled, done, and mentioned in passing without "remind me".
+# What must hold: the agent is shown the date that is true now, never a
+# cancelled or superseded one, and a dated plan the user mentions in passing
+# keeps its date.
+id: jordan_reminders_change
+title: Appointments that move, get cancelled and get done
+persona: Jordan, freelance designer juggling appointments
+end: 2026-05-08T08:00
+
+sessions:
+  - id: s01
+    date: 2026-04-01T09:00
+    turns:
+      - user: "Remind me I have a dentist appointment on April 22 at 3pm."
+        assistant: "I'll remind you about the dentist on April 22 at 3pm."
+        remember:
+          - {fact: "Dentist appointment on April 22 at 3pm", category: reminder, due_at: "2026-04-22T15:00"}
+      - user: "And my car insurance renewal is due April 30."
+        assistant: "Car insurance renewal, April 30. Got it."
+        remember:
+          - {fact: "Car insurance renewal due April 30", category: reminder, due_at: "2026-04-30"}
+      - user: "I'm a freelance designer, so mornings are for client work; keep appointments to afternoons."
+        assistant: "Afternoons for appointments from now on."
+        extract:
+          - {op: add, category: preference, content: "User is a freelance designer and wants appointments in the afternoon; mornings are for client work"}
+
+  - id: s02
+    date: 2026-04-08T14:30
+    turns:
+      - user: "The dentist moved my appointment to April 27 at 2pm."
+        assistant: "Updated: dentist on April 27 at 2pm."
+        update:
+          - {match: "Dentist appointment", content: "Dentist appointment on April 27 at 2pm", due_at: "2026-04-27T14:00"}
+      - user: "I'm pitching to Lumen Studio on April 16 at 1pm, I need to prepare the deck before then."
+        assistant: "Good luck with Lumen Studio! Want a prep checklist for the deck?"
+        extract:
+          # Mentioned in passing, no "remind me": a dated plan the extractor files itself.
+          - {op: add, category: reminder, content: "User is pitching to Lumen Studio on April 16 at 1pm", due_at: "2026-04-16T13:00"}
+      - user: "Yes, the checklist please, the deck is about their rebrand."
+        assistant: "Checklist: brand audit, three concepts, timeline, budget, case studies."
+
+  - id: s03
+    date: 2026-04-17T16:00
+    turns:
+      - user: "The pitch went well! They want a second meeting on May 12 at 2pm."
+        assistant: "Congratulations! Second meeting with Lumen Studio, May 12 at 2pm."
+        extract:
+          - {op: update, update_of: "pitching to Lumen Studio", category: reminder, content: "User has a second meeting with Lumen Studio on May 12 at 2pm", due_at: "2026-05-12T14:00"}
+      - user: "Cancel the car insurance reminder, I switched to a policy that renews automatically."
+        assistant: "Removed the insurance reminder."
+        forget: ["Car insurance renewal"]
+
+  - id: s04
+    date: 2026-04-28T10:00
+    turns:
+      - user: "Went to the dentist yesterday, all good, next checkup in six months."
+        assistant: "Glad it went well. Want a reminder for late October?"
+        forget: ["Dentist appointment"]
+      - user: "Yes, remind me to book the dentist checkup around October 27."
+        assistant: "I'll remind you to book the checkup around October 27."
+        remember:
+          - {fact: "Book a dentist checkup around October 27", category: reminder, due_at: "2026-10-27"}
+
+probes:
+  - id: dentist_rescheduled
+    at: s02
+    kind: reminder
+    query: "What do I have coming up?"
+    seen: [April 27]
+    unseen: [April 22]
+
+  - id: pitch_has_a_date
+    at: s02
+    kind: reminder
+    query: "What do I have coming up?"
+    seen: [Lumen Studio]
+
+  - id: second_meeting
+    at: end
+    kind: changed_fact
+    query: "What's next with Lumen Studio?"
+    seen: [May 12]
+    unseen: [April 16]
+
+  - id: cancelled_insurance
+    at: end
+    kind: forgotten
+    query: "Anything due soon?"
+    unseen: [insurance]
+    not_stored: [insurance]
+
+  - id: dentist_done
+    at: end
+    kind: changed_fact
+    query: "When is my next dentist visit?"
+    seen: [October 27]
+    unseen: [April 27, April 22]
+
+  - id: afternoons
+    at: end
+    kind: preference
+    query: "Book me a haircut this week."
+    seen: [afternoon]

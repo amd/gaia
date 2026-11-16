@@ -11,6 +11,7 @@ shown, what the session store writes, and which calls need a human.
 from __future__ import annotations
 
 import json
+import socket
 from unittest.mock import patch
 
 import pytest
@@ -414,7 +415,16 @@ def test_the_browser_refuses_addresses_off_the_public_internet(url, monkeypatch)
 
 def test_public_urls_pass(monkeypatch):
     monkeypatch.delenv("GAIA_BROWSER_ALLOW_PRIVATE", raising=False)
+    looked_up = []
+
+    def public_dns(host, *args, **kwargs):
+        looked_up.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", 0))]
+
+    # A unit test must not depend on the runner's DNS.
+    monkeypatch.setattr("gaia.web.client.socket.getaddrinfo", public_dns)
     assert BrowserUseToolsMixin._check_navigable("https://example.com") is None
+    assert looked_up == ["example.com"]
 
 
 def test_local_addresses_need_an_explicit_opt_in(monkeypatch):
@@ -512,3 +522,26 @@ def test_an_unknown_ref_falls_through_to_session_rules():
     a = _Agent()
     a._browser_last_elements = {}
     assert a.browser_call_needs_confirmation("browser_click", {"ref": "g1e9"}) is False
+
+
+# --- saved sign-in lookup ---------------------------------------------------
+
+
+def test_a_site_with_a_session_this_run_is_reported_signed_in():
+    a = _Agent()
+    a._authenticated_origins().add("https://bank.example")
+    assert a.browser_origin_is_authenticated("https://bank.example/accounts") is True
+    assert a.browser_origin_is_authenticated("https://other.example") is False
+
+
+def test_a_string_that_is_not_a_site_has_no_session():
+    assert _Agent().browser_origin_is_authenticated("not a url") is False
+
+
+def test_an_unexpected_lookup_failure_is_not_read_as_signed_out(monkeypatch):
+    def _broken(url):
+        raise RuntimeError("session store is broken")
+
+    monkeypatch.setattr(session_store, "origin_of", _broken)
+    with pytest.raises(RuntimeError, match="session store is broken"):
+        _Agent().browser_origin_is_authenticated("https://bank.example")

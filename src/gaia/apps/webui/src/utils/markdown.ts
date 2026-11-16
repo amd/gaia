@@ -18,7 +18,8 @@
 //   * No raw HTML pass-through (no `rehype-raw`).
 //   * `<script> <iframe> <object> <embed> <style>` are stripped if they
 //     somehow appear in the AST.
-//   * Anchor `href` values resolve only to `https:`, `http:`, or `mailto:`.
+//   * Anchor `href` values resolve only to `https:`, `http:`, or `mailto:`,
+//     plus the backend's own chat-upload URLs (`/api/files/uploads/<file>`).
 //     Anything else (including `javascript:`, `data:`, `vbscript:`) becomes
 //     an empty string so React renders the anchor as an inert
 //     `<a href="">` rather than a navigatable link.
@@ -28,6 +29,8 @@
 // LLM-generated content drive `<SafeMarkdown>` directly without an
 // additional review pass.
 
+import { getApiBase } from './apiBase';
+
 export const SAFE_DISALLOWED_ELEMENTS: ReadonlyArray<string> = [
     'script',
     'iframe',
@@ -36,22 +39,64 @@ export const SAFE_DISALLOWED_ELEMENTS: ReadonlyArray<string> = [
     'style',
 ] as const;
 
+/** A chat attachment the composer linked: one plain file name, no path. */
+const UPLOAD_URL_RE = /^\/api\/files\/uploads\/([A-Za-z0-9][A-Za-z0-9._-]*)$/;
+
+/** One attachment link the composer appends to a sent message. */
+export interface AttachmentLink {
+    name: string;
+    markdown: string;
+}
+
+const ATTACHMENT_LINE_RE = /^!?\[([^\]\n]*)\]\(\/api\/files\/uploads\/[A-Za-z0-9][A-Za-z0-9._-]*\)$/;
+
+/**
+ * Splits a sent message into the typed text and the attachment links the
+ * composer wrote after it (`text`, a blank line, then one link per line).
+ */
+export function splitAttachmentLinks(content: string): { text: string; links: AttachmentLink[] } {
+    const lines = content.split('\n');
+    let start = lines.length;
+    while (start > 0 && ATTACHMENT_LINE_RE.test(lines[start - 1])) start--;
+    if (start === lines.length || (start > 0 && lines[start - 1] !== '')) return { text: content, links: [] };
+    const links = lines.slice(start).map((line) => {
+        const m = ATTACHMENT_LINE_RE.exec(line)!;
+        return { name: m[1], markdown: line };
+    });
+    return { text: lines.slice(0, Math.max(0, start - 1)).join('\n'), links };
+}
+
+/** Puts attachment links back after edited text, the way the composer wrote them. */
+export function joinAttachmentLinks(text: string, links: AttachmentLink[]): string {
+    if (links.length === 0) return text;
+    const block = links.map((l) => l.markdown).join('\n');
+    return text ? `${text}\n\n${block}` : block;
+}
+
 /**
  * URL transformer for ReactMarkdown's `urlTransform` prop.
  * Returns the URL untouched if its scheme is in the allow list, otherwise
  * returns an empty string (renders an inert anchor).
  *
- * Schemes are matched case-insensitively. Only fragment-only URLs (`#anchor`)
- * pass through without a scheme: the renderer is loaded from `file://`, so a
- * root-relative (`/Windows/System32/calc.exe`), UNC (`//host/share/x.exe`) or
- * plain relative href resolves to a `file:` URL that the shell would hand to
+ * Schemes are matched case-insensitively. Apart from the upload links below,
+ * only fragment-only URLs (`#anchor`) pass through without a scheme: the
+ * renderer is loaded from `file://`, so a root-relative
+ * (`/Windows/System32/calc.exe`), UNC (`//host/share/x.exe`) or plain
+ * relative href resolves to a `file:` URL that the shell would hand to
  * ShellExecute. Those are inert here.
+ *
+ * The one scheme-less exception is a chat attachment the composer linked:
+ * `/api/files/uploads/<file>`, where `<file>` is a single plain file name.
+ * It is pointed at the backend (`getApiBase()`), never at `file://`.
  */
 export function safeUrlTransform(url: string): string {
     if (!url) return '';
 
-    // Allow same-page anchors only.
+    // Same-page anchors.
     if (url.startsWith('#')) return url;
+
+    const upload = UPLOAD_URL_RE.exec(url);
+    if (upload) return `${getApiBase()}/files/uploads/${upload[1]}`;
 
     // Extract scheme (case-insensitive). RFC 3986: scheme = ALPHA *(ALPHA / DIGIT / "+" / "-" / ".")
     const colonIdx = url.indexOf(':');

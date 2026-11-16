@@ -15,9 +15,11 @@ file is never clobbered).
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets
 import socket
+import sys
 import time
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -90,7 +92,9 @@ def _load_extra_specs() -> dict:
     return specs
 
 
-def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=None):
+def _build_registry(
+    specs, forwarder, *, custody_auth=None, custody_base_url=None, keychain_auth=None
+):
     """The daemon's sidecar registry, wired to the crash-reap ledger and the
     OAuth forward-out on-spawn push (#2154).
 
@@ -127,6 +131,7 @@ def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=Non
         on_started=_on_started,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
+        keychain_auth=keychain_auth,
     )
 
 
@@ -142,14 +147,29 @@ def _build_clock(
     oversight — reconciling jobs before an executor exists would permanently
     fail-mark every one of them on first fire.
     """
-    return DaemonClock(db_path, executors=executors or {})
+    from gaia.automations.daemon_tick import AutomationsTick
+
+    # GAIA automations keep their own store; the clock only gives them a pass.
+    return DaemonClock(db_path, executors=executors or {}, on_pass=[AutomationsTick()])
 
 
 def _build_register(
-    *, specs, pid, port, token, host, started_at, refresher, clock, lemonade_owner
+    *,
+    specs,
+    pid,
+    port,
+    token,
+    host,
+    started_at,
+    refresher,
+    clock,
+    lemonade_owner,
+    lemonade_clients,
+    lifetime=None,
 ) -> Callable[[], None]:
     """The daemon's ``on_startup`` hook: reap stale sidecars, publish
-    instance.json, then start the connector-token refresher and the job clock.
+    instance.json, then start the connector-token refresher, the job clock and
+    the *lifetime* watch.
 
     Crash-safety (#2379): ``app.py``'s lifespan calls ``on_startup()`` OUTSIDE
     its ``try``/``finally``, so if this raises, ``on_shutdown`` (the
@@ -169,31 +189,52 @@ def _build_register(
         killed = ledger.reap_stale(specs)
         if killed:
             logger.info("daemon: reaped stale sidecar pids %s", killed)
+        from gaia import version
+
         write_instance(
             DaemonInstance(
-                pid=pid, port=port, token=token, host=host, started_at=started_at
+                pid=pid,
+                port=port,
+                token=token,
+                host=host,
+                started_at=started_at,
+                gaia_version=version.__version__,
+                version_file=os.path.abspath(version.__file__),
             )
         )
         try:
             refresher.start()
             clock.start()
+            if lifetime is not None:
+                lifetime.start()
         except Exception:
             logger.exception(
                 "daemon: startup failed after instance.json was written; "
                 "rolling back registration"
             )
             refresher.stop()
+            clock.stop()
             remove_instance(only_pid=pid)
             raise
         logger.info("daemon: registered instance pid=%s port=%s", pid, port)
         # Up by the time anything needs a model, without delaying registration.
         lemonade_owner.ensure_in_background()
+        lemonade_clients.start()
 
     return _register
 
 
 def _build_deregister(
-    *, registry, custody_store, pid, refresher, clock, lemonade, lemonade_owner
+    *,
+    registry,
+    custody_store,
+    pid,
+    refresher,
+    clock,
+    lemonade,
+    lemonade_owner,
+    lemonade_clients,
+    lifetime=None,
 ) -> Callable[[], None]:
     """The daemon's ``on_shutdown`` hook: stop the refresher and the clock
     BEFORE tearing down sidecars, so neither races a sidecar mid-teardown, and
@@ -201,14 +242,17 @@ def _build_deregister(
     from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
 
     def _deregister() -> None:
+        if lifetime is not None:
+            lifetime.stop()
+        lemonade_clients.stop()
         refresher.stop()
         clock.stop()
         registry.shutdown_all()
         # After the sidecars, never before: an agent mid-teardown may still be
         # finishing a model call, and pulling the server out from under it
         # would turn a clean shutdown into a wave of connection errors in the
-        # logs. Only a server THIS daemon started is reaped — one the user
-        # launched from the tray is left running.
+        # logs. The supervisor reaps only a system server THIS daemon started;
+        # GAIA's own embedded server is stopped whoever started it.
         lemonade.shutdown()
         install_supervisor(None)
         try:
@@ -223,19 +267,48 @@ def _build_deregister(
     return _deregister
 
 
+def _keychain_auth():
+    """The /host/v1/keychain credential store, or ``None`` off macOS.
+
+    Only macOS ties keychain approval to the build asking; elsewhere the
+    sidecar keeps reading the OS store itself and the routes are not mounted.
+    """
+    if sys.platform != "darwin":
+        return None
+    from gaia.daemon.custody.auth import CustodyAuth
+
+    return CustodyAuth()
+
+
 def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
+    from gaia.logger import configure
+
+    configure()
     import uvicorn
 
+    from gaia.login_path import apply_login_path
     from gaia.tls import use_os_trust_store
 
     use_os_trust_store()
+    apply_login_path()
 
     from gaia.daemon.custody.auth import CustodyAuth
     from gaia.daemon.custody.store import CustodyStore
+    from gaia.daemon.lifetime import (
+        DaemonIdle,
+        LifetimeWatch,
+        app_path_from_env,
+        exit_with_pid_from_env,
+        idle_exit_seconds_from_env,
+    )
     from gaia.daemon.migrate import run_migrations
     from gaia.daemon.paths import custody_db_path, scheduler_db_path
     from gaia.daemon.sidecars.spec import builtin_specs
+
+    exit_with_pid = exit_with_pid_from_env()
+    app_path = app_path_from_env()
+    idle_limit = idle_exit_seconds_from_env()
 
     # One-time versioned state migration (§0.10 step 0). Runs before the port is
     # bound so a corrupt/unknown-newer custody schema refuses loudly (MigrationError
@@ -256,6 +329,7 @@ def run(host: str = HOST) -> None:
     # callback URL is the daemon's own loopback address.
     custody_store = CustodyStore(custody_db_path())
     custody_auth = CustodyAuth()
+    keychain_auth = _keychain_auth()
     custody_base_url = f"http://{host}:{port}"
 
     specs = {**builtin_specs(), **_load_extra_specs()}
@@ -265,6 +339,7 @@ def run(host: str = HOST) -> None:
         forwarder,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
+        keychain_auth=keychain_auth,
     )
 
     from gaia.daemon.forward_refresh import ForwardRefresher
@@ -296,7 +371,15 @@ def run(host: str = HOST) -> None:
     # daemon starts at boot and stops at shutdown.
     from gaia.daemon.lemonade import EmbeddedLemonadeOwner
 
-    lemonade_owner = EmbeddedLemonadeOwner()
+    lemonade_owner = EmbeddedLemonadeOwner(owner_pid=pid)
+
+    # The front ends using it: unload its models when the last app closes, and
+    # stop it after the configured idle time with nobody connected.
+    from gaia.daemon.lemonade_clients import LemonadeClients
+
+    lemonade_clients = LemonadeClients(
+        lemonade_owner, busy=lambda: bool(registry.running_connections())
+    )
 
     # The machine's model server. The daemon owns the process: front-ends ask
     # for it over /daemon/v1/lemonade/start and never spawn one, which is what
@@ -308,6 +391,35 @@ def run(host: str = HOST) -> None:
     lemonade = LemonadeSupervisor(embedded=lemonade_owner)
     install_supervisor(lemonade)
 
+    def _exit_on_own(_reason: str) -> None:
+        server.should_exit = True
+
+    def _slots_idle() -> Optional[float]:
+        slots = broker.snapshot()
+        if slots["active"] is not None or slots["waiting"]:
+            return None
+        ago = slots["last_activity_s_ago"]
+        return math.inf if ago is None else ago
+
+    idle = DaemonIdle(
+        clients_idle=lambda: lemonade_clients.snapshot()["idle_seconds"],
+        slots_idle=_slots_idle,
+        jobs_pending=lambda: bool(clock.job_counts()["pending"]),
+        limit=idle_limit,
+    )
+
+    # Exit once nothing can find this daemon (its home or instance.json is
+    # gone), the GAIA_DAEMON_EXIT_WITH_PID process has exited, the app that
+    # started it was deleted, or, outside the default home, nothing has used it
+    # for the idle limit.
+    lifetime = LifetimeWatch(
+        _exit_on_own,
+        exit_with_pid=exit_with_pid,
+        idle=idle,
+        idle_limit=idle_limit,
+        app_path=app_path,
+    )
+
     _register = _build_register(
         specs=specs,
         pid=pid,
@@ -318,6 +430,8 @@ def run(host: str = HOST) -> None:
         refresher=refresher,
         clock=clock,
         lemonade_owner=lemonade_owner,
+        lemonade_clients=lemonade_clients,
+        lifetime=lifetime,
     )
     _deregister = _build_deregister(
         registry=registry,
@@ -327,6 +441,8 @@ def run(host: str = HOST) -> None:
         clock=clock,
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,
+        lemonade_clients=lemonade_clients,
+        lifetime=lifetime,
     )
 
     app = create_app(
@@ -341,9 +457,11 @@ def run(host: str = HOST) -> None:
         broker=broker,
         custody_auth=custody_auth,
         custody_store=custody_store,
+        keychain_auth=keychain_auth,
         clock=clock,
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,
+        lemonade_clients=lemonade_clients,
     )
 
     config = uvicorn.Config(

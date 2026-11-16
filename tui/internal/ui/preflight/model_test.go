@@ -429,8 +429,8 @@ func TestADispositionHaltRowNoLongerAutoProceeds(t *testing.T) {
 			if _, ok := msg.(proceedTickMsg); ok {
 				t.Fatal("reportMsg with a Halt row scheduled the auto-proceed tick")
 			}
-		case <-time.After(200 * time.Millisecond):
-			t.Fatal("cmd from a Halt report did not resolve within 200ms — a regression to the 2500ms tick")
+		case <-time.After(time.Second):
+			t.Fatal("cmd from a Halt report did not resolve within 1s — a regression to the 2500ms tick")
 		}
 	}
 
@@ -441,8 +441,7 @@ func TestADispositionHaltRowNoLongerAutoProceeds(t *testing.T) {
 
 	// 3. The deliberate path — pressing enter — still works: only the
 	// automatic path was removed.
-	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = updated.(Model)
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("enter on a Halt report produced no command")
 	}

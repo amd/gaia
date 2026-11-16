@@ -81,6 +81,8 @@ const SentinelName = ".installed"
 
 // ArtifactKindBinary is the sentinel's artifact_kind for a frozen executable.
 // It mirrors installer.ARTIFACT_KIND_BINARY and identifies daemon sidecars.
+// tests/unit/test_hub_install_sidecar_contract.py pins both against the real
+// installer's sentinel.
 const ArtifactKindBinary = "binary"
 
 // InstallRoot is the directory the daemon installs hub agents into. It mirrors
@@ -308,9 +310,9 @@ func ResolveExecutable(nameOrPath, agentID string) (string, error) {
 	}
 	if l.Unverified != "" {
 		return "", fmt.Errorf(
-			"%w: reinstall %s with `gaia hub install %s` — %s exists but the install "+
+			"%w: reinstall %s with `%s` — %s exists but the install "+
 				"is unverified (no %s), so it is not safe to run",
-			ErrNoExecutable, agentID, agentID, l.Unverified, SentinelName)
+			ErrNoExecutable, agentID, InstallCommand(agentID), l.Unverified, SentinelName)
 	}
 	return "", errors.New(MissingBinaryMessage(nameOrPath, l))
 }
@@ -326,7 +328,7 @@ func MissingBinaryMessage(binary string, l Lookup) string {
 	return fmt.Sprintf(
 		"%s is the program that does the thinking, and it is not on this machine. "+
 			"Nothing runs without it.\nLooked in:  %s\n"+
-			"Fix:        re-run the GAIA installer — it ships %s alongside gaia-tui\n"+
+			"Fix:        re-run the GAIA installer — it ships %s alongside gaia-cli\n"+
 			"            %s\nlook:       %s",
 		binary, strings.Join(l.Looked, ", "), binary, InstallerURL, AgentDocsURL)
 }
@@ -412,10 +414,6 @@ type InstalledRecord struct {
 // disappear from the hub, which looks identical to "never installed".
 func (c *Catalog) Warnings() []string {
 	return append([]string(nil), c.warnings...)
-}
-
-func (c *Catalog) warn(format string, args ...any) {
-	c.warnings = append(c.warnings, fmt.Sprintf(format, args...))
 }
 
 // LocalInstalls reads the ~/.gaia/agents/*/.installed sentinels — the local
@@ -545,12 +543,29 @@ func readSentinel(path string) (*InstalledRecord, error) {
 // FlagshipID is the agent the TUI boots into. GAIA ships one.
 const FlagshipID = "gaia"
 
+// InstallCommand is the command a user runs to install agentID, or to finish an
+// install that left no sentinel. `gaia init` installs the flagship whenever it
+// is missing; any other agent installs by id through the Python CLI.
+func InstallCommand(agentID string) string {
+	if agentID == FlagshipID {
+		return "gaia init"
+	}
+	return "gaia hub install " + agentID
+}
+
+// UpdateCommand is the command that replaces an installed agent with the newest
+// published build. `gaia init` cannot stand in here, even for the flagship: it
+// leaves an agent that is already installed alone.
+func UpdateCommand(agentID string) string {
+	return "gaia hub install " + agentID
+}
+
 func seedAgents() []Agent {
 	return []Agent{
 		{
 			// The email agent is an HTTP sidecar the daemon supervises, not a
 			// binary the TUI can spawn — it is reached through the daemon relay.
-			// Not on the launch path: `gaia-tui chat --agent email` is how it is
+			// Not on the launch path: `gaia-cli chat --agent email` is how it is
 			// reached, and it keeps the daemon readiness gate.
 			ID: "email", Name: "Email", Description: "Email triage, drafting, and calendar",
 			Category: "Productivity", Tags: []string{"email", "gmail", "calendar", "communication"},
@@ -578,7 +593,7 @@ func seedAgents() []Agent {
 			Transport:       TransportSubprocess,
 			BinaryPath:      "gaia-agent",
 			CanonicalEvents: true,
-			// `gaia-tui --dev` also puts the child at DEBUG in
+			// `gaia-cli --dev` also puts the child at DEBUG in
 			// ~/.gaia/logs/gaia-agent.log. Without this the TUI would go verbose
 			// while the agent kept logging errors only — and the log is where the
 			// answer usually is.

@@ -18,6 +18,14 @@ import gaia_agent.session_registry as registry_mod  # noqa: E402
 from gaia_agent import server as server_mod  # noqa: E402
 
 import gaia.llm.lemonade_client as lc  # noqa: E402
+import gaia.ui.warmup as ui_warmup  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def fresh_warm_up(monkeypatch):
+    """A sidecar that just started, on a PC big enough to warm up at start."""
+    monkeypatch.setattr(server_mod, "_startup_warm_up", server_mod._StartupWarmUp())
+    monkeypatch.setattr(ui_warmup, "preload_skip_reason", lambda: None)
 
 
 @pytest.fixture
@@ -53,7 +61,7 @@ def test_an_undownloaded_default_skips_the_warmup(monkeypatch, default_model):
 def test_a_downloaded_default_is_warmed(default_model):
     default_model("Gemma-4-E4B-it-GGUF", downloaded=True)
 
-    assert server_mod._default_model_is_servable() is True
+    assert server_mod._model_to_warm() == "Gemma-4-E4B-it-GGUF"
 
 
 def test_a_cloud_default_is_warmed_without_a_catalog_lookup(monkeypatch):
@@ -64,4 +72,41 @@ def test_a_cloud_default_is_warmed_without_a_catalog_lookup(monkeypatch):
 
     monkeypatch.setattr(lc.LemonadeClient, "get_model_info", no_lookup)
 
-    assert server_mod._default_model_is_servable() is True
+    assert server_mod._model_to_warm() == "amd.DeepSeek"
+
+
+class _Agent:
+    model_id = "Gemma-4-E4B-it-GGUF"
+
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.warmed = False
+
+    def warm_up(self, cancel=None):
+        if self.fail:
+            raise ConnectionError("Lemonade not reachable")
+        self.warmed = True
+        return {"seconds": 1.0, "prompt_tokens": 20000, "cached_tokens": 0}
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_the_warm_up_primes_a_session_agents_prefix(monkeypatch, default_model, fail):
+    """The warm-up runs the agent's own warm_up — the composed system prompt and
+    tool schemas a turn sends — and a failure is a visible warning."""
+    default_model("Gemma-4-E4B-it-GGUF", downloaded=True)
+    agent = _Agent(fail=fail)
+    closed = []
+    monkeypatch.setattr(registry_mod, "build_session_agent", lambda **k: agent)
+    monkeypatch.setattr(server_mod, "close_agent", closed.append)
+    warnings = []
+    monkeypatch.setattr(
+        server_mod.logger, "warning", lambda msg, *a, **k: warnings.append(msg % a)
+    )
+
+    server_mod._warmup_blocking()
+
+    assert closed == [agent]
+    assert agent.warmed is not fail
+    assert bool(warnings) is fail
+    if fail:
+        assert "Lemonade not reachable" in warnings[0]

@@ -18,12 +18,29 @@ from typing import Any, List, Optional, Set
 FRAMEWORK_PATHS: Set[str] = {
     "gaia/agents/base",
     "gaia/agents/tools",
-    # Hub-migrated agents (#1102): wheel installs land under site-packages
+    # Hub-migrated agents: wheel installs land under site-packages
     # (covered below); editable hub checkouts show as hub/agents/<id>/python/.
     "hub/agents/",
-    "gaia_agent_chat",
+    "gaia_agent/",
     "site-packages/",
 }
+
+
+def exit_error(what: str, code: int, stderr: Any = "") -> str:
+    """The ``error`` for a process that exited non-zero: what, which code, why.
+
+    *why* is the last non-blank line of *stderr*, where a CLI puts its verdict.
+    """
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    message = f"'{what}' exited with code {code}"
+    for line in reversed(str(stderr or "").splitlines()):
+        line = line.strip()
+        if line:
+            if len(line) > 300:
+                line = line[:299] + "…"
+            return f"{message}: {line}"
+    return message
 
 
 class MissingHostAttributeError(RuntimeError):

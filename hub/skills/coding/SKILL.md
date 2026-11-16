@@ -2,7 +2,7 @@
 name: coding
 description: Work on a codebase — read, search, edit and verify source files. Use when the user asks to fix a bug, add a feature, refactor, explain code, make a test pass, or change anything in a repository. Covers finding the right file, editing safely, and proving the change works before reporting it.
 license: MIT
-version: 0.2.1
+version: 0.2.2
 metadata:
   gaia:
     security_tier: community
@@ -90,9 +90,9 @@ PYTHONPATH=src python -m pytest -q tests/
 Where only `python3` exists, `python3 -m pytest` works the same way.
 
 pytest often lives only in the project's virtualenv, so it is not on PATH. The
-skill still loads, but without the `pytest` grant — and `python -m pytest` is
-judged as `pytest`, so that spelling is refused too. Run the suite with
-`execute_python_file` instead, which works wherever pytest is importable:
+skill still loads, but without the `pytest` grant, so `python -m pytest` runs
+only once the user approves it. `execute_python_file` works too, wherever
+pytest is importable:
 
 ```python
 import sys, pytest
@@ -105,8 +105,8 @@ files, access the network, and launch other programs, including commands the
 direct CLI policy refuses. These grants do not sandbox their effects. The
 separate `execute_python_file` tool still requires per-call approval.
 
-`python -c "..."` is refused because the grant requires a reviewable file in the
-checkout. Write new code to a file first so the diff shows it, and review what
+`python -c "..."` is outside the grant, which requires a reviewable file in the
+checkout — the user would have to approve that exact line once. Write new code to a file first so the diff shows it, and review what
 it does before executing it. For a one-off calculation that should not land in
 the repository at all, `run_python` takes the snippet through the tool path
 instead — it asks for approval on every call rather than riding this grant.
@@ -141,17 +141,35 @@ You have `git`. Reads — `status`, `diff`, `log`, `show`, `branch` — run stra
 through, and you should use them constantly: `git diff` before you report a
 change is the cheapest possible check that the diff is only what you meant.
 
-`add`, `commit`, `checkout`, `switch`, `restore` and `stash` each stop and show
-the user the exact command before running. That is not a formality to click
-past — write the commit message as if it is the only thing the reviewer reads,
-because for a squashed PR it is.
+`add`, `commit`, `checkout`, `switch`, and `restore` require approval of the
+exact command before running. Write the commit message as if it is the only
+thing the reviewer reads, because for a squashed PR it is.
 
-The direct Git policy refuses `push`, `reset --hard`, `clean`, `rebase`,
-`commit --amend`, `git config`. Publishing and history-rewriting are the user's
-to run, and destroying uncommitted work has no undo anywhere. When the work is
-committed and wants pushing, **say so and stop** — *"committed on `fix/discount`;
-run `git push -u origin fix/discount` and I will open the PR"* — rather than
-looking for a spelling that gets through.
+`stash list` and `stash show` are reads. `stash push`, `stash save`, `stash
+apply`, and `stash pop` require approval; bare `stash`, `stash drop`, and
+`stash clear` are refused.
+
+The direct Git policy refuses these commands entirely: `push`, `fetch`, `pull`,
+`clone`, `merge`, `cherry-pick`, `revert`, `bisect`, `rebase`, `rm`, `mv`,
+`reset`, `clean`, `gc`, `tag`, `apply`, `format-patch`, and `config`. It also
+refuses `commit --amend` and `reset --hard`; these are not alternate spellings.
+For remote commands, tell the user the exact command. For history-changing
+commands, stop at the boundary and return the conflict state; the user may run
+`merge --continue`, `rebase --continue`, or the corresponding abort command.
+For `rm`, `mv`, `reset`, `clean`, `gc`, and `tag`, ask the user to perform the
+exact change—never substitute a shell command or another Git spelling. Every
+`tag` form, including listing tags, is refused.
+
+Publishing, history rewriting, and destroying uncommitted work are the user's
+to run. When a committed branch wants pushing, **say so and stop** —
+*"committed on `fix/discount`; run `git push -u origin fix/discount` and I will
+open the PR"* — rather than looking for a spelling that gets through.
+
+The supported Git surface is reads (`status`, `diff`, `log`, `show`, `branch`,
+`blame`, `describe`, `rev-parse`, `merge-base`, `ls-files`, `ls-tree`,
+`cat-file`, `grep`, `shortlog`, `help`), local staging and commits (`add`,
+`commit`), approval-gated branch/file operations (`checkout`, `switch`,
+`restore`, `stash`), and the read-only `remote` view. Anything else is refused.
 
 ## Keep the diff to the change
 

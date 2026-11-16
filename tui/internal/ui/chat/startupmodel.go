@@ -28,7 +28,7 @@ import (
 type StartupModelKind int
 
 const (
-	startupNone StartupModelKind = iota
+	_ StartupModelKind = iota // zero value: no startup turn
 	// StartupRestore re-applies the choice saved by an earlier launch.
 	StartupRestore
 	// StartupPicked confirms a model picked at the readiness gate.
@@ -81,6 +81,8 @@ func (m ChatModel) WithStartupModel(kind StartupModelKind, provider, model strin
 // Call after WithModelMemory.
 func (m ChatModel) WithRelayedModel(kind StartupModelKind, provider, model string) ChatModel {
 	m.startup = startupModel{}
+	// The model id too, as a relayed switch sets it: /cost prices by it.
+	m.modelID = model
 	m.modelDisplay = model
 	m.modelBackend = provider
 	m.modelRemote = true
@@ -212,7 +214,25 @@ func choiceLabel(provider, model string) string {
 	case "", "local":
 		return model
 	}
+	if lemonade.IsHybridID(model) {
+		return hybridLabel()
+	}
 	return lemonade.Label(provider) + " · " + strings.TrimPrefix(model, provider+".")
+}
+
+// hybridLabel names hybrid with where its turns run: cloud when any of its
+// models is, local when all are on this PC.
+func hybridLabel() string {
+	name := lemonade.Label(lemonade.HybridProvider)
+	cloud, err := lemonade.HybridCloudModels()
+	switch {
+	case err != nil:
+		// The switch itself reports the broken config; the label can't say.
+		return name
+	case len(cloud) == 0:
+		return name + " (local)"
+	}
+	return name + " (cloud)"
 }
 
 // startupFailureLine is the one line shown when the opening switch did not take.

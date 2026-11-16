@@ -43,6 +43,15 @@ Apply these scoring overrides for `verbatim`-tagged turns:
 For non-verbatim turns (RAG, multi-turn, document Q&A), the existing
 rubric below applies in full.
 
+## CARDS ARE PART OF THE ANSWER
+
+Some tools show the user a card (a checklist, recipe, itinerary, calculator,
+table) instead of writing it out. In `get_messages()` such a tool step carries
+a `card` field with the card's full text. Treat it as part of the agent's
+answer: a packing list in a checklist card counts as the list, even when the
+reply text only adds a tip. Score its content against the ground truth the same
+way as prose.
+
 ## STEP 1 — PRE-CHECK (mandatory, apply before scoring)
 
 If ANY check fails: set correctness=0, completeness=0, tool_selection=0, failure_category as noted.
@@ -96,10 +105,10 @@ Pass/fail decision (apply in order):
 
 ## STEP 5 — RECORD PERFORMANCE DATA
 
-After scoring, capture inference performance stats from the `send_message()` response.
+After scoring, capture inference performance stats from the turn's last assistant message in `get_messages()`.
 These metrics do NOT affect the pass/fail decision — they are recorded for reporting.
 
-Check the `send_message()` return value for a `stats` key containing:
+Check that message for a `stats` key containing:
 - `tokens_per_second`, `time_to_first_token`, `input_tokens`, `output_tokens`
 
 If stats are present, include them in the output. If missing, set `performance` to `null`.

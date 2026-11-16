@@ -1,0 +1,17 @@
+{
+  "agent_type": "gaia",
+  "model": "Qwen3.6-35B-A3B-GGUF",
+  "eval_model": "claude-sonnet-4-6",
+  "runner_pool": "[self-hosted, Windows, devlab-dispatch, strix-halo]",
+  "workflow": ".github/workflows/eval_flagship.yml",
+  "commit": null,
+  "date": null,
+  "source_run": null,
+  "iterations": null,
+  "categories": 0,
+  "scenarios": null,
+  "passed": null,
+  "pass_rate": null,
+  "target_pass_rate": 0.8,
+  "purpose": "No scorecards yet. model, eval_model and runner_pool are the contract a run must match to be compared here; every number stays null until scorecard_<category>.json files are copied unedited from a real full-sweep run of the workflow above (README.md)."
+}

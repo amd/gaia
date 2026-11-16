@@ -139,9 +139,27 @@ def test_401_body_is_a_credential_problem():
     assert "Do NOT ask for a spend-limit increase" in v.action
 
 
-def test_429_rate_limit_is_a_quota_problem():
+def test_a_bare_per_minute_429_is_throttling_not_quota():
+    """Only wording moves CI to the other account; a 429 alone is a throttle on an
+    account that still has quota (src/gaia/eval/claude_refusal.py)."""
     v = ccp.classify("API Error: 429 rate_limit_error", exit_code=1)
-    assert v.kind == "quota"
+    assert v.kind == "unclassified"
+    assert v.exit_code == ccp.EXIT_UNCLASSIFIED
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The bare subscription refusal, verbatim: no "weekly", no "usage".
+        "You've hit your limit · resets 3pm (UTC)",
+        "Claude AI usage limit reached|1761062400",
+        "Limit reached · resets 11am",
+        "API Error: 429 You've hit your limit · resets 3pm (UTC)",
+    ],
+)
+def test_the_subscription_refusal_is_quota(text):
+    v = ccp.classify(text, exit_code=1)
+    assert v.kind == "quota", v.summary
     assert v.exit_code == ccp.EXIT_QUOTA
 
 

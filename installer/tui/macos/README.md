@@ -1,15 +1,21 @@
-# macOS installer for the GAIA terminal hub
+# macOS installer for the GAIA Terminal UI
 
 Builds `gaia-<version>-darwin-<arch>.pkg`, which installs two command-line tools:
 
 | Path | Mode |
 | --- | --- |
-| `/usr/local/bin/gaia-tui` | 0755 |
+| `/usr/local/bin/gaia-cli` | 0755 |
 | `/usr/local/bin/gaia-agent` | 0755 |
-| `/usr/local/share/doc/gaia-tui/LICENSE.md` | 0644 |
+| `/usr/local/share/doc/gaia-cli/LICENSE.md` | 0644 |
 
 Nothing else is written, and the package is constrained to the system volume —
 `/usr/local/bin` is not relocatable, so there is no destination to choose.
+
+The `gaia` command that setup runs is not in the package. The first time GAIA
+opens, setup installs it into `~/.gaia` as the user, from the same release, so
+that step needs internet. A postinstall script can't do it: the release workflow
+installs the `.pkg` on a clean runner before that release's Python package is on
+PyPI.
 
 No directory entry for `/usr`, `/usr/local`, `/usr/local/bin` or
 `/usr/local/share` is shipped. Installing one would reset that directory to
@@ -21,7 +27,7 @@ files, so the shared parents are the `--install-location` and never payload.
 | Component | Identifier | Install location |
 | --- | --- | --- |
 | binaries | `ai.amd.gaia.terminal-hub` | `/usr/local/bin` |
-| licence | `ai.amd.gaia.terminal-hub.docs` | `/usr/local/share/doc/gaia-tui` |
+| licence | `ai.amd.gaia.terminal-hub.docs` | `/usr/local/share/doc/gaia-cli` |
 
 `productbuild` combines them into the single `.pkg` a user double-clicks. Both
 BOMs are read back after `pkgbuild` and the build fails if either the expected
@@ -35,8 +41,8 @@ then forget both receipts (`--forget` drops the receipt only; it deletes nothing
 so the order matters):
 
 ```bash
-sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
-sudo rm -rf /usr/local/share/doc/gaia-tui
+sudo rm -f /usr/local/bin/gaia-cli /usr/local/bin/gaia-agent
+sudo rm -rf /usr/local/share/doc/gaia-cli
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
 sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
 ```
@@ -57,9 +63,13 @@ All four arguments are required.
 
 - `--arch` is `arm64` or `x64`.
 - `--payload` is a directory that already contains two executables named
-  `gaia-tui` and `gaia-agent` (no extension) plus `LICENSE.md`. The script copies
-  them; it does not build them. A missing `LICENSE.md` is a hard error — every
-  package GAIA ships carries the licence.
+  `gaia-cli` and `gaia-agent` (no extension), `core/` (the frozen `gaia` and its
+  `_internal` folder) and `LICENSE.md`. The script copies them; it does not build
+  them. The core is its own component, installed to `/usr/local/lib/gaia` and
+  linked as `/usr/local/bin/gaia`. A missing `LICENSE.md` is a hard error — every
+  package GAIA ships carries the licence. `--without-core` leaves the core out, as
+  packages before it shipped one did; CI uses it only to rebuild such a release's
+  package.
 - `--out` is created if it does not exist. The result is
   `<out>/gaia-<version>-darwin-<arch>.pkg`.
 
@@ -108,7 +118,7 @@ Note that installer certificates do **not** appear under
 notary service rejects a package containing unsigned or ad-hoc-signed
 executables, so `build-pkg.sh` refuses to submit one — and a *Developer ID
 Application* certificate (a different certificate from the *Installer* one in
-the table above) is what signs them. `release_components.yml` imports no
+the table above) is what signs them. `tui_installers.yml` imports no
 keychain and signs no binary, so today it passes `--allow-unsigned` and every
 published `.pkg` is unsigned.
 
@@ -122,7 +132,7 @@ Codesign the Go binaries *before* staging them:
 ```bash
 codesign --force --options runtime --timestamp \
   --sign "Developer ID Application: … ($APPLE_TEAM_ID)" \
-  ./stage/darwin-arm64/gaia-tui ./stage/darwin-arm64/gaia-agent
+  ./stage/darwin-arm64/gaia-cli ./stage/darwin-arm64/gaia-agent
 ```
 
 `--options runtime` (the hardened runtime) is required for notarization.

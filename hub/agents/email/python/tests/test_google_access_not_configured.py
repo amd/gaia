@@ -18,11 +18,12 @@ import pytest
 
 pytest.importorskip("gaia_agent_email")
 
-from gaia.connectors.errors import ConnectorsError  # noqa: E402
 from gaia_agent_email.google_errors import (  # noqa: E402
     access_not_configured_message,
     access_not_configured_url,
 )
+
+from gaia.connectors.errors import ConnectorsError  # noqa: E402
 
 GMAIL_ENABLE_URL = (
     "https://console.developers.google.com/apis/api/"

@@ -40,7 +40,7 @@ from gaia.version import parse_version as _parse_version
 
 logger = get_logger(__name__)
 
-# Test-only hold on model reporting (#2539): Lemonade lazily reloads an
+# Test-only hold on model reporting: Lemonade lazily reloads an
 # unloaded model on the next inference request, which makes "model unavailable"
 # un-testable through these probes alone — by the time a second check runs, a
 # query elsewhere may have already triggered the reload. Setting this env var to
@@ -429,14 +429,19 @@ def _replay_cloud_key(model_id: str) -> bool:
     """
     import requests
 
-    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, reconnect_provider
     from gaia.llm.gateway import GatewayError
 
     provider = str(model_id or "").lower().split(".", 1)[0]
     if "." not in str(model_id or "") or provider not in PROVIDERS:
         return False
+    from gaia.llm.local_only import CloudDisabledError
+
     try:
-        return ensure_authenticated(provider)
+        return reconnect_provider(provider)
+    except CloudDisabledError as e:
+        logger.warning(str(e))
+        return False
     except (CloudKeyError, GatewayError, requests.RequestException) as e:
         # Never fatal: the model may simply be absent, and the caller's own
         # "not found" message is the actionable one.
@@ -493,16 +498,17 @@ def version_meets_min(found: Optional[str], minimum: Optional[str]) -> Optional[
 def pull_model(probe_base: str, model_id: str) -> None:
     """Tell a RUNNING backend to download ``model_id``.
 
-    Lemonade wants opposite payloads for its two kinds of model, and sending the
-    wrong one fails on a COLD cache only — so both directions survive every
-    warm-machine test:
+    The body is :func:`gaia.llm.lemonade_client.pull_request_body` — the same
+    one the Agent UI download uses. Lemonade wants opposite payloads for its
+    two kinds of model, and sending the wrong one fails on a COLD cache only:
 
     * **Built-in** (``Gemma-4-E4B-it-GGUF``, the ``*-FLM`` models) — name only.
       Passing ``recipe`` makes Lemonade treat the call as a *new* registration,
       which requires a ``user.`` prefix, and it 400s (#1655).
     * **Custom, ``user.``-prefixed** (the EmbeddingGemma embedder) — these are
       not registered yet, so the first pull must carry ``checkpoint`` +
-      ``recipe`` (+ ``embedding`` for an embedder). Name only returns HTTP 500
+      ``recipe`` (+ ``embedding`` for an embedder, and ``mmproj`` / ``vision`` /
+      ``reasoning`` when the model needs them). Name only returns HTTP 500
       ``not registered with Lemonade Server``.
 
     Sending name only for everything is what this used to do, which made the
@@ -510,7 +516,8 @@ def pull_model(probe_base: str, model_id: str) -> None:
     fix could not succeed. Found on a machine whose chat model already worked.
 
     A gateway-hosted model has no weights at all and raises ``RuntimeError``
-    before any request goes out.
+    before any request goes out. A ``user.`` id GAIA doesn't know is pulled by
+    name when Lemonade's model list has it, and raises ``ValueError`` otherwise.
 
     Raises ``requests.RequestException``, ``ValueError`` or ``RuntimeError`` on
     failure; the caller surfaces it as a loud ``✗`` line.
@@ -521,41 +528,33 @@ def pull_model(probe_base: str, model_id: str) -> None:
     import requests
 
     from gaia.llm.lemonade_client import (
-        MODELS,
-        is_cloud_model,
         lemonade_auth_headers,
+        pull_request_body,
+        registered_model_ids,
         resolve_lemonade_api_key,
     )
 
-    if is_cloud_model(model_id):
-        # A gateway model has no weights to fetch. Lemonade 400s on a pull for
-        # one, and the message talks about a download the user cannot perform.
-        raise RuntimeError(
-            f"'{model_id}' is hosted on a gateway, so there is nothing to "
-            f"download. If it is unavailable, check the gateway connection "
-            f"with `gaia gateway status`."
+    headers = lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base))
+    try:
+        payload = pull_request_body(model_id)
+    except ValueError:
+        if not model_id.lower().startswith("user."):
+            raise
+        # A ``user.`` model registered in Lemonade directly is pulled by name.
+        listing = requests.get(
+            f"{probe_base}/models",
+            params={"show_all": "true"},
+            headers=headers,
+            timeout=(PROBE_CONNECT_TIMEOUT, PROBE_READ_TIMEOUT),
         )
-
-    payload = {"model_name": model_id}
-    if model_id.startswith("user."):
-        requirement = next((m for m in MODELS.values() if m.model_id == model_id), None)
-        if requirement is None:
-            raise ValueError(
-                f"Cannot pull custom model '{model_id}': it is not in GAIA's "
-                "model registry, so its checkpoint and recipe are unknown. "
-                "Add it to MODELS in gaia.llm.lemonade_client, or run "
-                "`gaia init`."
-            )
-        payload.update(
-            checkpoint=requirement.checkpoint,
-            recipe=requirement.recipe,
-            embedding=requirement.embedding,
-        )
+        listing.raise_for_status()
+        registered = registered_model_ids(listing.json())
+        payload = pull_request_body(model_id, registered=registered)
 
     resp = requests.post(
         f"{probe_base}/pull",
         json=payload,
-        headers=lemonade_auth_headers(resolve_lemonade_api_key(base_url=probe_base)),
+        headers=headers,
         timeout=PULL_TIMEOUT,
     )
     resp.raise_for_status()
@@ -564,17 +563,6 @@ def pull_model(probe_base: str, model_id: str) -> None:
 # ---------------------------------------------------------------------------
 # GET — readiness
 # ---------------------------------------------------------------------------
-
-
-def model_list_unreadable(hint: Optional[str]) -> bool:
-    """Whether a hint reports the one failure the structured fields cannot.
-
-    The backend answered /health but its model list read failed, so
-    ``present:false`` means "could not tell", not "missing". Only the hint
-    carries that distinction.
-    """
-    h = (hint or "").lower()
-    return "model list" in h and "could not be read" in h
 
 
 def compute_init_status(

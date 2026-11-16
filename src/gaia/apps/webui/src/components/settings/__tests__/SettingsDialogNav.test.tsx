@@ -1,0 +1,62 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+/** The Settings nav marks one section: focus follows the tab you pick (#5260). */
+
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SettingsDialog } from '../SettingsDialog';
+import { useChatStore } from '../../../stores/chatStore';
+
+vi.mock('../../../services/api');
+vi.mock('../GeneralSettings', () => ({ GeneralSettings: () => <p>general pane</p> }));
+vi.mock('../ModelSettings', () => ({ ModelSettings: () => <p>model pane</p> }));
+vi.mock('../PrivacySettings', () => ({ PrivacySettings: () => <p>privacy pane</p> }));
+
+beforeEach(() => {
+    useChatStore.setState({ settingsSection: 'general' });
+});
+
+describe('SettingsDialog nav', () => {
+    it('moves focus to the tab you pick, so only one looks selected', () => {
+        render(<SettingsDialog onUseSkill={vi.fn()} />);
+        const general = screen.getByRole('button', { name: 'General' });
+        expect(general).toHaveFocus();
+
+        const model = screen.getByRole('button', { name: 'Model' });
+        fireEvent.click(model);
+
+        expect(model).toHaveFocus();
+        expect(model).toHaveAttribute('aria-current', 'page');
+        expect(general).not.toHaveAttribute('aria-current');
+        expect(screen.getByText('model pane')).toBeInTheDocument();
+    });
+
+    it('opens every tab at its top, not where the last tab was scrolled to', () => {
+        const { container } = render(<SettingsDialog onUseSkill={vi.fn()} />);
+        const pane = container.ownerDocument.querySelector('.settings-scroll') as HTMLElement;
+        pane.scrollTop = 900;
+
+        fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+
+        expect(pane.scrollTop).toBe(0);
+    });
+
+    it('is one Tab stop, and the arrow keys move through it', () => {
+        render(<SettingsDialog onUseSkill={vi.fn()} />);
+        const general = screen.getByRole('button', { name: 'General' });
+        const setup = screen.getByRole('button', { name: 'Setup' });
+        expect(general).toHaveAttribute('tabindex', '0');
+        expect(setup).toHaveAttribute('tabindex', '-1');
+
+        fireEvent.keyDown(general, { key: 'ArrowDown' });
+        expect(setup).toHaveFocus();
+        expect(setup).toHaveAttribute('aria-current', 'page');
+        expect(setup).toHaveAttribute('tabindex', '0');
+
+        fireEvent.keyDown(setup, { key: 'End' });
+        expect(screen.getByRole('button', { name: 'About' })).toHaveFocus();
+        fireEvent.keyDown(screen.getByRole('button', { name: 'About' }), { key: 'ArrowDown' });
+        expect(general).toHaveFocus();
+    });
+});

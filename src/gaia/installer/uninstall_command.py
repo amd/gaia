@@ -15,16 +15,23 @@ Tiers:
       uninstaller; this command only owns the shared Python-side state.
     * ``--venv``          — Tier 2: remove ``~/.gaia/venv/``.
     * ``--purge``         — Tier 3: venv + chat data + documents + the embedded
-      Lemonade runtime + electron config + install logs / state files + the
-      one-line installer's ``bin/`` + agent ``traces/`` + the daemon's
-      ``host/`` state (custody store included; the daemon is stopped first).
-      When purging the default ``~/.gaia``, it also removes the installer's
-      ``# Added by GAIA installer`` shell rc lines, or its Windows user PATH
-      entries. Always keeps ``~/.gaia/`` itself so other tools that store data
-      there (MCP config, etc.) are preserved.
+      Lemonade runtime + what GAIA learned and stored (memory, file and
+      scratchpad indexes, goals, sessions, ``config.json``, caches) + installed
+      agents + electron config, logs and state files + the one-line
+      installer's ``bin/`` + agent ``traces/`` + the daemon's ``host/`` state
+      (custody store included; the daemon is stopped first). It also clears
+      GAIA's sign-ins and API keys from the OS credential store and removes
+      the desktop app's ``~/.local/bin/gaia`` shim when it points into this
+      GAIA home. When purging the default ``~/.gaia``, it also removes the
+      installer's ``# Added by GAIA installer`` shell rc lines, or its Windows
+      user PATH entries. Always keeps ``~/.gaia/`` itself and the connector
+      setup in it (``mcp_servers.json``, ``connectors/``, the MCP server
+      secrets that file references) plus the user's own ``skills/``; the
+      plan names everything it keeps.
 
 Opt-in extras (only valid alongside ``--purge``):
-    * ``--purge-lemonade`` — best-effort Lemonade Server removal.
+    * ``--purge-lemonade`` — best-effort removal of a system-wide Lemonade
+      Server (GAIA's own goes with ``--purge``).
     * ``--purge-models``   — remove ``~/.cache/lemonade/models/``.
     * ``--purge-hf-cache`` — remove the HuggingFace hub cache (restores the
       legacy ``gaia uninstall --models`` cleanup capability).
@@ -60,13 +67,16 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import logging
 import ntpath
 import os
+import re
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -163,6 +173,32 @@ def _venv_paths(home: Optional[Path] = None) -> List[Path]:
     return [gaia / "venv"]
 
 
+_SQLITE_SIDECARS = ("", "-wal", "-shm", "-journal")
+
+# What GAIA learned and stored for the user, plus agents and caches it fetched.
+_USER_DATA_NAMES = (
+    *(
+        f"{db}{suffix}"
+        for db in ("memory.db", "file_index.db", "scratchpad.db", "goals.db")
+        for suffix in _SQLITE_SIDECARS
+    ),
+    "config.json",
+    "config.json.lock",
+    "config.json.lock.d",
+    "sessions",
+    # Undo copies of files the agent changed — the user's own file contents.
+    "snapshots",
+    "agents",
+    "tui",
+    "ui",
+    "cache",
+    "logs",
+    "seeder",
+    "catalog-cache.json",
+    "backend.pid",
+)
+
+
 def _purge_paths(home: Optional[Path] = None) -> List[Path]:
     """Paths that belong to Tier 3 (``--purge``).
 
@@ -175,13 +211,21 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
         gaia / "chat",
         gaia / "documents",
         gaia / "lemonade",
+        *(gaia / name for name in _USER_DATA_NAMES),
         gaia / "electron-config.json",
         gaia / "gaia.log",
         *(p for p in log_family(gaia / "gaia.log") if p != gaia / "gaia.log"),
         gaia / "gaia.log.lock",
         gaia / "electron-install-state.json",
         gaia / "electron-install.log",
+        gaia / "electron-install.log.prev",
+        gaia / "electron-main.log",
+        gaia / "electron-updater.log",
+        gaia / "electron-startup-failures.json",
         gaia / "bin",
+        # The frozen gaia the one-line installer keeps, and an AppImage's copy.
+        gaia / "core",
+        gaia / "app-core",
         gaia / "traces",
     ]
 
@@ -210,6 +254,149 @@ def _purges_installer_home(home: Optional[Path] = None) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Desktop app shim and OS credential store
+# ---------------------------------------------------------------------------
+
+# Exactly what the desktop app's backend-installer.cjs writes.
+_SHIM_RE = re.compile(r'#!/bin/sh\nexec "([^"\n]+)" "\$@"\n')
+
+
+def _desktop_shim_path(home: Optional[Path] = None) -> Path:
+    """Where the desktop app creates its ``gaia`` shim on Linux and macOS."""
+    xdg_bin = os.environ.get("XDG_BIN_HOME")
+    if xdg_bin:
+        return Path(xdg_bin) / "gaia"
+    return (home if home is not None else Path.home()) / ".local" / "bin" / "gaia"
+
+
+def _is_gaia_shim(shim: Path, gaia_home: Path) -> bool:
+    """Whether ``shim`` is the desktop app's wrapper around this home's venv."""
+    try:
+        if shim.is_symlink() or not shim.is_file() or shim.stat().st_size > 4096:
+            return False
+        match = _SHIM_RE.fullmatch(shim.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return False
+    if match is None:
+        return False
+    target = Path(match.group(1)).resolve(strict=False)
+    return target.is_relative_to((gaia_home / "venv").resolve(strict=False))
+
+
+def _remove_shim(shim: Path, gaia_home: Path, printer: Callable[[str], None]) -> bool:
+    # Re-check at delete time: the file may have changed since the plan.
+    if not _is_gaia_shim(shim, gaia_home):
+        _print(f"  [skip] {shim} (no longer GAIA's shim)", printer=printer)
+        return True
+    try:
+        shim.unlink()
+    except OSError as exc:
+        _print(f"  [error] failed to remove {shim}: {exc}", printer=printer)
+        return False
+    _print(f"  [removed] {shim}", printer=printer)
+    return True
+
+
+CREDENTIAL_SERVICE = "gaia.connections"
+
+
+def _credential_deleters() -> List[tuple]:
+    """``(label, delete)`` for every GAIA credential slot outside MCP server config.
+
+    MCP server secrets are left alone: ``mcp_servers.json`` survives the purge
+    and still references them.
+    """
+    # pylint: disable=import-outside-toplevel
+    # Registers the providers.
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors import store
+    from gaia.connectors.registry import REGISTRY
+    from gaia.llm import cloud_keys
+    from gaia.llm.lemonade_choice import API_KEY_SECRET_NAME
+    from gaia.messaging.slack import credentials as slack_credentials
+
+    deleters: List[tuple] = []
+    for spec in REGISTRY.all():
+        if spec.type != "oauth_pkce":
+            continue
+        provider = spec.id
+        deleters.append(
+            (f"{provider} sign-in", lambda p=provider: store.delete_connection(p))
+        )
+        deleters.append(
+            (
+                f"{provider} OAuth app credentials",
+                lambda p=provider: store.clear_provider_credentials(p),
+            )
+        )
+    for provider in cloud_keys.PROVIDERS:
+        deleters.append(
+            (f"{provider} API key", lambda p=provider: cloud_keys.forget_key(p))
+        )
+    deleters.append(
+        ("Lemonade API key", lambda: store.delete_secret(API_KEY_SECRET_NAME))
+    )
+    deleters.append(("Slack tokens", slack_credentials.clear))
+    return deleters
+
+
+def _clear_credentials(printer: Callable[[str], None] = print) -> bool:
+    """Delete GAIA's entries in the OS credential store. False on any failure."""
+    if importlib.util.find_spec("keyring") is None:
+        _print(
+            "  [skip] OS credential store (keyring is not installed, so GAIA "
+            "saved nothing there)",
+            printer=printer,
+        )
+        return True
+    import keyring
+    from keyring.backends import fail as no_store
+    from keyring.backends import null as disabled_store
+
+    from gaia.connectors.errors import ConnectorsError
+
+    try:
+        backend = keyring.get_keyring()
+    except Exception as exc:  # noqa: BLE001 - reported, not swallowed
+        _print(
+            f"  [error] could not open the OS credential store: {exc}", printer=printer
+        )
+        return False
+    # Headless Linux, WSL and containers: nothing could have been saved there.
+    if isinstance(backend, (no_store.Keyring, disabled_store.Keyring)):
+        _print(
+            "  [skip] OS credential store (none is available here, so GAIA "
+            "saved nothing there)",
+            printer=printer,
+        )
+        return True
+
+    try:
+        deleters = _credential_deleters()
+    except (ConnectorsError, ImportError) as exc:
+        _print(
+            f"  [error] could not open the OS credential store: {exc}",
+            printer=printer,
+        )
+        return False
+
+    failed = []
+    for label, delete in deleters:
+        try:
+            delete()
+        except Exception as exc:  # noqa: BLE001 - report each slot, keep going
+            failed.append(f"{label}: {exc}")
+    for failure in failed:
+        _print(f"  [error] credential store: {failure}", printer=printer)
+    if not failed:
+        _print(
+            f"  [removed] GAIA's sign-ins and API keys ({CREDENTIAL_SERVICE})",
+            printer=printer,
+        )
+    return not failed
+
+
+# ---------------------------------------------------------------------------
 # Installer shell rc / user PATH edits
 # ---------------------------------------------------------------------------
 
@@ -226,7 +413,7 @@ def _installer_posix_path_dirs(home: Optional[Path] = None) -> set:
 
 
 def _is_installer_export(line: str, allowed_dirs: set) -> bool:
-    """Current (venv/bin + bin) and pre-0.23 (venv/bin only) export shapes."""
+    """Current (bin only), 0.23+ (venv/bin + bin) and pre-0.23 (venv/bin only) shapes."""
     if not (line.startswith(_RC_EXPORT_PREFIX) and line.endswith('"')):
         return False
     dirs = line[len(_RC_EXPORT_PREFIX) : -1].split(":")
@@ -589,6 +776,8 @@ class UninstallPlan:
     purge_hf_cache_path: Optional[Path] = None
     # Stop the daemon before deleting its state, or it rewrites instance.json.
     stop_daemon: bool = False
+    clear_credentials: bool = False
+    shim_path: Optional[Path] = None
     rc_files: List[Path] = field(default_factory=list)
     windows_path_entries: List[str] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -615,6 +804,8 @@ class UninstallPlan:
             and self.purge_hf_cache_path is None
             and not self.rc_files
             and not self.windows_path_entries
+            and not self.clear_credentials
+            and self.shim_path is None
         )
 
 
@@ -646,7 +837,16 @@ def build_plan(
     if purge:
         for path in _purge_paths(home):
             plan.tiered_paths.append(("--purge", path))
+        # The credential store is per-user, not per-home: it also serves ~/.gaia.
+        plan.clear_credentials = _purges_installer_home(home)
+        if not plan.clear_credentials:
+            plan.notes.append(
+                f"GAIA's saved sign-ins and API keys ({CREDENTIAL_SERVICE}) are "
+                f"shared with {_installer_gaia_dir(home)}, so a purge of another "
+                "GAIA_HOME leaves them alone."
+            )
         _plan_installer_leftovers(plan, home)
+        _plan_desktop_shim(plan, home)
     elif venv:
         for path in _venv_paths(home):
             plan.tiered_paths.append(("--venv", path))
@@ -698,6 +898,44 @@ def _plan_installer_leftovers(plan: UninstallPlan, home: Optional[Path]) -> None
         plan.blocked_edits.extend(unreadable)
 
 
+def _plan_desktop_shim(plan: UninstallPlan, home: Optional[Path]) -> None:
+    """Add the desktop app's ``gaia`` shim when it wraps this home's venv."""
+    if _is_windows():
+        return
+    shim = _desktop_shim_path(home)
+    if not os.path.lexists(shim):
+        return
+    if _is_gaia_shim(shim, _gaia_home(home)):
+        plan.shim_path = shim
+    else:
+        plan.notes.append(
+            f"{shim} is not the desktop app's shim for this GAIA home, so it is "
+            "left alone."
+        )
+
+
+def _exists(path: Path) -> bool:
+    """``lexists``, but an unreadable entry counts as present so it is shown."""
+    try:
+        return os.path.lexists(path)
+    except OSError:
+        return True
+
+
+def _kept_entries(plan: UninstallPlan, gaia_home: Path) -> List[Path]:
+    """Entries in the GAIA home that the plan leaves in place."""
+    planned = {
+        path.name
+        for path in plan.unique_paths()
+        if path.parent.resolve(strict=False) == gaia_home
+    }
+    try:
+        children = sorted(gaia_home.iterdir())
+    except OSError:
+        return []
+    return [child for child in children if child.name not in planned]
+
+
 # ---------------------------------------------------------------------------
 # Output helpers
 # ---------------------------------------------------------------------------
@@ -720,13 +958,16 @@ def _print_no_flags_help(printer: Callable[[str], None] = print) -> None:
         "",
         "Choose a tier:",
         "  gaia uninstall --venv            Remove ~/.gaia/venv/ (Tier 2)",
-        "  gaia uninstall --purge           Remove venv + chat + documents +",
-        "                                   embedded Lemonade + config + logs +",
-        "                                   installer binaries + daemon state,",
-        "                                   and the installer's PATH edits (Tier 3)",
+        "  gaia uninstall --purge           Remove venv + chats + documents +",
+        "                                   memory + sessions + undo snapshots +",
+        "                                   config + agents + caches + embedded",
+        "                                   Lemonade + logs + installer binaries +",
+        "                                   daemon state + saved sign-ins and API",
+        "                                   keys, and the installer's PATH edits",
+        "                                   (Tier 3)",
         "",
         "Optional extras (must be combined with --purge):",
-        "  --purge-lemonade                 Also uninstall Lemonade Server",
+        "  --purge-lemonade                 Also uninstall a system-wide Lemonade Server",
         "  --purge-models                   Also remove Lemonade's models cache",
         "  --purge-hf-cache                 Also remove the HuggingFace hub cache",
         "",
@@ -754,9 +995,17 @@ def _print_plan(
         _print(f"GAIA home: {gaia_home}", printer=printer)
     header = "[dry-run] Would remove:" if dry_run else "The following will be removed:"
     _print(header, printer=printer)
-    if plan.tiered_paths:
-        for label, path in plan.tiered_paths:
+    for label, path in plan.tiered_paths:
+        if _exists(path):
             _print(f"  ({label}) {path}", printer=printer)
+    if plan.clear_credentials:
+        _print(
+            f"  (--purge) GAIA's sign-ins and API keys in the OS credential store "
+            f"({CREDENTIAL_SERVICE})",
+            printer=printer,
+        )
+    if plan.shim_path is not None:
+        _print(f"  (--purge) {plan.shim_path}", printer=printer)
     if plan.purge_lemonade:
         _print("  (--purge-lemonade) Lemonade Server (best-effort)", printer=printer)
     if plan.purge_models_path is not None:
@@ -778,6 +1027,16 @@ def _print_plan(
         _print(f"  (--purge) user PATH entry {entry}", printer=printer)
     for note in plan.notes:
         _print(f"  [note] {note}", printer=printer)
+    purging = any(label == "--purge" for label, _ in plan.tiered_paths)
+    if purging and gaia_home is not None:
+        kept = _kept_entries(plan, gaia_home)
+        if kept:
+            _print(
+                "Kept (connector setup, your own skills, other tools' files):",
+                printer=printer,
+            )
+            for path in kept:
+                _print(f"  {path}", printer=printer)
     _print(printer=printer)
 
 
@@ -918,10 +1177,10 @@ def _stop_daemon(printer: Callable[[str], None] = print) -> bool:
 
     inst = instance.read_instance()
     if inst is None:
-        return True
+        return _stop_orphaned_sidecars(printer)
     try:
         if not instance.pid_alive(inst.pid):
-            return True
+            return _stop_orphaned_sidecars(printer)
         try:
             client.request_shutdown(inst)
         except DaemonError:
@@ -945,6 +1204,28 @@ def _stop_daemon(printer: Callable[[str], None] = print) -> bool:
         )
         return False
     _print(f"  [daemon] stopped the GAIA daemon (pid {inst.pid})", printer=printer)
+    return _stop_orphaned_sidecars(printer)
+
+
+def _stop_orphaned_sidecars(printer: Callable[[str], None] = print) -> bool:
+    """Stop the agents a dead daemon left running. False when one survives."""
+    from gaia.daemon.sidecars import ledger
+
+    killed, survivors = ledger.reap_after_stop()
+    for pid in killed:
+        if pid not in survivors:
+            _print(
+                f"  [daemon] stopped an agent the daemon left running (pid {pid})",
+                printer=printer,
+            )
+    if survivors:
+        pids = ", ".join(str(pid) for pid in survivors)
+        _print(
+            f"error: GAIA agent process(es) {pids} are still running. End them "
+            "(Task Manager on Windows, `kill -9` elsewhere), then re-run.",
+            printer=printer,
+        )
+        return False
     return True
 
 
@@ -1078,141 +1359,141 @@ def _remove_path(
     return True
 
 
-def _resolve_lemonade_python() -> Optional[str]:
-    """Return the best-guess Python interpreter that owns ``lemonade-server``.
-
-    When called from the GAIA installer bundle, ``sys.executable`` is the
-    bundled venv, NOT where Lemonade was installed — so running ``pip
-    uninstall`` against it is always a no-op. Locate the real one by
-    inspecting ``lemonade-server`` on PATH:
-
-      * POSIX: read the script's shebang.
-      * Windows: walk the parent directory for ``python.exe`` /
-        ``Scripts/python.exe``.
-
-    Returns ``None`` when we can't make a confident guess; callers should
-    then skip the pip fallback rather than pip-uninstall the wrong env.
-    """
-    lemonade = shutil.which("lemonade-server")
-    if not lemonade:
-        return None
-
-    lemonade_path = Path(lemonade)
-
-    if sys.platform.startswith("win"):
-        # Typical layouts:
-        #   <env>/Scripts/lemonade-server.exe → <env>/python.exe
-        #   <env>/Scripts/lemonade-server.exe → <env>/Scripts/python.exe
-        scripts_dir = lemonade_path.parent
-        candidates = [
-            scripts_dir / "python.exe",
-            scripts_dir.parent / "python.exe",
-            scripts_dir / "pythonw.exe",
-        ]
-        for candidate in candidates:
-            if candidate.exists():
-                return str(candidate)
-        return None
-
-    # POSIX / macOS: parse the shebang of the console script.
+def _is_running_from_venv(venv: Path) -> bool:
+    """Whether this process executes from ``venv`` rather than merely deleting it."""
     try:
-        with open(lemonade_path, "rb") as fp:
-            first_line = fp.readline()
-    except OSError:
-        return None
-    if not first_line.startswith(b"#!"):
-        return None
-    shebang = first_line[2:].strip().decode("utf-8", errors="replace")
-    # Handle `#!/usr/bin/env python3` as well as a direct path.
-    parts = shebang.split()
-    if not parts:
-        return None
-    if parts[0].endswith("env") and len(parts) > 1:
-        return parts[1]
-    return parts[0]
+        return (
+            Path(sys.executable)
+            .resolve(strict=False)
+            .is_relative_to(venv.resolve(strict=False))
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def _is_launched_from(directory: Path) -> bool:
+    """Whether a console-script launcher in ``directory`` started this process.
+
+    uv's and pip's launchers set ``sys.argv[0]`` to their own path, less ``.exe``;
+    ``python.exe`` is then a child, so the launcher stays locked until we exit.
+    """
+    if not sys.argv or not sys.argv[0]:
+        return False
+    try:
+        return Path(sys.argv[0]).parent.resolve(strict=False) == directory.resolve(
+            strict=False
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def _powershell_literal(path: Path) -> str:
+    """Quote a filesystem path as a single-quoted PowerShell literal."""
+    return "'" + str(path).replace("'", "''") + "'"
+
+
+def _defer_windows_venv_removal(
+    venv: Path, *, printer: Callable[[str], None] = print
+) -> bool:
+    """Schedule a best-effort delete of a directory this process runs from.
+
+    Windows keeps ``python.exe`` and extension modules in the active virtual
+    environment open until this command exits, and the ``gaia.exe`` launcher in
+    ``~/.gaia/bin`` that started it. The detached helper therefore waits for our
+    PID (and a parent launched from ``venv``), retries briefly, and records any
+    final failure in the system temp directory instead of hiding a failed cleanup.
+    """
+    if not _is_windows():
+        return False
+
+    log_path = (
+        Path(tempfile.gettempdir()) / f"gaia-uninstall-{venv.name}-{os.getpid()}.log"
+    )
+    escaped_venv = _powershell_literal(venv)
+    escaped_log = _powershell_literal(log_path)
+    parent_pid = os.getppid()
+    command = (
+        "$ErrorActionPreference = 'Stop'; "
+        f"$pidToWait = {os.getpid()}; "
+        f"$parentPidToWait = {parent_pid}; "
+        f"$target = {escaped_venv}; "
+        f"$log = {escaped_log}; "
+        "try { "
+        "Wait-Process -Id $pidToWait -ErrorAction SilentlyContinue; "
+        "if ($parentPidToWait -gt 1) { "
+        "$parent = Get-Process -Id $parentPidToWait -ErrorAction SilentlyContinue; "
+        "if ($parent -and $parent.Path -and $parent.Path.StartsWith($target, [StringComparison]::OrdinalIgnoreCase)) { "
+        "Wait-Process -Id $parentPidToWait -ErrorAction SilentlyContinue "
+        "} "
+        "} "
+        "for ($attempt = 0; $attempt -lt 20 -and (Test-Path -LiteralPath $target); $attempt++) { "
+        "try { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction Stop } "
+        "catch { Start-Sleep -Milliseconds 500 } "
+        "} "
+        "if (Test-Path -LiteralPath $target) { "
+        'throw "Could not remove $target after waiting for GAIA to exit." '
+        "} "
+        "Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue "
+        "} catch { $_ | Out-File -LiteralPath $log -Encoding utf8 }"
+    )
+    try:
+        subprocess.Popen(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        )
+    except OSError as exc:
+        _print(f"  [error] could not defer removal of {venv}: {exc}", printer=printer)
+        return False
+
+    _print(
+        f"  [deferred] {venv} will be removed when this GAIA process exits "
+        f"(failure log: {log_path})",
+        printer=printer,
+    )
+    return True
 
 
 def _remove_lemonade(printer: Callable[[str], None] = print) -> bool:
-    """Best-effort Lemonade Server removal.
+    """Remove a system-wide Lemonade Server, if one is installed.
 
-    Never fails the command — returns True even if Lemonade could not be
-    removed, so the rest of the uninstall flow proceeds.
+    Returns False only when the installation check itself failed, because then
+    "not installed" would be a guess and the caller must not report success. A
+    removal that fails after a good check is reported as a warning and returns
+    True, so the rest of the uninstall flow proceeds.
     """
+    from gaia.installer.lemonade_installer import LemonadeInstaller
+
     _print("  [lemonade] attempting to uninstall Lemonade Server...", printer=printer)
-
-    # Strategy 1: the shared LemonadeInstaller class knows how to uninstall
-    # on Windows (msiexec) and Linux (apt / dpkg).
-    try:
-        from gaia.installer.lemonade_installer import LemonadeInstaller
-
-        installer = LemonadeInstaller()
-        info = installer.check_installation()
-        if not info.installed:
-            _print(
-                "  [lemonade] not installed — nothing to do",
-                printer=printer,
-            )
-            return True
-
-        result = installer.uninstall(silent=True)
-        if result.success:
-            _print(
-                "  [lemonade] uninstalled via LemonadeInstaller",
-                printer=printer,
-            )
-            return True
+    installer = LemonadeInstaller()
+    info = installer.check_installation()
+    if info.check_failed:
         _print(
-            f"  [lemonade] LemonadeInstaller.uninstall failed: {result.error}",
+            f"  [lemonade] installation check failed: {info.error}",
             printer=printer,
         )
-    except Exception as exc:  # pragma: no cover - defensive
         _print(
-            f"  [lemonade] LemonadeInstaller unavailable: {exc}",
+            "  [lemonade] skipped removal — uninstall Lemonade Server by hand "
+            "if it is present",
             printer=printer,
         )
+        return False
+    if not info.installed:
+        _print("  [lemonade] not installed — nothing to do", printer=printer)
+        return True
 
-    # Strategy 2: pip uninstall against the interpreter that actually owns
-    # the ``lemonade-server`` console script. Pip-uninstalling against
-    # ``sys.executable`` is wrong here: when invoked from the installer
-    # bundle that's the GAIA venv, NOT where Lemonade lives.
-    python = _resolve_lemonade_python()
-    if python is None:
-        _print(
-            "  [lemonade] lemonade-server not on PATH; skipping pip uninstall.",
-            printer=printer,
-        )
+    result = installer.uninstall(silent=True)
+    if result.success:
+        _print("  [lemonade] uninstalled Lemonade Server", printer=printer)
     else:
-        try:
-            result = subprocess.run(
-                [python, "-m", "pip", "uninstall", "-y", "lemonade-sdk"],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
-            if result.returncode == 0:
-                _print(
-                    f"  [lemonade] removed via `{python} -m pip uninstall lemonade-sdk`",
-                    printer=printer,
-                )
-                return True
-            _print(
-                "  [lemonade] pip uninstall did not remove lemonade-sdk "
-                f"(exit {result.returncode}); giving up cleanly",
-                printer=printer,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            _print(
-                f"  [lemonade] pip uninstall unavailable: {exc}",
-                printer=printer,
-            )
-
-    _print(
-        "  [lemonade] could not auto-remove Lemonade Server. If you want it "
-        "gone, uninstall it manually via your OS package manager.",
-        printer=printer,
-    )
-    return True  # best-effort — never fail the command
+        _print(
+            f"  [lemonade] could not uninstall Lemonade Server: {result.error}",
+            printer=printer,
+        )
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1236,6 +1517,8 @@ def execute_plan(
     half-uninstalled tree behind.
     """
     all_ok = True
+    venv_path = _gaia_home(home) / "venv"
+    bin_path = _gaia_home(home) / "bin"
 
     for message in plan.blocked_edits:
         _print(f"  [error] {message}", printer=printer)
@@ -1243,15 +1526,41 @@ def execute_plan(
 
     def _remove(path: Path) -> None:
         nonlocal all_ok
-        try:
-            if not _remove_path(path, allowed_roots=allowed_roots, printer=printer):
+        # Windows cannot delete the active venv's interpreter or extension
+        # modules, nor the ~/.gaia/bin launcher that started us. Defer these
+        # known GAIA-owned paths before rmtree can leave a partial tree behind.
+        if (
+            _is_windows()
+            and not _is_link(path)
+            and (
+                (path == venv_path and _is_running_from_venv(path))
+                or (path == bin_path and _is_launched_from(path))
+            )
+        ):
+            if not _defer_windows_venv_removal(path, printer=printer):
                 all_ok = False
+            return
+
+        try:
+            if _remove_path(path, allowed_roots=allowed_roots, printer=printer):
+                return
         except RuntimeError as exc:
             _print(f"  [error] {exc}", printer=printer)
             all_ok = False
+            return
+
+        all_ok = False
+
+    # Before the venv goes: clearing credentials imports GAIA modules from it.
+    if plan.clear_credentials and not _clear_credentials(printer=printer):
+        all_ok = False
 
     for path in plan.unique_paths():
         _remove(path)
+
+    if plan.shim_path is not None:
+        if not _remove_shim(plan.shim_path, _gaia_home(home), printer):
+            all_ok = False
 
     if plan.purge_models_path is not None:
         _remove(plan.purge_models_path)
@@ -1269,7 +1578,14 @@ def execute_plan(
             all_ok = False
 
     if plan.purge_lemonade:
-        _remove_lemonade(printer=printer)
+        if not _remove_lemonade(printer=printer):
+            all_ok = False
+
+    if any(label == "--purge" for label, _ in plan.tiered_paths):
+        gaia_home = _gaia_home(home).resolve(strict=False)
+        kept = [path.name for path in _kept_entries(plan, gaia_home)]
+        if kept:
+            _print(f"  [kept] in {gaia_home}: {', '.join(kept)}", printer=printer)
 
     _print(printer=printer)
     if all_ok:
@@ -1398,7 +1714,8 @@ def run(
 
     if not _should_skip_prompt(yes):
         prompt = (
-            f"Permanently delete the above from {resolved_home}? [y/N]: "
+            f"Permanently delete the above, including what GAIA remembers about "
+            f"you, from {resolved_home}? [y/N]: "
             if purge
             else "Continue? [y/N]: "
         )
@@ -1448,17 +1765,21 @@ def register_subparser(
         "--purge",
         action="store_true",
         help=(
-            "Tier 3: remove venv + chat + documents + embedded Lemonade + "
-            "electron config + install logs + installer binaries (~/.gaia/bin) + "
-            "traces + daemon state (~/.gaia/host, stopping the daemon first), "
-            "and the installer's shell rc / user PATH edits. Implies --venv."
+            "Tier 3: remove venv + chats + documents + memory, file and "
+            "scratchpad indexes, goals, sessions, config.json, installed agents, "
+            "caches + embedded Lemonade + electron config and logs + installer "
+            "binaries (~/.gaia/bin) + traces + daemon state (~/.gaia/host, "
+            "stopping the daemon first) + GAIA's sign-ins and API keys in the OS "
+            "credential store + the desktop app's ~/.local/bin/gaia shim, and "
+            "the installer's shell rc / user PATH edits. Keeps ~/.gaia itself, "
+            "mcp_servers.json, connectors/ and skills/. Implies --venv."
         ),
     )
     parser.add_argument(
         "--purge-lemonade",
         action="store_true",
         dest="purge_lemonade",
-        help="Also uninstall Lemonade Server (requires --purge).",
+        help="Also uninstall a system-wide Lemonade Server (requires --purge).",
     )
     parser.add_argument(
         "--purge-models",
