@@ -99,6 +99,11 @@ def is_placeholder_title(title: str | None) -> bool:
     return (title or "").strip().lower() in PLACEHOLDER_TITLES
 
 
+def _path_key(filepath: str) -> str:
+    """A case-insensitive form of *filepath*, for comparing stored paths."""
+    return str(Path(filepath)).replace("\\", "/").casefold()
+
+
 # Sentinel used by update_document_status to distinguish "caller passed None to clear
 # last_error" from "caller did not pass last_error at all" (leaving it unchanged).
 _UNSET = object()
@@ -1732,6 +1737,19 @@ class ChatDatabase:
                 return None
 
             return self._enrich_document(dict(row))
+
+    def path_held_by_other_content(self, filepath: str, file_hash: str) -> bool:
+        """Whether a library row for different content still names *filepath*.
+
+        Compared case-insensitively: on Windows and macOS two names that differ
+        only in case are one file.
+        """
+        wanted = _path_key(filepath)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT filepath FROM documents WHERE file_hash != ?", (file_hash,)
+            ).fetchall()
+        return any(_path_key(row["filepath"] or "") == wanted for row in rows)
 
     def _enrich_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         """Add sessions_using count to document dict.

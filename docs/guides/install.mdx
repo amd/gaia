@@ -197,8 +197,9 @@ with no address uses the one `gaia lemonade detect` finds on this PC.
 - **API key:** if your server was started with `LEMONADE_API_KEY`, GAIA asks for it
   (`--api-key-stdin` reads it from a pipe). It's kept in the OS credential store,
   never in GAIA's config file.
-- **Down:** if your server isn't answering, GAIA says so and how to start it. It
-  never starts its own instead.
+- **Down:** if your server isn't answering, GAIA says so. The terminal also shows
+  how to start it on this PC; the desktop app asks you to start it the way you
+  usually do. GAIA never starts its own instead.
 - **What GAIA does on your server:** registers its embedding model
   (`user.embeddinggemma-300m-GGUF`), downloads the models it needs and loads them.
   Its chat model loads with GAIA's context size for that load.

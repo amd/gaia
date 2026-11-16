@@ -688,6 +688,114 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const PICTURE = '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800"><rect width="1200" height="800" fill="#6a8fd8"/><circle cx="880" cy="240" r="110" fill="#ffe08a"/></svg>';
+
+async function withSentImages(page: Page): Promise<void> {
+    await page.route('**/api/files/uploads/*', (route) => route.fulfill({ status: 200, contentType: 'image/svg+xml', body: PICTURE }));
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [{
+                    id: 1, session_id: ANSWER_SESSION, role: 'user', created_at: NOW.toISOString(), rag_sources: null,
+                    content: 'ما رأيك؟\n\n![a.png](/api/files/uploads/a1.png)\n![b.png](/api/files/uploads/b2.png)\n![c.png](/api/files/uploads/c3.png)',
+                }],
+                total: 1,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`sent images are small tiles, and the viewer steps the way the page reads (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withSentImages);
+        const tiles = page.locator('.image-thumb');
+        await expect(tiles).toHaveCount(3);
+        for (const box of await tiles.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height))) {
+            expect(box).toBeLessThanOrEqual(160);
+        }
+        expect(await audit(page)).toEqual([]);
+        await tiles.first().click();
+        const dialog = page.getByRole('dialog');
+        await expect(dialog).toBeVisible();
+        const prev = await dialog.locator('.image-viewer-prev').boundingBox();
+        const next = await dialog.locator('.image-viewer-next').boundingBox();
+        expect(locale === 'ar' ? prev!.x > next!.x : prev!.x < next!.x, 'previous sits at the start edge').toBe(true);
+        const img = await dialog.locator('.image-viewer-img').boundingBox();
+        expect(img!.x).toBeGreaterThanOrEqual(0);
+        expect(img!.x + img!.width).toBeLessThanOrEqual(1400);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`image-viewer-${locale}.png`) });
+    });
+}
+
+const RAW_MODEL_ERROR = "Failed to start the query run: Failed to preload Lemonade model 'no-such-model-xyz-123' with ctx_size=65536 "
+    + "on idle server at http://localhost:64679/api/v1: Failed to auto-download 'no-such-model-xyz-123': Download failed: "
+    + 'When registering a new model, the model name must include the `user` namespace. Received: no-such-model-xyz-123';
+
+async function withFailedTurn(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Say hello.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: RAW_MODEL_ERROR, created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [{ id: 1, type: 'error', label: 'Error', detail: RAW_MODEL_ERROR, active: false, success: false }],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed turn names the cause and offers Settings, with the server error under Details (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailedTurn);
+        const reply = page.locator('.msg-error');
+        await expect(reply.locator('.msg-failed-lead')).toBeVisible();
+        await expect(reply.locator('details.msg-failed-details')).not.toHaveAttribute('open', '');
+        // Collapsed, the server's words are not on screen.
+        await expect(reply.locator('.msg-failed-details .md-content')).toBeHidden();
+        await expect(reply.locator('.msg-try-again', { hasText: '›' })).toHaveCount(1);
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`failed-turn-${locale}.png`) });
+        await reply.locator('.msg-failed-details summary').click();
+        await expect(reply.locator('.msg-failed-details .md-content')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`failed-turn-open-${locale}.png`) });
+    });
+
+    test(`a failed turn's Settings button lands on the setting it names (${locale})`, async ({ page }) => {
+        const worded = "There is no model called `no-such-model-xyz-123` to download: the model server doesn't list it. "
+            + 'If you typed this model ID yourself, clear it under Settings > Advanced > Custom model ID.';
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: {
+                    messages: [
+                        { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Say hello.', created_at: NOW.toISOString(), rag_sources: null },
+                        { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: worded, created_at: NOW.toISOString(), rag_sources: null, failed: true },
+                    ],
+                    total: 2,
+                },
+            }));
+            await p.route('**/api/settings', (route) => route.fulfill({ json: {
+                custom_model: 'no-such-model-xyz-123', model_status: { found: false, checked: true, downloaded: false, loaded: false },
+                context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+            } }));
+        });
+        await page.locator('.msg-error .msg-try-again').filter({ hasText: /Advanced|متقدم/ }).click();
+        const custom = page.locator('details[data-settings-target="custom-model"]');
+        // Opened and focused, not the top of the tab (#7861).
+        await expect(custom).toHaveAttribute('open', '');
+        await expect(custom.locator('summary')).toBeFocused();
+        await expect(custom.locator('input')).toBeInViewport();
+        await expect(page.locator('.settings-back')).toHaveCount(0);
+        await shot(page, `failed-turn-to-custom-model-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 /** A new chat whose empty history is still loading when its first message goes out. */
 async function withSlowNewChat(page: Page): Promise<void> {
     const created = { ...SESSIONS[0], title: 'New chat', message_count: 0 };
@@ -1477,6 +1585,77 @@ test('document being indexed', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    // The dialog was centred on its content, so its title and path box jumped as rows came and went.
+    test(`the document library stays put as rows arrive, and long names keep their end (${locale})`, async ({ page }) => {
+        const names = [
+            'Quarterly business review for the regional sales team final draft v7 (reviewed by finance).pdf',
+            'مراجعة الأعمال الفصلية لفريق المبيعات الإقليمي المسودة النهائية الإصدار السابع.docx',
+            'garden-notes.txt',
+        ];
+        let listed = false;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: listed
+                ? { documents: names.map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096, chunk_count: 2, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 })), total: 3, total_size_bytes: 1, total_chunks: 1 }
+                : { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 } }));
+        });
+        // Read the top once the panel's slide-in (12px) has landed, or a slow runner measures mid-slide.
+        const settledTop = async () => {
+            const modal = page.locator('.doc-modal');
+            await modal.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+            return (await modal.boundingBox())!.y;
+        };
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.empty-docs')).toBeVisible();
+        const topEmpty = await settledTop();
+        listed = true;
+        // Re-open, which lists again: the same dialog with three rows.
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.doc-modal')).toHaveCount(0);
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-row')).toHaveCount(3);
+        expect(Math.abs((await settledTop()) - topEmpty)).toBeLessThan(1);
+        const tail = page.locator('.doc-name-tail').first();
+        await expect(tail).toHaveText(/finance\)\.pdf$/);
+        await expect(tail).toBeInViewport();
+        // A name in the other script still starts at the UI's own edge.
+        const other = page.locator('.doc-name-split').nth(locale === 'ar' ? 0 : 1);
+        const [textBox, infoBox] = await other.evaluate((el) => {
+            const parts = [...el.children].map((c) => c.getBoundingClientRect());
+            const info = el.closest('.doc-info')!.getBoundingClientRect();
+            return [
+                { left: Math.min(...parts.map((r) => r.left)), right: Math.max(...parts.map((r) => r.right)) },
+                { left: info.left, right: info.right },
+            ];
+        });
+        if (locale === 'ar') expect(Math.abs(textBox.right - infoBox.right)).toBeLessThan(2);
+        else expect(Math.abs(textBox.left - infoBox.left)).toBeLessThan(2);
+        // A long Arabic name ends with ".docx" read left to right, never "docx." at its front.
+        const arabic = page.locator('.doc-name-split').nth(1);
+        const ext = await arabic.evaluate((el) => {
+            const last = el.lastElementChild!;
+            const text = last.firstChild!;
+            const box = (from: number, to: number) => {
+                const r = document.createRange();
+                r.setStart(text, from);
+                r.setEnd(text, to);
+                return r.getBoundingClientRect();
+            };
+            const at = (text.textContent ?? '').lastIndexOf('.');
+            return {
+                text: last.textContent,
+                box: last.getBoundingClientRect(),
+                dot: box(at, at + 1), word: box(at + 1, at + 5),
+            };
+        });
+        expect(ext.dot.right, 'the dot should come before "docx", read left to right').toBeLessThanOrEqual(ext.word.left + 0.5);
+        expect(ext.text).toBe('.docx');
+        // The name runs right to left, so its end, the extension, is its left-most part.
+        const headBox = await arabic.locator('.doc-name-head').boundingBox();
+        expect(ext.box.right).toBeLessThanOrEqual(headBox!.x + 0.5);
+        await shot(page, `documents-${locale}-long-names`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     // A file GAIA couldn't read used to be counted with the readable ones.
     test(`a document library with a file that could not be read (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
@@ -4379,6 +4558,42 @@ function streamThenWait(events: unknown[]): void {
     };
 }
 
+const SPEECH_NPU_PART = [
+    { type: 'tool_start', tool: 'transcribe_media', detail: 'standup.wav' },
+    { type: 'status', phase: 'speech_model_download', message: "Downloading the speech model's NPU part (0.7 GB), no progress shown" },
+];
+const SPEECH_DOWNLOADED = [
+    ...SPEECH_NPU_PART,
+    { type: 'status', phase: 'speech_model_downloaded', message: 'Downloaded the speech model (2.4 GB)' },
+    { type: 'status', phase: 'recording', message: 'Transcribing 14s of audio' },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`the speech model's NPU part says why it has no percent (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_NPU_PART);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.streaming-bubble')).toContainText(/no progress shown|دون عرض للتقدّم/);
+        await shot(page, `speech-npu-part-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a finished speech model download sits above the transcription still running (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_DOWNLOADED);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        const live = page.locator('.streaming-bubble');
+        await expect(live.locator('.flow-done')).toBeVisible();
+        // In time order (#7865): the download finished first, so it is drawn first.
+        const [done, running] = [await live.locator('.flow-done').boundingBox(), await live.locator('.flow-tool.active').first().boundingBox()];
+        expect(done!.y).toBeLessThan(running!.y);
+        await shot(page, `speech-downloaded-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const PYTHON_PROMPT = [{
     type: 'permission_request', tool: 'run_python', tool_label: 'running python', confirm_id: 'c-rtl',
     args: { code: 'p = r"C:\\Users\\you\\notes.txt"\nt = open(p, encoding="utf-8").read()\nprint(len(t))' },
@@ -4420,7 +4635,7 @@ for (const locale of ['ar', 'en'] as const) {
         await page.addInitScript(streamThenWait, [{
             type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-always',
             args: { file_path: '/private/tmp/plans/weekly-grocery-plan.md', content: '# Weekly grocery plan\n' },
-            always_scope: 'write_file on files in /private/tmp/plans', always_label: 'writing files in /private/tmp/plans',
+            always_scope: 'changes to files in /private/tmp/plans', always_label: 'changing files in /private/tmp/plans',
         }]);
         await open(page, `#${ANSWER_SESSION}`, locale);
         await page.locator('textarea').first().fill('save my grocery plan');
@@ -4461,8 +4676,15 @@ for (const locale of ['ar', 'en'] as const) {
         const card = page.locator('.perm-card');
         await expect(card).toBeVisible();
         const always = card.locator('.perm-btn').nth(1);
-        await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
-        if (locale === 'en') await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        if (locale === 'en') {
+            await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
+            await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        } else {
+            const title = await always.getAttribute('title');
+            expect(title?.replace(/[\u2066-\u2069]/g, '')).toBe(`تغيير الملفات في ${FOLDER}`);
+            await expect(always).not.toContainText('Documents');
+            expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+        }
         expect(await audit(page)).toEqual([]);
         await shot(page, `permission-folder-${locale}`);
     });
@@ -4641,6 +4863,32 @@ for (const locale of ['ar', 'en'] as const) {
         await expect(page.locator('.flow-tool-label').filter({ hasText: /run python|request user input/ })).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
         await shot(page, `declined-steps-${locale}`);
+    });
+}
+
+// A call GAIA turned down itself, for a request that only asked to translate.
+const AUTO_DECLINED_STEPS = [
+    { type: 'tool_start', tool: 'run_shell_command', narration: 'Running a command' },
+    {
+        type: 'tool_result', success: false, status: 'denied', declined_by: 'agent',
+        summary: 'Not run: the request only asks for text in the reply.',
+    },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a call GAIA turned down itself reads as not needed, not as declined (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, AUTO_DECLINED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('translate "Good morning" to French');
+        await page.keyboard.press('Enter');
+        const row = page.locator('.flow-steps.live .flow-tool').first();
+        await expect(row).toBeVisible();
+        if (locale === 'en') await expect(row.locator('.flow-tool-label')).toHaveText(/^Not run, not needed for this request: /);
+        await expect(row.locator('.flow-tool-label')).not.toContainText('You declined');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `auto-declined-step-${locale}`);
     });
 }
 

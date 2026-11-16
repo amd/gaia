@@ -251,6 +251,8 @@ are exact even on a small local model.
 ### See Generated Images and Audio
 
 An image the agent generates shows in the answer; click it to see it full size.
+Images you attach show as small tiles in the message; click one to see it full
+size and use the arrows to step through the others in that message.
 Music and sound effects it generates show a player with the file name and
 length (see [Local Music and Sound Effects](/guides/audio-generation)). Both
 still show when you reopen the chat. Only files GAIA saved in its own
@@ -790,9 +792,11 @@ The question appears above the message box with three answers:
 
 - **Allow once**
 - **Always allow** the same kind of action in this chat. For a host-resolved
-  file write, this covers files in that folder; unresolved or safety-sensitive
-  paths stay exact and continue to prompt (e.g. *writing notes.md*), and so
-  does a file whose real location is outside that folder
+  file write or edit, this covers changes to files in that folder: writing,
+  editing, and a plain rename that keeps the file in the folder. Unresolved or
+  safety-sensitive paths stay exact and continue to prompt (e.g. *writing
+  notes.md*), and so do a subfolder, a file whose real location is outside the
+  folder, and a move out of it
 - **Deny**
 
 When the same question comes back after you allowed it once, the prompt says
@@ -1085,7 +1089,9 @@ monthly total does, including answers you later edited, retried or deleted;
 its count of chats covers only the chats you still have. A stopped answer
 sends no token count, so its cost is unknown: it shows "Not reported", the
 total it belongs to reads as a floor, such as "≥ $0.04", and the breakdown says
-how many were left out, since the provider may still bill them. On a model on
+how many were left out, since the provider may still bill them. A message that
+failed before any reply came is not one of these and is not counted, here or
+in the month's total. On a model on
 this PC, or a cloud model with no known price, nothing is shown.
 
 **Settings → Advanced → Model server** switches between GAIA's own Lemonade

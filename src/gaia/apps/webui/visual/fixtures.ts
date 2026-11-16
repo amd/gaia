@@ -492,7 +492,7 @@ const DISCORD_BOT = {
 export const DISCORD_STATES: Record<string, Record<string, unknown>> = {
     none: DISCORD_BASE,
     pairing: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'pairing', pairing_code: 'K7QX4M9P', pairing_expires_at: 1e10, detail: 'DM the code to the bot to pair it with your Discord account.' },
-    connected: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'connected', paired: true, owner_name: 'someone_with_a_long_name', model: 'Qwen3.6-35B-A3B-GGUF', always_allowed: ['write_file on files in C:/Users/someone_with_a_long_name/Documents/projects/quarterly-report', 'dir'] },
+    connected: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'connected', paired: true, owner_name: 'someone_with_a_long_name', model: 'Qwen3.6-35B-A3B-GGUF', always_allowed: ['changes to files in C:/Users/someone_with_a_long_name/Documents/projects/quarterly-report', 'dir'] },
     crashed: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'stopped', running: false, paired: true, owner_name: 'kalin', detail: 'The Discord bridge stopped unexpectedly.' },
     taken_over: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'taken_over', paired: true, owner_name: 'kalin', detail: 'Another PC is answering this Discord bot.' },
     token_invalid: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'token_invalid', paired: true, owner_name: 'kalin', detail: 'Discord rejected the bot token (HTTP 401). Reset the token in the Developer Portal and paste the new one.' },

@@ -55,6 +55,7 @@ export function hostOf(url: string): string {
 function costSay(summary: TurnSummary, stopped: boolean): Say {
     const { cost } = summary;
     if (cost.kind === 'local') return { key: 'rail.costLocal' };
+    if (cost.kind === 'no_reply') return { key: 'rail.costNoReply' };
     if (cost.kind === 'unreported') return { key: stopped ? 'rail.costUnreportedStopped' : 'rail.costUnreported' };
     if (cost.kind === 'estimate' && typeof cost.usd === 'number') {
         // The "$" rides inside the value so the bidi isolate keeps it left of the digits in Arabic.

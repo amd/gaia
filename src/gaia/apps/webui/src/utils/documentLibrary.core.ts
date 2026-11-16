@@ -8,7 +8,8 @@ import { dateLocale, type Translate } from '../i18n/translator';
 
 /** How far a running index has got: PDF pages read, then chunks embedded. */
 export interface IndexProgress {
-    phase: 'reading' | 'embedding';
+    /** `starting`: waiting for GAIA's model server to start, at launch. */
+    phase: 'starting' | 'reading' | 'embedding';
     done: number;
     /** Null when the count isn't known upfront (e.g. pages of a non-PDF). */
     total: number | null;
@@ -60,6 +61,7 @@ const fmt = (n: number) => n.toLocaleString('en-US');
 
 /** "Reading page 37 of 229", "Embedding 412 of 1,180"; just the count when the total isn't known. */
 export function progressLabel(p: IndexProgress, t: Translate): string {
+    if (p.phase === 'starting') return t('docs.progress.starting');
     const done = fmt(p.done);
     if (p.phase === 'reading') {
         return p.total != null

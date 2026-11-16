@@ -12,6 +12,8 @@ a whole sentence or a phrase that reads correctly after the swap.
 the Agent UI's setup log swaps for the app's own.
 """
 
+import re
+
 from gaia.llm.hybrid import CLI_HYBRID_SWAPS
 from gaia.llm.local_only import SETTINGS_HINT as CLI_LOCAL_ONLY_HINT
 
@@ -29,6 +31,25 @@ CLI_MODEL_SWITCH_HINT = (
 SERVICE_MODEL_SWITCH_HINT = (
     "Pick another model with the request's `model` field, or change the GAIA "
     "host's default with `gaia config set default_model <model-id>`."
+)
+
+#: How GAIA's own model server gets started. The app starts it itself, so the
+#: Agent UI drops the command.
+CLI_OWN_SERVER_START_HINT = (
+    "GAIA starts its Lemonade Server when it needs it. To start it now, run: "
+    "gaia lemonade embedded start"
+)
+AGENT_UI_OWN_SERVER_START_HINT = "GAIA starts its model server when it needs it"
+
+#: What an Agent UI user does about a model that isn't downloaded, or one that
+#: failed to load; a terminal gets the client or restart command instead.
+AGENT_UI_MODEL_DOWNLOAD_HINT = (
+    "Download it under Settings > Model, or open Settings > Setup and press Run "
+    "setup again, then try again."
+)
+AGENT_UI_PRELOAD_RETRY_HINT = (
+    "Send your message again. If it fails the same way, pick another model "
+    "from the model menu next to the Send button."
 )
 
 #: What a TUI user does when the provider rejects the key (HTTP 401/403). The
@@ -122,6 +143,16 @@ APP_SERVER_DOWN_HINT = (
     f"Send your message again and GAIA will start its model server. {APP_RESTART_HINT}"
 )
 
+#: The same for a model server GAIA doesn't run: only its owner can start it.
+#: No command: the apps can't know how a server they didn't start is started.
+APP_OTHER_SERVER_START_HINT = (
+    "GAIA doesn't run this model server, so it can't start it. Start it the "
+    "way you usually do"
+)
+APP_OTHER_SERVER_DOWN_HINT = (
+    f"{APP_OTHER_SERVER_START_HINT}, then send your message again."
+)
+
 #: When GAIA's background service is not running at all, so the CLI must start
 #: it: `gaia daemon status` (the restart hint) would only report it is down.
 APP_SERVICE_DOWN_HINT = "Close GAIA and open it again so its background service starts."
@@ -161,9 +192,30 @@ AGENT_UI_LOCAL_ONLY_HINT = (
     "To allow cloud models again, turn off Local only under Settings > Privacy."
 )
 
+# Terminal remedies built around a command only known at run time.
+_AGENT_UI_COMMAND_REMEDIES = (
+    (
+        re.compile(
+            r"(isn't installed on the local LLM server\.) .*? Or: "
+            + re.escape(TUI_SETUP_HINT),
+            re.DOTALL,
+        ),
+        r"\1 " + AGENT_UI_MODEL_DOWNLOAD_HINT,
+    ),
+    (
+        re.compile(
+            r"To recover manually: stop the running server, then restart it "
+            r"\(.*?\) and re-run your GAIA command\.",
+            re.DOTALL,
+        ),
+        AGENT_UI_PRELOAD_RETRY_HINT,
+    ),
+)
+
 _SWAPS = {
     "agent_ui": (
         (CLI_LOCAL_ONLY_HINT, AGENT_UI_LOCAL_ONLY_HINT),
+        (CLI_OWN_SERVER_START_HINT, AGENT_UI_OWN_SERVER_START_HINT),
         (CLI_VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_HINT),
         (VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_STEP),
         (TUI_SERVER_RESTART_HINT, AGENT_UI_SERVER_RESTART_HINT),
@@ -219,6 +271,9 @@ def surface_wording(text: str, surface: str) -> str:
         )
     if not text:
         return text
+    if surface == "agent_ui":
+        for pattern, own in _AGENT_UI_COMMAND_REMEDIES:
+            text = pattern.sub(own, text)
     for tui, own in _SWAPS[surface]:
         text = text.replace(tui, own)
     return text

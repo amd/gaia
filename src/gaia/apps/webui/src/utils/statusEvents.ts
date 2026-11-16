@@ -8,6 +8,9 @@ import type { StreamEvent } from '../types';
 import { RECONNECTING_PHASE } from './constants';
 import { agentEventToStep, isProgressTick, statusText } from './streamSteps';
 
+/** Same as SPEECH_MODEL_DOWNLOADED_PHASE in audio_tools.py. */
+const SPEECH_MODEL_DOWNLOADED = 'speech_model_downloaded';
+
 /** Live phases that are a call's own label or the client's own notice, not the call's progress. */
 const CALL_LABEL_PHASES = new Set(['tool', 'waiting', RECONNECTING_PHASE]);
 
@@ -38,6 +41,16 @@ export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: numbe
             percent: event.percent,
             etaSeconds: event.eta_seconds,
         });
+        return;
+    }
+    if (event.phase === SPEECH_MODEL_DOWNLOADED && msg) {
+        // A download the user waited on stays in the turn's steps.
+        const done = { label: msg, active: false, success: true, kept: true };
+        const last = store.agentSteps[store.agentSteps.length - 1];
+        if (last && last.type === 'status' && last.active) store.updateLastAgentStep({ ...done, detail: undefined });
+        // It finished inside the running call, so it goes above that call's row, not under it.
+        else store.addStepBeforeRunningCall({ id: ++stepIdRef.current, type: 'status', timestamp: Date.now(), ...done });
+        store.setLiveStatus(null);
         return;
     }
     if (event.phase && msg) store.setLiveStatus(msg, event.phase);

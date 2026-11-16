@@ -124,11 +124,13 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
         setDraft(null);
         if (save) onRename(session.id, draft);
     };
+    // Held while the pointer rests on it: the wider label reverting under a reader puts Pin under the click.
+    const [overDelete, setOverDelete] = useState(false);
     useEffect(() => {
-        if (!confirm) return;
+        if (!confirm || overDelete) return;
         const timer = setTimeout(() => setConfirm(false), 3000);
         return () => clearTimeout(timer);
-    }, [confirm]);
+    }, [confirm, overDelete]);
     useEffect(() => {
         if (!editing && refocus.current) {
             refocus.current = false;
@@ -293,6 +295,8 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
                         type="button"
                         className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
                         onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
+                        onPointerEnter={() => setOverDelete(true)}
+                        onPointerLeave={() => setOverDelete(false)}
                         aria-label={confirm
                             ? (unsent > 0
                                 ? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })

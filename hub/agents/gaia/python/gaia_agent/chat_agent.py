@@ -57,7 +57,12 @@ from gaia_agent.python_jobs import (
     stopped_job_result,
     watch_folders,
 )
-from gaia_agent.python_runner import BUNDLED_LIBRARIES, is_frozen, python_command
+from gaia_agent.python_runner import (
+    BUNDLED_LIBRARIES,
+    GUARDED_FOLDERS_ENV,
+    is_frozen,
+    python_command,
+)
 from gaia_agent.session import SessionManager
 from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent.tool_requests import requested_tools
@@ -441,6 +446,13 @@ def _python_run_result(
     return result
 
 
+def _guarded_folders() -> str:
+    """The credential folders a script may not open files in, for its environment."""
+    from gaia.security import SECRET_DIRECTORIES
+
+    return os.pathsep.join(sorted(SECRET_DIRECTORIES))
+
+
 def _record_folder_changes(watch) -> Optional[str]:
     """Record what a script added to the folders it names; a note if that failed."""
     try:
@@ -467,6 +479,7 @@ def _python_script_run_context(
     env = child_env(relaunch_self=True)
     # The tools decode the output as UTF-8; the locale codec can't print a ✓.
     env["PYTHONIOENCODING"] = "utf-8"
+    env[GUARDED_FOLDERS_ENV] = _guarded_folders()
     # Files it writes with a bare open() are UTF-8, like the file tools write.
     env["PYTHONUTF8"] = "1"
     # A timed-out run still returns what it printed before the kill.
@@ -1171,6 +1184,39 @@ class ChatAgent(
         )
 
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
+
+    def follow_model_switch(self) -> None:
+        """Point what was chosen for the model this agent was built on at the
+        one it runs now: image reading, and the model documents are summarized with.
+        """
+        model = self.model_id
+        if "vlm_model" in vars(self):
+            vision = resolve_default_vision_model(model)
+            if vision != self.vlm_model:
+                from gaia.llm.vlm_client import VLMClient
+
+                self.vlm_model = vision
+                self.vlm_client = (
+                    None
+                    if vision is None
+                    else VLMClient(vlm_model=vision, base_url=self.vlm_base_url)
+                )
+        # vars(): tests build agents without running __init__.
+        if (
+            getattr(self, "_use_claude", False)
+            or not model
+            or "_rag_config_kwargs" not in vars(self)
+        ):
+            return
+        self._rag_config_kwargs["model"] = model
+        rag_config = self._rag_config
+        if rag_config is not _UNSET and rag_config is not None:
+            rag_config.model = model
+            rag_config.vlm_model = resolve_default_vision_model(model)
+        rag = self._rag
+        if rag is not _UNSET and rag is not None:
+            # Its own chat client names the model per call.
+            rag.chat.config.model = model
 
     @property
     def rag(self) -> Optional[RAGSDK]:
@@ -2928,6 +2974,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 env = child_env(relaunch_self=True)
                 env["PYTHONIOENCODING"] = "utf-8"
+                env[GUARDED_FOLDERS_ENV] = _guarded_folders()
                 env["PYTHONUTF8"] = "1"
                 env.setdefault("PYTHONUNBUFFERED", "1")
                 if project:
@@ -3042,7 +3089,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             # getattr: tools can register from super().__init__(), before
             # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                model=resolve_default_vision_model(),
+                model=resolve_default_vision_model(getattr(self, "model_id", None)),
                 base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
             )
             logger.debug(

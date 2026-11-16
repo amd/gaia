@@ -9,6 +9,19 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The sidecar stops when the GAIA daemon that started it is killed.** The
+  daemon now passes its pid in `GAIA_DAEMON_PID`; the sidecar polls it and
+  shuts down through its normal SIGINT path within seconds of the daemon dying,
+  instead of running until the next daemon reaps it.
+- **A Lemonade build suffix no longer leaks into the version number.** A
+  Lemonade build reporting `2026.48~1809.2d1f23e4` read its hash's leading
+  digit as the patch number; the `~`/`+` build suffix is now dropped before
+  the version is compared, matching core GAIA.
+
+- **`CONTRACT.md` now documents `GET /v1/email/briefing` (#3625).** The
+  briefing endpoint and its `cache_age_seconds`/`stale` fields were missing
+  from the reference, and the `2.14` history row now names the four response
+  fields that shipped under it without a version bump.
 - **Sender preferences now order a pre-scan across every connected mailbox
   (#3623).** With two mailboxes, each was sorted on its own and the results
   were joined in connection order, so the archive list could keep the first
@@ -348,8 +361,8 @@ contract version is tracked separately as
   `outlook_backend.py` never parses Gmail operator syntax, so converting
   `w` to days has no effect there. Quoted Outlook `$search` values are
   escaped separately (see the Graph quote escape entry above).
-- **An Outlook search using `is:starred`, `after:`, `before:`, `label:`,
-  `has:`, or `in:` returned nothing instead of an error (#2996).** These
+- **An Outlook search using `is:starred`, `after:`, `before:`, `newer:`,
+  `older:`, `label:`, `has:`, or `in:` returned nothing instead of an error (#2996).** These
   Gmail-style operators have no Microsoft Graph translation, so
   `translate_query` let each one fall through to the `$search` bucket and
   reach Graph as inert literal text: Graph never errors on an unrecognised

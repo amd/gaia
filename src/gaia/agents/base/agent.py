@@ -139,6 +139,11 @@ from gaia.agents.base.python_scope import python_scope_refusal
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
 from gaia.agents.base.task_lessons import attach as attach_task_lessons
+from gaia.agents.base.text_task import (
+    TEXT_ONLY_DECLINE,
+    hands_over_text_only,
+    instruction_part,
+)
 from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
@@ -3812,20 +3817,17 @@ Do NOT wrap conversational replies in JSON.
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer, got {value!r}.")
         # Env wins over the arguments; malformed values fail here, not mid-turn.
-        mode = context_eviction_from_env() or context_eviction
-        self.context_eviction_enabled = resolve_context_eviction(
-            mode, model_id, cloud=model_is_cloud
-        )
-        evictor = ContextEvictor(
-            threshold_tokens=evict_threshold_from_env()
+        self._context_eviction_mode = context_eviction_from_env() or context_eviction
+        self._context_eviction_settings = {
+            "threshold_tokens": evict_threshold_from_env()
             or context_eviction_threshold_tokens,
-            keep_steps=evict_keep_from_env() or context_eviction_keep_steps,
-            min_batch_tokens=evict_min_batch_from_env()
+            "keep_steps": evict_keep_from_env() or context_eviction_keep_steps,
+            "min_batch_tokens": evict_min_batch_from_env()
             or context_eviction_min_batch_tokens,
-        )
-        self._context_evictor: Optional[ContextEvictor] = (
-            evictor if self.context_eviction_enabled else None
-        )
+        }
+        self.context_eviction_enabled = False
+        self._context_evictor: Optional[ContextEvictor] = None
+        self.apply_context_eviction(model_id, cloud=model_is_cloud)
         # Set by the step head when a batch fires; the step's stats record takes it.
         self._pending_eviction: Optional[Dict[str, int]] = None
         # What the last overflow shrink put away.
@@ -4902,6 +4904,17 @@ Do NOT wrap conversational replies in JSON.
         self._instance_tools = dict(_TOOL_REGISTRY)
         if hasattr(self, "_tool_overrides"):
             self._instance_tools.update(self._tool_overrides)
+
+    def apply_context_eviction(self, model_id: Optional[str], cloud: bool) -> None:
+        """Turn context eviction on or off for *model_id*, as a new agent on it would."""
+        enabled = resolve_context_eviction(
+            self._context_eviction_mode, model_id, cloud=cloud
+        )
+        if enabled and self._context_evictor is None:
+            self._context_evictor = ContextEvictor(**self._context_eviction_settings)
+        elif not enabled:
+            self._context_evictor = None
+        self.context_eviction_enabled = enabled
 
     def apply_model_features(self, model_id: Optional[str]) -> None:
         """Offer exactly the features *model_id* gets, both ways.
@@ -8840,6 +8853,25 @@ Do NOT wrap conversational replies in JSON.
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # Handed-over text asks for no command or file change; a person
+            # asked to approve one would only be pressing Deny.
+            if hands_over_text_only(
+                str(
+                    getattr(self, "_original_user_input", None)
+                    or getattr(self, "_current_query", "")
+                    or ""
+                )
+            ):
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
+                return {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "declined_by": "agent",
+                    "error": TEXT_ONLY_DECLINE,
+                }
             # Re-asking an unanswered prompt would hold the chat for another timeout.
             call_key = (
                 getattr(self, "_turn_seq", 0),
@@ -12126,8 +12158,11 @@ Do NOT wrap conversational replies in JSON.
         self._last_tool_filter = None
 
         # Relative paths resolve against the working directory, as the file tools do.
+        # Text handed over to translate names no source to inventory.
         self._extraction_ledger = ExtractionLedger(
-            user_input, os.getcwd(), available=self._read_validator() is not None
+            instruction_part(user_input),
+            os.getcwd(),
+            available=self._read_validator() is not None,
         )
         # A test agent built via __new__ never ran Agent.__init__, so it has
         # no guard yet — create one rather than crash (mirrors _extraction_ledger).

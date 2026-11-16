@@ -90,12 +90,17 @@ export function policyAlertNotification(
     };
 }
 
-/** How a gated call ended without running: refused by the user, or its prompt timed out. */
-function denial(event: StreamEvent): 'declined' | 'timedOut' | null {
-    const data = (event.data && typeof event.data === 'object' ? event.data : {}) as { status?: unknown; timed_out?: unknown };
+/** How a gated call ended without running: refused by the user, its prompt timed out, or GAIA turned it down unasked. */
+function denial(event: StreamEvent): 'declined' | 'timedOut' | 'autoDeclined' | null {
+    const data = (event.data && typeof event.data === 'object' ? event.data : {}) as {
+        status?: unknown;
+        timed_out?: unknown;
+        declined_by?: unknown;
+    };
     const status = event.status ?? data.status;
     if (status !== 'denied') return null;
-    return event.timed_out === true || data.timed_out === true ? 'timedOut' : 'declined';
+    if (event.timed_out === true || data.timed_out === true) return 'timedOut';
+    return (event.declined_by ?? data.declined_by) === 'agent' ? 'autoDeclined' : 'declined';
 }
 
 /** What a `tool_result` adds to the tool step it finishes. */

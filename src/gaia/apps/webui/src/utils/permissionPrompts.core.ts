@@ -91,9 +91,12 @@ function toolAction(n: GaiaNotification, say: Say): string | null {
   return label.charAt(0).toLowerCase() + label.slice(1);
 }
 
+/** The scope of a folder grant shared by writes, edits and renames. */
+const FILE_CHANGE_SCOPE = 'changes to files in ';
+
 /**
  * What an "always allow" answer covers, in the UI language. The backend words
- * its scope in English (`write_file on notes.txt`, `write_file on files in /x`);
+ * its scope in English (`write_file on notes.txt`, `changes to files in /x`);
  * null when the scope isn't one of those, and the caller keeps the backend's text.
  */
 export function alwaysScopeText(n: GaiaNotification, t: Translate): string | null {
@@ -102,6 +105,9 @@ export function alwaysScopeText(n: GaiaNotification, t: Translate): string | nul
 
 /** `alwaysScopeText` in the language `say` writes, for a line built inside `t.compose`. */
 export function alwaysScopeWith(n: GaiaNotification, say: Say, wrapName: (name: string) => string = (name) => name): string | null {
+  if (n.alwaysScope?.startsWith(FILE_CHANGE_SCOPE)) {
+    return say('prompt.always.changes', { folder: wrapName(n.alwaysScope.slice(FILE_CHANGE_SCOPE.length)) });
+  }
   const action = toolAction(n, say);
   const prefix = `${n.tool} `;
   if (!action || !n.alwaysScope?.startsWith(prefix)) return null;
@@ -224,9 +230,10 @@ export function splitCommandSummary(summary: string): { command: string; folder:
 
 /** A grant's folder by its name alone, for a button; the full path stays in its tooltip. */
 export function shortScope(scope: string): string {
-  return scope.replace(/(\s)((?:[A-Za-z]:)?[\\/][^]*)$/, (_, space: string, path: string) => {
+  // A translated scope wraps its path in direction isolates (U+2068 ... U+2069).
+  return scope.replace(/(\s\u2068?)((?:[A-Za-z]:)?[\\/][^\u2069]*)(\u2069?)$/, (_, lead: string, path: string, close: string) => {
     const name = path.split(/[\\/]/).filter(Boolean).pop();
-    return name ? `${space}${name}` : `${space}${path}`;
+    return `${lead}${name ?? path}${close}`;
   });
 }
 
