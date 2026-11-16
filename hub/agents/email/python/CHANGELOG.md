@@ -13,6 +13,11 @@ contract version is tracked separately as
   daemon now passes its pid in `GAIA_DAEMON_PID`; the sidecar polls it and
   shuts down through its normal SIGINT path within seconds of the daemon dying,
   instead of running until the next daemon reaps it.
+- **A Lemonade build suffix no longer leaks into the version number.** A
+  Lemonade build reporting `2026.48~1809.2d1f23e4` read its hash's leading
+  digit as the patch number; the `~`/`+` build suffix is now dropped before
+  the version is compared, matching core GAIA.
+
 - **`CONTRACT.md` now documents `GET /v1/email/briefing` (#3625).** The
   briefing endpoint and its `cache_age_seconds`/`stale` fields were missing
   from the reference, and the `2.14` history row now names the four response
