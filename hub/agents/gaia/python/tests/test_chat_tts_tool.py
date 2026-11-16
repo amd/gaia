@@ -116,6 +116,7 @@ def test_tts_default_output_gets_an_inline_player(tts_tool):
 
     assert result["status"] == "success"
     assert result["output_path"] == result["audio_path"]
+    assert "saved_to" not in result
     card = _card(result)
     assert card is not None
     assert card["render"] == "audio"
@@ -140,6 +141,7 @@ def test_tts_saved_to_a_named_folder_still_gets_a_player(tts_tool):
     card = _card(result)
     assert card is not None and card["render"] == "audio"
     assert card["data"]["path"] == str(kept.resolve())
+    assert card["data"]["saved_to"] == str(target)
 
 
 def test_tts_copy_that_cannot_be_saved_says_where_the_recording_is(

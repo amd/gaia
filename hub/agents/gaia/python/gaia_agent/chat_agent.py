@@ -3697,7 +3697,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     "status": "error",
                     "error": f"Speech synthesis did not create a non-empty file at {saved}.",
                 }
-            return {
+            result = {
                 "status": "success",
                 "output_path": str(saved),
                 "file_path": str(saved),
@@ -3708,6 +3708,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 "model": model,
                 "chunks": len(pieces),
             }
+            if destination is not None:
+                result["saved_to"] = str(destination)
+            return result
 
         # Must run last so MCP tools don't bloat context before we know the base count.
         self._load_mcp_tools()
