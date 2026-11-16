@@ -3,10 +3,10 @@
 
 import type { DevicePairingOffer } from '../services/devicesApi';
 
-// The production phone app's scheme: `scheme: id` with APP_IDS.production in apps/mobile/app.config.ts (pairingLink.test.ts checks it).
+// The production phone app's URL scheme.
 export const PAIRING_LINK_SCHEME = 'ai.amd.gaia.mobile';
 
-/** A link the phone's "Paste the pairing link or code" screen reads (apps/mobile pairing/invite.ts parseInvite). */
+/** A link the phone's "Paste the pairing link or code" screen reads: the offer as unpadded base64url JSON. */
 export function pairingLink(offer: DevicePairingOffer): string {
     let binary = '';
     for (const byte of new TextEncoder().encode(JSON.stringify(offer))) binary += String.fromCharCode(byte);
