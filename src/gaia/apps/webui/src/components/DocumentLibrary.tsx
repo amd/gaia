@@ -695,17 +695,18 @@ export function DocumentLibrary() {
             case 'failed': {
                 const hint = doc.error_kind ? PERMANENT_FAILURE_HINTS[doc.error_kind] : undefined;
                 const serverReason = serverFailureText(doc.error_kind, t);
+                const waiting = isServerFailure(doc.error_kind);
                 const lastError = serverReason ?? doc.last_error;
                 const reason = lastError ? splitFailureReason(lastError) : null;
                 return (
                     <div className="doc-failure">
                         <div className="doc-indexing-status">
                             <span
-                                className="doc-status-badge doc-status-failed"
+                                className={waiting ? 'doc-status-badge doc-status-waiting' : 'doc-status-badge doc-status-failed'}
                                 title={lastError || undefined}
                                 aria-label={lastError ? t('docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
                             >
-                                <AlertCircle size={12} /> {hint ? t('docs.cantRead') : t('docs.failed')}
+                                <AlertCircle size={12} /> {hint ? t('docs.cantRead') : waiting ? t('docs.waiting') : t('docs.failed')}
                             </span>
                             <button
                                 className={hint ? 'btn-retry btn-retry-quiet' : 'btn-retry'}

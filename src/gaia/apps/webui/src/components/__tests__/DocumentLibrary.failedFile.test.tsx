@@ -198,4 +198,14 @@ describe('a file the model server could not embed', () => {
         expect(row).toHaveTextContent("GAIA's model server isn't answering");
         expect(row.textContent).not.toMatch(/HTTPConnectionPool|WinError|Lemonade/);
     });
+
+    it('marks its row as waiting, matching the header, not as failed', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [DOWN], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('third.md');
+        const badge = document.querySelector('.doc-failure .doc-status-badge')!;
+        expect(badge).toHaveTextContent('Waiting');
+        expect(badge).not.toHaveClass('doc-status-failed');
+    });
 });
