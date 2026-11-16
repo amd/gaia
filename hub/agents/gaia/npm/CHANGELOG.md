@@ -16,6 +16,16 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   failing the server is its owner's to start. For a `/query` with `surface:
   "agent_ui"` it names no command; the TUI and other callers still get this
   machine's start instruction.
+- **A session switched to another model behaves like one started on it.** A
+  `/query` naming a different `model` swaps the session's client in place. The
+  swap now also moves what was chosen for the first model: image reading (off
+  on an NPU model, on again after a switch to a GPU one), the model documents
+  are summarized with, context eviction, and the `set_reasoning_effort` tool
+  for a model that grades reasoning. A failed switch still leaves the session
+  exactly as it was.
+- **`provider: "lemonade"` with no `model` uses the configured default.** A
+  session moved back from Claude went to Gemma 4 E4B even when `default_model`
+  named another model.
 - **A model name the server doesn't list fails with a plain reason.** A
   `/query` for a model id outside the model server's catalog answered 500 with
   the raw preload error and a restart command. It now answers 503 saying there

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../services/api');
 
 import * as api from '../../services/api';
-import { PICK_LOAD_POLL_MS, resetModelRetryForTests, useModelStore } from '../modelStore';
+import { PICK_LOAD_POLL_MS, resetModelRetryForTests, syncModelAfterSettingChange, useModelStore } from '../modelStore';
 
 const mocked = vi.mocked(api);
 const QWEN = 'Qwen3.6-35B-A3B-GGUF';
@@ -89,5 +89,63 @@ describe('picking a local model', () => {
         await vi.advanceTimersByTimeAsync(PICK_LOAD_POLL_MS * 3);
         expect(mocked.getWarmUp).not.toHaveBeenCalled();
         expect(useModelStore.getState().pickLoad).toBeNull();
+    });
+});
+
+describe('a setting that changes the model outside the picker', () => {
+    it('re-reads the model and follows the load the backend started', async () => {
+        mocked.getActiveModel.mockResolvedValue(local);
+        mocked.listProviderModels.mockResolvedValue({ models: [] } as never);
+        mocked.getWarmUp
+            .mockResolvedValueOnce({ state: 'warming', elapsed_seconds: 1.2, model: QWEN } as never)
+            .mockResolvedValue({ state: 'ready', elapsed_seconds: 9, model: QWEN } as never);
+        await syncModelAfterSettingChange('gemma4-it-e4b-FLM');
+        await vi.advanceTimersByTimeAsync(0);
+        expect(useModelStore.getState().active).toEqual(local);
+        expect(useModelStore.getState().pickLoad).toEqual({ model: QWEN, seconds: 1, error: null });
+        expect(mocked.listSessions).toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(PICK_LOAD_POLL_MS);
+        expect(useModelStore.getState().pickLoad).toBeNull();
+    });
+
+    it('shows no load, nor an old failure, when the model did not change', async () => {
+        mocked.getActiveModel.mockResolvedValue(local);
+        mocked.listProviderModels.mockResolvedValue({ models: [] } as never);
+        mocked.getWarmUp.mockResolvedValue({ state: 'failed', elapsed_seconds: 1, model: null, error: 'down' } as never);
+        await syncModelAfterSettingChange(QWEN);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mocked.getWarmUp).not.toHaveBeenCalled();
+        expect(useModelStore.getState().pickLoad).toBeNull();
+    });
+
+    it('follows no load when the model is now a cloud one', async () => {
+        mocked.getActiveModel.mockResolvedValue({ ...(local as object), remote: true } as never);
+        mocked.listProviderModels.mockResolvedValue({ models: [] } as never);
+        await syncModelAfterSettingChange();
+        expect(mocked.getWarmUp).not.toHaveBeenCalled();
+        expect(useModelStore.getState().pickLoad).toBeNull();
+    });
+});
+
+describe('a model picked from the chip', () => {
+    it('applies at once when no reply is running', async () => {
+        const { useChatStore } = await import('../chatStore');
+        useChatStore.setState({ isStreaming: false });
+        mocked.selectModel.mockResolvedValue(local);
+        mocked.getWarmUp.mockResolvedValue({ state: 'ready', elapsed_seconds: 1, model: QWEN } as never);
+        useModelStore.getState().queue(QWEN);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mocked.selectModel).toHaveBeenCalledWith(QWEN);
+        expect(useModelStore.getState().queued).toBeNull();
+    });
+
+    it('waits for a running reply', async () => {
+        const { useChatStore } = await import('../chatStore');
+        useChatStore.setState({ isStreaming: true });
+        useModelStore.getState().queue(QWEN);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mocked.selectModel).not.toHaveBeenCalled();
+        expect(useModelStore.getState().queued).toBe(QWEN);
+        useChatStore.setState({ isStreaming: false });
     });
 });

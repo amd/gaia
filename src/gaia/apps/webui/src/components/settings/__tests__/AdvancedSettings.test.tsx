@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { AdvancedSettings } from '../AdvancedSettings';
 import * as api from '../../../services/api';
 import { useChatStore } from '../../../stores/chatStore';
@@ -305,6 +305,33 @@ describe('AdvancedSettings', () => {
             fireEvent.click(screen.getByRole('button', { name: 'Save custom model' }));
             await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ custom_model: id }));
         }
+
+        function refusal(): Error {
+            // pydantic's 422 text, as parseErrorDetail joins it.
+            return Object.assign(Object.create(api.ApiError.prototype), {
+                message: 'Value error, A model ID is a single line: remove the line break or control character.',
+                httpStatus: 422, fields: ['custom_model'],
+            });
+        }
+
+        it.each([
+            ['en', 'A model ID is a single line of up to 256 characters.'],
+            ['ar', 'معرّف النموذج سطر واحد لا يتجاوز 256 حرفًا.'],
+        ])('says a refused ID in the UI language, not pydantic English (%s)', async (locale, text) => {
+            useChatStore.setState({ locale } as never);
+            onTestFinished(() => useChatStore.setState({ locale: 'en' } as never));
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.updateSettings.mockRejectedValue(refusal());
+            render(<AdvancedSettings />);
+            const input = await screen.findByRole('textbox');
+            await waitFor(() => expect(input).toBeEnabled());
+            fireEvent.change(input, { target: { value: 'two\nlines' } });
+            fireEvent.keyDown(input, { key: 'Enter' });
+            await waitFor(() => expect(
+                screen.getAllByRole('alert').some((a) => a.textContent?.includes(text)),
+            ).toBe(true));
+            expect(screen.queryByText(/Value error/)).not.toBeInTheDocument();
+        });
 
         it('says when the model server does not list the saved ID', async () => {
             await save('fireworks.no-such-model', { found: false, checked: true });
