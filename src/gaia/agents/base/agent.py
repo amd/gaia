@@ -10436,12 +10436,14 @@ Do NOT wrap conversational replies in JSON.
         """Say the turn is unfinished, why, what already ran, and what next.
 
         *headline* replaces the opening "The model stopped responding at step
-        N" when the caller knows better what happened.
+        N" when the caller knows better what happened. Marks the turn failed,
+        so front-ends never have to recognize this answer by its text.
         """
         from collections import Counter
 
         from gaia.llm.failure_record import record_note
 
+        self._turn_model_retries["failed"] = True
         what = "stopped responding" if stopped_responding else "call failed"
         cause = cause.strip().rstrip(".")
         cause = cause[:1].upper() + cause[1:]
