@@ -399,6 +399,21 @@ _secret_links_lock = threading.Lock()
 _secret_links_cache: Dict[str, Any] = {"key": None, "at": 0.0, "ids": {}}
 
 
+def _walk_secret_files(linked_only: bool) -> Dict[Tuple[int, int], Tuple[str, int]]:
+    """``(device, inode)`` -> ``(folder, size)`` for the files in every credential folder."""
+    ids: Dict[Tuple[int, int], Tuple[str, int]] = {}
+    for folder in SECRET_DIRECTORIES:
+        for current, _dirs, files in os.walk(folder):
+            for name in files:
+                try:
+                    st = os.stat(os.path.join(current, name))
+                except OSError:
+                    continue  # removed or locked mid-walk; it can't be read either
+                if not linked_only or st.st_nlink >= 2:
+                    ids[(st.st_dev, st.st_ino)] = (folder, st.st_size)
+    return ids
+
+
 def _secret_links() -> Dict[Tuple[int, int], str]:
     """``(device, inode)`` -> folder, for every file in a credential folder."""
     key = frozenset(SECRET_DIRECTORIES)
@@ -406,17 +421,30 @@ def _secret_links() -> Dict[Tuple[int, int], str]:
         cache = _secret_links_cache
         if cache["key"] == key and time.monotonic() - cache["at"] < SECRET_LINKS_TTL_S:
             return cache["ids"]
-        ids: Dict[Tuple[int, int], str] = {}
-        for folder in SECRET_DIRECTORIES:
-            for current, _dirs, files in os.walk(folder):
-                for name in files:
-                    try:
-                        st = os.stat(os.path.join(current, name))
-                    except OSError:
-                        continue  # removed or locked mid-walk; it can't be read either
-                    ids[(st.st_dev, st.st_ino)] = folder
+        ids = {k: folder for k, (folder, _size) in _walk_secret_files(False).items()}
         cache.update(key=key, at=time.monotonic(), ids=ids)
         return ids
+
+
+def linked_secret_files() -> Dict[Tuple[int, int], Tuple[str, int]]:
+    """``(device, inode)`` -> ``(folder, size)``, for each credential file with a second name.
+
+    Listed fresh, not from the cache, so a link made a moment ago is in it.
+    A second name has the same size, so a folder-wide search looks up only
+    the files whose size matches one of these.
+    """
+    return _walk_secret_files(linked_only=True)
+
+
+def file_identity(path: Any) -> Optional[Tuple[int, int]]:
+    """``(device, inode)`` of the regular file *path* names when it has a second name."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink < 2:
+        return None
+    return (st.st_dev, st.st_ino)
 
 
 def secret_folder_sharing(path: Any) -> Optional[str]:
@@ -432,13 +460,8 @@ def secret_folder_sharing(path: Any) -> Optional[str]:
         The credential folder, or None when *path* is not a second name for
         one of its files.
     """
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    if not stat.S_ISREG(st.st_mode) or st.st_nlink < 2:
-        return None
-    return _secret_links().get((st.st_dev, st.st_ino))
+    identity = file_identity(path)
+    return _secret_links().get(identity) if identity else None
 
 
 def _real_path(path: Any) -> str:
@@ -508,8 +531,9 @@ def credential_file_read(word: str, cwd: str) -> Optional[str]:
     """The credential file *word* reads from *cwd*, or None.
 
     By name for what the word says, and by the real file for what it is: a
-    ``notes.txt`` symlinked to ``.env`` reads ``.env``. A folder is not a file,
-    so a virtualenv called ``.env`` stays listable.
+    ``notes.txt`` symlinked to ``.env``, or hard-linked to a file in a
+    credential folder, reads that file. A folder is not a file, so a
+    virtualenv called ``.env`` stays listable.
     """
     if not word or "://" in word:
         return None
@@ -528,6 +552,8 @@ def credential_file_read(word: str, cwd: str) -> Optional[str]:
         if names_credential_file(spelling):
             return spelling
         if present and is_credential_file_name(os.path.basename(real)):
+            return real
+        if present and secret_folder_sharing(real):
             return real
     return None
 

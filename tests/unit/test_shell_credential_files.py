@@ -571,3 +571,78 @@ def test_a_search_with_an_option_this_check_does_not_know_is_refused(home, comma
 def test_an_unknown_option_on_a_plain_command_runs(home):
     assert _refusal("grep --frobnicate TOKEN env.txt", home / "proj", home) is None
     assert _refusal("rg --frobnicate TOKEN env.txt", home / "proj", home) is None
+
+
+# ------------------------------- a hard link is a second name for the file
+
+
+def _key_and_clean_folder(home, monkeypatch):
+    """A key in a credential folder, and a folder with no credential file in it."""
+    from gaia import security
+
+    ssh = home / ".ssh"
+    ssh.mkdir()
+    (ssh / "id_rsa").write_text("PRIVATE KEY\n")
+    monkeypatch.setattr(security, "SECRET_DIRECTORIES", {str(ssh)})
+    security._secret_links_cache.update(key=None)
+    clean = home / "clean"
+    clean.mkdir()
+    (clean / "a.txt").write_text("TODO\n")
+    return ssh / "id_rsa", clean
+
+
+def _hard_link(source, name):
+    try:
+        os.link(source, name)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"cannot create a hard link here: {exc}")
+
+
+@pytest.fixture
+def linked_key(home, monkeypatch):
+    """``clean/notes.txt`` is a hard link to a key in a credential folder."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    _hard_link(key, clean / "notes.txt")
+    return clean
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["cat notes.txt", "grep -n KEY notes.txt", "grep -rn KEY .", "git grep -n KEY"],
+)
+def test_a_hard_link_to_a_credential_file_is_refused(home, linked_key, command):
+    refusal = _refusal(command, linked_key, home)
+
+    assert refusal is not None, command
+    assert refusal["executed"] is False
+    assert "notes.txt" in refusal["error"]
+
+
+@WINDOWS_ONLY
+def test_findstr_over_a_hard_link_to_a_credential_file_is_refused(
+    home, linked_key, monkeypatch
+):
+    monkeypatch.setattr(shell_tools, "_greps_expand_arguments", lambda: True)
+    refusal = _refusal("findstr /s /n KEY *", linked_key, home)
+
+    assert refusal is not None and refusal["executed"] is False
+
+
+def test_a_hard_link_made_after_a_search_is_still_caught(home, monkeypatch):
+    """The credential folder is listed fresh per search, not from a cache."""
+    key, clean = _key_and_clean_folder(home, monkeypatch)
+    assert _refusal("grep -rn KEY .", clean, home) is None
+
+    _hard_link(key, clean / "notes.txt")
+
+    refusal = _refusal("grep -rn KEY .", clean, home)
+    assert refusal is not None and refusal["executed"] is False
+
+
+def test_an_ordinary_hard_link_does_not_block_a_search(home, monkeypatch):
+    _key, clean = _key_and_clean_folder(home, monkeypatch)
+    _hard_link(clean / "a.txt", clean / "b.txt")
+
+    assert _refusal("grep -rn TODO .", clean, home) is None
+    assert _refusal("findstr /s /n TODO *", clean, home) is None
+    assert _refusal("cat b.txt", clean, home) is None

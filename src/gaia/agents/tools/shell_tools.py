@@ -3723,6 +3723,9 @@ def _bulk_read_credential(
     ``_BULK_TOO_LARGE`` and ``_BULK_UNKNOWN``, *path* is the folder that
     could not be checked.
     """
+    from gaia import security
+
+    linked = security.linked_secret_files()
     for number, words in enumerate(_command_word_lists(argv)):
         for spec, includes, excludes, tree, links_only in _bulk_read_roots(
             words, rewritten and number == 0
@@ -3743,7 +3746,7 @@ def _bulk_read_credential(
                 continue
             if tree:
                 found, complete = _tree_credential(
-                    folder, pattern, includes, excludes, links_only
+                    folder, pattern, includes, excludes, links_only, linked
                 )
                 if not complete:
                     return str(folder), _BULK_TOO_LARGE
@@ -3757,7 +3760,7 @@ def _bulk_read_credential(
                 continue
             for entry in entries:
                 if _bulk_entry_is_credential(
-                    entry, pattern, includes, excludes, links_only
+                    entry, pattern, includes, excludes, links_only, linked
                 ):
                     return entry.path, _BULK_READ
     return None
@@ -3769,6 +3772,7 @@ def _tree_credential(
     includes: list,
     excludes: list,
     links_only: bool,
+    linked: Optional[dict] = None,
 ) -> Tuple[Optional[str], bool]:
     """``(credential, complete)`` for a recursive search of *folder*.
 
@@ -3802,14 +3806,18 @@ def _tree_credential(
                 logger.debug("Cannot stat %r for the credential check: %s", entry, exc)
                 continue
             if hit and _searched_file_is_credential(
-                entry, usable_includes, excludes, links_only
+                entry, usable_includes, excludes, links_only, linked
             ):
                 return entry.path, True
     return None, True
 
 
 def _searched_file_is_credential(
-    entry: os.DirEntry, includes: list, excludes: list, links_only: bool
+    entry: os.DirEntry,
+    includes: list,
+    excludes: list,
+    links_only: bool,
+    linked: Optional[dict] = None,
 ) -> bool:
     """Whether a search that reaches *entry* reads a credential file there.
 
@@ -3831,7 +3839,9 @@ def _searched_file_is_credential(
     except OSError as exc:
         logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
         return False
-    disguised = bool(target) and _credential_file_name(target)
+    disguised = (bool(target) and _credential_file_name(target)) or _shares_secret(
+        entry, linked
+    )
     if links_only:
         return disguised and not _credential_file_name(name)
     return disguised or _credential_file_name(name)
@@ -3843,6 +3853,7 @@ def _bulk_entry_is_credential(
     includes: list,
     excludes: list,
     links_only: bool = False,
+    linked: Optional[dict] = None,
 ) -> bool:
     """Whether a folder-wide read of *entry*'s folder reads it as a credential.
 
@@ -3863,11 +3874,34 @@ def _bulk_entry_is_credential(
     except OSError as exc:
         logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
         return False
+    disguised = _credential_file_name(os.path.basename(real)) or _shares_secret(
+        entry, linked
+    )
     if links_only:
-        return not _credential_file_name(name) and _credential_file_name(
-            os.path.basename(real)
-        )
-    return _credential_file_name(name) or _credential_file_name(os.path.basename(real))
+        return not _credential_file_name(name) and disguised
+    return _credential_file_name(name) or disguised
+
+
+def _shares_secret(entry: os.DirEntry, linked: Optional[dict]) -> bool:
+    """Whether *entry* is a hard link to a file in a credential folder.
+
+    *linked* is :func:`gaia.security.linked_secret_files` for this search. A
+    second name has the same size, and the listing already knows the size, so
+    only a file of a matching size is looked up.
+    """
+    if not linked:
+        return False
+    try:
+        size = entry.stat(follow_symlinks=False).st_size
+    except OSError as exc:
+        logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
+        return False
+    if size not in {secret_size for _folder, secret_size in linked.values()}:
+        return False
+    from gaia import security
+
+    identity = security.file_identity(entry.path)
+    return identity is not None and identity in linked
 
 
 def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]:
