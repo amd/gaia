@@ -6,6 +6,6 @@ import { declaredNavEntries } from './navEntries';
 describe('declaredNavEntries', () => {
     it('lists an entry only when its route is declared, in the web order', () => {
         expect(declaredNavEntries(['index', 'new', 'schedules']).map((e) => e.key)).toEqual(['schedules']);
-        expect(declaredNavEntries(['settings', 'skills', 'memory']).map((e) => e.key)).toEqual(['memory', 'skills', 'settings']);
+        expect(declaredNavEntries(['settings', 'goals', 'schedules']).map((e) => e.key)).toEqual(['schedules', 'goals', 'settings']);
     });
 });
