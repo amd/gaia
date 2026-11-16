@@ -66,16 +66,22 @@ def start(
 ) -> Optional[threading.Thread]:
     """Watch the daemon named in *env*; the thread, or None when there is none.
 
-    Starts one watcher per process: a later call returns the running one.
+    Starts one watcher per process: a later call returns the running one. With
+    no *env* it reads ``os.environ`` and removes the variable, so processes the
+    agent starts don't tie themselves to the daemon too.
 
     Raises:
         ValueError: ``GAIA_DAEMON_PID`` is set but is not a pid.
         psutil.AccessDenied: the daemon's process can't be inspected.
     """
     global _watcher
-    raw = (env if env is not None else os.environ).get(DAEMON_PID_ENV_VAR)
+    if env is None:
+        # Read once and drop it: what the agent launches must not inherit the tie.
+        raw = os.environ.pop(DAEMON_PID_ENV_VAR, None)
+    else:
+        raw = env.get(DAEMON_PID_ENV_VAR)
     if not raw:
-        return None
+        return _watcher if _watcher is not None and _watcher.is_alive() else None
     try:
         pid = int(raw)
     except ValueError as e:

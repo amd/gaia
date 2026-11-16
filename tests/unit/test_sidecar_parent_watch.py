@@ -128,3 +128,19 @@ def test_a_killed_but_unreaped_daemon_counts_as_gone(monkeypatch):
     gone = threading.Event()
     parent_watch.start(env={DAEMON_PID_ENV_VAR: "4242"}, poll_s=0.1, on_gone=gone.set)
     assert gone.wait(5)
+
+
+def test_reading_the_environment_removes_the_pid_from_it(monkeypatch):
+    """What the agent launches (MCP servers, shell commands) must not inherit it."""
+    daemon = _sleeper()
+    try:
+        monkeypatch.setenv(DAEMON_PID_ENV_VAR, str(daemon.pid))
+        monkeypatch.setattr(parent_watch, "_shut_down", lambda: None)
+        first = parent_watch.start(poll_s=0.1, on_gone=lambda: None)
+        assert first is not None
+        assert DAEMON_PID_ENV_VAR not in os.environ
+        # The dev-mode import and main() both call start(): the second still gets it.
+        assert parent_watch.start(poll_s=0.1, on_gone=lambda: None) is first
+    finally:
+        daemon.kill()
+        daemon.wait()
