@@ -179,7 +179,11 @@ function Folders({ sessionId }: { sessionId: string }) {
                 : <File size={13} className="sp-item-icon" aria-hidden="true" />}
             <div className="sp-item-text">
                 <span className="sp-item-name" dir="ltr" title={entry.path}>{entry.name || baseName(entry.path)}</span>
-                <span className="sp-meta" title={entry.path}>{t(SOURCE_LABEL[entry.source])} · <span className="sp-item-path" dir="ltr">{entry.path}</span></span>
+                {/* A folder's path matters; a file's shows on hover. */}
+                <span className="sp-meta" title={entry.path}>
+                    {t(SOURCE_LABEL[entry.source])}
+                    {entry.kind === 'folder' && <> · <span className="sp-item-path" dir="ltr">{entry.path}</span></>}
+                </span>
             </div>
             {entry.removable && !locked && (
                 <button
