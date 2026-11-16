@@ -32,6 +32,11 @@ ALLOWED_MONTH_SETTING = "cloud_spend_allowed_month"
 WARN_FRACTION = 0.8
 #: Where the prices come from, shown next to them.
 PRICE_SOURCE = "Fireworks AI list price, checked 2026-09-19"
+#: Where prices come from when no priced model is named.
+ANY_PRICE_SOURCE = (
+    "each model's list price: Fireworks AI's, the AMD LLM Gateway's own price "
+    "list, or Anthropic's"
+)
 
 
 def current_month(now: Optional[dt.datetime] = None) -> str:
@@ -232,6 +237,7 @@ def month_report(db, month: Optional[str] = None) -> Dict[str, Any]:
                 "usd": 0.0,
                 "unpriced_turns": 0,
                 "unreported_turns": 0,
+                "price_source": _source(r["model"]),
             },
         )
         entry["turns"] += 1
@@ -263,8 +269,19 @@ def month_report(db, month: Optional[str] = None) -> Dict[str, Any]:
         "limit_usd": limit,
         "state": state,
         "by_model": sorted(by_model.values(), key=lambda e: -e["usd"]),
-        "price_source": PRICE_SOURCE,
+        "price_source": _sources(e["price_source"] for e in by_model.values()),
     }
+
+
+def _source(model_id: str) -> Optional[str]:
+    card = price_card(model_id)
+    return card["source"] if card else None
+
+
+def _sources(sources) -> str:
+    """The distinct price sources named, or :data:`ANY_PRICE_SOURCE` for none."""
+    named = sorted({s for s in sources if s})
+    return "; ".join(named) if named else ANY_PRICE_SOURCE
 
 
 def _parse_instant(text: str) -> dt.datetime:
@@ -362,7 +379,7 @@ def chat_spend(
             "chats": len({a["session_id"] for a in answered_today}),
             "since": start_utc.isoformat(),
         },
-        "price_source": PRICE_SOURCE,
+        "price_source": _sources([_source(model_id)] if model_id else []),
     }
 
 

@@ -436,15 +436,32 @@ def test_set_bad_rules_names_the_fault_and_the_command(tmp_path, text, match):
 @pytest.mark.parametrize(
     "doc,match",
     [
-        ({"hybrid_policy": "custom"}, "needs 'hybrid_rules'"),
-        ({"hybrid_policy": "custom", "hybrid_rules": None}, "needs 'hybrid_rules'"),
-        ({"hybrid_rules": json.dumps(_rules())}, "JSON object, not text"),
-        ({"hybrid_rules": {"other": {}}}, "unknown fields|no rule"),
+        ({"hybrid_policy": "custom"}, "hybrid_rules is not set"),
+        ({"hybrid_policy": "custom", "hybrid_rules": None}, "hybrid_rules is not set"),
+        (
+            {"hybrid_policy": "custom", "hybrid_rules": json.dumps(_rules())},
+            "must be a JSON object",
+        ),
+        (
+            {"hybrid_policy": "custom", "hybrid_rules": {"other": {}}},
+            "unknown fields|no rule",
+        ),
     ],
 )
-def test_a_file_with_bad_rules_fails_to_load(tmp_path, doc, match):
-    with pytest.raises(GaiaConfigError, match=match):
-        GaiaConfig.load(_config_path(tmp_path, doc))
+def test_a_file_with_bad_custom_rules_loads_but_hybrid_refuses_it(tmp_path, doc, match):
+    """The rest of GAIA keeps running; hybrid itself fails loudly."""
+    cfg = GaiaConfig.load(_config_path(tmp_path, doc))
+    assert cfg.hybrid_rules == doc.get("hybrid_rules")
+    with pytest.raises(HybridConfigError, match=match):
+        HybridSettings.load(cfg)
+
+
+def test_a_preset_policy_ignores_a_broken_saved_table(tmp_path):
+    cfg = GaiaConfig.load(
+        _config_path(tmp_path, {"hybrid_policy": "quality", "hybrid_rules": {"x": 1}})
+    )
+    settings = HybridSettings.load(cfg)
+    assert settings.table == preset_rules("quality")
 
 
 def test_a_file_with_custom_rules_loads_and_routes(tmp_path):

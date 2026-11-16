@@ -630,3 +630,15 @@ def test_hybrid_falling_back_to_direct_claude_is_refused_over_the_limit(
     spending.set_limit(db, 0.01)
     _turn(db, model=CLAUDE_MODEL, inp=1_000_000, out=100_000)
     assert "Anthropic" in spending.limit_refusal(db, "hybrid")
+
+
+def test_the_month_names_where_its_prices_came_from(db, gateway_prices_read):
+    _turn(db, model=GATEWAY_MODEL)
+    report = spending.month_report(db)
+    assert "AMD LLM Gateway" in report["price_source"]
+    assert "Fireworks" not in report["price_source"]
+    assert "AMD LLM Gateway" in report["by_model"][0]["price_source"]
+
+
+def test_a_month_with_no_priced_turns_names_no_single_provider(db):
+    assert spending.month_report(db)["price_source"] == spending.ANY_PRICE_SOURCE

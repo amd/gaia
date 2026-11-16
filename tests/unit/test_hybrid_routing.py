@@ -710,11 +710,12 @@ def test_policy_config_key_validates_on_set():
         {"hybrid_policy": ["balanced"]},
     ],
 )
-def test_config_file_with_bad_hybrid_values_fails_to_load(tmp_path, doc):
+def test_config_file_with_bad_hybrid_values_loads_but_hybrid_refuses_it(tmp_path, doc):
     path = tmp_path / "config.json"
     path.write_text(json.dumps(doc), encoding="utf-8")
-    with pytest.raises(GaiaConfigError):
-        GaiaConfig.load(path)
+    cfg = GaiaConfig.load(path)
+    with pytest.raises(HybridConfigError):
+        HybridSettings.load(cfg)
 
 
 def test_config_file_policy_loads(tmp_path):

@@ -3196,8 +3196,10 @@ the same way.
     chat starts on `hybrid`; `null` while config.json is invalid). When the
     saved settings can't be used, including a hand-edited config.json that
     fails to load, `config_error` says what's wrong and how to fix it and the
-    values are shown as saved, so a `PUT` can repair them. Only a config.json
-    that isn't JSON at all is a **500**.
+    values are shown as saved, so a `PUT` can repair them. A broken `hybrid_*`
+    value never stops config.json from loading for the rest of GAIA; only
+    `hybrid` itself refuses it. Only a config.json that isn't JSON at all is a
+    **500**.
   </Accordion>
 
   <Accordion title="PUT /api/hybrid/settings">
@@ -3206,8 +3208,9 @@ the same way.
     1-120), `policy`, and `rules`. `rules` must cover all 8 kinds, each with
     exactly `cheap_max_difficulty` (0-5; 0 never runs cheap) and
     `allow_high_stakes` (true or false); `custom` needs rules, saved or sent in
-    the same request. Switching to a preset keeps saved rules for later.
-    A model must be one a provider set up here offers. Returns the `GET`
+    the same request. Switching to a preset keeps saved rules for later, and
+    works even when they are broken: a preset never reads them, and going back
+    to `custom` without new rules names what's wrong. A model must be one a provider set up here offers. Returns the `GET`
     shape. **422**, with what to change and which providers were checked, for
     an unknown field, a wrong type or range, a model no provider offers, a
     self-routing `hybrid` model, the same cheap and strong model, or `custom`
@@ -3300,7 +3303,7 @@ day old.
     so the total can read lower than the bill as well as higher: `total_usd`, `turns` (every counted turn, the next two kinds included), `unpriced_turns` (turns on a model with no
     known price, counted apart), `unreported_turns` (turns on a priced model that
     sent no usage, such as a stopped answer, also counted apart), `by_model` (each
-    entry's `provider` is `fireworks`, `amd` or `anthropic`, and it carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`
+    entry's `provider` is `fireworks`, `amd` or `anthropic`, and it carries its own `unpriced_turns`, `unreported_turns` and `price_source`), `price_source` (every source this month's prices came from), `limit_usd`, and `state`
     (`no_limit`, `ok`, `near` at 80% of the limit, `reached`, or
     `allowed_over`). **500** when the saved limit is unreadable.
   </Accordion>
