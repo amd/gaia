@@ -361,6 +361,10 @@ def _run_scheduled_prompt(
     try:
         result = agent.process_query(prompt)
     finally:
+        from gaia.agents.base.memory import drain_memory_extraction
+
+        # Save the run's memories now: a queued save would keep the agent alive.
+        drain_memory_extraction(agent)
         agent.close()
     if isinstance(result, dict):
         val = result.get("result")

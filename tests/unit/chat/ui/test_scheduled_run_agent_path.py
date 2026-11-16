@@ -459,3 +459,36 @@ async def test_a_failed_run_exposes_its_error_until_a_run_succeeds(db):
         assert db.list_scheduled_tasks()[0]["last_error"] is None
     finally:
         await scheduler.shutdown()
+
+
+def test_an_in_process_run_saves_its_memories_before_closing(monkeypatch, db):
+    """A save still queued at close kept the whole closed agent alive."""
+    registry = SimpleNamespace(
+        get=lambda _id: SimpleNamespace(is_sidecar=False),
+        get_load_error=lambda _id: None,
+    )
+    monkeypatch.setattr(chat_helpers_module, "_agent_registry", registry)
+    order = []
+
+    class _Agent:
+        def __init__(self, config):
+            self.config = config
+
+        def process_query(self, prompt):
+            return {"result": "ok"}
+
+        def wait_for_memory_extraction(self, timeout):
+            order.append("drained")
+            return True
+
+        def close(self):
+            order.append("closed")
+
+    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_mod.GaiaAgent = _Agent
+    fake_mod.GaiaAgentConfig = SimpleNamespace
+    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+
+    server._run_scheduled_prompt(db, "hi")
+    assert order == ["drained", "closed"]
