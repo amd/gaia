@@ -28,6 +28,7 @@ from gaia.agents.base.model_features import COMPACT, FULL, withheld_tools
 from gaia.agents.base.offline import ONLINE_SERVICE_TOOLS
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools._calendar.scopes import SCOPE_GOOGLE_CALENDAR_EVENTS
 from gaia.agents.tools._email import fixture
 from gaia.agents.tools._email.gmail import GMAIL_API_BASE, GmailWriteBackend
 from gaia.agents.tools._email.graph import GRAPH_API_BASE, OutlookWriteBackend
@@ -1697,6 +1698,48 @@ def test_new_mail_goes_out_from_the_default_unless_another_is_named(mailbox, age
     shown = [args[EXACT_TEXT_ARG] for _, args in console.shown]
     assert shown[0].startswith(FROM)
     assert shown[1].startswith(f"From: {WORK} (Google)\n")
+
+
+def _calendar_only_gmail_and_outlook(mailbox, gmail_status="ok"):
+    """A default Gmail connected for its calendar alone, and a mail Outlook."""
+    calendar = [SCOPE_GOOGLE_CALENDAR_EVENTS]
+    mail = [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND]
+    mailbox["google"] = {
+        "scopes": calendar,
+        "grants": calendar,
+        "email": "me@gmail.com",
+        "status": gmail_status,
+    }
+    mailbox["microsoft"] = {"scopes": mail, "grants": mail, "email": "me@outlook.com"}
+
+
+def test_a_calendar_only_gmail_does_not_block_new_mail_from_outlook(mailbox, agent_for):
+    _calendar_only_gmail_and_outlook(mailbox)
+    graph = _Graph()
+    console = _Asked()
+    out = json.loads(
+        agent_for(console, graph, OutlookWriteBackend)._execute_tool(
+            "send_now", SEND_NOW
+        )
+    )
+    assert console.shown[0][1][EXACT_TEXT_ARG].startswith(
+        "From: me@outlook.com (Microsoft)\n"
+    )
+    assert out["sent"] is True and out["sent_from"] == "me@outlook.com (Microsoft)"
+
+
+def test_an_expired_default_gmail_still_refuses_new_mail(mailbox, agent_for):
+    """Its scopes can't be read while signed out, so it may be meant for mail."""
+    _calendar_only_gmail_and_outlook(mailbox, gmail_status="reauth_required")
+    mailbox["google"]["scopes"] = [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE]
+    graph = _Graph()
+    console = _Asked()
+    result = agent_for(console, graph, OutlookWriteBackend)._execute_tool(
+        "send_now", SEND_NOW
+    )
+    assert "me@gmail.com" in result["error"]
+    assert "Reconnect" in result["error"]
+    assert console.shown == [] and graph.calls == []
 
 
 def test_an_untagged_id_with_several_accounts_is_refused_before_asking(

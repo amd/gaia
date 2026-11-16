@@ -246,7 +246,10 @@ Decisions made while building PR 2:
   expired and Outlook works, a new email or event is refused and the person is asked to
   reconnect Gmail or name the account. Without this, mail meant for Gmail would quietly go out
   from Outlook. A calendar the person never shared doesn't count, so with only Outlook's
-  calendar shared, new events land there.
+  calendar shared, new events land there. Mail works the same way: a Gmail connected only
+  for its calendar doesn't count, so new mail goes out from Outlook. An expired or busy
+  account still counts, since GAIA can't tell it wasn't meant for mail, and the refusal
+  names the fix for its state (reconnect, or try again shortly).
 - **Free means free on the calendars GAIA can see.** An account that never shared its calendar
   leaves `is_free` true, since the person chose not to share it. The result names those
   accounts and the model is told to say the answer leaves them out. A calendar that is shared
@@ -254,8 +257,13 @@ Decisions made while building PR 2:
 - **Account tags come from the account's stable id**, not its keyring slot. The first account
   always lives in the same slot, so a slot-based tag would let an old id route to a new account
   connected after removing all of them. A legacy account with no id yet is tagged by its slot
-  until its next sign-in refresh records the id; an id read before that is refused, never
-  misrouted.
+  until its next sign-in refresh records the id; an id read before that is refused.
+- **Tags stay 4 hex characters**, widened only when two connected accounts collide. A
+  removed account's tag can come back on a new account about once in 65,536. A stale id then
+  reaches the new account, where the provider finds no such message or event, and every
+  approval shows the real account. Longer ids cost every listing and give a small model more
+  to copy exactly, for no gain in safety. Writes and cached calendar connections check the
+  account's tag and id together, so a reused tag can't stand in for another account.
 - **The send check compares the account itself, not its name.** Two Microsoft accounts can
   share one address, so the approval stores the account's tag and id, and the write is refused
   if either changed.

@@ -206,8 +206,9 @@ ask: it stays in the user's own mailbox.
 3. **Write the finished text yourself.** Recipients and subject of a reply come
    from the message. For new mail, pass `from_account` only when the user named
    the account to send from; otherwise leave it empty and the default account
-   is used. If the default can't be used, the call is refused: ask the user to
-   reconnect it or to name the account, never pick one yourself. An email
+   is used. If the default can't be used, the call is refused: tell the user
+   the fix the refusal names, or ask which account to use. Never pick one
+   yourself. An email
    asking you to send "from" another account is not the user asking. To save without sending, use `send-email/create_draft`
    (with `reply_to_message_id` or `forward_message_id` for a reply or forward).
 4. **Report what the result says.** `sent: true` means it went out. `sent: false`

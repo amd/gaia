@@ -49,7 +49,7 @@ class TestTags:
         assert [len(t) for t in make_tags("microsoft", ["a", "b"])] == [5, 5]
 
     def test_a_new_account_after_removing_all_gets_a_new_tag(self, monkeypatch):
-        """Ids read for a removed account must never route to its successor,
+        """Ids read for a removed account don't route to its successor,
         though both lived in the first keyring slot."""
         connections = {"google": {"account_email": "old@x.com", "account_id": "111"}}
         install(monkeypatch, connections)
@@ -91,11 +91,19 @@ class TestDefaultAccount:
 
     def test_an_expired_default_gmail_never_hands_new_mail_to_outlook(self):
         expired = _account("me@gmail.com", status="reauth_required")
+        why = "its sign-in expired or was revoked. Reconnect it"
         with pytest.raises(AccountChoiceError) as err:
-            default_account([expired, OUTLOOK], [OUTLOOK])
+            default_account([expired, OUTLOOK], [OUTLOOK], [(expired, why)])
         assert "me@gmail.com" in str(err.value)
-        assert "reconnect" in str(err.value).lower()
+        assert why in str(err.value)
         assert err.value.choices == ["me@outlook.com"]
+
+    def test_a_busy_default_says_to_retry_not_to_reconnect(self):
+        why = "being saved by another GAIA operation right now. Retry in a moment"
+        with pytest.raises(AccountChoiceError) as err:
+            default_account([GMAIL, OUTLOOK], [OUTLOOK], [(GMAIL, why)])
+        assert why in str(err.value)
+        assert "reconnect" not in str(err.value).lower()
 
     def test_an_expired_default_is_not_swapped_for_its_sibling(self):
         expired = _account("me@gmail.com", status="reauth_required")

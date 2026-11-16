@@ -3,16 +3,19 @@
 """The Google and Microsoft accounts the mail and calendar tools act for.
 
 A person may connect several accounts of each provider. Reads ask every usable
-account; a write acts for exactly one. So that a reply or an event change can
-never land on the wrong account, every message, thread, draft and event id a
-tool hands out starts with a short tag naming its account (``g3f1a:<id>``), and
-a tool that acts on an id takes its account from that tag.
+account; a write acts for exactly one. So that a reply or an event change lands
+on the account it came from, every message, thread, draft and event id a tool
+hands out starts with a short tag naming its account (``g3f1a:<id>``), and a
+tool that acts on an id takes its account from that tag.
 
 A tag is derived from the account's stable id, so an id read in an earlier
-turn still names the same account after a restart, and never names an account
-connected later in its place. A legacy account whose id GAIA has not learned
-yet is tagged by its keyring slot until its next token refresh records the id;
-its tag then changes once, and an id read before that is refused, not misrouted.
+turn still names the same account after a restart. A tag is a short hash, so
+an account connected later can, rarely, get a removed account's tag. An old id
+carrying it then reaches that account, where the provider looks the id up and
+finds nothing, and an approval prompt always shows the account a write acts
+for. A legacy account whose id GAIA has not learned yet is tagged by its
+keyring slot until its next token refresh records the id; its tag then changes
+once, and an id read before that is refused.
 """
 
 from __future__ import annotations
@@ -206,14 +209,17 @@ def account_for_id(
 
 
 def default_account(
-    stored: Sequence[ToolAccount], usable: Sequence[ToolAccount]
+    stored: Sequence[ToolAccount],
+    usable: Sequence[ToolAccount],
+    unusable: Sequence[Tuple[ToolAccount, str]] = (),
 ) -> ToolAccount:
     """The account a new message or event uses when the person names none.
 
     The default account of the first provider, in registry order, with any
     account in ``stored``. When that default can't be used, nothing is guessed,
     not even another provider's account: the person is asked. ``stored`` holds
-    every account meant for this kind of write, usable or not.
+    every account meant for this kind of write, usable or not; ``unusable``
+    says why an account can't be used, so the refusal names the right fix.
     """
     usable_tags = {a.tag for a in usable}
     for provider in PROVIDERS:
@@ -223,15 +229,23 @@ def default_account(
         default = next((a for a in mine if a.is_default), None)
         if default is not None and default.tag in usable_tags:
             return next(a for a in usable if a.tag == default.tag)
-        missing = default.name if default is not None else "none is set"
         others = _names(usable)
+        if default is None:
+            problem = f"No default {PROVIDER_NAMES[provider]} account is set"
+        else:
+            why = next((w for a, w in unusable if a.tag == default.tag), "")
+            problem = (
+                f"The default {PROVIDER_NAMES[provider]} account ({default.name}) "
+                "can't be used right now" + (f": {why}" if why else "")
+            )
         instead = (
-            f", or which account to use instead: {', '.join(others)}" if others else ""
+            f", or ask which account to use instead: {', '.join(others)}"
+            if others
+            else ""
         )
         raise AccountChoiceError(
-            f"The default {PROVIDER_NAMES[provider]} account ({missing}) can't be "
-            "used right now, so GAIA won't pick another account on its own. Ask "
-            f"the user to reconnect it{instead}.",
+            f"{problem}. GAIA won't pick another account on its own. Tell the "
+            f"user{instead}.",
             others,
         )
     raise AccountChoiceError("No usable account is connected.", [])

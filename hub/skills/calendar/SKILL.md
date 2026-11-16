@@ -159,7 +159,7 @@ is refused.
    `calendar_account` only when the user named the account; otherwise the
    default account is used, and the approval shows which. If the default
    account can't be used, the call is refused rather than moved to another
-   account: ask the user to reconnect it or to name the account to use.
+   account: tell the user the fix the refusal names, or ask which account to use.
 3. **To move or cancel one**, list first, then call
    `calendar/update_calendar_event` or `calendar/cancel_calendar_event` with the
    event's `id` exactly as listed (its account tag included), its title and

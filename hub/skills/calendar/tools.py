@@ -93,10 +93,10 @@ CALENDAR_WRITE_TOOLS = frozenset(
 )
 #: Per-agent state, and its value before the first call.
 _STATE_DEFAULTS: Dict[str, Any] = {
-    # Account tag -> its calendar backend, each built on first use.
+    # (tag, account id) -> its calendar backend, each built on first use.
     "_calendar_backends": None,
-    # Tags whose backend this skill built, so it may rebuild them.
-    "_calendar_owned_tags": None,
+    # Keys whose backend this skill built, so it may rebuild them.
+    "_calendar_owned_keys": None,
     # The account and event the last change was checked against, for its prompt.
     "_calendar_targets": None,
     # The account a new event's prompt showed, so the write can't land elsewhere.
@@ -716,7 +716,11 @@ class _CalendarOps:
         usable, others = self._calendar_accounts()
         shared = [account for account, kind, _ in others if kind != _UNSET]
         try:
-            return _accounts.default_account(usable + shared, usable)
+            return _accounts.default_account(
+                usable + shared,
+                usable,
+                [(account, why) for account, _, why in others],
+            )
         except _accounts.AccountChoiceError as exc:
             raise CalendarError(str(exc)) from None
 
@@ -737,11 +741,12 @@ class _CalendarOps:
         backends = self._calendar_backends
         if backends is None:
             backends = self._calendar_backends = {}
-        if account.tag not in backends:
-            backends[account.tag] = self._build_calendar_backend(account)
-            owned = self._calendar_owned_tags or set()
-            self._calendar_owned_tags = owned | {account.tag}
-        return backends[account.tag]
+        key = (account.tag, account.ref)
+        if key not in backends:
+            backends[key] = self._build_calendar_backend(account)
+            owned = self._calendar_owned_keys or set()
+            self._calendar_owned_keys = owned | {key}
+        return backends[key]
 
     def _build_calendar_backend(self, account: ToolAccount) -> CalendarBackend:
         import gaia.connectors.api as connectors_api
@@ -793,12 +798,13 @@ class _CalendarOps:
         try:
             return fn(self._calendar_backend(account))
         except CalendarAuthError:
-            if account.tag not in (self._calendar_owned_tags or set()):
+            key = (account.tag, account.ref)
+            if key not in (self._calendar_owned_keys or set()):
                 raise
             logger.info("calendar: rebuilding a connection after an auth failure")
-            (self._calendar_backends or {}).pop(account.tag, None)
+            (self._calendar_backends or {}).pop(key, None)
             usable, _ = self._calendar_accounts()
-            if all(a.tag != account.tag for a in usable):
+            if all((a.tag, a.ref) != key for a in usable):
                 raise CalendarError(
                     f"The {account.name} calendar connection stopped working, so "
                     "nothing was changed on it. Tell the person to reconnect it, "
@@ -1229,7 +1235,7 @@ def create_calendar_event(
         return json.dumps(
             _refusal("create_calendar_event", _UNCHECKED_ACCOUNT_MESSAGE), indent=2
         )
-    if (shown.tag, shown.email) != (account.tag, account.email):
+    if (shown.tag, shown.ref) != (account.tag, account.ref):
         return json.dumps(
             _refusal(
                 "create_calendar_event",

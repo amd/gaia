@@ -354,6 +354,21 @@ def _classify_mailbox(
     return scope, "ready"
 
 
+def _meant_for_mail(account: ToolAccount) -> bool:
+    """False only for an account whose connection never carried a mail read
+    scope. An expired, busy or ungranted account may be meant for mail, so it
+    still counts as the default and its mail never moves to another account."""
+    from gaia.connectors.api import get_connection
+
+    if account.status != "ok":
+        return True
+    conn = get_connection(account.provider, account=account.ref)
+    if not conn or conn.get("error"):
+        return True
+    scopes = conn.get("scopes") or []
+    return any(s in scopes for s in READ_CAPABLE_SCOPES[account.provider])
+
+
 AccountState = Tuple[ToolAccount, Optional[str], str]
 
 
@@ -772,8 +787,12 @@ class EmailToolsMixin:
         if from_account and from_account.strip():
             return self._email_pick(from_account).account
         usable = [b.account for b in self._email_boxes()]
-        stored = usable if fixture.fixture_path() else _accounts.stored_accounts()
-        return _accounts.default_account(stored, usable)
+        unusable = list(self._email_unusable or ())
+        if fixture.fixture_path():
+            return _accounts.default_account(usable, usable)
+        # An account connected for its calendar alone is not meant for mail.
+        meant = usable + [a for a, _ in unusable if _meant_for_mail(a)]
+        return _accounts.default_account(meant, usable, unusable)
 
     def _new_write_backend(self, provider: str, token: Callable[[], str]):
         if provider == GOOGLE_CONNECTOR_ID:

@@ -209,6 +209,14 @@ ACCOUNT = "me@x.com"
 G = tag("google", ACCOUNT)
 
 
+def key(provider: str, account_id: str = "default"):
+    """The calendar backend cache key of the account with ``account_id``."""
+    return (tag(provider, account_id), account_id)
+
+
+GK = key("google", ACCOUNT)
+
+
 class _ScopeGrants:
     """Each connected account's own scopes, granted to the flagship."""
 
@@ -245,7 +253,7 @@ def make_agent():
         with patch("gaia.agents.base.agent.AgentSDK"):
             built = _CalendarAgent(silent_mode=True, skip_lemonade=True)
         built.console = _RecordingConsole()
-        built._calendar_backends = {G: fake.backend()}
+        built._calendar_backends = {GK: fake.backend()}
         return built
 
     try:
@@ -466,7 +474,7 @@ class TestUpdate:
             )
 
         agent = make_agent(_FakeGoogle())
-        agent._calendar_backends[G] = GraphCalendarBackend(
+        agent._calendar_backends[GK] = GraphCalendarBackend(
             lambda: "tok",
             http_client=httpx.Client(transport=httpx.MockTransport(handler)),
         )
@@ -618,7 +626,7 @@ class TestCreate:
         }
         outlook = _FakeGoogle()
         agent = make_agent(_FakeGoogle())
-        agent._calendar_backends[tag("microsoft", "me@outlook.com")] = outlook.backend()
+        agent._calendar_backends[key("microsoft", "me@outlook.com")] = outlook.backend()
         result = self._create(agent, calendar_account="")
         assert result["success"] is True and result["account"] == "me@outlook.com"
 
@@ -632,11 +640,39 @@ class TestCreate:
         }
         outlook = _FakeGoogle()
         agent = make_agent(_FakeGoogle())
-        agent._calendar_backends[tag("microsoft", "me@outlook.com")] = outlook.backend()
+        agent._calendar_backends[key("microsoft", "me@outlook.com")] = outlook.backend()
         result = self._create(agent, calendar_account="")
         assert result["success"] is False
         assert ACCOUNT in result["error"] and "me@outlook.com" in result["error"]
         assert agent.console.asked == [] and outlook.writes == []
+
+    def test_a_new_account_with_the_same_tag_and_address_creates_nothing(
+        self, make_agent, connected_accounts
+    ):
+        """Replaced while asking by an account whose id hashes to the same tag."""
+        first, second = "acct257", "acct303"
+        assert tag("microsoft", first) == tag("microsoft", second)
+        row = {
+            "account_email": "me@outlook.com",
+            "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
+        }
+        connected_accounts["microsoft"] = {**row, "account_id": first}
+        fakes = {first: _FakeGoogle(), second: _FakeGoogle()}
+        agent = make_agent(_FakeGoogle())
+        for ref, fake in fakes.items():
+            agent._calendar_backends[key("microsoft", ref)] = fake.backend()
+
+        class _ReplacedWhileAsking(_RecordingConsole):
+            def confirm_tool_execution(self, tool_name, tool_args):
+                super().confirm_tool_execution(tool_name, tool_args)
+                connected_accounts["microsoft"] = {**row, "account_id": second}
+                return True
+
+        agent.console = _ReplacedWhileAsking()
+        result = self._create(agent, calendar_account="me@outlook.com")
+        assert agent.console.asked[0][1]["calendar_account"] == "me@outlook.com"
+        assert result["success"] is False and "nothing was created" in result["error"]
+        assert all(f.writes == [] for f in fakes.values())
 
 
 class TestWhichCalendar:
@@ -662,7 +698,7 @@ class TestWhichCalendar:
             "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
         }
         agent = make_agent(_FakeGoogle(items=[]))
-        agent._calendar_backends[tag("microsoft", "work@corp.com")] = (
+        agent._calendar_backends[key("microsoft", "work@corp.com")] = (
             _FailingCalendar().backend()
         )
         for result in self._read(agent):
@@ -739,7 +775,14 @@ class TestSeveralAccounts:
         }
         self.work_tag = work_tag
         agent = make_agent(_FakeGoogle())
-        agent._calendar_backends = {t: f.backend() for t, f in self.fakes.items()}
+        refs = {
+            G: ACCOUNT,
+            work_tag: self.WORK,
+            tag("microsoft", self.OUTLOOK): self.OUTLOOK,
+        }
+        agent._calendar_backends = {
+            (t, refs[t]): f.backend() for t, f in self.fakes.items()
+        }
         self.connections = connected_accounts
         return agent
 
@@ -923,7 +966,7 @@ class TestAConnectionThatChanged:
         self._connect(agent)
         self.tokens["google"] = RuntimeError("not a connector error")
         with pytest.raises(RuntimeError):
-            agent._calendar_backends[G].get_event("x")
+            agent._calendar_backends[GK].get_event("x")
 
     def test_a_read_after_a_switch_answers_from_the_new_account(self, agent):
         self.tokens["google"] = "tok"
@@ -1225,7 +1268,7 @@ class TestAvailability:
     def test_a_backend_failure_is_an_error_not_free(self, make_agent):
         fake = _FakeGoogle()
         agent = make_agent(fake)
-        agent._calendar_backends[G] = GoogleCalendarBackend(
+        agent._calendar_backends[GK] = GoogleCalendarBackend(
             lambda: "tok",
             http_client=httpx.Client(
                 transport=httpx.MockTransport(lambda _: httpx.Response(500))
@@ -1403,7 +1446,7 @@ class TestConnectionErrors:
             },
             {"microsoft": {"installed:gaia": [SCOPE_GRAPH_CALENDARS_READWRITE]}},
         )
-        agent._calendar_backends = {tag("microsoft"): _FakeGoogle(items=[]).backend()}
+        agent._calendar_backends = {key("microsoft"): _FakeGoogle(items=[]).backend()}
         result = _run(
             agent,
             "check_calendar_availability",
@@ -1739,7 +1782,7 @@ class TestACalendarChangeNeedsAPerson:
         with patch("gaia.agents.base.agent.AgentSDK"):
             agent = _NeverAsks(silent_mode=True, skip_lemonade=True)
         agent.console = _RecordingConsole()
-        agent._calendar_backends = {G: fake.backend()}
+        agent._calendar_backends = {GK: fake.backend()}
         result = _run(agent, tool, **WRITE_CALLS[tool])
         assert result["success"] is False
         assert "always need" in result["error"]
@@ -2169,7 +2212,7 @@ class TestAPersonIsAskedWheneverOneCanAnswer:
             with patch("gaia.agents.base.agent.AgentSDK"):
                 agent = _Host(silent_mode=True, skip_lemonade=True)
             agent.console = _RecordingConsole()
-            agent._calendar_backends = {G: _FakeGoogle().backend()}
+            agent._calendar_backends = {GK: _FakeGoogle().backend()}
             _run(agent, "create_calendar_event", **{**CREATE, "title": f"A{RLO}"})
         finally:
             _TOOL_REGISTRY.clear()
