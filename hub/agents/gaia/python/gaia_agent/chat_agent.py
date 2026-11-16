@@ -1645,7 +1645,8 @@ class ChatAgent(
             }
         self._tool_searches += 1
         loader = self.tool_loader
-        registry = self._tools_registry
+        # Only what this agent may run: a withheld tool must not turn up here.
+        registry = self._execution_tool_registry()
         tool_docs = {
             name: text
             for name, text in loader.tool_docs(registry).items()
@@ -1653,12 +1654,16 @@ class ChatAgent(
         }
         # A skill this model cannot load would only cost a failed load_skill.
         compact = bool(withheld_tools(self.model_features))
-        skill_docs = {
-            name: f"{name}: {skill.description}"
-            for name, skill in self.skill_manager.discover().items()
-            if name not in self.loaded_skills
-            and not (compact and _withheld_skill_tools(self, skill))
-        }
+        skill_docs = (
+            {
+                name: f"{name}: {skill.description}"
+                for name, skill in self.skill_manager.discover().items()
+                if name not in self.loaded_skills
+                and not (compact and _withheld_skill_tools(self, skill))
+            }
+            if self._tool_permitted("load_skill")
+            else {}
+        )
         try:
             tools = [
                 name for name, _ in loader.rank(query, tool_docs, TOOL_SEARCH_HITS)

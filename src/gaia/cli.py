@@ -1188,6 +1188,17 @@ def _positive_int(value: str) -> int:
     return number
 
 
+def _tool_patterns(value: str) -> list[str]:
+    """argparse type: comma- or space-separated tool names or globs."""
+    import argparse
+    import re
+
+    names = [n for n in re.split(r"[,\s]+", value) if n]
+    if not names:
+        raise argparse.ArgumentTypeError("expected at least one tool name")
+    return names
+
+
 def build_parser():
     """Build and return the root argparse parser."""
     import argparse
@@ -1311,6 +1322,31 @@ def build_parser():
         help="With -p: full access, as the TUI's /full-access: lifts the shell "
         "guardrails (test runners, build tools run) and grants paths outside the "
         "current folder without asking. Implies --dangerously-skip-permissions",
+    )
+    parser.add_argument(
+        "--disallowed-tools",
+        dest="print_disallowed_tools",
+        type=_tool_patterns,
+        action="extend",
+        default=None,
+        metavar="TOOLS",
+        help="With -p: tools the agent may not see or call, comma- or "
+        "space-separated, with * globs (e.g. 'search_web,browser_*'). A name "
+        "that matches no tool is an error",
+    )
+    parser.add_argument(
+        "--no-web",
+        dest="print_no_web",
+        action="store_true",
+        help="With -p: withhold every tool that searches, reads or downloads from "
+        "the internet. The shell stays available",
+    )
+    parser.add_argument(
+        "--no-skills",
+        dest="print_no_skills",
+        action="store_true",
+        help="With -p: no skill catalogue in the prompt and no tools to find, "
+        "load or learn skills, so the turn runs on the core tools alone",
     )
 
     # --stats is split out so a command whose handler never reads it (email)
@@ -5204,6 +5240,9 @@ def main():
         "--attempts": args.print_attempts is not None,
         "--dangerously-skip-permissions": args.print_skip_permissions,
         "--full-access": args.print_full_access,
+        "--disallowed-tools": bool(args.print_disallowed_tools),
+        "--no-web": args.print_no_web,
+        "--no-skills": args.print_no_skills,
     }
     if args.print_prompt is None and any(print_only.values()):
         used = ", ".join(flag for flag, given in print_only.items() if given)
@@ -5250,6 +5289,9 @@ def main():
                 full_access=args.print_full_access,
                 base_url=args.base_url,
                 time_limit=args.print_time_limit,
+                disallowed_tools=args.print_disallowed_tools or (),
+                no_web=args.print_no_web,
+                no_skills=args.print_no_skills,
             )
         )
 

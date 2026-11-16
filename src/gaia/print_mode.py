@@ -15,13 +15,43 @@ import os
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from fnmatch import fnmatchcase
+from typing import Any, Dict, List, Optional, Sequence
 
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
 
 OUTPUT_FORMATS = ("text", "json")
+
+#: Tools ``--no-web`` withholds: GAIA's own tools that search, read or download
+#: from the internet, or install from it. The shell and MCP tools stay on.
+WEB_TOOL_PATTERNS = (
+    "search_web",
+    "fetch_page",
+    "fetch_webpage",
+    "download_file",
+    "open_url",
+    "browser_*",
+    "search_documentation",
+    "search_skill_hub",
+    "install_skill",
+    "install_cli",
+    "transcribe_media",
+)
+
+#: Tools ``--no-skills`` withholds, so no skill can be found, loaded or learned.
+SKILL_TOOL_PATTERNS = (
+    "list_skills",
+    "search_skill_hub",
+    "install_skill",
+    "capture_skill",
+    "remove_skill",
+    "load_skill",
+    "unload_skill",
+    "skill_status",
+    "remember_skill_lesson",
+)
 
 # What `-p` holds when given no text. Not "": an empty $PROMPT in a script must
 # be refused, not wait on a stdin that may never close.
@@ -151,6 +181,9 @@ def run(
     base_url: Optional[str] = None,
     attempts: int = 1,
     time_limit: Optional[int] = None,
+    disallowed_tools: Sequence[str] = (),
+    no_web: bool = False,
+    no_skills: bool = False,
 ) -> int:
     """Run one headless turn and print its result. Returns the exit code.
 
@@ -179,6 +212,9 @@ def run(
             skip_permissions=skip_permissions,
             full_access=full_access,
             base_url=base_url,
+            disallowed_tools=tuple(disallowed_tools),
+            no_web=no_web,
+            no_skills=no_skills,
         )
         record = (
             _run_with_attempts(text, attempts, **turn)
@@ -245,6 +281,12 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
         flags.append("--dangerously-skip-permissions")
     if turn["base_url"]:
         flags += ["--base-url", turn["base_url"]]
+    if turn["disallowed_tools"]:
+        flags += ["--disallowed-tools", ",".join(turn["disallowed_tools"])]
+    if turn["no_web"]:
+        flags.append("--no-web")
+    if turn["no_skills"]:
+        flags.append("--no-skills")
     print(f"gaia -p: running {attempts} independent attempts…", file=sys.stderr)
     final_prompt, records, scratch = run_attempts(text, attempts, flags)
     try:
@@ -342,6 +384,9 @@ def _run_turn(
     base_url: Optional[str],
     extra_paths: Optional[List[str]] = None,
     time_limit: Optional[int] = None,
+    disallowed_tools: Sequence[str] = (),
+    no_web: bool = False,
+    no_skills: bool = False,
 ) -> Dict[str, Any]:
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.logger import configure
@@ -365,6 +410,11 @@ def _run_turn(
             base_url=base_url,
             extra_paths=extra_paths,
             time_limit=time_limit,
+            restricted=(
+                "--disallowed-tools"
+                if disallowed_tools
+                else "--no-web" if no_web else "--no-skills" if no_skills else ""
+            ),
         )
     detected_base_url = _start_server(model, base_url)
 
@@ -376,7 +426,15 @@ def _run_turn(
             silent_mode=True,
             streaming=False,
             allowed_paths=[os.getcwd(), *(extra_paths or [])],
+            **(
+                {"skill_discovery": False, "skill_suggestions": False}
+                if no_skills
+                else {}
+            ),
         )
+    )
+    withheld = restrict_tools(
+        agent, disallowed_tools, no_web=no_web, no_skills=no_skills
     )
     configure_console(agent.console, skip_permissions, full_access)
     if full_access:
@@ -398,9 +456,44 @@ def _run_turn(
         from gaia.agents.base.memory import drain_memory_extraction
 
         drain_memory_extraction(agent)
-    return summarize(
+    record = summarize(
         result, agent.model_id or model, time.time() - started, verbose=verbose
     )
+    if withheld:
+        record["withheld_tools"] = withheld
+    return record
+
+
+def restrict_tools(
+    agent: Any,
+    disallowed_tools: Sequence[str],
+    *,
+    no_web: bool = False,
+    no_skills: bool = False,
+) -> List[str]:
+    """Withhold the tools the -p flags turn off; return the names withheld.
+
+    A ``--disallowed-tools`` pattern that matches no tool is an error. The
+    ``--no-web`` and ``--no-skills`` sets withhold whichever of theirs this
+    agent has, since a model's feature tier may already leave some out.
+    """
+    if not (disallowed_tools or no_web or no_skills):
+        return []
+    patterns = list(disallowed_tools)
+    present = set(agent.get_tools_info())
+    for wanted, preset in (
+        (no_web, WEB_TOOL_PATTERNS),
+        (no_skills, SKILL_TOOL_PATTERNS),
+    ):
+        if wanted:
+            patterns += [
+                p for p in preset if any(fnmatchcase(name, p) for name in present)
+            ]
+    if no_skills:
+        agent._learned_skills_enabled = False  # pylint: disable=protected-access
+    withheld = agent.deny_tools(list(dict.fromkeys(patterns))) if patterns else []
+    agent.rebuild_system_prompt()
+    return withheld
 
 
 def _arm_time_limit(agent: Any, seconds: int) -> threading.Timer:
@@ -440,6 +533,7 @@ def _relay_turn(
     base_url: Optional[str],
     extra_paths: Optional[List[str]] = None,
     time_limit: Optional[int] = None,
+    restricted: str = "",
 ) -> Dict[str, Any]:
     """Run the turn on the GAIA agent's own binary, through the daemon.
 
@@ -450,14 +544,18 @@ def _relay_turn(
 
     from gaia.daemon.agent_query import ConsoleRenderer, run_query
 
-    if skip_permissions or full_access or base_url or time_limit:
+    if skip_permissions or full_access or base_url or time_limit or restricted:
         flag = (
             "--full-access"
             if full_access
             else (
                 "--dangerously-skip-permissions"
                 if skip_permissions
-                else "--base-url" if base_url else "--time-limit"
+                else (
+                    "--base-url"
+                    if base_url
+                    else "--time-limit" if time_limit else restricted
+                )
             )
         )
         raise RuntimeError(
