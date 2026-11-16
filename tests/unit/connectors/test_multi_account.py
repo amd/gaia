@@ -587,12 +587,14 @@ async def test_adding_beside_an_account_stored_without_an_address_adds_one(googl
     assert len(accounts.list_accounts("google")) == 2
 
 
-async def _merge_old_slot_with_a_later_sign_in(google, granted):
+async def _merge_old_slot_with_a_later_sign_in(google, granted, before_refresh=None):
     _old_store_without_an_address()
     # The same Gmail was later added beside it, under its stable id.
     google.granted = granted
     await _sign_in(google, ALICE, "rt-new", add=True)
     assert len(accounts.list_accounts("google")) == 2
+    if before_refresh:
+        before_refresh()
 
     google.refresh_identity = ALICE
     token = await api.get_access_token(provider="google", scopes=[GMAIL])
@@ -621,6 +623,36 @@ async def test_a_merge_keeps_the_later_sign_in_when_it_granted_more(google):
     assert CALENDAR in kept["scopes"]
     token = await api.get_access_token(provider="google", scopes=[CALENDAR])
     assert token == "access-for-rt-new"
+
+
+async def test_a_merge_keeps_the_proven_sign_in_when_grants_only_overlap(google):
+    kept = await _merge_old_slot_with_a_later_sign_in(
+        google, ["openid", "https://www.googleapis.com/auth/userinfo.email", CALENDAR]
+    )
+
+    # Neither copy covers the other, so the token just proven to work stays.
+    assert kept["refresh_token"] == "rt-old"
+
+
+async def test_a_merge_never_keeps_a_sign_in_from_another_oauth_client(google):
+    def move_later_sign_in_to_another_client():
+        twin = accounts.resolve_slot("google", "alice-sub")
+        blob = peek_connection("google", slot=twin)
+        save_connection(
+            provider="google",
+            slot=twin,
+            account_id="alice-sub",
+            account_email=blob["account_email"],
+            refresh_token=blob["refresh_token"],
+            scopes=blob["scopes"],
+            client_id_hash="another-client",
+        )
+
+    kept = await _merge_old_slot_with_a_later_sign_in(
+        google, SCOPES + [CALENDAR], before_refresh=move_later_sign_in_to_another_client
+    )
+
+    assert kept["refresh_token"] == "rt-old"
 
 
 async def test_an_old_slot_learns_its_address_with_its_id(google):

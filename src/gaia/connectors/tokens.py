@@ -666,8 +666,12 @@ def _claim_identity(
             return None
         if accounts.slot_holding(provider_id, account_id, besides=slot) != twin:
             return None
-        twin_scopes = (peek_connection(provider_id, slot=twin) or {}).get("scopes")
-        if not set(twin_scopes or []) <= set(scopes):
+        twin_blob = peek_connection(provider_id, slot=twin) or {}
+        mine = peek_connection(provider_id, slot=slot) or {}
+        twin_wins = set(scopes) < set(twin_blob.get("scopes") or []) and (
+            twin_blob.get("client_id_hash") == mine.get("client_id_hash")
+        )
+        if twin_wins:
             delete_connection(provider_id, slot=slot)
             accounts.drop_duplicate(provider_id, keep=twin, drop=slot)
             return twin
