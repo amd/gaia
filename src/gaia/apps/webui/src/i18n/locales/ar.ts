@@ -3499,7 +3499,7 @@ const messages: Messages = {
     'resources.ethernet': 'إيثرنت',
     'resources.wifi': 'Wi-Fi',
     'resources.network': 'الشبكة',
-    'resources.sendRecv': '↑ {send} ↓ {recv}',
+    'resources.sendRecv': '↑ {send} ↓ {recv} {unit}',
     'resources.send': 'إرسال {rate}',
     'resources.receive': 'استلام {rate}',
     'resources.unavailable': 'غير متاح',
