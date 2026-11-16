@@ -14,11 +14,6 @@ import (
 	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
-var defaultHybrid = lemonade.HybridModels{
-	Cheap: lemonade.DefaultHybridCheapModel, Strong: lemonade.DefaultHybridStrongModel,
-	Classifier: lemonade.DefaultHybridCheapModel,
-}
-
 func stubHybrid(t *testing.T, h lemonade.HybridModels, readErr, localErr error) {
 	t.Helper()
 	origRead, origLocal := readHybridModels, hybridLocalRefuse
@@ -27,92 +22,91 @@ func stubHybrid(t *testing.T, h lemonade.HybridModels, readErr, localErr error) 
 	hybridLocalRefuse = func() error { return localErr }
 }
 
-func gatewayEntries(ids ...string) []lemonade.Entry {
-	models := make([]lemonade.Model, len(ids))
-	for i, id := range ids {
-		models[i] = lemonade.Model{ID: id, Recipe: "cloud"}
+// joined is the screen with wrapped lines rejoined.
+func joined(m Model) string {
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSpace(lines[i])
 	}
-	return plain(models...)
+	return strings.Join(lines, " ")
 }
 
-func TestGatewayListLeadsWithHybrid(t *testing.T) {
-	stubHybrid(t, defaultHybrid, nil, nil)
-	entries := withHybrid(gatewayEntries(lemonade.DefaultHybridCheapModel, lemonade.DefaultHybridStrongModel))
-	if len(entries) != 3 || entries[0].Model.ID != lemonade.HybridModelID {
-		t.Fatalf("entries %s", ids(entries))
+func hybridPanel(t *testing.T) Model {
+	t.Helper()
+	m := New("", 100, 40).WithCurrent(lemonade.HybridProvider)
+	if m.chosen() != lemonade.HybridProvider {
+		t.Fatalf("panel did not open on hybrid: %s", m.chosen())
 	}
-	h := entries[0]
-	if !h.Selectable() || h.NeedsDownload() {
-		t.Fatalf("hybrid must be choosable and never downloaded: %+v", h)
+	return m
+}
+
+func TestHybridIsItsOwnRowNamedByItsPair(t *testing.T) {
+	for _, tc := range []struct {
+		h    lemonade.HybridModels
+		want string
+	}{
+		{lemonade.HybridModels{Cheap: "amd.DeepSeek-V4.1-Flash", Strong: "amd.Claude-Opus-5-5", Classifier: "amd.DeepSeek-V4.1-Flash"},
+			"Hybrid (DeepSeek + Opus) (cloud)"},
+		{lemonade.HybridModels{Cheap: "Gemma-4-E4B-it-GGUF", Strong: "Qwen3.6-35B-A3B-GGUF", Classifier: "Gemma-4-E4B-it-GGUF"},
+			"Hybrid (Gemma + Qwen) (local)"},
+		{lemonade.HybridModels{Cheap: "fireworks.deepseek-v4p1-flash", Strong: "claude-opus-5", Classifier: "fireworks.deepseek-v4p1-flash"},
+			"Hybrid (DeepSeek + Opus) (cloud)"},
+	} {
+		stubHybrid(t, tc.h, nil, nil)
+		v := joined(hybridPanel(t))
+		if !strings.Contains(v, "› "+tc.want) || !strings.Contains(v, "/hybrid changes the models") {
+			t.Errorf("want %q:\n%s", tc.want, v)
+		}
 	}
-	if got := entryName(h, "amd"); got != "Hybrid (DeepSeek + Opus) (cloud)" {
-		t.Fatalf("label %q", got)
+}
+
+func TestChoosingHybridSelectsTheHybridID(t *testing.T) {
+	stubHybrid(t, lemonade.HybridModels{Cheap: "Gemma-4-E4B-it-GGUF", Strong: "amd.Claude-Opus-5-5",
+		Classifier: "Gemma-4-E4B-it-GGUF"}, nil, nil)
+	_, cmd := hybridPanel(t).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter on hybrid did nothing")
 	}
-	if entryGroup(h) != "Hybrid routing" {
-		t.Fatalf("group %q", entryGroup(h))
-	}
-	if len(withHybrid(nil)) != 0 {
-		t.Fatal("hybrid offered with nothing on the gateway to route between")
+	if got := cmd().(SelectedMsg).ID; got != lemonade.HybridModelID {
+		t.Fatalf("selected %q", got)
 	}
 }
 
 func TestHybridRowSaysWhyItCannotBeChosen(t *testing.T) {
 	for name, tc := range map[string]struct {
-		h         lemonade.HybridModels
-		readErr   error
-		localErr  error
-		gateway   []string
-		wantInWhy string
+		readErr, localErr error
+		want              string
 	}{
-		"missing strong": {defaultHybrid, nil, nil, []string{lemonade.DefaultHybridCheapModel}, "doesn't list amd.Claude-Opus-5-5, hybrid's strong model"},
-		"broken config":  {lemonade.HybridModels{}, errors.New("hybrid_policy must be one of quality"), nil, []string{"amd.x"}, "Fix it in /hybrid"},
-		"local only":     {defaultHybrid, nil, errors.New("Local only is on, so hybrid won't send turns to amd.x"), []string{lemonade.DefaultHybridCheapModel, lemonade.DefaultHybridStrongModel}, "Local only is on"},
+		"broken config": {errors.New("hybrid_policy must be one of quality"), nil, "Fix it in /hybrid"},
+		"local only":    {nil, errors.New("Local only is on, so hybrid won't send turns to amd.x"), "Local only is on"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			stubHybrid(t, tc.h, tc.readErr, tc.localErr)
-			h := withHybrid(gatewayEntries(tc.gateway...))[0]
-			if h.Selectable() || !strings.Contains(h.Reason, tc.wantInWhy) {
-				t.Fatalf("selectable=%v reason=%q", h.Selectable(), h.Reason)
+			stubHybrid(t, lemonade.HybridModels{Cheap: "amd.a", Strong: "amd.b", Classifier: "amd.a"}, tc.readErr, tc.localErr)
+			m := hybridPanel(t)
+			if v := joined(m); !strings.Contains(v, "Can't use: ") || !strings.Contains(v, tc.want) {
+				t.Fatalf("row:\n%s", v)
+			}
+			next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if cmd != nil {
+				t.Fatal("an unusable hybrid was selected")
+			}
+			if !strings.Contains(next.(Model).note, tc.want) {
+				t.Fatalf("note %q", next.(Model).note)
 			}
 		})
 	}
 }
 
-// A model hybrid routes to that is not a gateway model (a local one) is checked
-// when the switch is made, not refused here.
-func TestNonGatewayMembersAreLeftToTheSwitchCheck(t *testing.T) {
-	stubHybrid(t, lemonade.HybridModels{Cheap: "Gemma-4-E4B-it-GGUF", Strong: lemonade.DefaultHybridStrongModel,
-		Classifier: "Gemma-4-E4B-it-GGUF"}, nil, nil)
-	h := withHybrid(gatewayEntries(lemonade.DefaultHybridStrongModel))[0]
-	if !h.Selectable() {
-		t.Fatalf("refused: %s", h.Reason)
-	}
-}
-
-func TestChoosingHybridSelectsTheHybridID(t *testing.T) {
-	stubHybrid(t, defaultHybrid, nil, nil)
+// Hybrid is not one of the gateway's models any more: its own row replaces it.
+func TestTheGatewayListHasNoHybridRow(t *testing.T) {
+	stubHybrid(t, lemonade.HybridModels{Cheap: "amd.a", Strong: "amd.b", Classifier: "amd.a"}, nil, nil)
 	m := New("", 100, 40)
-	m.selected = 2 // amd
+	m.selected = 2
 	m = m.setup()
-	next, _ := m.Update(modelsMsg{source: m.client,
-		entries: withHybrid(gatewayEntries(lemonade.DefaultHybridCheapModel, lemonade.DefaultHybridStrongModel))})
-	m = next.(Model)
-	lines := strings.Split(ansi.Strip(m.View()), "\n")
-	for i := range lines {
-		lines[i] = strings.TrimSpace(lines[i])
-	}
-	view := strings.Join(lines, "")
-	if strings.Contains(view, "★ Hybrid") {
-		t.Fatalf("hybrid is not a recommended model:\n%s", view)
-	}
-	if !strings.Contains(view, "Hybrid routing") || !strings.Contains(view, "Hybrid (DeepSeek + Opus) (cloud)") {
-		t.Fatalf("hybrid not listed:\n%s", view)
-	}
-	if !strings.Contains(view, "picked by "+lemonade.DefaultHybridCheapModel) {
-		t.Fatalf("the focused hybrid row does not say what it routes between:\n%s", view)
-	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if got := cmd().(SelectedMsg).ID; got != lemonade.HybridModelID {
-		t.Fatalf("selected %q", got)
+	next, _ := m.Update(modelsMsg{source: m.client, entries: plain(lemonade.Model{ID: "amd.a", Recipe: "cloud"})})
+	for _, e := range next.(Model).entries {
+		if lemonade.IsHybridID(e.Model.ID) {
+			t.Fatal("hybrid listed among the gateway's models")
+		}
 	}
 }

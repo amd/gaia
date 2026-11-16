@@ -24,17 +24,50 @@ import (
 type stubs struct {
 	saved   []lemonade.HybridSettings
 	saveErr error
+	catalog lemonade.HybridCatalog
 }
 
-// open builds the screen over stubbed config, gateway list and Agent UI.
-func open(t *testing.T, s lemonade.HybridSettings, readErr error, server http.Handler) (Model, *stubs) {
-	t.Helper()
-	st := &stubs{}
-	origRead, origSave, origList, origURL := readSettings, saveSettings, listGatewayModels, AgentUIURL
-	t.Cleanup(func() {
-		readSettings, saveSettings, listGatewayModels, AgentUIURL = origRead, origSave, origList, origURL
+func testCatalog() lemonade.HybridCatalog {
+	return lemonade.HybridCatalog{
+		Models: map[string][]string{
+			lemonade.HybridFromLocal:   {"Gemma-4-E4B-it-GGUF"},
+			lemonade.HybridFromGateway: {"amd.DeepSeek-V4.1-Flash", "amd.Claude-Opus-5-5", "amd.Gemma-4-31B", "amd.Claude-Sonnet-5-5"},
+		},
+		Errs:         map[string]error{},
+		DefaultLocal: "Gemma-4-E4B-it-GGUF",
+	}
+}
+
+// fastAPI404 answers unknown routes the way the Agent UI's FastAPI does.
+func fastAPI404(mux *http.ServeMux) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, pattern := mux.Handler(r); pattern == "" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"detail":"Not Found"}`)
+			return
+		}
+		mux.ServeHTTP(w, r)
 	})
-	readSettings = func() (lemonade.HybridSettings, error) { return s, readErr }
+}
+
+// open builds the screen over stubbed config, provider lists and Agent UI.
+func open(t *testing.T, s lemonade.HybridSettings, readErr error, server http.Handler) (Model, *stubs) {
+	return openWith(t, s, readErr, server, testCatalog())
+}
+
+func openWith(t *testing.T, s lemonade.HybridSettings, readErr error, server http.Handler, c lemonade.HybridCatalog) (Model, *stubs) {
+	t.Helper()
+	st := &stubs{catalog: c}
+	origRead, origSave, origLoad, origURL := readSettings, saveSettings, loadCatalog, AgentUIURL
+	t.Cleanup(func() {
+		readSettings, saveSettings, loadCatalog, AgentUIURL = origRead, origSave, origLoad, origURL
+	})
+	readSettings = func() (lemonade.HybridSettings, error) {
+		if len(st.saved) > 0 {
+			return st.saved[len(st.saved)-1], nil
+		}
+		return s, readErr
+	}
 	saveSettings = func(s lemonade.HybridSettings) error {
 		if err := s.Validate(); err != nil {
 			return err
@@ -45,9 +78,7 @@ func open(t *testing.T, s lemonade.HybridSettings, readErr error, server http.Ha
 		st.saved = append(st.saved, s)
 		return nil
 	}
-	listGatewayModels = func(context.Context, string) ([]string, error) {
-		return []string{"amd.DeepSeek-V4.1-Flash", "amd.Claude-Opus-5-5", "amd.Gemma-4-31B"}, nil
-	}
+	loadCatalog = func(context.Context, string) lemonade.HybridCatalog { return st.catalog }
 	if server != nil {
 		srv := httptest.NewServer(server)
 		t.Cleanup(srv.Close)
@@ -55,7 +86,7 @@ func open(t *testing.T, s lemonade.HybridSettings, readErr error, server http.Ha
 	} else {
 		AgentUIURL = closedURL(t)
 	}
-	m := New("", 110, 60)
+	m := New("", 110, 80)
 	m = settle(t, m, m.Init())
 	return m, st
 }
@@ -95,7 +126,7 @@ func settle(t *testing.T, m Model, cmd tea.Cmd) Model {
 		switch v := msg.(type) {
 		case tea.BatchMsg:
 			queue = append(queue, v...)
-		case settingsMsg, modelsMsg, statsMsg, previewMsg:
+		case settingsMsg, catalogMsg, serverTemplatesMsg, appliedMsg, statsMsg, previewMsg:
 			next, more := m.Update(msg)
 			m = next.(Model)
 			queue = append(queue, more)
@@ -136,9 +167,13 @@ func key(t *testing.T, m Model, keys ...string) Model {
 	return m
 }
 
+// focus moves to a field row (rowCheap…rowTry()).
 func focus(t *testing.T, m Model, row int) Model {
 	t.Helper()
-	for m.focus != row {
+	for i := 0; m.field() != row; i++ {
+		if i > 100 {
+			t.Fatalf("never reached row %d", row)
+		}
 		m = key(t, m, "down")
 	}
 	return m
@@ -181,7 +216,7 @@ func TestABrokenConfigIsShownAndCanBeReplaced(t *testing.T) {
 func TestPickingModelsAndSaving(t *testing.T) {
 	m, st := open(t, lemonade.DefaultHybridSettings(), nil, nil)
 	m = focus(t, m, rowStrong)
-	m = key(t, m, "enter", "g", "e", "m", "enter")
+	m = key(t, m, "enter", "3", "1", "b", "enter")
 	if m.edit.Strong != "amd.Gemma-4-31B" {
 		t.Fatalf("strong = %q", m.edit.Strong)
 	}
@@ -194,18 +229,84 @@ func TestPickingModelsAndSaving(t *testing.T) {
 	}
 }
 
-func TestPickerOffersTheDefaultAndKeepsAnUnlistedChoice(t *testing.T) {
+func TestPickerGroupsModelsByProviderAndSaysWhyOnesAreMissing(t *testing.T) {
 	s := lemonade.DefaultHybridSettings()
 	s.Cheap = "fireworks.glm-5p3-flash"
 	m, _ := open(t, s, nil, nil)
+	m = focus(t, m, rowCheap)
 	m = key(t, m, "enter")
-	opts := m.pickOptions()
-	if opts[0] != "" || opts[len(opts)-1] != "fireworks.glm-5p3-flash" {
-		t.Fatalf("options %v", opts)
+	v := view(m)
+	for _, want := range []string{
+		"On this PC", "Gemma-4-E4B-it-GGUF", "AMD LLM Gateway", "amd.Claude-Sonnet-5-5",
+		"Fireworks AI", "fireworks.glm-5p3-flash · current · can't use: add a Fireworks key first",
+		"Claude (Anthropic API)", "set ANTHROPIC_API_KEY",
+	} {
+		if !strings.Contains(v, want) {
+			t.Errorf("picker lacks %q:\n%s", want, v)
+		}
+	}
+	if i := strings.Index(v, "On this PC"); i < 0 || i > strings.Index(v, "AMD LLM Gateway") {
+		t.Error("local models come first")
 	}
 	m = key(t, m, "enter") // the default
 	if m.edit.Cheap != "" {
 		t.Fatalf("default not chosen: %q", m.edit.Cheap)
+	}
+}
+
+func TestPickingAnUnavailableModelSaysWhy(t *testing.T) {
+	s := lemonade.DefaultHybridSettings()
+	s.Strong = "fireworks.glm-5p3-flash"
+	m, _ := open(t, s, nil, nil)
+	m = focus(t, m, rowStrong)
+	m = key(t, m, "enter", "g", "l", "m", "enter")
+	if m.edit.Strong != "fireworks.glm-5p3-flash" || !strings.Contains(view(m), "can't be used: add a Fireworks key first") {
+		t.Fatalf("strong %q\n%s", m.edit.Strong, view(m))
+	}
+}
+
+func TestDirectClaudeAndFireworksAreChoosableWhenSetUp(t *testing.T) {
+	c := testCatalog()
+	c.ClaudeKey = true
+	c.Models[lemonade.HybridFromClaude] = []string{"claude-haiku-4-5", "claude-opus-5"}
+	c.Models[lemonade.HybridFromFireworks] = []string{"fireworks.accounts/fireworks/models/deepseek-v4p1-flash"}
+	m, st := openWith(t, lemonade.DefaultHybridSettings(), nil, nil, c)
+	m = focus(t, m, rowCheap)
+	m = key(t, m, "enter", "v", "4", "p", "1", "enter")
+	m = focus(t, m, rowStrong)
+	m = key(t, m, "enter", "o", "p", "u", "s", "-", "5", "down", "enter") // the gateway Opus lists first
+	if m.edit.Strong != "claude-opus-5" {
+		t.Fatalf("strong %q", m.edit.Strong)
+	}
+	m = key(t, m, "ctrl+s")
+	if len(st.saved) != 1 || st.saved[0].Cheap != "fireworks.accounts/fireworks/models/deepseek-v4p1-flash" {
+		t.Fatalf("saved %+v\n%s", st.saved, view(m))
+	}
+}
+
+func TestSaveRefusesAModelNoProviderOffers(t *testing.T) {
+	s := lemonade.DefaultHybridSettings()
+	s.Strong = "amd.Retired-Model"
+	m, st := open(t, s, nil, nil)
+	m = key(t, m, "ctrl+s")
+	v := view(m)
+	if len(st.saved) != 0 || !strings.Contains(v, "amd.Retired-Model can't be used") ||
+		!strings.Contains(v, "Checked: On this PC, AMD LLM Gateway, Fireworks AI, Claude") {
+		t.Fatalf("saved %+v\n%s", st.saved, v)
+	}
+}
+
+func TestNotesForUnmeasuredPairsAndLocalClassifiers(t *testing.T) {
+	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, nil)
+	if v := view(m); strings.Contains(v, "Not yet measured") || strings.Contains(v, "small local model") {
+		t.Fatalf("the measured default earns no notes:\n%s", v)
+	}
+	s := lemonade.DefaultHybridSettings()
+	s.Cheap = "Gemma-4-E4B-it-GGUF"
+	m, _ = open(t, s, nil, nil)
+	v := view(m)
+	if !strings.Contains(v, "Not yet measured") || !strings.Contains(v, "Gemma-4-E4B-it-GGUF is a small local model, so it may route less accurately") {
+		t.Fatalf("notes missing:\n%s", v)
 	}
 }
 

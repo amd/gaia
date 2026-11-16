@@ -1,18 +1,19 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Package hybrid is the /hybrid screen: the models hybrid routes between, its
-// policy and custom rules, a preview of how a request would be routed, and how
-// past turns were.
+// Package hybrid is the /hybrid screen: templates, the models hybrid routes
+// between (from every provider set up here), its policy and custom rules, a
+// preview of how a request would be routed, and how past turns were.
 //
 // Settings are read from and saved to ~/.gaia/config.json with the checks
-// GaiaConfig applies, the way every other TUI setting is saved. The preview and
-// the stats need the real classifier and the spending record, which only the
-// Agent UI server has, so those two go to its /api/hybrid routes.
+// GaiaConfig applies, the way every other TUI setting is saved. The preview, the
+// stats and the server's own template list need the Agent UI server; without
+// it the templates are judged here from what this PC's providers offer.
 package hybrid
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,8 +24,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -36,9 +39,16 @@ type settingsMsg struct {
 	err      error
 }
 
-type modelsMsg struct {
-	ids []string
-	err error
+type catalogMsg struct{ catalog lemonade.HybridCatalog }
+
+type serverTemplatesMsg struct {
+	templates []lemonade.HybridTemplate
+	err       error
+}
+
+type appliedMsg struct {
+	name string
+	err  error
 }
 
 type statsMsg struct {
@@ -52,18 +62,31 @@ type previewMsg struct {
 	err   error
 }
 
-// listGatewayModels lists the AMD gateway's chat models from Lemonade. A var so
-// tests reach no server.
-var listGatewayModels = func(ctx context.Context, base string) ([]string, error) {
-	models, err := lemonade.New(base).Models(ctx, "amd")
+// loadCatalog lists what each provider offers here. A var so tests reach no
+// server.
+var loadCatalog = func(ctx context.Context, base string) lemonade.HybridCatalog {
+	c := lemonade.HybridCatalog{Models: map[string][]string{}, Errs: map[string]error{},
+		ClaudeKey: preflight.ClaudeCredentialConfigured(), LocalOnly: lemonade.LocalOnly()}
+	lc := lemonade.New(base)
+	for _, p := range []string{lemonade.HybridFromLocal, lemonade.HybridFromGateway, lemonade.HybridFromFireworks} {
+		models, err := lc.Models(ctx, p)
+		if err != nil {
+			c.Errs[p] = err
+			continue
+		}
+		for _, m := range models {
+			c.Models[p] = append(c.Models[p], m.ID)
+		}
+	}
+	if c.ClaudeKey {
+		c.Models[lemonade.HybridFromClaude] = client.ClaudeModelIDs()
+	}
+	local, err := lemonade.DefaultLocalChatModel()
 	if err != nil {
-		return nil, err
+		c.Errs[lemonade.HybridFromLocal] = err
 	}
-	ids := make([]string, 0, len(models))
-	for _, m := range models {
-		ids = append(ids, m.ID)
-	}
-	return ids, nil
+	c.DefaultLocal = local
+	return c
 }
 
 // Settings I/O, vars so tests touch no real config.
@@ -74,7 +97,8 @@ var (
 
 const loadTimeout = 30 * time.Second
 
-// Rows, top to bottom. The rules table sits between policy and the preview.
+// Field rows, top to bottom below the templates. The rules table sits between
+// policy and the preview.
 const (
 	rowCheap = iota
 	rowStrong
@@ -85,6 +109,15 @@ const (
 )
 
 func rowTry() int { return rowRules + len(lemonade.HybridKinds) }
+
+// choice is one row of the model picker: a provider heading, or a model.
+type choice struct {
+	id       string
+	heading  string
+	reason   string
+	isModel  bool
+	provider string
+}
 
 // Model is the /hybrid screen.
 type Model struct {
@@ -98,17 +131,25 @@ type Model struct {
 	edit    lemonade.HybridSettings
 	loadErr error
 
-	models    []string
-	modelsErr error
+	catalog       lemonade.HybridCatalog
+	catalogLoaded bool
+
+	// templates are the server's when it answered, else judged here.
+	templates     []lemonade.HybridTemplate
+	fromServer    bool
+	serverChecked bool
+	templatesErr  error
+	applying      bool
 
 	stats    string
 	statsErr error
 
+	// focus counts the template rows first, then the field rows.
 	focus   int
 	timeout textinput.Model
 	try     textinput.Model
 
-	// picking is the model row whose list is open, or -1.
+	// picking is the field row whose list is open, or -1.
 	picking      int
 	pickSearch   string
 	pickCursor   int
@@ -117,12 +158,14 @@ type Model struct {
 	preview      *event.CanonicalRoute
 	previewErr   error
 	note, errMsg string
+	// moved is set once the user has moved the focus.
+	moved bool
 	// discardArmed is set by esc with unsaved changes; a second esc discards.
 	discardArmed  bool
 	width, height int
 }
 
-// New builds the screen for the Lemonade at base, which lists gateway models.
+// New builds the screen for the Lemonade at base, which lists the models.
 func New(base string, width, height int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	timeout := textinput.New()
@@ -137,19 +180,22 @@ func New(base string, width, height int) Model {
 		picking: -1, width: width, height: height}
 }
 
-// Init reads the settings, the gateway's models and the stats together.
+// Init reads the settings, every provider's models, the server's templates
+// and the stats together.
 func (m Model) Init() tea.Cmd {
 	ctx, base, a := m.ctx, m.base, m.api
 	return tea.Batch(
+		readSettingsCmd(),
 		func() tea.Msg {
-			s, err := readSettings()
-			return settingsMsg{settings: s, err: err}
+			c, cancel := context.WithTimeout(ctx, loadTimeout)
+			defer cancel()
+			return catalogMsg{catalog: loadCatalog(c, base)}
 		},
 		func() tea.Msg {
 			c, cancel := context.WithTimeout(ctx, loadTimeout)
 			defer cancel()
-			ids, err := listGatewayModels(c, base)
-			return modelsMsg{ids: ids, err: err}
+			t, err := a.Templates(c)
+			return serverTemplatesMsg{templates: t, err: err}
 		},
 		func() tea.Msg {
 			c, cancel := context.WithTimeout(ctx, loadTimeout)
@@ -160,8 +206,23 @@ func (m Model) Init() tea.Cmd {
 	)
 }
 
+func readSettingsCmd() tea.Cmd {
+	return func() tea.Msg {
+		s, err := readSettings()
+		return settingsMsg{settings: s, err: err}
+	}
+}
+
 // Close stops anything still in flight.
 func (m Model) Close() { m.cancel() }
+
+// field is the focused field row, or -1 on a template.
+func (m Model) field() int {
+	if m.focus < len(m.templates) {
+		return -1
+	}
+	return m.focus - len(m.templates)
+}
 
 func (m Model) dirty() bool {
 	return m.loaded && !sameSettings(m.current(), m.saved)
@@ -198,6 +259,27 @@ func sameSettings(a, b lemonade.HybridSettings) bool {
 	return true
 }
 
+// refreshTemplates judges the built-in templates here while the server's
+// list is not in use.
+func (m *Model) refreshTemplates() {
+	if m.fromServer || !m.catalogLoaded || !m.serverChecked {
+		return
+	}
+	before := len(m.templates)
+	m.templates = lemonade.BuiltinHybridTemplates(m.catalog)
+	m.keepFocus(before)
+}
+
+// keepFocus holds the focus on the same field when the template rows above
+// it change; before any key it starts on the first template.
+func (m *Model) keepFocus(before int) {
+	if !m.moved {
+		m.focus = 0
+		return
+	}
+	m.focus = max(0, m.focus+len(m.templates)-before)
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -205,10 +287,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case settingsMsg:
 		m.loaded = true
+		m.loadErr = v.err
 		if v.err != nil {
 			// Shown, and the screen opens on the defaults so the bad value can be
 			// replaced; saving writes every hybrid key.
-			m.loadErr = v.err
 			v.settings = lemonade.DefaultHybridSettings()
 		}
 		m.saved = v.settings
@@ -222,9 +304,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.saved = lemonade.HybridSettings{}
 		}
 		return m, nil
-	case modelsMsg:
-		m.models, m.modelsErr = v.ids, v.err
+	case catalogMsg:
+		m.catalog, m.catalogLoaded = v.catalog, true
+		m.refreshTemplates()
 		return m, nil
+	case serverTemplatesMsg:
+		m.serverChecked = true
+		var down *ServerDownError
+		var missing *RouteMissingError
+		switch {
+		case v.err == nil:
+			before := len(m.templates)
+			m.templates, m.fromServer = v.templates, true
+			m.keepFocus(before)
+		case errors.As(v.err, &down), errors.As(v.err, &missing):
+			m.refreshTemplates()
+		default:
+			m.templatesErr = v.err
+		}
+		return m, nil
+	case appliedMsg:
+		m.applying = false
+		if v.err != nil {
+			m.errMsg = "Not applied: " + v.err.Error()
+			return m, nil
+		}
+		m.note = v.name + " applied. A chat already on hybrid picks this up after /model hybrid."
+		return m, readSettingsCmd()
 	case statsMsg:
 		if v.err != nil {
 			m.statsErr = v.err
@@ -252,7 +358,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) forward(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	switch m.focus {
+	switch m.field() {
 	case rowTimeout:
 		m.timeout, cmd = m.timeout.Update(msg)
 	case rowTry():
@@ -291,19 +397,25 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !m.loaded {
 		return m, nil
 	}
+	f := m.field()
 	switch {
-	case m.focus <= rowClassifier:
+	case f < 0:
 		if k.String() == "enter" {
-			m.picking, m.pickSearch, m.pickCursor = m.focus, "", 0
+			return m.applyTemplate(m.templates[m.focus])
+		}
+		return m, nil
+	case f <= rowClassifier:
+		if k.String() == "enter" {
+			m.picking, m.pickSearch, m.pickCursor = f, "", 0
 			m.errMsg = ""
 		}
 		return m, nil
-	case m.focus == rowTimeout:
+	case f == rowTimeout:
 		if k.Type == tea.KeyRunes && !isDigits(string(k.Runes)) {
 			return m, nil
 		}
 		return m.forward(k)
-	case m.focus == rowPolicy:
+	case f == rowPolicy:
 		switch k.String() {
 		case "left", "h":
 			m.setPolicy(-1)
@@ -315,7 +427,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.startFrom(lemonade.HybridPolicyBalanced)
 		}
 		return m, nil
-	case m.focus < rowTry():
+	case f < rowTry():
 		return m.handleRuleKey(k), nil
 	default:
 		if k.String() == "enter" {
@@ -335,17 +447,45 @@ func isDigits(s string) bool {
 }
 
 func (m Model) move(delta int) (tea.Model, tea.Cmd) {
-	last := rowTry()
-	m.focus = (m.focus + delta + last + 1) % (last + 1)
+	m.moved = true
+	rows := len(m.templates) + rowTry() + 1
+	m.focus = (m.focus + delta + rows) % rows
 	m.timeout.Blur()
 	m.try.Blur()
-	switch m.focus {
+	switch m.field() {
 	case rowTimeout:
 		return m, m.timeout.Focus()
 	case rowTry():
 		return m, m.try.Focus()
 	}
 	return m, nil
+}
+
+// applyTemplate sets a template's models and policy: through the server when
+// the list came from it, else by saving config.json here.
+func (m Model) applyTemplate(t lemonade.HybridTemplate) (tea.Model, tea.Cmd) {
+	m.note, m.errMsg = "", ""
+	if !t.Available {
+		m.errMsg = t.Name + " can't be used yet: " + t.Reason + "."
+		return m, nil
+	}
+	if m.fromServer {
+		m.applying = true
+		ctx, a := m.ctx, m.api
+		return m, func() tea.Msg {
+			return appliedMsg{name: t.Name, err: a.ApplyTemplate(ctx, t.ID)}
+		}
+	}
+	s := t.Settings(m.saved)
+	if m.loadErr != nil || s.Timeout == 0 {
+		s.Timeout = lemonade.DefaultHybridTimeout
+	}
+	if err := saveSettings(s); err != nil {
+		m.errMsg = "Not applied: " + err.Error()
+		return m, nil
+	}
+	m.note = t.Name + " applied. A chat already on hybrid picks this up after /model hybrid."
+	return m, readSettingsCmd()
 }
 
 // setPolicy steps through Quality, Balanced and Custom. Custom with no table
@@ -380,7 +520,7 @@ func (m *Model) startFrom(preset string) {
 // handleRuleKey edits the focused kind's rule. Editing a preset's table turns
 // Custom on, starting from that preset, and says so.
 func (m Model) handleRuleKey(k tea.KeyMsg) Model {
-	kind := lemonade.HybridKinds[m.focus-rowRules]
+	kind := lemonade.HybridKinds[m.field()-rowRules]
 	switch k.String() {
 	case "q":
 		m.startFrom(lemonade.HybridPolicyQuality)
@@ -414,6 +554,29 @@ func (m Model) handleRuleKey(k tea.KeyMsg) Model {
 	return m
 }
 
+// offered checks every model s routes to against the providers set up here,
+// as the backend accepts a model any configured provider offers.
+func (m Model) offered(s lemonade.HybridSettings) error {
+	if !m.catalogLoaded {
+		return errors.New("the models each provider offers are still loading; try again in a moment")
+	}
+	h := s.Models()
+	for _, r := range h.Roles() {
+		if _, err := m.catalog.Find(r.Model); err != nil {
+			return fmt.Errorf("the %s model %s can't be used: %v. Checked: %s", r.Role, r.Model, err, m.checkedProviders())
+		}
+	}
+	return nil
+}
+
+func (m Model) checkedProviders() string {
+	var out []string
+	for _, p := range lemonade.HybridProviders {
+		out = append(out, lemonade.HybridProviderLabel(p))
+	}
+	return strings.Join(out, ", ")
+}
+
 func (m Model) save() Model {
 	m.note, m.errMsg = "", ""
 	if !m.loaded {
@@ -427,6 +590,14 @@ func (m Model) save() Model {
 	s := m.current()
 	if s.Policy != lemonade.HybridPolicyCustom {
 		s.Rules = nil
+	}
+	if err := s.Validate(); err != nil {
+		m.errMsg = "Not saved: " + err.Error()
+		return m
+	}
+	if err := m.offered(s); err != nil {
+		m.errMsg = "Not saved: " + err.Error()
+		return m
 	}
 	if err := saveSettings(s); err != nil {
 		m.errMsg = "Not saved: " + err.Error()
@@ -457,29 +628,70 @@ func (m Model) runPreview() (tea.Model, tea.Cmd) {
 	}
 }
 
-// pickOptions are the picker's rows: the default first, then the gateway's
-// models, then the current choice if the gateway does not list it.
-func (m Model) pickOptions() []string {
-	opts := []string{""}
+// choices are the picker's rows: the default first, then each provider's
+// models under its heading. A provider with nothing to offer says why, and the
+// current choice stays listed with the reason when no provider offers it.
+func (m Model) choices() []choice {
 	current := m.roleValue(m.picking)
-	listed := current == ""
-	for _, id := range m.models {
-		opts = append(opts, id)
-		if id == current {
-			listed = true
+	out := []choice{{isModel: true}}
+	placed := current == ""
+	for _, p := range lemonade.HybridProviders {
+		out = append(out, choice{heading: lemonade.HybridProviderLabel(p)})
+		if err := m.catalog.Errs[p]; err != nil {
+			out = append(out, choice{reason: "couldn't list them: " + err.Error()})
+		} else if len(m.catalog.Models[p]) == 0 {
+			out = append(out, choice{reason: m.emptyReason(p)})
 		}
-	}
-	if !listed {
-		opts = append(opts, current)
+		for _, id := range m.catalog.Models[p] {
+			out = append(out, choice{id: id, isModel: true, provider: p})
+			placed = placed || strings.EqualFold(id, current)
+		}
+		if !placed && lemonade.HybridProviderOf(current) == p {
+			_, err := m.catalog.Find(current)
+			out = append(out, choice{id: current, isModel: true, provider: p, reason: reasonOf(err)})
+			placed = true
+		}
 	}
 	needle := strings.ToLower(m.pickSearch)
 	if needle == "" {
-		return opts
+		return out
 	}
-	var out []string
-	for _, id := range opts {
-		if id != "" && strings.Contains(strings.ToLower(id), needle) {
-			out = append(out, id)
+	var filtered []choice
+	for _, c := range out {
+		if c.isModel && c.id != "" && strings.Contains(strings.ToLower(c.id), needle) {
+			filtered = append(filtered, c)
+		}
+	}
+	return filtered
+}
+
+func reasonOf(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func (m Model) emptyReason(p string) string {
+	switch {
+	case !m.catalogLoaded:
+		return "loading…"
+	case p == lemonade.HybridFromLocal:
+		return "no models downloaded yet (/models)"
+	case p == lemonade.HybridFromGateway:
+		return "not connected (/gateway)"
+	case p == lemonade.HybridFromFireworks:
+		return "no Fireworks key yet (/provider)"
+	}
+	return "set ANTHROPIC_API_KEY, then restart GAIA"
+}
+
+// selectable are the indexes of choices that can be picked.
+func selectable(cs []choice) []int {
+	var out []int
+	for i, c := range cs {
+		if c.isModel {
+			out = append(out, i)
 		}
 	}
 	return out
@@ -507,7 +719,7 @@ func (m *Model) setRole(row int, id string) {
 }
 
 func (m Model) handlePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	opts := m.pickOptions()
+	rows := selectable(m.choices())
 	switch k.String() {
 	case "esc":
 		m.picking = -1
@@ -515,12 +727,19 @@ func (m Model) handlePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up":
 		m.pickCursor = max(0, m.pickCursor-1)
 	case "down", "tab":
-		m.pickCursor = max(0, min(len(opts)-1, m.pickCursor+1))
+		m.pickCursor = max(0, min(len(rows)-1, m.pickCursor+1))
 	case "enter":
-		if m.pickCursor < len(opts) {
-			m.setRole(m.picking, opts[m.pickCursor])
-			m.note, m.errMsg = "", ""
+		if m.pickCursor >= len(rows) {
+			return m, nil
 		}
+		c := m.choices()[rows[m.pickCursor]]
+		if c.reason != "" {
+			m.errMsg = c.id + " can't be used: " + c.reason + "."
+			m.picking = -1
+			return m, nil
+		}
+		m.setRole(m.picking, c.id)
+		m.note, m.errMsg = "", ""
 		m.picking = -1
 	case "backspace":
 		if r := []rune(m.pickSearch); len(r) > 0 {
@@ -547,6 +766,7 @@ var (
 	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(theme.AccentBright)
 	dimStyle    = lipgloss.NewStyle().Foreground(theme.Dim)
 	errStyle    = lipgloss.NewStyle().Foreground(theme.Danger)
+	warnStyle   = lipgloss.NewStyle().Foreground(theme.Warning)
 	okStyle     = lipgloss.NewStyle().Foreground(theme.Success)
 	focusStyle  = lipgloss.NewStyle().Bold(true).Foreground(theme.AccentBright)
 	chosenStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Highlight)
@@ -555,17 +775,31 @@ var (
 // modelLabel is a role's value as shown: the id, or what the default is.
 func (m Model) modelLabel(row int) string {
 	v := m.roleValue(row)
-	if v != "" {
-		return v
-	}
 	h := m.edit.Models()
-	switch row {
-	case rowCheap:
+	switch {
+	case v != "":
+	case row == rowCheap:
 		return h.Cheap + " (default)"
-	case rowStrong:
+	case row == rowStrong:
 		return h.Strong + " (default)"
+	default:
+		return "same as the cheap model"
 	}
-	return "same as the cheap model"
+	return v + " · " + lemonade.HybridProviderLabel(lemonade.HybridProviderOf(v))
+}
+
+// notes are the cautions the current pair earns.
+func (m Model) notes() []string {
+	s := m.current()
+	var out []string
+	if !lemonade.IsMeasuredHybrid(s) {
+		out = append(out, "Not yet measured: GAIA tuned its policies on DeepSeek + Opus (gateway, Quality); "+
+			"this setup may route differently than expected.")
+	}
+	if c := s.Models().Classifier; lemonade.HybridProviderOf(c) == lemonade.HybridFromLocal {
+		out = append(out, "The classifier "+c+" is a small local model, so it may route less accurately.")
+	}
+	return out
 }
 
 func (m Model) View() string {
@@ -573,7 +807,7 @@ func (m Model) View() string {
 	lines := []string{titleStyle.Render("Hybrid routing")}
 	if !m.loaded {
 		lines = append(lines, "", "Reading the hybrid settings…")
-		return m.frame(lines, "esc close", w)
+		return m.frame(lines, "esc close", w, -1)
 	}
 	if m.picking >= 0 {
 		return m.pickView(w)
@@ -589,29 +823,51 @@ func (m Model) View() string {
 	}
 	if m.loadErr != nil {
 		lines = append(lines, errStyle.Render("Your saved settings can't be used: "+m.loadErr.Error()+
-			". Showing the defaults; ctrl+s replaces them."))
+			". Showing the defaults; ctrl+s or a template replaces them."))
 	}
-	if m.modelsErr != nil {
-		lines = append(lines, errStyle.Render("Gateway models couldn't be listed ("+
-			strings.TrimSuffix(m.modelsErr.Error(), ".")+"), so only the current choices can be kept."))
+
+	focusLine := -1
+	lines = append(lines, "", m.templatesHeading())
+	if m.templatesErr != nil {
+		lines = append(lines, errStyle.Render("  Templates couldn't be listed: "+m.templatesErr.Error()))
+	}
+	for i, t := range m.templates {
+		text := t.Name
+		if t.Measured {
+			text += " · measured"
+		} else {
+			text += " · not yet measured"
+		}
+		detail := t.Description
+		if !t.Available {
+			detail = "Can't use yet: " + t.Reason
+		}
+		switch {
+		case i == m.focus:
+			focusLine = len(lines)
+			lines = append(lines, focusStyle.Render("› "+text), "    "+detail)
+		case !t.Available:
+			lines = append(lines, dimStyle.Render("  "+text), dimStyle.Render("    "+detail))
+		default:
+			lines = append(lines, "  "+text, dimStyle.Render("    "+detail))
+		}
 	}
 	lines = append(lines, "")
 
 	row := func(i int, label, value string) string {
-		marker := "  "
 		text := fmt.Sprintf("%-18s %s", label, value)
-		if i == m.focus {
-			marker = "› "
-			return focusStyle.Render(marker + text)
+		if i == m.field() {
+			focusLine = len(lines)
+			return focusStyle.Render("› " + text)
 		}
-		return marker + text
+		return "  " + text
 	}
 	lines = append(lines,
 		row(rowCheap, "Cheap model", m.modelLabel(rowCheap)),
 		row(rowStrong, "Strong model", m.modelLabel(rowStrong)),
 		row(rowClassifier, "Classifier", m.modelLabel(rowClassifier)))
 	timeout := m.timeout.View()
-	if m.focus != rowTimeout {
+	if m.field() != rowTimeout {
 		timeout = m.timeout.Value()
 	}
 	lines = append(lines, row(rowTimeout, "Classifier limit", timeout+" seconds"))
@@ -625,6 +881,9 @@ func (m Model) View() string {
 		policies = append(policies, name)
 	}
 	lines = append(lines, row(rowPolicy, "Policy", strings.Join(policies, "  ")))
+	for _, n := range m.notes() {
+		lines = append(lines, warnStyle.Render("  "+n))
+	}
 
 	lines = append(lines, "", dimStyle.Render(fmt.Sprintf("  %-18s %-16s %s", "Request kind", "Cheap up to", "High stakes")))
 	rules := m.edit.EffectiveRules()
@@ -640,7 +899,8 @@ func (m Model) View() string {
 		}
 		text := fmt.Sprintf("%-18s %-16s %s", lemonade.HybridKindLabel(kind), limit, stakes)
 		switch {
-		case rowRules+i == m.focus:
+		case rowRules+i == m.field():
+			focusLine = len(lines)
 			lines = append(lines, focusStyle.Render("› "+text))
 		case m.edit.Policy != lemonade.HybridPolicyCustom:
 			lines = append(lines, dimStyle.Render("  "+text))
@@ -668,13 +928,26 @@ func (m Model) View() string {
 		}
 	}
 
+	if m.applying {
+		lines = append(lines, "", dimStyle.Render("Applying the template…"))
+	}
 	if m.note != "" {
 		lines = append(lines, "", okStyle.Render(m.note))
 	}
 	if m.errMsg != "" {
 		lines = append(lines, "", errStyle.Render(m.errMsg))
 	}
-	return m.frame(lines, m.hint(), w)
+	return m.frame(lines, m.hint(), w, focusLine)
+}
+
+func (m Model) templatesHeading() string {
+	switch {
+	case m.fromServer:
+		return dimStyle.Render("Templates")
+	case !m.serverChecked || !m.catalogLoaded:
+		return dimStyle.Render("Templates (checking what this PC offers…)")
+	}
+	return dimStyle.Render("Templates (judged on this PC; the Agent UI server isn't running)")
 }
 
 // PreviewLine is a preview's route in the chat's words, with how long the
@@ -698,14 +971,17 @@ func RouteOf(r event.CanonicalRoute) lemonade.HybridRoute {
 }
 
 func (m Model) hint() string {
+	f := m.field()
 	switch {
-	case m.focus <= rowClassifier:
+	case f < 0:
+		return "↑/↓ move · enter apply template · ctrl+s save · esc close"
+	case f <= rowClassifier:
 		return "↑/↓ move · enter choose model · ctrl+s save · esc close"
-	case m.focus == rowTimeout:
+	case f == rowTimeout:
 		return "type seconds (1-120) · ↑/↓ move · ctrl+s save · esc close"
-	case m.focus == rowPolicy:
+	case f == rowPolicy:
 		return "←/→ policy · q/b start from Quality/Balanced · ctrl+s save · esc close"
-	case m.focus < rowTry():
+	case f < rowTry():
 		return "←/→ cheap up to · space high stakes · q/b start from Quality/Balanced · ctrl+s save · esc close"
 	}
 	return "type a request · enter try it · ↑/↓ move · ctrl+s save · esc close"
@@ -714,52 +990,79 @@ func (m Model) hint() string {
 func (m Model) pickView(w int) string {
 	names := map[int]string{rowCheap: "cheap", rowStrong: "strong", rowClassifier: "classifier"}
 	lines := []string{titleStyle.Render("Hybrid routing · " + names[m.picking] + " model"),
-		"Gateway models. Type to search.", "Search: " + m.pickSearch, ""}
-	opts := m.pickOptions()
+		"Models from every provider set up here. Type to search.", "Search: " + m.pickSearch, ""}
+	cs := m.choices()
+	rows := selectable(cs)
+	focused := -1
+	if m.pickCursor < len(rows) {
+		focused = rows[m.pickCursor]
+	}
+	focusLine := -1
 	budget := max(3, m.height-10)
-	start := max(0, m.pickCursor-budget+1)
+	start := max(0, focused-budget+1)
 	current := m.roleValue(m.picking)
-	for i := start; i < min(len(opts), start+budget); i++ {
-		label := opts[i]
+	for i := start; i < min(len(cs), start+budget); i++ {
+		c := cs[i]
+		switch {
+		case c.heading != "":
+			lines = append(lines, titleStyle.Render(c.heading))
+			continue
+		case !c.isModel:
+			lines = append(lines, dimStyle.Render("    "+c.reason))
+			continue
+		}
+		label := c.id
 		if label == "" {
-			label = "Default"
 			switch m.picking {
 			case rowCheap:
-				label += " (" + lemonade.DefaultHybridCheapModel + ")"
+				label = "Default (" + lemonade.DefaultHybridCheapModel + ")"
 			case rowStrong:
-				label += " (" + lemonade.DefaultHybridStrongModel + ")"
+				label = "Default (" + lemonade.DefaultHybridStrongModel + ")"
 			default:
 				label = "Same as the cheap model"
 			}
 		}
-		if opts[i] == current {
+		if c.id == current {
 			label += " · current"
 		}
+		if c.reason != "" {
+			label += " · can't use: " + c.reason
+		}
 		label = ansi.Truncate(label, w-2, "…")
-		if i == m.pickCursor {
+		switch {
+		case i == focused:
+			focusLine = len(lines)
 			lines = append(lines, focusStyle.Render("› "+label))
-		} else {
+		case c.reason != "":
+			lines = append(lines, dimStyle.Render("  "+label))
+		default:
 			lines = append(lines, "  "+label)
 		}
 	}
-	if len(opts) == 0 {
-		lines = append(lines, "No gateway model matches. Backspace to change the search.")
+	if len(rows) == 0 {
+		lines = append(lines, "No model matches. Backspace to change the search.")
 	}
-	if m.modelsErr != nil {
-		lines = append(lines, "", errStyle.Render("Gateway models couldn't be listed: "+m.modelsErr.Error()))
-	}
-	return m.frame(lines, "type to search · ↑/↓ choose · enter select · esc back", w)
+	return m.frame(lines, "type to search · ↑/↓ choose · enter select · esc back", w, focusLine)
 }
 
-// frame wraps lines to the width and, when too tall, keeps the title and the
-// bottom, where the focused row and keys usually are.
-func (m Model) frame(lines []string, hint string, w int) string {
+// frame wraps lines to the width and, when too tall, keeps the title and a
+// window that holds the focused line.
+func (m Model) frame(lines []string, hint string, w, focusLine int) string {
 	var wrapped []string
-	for _, line := range lines {
+	focusAt := 0
+	for i, line := range lines {
+		if i == focusLine {
+			focusAt = len(wrapped)
+		}
 		wrapped = append(wrapped, strings.Split(ansi.Wrap(line, w, ""), "\n")...)
 	}
 	if budget := m.height - 4; m.height > 0 && len(wrapped) > budget {
-		wrapped = append(wrapped[:1], wrapped[len(wrapped)-max(1, budget-1):]...)
+		keep := max(1, budget-1)
+		start := len(wrapped) - keep
+		if focusLine >= 0 && focusAt < start+1 {
+			start = max(1, focusAt-keep/3)
+		}
+		wrapped = append(wrapped[:1], wrapped[start:min(len(wrapped), start+keep)]...)
 	}
 	wrapped = append(wrapped, "", dimStyle.Render(ansi.Truncate(hint, w, "…")))
 	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(wrapped, "\n"))

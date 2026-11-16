@@ -194,6 +194,9 @@ func (l localRunner) walk(ctx context.Context, cfg Config, models *[]gaiainit.Mo
 // file discoverable from the TUI's working directory. The subprocess inherits
 // that same working directory, so accepting a .env here cannot turn a launch
 // into a false pass that the child would reject.
+// ClaudeCredentialConfigured reports whether a direct Claude model can run.
+func ClaudeCredentialConfigured() bool { return claudeCredentialConfigured() }
+
 func claudeCredentialConfigured() bool {
 	if strings.TrimSpace(os.Getenv(claudeAPIKeyEnv)) != "" {
 		return true

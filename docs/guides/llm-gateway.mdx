@@ -292,15 +292,20 @@ In a running chat, `/model hybrid` turns routing on and `/model <id>` turns it
 off. The terminal UI checks the cheap, strong and classifier models before it
 starts, and names the `hybrid_*` setting to change if one is unavailable.
 
-In the terminal UI, the model picker (`/provider` › AMD LLM Gateway, and
-`/gateway`) lists hybrid as **Hybrid (DeepSeek + Opus)**, marked `(cloud)` or
-`(local)` by where its models run. `/hybrid` opens its settings: the cheap,
-strong and classifier models, the classifier's time limit, the policy, and for
-**Custom** a rules table you can start from Quality or Balanced. It saves to
-`~/.gaia/config.json` with the same checks as `gaia config set`. Its **Try a
-request** box and its routing stats need the Agent UI server running
-(`gaia chat --ui`). Each hybrid answer ends with where it ran, such as
-`→ DeepSeek (writing, d1)`.
+In the terminal UI, `/provider` lists hybrid as its own entry, named by its two
+models (**Hybrid (DeepSeek + Opus)**) and marked `(cloud)` or `(local)` by where
+they run; `/gateway` and `/model` offer it too. `/hybrid` opens its settings:
+templates at the top (DeepSeek + Opus is the one GAIA's policies were measured
+on; the rest say "not yet measured", and one that needs a model or key you
+don't have says which), then the cheap, strong and classifier models from every
+provider set up on this PC (local, AMD LLM Gateway, Fireworks, direct Claude),
+the classifier's time limit, the policy, and for **Custom** a rules table you
+can start from Quality or Balanced. It saves to `~/.gaia/config.json` with the
+same checks as `gaia config set`, and notes when the classifier is a small
+local model, which may route less accurately. Its **Try a request** box and its
+routing stats need the Agent UI server running (`gaia chat --ui`); without it,
+templates are judged from what this PC's providers offer. Each hybrid answer
+ends with where it ran, such as `→ DeepSeek (writing, d1)`.
 
 Before each turn, the cheap model labels your request: what kind of work it is,
 how hard it is (1-5), and whether a wrong answer would be acted on directly

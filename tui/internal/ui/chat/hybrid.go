@@ -60,11 +60,11 @@ func (m ChatModel) updateHybridPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // hybridPaletteDesc names hybrid by its models and where they run, as the
-// provider picker does. Broken settings are reported by the switch itself.
+// provider panel does. Broken settings are reported by the switch itself.
 func hybridPaletteDesc() string {
 	h, err := lemonade.ReadHybridModels()
 	if err != nil {
-		return "Hybrid · AMD LLM Gateway · settings need fixing in /hybrid"
+		return "Hybrid · settings need fixing in /hybrid"
 	}
-	return lemonade.HybridDisplayName(h) + " " + lemonade.HybridWhere(h) + " · AMD LLM Gateway"
+	return lemonade.HybridDisplayName(h) + " " + lemonade.HybridWhere(h) + " · routes each turn"
 }

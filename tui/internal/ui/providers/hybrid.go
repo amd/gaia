@@ -6,6 +6,8 @@ package providers
 import (
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
@@ -15,56 +17,39 @@ var (
 	hybridLocalRefuse = lemonade.HybridLocalOnlyRefusal
 )
 
-// withHybrid puts hybrid at the head of the gateway's list, as `gaia gateway
-// use hybrid` offers it: a row for the router over two of the gateway's own
-// models. It can't be chosen while its settings are broken, Local only refuses
-// it, or the gateway doesn't list one of its gateway models; the row says why.
-func withHybrid(gateway []lemonade.Entry) []lemonade.Entry {
-	if len(gateway) == 0 {
-		return gateway
-	}
-	return append([]lemonade.Entry{hybridEntry(gateway)}, gateway...)
+// hybridRow is hybrid's entry beside the providers: its name from the
+// configured pair, where it runs, and why it can't be chosen when it can't.
+type hybridRow struct {
+	label  string
+	reason string
 }
 
-func hybridEntry(gateway []lemonade.Entry) lemonade.Entry {
-	rec := &lemonade.Recommended{ID: lemonade.HybridModelID, Provider: "amd", Label: "Hybrid"}
-	e := lemonade.Entry{
-		Model:       lemonade.Model{ID: lemonade.HybridModelID, Recipe: "cloud"},
-		Recommended: rec,
-		Listed:      true,
-		Fits:        true,
-	}
+func readHybridRow() hybridRow {
 	h, err := readHybridModels()
 	if err != nil {
-		e.Listed = false
-		e.Reason = strings.TrimSuffix(err.Error(), ".") + ". Fix it in /hybrid"
-		return e
+		return hybridRow{label: "Hybrid", reason: strings.TrimSuffix(err.Error(), ".") + ". Fix it in /hybrid"}
 	}
-	rec.Label = lemonade.HybridDisplayName(h) + " " + lemonade.HybridWhere(h)
-	rec.Note = "Each turn runs on " + h.Cheap + " or " + h.Strong + ", picked by " + h.Classifier +
-		". /hybrid changes the models and policy."
+	row := hybridRow{label: lemonade.HybridDisplayName(h) + " " + lemonade.HybridWhere(h)}
 	if err := hybridLocalRefuse(); err != nil {
-		e.Listed = false
-		e.Reason = err.Error()
-		return e
+		row.reason = err.Error()
 	}
-	for _, r := range h.Roles() {
-		if !strings.HasPrefix(r.Model, "amd.") || listedIn(gateway, r.Model) {
-			continue
-		}
-		e.Listed = false
-		e.Reason = "the gateway doesn't list " + r.Model + ", hybrid's " + r.Role +
-			" model. Choose another in /hybrid"
-		return e
-	}
-	return e
+	return row
 }
 
-func listedIn(entries []lemonade.Entry, id string) bool {
-	for _, e := range entries {
-		if strings.EqualFold(e.Model.ID, id) {
-			return true
-		}
+func (r hybridRow) desc() string {
+	if r.reason != "" {
+		return "Can't use: " + r.reason
 	}
-	return false
+	return "Each turn on the cheap or the strong model · /hybrid changes the models and policy"
+}
+
+// chooseHybrid is enter on the hybrid row: its members are checked when the
+// session switches, as for any model.
+func (m Model) chooseHybrid() (Model, tea.Cmd) {
+	if m.hybrid.reason != "" {
+		m.note = m.hybrid.label + " can't be used: " + m.hybrid.reason
+		return m, nil
+	}
+	m.cancel()
+	return m, func() tea.Msg { return SelectedMsg{ID: lemonade.HybridModelID} }
 }

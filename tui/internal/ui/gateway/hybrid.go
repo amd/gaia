@@ -43,7 +43,7 @@ func (m GatewayModel) hybridRow() string {
 }
 
 // useHybrid is `gaia gateway use hybrid`: hybrid becomes the default model once
-// every model it routes to is one the gateway lists.
+// every gateway model it routes to is one the gateway lists.
 func (m GatewayModel) useHybrid() GatewayModel {
 	m.notice, m.errMsg = "", ""
 	// Read again: /hybrid may have changed them since the screen opened.
@@ -60,7 +60,8 @@ func (m GatewayModel) useHybrid() GatewayModel {
 			continue
 		}
 		seen[id] = true
-		if !m.lists(id) {
+		// A model from another provider is checked when a session switches to it.
+		if strings.HasPrefix(id, Provider+".") && !m.lists(id) {
 			missing = append(missing, id)
 		}
 	}

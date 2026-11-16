@@ -138,16 +138,21 @@ type Model struct {
 	gatewayErr     error
 	// gatewaySeq is the newest check sent; an older answer is dropped.
 	gatewaySeq int
+	// hybrid is the hybrid row, read when the panel opens.
+	hybrid hybridRow
 }
 
-var names = lemonade.ChatProviders
+// names are the panel's rows: the chat providers, then hybrid, which routes
+// between models from any of them.
+var names = append(append([]string(nil), lemonade.ChatProviders...), lemonade.HybridProvider)
 
 func New(base string, width, height int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
 	spin.Style = lipgloss.NewStyle().Foreground(theme.AccentBright)
-	return Model{spin: spin, client: lemonade.New(base), ctx: ctx, cancel: cancel, stage: "providers", width: width, height: height}
+	return Model{spin: spin, client: lemonade.New(base), ctx: ctx, cancel: cancel, stage: "providers", width: width, height: height,
+		hybrid: readHybridRow()}
 }
 func (m Model) Init() tea.Cmd {
 	c := m.client
@@ -155,7 +160,7 @@ func (m Model) Init() tea.Cmd {
 		// Lemonade forgets a pasted key when it restarts; give it back any key
 		// kept from an earlier session before reading which providers have one.
 		var restoreErr error
-		for _, name := range names[1:] {
+		for _, name := range lemonade.ChatProviders[1:] {
 			err := restoreKey(name)
 			if err != nil && restoreErr == nil {
 				restoreErr = err
@@ -208,7 +213,7 @@ func (m Model) WithCurrent(provider string) Model {
 // A provider the panel does not offer leaves it on the list.
 func (m Model) WithConnect(provider string) Model {
 	for i, name := range names {
-		if name == provider && name != "local" {
+		if name == provider && name != "local" && name != lemonade.HybridProvider {
 			m.selected, m.autoConnect = i, true
 		}
 	}
@@ -387,9 +392,6 @@ func loadCatalog(ctx context.Context, c *lemonade.Client, provider string) model
 			note = "The model you chose last isn't listed: " + cerr.Error()
 		}
 		entries = lemonade.OnlyProvenNPU(entries, chosen)
-	}
-	if provider == "amd" && err == nil {
-		entries = withHybrid(entries)
 	}
 	return modelsMsg{source: c, entries: entries, capacity: line, err: err, note: note}
 }
@@ -767,6 +769,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.waiting() {
 					return m, nil
 				}
+				if m.chosen() == lemonade.HybridProvider {
+					return m.chooseHybrid()
+				}
 				if m.chosen() == "local" {
 					m.busy = true
 					m.activity = "Loading models"
@@ -959,7 +964,9 @@ func (m Model) View() string {
 		lines = append(lines, "Choose where GAIA runs chat inference.", "")
 		for i, name := range names {
 			desc := "On this machine · models that fit this PC"
-			if m.waiting() {
+			if name == lemonade.HybridProvider {
+				desc = m.hybrid.desc()
+			} else if m.waiting() {
 				desc = fmt.Sprintf("Available after setup step %d", m.setupStep)
 			} else if name != "local" && !m.read {
 				desc = "Via Lemonade · checking for a saved key"
@@ -983,8 +990,11 @@ func (m Model) View() string {
 				marker = "› "
 			}
 			label := marker + lemonade.Label(name)
+			if name == lemonade.HybridProvider {
+				label = marker + m.hybrid.label
+			}
 			switch {
-			case name == "amd" && m.gatewayDisabled():
+			case (name == "amd" && m.gatewayDisabled()) || (name == lemonade.HybridProvider && m.hybrid.reason != ""):
 				label = lipgloss.NewStyle().Foreground(theme.Dim).Render(label)
 			case i == m.selected:
 				label = title.Render(label)
@@ -1075,7 +1085,7 @@ func (m Model) View() string {
 				marker = "› "
 			}
 			label := entryName(e, m.chosen())
-			if e.Featured() && !e.Recommended.Custom && !lemonade.IsHybridID(e.Model.ID) {
+			if e.Featured() && !e.Recommended.Custom {
 				label = "★ " + label
 			}
 			if rank, note, ok := lemonade.Rank(e.Model.ID); ok {
@@ -1221,8 +1231,6 @@ func formatTokens(n int) string {
 // entryGroup is the heading a picker row sits under.
 func entryGroup(e lemonade.Entry) string {
 	switch {
-	case lemonade.IsHybridID(e.Model.ID):
-		return "Hybrid routing"
 	case !e.Featured():
 		return "All models"
 	case e.Recommended.Custom:

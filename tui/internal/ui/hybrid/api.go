@@ -12,10 +12,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
 // AgentUIURL is the Agent UI server, which runs the real classifier for a
@@ -36,6 +38,16 @@ func (e *ServerDownError) Error() string {
 }
 
 func (e *ServerDownError) Unwrap() error { return e.Err }
+
+// RouteMissingError is an Agent UI server older than the route asked for.
+type RouteMissingError struct {
+	Base, Path string
+}
+
+func (e *RouteMissingError) Error() string {
+	return "the Agent UI server at " + e.Base + " has no " + e.Path + " — it is older than this TUI. " +
+		"Update GAIA, restart `gaia chat --ui`, then try again"
+}
 
 // Stats is GET /api/hybrid/stats: how hybrid turns were routed and what they cost.
 type Stats struct {
@@ -143,9 +155,9 @@ func (a api) call(ctx context.Context, method, path string, body any, out any, w
 	if err != nil {
 		return fmt.Errorf("%s: the Agent UI server's answer was cut off: %w", what, err)
 	}
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("the Agent UI server at %s has no %s — it is older than this TUI. "+
-			"Update GAIA, restart `gaia chat --ui`, then try again", a.base, path)
+	// FastAPI's own 404 is "Not Found": the route is missing, not the thing asked for.
+	if resp.StatusCode == http.StatusNotFound && detail(raw) == "Not Found" {
+		return &RouteMissingError{Base: a.base, Path: path}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("%s failed (HTTP %d): %s", what, resp.StatusCode, detail(raw))
@@ -183,4 +195,18 @@ func detail(raw []byte) string {
 		return "no detail given"
 	}
 	return text
+}
+
+// Templates lists the server's hybrid templates, judged on its own view of
+// which providers are set up.
+func (a api) Templates(ctx context.Context) ([]lemonade.HybridTemplate, error) {
+	var t []lemonade.HybridTemplate
+	return t, a.call(ctx, http.MethodGet, "/api/hybrid/templates", nil, &t, "Listing templates")
+}
+
+// ApplyTemplate makes the template the hybrid settings.
+func (a api) ApplyTemplate(ctx context.Context, id string) error {
+	var out map[string]any
+	return a.call(ctx, http.MethodPost, "/api/hybrid/templates/"+url.PathEscape(id)+"/apply",
+		map[string]string{}, &out, "Applying the template")
 }
