@@ -586,3 +586,71 @@ def test_no_token_or_invite_in_logs(served, caplog):
     for value in (device["token"], secret[:8], invite, invite[:8]):
         assert value not in logged
     assert device["device_id"] in logged
+
+
+def _device_access(tmp_path):
+    GaiaConfig.save_key("device_pairing", True)
+    app = create_app(db_path=":memory:")
+    return DeviceAccess(app, folder=tmp_path / "devices", host="127.0.0.1", port=0)
+
+
+def test_listener_answers_with_the_os_trust_store_injected(tmp_path, monkeypatch):
+    # server.main() injects truststore before the listener starts.
+    import truststore
+
+    from gaia import tls
+
+    client = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    client.check_hostname = False
+    client.verify_mode = ssl.CERT_NONE
+    access = _device_access(tmp_path)
+    monkeypatch.setattr(tls, "_injected", False)
+    assert tls.use_os_trust_store()
+
+    async def scenario():
+        try:
+            await access.start()
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", access.status()["port"], ssl=client
+            )
+            writer.write(
+                b"GET /api/health HTTP/1.1\r\nHost: pc\r\nConnection: close\r\n\r\n"
+            )
+            assert (await reader.read()).startswith(b"HTTP/1.1 401 ")
+            writer.close()
+        finally:
+            await access.shutdown()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        truststore.extract_from_ssl()
+
+
+def test_listener_that_cannot_finish_tls_does_not_report_listening(
+    tmp_path, monkeypatch
+):
+    import truststore
+
+    from gaia.ui.devices import access as access_module
+
+    def truststore_context(identity):
+        context = truststore.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(identity.certificate_path, identity.key_path)
+        return context
+
+    access = _device_access(tmp_path)
+    monkeypatch.setattr(access_module, "server_context", truststore_context)
+
+    async def scenario():
+        try:
+            with pytest.raises(ListenerError) as failed:
+                await access.start()
+            assert failed.value.code == "start_failed"
+            assert "TLS handshake" in failed.value.detail
+            status = access.status()
+            assert not status["listening"] and status["error_code"] == "start_failed"
+        finally:
+            await access.shutdown()
+
+    asyncio.run(scenario())

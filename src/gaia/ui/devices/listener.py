@@ -408,6 +408,49 @@ def _bind(host: str, port: int) -> socket.socket:
     return sock
 
 
+def _prove_handshake(context: ssl.SSLContext) -> None:
+    """Complete one TLS handshake in memory on *context*, as each connection will.
+
+    Raises:
+        ListenerError: The handshake fails, so no device could be answered.
+    """
+    from gaia.tls import stock_ssl_context
+
+    client_context = stock_ssl_context(
+        ssl.PROTOCOL_TLS_CLIENT, check_hostname=False, verify_mode=ssl.CERT_NONE
+    )
+    to_server, to_client = ssl.MemoryBIO(), ssl.MemoryBIO()
+    from_server, from_client = ssl.MemoryBIO(), ssl.MemoryBIO()
+    client = client_context.wrap_bio(to_client, from_client)
+    server = context.wrap_bio(to_server, from_server, server_side=True)
+    try:
+        for _ in range(8):
+            finished = 0
+            for side in (client, server):
+                try:
+                    side.do_handshake()
+                    finished += 1
+                except ssl.SSLWantReadError:
+                    pass
+            to_server.write(from_client.read())
+            to_client.write(from_server.read())
+            if finished == 2:
+                return
+    except ssl.SSLError as e:
+        raise ListenerError(
+            "start_failed",
+            f"GAIA's listener for paired devices can't complete a TLS handshake "
+            f"({type(e).__name__}: {e}), so it didn't start. Restart GAIA; if "
+            "this persists, send `gaia diagnostics` with a bug report.",
+        ) from e
+    raise ListenerError(
+        "start_failed",
+        "GAIA's listener for paired devices didn't finish a TLS handshake, so it "
+        "didn't start. Restart GAIA; if this persists, send `gaia diagnostics` "
+        "with a bug report.",
+    )
+
+
 def _in_use(error: OSError) -> bool:
     return error.errno == errno.EADDRINUSE or getattr(error, "winerror", None) in (
         10048,
@@ -443,6 +486,7 @@ class DeviceListener:
         """
         import uvicorn
 
+        _prove_handshake(context)
         try:
             sock = _bind(self._host, self._port)
         except OSError as e:

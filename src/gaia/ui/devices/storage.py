@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from gaia.config import UnsafeGaiaHomeError
+from gaia.tls import stock_ssl_context
 from gaia.utils.file_lock import write_bytes_atomic
 from gaia.utils.owner_only import (
     OwnerOnlyError,
@@ -182,8 +183,9 @@ def load_identity(folder: Path) -> ListenerIdentity:
 
 def server_context(identity: ListenerIdentity) -> ssl.SSLContext:
     """The listener's TLS: this certificate, TLS 1.2 or later, no client certificate."""
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context = stock_ssl_context(
+        ssl.PROTOCOL_TLS_SERVER, minimum_version=ssl.TLSVersion.TLSv1_2
+    )
     try:
         context.load_cert_chain(identity.certificate_path, identity.key_path)
     except (ssl.SSLError, OSError) as e:
