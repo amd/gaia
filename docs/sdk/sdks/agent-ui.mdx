@@ -3544,9 +3544,9 @@ the PC until it is opened to devices on purpose. The list is `DEVICE_ROUTES` in
 | PC-only | Refused | Routes that answer only the PC, including every [paired devices](#paired-devices) route that manages devices |
 | Stays on the PC | Refused | Everything else: settings, providers and keys, mobile access, connectors, memory, documents and files, skills and agents, logs, changes and the rest |
 
-A request matching both a listed route and an unlisted one, such as
-`GET /api/sessions/search` next to `GET /api/sessions/{session_id}`, is
-refused. A refused request is a **403** with `code: pc_only` that says to do it
+A request that matches a listed route and also an unlisted one that would
+serve a device, such as `GET /api/sessions/search` next to
+`GET /api/sessions/{session_id}`, is refused. A refused request is a **403** with `code: pc_only` that says to do it
 on the PC.
 
 ### Flagship only

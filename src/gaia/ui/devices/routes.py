@@ -68,30 +68,41 @@ def iter_api_routes(routes: Iterable) -> Iterator[APIRoute]:
 class DeviceRouteTable:
     """Decides whether a device request reaches only routes in *allowed*.
 
-    A request is let through only when at least one route matches it and
-    every route that matches is allowed, so a listed template never opens an
-    unlisted route that shares its shape (``/api/sessions/search``).
+    A request is let through only when a listed route matches it and every
+    other route that matches is listed too or refuses devices with its own
+    guard. Whichever one the router picks, an unlisted route that would serve
+    a device is never reached, so a listed template can't open a sibling that
+    shares its shape (``/api/sessions/search``).
     """
 
     def __init__(self, app, allowed: FrozenSet[str] = DEVICE_ROUTES) -> None:
         self._app = app
         self._allowed = allowed
-        self._table: List[Tuple[str, "re.Pattern[str]", str]] = []
+        self._table: List[Tuple[str, "re.Pattern[str]", str, bool]] = []
         self._built = False
 
     def _build(self) -> None:
+        from gaia.ui.security import refuse_on_device_listener, require_local_pc
+
+        refusing = {require_local_pc, refuse_on_device_listener}
         for route in iter_api_routes(self._app.routes):
             if not route.path.startswith(("/api/", "/v1/")):
                 continue
             regex = compile_path(route.path)[0]
+            guarded = any(d.call in refusing for d in route.dependant.dependencies)
             for method in route.methods:
-                self._table.append((method, regex, f"{method} {route.path}"))
+                key = f"{method} {route.path}"
+                self._table.append((method, regex, key, guarded))
         self._built = True
 
     def allows(self, method: str, path: str) -> bool:
         if not self._built:
             self._build()
         matched = [
-            key for m, regex, key in self._table if m == method and regex.match(path)
+            (key in self._allowed, guarded)
+            for m, regex, key, guarded in self._table
+            if m == method and regex.match(path)
         ]
-        return bool(matched) and all(key in self._allowed for key in matched)
+        return any(listed for listed, _ in matched) and all(
+            listed or guarded for listed, guarded in matched
+        )
