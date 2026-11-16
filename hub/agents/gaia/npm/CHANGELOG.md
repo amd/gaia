@@ -11,6 +11,22 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **The agent stops when the GAIA daemon that started it is killed.** It used
   to keep running, holding memory and a port, until the next daemon started.
   It now notices within seconds and shuts down normally.
+- **A session switched to another model behaves like one started on it.** A
+  `/query` naming a different `model` swaps the session's client in place. The
+  swap now also moves what was chosen for the first model: image reading (off
+  on an NPU model, on again after a switch to a GPU one), the model documents
+  are summarized with, context eviction, and the `set_reasoning_effort` tool
+  for a model that grades reasoning. A failed switch still leaves the session
+  exactly as it was.
+- **`provider: "lemonade"` with no `model` uses the configured default.** A
+  session moved back from Claude went to Gemma 4 E4B even when `default_model`
+  named another model.
+- **A model name the server doesn't list fails with a plain reason.** A
+  `/query` for a model id outside the model server's catalog answered 500 with
+  the raw preload error and a restart command. It now answers 503 saying there
+  is no model by that name to download, with the caller's own way to pick
+  another. For `surface: "agent_ui"`, a start failure's detail no longer names
+  a terminal command.
 - **Cancel says how many attached documents were left unloaded.**
   `POST /v1/gaia/query/{run_id}/cancel` now returns `documents_left` when it
   stops the loading of the turn's attached documents, including for a cancel

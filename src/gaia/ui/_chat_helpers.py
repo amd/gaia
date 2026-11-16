@@ -100,7 +100,7 @@ from .utils import (
     managed_documents_dir,
     resolve_upload_links,
 )
-from .warmup import wait_for_warm_up
+from .warmup import turn_ended, wait_for_warm_up
 
 logger = logging.getLogger(__name__)
 
@@ -1663,6 +1663,13 @@ def _canonical_agent_type(agent_type: str) -> str:
     if registry is None:
         return agent_type
     return registry.canonical_id(agent_type)
+
+
+def _follow_model_settings(agent) -> None:
+    """Apply a vision model chosen in Settings since this cached agent last ran."""
+    follow = getattr(agent, "follow_model_switch", None)
+    if callable(follow):
+        follow()
 
 
 def _get_cached_agent(
@@ -4327,6 +4334,7 @@ async def _get_chat_response(
             from gaia.agents.base.console import SilentConsole
 
             agent = cached_agent
+            _follow_model_settings(agent)
             # A prior streaming turn leaves its dead SSE console behind.
             agent.console = SilentConsole()
             with writing_tool_registry():
@@ -4652,6 +4660,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if slot is not None:
                     slot.close()
                 _stopping_sessions[session_id] = producer
+        # After the join: the thread may still have been reading from the model.
+        # Off the loop: a context size waiting on this turn reads Lemonade.
+        await asyncio.to_thread(turn_ended)
 
     try:
         # Create SSE handler for streaming events
@@ -4805,6 +4816,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if cached_agent is not None:
                     # -- Cache hit --
                     agent = cached_agent
+                    _follow_model_settings(agent)
                     if hasattr(agent, "config"):
                         agent.config.working_directory = working_directory
                     agent.console = sse_handler
@@ -6268,6 +6280,8 @@ def _index_timeout_from_env() -> float:
 _INDEX_TIMEOUT_S = _index_timeout_from_env()
 # How often a waiting index checks for progress.
 _INDEX_POLL_S = 0.5
+# Longest a document waits for the boot-time model-server check before indexing.
+_BOOT_SERVER_WAIT_S = 300.0
 
 
 def _settled_quietly(future) -> None:
@@ -6380,6 +6394,23 @@ async def _index_document(
         asyncio.CancelledError: If the awaiting task was cancelled.
     """
     from gaia.rag.sdk import IndexingStopped, name_file_for_user
+    from gaia.ui import dispatch
+
+    # At launch GAIA's own model server is still starting; embedding now fails.
+    boot = dispatch.BOOT_QUEUE
+    if boot is not None and boot.step_pending("check_server"):
+        if progress_key is not None:
+            INDEX_PROGRESS[progress_key] = {
+                "phase": "starting",
+                "done": 0,
+                "total": None,
+            }
+        try:
+            await boot.wait_for_step("check_server", _BOOT_SERVER_WAIT_S)
+        except asyncio.CancelledError:
+            if progress_key is not None:
+                INDEX_PROGRESS.pop(progress_key, None)
+            raise
 
     name = display_name or filepath.name
     stop = threading.Event()
