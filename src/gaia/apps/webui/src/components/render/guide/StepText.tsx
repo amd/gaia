@@ -49,9 +49,10 @@ export function StepText({ text, stepIndex, timers, withTimers }: {
     return (
         <>
             {spans.map((span, i) => {
-                const before = text.slice(cursor, span.end);
+                const punctuation = /^[.,;:!?]+/.exec(text.slice(span.end))?.[0] ?? '';
+                const before = text.slice(cursor, span.end + punctuation.length);
                 const phrase = text.slice(span.start, span.end);
-                cursor = span.end;
+                cursor = span.end + punctuation.length;
                 return (
                     <Fragment key={i}>
                         {before}

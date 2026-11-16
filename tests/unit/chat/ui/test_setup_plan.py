@@ -1226,3 +1226,23 @@ def test_a_cloud_setup_is_not_refused_for_a_saved_npu_model(
     r = client.post("/api/setup/run", json={"skip_chat_model": True}, headers=UI)
     assert r.status_code == 200
     assert len(started) == 1
+
+
+@pytest.mark.parametrize("bundled", [True, False])
+def test_a_model_server_the_installer_carries_is_marked_bundled(
+    monkeypatch, tmp_path, bundled
+):
+    """The row read "From included with GAIA"."""
+    from gaia.llm import lemonade_embedded
+
+    if bundled:
+        monkeypatch.setenv(lemonade_embedded.BUNDLED_ARCHIVE_DIR_ENV, str(tmp_path))
+    else:
+        monkeypatch.delenv(lemonade_embedded.BUNDLED_ARCHIVE_DIR_ENV, raising=False)
+    monkeypatch.setattr(
+        lemonade_embedded.EmbeddedLemonade, "is_installed", lambda self: False
+    )
+    server = sp._components({"mode": "embedded"}, skip_models=True)[0]
+    assert server["id"] == "server"
+    assert server["bundled"] is bundled
+    assert "included" not in server["source"]

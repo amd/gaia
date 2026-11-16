@@ -12,6 +12,7 @@ from collections import Counter
 
 from gaia.rag import keyword_search
 from gaia.rag.keyword_search import KeywordIndex, keyword_index
+from gaia.rag.normalize import search_form
 
 
 def _top(query, texts, limit=5):
@@ -213,9 +214,7 @@ def test_skipping_the_prefix_regex_changes_no_word():
         "والشركة فالعقد بالشركة كالبيت للعميل الكتاب وولد فلل أحمد إيرادات "
         "و ف ال بل ولد Large x86_64 ١٢٣ Über straße"
     )
-    lowered = keyword_search._ARABIC_MARKS.sub("", text.lower()).translate(
-        keyword_search._ARABIC_LETTERS
-    )
+    lowered = search_form(text).lower().translate(keyword_search._ARABIC_LETTERS)
     expected = [
         keyword_search._ARABIC_PREFIX.sub("", word)
         for word in keyword_search._WORD.findall(lowered)

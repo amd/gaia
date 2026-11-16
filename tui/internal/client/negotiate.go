@@ -123,6 +123,15 @@ const (
 // surfaceAgentID is the only agent whose `/query` takes `surface`.
 const surfaceAgentID = "gaia"
 
+// workingDirectoryContract is the contract version from which the flagship's
+// `/query` takes `working_directory` (schema 2.24). Without it the
+// daemon-spawned sidecar resolves relative paths and the project map against
+// the daemon's folder. Gaia only, like surface.
+const (
+	workingDirectoryContractMajor = 2
+	workingDirectoryContractMinor = 24
+)
+
 // versionProbeTimeout bounds the negotiation round-trip. Short: it is a local
 // daemon relay, and the probe must never be the reason a turn feels slow. On
 // failure the client assumes the peer is old, which is the answer that keeps
@@ -148,6 +157,8 @@ type peerContract struct {
 	supportsToolDecision bool
 	// supportsSurface is true only when the peer is the gaia agent at >= 2.20.
 	supportsSurface bool
+	// supportsWorkingDirectory is true only when the peer is the gaia agent at >= 2.24.
+	supportsWorkingDirectory bool
 	// answered is true only when the /version probe actually heard from the
 	// peer: a parsed 200 body, or a 404 (no such route -- which is itself a
 	// definitive "old enough to predate every contract this file tracks").
@@ -266,21 +277,25 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		contractAtLeast(payload.APIVersion, toolDecisionContractMajor, toolDecisionContractMinor)
 	supportsSurface := s.agentID == surfaceAgentID &&
 		contractAtLeast(payload.APIVersion, surfaceContractMajor, surfaceContractMinor)
-	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t, tool decisions: %t)",
-		s.agentID, payload.APIVersion, supports, supportsSession, supportsFollowUp, supportsDecision)
+	supportsWorkingDirectory := s.agentID == surfaceAgentID &&
+		contractAtLeast(payload.APIVersion, workingDirectoryContractMajor, workingDirectoryContractMinor)
+	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t, tool decisions: %t, surface: %t, start folder: %t)",
+		s.agentID, payload.APIVersion, supports, supportsSession, supportsFollowUp, supportsDecision,
+		supportsSurface, supportsWorkingDirectory)
 	agentVersion := payload.Version
 	if agentVersion == "" {
 		agentVersion = payload.AgentVersion
 	}
 	return peerContract{
-		version:              payload.APIVersion,
-		agentVersion:         agentVersion,
-		canAnswerQuestions:   supports,
-		supportsSession:      supportsSession,
-		supportsFollowUp:     supportsFollowUp,
-		supportsToolDecision: supportsDecision,
-		supportsSurface:      supportsSurface,
-		answered:             true,
+		version:                  payload.APIVersion,
+		agentVersion:             agentVersion,
+		canAnswerQuestions:       supports,
+		supportsSession:          supportsSession,
+		supportsFollowUp:         supportsFollowUp,
+		supportsToolDecision:     supportsDecision,
+		supportsSurface:          supportsSurface,
+		answered:                 true,
+		supportsWorkingDirectory: supportsWorkingDirectory,
 	}
 }
 

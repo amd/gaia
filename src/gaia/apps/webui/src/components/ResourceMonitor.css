@@ -14,9 +14,10 @@
     flex-shrink: 0;
 }
 
-/* One row of tiles at their content's width, spread across the strip. */
+/* Tiles keep their content's width and wrap before they would overlap. */
 .resource-tiles {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     gap: 6px 12px;
     flex: 1;
@@ -28,11 +29,10 @@
 .resource-tiles.is-stale { opacity: 0.55; }
 
 .resource-tile {
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: 8px;
-    min-width: 0;
     color: var(--text-primary);
 }
 .tone-cpu .resource-spark { color: var(--accent-blue); }
@@ -65,6 +65,9 @@
 .resource-label {
     font-size: 12px;
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--text-primary);
 }
 .resource-reading {
@@ -105,14 +108,14 @@
 
 .resource-close { flex-shrink: 0; align-self: flex-start; }
 
-/* Too narrow for one row (it needs about 820px with long readings): an even
- * grid, never one tile left alone on a row. */
+/* A small window keeps one row: graphs go, tiles share the width. */
 @container (max-width: 860px) {
-    .resource-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .resource-tiles { flex-wrap: nowrap; gap: 12px; }
+    .resource-tile { flex: 1 1 0; min-width: 0; overflow: hidden; }
+    .resource-spark { display: none; }
 }
 
-/* A narrow chat keeps the numbers and drops the graphs. */
+/* Too narrow for one row: two even columns rather than unreadable slivers. */
 @container (max-width: 520px) {
-    .resource-spark { display: none; }
-    .resource-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
+    .resource-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
 }

@@ -17,6 +17,8 @@ from gaia.skills.lock import SkillLock
 from gaia.utils import file_lock as file_lock_mod
 from tests.unit.skills_helpers import make_marketplace
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 
 def _write_source(tmp_path, name, version="1.0.0", extra_files=0):
     directory = tmp_path / "src" / f"{name}-{version}" / name

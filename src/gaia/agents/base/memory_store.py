@@ -4653,8 +4653,8 @@ class MemoryStore:
             attempt_count, declined_count, started_at, last_at}``.  ``goal`` is
             None when the session has no user turn.  ``declined_count`` counts
             the calls in the window denied before they ran (a declined or
-            unanswered prompt, or an effect declined earlier in the request);
-            they are in neither count.
+            unanswered prompt, a refused folder or file access, or an effect
+            declined earlier in the request); they are in neither count.
         """
         sql = """
             WITH eligible AS (
@@ -4671,7 +4671,10 @@ class MemoryStore:
                 WHERE (:since IS NULL OR timestamp > :since)
                   AND executed = 0
                   AND (result_summary LIKE '%"status": "denied%'
-                       OR result_summary LIKE '%''status'': ''denied''%')
+                       OR result_summary LIKE '%''status'': ''denied''%'
+                       -- A refused folder or file access prompt.
+                       OR error LIKE 'Access denied: %'
+                       OR result_summary LIKE '%Access denied: %')
                 GROUP BY session_id
             )
             SELECT th.session_id, th.tool_name, th.args, th.success, th.timestamp,

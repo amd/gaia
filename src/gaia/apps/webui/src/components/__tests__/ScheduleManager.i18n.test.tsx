@@ -48,12 +48,12 @@ function leftoverEnglish(root: HTMLElement): string[] {
 
 const attrs = (root: HTMLElement) =>
     [...root.querySelectorAll('[title], [aria-label], [placeholder]')].flatMap((el) =>
-        ['title', 'aria-label', 'placeholder'].map((a) => el.getAttribute(a)).filter((v): v is string => !!v && v !== schedule.description));
+        ['title', 'aria-label', 'placeholder'].map((a) => el.getAttribute(a)).filter((v): v is string => !!v && v !== schedule.description && v !== schedule.name && v !== schedule.prompt));
 
 beforeEach(() => {
     act(() => useChatStore.getState().setLocale('ar'));
     useChatStore.setState({ showSchedules: true });
-    useScheduleStore.setState({ schedules: [], loading: false, error: null, actionError: null, loadSchedules: vi.fn(async () => {}) });
+    useScheduleStore.setState({ draft: null, schedules: [], loading: false, error: null, actionError: null, loadSchedules: vi.fn(async () => {}) });
 });
 
 afterEach(() => {
@@ -79,9 +79,26 @@ describe('Scheduled tasks in Arabic', () => {
         fireEvent.click(screen.getByRole('button', { name: /مهمة مجدولة جديدة/ }));
         expect(screen.getByLabelText(readsAs('موعد التشغيل (When to run)')).tagName).toBe('TEXTAREA');
         fireEvent.change(screen.getByLabelText(readsAs('موعد التشغيل (When to run)')), { target: { value: 'daily at 25:00' } });
-        expect(await screen.findByText(readsAs('لم يفهم GAIA هذا الموعد. (GAIA didn\'t understand that schedule.)'), {}, { timeout: 3000 })).toBeInTheDocument();
+        expect(await screen.findByText(readsAs('لا يمكن استخدام هذا الموعد. (That schedule can\'t be used.)'), {}, { timeout: 3000 })).toBeInTheDocument();
         expect(leftoverEnglish(container)).toEqual([]);
         for (const a of attrs(container)) expect(a, a).toMatch(/[؀-ۿ]/);
+    });
+
+    it('explains in Arabic that a schedule typed in Arabic must be written in English', async () => {
+        vi.mocked(parseScheduleInput).mockResolvedValue({
+            interval_seconds: 0, time_of_day: null, start_hour: null, end_hour: null, days_of_week: null,
+            description: "GAIA couldn't read 'كل يوم الساعة 8 صباحا'. Use a form like 'every 30m'.", next_run_at: null, valid: false,
+        });
+        const { container } = render(<ScheduleManager />);
+        fireEvent.click(screen.getByRole('button', { name: /مهمة مجدولة جديدة/ }));
+        const field = screen.getByLabelText(readsAs('موعد التشغيل (When to run)'));
+        fireEvent.change(field, { target: { value: 'كل يوم الساعة 8 صباحا' } });
+        expect(await screen.findByText(readsAs('لا يمكن استخدام هذا الموعد. (That schedule can\'t be used.)'), {}, { timeout: 3000 })).toBeInTheDocument();
+        expect(screen.queryByText(/couldn't read/)).not.toBeInTheDocument();
+        const hint = container.querySelector('.schedule-field-hint')!;
+        expect(stripIsolates(hint.textContent ?? '')).toContain('اكتب الموعد بالإنجليزية، مثل "every 30m"');
+        expect(field.getAttribute('aria-describedby')).toContain(hint.id);
+        expect(leftoverEnglish(container)).toEqual([]);
     });
 
     it('translates a list row and every action on it', () => {
@@ -92,6 +109,24 @@ describe('Scheduled tasks in Arabic', () => {
         expect(screen.getByText(readsAs('آخر تشغيل: لا يوجد (Last: never)'))).toBeInTheDocument();
         expect(leftoverEnglish(container)).toEqual([]);
         for (const a of attrs(container)) expect(a, a).toMatch(/[؀-ۿ]/);
+    });
+
+    it('says a paused task is paused, not that it never runs', () => {
+        useScheduleStore.setState({ schedules: [schedule] });
+        render(<ScheduleManager />);
+        expect(screen.getByText(readsAs('التشغيل التالي: متوقفة مؤقتًا (Next: paused)'))).toBeInTheDocument();
+    });
+});
+
+describe('Scheduled tasks in English', () => {
+    beforeEach(() => act(() => useChatStore.getState().setLocale('en')));
+
+    it('heads the list for every status and shows a paused task as paused', () => {
+        useScheduleStore.setState({ schedules: [schedule] });
+        render(<ScheduleManager />);
+        expect(screen.getByRole('heading', { name: 'Your schedules' })).toBeInTheDocument();
+        expect(screen.getByText('Next: paused')).toBeInTheDocument();
+        expect(screen.queryByText('Next: never')).not.toBeInTheDocument();
     });
 });
 
@@ -122,4 +157,24 @@ describe('schedule dates follow the interface language, not the PC', () => {
         expect(next).toMatch(ARABIC_WEEKDAY);
         expect(next).not.toMatch(ENGLISH_CLOCK);
     });
+
+    it('keeps the English gloss of the next run free of Arabic weekdays and times', () => {
+        useScheduleStore.setState({ schedules: [{ ...schedule, status: 'active', next_run_at: new Date(Date.now() + 3 * 86_400_000).toISOString() }] });
+        render(<ScheduleManager />);
+        const gloss = screen.getByText(/التشغيل التالي/).querySelector('.i18n-gloss');
+        const text = stripIsolates(gloss?.textContent ?? '');
+        expect(text).toContain('Next:');
+        expect(text).toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/);
+        expect(text).not.toMatch(/[؀-ۿ]/);
+    });
+
+    it('keeps the English gloss of the last run free of Arabic weekdays and times', () => {
+        useScheduleStore.setState({ schedules: [{ ...schedule, status: 'active', last_run_at: new Date(Date.now() - 3 * 86_400_000).toISOString() }] });
+        render(<ScheduleManager />);
+        const gloss = screen.getAllByText(/آخر تشغيل/)[0].querySelector('.i18n-gloss');
+        const text = stripIsolates(gloss?.textContent ?? '');
+        expect(text).toContain('Last:');
+        expect(text).not.toMatch(/[؀-ۿ]/);
+    });
 });
+

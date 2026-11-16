@@ -5,11 +5,13 @@
 claims "100% local" while turns go to a cloud provider."""
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from gaia.ui._chat_helpers import session_inference_location
+from gaia.ui.routers import providers
 from gaia.ui.server import create_app
 
 
@@ -31,6 +33,12 @@ def _no_eval_provider(monkeypatch):
 @pytest.fixture
 def client():
     return TestClient(create_app(db_path=":memory:"))
+
+
+def _local_default_downloaded(on_disk):
+    """Stand in for the model server's local list."""
+    listing = [{"id": "Gemma-4-E4B-it-GGUF", "downloaded": on_disk}]
+    return patch.object(providers, "_list_models", return_value=listing)
 
 
 def _session(model="Gemma-4-E4B-it-GGUF", device=None):
@@ -100,6 +108,66 @@ class TestSessionInferenceLocation:
         assert session_inference_location(_session(), None, _Registry([])) is None
 
 
+class TestHybridSessionLocation:
+    """``hybrid`` is not a local model id: it routes to cloud models by default."""
+
+    def test_hybrid_session_is_remote(self):
+        loc = session_inference_location(
+            _session("hybrid"), None, registry=_Registry([])
+        )
+        assert loc.remote is True
+        assert loc.provider == "amd"
+        assert loc.model == "hybrid"
+
+    def test_hybrid_override_is_remote(self):
+        loc = session_inference_location(_session(), "hybrid", registry=_Registry([]))
+        assert loc.remote is True
+
+    def test_device_choice_does_not_turn_hybrid_local(self):
+        loc = session_inference_location(
+            _session("hybrid", device="npu"), None, registry=_Registry([])
+        )
+        assert loc.remote is True
+        assert loc.model == "hybrid"
+
+    def test_hybrid_with_one_cloud_model_is_remote(self):
+        from gaia.config import GaiaConfig
+
+        GaiaConfig(
+            hybrid_cheap_model="Gemma-4-E4B-it-GGUF",
+            hybrid_strong_model="fireworks.deepseek-v4p1-flash",
+        ).save()
+        loc = session_inference_location(
+            _session("hybrid"), None, registry=_Registry([])
+        )
+        assert loc.remote is True
+        assert loc.provider == "fireworks"
+
+    def test_hybrid_between_local_models_is_local(self):
+        from gaia.config import GaiaConfig
+
+        GaiaConfig(
+            hybrid_cheap_model="Gemma-4-E4B-it-GGUF",
+            hybrid_strong_model="Qwen3.6-35B-A3B-GGUF",
+            hybrid_classifier_model="Gemma-4-E4B-it-GGUF",
+        ).save()
+        loc = session_inference_location(
+            _session("hybrid"), None, registry=_Registry([])
+        )
+        assert loc.remote is False
+
+    def test_unusable_hybrid_settings_make_no_claim(self, monkeypatch):
+        from gaia.llm import hybrid
+
+        def broken(*_a, **_k):
+            raise hybrid.HybridConfigError("hybrid_cheap_model must name a model")
+
+        monkeypatch.setattr(hybrid.HybridSettings, "load", classmethod(broken))
+        assert (
+            session_inference_location(_session("hybrid"), None, _Registry([])) is None
+        )
+
+
 class TestSessionResponseFields:
     def test_cloud_override_reaches_session_responses(self, client):
         created = client.post("/api/sessions", json={"title": "t"}).json()
@@ -129,8 +197,18 @@ class TestSessionResponseFields:
         assert data["inference_remote"] is True
         assert data["effective_model"] == "claude-haiku-4-5"
 
-    def test_clearing_override_goes_back_to_local(self, client):
+    def test_clearing_override_goes_back_to_the_local_model_picked(self, client):
         created = client.post("/api/sessions", json={"title": "t"}).json()
+        with (
+            patch.object(providers, "_check_model_available", return_value=None),
+            patch("gaia.ui.warmup.request_warm_up"),
+        ):
+            picked = client.post(
+                "/api/providers/select",
+                json={"model": "Gemma-4-E4B-it-GGUF"},
+                headers={"X-Gaia-UI": "1"},
+            )
+        assert picked.status_code == 200, picked.text
         client.put(
             "/api/settings", json={"custom_model": "fireworks.deepseek-v4p1-flash"}
         )
@@ -138,3 +216,33 @@ class TestSessionResponseFields:
         data = client.get(f"/api/sessions/{created['id']}").json()
         assert data["inference_remote"] is False
         assert data["inference_provider"] == "lemonade"
+        assert data["effective_model"] == "Gemma-4-E4B-it-GGUF"
+
+    def test_clearing_override_goes_back_to_a_downloaded_local_default(self, client):
+        created = client.post("/api/sessions", json={"title": "t"}).json()
+        client.put(
+            "/api/settings", json={"custom_model": "fireworks.deepseek-v4p1-flash"}
+        )
+        with (
+            _local_default_downloaded(True),
+            patch(
+                "gaia.ui.database.resolved_default_model",
+                return_value="Gemma-4-E4B-it-GGUF",
+            ),
+        ):
+            client.put("/api/settings", json={"custom_model": ""})
+        data = client.get(f"/api/sessions/{created['id']}").json()
+        assert data["inference_remote"] is False
+        assert data["inference_provider"] == "lemonade"
+
+    def test_clearing_override_keeps_cloud_when_no_local_model_is_set_up(self, client):
+        created = client.post("/api/sessions", json={"title": "t"}).json()
+        client.put(
+            "/api/settings", json={"custom_model": "fireworks.deepseek-v4p1-flash"}
+        )
+        with _local_default_downloaded(False):
+            client.put("/api/settings", json={"custom_model": ""})
+        data = client.get(f"/api/sessions/{created['id']}").json()
+        assert data["inference_remote"] is True
+        assert data["inference_provider"] == "fireworks"
+        assert data["effective_model"] == "fireworks.deepseek-v4p1-flash"
