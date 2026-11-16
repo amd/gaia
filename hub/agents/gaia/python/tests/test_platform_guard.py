@@ -21,6 +21,10 @@ from gaia import platform_guard
 PACKAGING_SERVER = Path(__file__).resolve().parents[1] / "packaging" / "server.py"
 # Taken at collection, before any test runs entry.main() and installs the guard.
 _CPYTHON_WMI_QUERY = getattr(platform, "_wmi_query", None)
+try:
+    import _wmi as _WMI_MODULE
+except ImportError:
+    _WMI_MODULE = None
 
 needs_wmi = pytest.mark.skipif(
     sys.platform != "win32" or sys.version_info < (3, 12),
@@ -32,6 +36,8 @@ needs_wmi = pytest.mark.skipif(
 def cold_platform(monkeypatch):
     """Empty platform's caches, and put them back after the test."""
     monkeypatch.setattr(platform, "_wmi_query", _CPYTHON_WMI_QUERY, raising=False)
+    # One failed query sets platform._wmi to None for the rest of the process.
+    monkeypatch.setattr(platform, "_wmi", _WMI_MODULE, raising=False)
     monkeypatch.setattr(platform, "_uname_cache", None)
     monkeypatch.setattr(platform, "_platform_cache", {})
 

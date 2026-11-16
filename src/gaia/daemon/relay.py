@@ -382,7 +382,13 @@ def build_relay_router(token: str, registry, turns: Optional[RelayTurns] = None)
                 )
             except httpx.HTTPError as e:
                 await client.aclose()
-                if not restarted and await _restart_if_crashed(agent_id, e):
+                # Resend only a request the sidecar never received: one that
+                # reached it may have run a tool before the crash.
+                if (
+                    not restarted
+                    and isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
+                    and await _restart_if_crashed(agent_id, e)
+                ):
                     restarted = True
                     continue
                 raise HTTPException(

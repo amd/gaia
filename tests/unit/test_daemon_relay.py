@@ -655,6 +655,78 @@ def test_relay_restarts_at_most_once():
     assert registry.restarts == 1
 
 
+@pytest.fixture()
+def drops_after_reading_url():
+    """A sidecar that reads each request in full, then dies without answering."""
+    import socket
+
+    received = []
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    listener.settimeout(0.2)
+    stop = threading.Event()
+
+    def _serve_and_drop():
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+            except (socket.timeout, OSError):
+                continue
+            with conn:
+                conn.settimeout(5)
+                data = b""
+                try:
+                    while b"\r\n\r\n" not in data:
+                        chunk = conn.recv(65536)
+                        if not chunk:
+                            break
+                        data += chunk
+                    head, _, body = data.partition(b"\r\n\r\n")
+                    length = 0
+                    for line in head.split(b"\r\n")[1:]:
+                        name, _, value = line.partition(b":")
+                        if name.strip().lower() == b"content-length":
+                            length = int(value.strip())
+                    while len(body) < length:
+                        chunk = conn.recv(65536)
+                        if not chunk:
+                            break
+                        body += chunk
+                except OSError:
+                    continue
+                received.append(head.split(b"\r\n", 1)[0].decode())
+
+    thread = threading.Thread(target=_serve_and_drop, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{listener.getsockname()[1]}", received
+    stop.set()
+    thread.join(timeout=5)
+    listener.close()
+
+
+@needs_fastapi
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE", "GET"])
+def test_relay_never_resends_a_request_the_sidecar_received(
+    drops_after_reading_url, live_sidecar_url, method
+):
+    # It may have run a tool (sent mail, wrote a file) before it died, so a
+    # resend could do that twice: the user is told to send it again instead.
+    dropping_url, received = drops_after_reading_url
+    sidecar, url = live_sidecar_url
+    registry = _StubRegistry(base_url=dropping_url, restarted_url=url)
+    r = _daemon_test_client(registry).request(
+        method, "/v1/email/confirm", json={"send": 1}, headers=_auth()
+    )
+    assert r.status_code == 502
+    assert len(received) == 1 and received[0].startswith(f"{method} /v1/email/")
+    assert sidecar.seen == []
+    assert registry.restarts == 0
+    detail = r.json()["detail"]
+    assert "sidecar for agent 'email'" in detail and "did not answer" in detail
+    assert "Send your message again" in detail
+
+
 # ---------------------------------------------------------------------------
 # Part 4 — real-server integration: fake sidecar + daemon relay over TCP
 # ---------------------------------------------------------------------------
