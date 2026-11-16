@@ -66,5 +66,5 @@ func hybridPaletteDesc() string {
 	if err != nil {
 		return "Hybrid · settings need fixing in /hybrid"
 	}
-	return lemonade.HybridDisplayName(h) + " " + lemonade.HybridWhere(h) + " · routes each turn"
+	return lemonade.HybridEntryLabel(h) + " " + lemonade.HybridWhere(h) + " · routes each turn"
 }

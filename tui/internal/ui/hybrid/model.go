@@ -24,7 +24,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
@@ -49,6 +48,11 @@ type serverTemplatesMsg struct {
 type appliedMsg struct {
 	name string
 	err  error
+}
+
+type notesMsg struct {
+	notes serverNotes
+	err   error
 }
 
 type statsMsg struct {
@@ -79,7 +83,7 @@ var loadCatalog = func(ctx context.Context, base string) lemonade.HybridCatalog 
 		}
 	}
 	if c.ClaudeKey {
-		c.Models[lemonade.HybridFromClaude] = client.ClaudeModelIDs()
+		c.Models[lemonade.HybridFromClaude] = lemonade.HybridClaudeModels
 	}
 	local, err := lemonade.DefaultLocalChatModel()
 	if err != nil {
@@ -144,6 +148,10 @@ type Model struct {
 	stats    string
 	statsErr error
 
+	// server is the Agent UI's notes for the saved settings; nil when it
+	// isn't running, so the notes are worked out here.
+	server *serverNotes
+
 	// focus counts the template rows first, then the field rows.
 	focus   int
 	timeout textinput.Model
@@ -186,6 +194,7 @@ func (m Model) Init() tea.Cmd {
 	ctx, base, a := m.ctx, m.base, m.api
 	return tea.Batch(
 		readSettingsCmd(),
+		m.readNotesCmd(),
 		func() tea.Msg {
 			c, cancel := context.WithTimeout(ctx, loadTimeout)
 			defer cancel()
@@ -210,6 +219,16 @@ func readSettingsCmd() tea.Cmd {
 	return func() tea.Msg {
 		s, err := readSettings()
 		return settingsMsg{settings: s, err: err}
+	}
+}
+
+func (m Model) readNotesCmd() tea.Cmd {
+	ctx, a := m.ctx, m.api
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx, loadTimeout)
+		defer cancel()
+		n, err := a.Notes(c)
+		return notesMsg{notes: n, err: err}
 	}
 }
 
@@ -330,7 +349,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.note = v.name + " applied. A chat already on hybrid picks this up after /model hybrid."
-		return m, readSettingsCmd()
+		return m, tea.Batch(readSettingsCmd(), m.readNotesCmd())
+	case notesMsg:
+		m.server = nil
+		if v.err == nil {
+			n := v.notes
+			m.server = &n
+		} else if !IsServerAbsent(v.err) {
+			m.errMsg = "The Agent UI server's hybrid notes couldn't be read: " + v.err.Error()
+		}
+		return m, nil
 	case statsMsg:
 		if v.err != nil {
 			m.statsErr = v.err
@@ -388,7 +416,8 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cancel()
 		return m, func() tea.Msg { return ClosedMsg{} }
 	case "ctrl+s":
-		return m.save(), nil
+		m = m.save()
+		return m, m.readNotesCmd()
 	case "up", "shift+tab":
 		return m.move(-1)
 	case "down", "tab":
@@ -485,7 +514,7 @@ func (m Model) applyTemplate(t lemonade.HybridTemplate) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.note = t.Name + " applied. A chat already on hybrid picks this up after /model hybrid."
-	return m, readSettingsCmd()
+	return m, tea.Batch(readSettingsCmd(), m.readNotesCmd())
 }
 
 // setPolicy steps through Quality, Balanced and Custom. Custom with no table
@@ -563,18 +592,10 @@ func (m Model) offered(s lemonade.HybridSettings) error {
 	h := s.Models()
 	for _, r := range h.Roles() {
 		if _, err := m.catalog.Find(r.Model); err != nil {
-			return fmt.Errorf("the %s model %s can't be used: %v. Checked: %s", r.Role, r.Model, err, m.checkedProviders())
+			return fmt.Errorf("the %s model %s can't be used: %v. %s", r.Role, r.Model, err, m.catalog.Checked())
 		}
 	}
 	return nil
-}
-
-func (m Model) checkedProviders() string {
-	var out []string
-	for _, p := range lemonade.HybridProviders {
-		out = append(out, lemonade.HybridProviderLabel(p))
-	}
-	return strings.Join(out, ", ")
 }
 
 func (m Model) save() Model {
@@ -673,17 +694,10 @@ func reasonOf(err error) string {
 }
 
 func (m Model) emptyReason(p string) string {
-	switch {
-	case !m.catalogLoaded:
+	if !m.catalogLoaded {
 		return "loading…"
-	case p == lemonade.HybridFromLocal:
-		return "no models downloaded yet (/models)"
-	case p == lemonade.HybridFromGateway:
-		return "not connected (/gateway)"
-	case p == lemonade.HybridFromFireworks:
-		return "no Fireworks key yet (/provider)"
 	}
-	return "set ANTHROPIC_API_KEY, then restart GAIA"
+	return lemonade.HybridSetupHint(p)
 }
 
 // selectable are the indexes of choices that can be picked.
@@ -788,16 +802,23 @@ func (m Model) modelLabel(row int) string {
 	return v + " · " + lemonade.HybridProviderLabel(lemonade.HybridProviderOf(v))
 }
 
-// notes are the cautions the current pair earns.
+// notes are the cautions the pair earns: the server's for the saved pair when
+// it answers, else worked out here in the same words.
 func (m Model) notes() []string {
-	s := m.current()
 	var out []string
-	if !lemonade.IsMeasuredHybrid(s) {
-		out = append(out, "Not yet measured: GAIA tuned its policies on DeepSeek + Opus (gateway, Quality); "+
-			"this setup may route differently than expected.")
+	if m.server != nil && !m.dirty() {
+		for _, n := range []*string{m.server.MeasuredNote, m.server.ClassifierNote} {
+			if n != nil && *n != "" {
+				out = append(out, *n)
+			}
+		}
+		return out
 	}
-	if c := s.Models().Classifier; lemonade.HybridProviderOf(c) == lemonade.HybridFromLocal {
-		out = append(out, "The classifier "+c+" is a small local model, so it may route less accurately.")
+	_, measured, classifier := lemonade.HybridNotes(m.current())
+	for _, n := range []string{measured, classifier} {
+		if n != "" {
+			out = append(out, n)
+		}
 	}
 	return out
 }

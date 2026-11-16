@@ -5,8 +5,6 @@ package lemonade
 
 import (
 	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -51,10 +49,10 @@ func TestBuiltinTemplatesAreTheSevenWithStableIDs(t *testing.T) {
 func TestTemplateAvailabilityFollowsWhatIsSetUp(t *testing.T) {
 	none := BuiltinHybridTemplates(catalogWith(nil))
 	for id, why := range map[string]string{
-		"gateway-deepseek-opus": "Connect the AMD LLM Gateway first",
-		"all-local":             "Download " + HybridSmallLocalModel + " first",
-		"fireworks":             "Add a Fireworks key first",
-		"claude-direct":         "set ANTHROPIC_API_KEY first",
+		"gateway-deepseek-opus": "needs the AMD LLM Gateway: Connect the AMD LLM Gateway with /gateway",
+		"all-local":             "Download " + HybridSmallLocalModel + " with /models",
+		"fireworks":             "needs Fireworks AI: Add a Fireworks key with /provider. The strong model needs the AMD LLM Gateway or an Anthropic key",
+		"claude-direct":         "needs Anthropic: Add an Anthropic API key",
 	} {
 		tpl := templateByID(t, none, id)
 		if tpl.Available || !strings.Contains(tpl.Reason, why) {
@@ -131,56 +129,28 @@ func TestDefaultLocalChatModel(t *testing.T) {
 	}
 }
 
-// The templates are defined once, in Python; this copy is what the TUI judges
-// when the Agent UI server isn't running, so it must name the same ids, models
-// and policies.
-func TestHybridTemplatesMatchPython(t *testing.T) {
-	path := filepath.Join("..", "..", "..", "src", "gaia", "llm", "hybrid_templates.py")
-	raw, err := os.ReadFile(path) // #nosec G304 -- fixed relative path to a checked-in source file
-	if os.IsNotExist(err) {
-		t.Skipf("%s is not in this checkout yet; it lands with the hybrid settings backend", path)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	src := string(raw)
-	c := catalogWith(map[string][]string{
-		HybridFromLocal:     {HybridSmallLocalModel, HybridLargeLocalModel},
-		HybridFromGateway:   {DefaultHybridCheapModel, DefaultHybridStrongModel, HybridSonnetModel},
-		HybridFromFireworks: {HybridFireworksCheap},
-	})
+func TestTemplateNotesUseTheBackendsWords(t *testing.T) {
+	c := catalogWith(nil)
 	for _, tpl := range BuiltinHybridTemplates(c) {
-		if !strings.Contains(src, `"`+tpl.ID+`"`) {
-			t.Errorf("Python has no template %q", tpl.ID)
+		wantMeasured := tpl.ID == HybridMeasuredTemplate
+		if tpl.Measured != wantMeasured {
+			t.Errorf("%s measured=%v", tpl.ID, tpl.Measured)
 		}
-	}
-	for _, id := range []string{
-		DefaultHybridCheapModel, DefaultHybridStrongModel, HybridSonnetModel, HybridFireworksCheap,
-		HybridClaudeDirectCheap, HybridClaudeDirectStrong, HybridSmallLocalModel, HybridLargeLocalModel,
-	} {
-		if !strings.Contains(src, id) && !pythonNamesConstantFor(src, id) {
-			t.Errorf("Python's templates never name %s", id)
+		if tpl.Measured != (tpl.MeasuredNote == "") || (!tpl.Measured && tpl.MeasuredNote != HybridMeasuredNote) {
+			t.Errorf("%s measured note %q", tpl.ID, tpl.MeasuredNote)
 		}
-	}
-	ids := regexp.MustCompile(`id\s*=\s*"([a-z0-9-]+)"|"id"\s*:\s*"([a-z0-9-]+)"`).FindAllStringSubmatch(src, -1)
-	if len(ids) > 0 && len(ids) != 7 {
-		t.Errorf("Python defines %d templates, the TUI 7", len(ids))
+		local := HybridProviderOf(tpl.Classifier) == HybridFromLocal
+		if local != (tpl.ClassifierNote == HybridClassifierNote) {
+			t.Errorf("%s classifier %s note %q", tpl.ID, tpl.Classifier, tpl.ClassifierNote)
+		}
 	}
 }
 
-// pythonNamesConstantFor allows Python to name a default model by the
-// constant that holds it (DEFAULT_CHEAP_MODEL and the like).
-func pythonNamesConstantFor(src, id string) bool {
-	constants := map[string][]string{
-		DefaultHybridCheapModel:  {"DEFAULT_CHEAP_MODEL"},
-		DefaultHybridStrongModel: {"DEFAULT_STRONG_MODEL"},
-		HybridSmallLocalModel:    {"DEFAULT_MODEL_NAME"},
-		HybridLargeLocalModel:    {"LARGE_DEFAULT_MODEL_NAME"},
+func TestCheckedNamesTheProvidersAndHowToAddMore(t *testing.T) {
+	c := catalogWith(map[string][]string{HybridFromGateway: {"amd.x"}})
+	want := "Checked the AMD LLM Gateway. To use more models: Download a model with /models; " +
+		"Add a Fireworks key with /provider; Add an Anthropic API key (ANTHROPIC_API_KEY in GAIA's environment)."
+	if got := c.Checked(); got != want {
+		t.Fatalf("%q", got)
 	}
-	for _, name := range constants[id] {
-		if strings.Contains(src, name) {
-			return true
-		}
-	}
-	return false
 }

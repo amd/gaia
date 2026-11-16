@@ -4,6 +4,7 @@
 package providers
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/ui/hybrid"
 )
 
 func stubHybrid(t *testing.T, h lemonade.HybridModels, readErr, localErr error) {
@@ -48,9 +50,9 @@ func TestHybridIsItsOwnRowNamedByItsPair(t *testing.T) {
 		{lemonade.HybridModels{Cheap: "amd.DeepSeek-V4.1-Flash", Strong: "amd.Claude-Opus-5-5", Classifier: "amd.DeepSeek-V4.1-Flash"},
 			"Hybrid (DeepSeek + Opus) (cloud)"},
 		{lemonade.HybridModels{Cheap: "Gemma-4-E4B-it-GGUF", Strong: "Qwen3.6-35B-A3B-GGUF", Classifier: "Gemma-4-E4B-it-GGUF"},
-			"Hybrid (Gemma + Qwen) (local)"},
-		{lemonade.HybridModels{Cheap: "fireworks.deepseek-v4p1-flash", Strong: "claude-opus-5", Classifier: "fireworks.deepseek-v4p1-flash"},
-			"Hybrid (DeepSeek + Opus) (cloud)"},
+			"Hybrid (Gemma + Qwen3.6) (local)"},
+		{lemonade.HybridModels{Cheap: "fireworks.deepseek-v4p1-flash", Strong: "claude-opus-5-5", Classifier: "fireworks.deepseek-v4p1-flash"},
+			"Hybrid (Deepseek + Opus) (cloud)"},
 	} {
 		stubHybrid(t, tc.h, nil, nil)
 		v := joined(hybridPanel(t))
@@ -107,6 +109,31 @@ func TestTheGatewayListHasNoHybridRow(t *testing.T) {
 	for _, e := range next.(Model).entries {
 		if lemonade.IsHybridID(e.Model.ID) {
 			t.Fatal("hybrid listed among the gateway's models")
+		}
+	}
+}
+
+func TestTheServersEntryNamesTheRowWhenItAnswers(t *testing.T) {
+	stubHybrid(t, lemonade.HybridModels{Cheap: "amd.a", Strong: "amd.b", Classifier: "amd.a"}, nil, nil)
+	orig := fetchHybridEntry
+	t.Cleanup(func() { fetchHybridEntry = orig })
+	remote := false
+	why := "Download Qwen3.6-35B-A3B-GGUF in Settings › Models"
+	for _, tc := range []struct {
+		entry      hybrid.Entry
+		label, why string
+	}{
+		{hybrid.Entry{ID: "hybrid", DisplayName: "Hybrid (Gemma + Qwen3.6)", Remote: &remote, Available: true, Shown: true},
+			"Hybrid (Gemma + Qwen3.6) (local)", ""},
+		{hybrid.Entry{ID: "hybrid", DisplayName: "Hybrid (Gemma + Qwen3.6)", Remote: &remote, Reason: &why, Shown: true},
+			"Hybrid (Gemma + Qwen3.6) (local)", why},
+	} {
+		fetchHybridEntry = func(context.Context) (hybrid.Entry, error) { return tc.entry, nil }
+		m := hybridPanel(t)
+		next, _ := m.Update(m.Init()())
+		got := next.(Model)
+		if got.hybrid.label != tc.label || got.hybrid.reason != tc.why {
+			t.Errorf("row %+v, want %q / %q", got.hybrid, tc.label, tc.why)
 		}
 	}
 }

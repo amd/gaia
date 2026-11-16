@@ -33,10 +33,10 @@ func TestTemplatesWithNoServerAreJudgedHere(t *testing.T) {
 	v := view(m)
 	for _, want := range []string{
 		"judged on this PC; the Agent UI server isn't running",
-		"DeepSeek + Opus (gateway) · measured",
-		"DeepSeek + Sonnet (gateway) · not yet measured",
-		"Can't use yet: Download Qwen3.6-35B-A3B-GGUF first",
-		"Can't use yet: set ANTHROPIC_API_KEY first",
+		"Gateway: DeepSeek + Opus · measured",
+		"Gateway: DeepSeek + Sonnet · not yet measured",
+		"Can't use yet: Download Qwen3.6-35B-A3B-GGUF with /models",
+		"Can't use yet: claude-haiku-5-5 needs Anthropic",
 	} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view lacks %q:\n%s", want, v)
@@ -70,7 +70,7 @@ func TestLocalPlusCloudUsesTheDefaultLocalModel(t *testing.T) {
 	if len(st.saved) != 1 || st.saved[0].Cheap != "Gemma-4-E4B-it-GGUF" || st.saved[0].Classifier != "Gemma-4-E4B-it-GGUF" {
 		t.Fatalf("saved %+v", st.saved)
 	}
-	if !strings.Contains(view(m), "small local model") {
+	if !strings.Contains(view(m), lemonade.HybridClassifierNote) {
 		t.Fatalf("local classifier note missing:\n%s", view(m))
 	}
 }
@@ -79,7 +79,7 @@ func TestAnUnavailableTemplateIsNotApplied(t *testing.T) {
 	m, st := open(t, lemonade.DefaultHybridSettings(), nil, nil)
 	m = focusTemplate(t, m, "claude-direct")
 	m = key(t, m, "enter")
-	if len(st.saved) != 0 || !strings.Contains(view(m), "Claude Haiku + Opus can't be used yet: set ANTHROPIC_API_KEY first") {
+	if len(st.saved) != 0 || !strings.Contains(view(m), "Anthropic: Haiku + Opus can't be used yet: claude-haiku-5-5 needs Anthropic") {
 		t.Fatalf("saved %+v\n%s", st.saved, view(m))
 	}
 }
@@ -155,5 +155,21 @@ func TestAnOlderServerFallsBackToTheTemplatesJudgedHere(t *testing.T) {
 	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, fastAPI404(http.NewServeMux()))
 	if m.fromServer || len(m.templates) != 7 || m.templatesErr != nil {
 		t.Fatalf("from server %v, %d templates, err %v", m.fromServer, len(m.templates), m.templatesErr)
+	}
+}
+
+func TestNotesComeFromTheServerWhenItAnswers(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/hybrid/settings", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"measured":false,"measured_note":"Server: not measured.","classifier_note":null}`)
+	})
+	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, fastAPI404(mux))
+	if v := view(m); !strings.Contains(v, "Server: not measured.") || strings.Contains(v, lemonade.HybridMeasuredNote) {
+		t.Fatalf("the server's note is not the one shown:\n%s", v)
+	}
+	// An unsaved edit is judged here, in the same words the server uses.
+	m.edit.Cheap = "Gemma-4-E4B-it-GGUF"
+	if v := view(m); !strings.Contains(v, lemonade.HybridClassifierNote) || strings.Contains(v, "Server: not measured.") {
+		t.Fatalf("an unsaved pair shows the saved pair's notes:\n%s", v)
 	}
 }

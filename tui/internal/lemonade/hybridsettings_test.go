@@ -240,27 +240,30 @@ func TestSaveHybridSettingsRefusesABrokenConfigFile(t *testing.T) {
 	}
 }
 
+// Names follow short_name in gaia.llm.hybrid_templates, so every app shows the
+// same entry.
 func TestHybridNames(t *testing.T) {
 	h := HybridModels{Cheap: DefaultHybridCheapModel, Strong: DefaultHybridStrongModel, Classifier: DefaultHybridCheapModel}
-	if got := HybridDisplayName(h); got != "Hybrid (DeepSeek + Opus)" {
-		t.Errorf("display = %q", got)
+	if got := HybridEntryLabel(h); got != "Hybrid (DeepSeek + Opus)" {
+		t.Errorf("entry = %q", got)
 	}
 	if HybridWhere(h) != "(cloud)" {
 		t.Error("gateway models are cloud")
 	}
 	local := HybridModels{Cheap: "Gemma-4-E4B-it-GGUF", Strong: "Qwen3.6-35B-A3B-GGUF", Classifier: "Gemma-4-E4B-it-GGUF"}
-	if HybridWhere(local) != "(local)" || HybridDisplayName(local) != "Hybrid (Gemma + Qwen)" {
-		t.Errorf("local: %s %s", HybridDisplayName(local), HybridWhere(local))
+	if HybridWhere(local) != "(local)" || HybridEntryLabel(local) != "Hybrid (Gemma + Qwen3.6)" {
+		t.Errorf("local: %s %s", HybridEntryLabel(local), HybridWhere(local))
 	}
-	same := HybridModels{Cheap: "amd.DeepSeek-V4.1-Flash", Strong: "amd.DeepSeek-V4-Pro"}
-	if got := HybridDisplayName(same); got != "Hybrid (DeepSeek-V4.1-Flash + DeepSeek-V4-Pro)" {
-		t.Errorf("one family twice must still tell them apart: %q", got)
-	}
-	if ShortModelName("fireworks.accounts/fireworks/models/glm-5p3-flash") != "GLM" {
-		t.Error("fireworks path form")
-	}
-	if ShortModelName("amd.Mystery-7B") != "Mystery-7B" {
-		t.Error("an unknown family keeps its id")
+	for id, want := range map[string]string{
+		"fireworks.accounts/fireworks/models/glm-5p3-flash": "Glm",
+		"fireworks.deepseek-v4p1-flash":                     "Deepseek",
+		"claude-haiku-5-5":                                  "Haiku",
+		"amd.Claude-Sonnet-5-5":                             "Sonnet",
+		"user.Mystery-7B":                                   "Mystery",
+	} {
+		if got := ShortModelName(id); got != want {
+			t.Errorf("%s: %q, want %q", id, got, want)
+		}
 	}
 }
 

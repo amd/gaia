@@ -126,7 +126,7 @@ func settle(t *testing.T, m Model, cmd tea.Cmd) Model {
 		switch v := msg.(type) {
 		case tea.BatchMsg:
 			queue = append(queue, v...)
-		case settingsMsg, catalogMsg, serverTemplatesMsg, appliedMsg, statsMsg, previewMsg:
+		case settingsMsg, catalogMsg, serverTemplatesMsg, appliedMsg, notesMsg, statsMsg, previewMsg:
 			next, more := m.Update(msg)
 			m = next.(Model)
 			queue = append(queue, more)
@@ -238,8 +238,8 @@ func TestPickerGroupsModelsByProviderAndSaysWhyOnesAreMissing(t *testing.T) {
 	v := view(m)
 	for _, want := range []string{
 		"On this PC", "Gemma-4-E4B-it-GGUF", "AMD LLM Gateway", "amd.Claude-Sonnet-5-5",
-		"Fireworks AI", "fireworks.glm-5p3-flash · current · can't use: add a Fireworks key first",
-		"Claude (Anthropic API)", "set ANTHROPIC_API_KEY",
+		"Fireworks AI", "fireworks.glm-5p3-flash · current · can't use: fireworks.glm-5p3-flash needs",
+		"Anthropic (Claude)", "Add an Anthropic API key",
 	} {
 		if !strings.Contains(v, want) {
 			t.Errorf("picker lacks %q:\n%s", want, v)
@@ -260,7 +260,7 @@ func TestPickingAnUnavailableModelSaysWhy(t *testing.T) {
 	m, _ := open(t, s, nil, nil)
 	m = focus(t, m, rowStrong)
 	m = key(t, m, "enter", "g", "l", "m", "enter")
-	if m.edit.Strong != "fireworks.glm-5p3-flash" || !strings.Contains(view(m), "can't be used: add a Fireworks key first") {
+	if m.edit.Strong != "fireworks.glm-5p3-flash" || !strings.Contains(view(m), "can't be used: fireworks.glm-5p3-flash needs Fireworks AI") {
 		t.Fatalf("strong %q\n%s", m.edit.Strong, view(m))
 	}
 }
@@ -268,14 +268,14 @@ func TestPickingAnUnavailableModelSaysWhy(t *testing.T) {
 func TestDirectClaudeAndFireworksAreChoosableWhenSetUp(t *testing.T) {
 	c := testCatalog()
 	c.ClaudeKey = true
-	c.Models[lemonade.HybridFromClaude] = []string{"claude-haiku-4-5", "claude-opus-5"}
+	c.Models[lemonade.HybridFromClaude] = lemonade.HybridClaudeModels
 	c.Models[lemonade.HybridFromFireworks] = []string{"fireworks.accounts/fireworks/models/deepseek-v4p1-flash"}
 	m, st := openWith(t, lemonade.DefaultHybridSettings(), nil, nil, c)
 	m = focus(t, m, rowCheap)
 	m = key(t, m, "enter", "v", "4", "p", "1", "enter")
 	m = focus(t, m, rowStrong)
-	m = key(t, m, "enter", "o", "p", "u", "s", "-", "5", "down", "enter") // the gateway Opus lists first
-	if m.edit.Strong != "claude-opus-5" {
+	m = key(t, m, "enter", "c", "l", "a", "u", "d", "e", "-", "o", "p", "u", "s", "down", "enter") // the gateway Opus lists first
+	if m.edit.Strong != "claude-opus-5-5" {
 		t.Fatalf("strong %q", m.edit.Strong)
 	}
 	m = key(t, m, "ctrl+s")
@@ -291,21 +291,21 @@ func TestSaveRefusesAModelNoProviderOffers(t *testing.T) {
 	m = key(t, m, "ctrl+s")
 	v := view(m)
 	if len(st.saved) != 0 || !strings.Contains(v, "amd.Retired-Model can't be used") ||
-		!strings.Contains(v, "Checked: On this PC, AMD LLM Gateway, Fireworks AI, Claude") {
+		!strings.Contains(v, "Checked this PC, the AMD LLM Gateway. To use more models: Add a Fireworks key with /provider") {
 		t.Fatalf("saved %+v\n%s", st.saved, v)
 	}
 }
 
 func TestNotesForUnmeasuredPairsAndLocalClassifiers(t *testing.T) {
 	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, nil)
-	if v := view(m); strings.Contains(v, "Not yet measured") || strings.Contains(v, "small local model") {
+	if v := view(m); strings.Contains(v, lemonade.HybridMeasuredNote) || strings.Contains(v, lemonade.HybridClassifierNote) {
 		t.Fatalf("the measured default earns no notes:\n%s", v)
 	}
 	s := lemonade.DefaultHybridSettings()
 	s.Cheap = "Gemma-4-E4B-it-GGUF"
 	m, _ = open(t, s, nil, nil)
 	v := view(m)
-	if !strings.Contains(v, "Not yet measured") || !strings.Contains(v, "Gemma-4-E4B-it-GGUF is a small local model, so it may route less accurately") {
+	if !strings.Contains(v, lemonade.HybridMeasuredNote) || !strings.Contains(v, lemonade.HybridClassifierNote) {
 		t.Fatalf("notes missing:\n%s", v)
 	}
 }

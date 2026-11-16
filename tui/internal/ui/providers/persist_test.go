@@ -22,6 +22,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/ui/hybrid"
 )
 
 // keyStoreCalls records what the panel asked the daemon to keep, forget and
@@ -44,6 +45,10 @@ var realRestoreKey = restoreKey
 func TestMain(m *testing.M) {
 	// A developer's own Local only must not change what these tests send.
 	os.Setenv("GAIA_POLICY_FILE", filepath.Join(os.TempDir(), "gaia-providers-test-no-policy.json"))
+	// Nor reach a developer's own Agent UI server for hybrid's entry.
+	fetchHybridEntry = func(context.Context) (hybrid.Entry, error) {
+		return hybrid.Entry{}, &hybrid.ServerDownError{Base: "test", What: "Naming hybrid", Err: errors.New("test: no server")}
+	}
 	callDaemon = func(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
 		return nil, errors.New("a test reached the daemon")
 	}
@@ -82,6 +87,10 @@ func TestRestoringAKeyStartsTheDaemon(t *testing.T) {
 	orig := callDaemon
 	t.Cleanup(func() { callDaemon = orig })
 	var started []bool
+	// Nor reach a developer's own Agent UI server for hybrid's entry.
+	fetchHybridEntry = func(context.Context) (hybrid.Entry, error) {
+		return hybrid.Entry{}, &hybrid.ServerDownError{Base: "test", What: "Naming hybrid", Err: errors.New("test: no server")}
+	}
 	callDaemon = func(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
 		started = append(started, start)
 		return []byte(`{"authenticated":true}`), nil

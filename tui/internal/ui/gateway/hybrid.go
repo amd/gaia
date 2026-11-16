@@ -31,7 +31,7 @@ func (m GatewayModel) hybridRow() string {
 	if err != nil {
 		return "    Hybrid" + errorStyle.Render(" (settings can't be used: "+err.Error()+" — fix them in /hybrid)") + "\n"
 	}
-	name := lemonade.HybridDisplayName(h) + " " + lemonade.HybridWhere(h)
+	name := lemonade.HybridEntryLabel(h) + " " + lemonade.HybridWhere(h)
 	if m.defaultErr != nil {
 		name += errorStyle.Render(" (can't tell if it is active: " + m.defaultErr.Error() + ")")
 	}

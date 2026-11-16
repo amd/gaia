@@ -35,6 +35,8 @@ type loadedMsg struct {
 	started time.Time
 	// server is the one-line Model server summary; empty when unreadable.
 	server string
+	// entry is hybrid's row from the Agent UI server, on the opening read.
+	entry *hybridEntryMsg
 }
 type modelsMsg struct {
 	source   *lemonade.Client
@@ -154,9 +156,20 @@ func New(base string, width, height int) Model {
 	return Model{spin: spin, client: lemonade.New(base), ctx: ctx, cancel: cancel, stage: "providers", width: width, height: height,
 		hybrid: readHybridRow()}
 }
-func (m Model) Init() tea.Cmd {
+// Init reads the providers and, from the Agent UI server when it runs,
+// hybrid's entry.
+func (m Model) Init() tea.Cmd { return m.readAll(true) }
+
+func (m Model) readProviders() tea.Cmd { return m.readAll(false) }
+
+func (m Model) readAll(withEntry bool) tea.Cmd {
 	c := m.client
 	return func() tea.Msg {
+		var entry *hybridEntryMsg
+		if withEntry {
+			e := m.fetchEntry()
+			entry = &e
+		}
 		// Lemonade forgets a pasted key when it restarts; give it back any key
 		// kept from an earlier session before reading which providers have one.
 		var restoreErr error
@@ -173,7 +186,7 @@ func (m Model) Init() tea.Cmd {
 		}
 		started := time.Now()
 		p, e := c.Providers(m.ctx)
-		msg := loadedMsg{source: c, providers: p, err: e, restoreErr: restoreErr, started: started}
+		msg := loadedMsg{source: c, providers: p, err: e, restoreErr: restoreErr, started: started, entry: entry}
 		if e == nil {
 			if info, err := c.ServerInfo(m.ctx); err == nil {
 				msg.server = localServerLine(info)
@@ -572,6 +585,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.readAt = v.started
 		m.read = true
+		if v.entry != nil {
+			m = m.withEntry(*v.entry)
+		}
 		m.server = v.server
 		// A failed read keeps what is known rather than forgetting every key.
 		if v.err == nil || v.providers != nil {
@@ -639,7 +655,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.note = "Lemonade lists no local chat models. Update Lemonade, then retry."
 			}
 			// The key Lemonade holds may have changed; the list must show that.
-			return m, m.Init()
+			return m, m.readProviders()
 		}
 		m.entries = v.entries
 		m.stage = "models"
@@ -664,7 +680,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.note = m.afterRefresh
 		}
 		m.afterRefresh = ""
-		return m, m.Init()
+		return m, m.readProviders()
 	case customCheckedMsg:
 		return m.onChecked(v)
 	case customRemovedMsg:
@@ -711,7 +727,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		return m, m.Init()
+		return m, m.readProviders()
 	case tea.KeyMsg:
 		if v.String() == "ctrl+c" {
 			m.fields = nil
@@ -784,7 +800,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.autoConnect = false
 				return m.openSetup()
 			case "r":
-				return m, m.Init()
+				return m, m.readProviders()
 			}
 		case "models":
 			entries := m.filteredEntries()

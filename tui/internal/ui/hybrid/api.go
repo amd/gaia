@@ -210,3 +210,55 @@ func (a api) ApplyTemplate(ctx context.Context, id string) error {
 	return a.call(ctx, http.MethodPost, "/api/hybrid/templates/"+url.PathEscape(id)+"/apply",
 		map[string]string{}, &out, "Applying the template")
 }
+
+// Entry is GET /api/hybrid/entry: hybrid's row in a model picker.
+type Entry struct {
+	ID          string  `json:"id"`
+	DisplayName string  `json:"display_name"`
+	Remote      *bool   `json:"remote"`
+	Available   bool    `json:"available"`
+	Reason      *string `json:"reason"`
+	Shown       bool    `json:"shown"`
+}
+
+// Label is the entry's name with where it runs.
+func (e Entry) Label() string {
+	switch {
+	case e.Remote == nil:
+		return e.DisplayName
+	case *e.Remote:
+		return e.DisplayName + " (cloud)"
+	}
+	return e.DisplayName + " (local)"
+}
+
+// FetchEntry asks the Agent UI server for hybrid's picker entry.
+func FetchEntry(ctx context.Context) (Entry, error) {
+	var e Entry
+	err := newAPI().call(ctx, http.MethodGet, "/api/hybrid/entry", nil, &e, "Naming hybrid")
+	if err == nil && e.DisplayName == "" {
+		err = errors.New("the Agent UI server's hybrid entry has no name; update GAIA so the TUI and server match")
+	}
+	return e, err
+}
+
+// IsServerAbsent reports an error that only means the Agent UI server isn't
+// running, or predates the route, so the caller judges on this PC instead.
+func IsServerAbsent(err error) bool {
+	var down *ServerDownError
+	var missing *RouteMissingError
+	return errors.As(err, &down) || errors.As(err, &missing)
+}
+
+// serverNotes are the notes GET /api/hybrid/settings gives the saved pair.
+type serverNotes struct {
+	Measured       bool    `json:"measured"`
+	MeasuredNote   *string `json:"measured_note"`
+	ClassifierNote *string `json:"classifier_note"`
+}
+
+// Notes reads the server's notes for the saved settings.
+func (a api) Notes(ctx context.Context) (serverNotes, error) {
+	var n serverNotes
+	return n, a.call(ctx, http.MethodGet, "/api/hybrid/settings", nil, &n, "Reading the hybrid notes")
+}

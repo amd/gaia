@@ -399,43 +399,6 @@ func writeConfigKeys(path string, keys map[string]any) error {
 	return nil
 }
 
-// ShortModelName is a model's family name for a one-line label: DeepSeek,
-// Opus, Gemma. An unknown family keeps its id, without the provider prefix.
-func ShortModelName(id string) string {
-	name := strings.TrimSpace(id)
-	if provider, rest, ok := strings.Cut(name, "."); ok && (provider == "amd" || provider == "fireworks") {
-		name = rest
-	}
-	name = name[strings.LastIndex(name, "/")+1:]
-	lower := strings.ToLower(name)
-	for _, f := range []struct{ hint, label string }{
-		{"deepseek", "DeepSeek"}, {"opus", "Opus"}, {"sonnet", "Sonnet"}, {"haiku", "Haiku"},
-		{"gemma", "Gemma"}, {"qwen", "Qwen"}, {"glm", "GLM"}, {"kimi", "Kimi"},
-		{"llama", "Llama"}, {"mistral", "Mistral"}, {"gpt", "GPT"},
-	} {
-		if strings.Contains(lower, f.hint) {
-			return f.label
-		}
-	}
-	return name
-}
-
-// HybridDisplayName names hybrid by its two models: "Hybrid (DeepSeek + Opus)".
-func HybridDisplayName(h HybridModels) string {
-	cheap, strong := ShortModelName(h.Cheap), ShortModelName(h.Strong)
-	if cheap == strong {
-		cheap, strong = trimProvider(h.Cheap), trimProvider(h.Strong)
-	}
-	return "Hybrid (" + cheap + " + " + strong + ")"
-}
-
-func trimProvider(id string) string {
-	if provider, rest, ok := strings.Cut(id, "."); ok && (provider == "amd" || provider == "fireworks") {
-		return rest
-	}
-	return id
-}
-
 // HybridWhere is "(cloud)" when any of hybrid's models runs off this PC, else
 // "(local)".
 func HybridWhere(h HybridModels) string {

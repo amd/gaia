@@ -4,11 +4,14 @@
 package providers
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/ui/hybrid"
 )
 
 // Hybrid config reads, vars so tests need no config file.
@@ -24,12 +27,48 @@ type hybridRow struct {
 	reason string
 }
 
+// fetchHybridEntry is the Agent UI's GET /api/hybrid/entry. A var so tests
+// reach no server.
+var fetchHybridEntry = hybrid.FetchEntry
+
+// hybridEntryMsg is the server's hybrid entry, or why it has none.
+type hybridEntryMsg struct {
+	entry hybrid.Entry
+	err   error
+}
+
+func (m Model) fetchEntry() hybridEntryMsg {
+	c, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+	defer cancel()
+	e, err := fetchHybridEntry(c)
+	return hybridEntryMsg{entry: e, err: err}
+}
+
+// withEntry takes the server's entry; with no server the row stays as read
+// from config here.
+func (m Model) withEntry(v hybridEntryMsg) Model {
+	switch {
+	case v.err == nil:
+		row := hybridRow{label: v.entry.Label()}
+		if v.entry.Reason != nil {
+			row.reason = *v.entry.Reason
+		}
+		if !v.entry.Available && row.reason == "" {
+			row.reason = "no hybrid pairing can be used here yet; set one up in /hybrid"
+		}
+		m.hybrid = row
+	case !hybrid.IsServerAbsent(v.err):
+		m.hybrid.reason = "the Agent UI server couldn't name it: " + v.err.Error()
+	}
+	return m
+}
+
 func readHybridRow() hybridRow {
 	h, err := readHybridModels()
 	if err != nil {
 		return hybridRow{label: "Hybrid", reason: strings.TrimSuffix(err.Error(), ".") + ". Fix it in /hybrid"}
 	}
-	row := hybridRow{label: lemonade.HybridDisplayName(h) + " " + lemonade.HybridWhere(h)}
+	row := hybridRow{label: lemonade.HybridEntryLabel(h) + " " + lemonade.HybridWhere(h)}
 	if err := hybridLocalRefuse(); err != nil {
 		row.reason = err.Error()
 	}
