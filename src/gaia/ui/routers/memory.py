@@ -1860,6 +1860,116 @@ def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
     }
 
 
+class EmbedderBody(BaseModel):
+    """``npu`` or ``gpu``; None follows the PC's profile."""
+
+    device: Optional[Literal["npu", "gpu"]] = None
+
+
+def _embedder_option(device: str) -> Dict[str, Any]:
+    """One device the embedder may run on, and whether this PC can use it now."""
+    from gaia.agents.registry import get_embedding_model_for_device
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+    from .providers import ProviderError, display_name, local_unavailable_reason
+
+    model = get_embedding_model_for_device(device)
+    option: Dict[str, Any] = {
+        "device": device,
+        "model": model,
+        "display_name": display_name(model),
+        "available": None,
+        "reason": None,
+        "downloaded": None,
+    }
+    try:
+        option["reason"] = local_unavailable_reason(model)
+        option["available"] = option["reason"] is None
+        option["downloaded"] = bool(
+            LemonadeClient(verbose=False).get_model_info(model)["downloaded"]
+        )
+    except (ProviderError, LemonadeClientError) as e:
+        # Unknown, not refused: the model server isn't answering yet.
+        option["reason"] = str(e)
+    return option
+
+
+def _embedder_view() -> Dict[str, Any]:
+    from gaia.agents.registry import machine_embedding_device
+    from gaia.config import GaiaConfig
+
+    config = GaiaConfig.load()
+    device = machine_embedding_device()
+    return {
+        "device": device,
+        "chosen": config.embedding_device is not None,
+        "profile_device": "npu" if config.default_device == "npu" else "gpu",
+        "options": [_embedder_option(d) for d in GaiaConfig.EMBEDDING_DEVICE_CHOICES],
+    }
+
+
+@router.get("/api/memory/embedder")
+def get_embedder() -> Dict[str, Any]:
+    """Where every chat embeds documents and memory, and where it could instead."""
+    from gaia.config import GaiaConfigError
+
+    try:
+        return _embedder_view()
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.put("/api/memory/embedder", dependencies=[Depends(_require_ui_header)])
+def set_embedder(body: EmbedderBody) -> Dict[str, Any]:
+    """Run the embedder on *device* for every chat; None follows the profile.
+
+    Stored memory is re-embedded with it as the agent next starts. Refused
+    while a reply runs: its agent holds the old embedder.
+    """
+    from gaia.agents.registry import get_embedding_model_for_device
+    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.daemon.sidecars.errors import SidecarError
+    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.security import FLAGSHIP_AGENT_ID
+
+    from .._chat_helpers import _active_sse_handlers, evict_all_session_agents
+    from .providers import ProviderError, local_unavailable_reason
+
+    if _active_sse_handlers:
+        raise HTTPException(
+            status_code=409,
+            detail="A reply is running. Change the embedder once it finishes.",
+        )
+    if body.device is not None:
+        model = get_embedding_model_for_device(body.device)
+        try:
+            reason = local_unavailable_reason(model)
+        except ProviderError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        if reason:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This PC can't run the embedder on the {body.device.upper()}: {reason}",
+            )
+    try:
+        GaiaConfig.save_key("embedding_device", body.device or "auto")
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    # Agents pick their embedder as they are built: rebuild every one.
+    evict_all_session_agents()
+    try:
+        daemon_client.stop_sidecar(FLAGSHIP_AGENT_ID)
+    except SidecarError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"Saved, but GAIA's agent didn't restart ({e}), so chats keep the "
+                "old embedder until it does. Close GAIA and open it again."
+            ),
+        ) from e
+    return _embedder_view()
+
+
 @router.get("/api/memory/settings")
 def get_memory_settings(db: ChatDatabase = Depends(get_db)) -> Dict:
     """Return memory-related feature settings.

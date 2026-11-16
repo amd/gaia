@@ -98,7 +98,8 @@ The embedder for documents and memory follows the PC's profile, not the chat mod
 to a GPU model. Memory keeps one set of vectors, made by one embedder, so a chat on the other
 device never clears them. Setup run from the Agent UI or terminal UI keeps an NPU PC on its
 NPU embedder. Running `gaia init` with a GPU-only profile, such as `--profile chat`, moves the PC
-to the GPU embedder, and memory is re-embedded with it.
+to the GPU embedder, and memory is re-embedded with it. To move the embedder yourself, choose it
+in the Agent UI under **Settings → Memory**; that choice outlasts setup.
 
 ## Which NPU model
 

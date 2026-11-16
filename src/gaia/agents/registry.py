@@ -396,8 +396,31 @@ def get_embedding_model_for_device(device: Optional[str]) -> str:
     return DEFAULT_EMBEDDING_MODEL
 
 
+def machine_embedding_device() -> str:
+    """``npu`` or ``gpu``: where every chat on this PC embeds.
+
+    The user's ``embedding_device``, else the PC's profile (``default_device``).
+
+    Raises:
+        GaiaConfigError: ``~/.gaia/config.json`` can't be read.
+    """
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    try:
+        config = GaiaConfig.load()
+    except GaiaConfigError as e:
+        raise GaiaConfigError(
+            f"Cannot tell which embedder this PC uses for documents and memory: "
+            f"{e}. Fix or delete {GaiaConfig.config_path()}, or run `gaia config "
+            "set default_device gpu`."
+        ) from e
+    return config.embedding_device or (
+        "npu" if config.default_device == "npu" else "gpu"
+    )
+
+
 def machine_embedding_model() -> str:
-    """The embedder every chat on this PC uses: its profile's (``default_device``).
+    """The embedder every chat on this PC uses (:func:`machine_embedding_device`).
 
     One per machine, never per chat or per model switch. Memory is one store
     whose vectors belong to one embedder; changing it clears them all, so an
@@ -407,17 +430,7 @@ def machine_embedding_model() -> str:
     Raises:
         GaiaConfigError: ``~/.gaia/config.json`` can't be read.
     """
-    from gaia.config import GaiaConfig, GaiaConfigError
-
-    try:
-        device = GaiaConfig.load().default_device
-    except GaiaConfigError as e:
-        raise GaiaConfigError(
-            f"Cannot tell which embedder this PC uses for documents and memory: "
-            f"{e}. Fix or delete {GaiaConfig.config_path()}, or run `gaia config "
-            "set default_device gpu`."
-        ) from e
-    return get_embedding_model_for_device(device)
+    return get_embedding_model_for_device(machine_embedding_device())
 
 
 @dataclass

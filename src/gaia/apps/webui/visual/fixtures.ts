@@ -217,6 +217,13 @@ const ROUTES: Record<string, unknown> = {
     'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 },
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
+    'GET /memory/embedder': {
+        device: 'npu', chosen: false, profile_device: 'npu',
+        options: [
+            { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', available: true, reason: null, downloaded: true },
+            { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', available: true, reason: null, downloaded: true },
+        ],
+    },
     'GET /skills': { skills: [] },
     'GET /skills/featured': { libraries: [{ id: 'pstack', name: 'pstack', url: 'https://github.com/michael-denyer/pstack-claude', description: 'Engineering workflows: design, review, CI fixes, TDD, PR hygiene (MIT)' }] },
     'GET /system/resources': RESOURCES,
@@ -385,6 +392,13 @@ export async function withSettingsPanes(page: Page, options: { networkPolicy?: '
             policy_notices: options.policyNotices ?? [],
         },
         'GET /memory/settings': { memory_enabled: true },
+        'GET /memory/embedder': {
+            device: 'npu', chosen: false, profile_device: 'npu',
+            options: [
+                { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', available: true, reason: null, downloaded: true },
+                { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', available: true, reason: null, downloaded: true },
+            ],
+        },
         'GET /skills': {
             skills: [
                 skill('gh-cli', 'agent-bundled', 'Work with GitHub from the terminal: issues, pull requests and releases.', { always_on: true }),

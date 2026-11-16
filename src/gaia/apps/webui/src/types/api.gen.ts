@@ -42,6 +42,7 @@ export interface ApiSchemas {
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadProgress: DownloadProgress;
+  EmbedderBody: EmbedderBody;
   EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
   FileListResponse: FileListResponse;
@@ -553,6 +554,12 @@ export interface DownloadProgress {
   state: string;
   total_bytes?: number;
   total_files?: number;
+}
+/**
+ * ``npu`` or ``gpu``; None follows the PC's profile.
+ */
+export interface EmbedderBody {
+  device?: ("npu" | "gpu") | null;
 }
 export interface EvalMailboxRequest {
   attached: boolean;

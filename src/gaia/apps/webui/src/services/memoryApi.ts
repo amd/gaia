@@ -247,6 +247,36 @@ export function updateMemorySettings(settings: Partial<MemorySettings>) {
     return memFetch<MemorySettingsUpdateResponse>('PUT', '/memory/settings', settings);
 }
 
+export type EmbedderDevice = 'npu' | 'gpu';
+
+/** One device the embedder may run on; `available` null while the model server is starting. */
+export interface EmbedderOption {
+    device: EmbedderDevice;
+    model: string;
+    display_name: string;
+    available: boolean | null;
+    reason: string | null;
+    downloaded: boolean | null;
+}
+
+/** Where every chat embeds documents and memory. */
+export interface EmbedderView {
+    device: EmbedderDevice;
+    /** True when the user chose the device; false when the PC's setup decides it. */
+    chosen: boolean;
+    profile_device: EmbedderDevice;
+    options: EmbedderOption[];
+}
+
+export function getEmbedder() {
+    return memFetch<EmbedderView>('GET', '/memory/embedder');
+}
+
+/** `null` returns to the PC's setup. */
+export function setEmbedder(device: EmbedderDevice | null) {
+    return memFetch<EmbedderView>('PUT', '/memory/embedder', { device });
+}
+
 export function clearAllMemory() {
     return memFetch<{ knowledge: number; tool_history: number; conversations: number }>(
         'DELETE', '/memory/all'
