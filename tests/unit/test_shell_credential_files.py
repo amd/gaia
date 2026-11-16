@@ -694,7 +694,7 @@ def test_a_link_is_sized_by_the_file_it_reads(home, monkeypatch):
 
 
 def test_linking_a_key_then_searching_in_one_command_is_refused(home, monkeypatch):
-    """The link does not exist when the line is checked, so naming the key must refuse."""
+    """The link does not exist yet when the line is checked; naming the key refuses."""
     key, clean = _key_and_clean_folder(home, monkeypatch)
 
     for command in (f"ln {key} notes.txt && grep -rn KEY .", f"ln {key} notes.txt"):
