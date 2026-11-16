@@ -2751,7 +2751,7 @@ export const enMessages = {
     'settings.spend.limit': 'Monthly limit ($)',
     'settings.spend.noLimit': 'No limit',
     'settings.spend.removeLimit': 'Remove limit',
-    'settings.spend.how': 'Counts cloud chats in GAIA’s Agent UI at list price, with cached input at its cached rate, as each answer’s cost is. Your provider’s bill is the final word. Turns stopped before any reply aren’t counted, nor are turns that fail before any reply with no usage reported; an answer stopped partway still is, since your provider may bill it. Models with an unknown price, like the AMD LLM Gateway’s, add nothing to the total, but are stopped too once the limit is reached.',
+    'settings.spend.how': 'Counts cloud chats in GAIA’s Agent UI at list price, with cached input at its cached rate, as each answer’s cost is. Your provider’s bill is the final word. Turns stopped before any reply aren’t counted, nor are turns that fail before any reply with no usage reported; an answer stopped partway still is, since your provider may bill it. AMD LLM Gateway models are priced from the gateway’s own price list. Models with an unknown price add nothing to the total, but are stopped too once the limit is reached.',
     'settings.hybrid.title': 'Hybrid',
     'settings.hybrid.provider.local': 'Local',
     'settings.hybrid.provider.amd': 'AMD LLM Gateway',
