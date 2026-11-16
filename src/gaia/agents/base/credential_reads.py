@@ -41,7 +41,7 @@ def _may_read_credentials(code: str) -> bool:
     from gaia import security
 
     lowered = code.lower()
-    return any(n.lower() in lowered for n in security.SENSITIVE_FILE_NAMES) or any(
+    return any(n.lower() in lowered for n in security.READ_BLOCKED_FILE_NAMES) or any(
         e in lowered for e in security.SENSITIVE_EXTENSIONS
     )
 

@@ -126,6 +126,13 @@ SENSITIVE_FILE_NAMES: Set[str] = {
     ".pypirc",
 }
 
+# Never written, but free to read: world-readable account lists that hold no
+# secrets (password hashes live in ``shadow``).
+PUBLIC_SYSTEM_FILE_NAMES: Set[str] = {"passwd"}
+
+# The names the read tools refuse.
+READ_BLOCKED_FILE_NAMES: Set[str] = SENSITIVE_FILE_NAMES - PUBLIC_SYSTEM_FILE_NAMES
+
 # Sensitive file extensions
 SENSITIVE_EXTENSIONS: Set[str] = {
     ".pem",
@@ -501,7 +508,7 @@ def is_credential_file_name(name: str) -> bool:
     """
     lowered = name.lower()
     return (
-        lowered in {n.lower() for n in SENSITIVE_FILE_NAMES}
+        lowered in {n.lower() for n in READ_BLOCKED_FILE_NAMES}
         or os.path.splitext(lowered)[1] in SENSITIVE_EXTENSIONS
     )
 
@@ -510,7 +517,7 @@ def names_credential_file(word: str) -> bool:
     """Whether *word*, read as a path, names a credential file.
 
     A word with a folder in it is judged by its last part. A bare word must
-    look like a file name: ``passwd`` is also a getent database and ``.a.key``
+    look like a file name: ``shadow`` is also a getent database and ``.a.key``
     a JSON field, so those count only when such a file is really there.
     """
     # '\' separates folders on Windows only; elsewhere '\.env' is a regex.
@@ -521,7 +528,7 @@ def names_credential_file(word: str) -> bool:
         return False
     if name != stripped.lower():
         return is_credential_file_name(name)
-    if name in {n.lower() for n in SENSITIVE_FILE_NAMES}:
+    if name in {n.lower() for n in READ_BLOCKED_FILE_NAMES}:
         return "." in name
     ext = os.path.splitext(name)[1]
     return ext in SENSITIVE_EXTENSIONS and not name.startswith(".")
@@ -1693,7 +1700,7 @@ class PathValidator:
             file_name = real_path.name.lower()
             file_ext = real_path.suffix.lower()
 
-            if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
+            if file_name in {s.lower() for s in READ_BLOCKED_FILE_NAMES}:
                 return (
                     True,
                     f"Read blocked: '{real_path.name}' holds credentials, keys or "

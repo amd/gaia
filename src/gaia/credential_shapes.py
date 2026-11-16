@@ -74,7 +74,7 @@ def _credential_names() -> Tuple[frozenset, frozenset, Any, Any]:
     """
     from gaia import security
 
-    names = frozenset(n.lower() for n in security.SENSITIVE_FILE_NAMES)
+    names = frozenset(n.lower() for n in security.READ_BLOCKED_FILE_NAMES)
     extensions = frozenset(e.lower() for e in security.SENSITIVE_EXTENSIONS)
     words = sorted(names | extensions, key=len, reverse=True)
     alternation = "|".join(re.escape(w) for w in words)

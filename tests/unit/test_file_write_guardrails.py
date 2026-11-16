@@ -1941,3 +1941,27 @@ class TestPythonSyntaxGate:
         assert result["status"] == "error", result
         assert result["error"] == "Replacement would result in invalid syntax"
         assert (repo / "app.py").read_text(encoding="utf-8") == before
+
+
+class TestAccountListIsReadableNotWritable:
+    """``passwd`` holds no secrets (hashes live in ``shadow``): read yes, write no."""
+
+    @pytest.fixture
+    def validator(self, tmp_path):
+        return PathValidator(allowed_paths=[str(tmp_path)])
+
+    def test_passwd_can_be_read(self, validator, tmp_path):
+        passwd = tmp_path / "passwd"
+        passwd.write_text("root:x:0:0:root:/root:/bin/bash\n")
+        is_blocked, _ = validator.is_read_blocked(str(passwd))
+        assert not is_blocked
+
+    def test_passwd_still_cannot_be_written(self, validator, tmp_path):
+        is_blocked, _ = validator.is_write_blocked(str(tmp_path / "passwd"))
+        assert is_blocked
+
+    def test_shadow_is_still_refused_to_read(self, validator, tmp_path):
+        shadow = tmp_path / "shadow"
+        shadow.write_text("root:$6$hash:19000:0:99999:7:::\n")
+        is_blocked, _ = validator.is_read_blocked(str(shadow))
+        assert is_blocked
