@@ -363,13 +363,16 @@ class HybridSettings:
                 f"hybrid_policy must be one of {', '.join(POLICIES)}, but it is "
                 f"{self.policy!r}. To fix, {APP_RESET_POLICY}."
             )
+        if self.policy != CUSTOM_POLICY:
+            # Unused under a preset, so a broken saved table can't block one.
+            return
         if self.rules is not None:
             try:
                 rules = validate_rules(self.rules)
             except HybridConfigError as e:
                 raise HybridConfigError(f"{e} To fix, {APP_SET_RULES}.") from e
             object.__setattr__(self, "rules", MappingProxyType(rules))
-        elif self.policy == CUSTOM_POLICY:
+        else:
             raise HybridConfigError(
                 "hybrid_policy is custom, but hybrid_rules is not set. To fix, "
                 f"{APP_SET_RULES}, or {APP_RESET_POLICY}."
@@ -383,12 +386,14 @@ class HybridSettings:
 
             config = GaiaConfig.load()
         cheap = config.hybrid_cheap_model or DEFAULT_CHEAP_MODEL
+        policy = config.hybrid_policy
         return cls(
             cheap_model=cheap,
             strong_model=config.hybrid_strong_model or DEFAULT_STRONG_MODEL,
             classifier_model=config.hybrid_classifier_model or cheap,
             classifier_timeout_s=config.hybrid_classifier_timeout,
-            policy=config.hybrid_policy,
+            # config.json may hold it as saved (see GaiaConfig._checked_hybrid).
+            policy=policy.strip().lower() if isinstance(policy, str) else policy,
             rules=config.hybrid_rules,
         )
 

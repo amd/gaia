@@ -995,7 +995,7 @@ def test_broken_rules_return_settings_with_the_fault_not_a_500(client, gateway):
     assert "Settings › Models › Hybrid" in body["config_error"]
     assert "`gaia " not in body["config_error"]
     assert body["policy"] == "custom" and body["rules"] == _broken_rules()
-    assert body["is_active"] is None and body["models"]
+    assert body["is_active"] is False and body["models"]
 
 
 def test_put_repairs_broken_rules(client, gateway):
@@ -1014,13 +1014,16 @@ def test_put_repairs_broken_rules(client, gateway):
 
 
 def test_put_repairs_by_switching_to_a_preset(client, gateway):
+    """A preset never reads the custom table, so switching needs no valid one."""
     _write_config({"hybrid_policy": "custom", "hybrid_rules": _broken_rules()})
     resp = client.put("/api/hybrid/settings", json={"policy": "quality"})
-    # The broken table is still saved, so it is still refused, by name.
-    assert resp.status_code == 422 and "no rule for other" in resp.json()["detail"]
-    resp = client.put("/api/hybrid/settings", json={"policy": "quality", "rules": None})
     assert resp.status_code == 200, resp.text
-    assert resp.json()["config_error"] is None
+    body = resp.json()
+    assert body["config_error"] is None and body["rules"] == preset_rules("quality")
+    # Kept as saved; going back to custom without new rules names the fault.
+    assert _config()["hybrid_rules"] == _broken_rules()
+    resp = client.put("/api/hybrid/settings", json={"policy": "custom"})
+    assert resp.status_code == 422 and "no rule for other" in resp.json()["detail"]
 
 
 def test_put_that_leaves_it_broken_is_refused(client, gateway):
@@ -1038,11 +1041,51 @@ def test_broken_timeout_in_the_file_is_shown_and_repairable(client, gateway):
     assert resp.status_code == 200 and resp.json()["config_error"] is None
 
 
-def test_templates_still_list_with_a_broken_config(client, gateway):
+def test_templates_still_list_with_broken_hybrid_rules(client, gateway):
     _write_config({"hybrid_policy": "custom", "hybrid_rules": _broken_rules()})
     templates = _templates(client)
     assert templates["gateway-deepseek-opus"]["available"] is True
+    # The rest of config.json still reads, so the local default is known.
+    assert templates["local-plus-cloud"]["cheap_model"] is not None
+
+
+def test_templates_still_list_with_an_unreadable_config(client, gateway):
+    _write_config({"full_access": "yes"})
+    templates = _templates(client)
+    assert templates["gateway-deepseek-opus"]["available"] is True
     assert "config.json can't be read" in templates["local-plus-cloud"]["reason"]
+
+
+@pytest.fixture
+def lemonade_reads_config(monkeypatch, gateway):
+    """The model-server calls read config.json first, as the real client's do."""
+    from gaia.config import GaiaConfig
+
+    stubbed = hybrid_router._lemonade_payloads
+
+    def payloads():
+        GaiaConfig.load()
+        return stubbed()
+
+    monkeypatch.setattr(hybrid_router, "_lemonade_payloads", payloads)
+    return gateway
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/hybrid/settings", "/api/hybrid/templates", "/api/hybrid/entry"]
+)
+def test_broken_custom_rules_never_500_the_hybrid_routes(
+    client, lemonade_reads_config, path
+):
+    _write_config({"hybrid_policy": "custom", "hybrid_rules": _broken_rules()})
+    resp = client.get(path)
+    assert resp.status_code == 200, resp.text
+
+
+def test_entry_with_broken_rules_says_why_it_cannot_run(client, lemonade_reads_config):
+    _write_config({"hybrid_policy": "custom", "hybrid_rules": _broken_rules()})
+    entry = client.get("/api/hybrid/entry").json()
+    assert entry["available"] is False and "no rule for other" in entry["reason"]
 
 
 def test_config_that_is_not_json_is_a_500_naming_the_file(client, gateway):
