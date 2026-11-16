@@ -60,6 +60,14 @@ GATEWAY_EQUIVALENTS = {
     "claude-fable-5": "amd.Claude-Fable-5",
     "claude-fable-5-1": "amd.Claude-Fable-5-1",
     "claude-fable-5-2": "amd.Claude-Fable-5-2",
+    "claude-opus-4-8": "amd.Claude-Opus-4-8",
+    "claude-opus-4-6": "amd.Claude-Opus-4-6",
+    "claude-opus-4-5": "amd.Claude-Opus-4-5",
+    "claude-sonnet-4-6": "amd.Claude-Sonnet-4-6",
+    "claude-sonnet-4-5": "amd.Claude-Sonnet-4-5",
+    "claude-sonnet-4-5-20250929": "amd.Claude-Sonnet-4-5",
+    "claude-haiku-4-5": "amd.Claude-Haiku-4-5",
+    "claude-haiku-4-5-20251001": "amd.Claude-Haiku-4-5",
 }
 #: Suggested when a direct model has no gateway equivalent.
 DEFAULT_GATEWAY_CLAUDE = "amd.Claude-Opus-5-5"

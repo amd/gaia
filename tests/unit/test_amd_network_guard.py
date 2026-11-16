@@ -248,7 +248,9 @@ def test_on_the_network_the_gateway_host_is_allowed(on_network, base):
         ("opus", "amd.Claude-Opus-5-5"),
         ("claude-haiku-5-5", "amd.Claude-Haiku-5-5"),
         ("claude-fable-5-1", "amd.Claude-Fable-5-1"),
-        ("claude-haiku-4-5", "amd.Claude-Opus-5-5"),
+        ("claude-haiku-4-5", "amd.Claude-Haiku-4-5"),
+        ("Claude-Sonnet-4-6", "amd.Claude-Sonnet-4-6"),
+        ("claude-opus-4-7", "amd.Claude-Opus-5-5"),
         (None, "amd.Claude-Opus-5-5"),
     ],
 )
@@ -444,9 +446,7 @@ def test_the_judge_model_maps_and_is_announced(judge_env, capsys):
     )
 
 
-@pytest.mark.parametrize(
-    "model", ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8", "opus", ""]
-)
+@pytest.mark.parametrize("model", ["claude-opus-4-7", "claude-sonnet-4", "opus", ""])
 def test_a_judge_model_without_a_gateway_equivalent_is_refused(judge_env, model):
     from gaia.eval import claude_credential
 
@@ -530,7 +530,7 @@ def test_the_judge_client_refuses_a_model_the_gateway_lacks(judge_env):
     from gaia.eval.claude import ClaudeClient
 
     with pytest.raises(ValueError, match="no equivalent"):
-        ClaudeClient(model="claude-haiku-4-5")
+        ClaudeClient(model="claude-opus-4-7")
 
 
 def test_a_subscription_judge_becomes_the_gateway_judge_on_the_network(
@@ -555,7 +555,7 @@ def test_the_flagship_judge_command_uses_the_gateway(
     assert cmd[cmd.index("--model") + 1] == "claude-opus-5"
     assert "--bare" not in cmd
     with pytest.raises(ValueError, match="no equivalent"):
-        flagship_tasks.judge_command("claude-haiku-4-5", {})
+        flagship_tasks.judge_command("claude-opus-4-7", {})
 
 
 def test_the_eval_fixer_is_refused_on_the_network(monkeypatch, on_network, tmp_path):
@@ -687,3 +687,42 @@ def test_the_eval_driver_runs_claude_code_against_the_gateway(judge_env, claude_
     assert env["ANTHROPIC_BASE_URL"] == GATEWAY_BASE
     assert env["ANTHROPIC_CUSTOM_HEADERS"].startswith("Ocp-Apim-Subscription-Key: ")
     assert "ANTHROPIC_API_KEY" not in env and "CLAUDE_CODE_OAUTH_TOKEN" not in env
+
+
+#: The AMD LLM Gateway's Claude models, from its live /Unified/v1/models.
+GATEWAY_CLAUDE_CATALOG = {
+    f"amd.Claude-{name}"
+    for name in (
+        "Fable-5",
+        "Fable-5-1",
+        "Fable-5-2",
+        "Haiku-4-5",
+        "Haiku-5-5",
+        "Opus-4-5",
+        "Opus-4-6",
+        "Opus-4-8",
+        "Opus-5",
+        "Opus-5-5",
+        "Sonnet-4-5",
+        "Sonnet-4-6",
+        "Sonnet-5",
+        "Sonnet-5-5",
+    )
+}
+
+
+def test_every_mapping_targets_a_model_the_gateway_serves():
+    targets = set(amd_network.GATEWAY_EQUIVALENTS.values())
+    assert targets <= GATEWAY_CLAUDE_CATALOG
+    assert amd_network.DEFAULT_GATEWAY_CLAUDE in GATEWAY_CLAUDE_CATALOG
+    # Each catalog model is reachable from its own direct id.
+    assert targets == GATEWAY_CLAUDE_CATALOG
+
+
+def test_the_baseline_judge_model_has_a_gateway_equivalent():
+    import json
+
+    for meta in (REPO / "tests" / "fixtures" / "eval_baselines").glob("*/meta.json"):
+        model = json.loads(meta.read_text(encoding="utf-8")).get("eval_model")
+        if model:
+            assert amd_network.gateway_equivalent(model), f"{meta}: {model}"
