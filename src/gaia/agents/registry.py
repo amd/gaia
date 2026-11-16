@@ -407,9 +407,17 @@ def machine_embedding_model() -> str:
     Raises:
         GaiaConfigError: ``~/.gaia/config.json`` can't be read.
     """
-    from gaia.config import GaiaConfig
+    from gaia.config import GaiaConfig, GaiaConfigError
 
-    return get_embedding_model_for_device(GaiaConfig.load().default_device)
+    try:
+        device = GaiaConfig.load().default_device
+    except GaiaConfigError as e:
+        raise GaiaConfigError(
+            f"Cannot tell which embedder this PC uses for documents and memory: "
+            f"{e}. Fix or delete {GaiaConfig.config_path()}, or run `gaia config "
+            "set default_device gpu`."
+        ) from e
+    return get_embedding_model_for_device(device)
 
 
 @dataclass

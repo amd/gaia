@@ -828,6 +828,17 @@ class TestConsolidateEndpoint:
 # ===========================================================================
 
 
+def _npu_pc(monkeypatch, tmp_path) -> None:
+    """A PC set up with ``gaia init --profile npu``."""
+    import json
+
+    from gaia import config as config_mod
+
+    config_file = tmp_path / "npu-config.json"
+    config_file.write_text(json.dumps({"default_device": "npu"}), encoding="utf-8")
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
+
+
 class TestRebuildEmbeddingsEndpoint:
     """Test POST /api/memory/rebuild-embeddings endpoint."""
 
@@ -863,14 +874,15 @@ class TestRebuildEmbeddingsEndpoint:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 500
 
-    def test_rebuild_uses_stamped_embedder_not_default(self, client, test_store):
-        """Re-embed with the stamped embedder, not the GGUF default (#1744).
+    def test_rebuild_uses_the_pcs_embedder_not_the_gguf_default(
+        self, client, test_store, monkeypatch, tmp_path
+    ):
+        """On an NPU PC, re-embed with its FLM embedder (#1744, #6008).
 
-        On the NPU profile the agent stamps the FLM embedder. The dashboard
-        rebuild button must reuse it — embedding with the default would mix vector
-        spaces in one table and reload a Vulkan embedder that evicts the FLM
-        chat model.
+        Embedding with the GGUF default would mix vector spaces in one table
+        and reload a Vulkan embedder that evicts the FLM chat model.
         """
+        _npu_pc(monkeypatch, tmp_path)
         test_store.set_embedder_id("embed-gemma-300m-FLM")
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1] * 768]
@@ -880,6 +892,23 @@ class TestRebuildEmbeddingsEndpoint:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 200
         ctor.assert_called_once_with(model="embed-gemma-300m-FLM")
+
+    def test_rebuild_replaces_a_stamp_left_by_another_profile(
+        self, client, test_store, monkeypatch, tmp_path
+    ):
+        """The next agent start re-stamps the PC's embedder; rebuilding with the
+        old one would only be cleared again."""
+        _npu_pc(monkeypatch, tmp_path)
+        test_store.set_embedder_id("user.embeddinggemma-300m-GGUF")
+        mock_provider = MagicMock()
+        mock_provider.embed.return_value = [[0.1] * 768]
+        with patch(
+            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
+        ) as ctor:
+            resp = client.post("/api/memory/rebuild-embeddings")
+        assert resp.status_code == 200
+        ctor.assert_called_once_with(model="embed-gemma-300m-FLM")
+        assert test_store.get_embedder_id() == "embed-gemma-300m-FLM"
 
     def test_rebuild_falls_back_to_default_embedder_when_unstamped(
         self, client, test_store

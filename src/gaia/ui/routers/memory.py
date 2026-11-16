@@ -432,13 +432,13 @@ def _embed_row(store, knowledge_id: str) -> Dict[str, Any]:
     The row stays saved either way; a failure is reported to the caller as
     ``embedded: false`` plus the reason, never swallowed.
     """
-    from gaia.agents.base.memory import EMBEDDING_MODEL
+    from gaia.agents.registry import machine_embedding_model
 
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    # The stored vectors' embedder, not a hardcoded default (#1744).
-    model = store.get_embedder_id() or EMBEDDING_MODEL
+    # The stored vectors' embedder, else the one every chat on this PC uses.
+    model = store.get_embedder_id() or machine_embedding_model()
     try:
         store.store_embedding(knowledge_id, _make_embed_fn(model)(item["content"]))
     except Exception as exc:  # the row is saved; only its vector is missing
@@ -745,14 +745,12 @@ def rebuild_embeddings() -> Dict:
     Returns ``{backfilled: int, total_without: int}``.
     """
     try:
-        from gaia.agents.base.memory import EMBEDDING_MODEL
+        from gaia.agents.registry import machine_embedding_model
 
         store = _get_store()
-        # Re-embed with the embedder that produced the stored vectors, not a
-        # hardcoded default. On the NPU profile that is the FLM-native embedder;
-        # the GGUF default would mix vector spaces in one table and reload a
-        # Vulkan GGUF embedder that evicts the FLM chat model (#1744).
-        embedder_model = store.get_embedder_id() or EMBEDDING_MODEL
+        # Re-embed with the embedder every chat on this PC uses, which the
+        # agent stamps on its next start anyway; the stamp may be a profile old.
+        embedder_model = machine_embedding_model()
         store.reconcile_embedder(embedder_model)
         result = store.backfill_embeddings(_make_embed_fn(embedder_model))
         return result

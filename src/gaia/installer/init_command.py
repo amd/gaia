@@ -1958,16 +1958,11 @@ class InitCommand:
             try:
                 from gaia.config import GaiaConfig
 
-                def _apply_profile(config) -> None:
-                    config.profile = self.profile
-                    config.default_device = "npu" if self.profile == "npu" else "gpu"
-                    self._record_chat_choice(config)
-
                 # Read under the lock, so a default_model another process saved
                 # during this long-running init survives. init is the recovery
                 # path, so a corrupt file is reset rather than left in place.
                 GaiaConfig.update(
-                    _apply_profile,
+                    self._apply_profile_to,
                     on_unreadable=lambda e: self._print_warning(
                         f"Resetting unreadable config: {e}"
                     ),
@@ -2594,6 +2589,17 @@ class InitCommand:
             self._print_error(f"Failed to install backend '{backend_spec}': {e}")
             self._print_error(self._server_problem_hint())
             return False
+
+    def _apply_profile_to(self, config) -> None:
+        """Record this profile, its device and the chat model setup chose."""
+        config.profile = self.profile
+        if self.profile == "npu":
+            config.default_device = "npu"
+        elif not (self.profile == "gaia" and config.default_device == "npu"):
+            # The app runs "gaia" on every PC; the device picks the embedder,
+            # and changing it clears every memory vector.
+            config.default_device = "gpu"
+        self._record_chat_choice(config)
 
     def _record_chat_choice(self, config) -> None:
         """Save a hardware-picked chat model as ``default_model`` so every agent

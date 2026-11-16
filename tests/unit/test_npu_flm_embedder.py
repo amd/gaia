@@ -62,6 +62,35 @@ class TestDeviceEmbedderResolution:
         monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
         assert machine_embedding_model() == embedder
 
+    @pytest.mark.parametrize(
+        "before, profile, after",
+        [
+            ("npu", "gaia", "npu"),  # the app's own setup on an NPU PC
+            ("gpu", "gaia", "gpu"),
+            ("npu", "npu", "npu"),
+            ("gpu", "npu", "npu"),
+            ("npu", "chat", "gpu"),  # a GPU-only profile chosen on purpose
+        ],
+    )
+    def test_setup_keeps_an_npu_pcs_embedder(
+        self, before, profile, after, tmp_path, monkeypatch
+    ):
+        """Moving an NPU PC to the GPU would clear every memory vector (#6008)."""
+        import json
+
+        from gaia import config as config_mod
+        from gaia.config import GaiaConfig
+        from gaia.installer.init_command import InitCommand
+
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"default_device": before}), encoding="utf-8")
+        monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
+        init = InitCommand.__new__(InitCommand)
+        init.profile = profile
+        init._record_chat_choice = lambda config: None
+        GaiaConfig.update(init._apply_profile_to)
+        assert GaiaConfig.load().default_device == after
+
     def test_device_config_carries_embedder(self):
         """The embedder choice lives next to the chat model in DeviceConfig."""
         from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
