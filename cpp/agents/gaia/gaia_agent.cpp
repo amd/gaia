@@ -874,8 +874,8 @@ std::optional<std::string> GaiaAgent::handBackNote(const std::string& answer, co
         std::regex::icase);
     if (!calls.empty() && std::regex_search(tail, m, announces) && std::regex_search(m[2].str(), namesFile)) {
         return "Your answer ends by saying you will " + lowered(m[1].str()) +
-               " something, but the turn ends with your answer, so that never happens. Do it now and "
-               "answer with what you find.";
+               " something, but the turn ends with your answer, so that never happens. Do it now, then give your "
+               "whole answer again: keep everything you already told the user and add what you find.";
     }
     if (!std::regex_search(tail, m, offer)) return std::nullopt;
     // With no tool call the turn was conversation: only an offer to open a named file is a hand-back.
