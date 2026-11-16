@@ -113,6 +113,7 @@ const messages: Messages = {
     // The log viewer
     'logs.title': "السجلات",
     'logs.serverLog': "سجلّ خادم النماذج",
+    'logs.agentLog': "سجلّ الوكيل",
     'logs.view': "عرض السجلات",
     'logs.settingsHint': "ما كتبه GAIA وخدمته في الخلفية والوكيل وتطبيق سطح المكتب وخادم النماذج. انظر هنا عندما يفشل شيء، واحفظها كلها لإرفاقها ببلاغ.",
     'logs.close': "إغلاق",

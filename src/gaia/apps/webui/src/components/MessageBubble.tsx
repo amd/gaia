@@ -144,6 +144,13 @@ export function isModelFailure(content: string): boolean {
     return MODEL_FAILURE_RE.test(content.trimStart());
 }
 
+/** The agent's own crash or start failure, which ends by naming its log folder (relay `stream_ended_text`). */
+const AGENT_LOG_DIR_RE = /[\\/]agents[\\/][^\\/\s]+[\\/]logs\b/;
+
+export function namesAgentLog(content: string): boolean {
+    return AGENT_LOG_DIR_RE.test(content);
+}
+
 const CHAT_REPORT_CLASSES: ReportClasses = {
     root: 'msg-report',
     button: 'msg-try-again',
@@ -937,8 +944,14 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {t.compose((say) => say('failedTurn.openSettings', { tab: say(`settings.section.${section}`) }))}
                         </button>
                     ))}
-                    {/* A local model failed: what Lemonade and its backend wrote says why. */}
-                    {(isError || (message.role === 'assistant' && isModelFailure(message.content))) && !isStreaming && place?.remote === false && (
+                    {/* The agent itself stopped: its own log says why, not the model server's. */}
+                    {isError && !isStreaming && namesAgentLog(message.content) ? (
+                        <button type="button" className="msg-try-again" onClick={() => showServerLog('agent')}>
+                            <ScrollText size={12} aria-hidden="true" />
+                            {t('logs.agentLog')}
+                        </button>
+                    ) : (isError || (message.role === 'assistant' && isModelFailure(message.content))) && !isStreaming && place?.remote === false && (
+                        /* A local model failed: what Lemonade and its backend wrote says why. */
                         <button type="button" className="msg-try-again" onClick={() => showServerLog('model_server')}>
                             <ScrollText size={12} aria-hidden="true" />
                             {t('logs.serverLog')}
