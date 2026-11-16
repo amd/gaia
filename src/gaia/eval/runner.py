@@ -2429,9 +2429,9 @@ def run_scenario_subprocess(
     scenario_id = scenario_data["id"]
     setup_error = (
         _apply_mailbox_fixture(backend_url, scenario_data)
-        or _reset_memory(backend_url, scenario_data)
         or _apply_skills_absent(scenario_data)
-    )
+        or _reset_memory(backend_url, scenario_data)
+    )
     if setup_error:
         print(f"[SETUP_ERROR] {scenario_id}: {setup_error}", flush=True)
         return {

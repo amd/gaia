@@ -25,6 +25,7 @@ SKILL_DIRS = sorted(
 #: Plain queries per skill; the skill must rank in the top 3 for each.
 QUERIES: dict[str, list[str]] = {
     "analyze-recording": ["youtube video", "podcast chapters"],
+    "automations": ["remind me at 5pm", "alert me if main breaks"],
     "calculators": ["tip calculator", "mortgage payment"],
     "calendar": ["what is on my calendar", "schedule a meeting"],
     "check-in": ["check in", "what was I working on"],
@@ -37,9 +38,12 @@ QUERIES: dict[str, list[str]] = {
     "guides": ["packing list", "workout"],
     "image-gen": ["draw a picture", "generate an image"],
     "inbox-triage": ["inbox", "unread mail"],
+    "meeting-actions": ["action items from meeting notes", "decision log"],
+    "log-triage": ["root cause in the logs", "incident summary"],
     "music-gen": ["music", "sound effects"],
     "price-watch": ["track price", "price drop"],
     "recommendations": ["what to watch", "book recommendations"],
+    "report-from-sources": ["turn my spreadsheets into a report", "one-pager"],
     "research-report": ["research report with sources", "literature scan"],
     "rss-digest": ["summarizing RSS feeds", "atom feed"],
     "send-email": ["send an email", "draft an email"],
