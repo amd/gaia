@@ -2095,7 +2095,9 @@ class EmbeddedLemonade:
         Returns:
             The process, the API key it was started with, and when it started.
         """
-        api_key = secrets.token_urlsafe(32)
+        # A restart keeps the recorded key: running agents hold it and would get 401s.
+        previous = self._read_state() or {}
+        api_key = previous.get("api_key") or secrets.token_urlsafe(32)
 
         from gaia.llm.fireworks_known_models import start_env
 

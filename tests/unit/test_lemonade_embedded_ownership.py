@@ -794,3 +794,35 @@ class TestUnload:
         monkeypatch.setattr(urllib.request, "urlopen", _refuse)
         with pytest.raises(EmbeddedLemonadeError, match="did not unload"):
             manager.unload_models()
+
+
+class TestRestartKeepsTheKey:
+    """Agents already running hold the server's key; a restart must not change it."""
+
+    def _spawn_twice(self, manager, monkeypatch):
+        spawned = []
+
+        def fake_popen(argv, **kwargs):
+            spawned.append(kwargs.get("env", {}).get("LEMONADE_API_KEY"))
+            return SimpleNamespace(pid=6000 + len(spawned), poll=lambda: None)
+
+        monkeypatch.setattr(embedded_mod.subprocess, "Popen", fake_popen)
+        _, first, _ = manager._spawn(50601, None, None)
+        _, second, _ = manager._spawn(50602, None, None)
+        return first, second, spawned
+
+    def test_a_respawn_reuses_the_recorded_key(self, manager, monkeypatch):
+        first, second, spawned = self._spawn_twice(manager, monkeypatch)
+
+        assert first and second == first
+        assert spawned == [first, first]
+        assert manager.current_api_key() == first
+
+    def test_a_first_start_makes_a_fresh_key(self, tmp_path, monkeypatch):
+        keys = []
+        for home in ("a", "b"):
+            m = EmbeddedLemonade(home=tmp_path / home)
+            first, _, _ = self._spawn_twice(m, monkeypatch)
+            keys.append(first)
+
+        assert keys[0] != keys[1]
