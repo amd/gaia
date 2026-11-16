@@ -3084,7 +3084,7 @@ def _scratch_reached_by(agent: Any, tool_name: str, prompt_args: Any) -> str:
             if command_reaches_folder(args, bases, scratch):
                 return scratch
         return ""
-    if tool_name in SHELL_TOOLS or tool_name == "start_process":
+    if tool_name in SHELL_TOOLS:
         command = prompt_args.get("command")
         if not isinstance(command, str):
             return ""
