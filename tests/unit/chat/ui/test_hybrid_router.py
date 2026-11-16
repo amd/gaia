@@ -102,20 +102,45 @@ def _fresh_health():
 
 @pytest.fixture
 def gateway(monkeypatch):
-    """The gateway's chat models, as ``_list_models`` reads them from Lemonade."""
-    state = {"models": list(GATEWAY), "error": None, "asked": []}
+    """What the model server lists and which cloud providers hold a key."""
+    state = {
+        "models": list(GATEWAY),
+        "fireworks": [],
+        # (model id, downloaded)
+        "local": [],
+        "anthropic": False,
+        "error": None,
+    }
 
-    def list_models(provider, **_):
-        state["asked"].append(provider)
+    def payloads():
         if state["error"] is not None:
             raise state["error"]
-        return [
-            {"id": m, "rank": None, "price": None}
-            for m in state["models"]
-            if m.startswith(f"{provider}.")
+        data = [
+            {"id": m, "recipe": "cloud", "labels": ["chat"]}
+            for m in [*state["models"], *state["fireworks"]]
         ]
+        data += [
+            {"id": m, "recipe": "llamacpp", "labels": ["chat"], "downloaded": d}
+            for m, d in state["local"]
+        ]
+        cloud = [
+            {"name": p, "runtime_key_set": True}
+            for p, listed in (
+                ("amd", state["models"]),
+                ("fireworks", state["fireworks"]),
+            )
+            if listed
+        ]
+        return {"data": data}, {"cloud": {"providers": cloud}}
 
-    monkeypatch.setattr(providers, "_list_models", list_models)
+    monkeypatch.setattr(hybrid_router, "_lemonade_payloads", payloads)
+    monkeypatch.setattr("gaia.env.load_env", lambda: False)
+    monkeypatch.setattr(
+        "gaia.env.credential",
+        lambda name: (
+            "sk-test" if state["anthropic"] and name == "ANTHROPIC_API_KEY" else None
+        ),
+    )
     return state
 
 
@@ -169,20 +194,24 @@ def test_get_shows_the_defaults_presets_kinds_and_gateway_models(client, gateway
     assert body["presets"] == {p: preset_rules(p) for p in ("quality", "balanced")}
     assert body["kinds"] == list(KIND_ORDER)
     assert body["is_active"] is False and body["config_error"] is None
-    assert [m["id"] for m in body["models"]] == GATEWAY
-    first = body["models"][0]
+    assert [m["id"] for m in body["models"]] == sorted(GATEWAY, key=str.lower)
+    first = next(m for m in body["models"] if m["id"] == DEFAULT_CHEAP_MODEL)
     assert set(first) == {
         "id",
         "display_name",
+        "provider",
         "input_per_million",
         "output_per_million",
         "cache_read_per_million",
         "price_source",
         "available",
+        "reason",
     }
-    # The gateway's prices are its organization's: unknown, never $0.
+    # No gateway price list was read: unknown, never $0.
     assert first["input_per_million"] is None and first["available"] is True
-    assert first["display_name"] == "DeepSeek-V4.1-Flash"
+    assert (first["provider"], first["display_name"]) == ("amd", "DeepSeek-V4.1-Flash")
+    assert body["measured"] is True and body["measured_note"] is None
+    assert body["classifier_note"] is None
 
 
 def test_get_prices_models_with_a_known_card_and_flags_unlisted_ones(client, gateway):
@@ -198,11 +227,7 @@ def test_get_says_when_the_gateway_list_cannot_be_read(client, gateway):
     gateway["error"] = providers.ProviderError("Lemonade answered /models with 500.")
     body = client.get("/api/hybrid/settings").json()
     assert "500" in body["models_error"]
-    assert all(m["available"] is None for m in body["models"])
-    assert [m["id"] for m in body["models"]] == [
-        DEFAULT_CHEAP_MODEL,
-        DEFAULT_STRONG_MODEL,
-    ]
+    assert body["models"] == [] and body["entry"] is None
 
 
 def test_get_is_active_follows_the_model_a_new_chat_starts_on(client, gateway, db):
@@ -580,61 +605,248 @@ def test_stats_fail_loudly_on_an_unreadable_record(client, db):
     assert resp.status_code == 500 and str(msg) in resp.json()["detail"]
 
 
+# ── every provider ───────────────────────────────────────────────────────────
+
+
+def test_models_cover_every_set_up_provider_grouped(client, gateway):
+    gateway["fireworks"] = [CHEAP]
+    gateway["local"] = [("Gemma-4-E4B-it-GGUF", True), ("Qwen3.6-35B-A3B-GGUF", False)]
+    gateway["anthropic"] = True
+    models = client.get("/api/hybrid/settings").json()["models"]
+    order = ["local", "amd", "fireworks", "claude"]
+    providers_in_order = [m["provider"] for m in models]
+    assert providers_in_order == sorted(providers_in_order, key=order.index)
+    assert set(providers_in_order) == set(order)
+    by_id = {m["id"]: m for m in models}
+    # Only downloaded local models are offered.
+    assert "Gemma-4-E4B-it-GGUF" in by_id and "Qwen3.6-35B-A3B-GGUF" not in by_id
+    assert by_id[CHEAP]["input_per_million"] == pytest.approx(0.30)
+    opus = by_id["claude-opus-5-5"]
+    assert opus["provider"] == "claude" and opus["input_per_million"] == 4.0
+    assert "Anthropic" in opus["price_source"]
+
+
+def test_put_accepts_a_model_from_any_set_up_provider(client, gateway):
+    gateway["local"] = [("Gemma-4-E4B-it-GGUF", True)]
+    gateway["anthropic"] = True
+    resp = client.put(
+        "/api/hybrid/settings",
+        json={"cheap_model": "Gemma-4-E4B-it-GGUF", "strong_model": "claude-opus-5-5"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The classifier defaults to the cheap model, here a local one.
+    assert body["classifier_note"] and body["measured"] is False
+    assert body["measured_note"]
+
+
+@pytest.mark.parametrize(
+    "model,match",
+    [
+        ("fireworks.glm-5p3", "Add a Fireworks key in Settings › Models"),
+        ("claude-opus-5-5", "Anthropic API key"),
+        ("Qwen3.6-35B-A3B-GGUF", "Download Qwen3.6-35B-A3B-GGUF"),
+        ("amd.Not-Listed", "offer amd.Not-Listed"),
+        ("other.x", "other.x isn't a model on this PC"),
+    ],
+)
+def test_put_refuses_a_model_no_provider_offers(client, gateway, model, match):
+    gateway["local"] = [("Qwen3.6-35B-A3B-GGUF", False)]
+    _write_config({"hybrid_policy": "quality"})
+    before = _config()
+    resp = client.put("/api/hybrid/settings", json={"strong_model": model})
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert match in detail and "Checked" in detail and "`gaia " not in detail
+    assert _config() == before
+
+
+def test_put_when_the_model_server_cannot_say_is_503(client, gateway):
+    gateway["error"] = providers.ProviderError("connection refused")
+    resp = client.put("/api/hybrid/settings", json={"cheap_model": "amd.Gemma-4-31B"})
+    assert resp.status_code == 503 and "connection refused" in resp.json()["detail"]
+
+
+# ── templates ───────────────────────────────────────────────────────────────
+
+
+def _templates(client):
+    return {t["id"]: t for t in client.get("/api/hybrid/templates").json()}
+
+
+def test_templates_list_all_seven_with_availability(client, gateway):
+    templates = _templates(client)
+    assert list(templates) == [
+        "gateway-deepseek-opus",
+        "gateway-deepseek-sonnet",
+        "gateway-balanced",
+        "local-plus-cloud",
+        "all-local",
+        "fireworks",
+        "claude-direct",
+    ]
+    measured = [t["id"] for t in templates.values() if t["measured"]]
+    assert measured == ["gateway-deepseek-opus"]
+    assert templates["gateway-deepseek-opus"]["available"] is True
+    # The gateway in this fixture doesn't list Sonnet.
+    assert (
+        "offer amd.Claude-Sonnet-5-5" in templates["gateway-deepseek-sonnet"]["reason"]
+    )
+    assert templates["gateway-balanced"]["policy"] == "balanced"
+    assert "Gemma-4-E4B-it-GGUF" in templates["local-plus-cloud"]["reason"]
+    assert "Fireworks key" in templates["fireworks"]["reason"]
+    assert "Anthropic API key" in templates["claude-direct"]["reason"]
+    for t in templates.values():
+        assert t["available"] is (t["reason"] is None)
+        assert (t["measured_note"] is None) is t["measured"]
+
+
+def test_all_local_template_needs_both_models_downloaded(client, gateway):
+    gateway["local"] = [("Gemma-4-E4B-it-GGUF", True), ("Qwen3.6-35B-A3B-GGUF", False)]
+    t = _templates(client)["all-local"]
+    assert t["available"] is False
+    assert t["reason"] == "Download Qwen3.6-35B-A3B-GGUF in Settings › Models"
+    assert t["providers_needed"] == ["local"] and t["classifier_note"]
+
+
+def test_all_local_works_under_local_only(client, gateway, monkeypatch):
+    monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: True)
+    gateway["local"] = [("Gemma-4-E4B-it-GGUF", True), ("Qwen3.6-35B-A3B-GGUF", True)]
+    templates = _templates(client)
+    assert templates["all-local"]["available"] is True
+    mixed = templates["local-plus-cloud"]
+    assert mixed["available"] is False and "Local only is on" in mixed["reason"]
+    assert DEFAULT_STRONG_MODEL in mixed["reason"]
+    resp = client.post("/api/hybrid/templates/all-local/apply")
+    assert resp.status_code == 200, resp.text
+    saved = _config()
+    assert (saved["hybrid_cheap_model"], saved["hybrid_strong_model"]) == (
+        "Gemma-4-E4B-it-GGUF",
+        "Qwen3.6-35B-A3B-GGUF",
+    )
+    assert resp.json()["entry"]["remote"] is False
+
+
+def _hybrid_models_saved():
+    if not config_mod.GAIA_CONFIG_FILE.exists():
+        return None
+    return _config().get("hybrid_cheap_model")
+
+
+def test_mixed_template_under_local_only_is_refused(client, gateway, monkeypatch):
+    monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: True)
+    gateway["local"] = [("Gemma-4-E4B-it-GGUF", True)]
+    resp = client.post("/api/hybrid/templates/local-plus-cloud/apply")
+    assert resp.status_code == 409 and "Local only is on" in resp.json()["detail"]
+    assert _hybrid_models_saved() is None
+
+
+def test_applying_a_template_whose_provider_is_missing_is_409(client, gateway):
+    resp = client.post("/api/hybrid/templates/claude-direct/apply")
+    assert resp.status_code == 409 and "Anthropic API key" in resp.json()["detail"]
+    assert _hybrid_models_saved() is None
+
+
+@pytest.mark.parametrize("template_id", ["nope", "GATEWAY-DEEPSEEK-OPUS", "all-local "])
+def test_unknown_template_is_404(client, gateway, template_id):
+    resp = client.post(f"/api/hybrid/templates/{template_id}/apply")
+    assert resp.status_code == 404
+    assert "gateway-deepseek-opus" in resp.json()["detail"]
+
+
+def test_apply_sets_models_and_policy_and_returns_settings(client, gateway):
+    _write_config({"hybrid_policy": "custom", "hybrid_rules": _rules()})
+    body = client.post("/api/hybrid/templates/gateway-balanced/apply").json()
+    assert (body["cheap_model"], body["strong_model"], body["policy"]) == (
+        DEFAULT_CHEAP_MODEL,
+        DEFAULT_STRONG_MODEL,
+        "balanced",
+    )
+    # Custom rules are kept for later.
+    assert _config()["hybrid_rules"] == _rules()
+
+
+def test_claude_direct_with_a_key(client, gateway):
+    gateway["anthropic"] = True
+    gateway["models"] = []
+    templates = _templates(client)
+    t = templates["claude-direct"]
+    assert t["available"] is True and t["providers_needed"] == ["claude"]
+    # No gateway: the Fireworks pairing's strong model comes from Anthropic.
+    assert templates["fireworks"]["strong_model"] == "claude-opus-5-5"
+
+
+def test_fireworks_template_uses_the_gateway_for_strong_when_set_up(client, gateway):
+    gateway["fireworks"] = ["fireworks.deepseek-v4p1-flash"]
+    t = _templates(client)["fireworks"]
+    assert t["available"] is True
+    assert (t["cheap_model"], t["strong_model"]) == (
+        "fireworks.deepseek-v4p1-flash",
+        DEFAULT_STRONG_MODEL,
+    )
+
+
+def test_unpriced_provider_costs_are_null(client, gateway, db):
+    _write_config(
+        {
+            "hybrid_cheap_model": "Gemma-4-E4B-it-GGUF",
+            "hybrid_strong_model": "amd.Gemma-4-31B",
+        }
+    )
+    session = db.create_session(model="hybrid")["id"]
+    _answer(db, session, _route("Gemma-4-E4B-it-GGUF", "cheap"), (1000, 100, 0))
+    _answer(db, session, _route("amd.Gemma-4-31B", "strong"), (1000, 100, 0))
+    body = client.get("/api/hybrid/stats").json()
+    # The gateway model has no price, so neither total is known: never $0.
+    assert body["cost"] is None and body["cost_if_all_strong"] is None
+    assert body["unpriced_turns"] == 2
+
+
 # ── the picker's hybrid entry ───────────────────────────────────────────────
 
 
-def test_gateway_list_offers_hybrid_named_by_its_models(client, gateway):
-    models = client.get("/api/providers/amd/models").json()["models"]
-    entry = models[-1]
-    assert entry["id"] == "hybrid" and entry["hybrid"] is True
+def test_entry_is_named_from_the_pair_and_not_under_the_gateway(client, gateway):
+    entry = client.get("/api/hybrid/entry").json()
     assert entry["display_name"] == "Hybrid (DeepSeek + Opus)"
-    assert entry["error"] is None
-    assert [m["id"] for m in models[:-1]] == GATEWAY
+    assert (entry["available"], entry["shown"], entry["remote"]) == (True, True, True)
 
 
-def test_gateway_list_names_the_configured_models(client, gateway):
+def test_entry_for_an_all_local_pair_is_local(client, gateway):
+    gateway["local"] = [("Gemma-4-E4B-it-GGUF", True), ("Qwen3.6-35B-A3B-GGUF", True)]
     _write_config(
         {
-            "hybrid_cheap_model": "amd.Gemma-4-31B",
-            "hybrid_strong_model": "amd.Claude-Sonnet-5",
+            "hybrid_cheap_model": "Gemma-4-E4B-it-GGUF",
+            "hybrid_strong_model": "Qwen3.6-35B-A3B-GGUF",
         }
     )
-    entry = client.get("/api/providers/amd/models").json()["models"][-1]
-    assert entry["display_name"] == "Hybrid (Gemma + Sonnet)"
+    entry = client.get("/api/hybrid/entry").json()
+    assert entry["display_name"] == "Hybrid (Gemma + Qwen3.6)"
+    assert entry["remote"] is False and entry["available"] is True
 
 
-def test_no_hybrid_entry_before_the_gateway_is_set_up(client, gateway):
+def test_entry_hidden_when_nothing_can_run(client, gateway):
     gateway["models"] = []
-    assert client.get("/api/providers/amd/models").json()["models"] == []
+    entry = client.get("/api/hybrid/entry").json()
+    assert entry["shown"] is False and entry["available"] is False
+    assert "Connect the AMD LLM Gateway" in entry["reason"]
 
 
-def test_no_hybrid_entry_under_another_provider(client, gateway):
-    gateway["models"] = ["fireworks.glm-5p3", *GATEWAY]
-    ids = [
-        m["id"] for m in client.get("/api/providers/fireworks/models").json()["models"]
-    ]
-    assert ids == ["fireworks.glm-5p3"]
+def test_entry_shown_when_only_a_template_can_run(client, gateway):
+    gateway["models"] = []
+    gateway["local"] = [("Gemma-4-E4B-it-GGUF", True), ("Qwen3.6-35B-A3B-GGUF", True)]
+    entry = client.get("/api/hybrid/entry").json()
+    assert entry["shown"] is True and entry["available"] is False
 
 
-def test_hybrid_entry_with_unusable_settings_says_why(client, gateway):
+def test_entry_with_unusable_settings_says_why(client, gateway):
     _write_config({"hybrid_cheap_model": "amd.Same", "hybrid_strong_model": "amd.Same"})
-    entry = client.get("/api/providers/amd/models").json()["models"][-1]
+    entry = client.get("/api/hybrid/entry").json()
     assert entry["display_name"] == "Hybrid"
-    assert "nothing to route between" in entry["error"]
+    assert "nothing to route between" in entry["reason"]
 
 
 @pytest.fixture
-def availability(monkeypatch):
-    """Concrete models' availability; ``hybrid`` still goes through the real check."""
-    reasons = {}
-    real = providers._check_model_available  # pylint: disable=protected-access
-
-    def check(model_id):
-        if model_id == "hybrid":
-            return real(model_id)
-        return reasons.get(model_id)
-
-    monkeypatch.setattr(providers, "_check_model_available", check)
+def no_side_effects(monkeypatch):
     warmed = []
     from gaia.ui import warmup
 
@@ -644,22 +856,24 @@ def availability(monkeypatch):
     monkeypatch.setattr(
         "gaia.connectors.store.retry_keyring", lambda: None, raising=False
     )
-    return {"reasons": reasons, "warmed": warmed}
+    return warmed
 
 
-def test_selecting_hybrid_saves_it_as_the_tui_does(client, db, availability):
+def test_selecting_hybrid_saves_it_as_the_tui_does(
+    client, db, gateway, no_side_effects
+):
     resp = client.post("/api/providers/select", json={"model": "Hybrid"})
     assert resp.status_code == 200, resp.text
     saved = _config()
     assert (saved["last_provider"], saved["last_model"]) == ("hybrid", "hybrid")
     assert db.get_setting("custom_model") == "hybrid"
-    assert availability["warmed"] == []
+    assert no_side_effects == []
 
 
 def test_selecting_hybrid_is_refused_when_one_of_its_models_cannot_run(
-    client, db, availability
+    client, db, gateway, no_side_effects
 ):
-    availability["reasons"][DEFAULT_STRONG_MODEL] = "the model is no longer listed"
+    gateway["models"] = [DEFAULT_CHEAP_MODEL]
     resp = client.post("/api/providers/select", json={"model": "hybrid"})
     assert resp.status_code == 409
     assert DEFAULT_STRONG_MODEL in resp.json()["detail"]

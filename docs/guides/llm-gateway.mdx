@@ -278,8 +278,8 @@ those lists to re-probe it. Set the level back to `off` to stop sending it.
 
 ## Hybrid model
 
-`hybrid` is one model id that runs each turn on a cheap gateway model or a strong
-one, so routine requests stay fast and inexpensive and hard ones get the stronger
+`hybrid` is one model id that runs each turn on a cheap model or a strong one,
+so routine requests stay fast and inexpensive and hard ones get the stronger
 model:
 
 ```bash
@@ -336,8 +336,36 @@ gaia hybrid preview "Fix the typo in README.md"
 ```
 
 It prints the model, the label and the classifier's reason, and runs nothing.
-In the Agent UI, **Settings › Models › Hybrid** edits the same settings, has a
-box to try a request the same way, and shows how your hybrid turns have routed
+Hybrid isn't tied to the gateway. Any model a provider set up here offers can
+be the cheap, strong or classifier model: one downloaded on this PC, a gateway
+model, a Fireworks AI model once it has a key, or an Anthropic `claude-*` model
+when `ANTHROPIC_API_KEY` is set. With every member on this PC, hybrid works
+under Local only; with any member in the cloud, Local only refuses the turn.
+A classifier on this PC is free but, if small, may route less accurately.
+
+Built-in templates set the models and policy in one step:
+
+| Template | Cheap / strong | Needs |
+|----------|----------------|-------|
+| `gateway-deepseek-opus` | DeepSeek V4.1 Flash / Claude Opus 5.5 (the default, and the pairing the policies were tuned on) | the gateway |
+| `gateway-deepseek-sonnet` | DeepSeek V4.1 Flash / Claude Sonnet 5.5 | the gateway |
+| `gateway-balanced` | the default pair, `balanced` policy | the gateway |
+| `local-plus-cloud` | your local chat model / Claude Opus 5.5 | a local model and the gateway |
+| `all-local` | Gemma-4-E4B / Qwen3.6-35B-A3B | both downloaded; Qwen needs a PC it fits |
+| `fireworks` | Fireworks DeepSeek V4.1 Flash / Claude Opus 5.5 (gateway, else Anthropic) | a Fireworks key |
+| `claude-direct` | Claude Haiku 5.5 / Claude Opus 5.5 | `ANTHROPIC_API_KEY` |
+
+```bash
+gaia hybrid templates          # each template, and why one can't run here
+gaia hybrid use all-local      # apply one
+```
+
+Only the default pairing has been measured; the others are marked as not yet
+measured.
+
+In the Agent UI, **Settings › Models › Hybrid** edits the same settings, offers
+the templates, has a box to try a request the same way, and shows how your
+hybrid turns have routed
 and what they cost next to running every turn on the strong model. Costs use
 the gateway's own per-model prices, which GAIA reads from the gateway when you
 register it and again once a day; a model the gateway gives no price for shows

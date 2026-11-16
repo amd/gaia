@@ -1919,6 +1919,22 @@ gaia hybrid preview --json "Audit auth.py for injection"
 |------|---------|
 | `--json` | Print `model`, `tier`, `kind`, `difficulty`, `stakes`, `reason`, `classified`, `seconds`, `policy` and `fix` as JSON |
 
+`gaia hybrid templates` lists the built-in pairings, each with whether it can
+run here and, when not, what to set up; `--json` prints them as JSON.
+`gaia hybrid use <template>` sets the models and policy one names, and refuses
+one that can't run here. See
+[Hybrid model](/guides/llm-gateway#hybrid-model) for the templates.
+
+```bash
+gaia hybrid templates
+gaia hybrid use all-local
+```
+
+`gaia config set hybrid_cheap_model` (and the strong and classifier keys)
+accepts a model only when a provider set up here offers it — this PC, the
+gateway, Fireworks AI, or Anthropic — and otherwise names the providers it
+checked and how to add one. It asks the model server, so that must be running.
+
 [→ LLM Gateway Guide](/guides/llm-gateway)
 
 ---

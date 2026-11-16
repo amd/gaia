@@ -675,6 +675,8 @@ def _call_with_deadline(fn: Callable[[], Any], seconds: float) -> Any:
 def _default_client_factory(model: str, base_url: Optional[str]) -> Any:
     from gaia.llm.factory import create_client
 
+    if model.startswith("claude-"):
+        return create_client("claude", model=model)
     return create_client("lemonade", model=model, base_url=base_url)
 
 
@@ -757,7 +759,12 @@ class HybridRouter:
 
         def attempts() -> Tuple[Any, str]:
             client = self._client_factory(model, base_url)
-            request_format = _HEALTH.format_for(model)
+            # Anthropic has no JSON mode, so a direct Claude is asked in plain text.
+            request_format = (
+                FORMAT_PLAIN
+                if model.startswith("claude-")
+                else _HEALTH.format_for(model)
+            )
             try:
                 return ask(client, request_format), request_format
             except Exception as exc:  # pylint: disable=broad-exception-caught

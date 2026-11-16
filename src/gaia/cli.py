@@ -4133,6 +4133,17 @@ afterwards (or `swebench <run_dir>` does, later).
     hybrid_preview_parser.add_argument(
         "--json", action="store_true", help="Print the decision as JSON"
     )
+    hybrid_templates_parser = hybrid_subparsers.add_parser(
+        "templates",
+        help="List the built-in model pairings and whether each works here",
+    )
+    hybrid_templates_parser.add_argument(
+        "--json", action="store_true", help="Print the templates as JSON"
+    )
+    hybrid_use_parser = hybrid_subparsers.add_parser(
+        "use", help="Set hybrid's models and policy from a template"
+    )
+    hybrid_use_parser.add_argument("template", help="Template id, e.g. all-local")
     hybrid_parser.set_defaults(action="hybrid")
 
     # Init command (one-stop GAIA setup)
@@ -7710,6 +7721,10 @@ def handle_config_command(args):
         return
 
     if action == "set":
+        from gaia.config import HYBRID_MODEL_KEYS
+
+        if args.key in HYBRID_MODEL_KEYS and args.value.strip():
+            _check_hybrid_model_offered(args.key, args.value)
         try:
             cfg.set(args.key, args.value)
         except GaiaConfigError as e:
@@ -7851,8 +7866,15 @@ def handle_hybrid_command(args) -> None:
     from gaia.config import GaiaConfigError
     from gaia.llm.hybrid import HybridConfigError, HybridRouter, HybridSettings
 
-    if getattr(args, "hybrid_action", None) != "preview":
-        print('Use: gaia hybrid preview "<request>"', file=sys.stderr)
+    action = getattr(args, "hybrid_action", None)
+    if action in ("templates", "use"):
+        _hybrid_templates_command(args)
+        return
+    if action != "preview":
+        print(
+            'Use: gaia hybrid preview "<request>" | templates | use <template>',
+            file=sys.stderr,
+        )
         sys.exit(1)
     try:
         decision = HybridRouter(HybridSettings.load()).preview(args.text)
@@ -7889,6 +7911,82 @@ def handle_hybrid_command(args) -> None:
         print(f"  Not classified, so the strong model: {record['reason']}")
         if record["fix"]:
             print(f"  To fix: {record['fix']}")
+
+
+def _cli_hybrid_inventory():
+    """What every provider offers here, read from the model server; exits on failure."""
+    from gaia.env import credential
+    from gaia.llm.hybrid import HybridConfigError
+    from gaia.llm.hybrid_templates import build_inventory
+    from gaia.llm.local_only import cloud_blocked
+
+    load_env()
+    try:
+        client = LemonadeClient()
+        models = client.list_models(show_all=True)
+        info = client.get_system_info()
+        return build_inventory(
+            models,
+            info,
+            anthropic_key=bool(credential("ANTHROPIC_API_KEY")),
+            local_only=cloud_blocked(),
+        )
+    except HybridConfigError as e:
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        print(
+            f"❌ Couldn't ask the model server which models hybrid can use: "
+            f"{_cli_error_text(e)}",
+            file=sys.stderr,
+        )
+    sys.exit(1)
+
+
+def _hybrid_templates_command(args) -> None:
+    """``gaia hybrid templates`` lists the pairings; ``gaia hybrid use <id>`` applies one."""
+    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.llm.hybrid import HybridConfigError
+    from gaia.llm.hybrid_templates import cli_text, list_templates, template_settings
+
+    inv = _cli_hybrid_inventory()
+    if args.hybrid_action == "templates":
+        templates = list_templates(inv)
+        if args.json:
+            print(json.dumps(templates, indent=2))
+            return
+        for t in templates:
+            mark = "✓" if t["available"] else "✗"
+            print(f"{mark} {t['id']}: {t['name']}")
+            print(f"    {t['cheap_model']} + {t['strong_model']} ({t['policy']})")
+            for note in (t["reason"], t["measured_note"], t["classifier_note"]):
+                if note:
+                    print(f"    {cli_text(_cli_wording(Exception(note)))}")
+        return
+    try:
+        values = template_settings(args.template, inv)
+        GaiaConfig.save_keys(values)
+    except KeyError as e:
+        print(f"❌ {e.args[0]}", file=sys.stderr)
+        sys.exit(1)
+    except (HybridConfigError, GaiaConfigError) as e:
+        print(f"❌ {cli_text(_cli_wording(e))}", file=sys.stderr)
+        sys.exit(1)
+    print(
+        f"✅ hybrid now runs on {values['hybrid_cheap_model']} or "
+        f"{values['hybrid_strong_model']} (policy {values['hybrid_policy']}). "
+        "Pick it with `gaia config set default_model hybrid`."
+    )
+
+
+def _check_hybrid_model_offered(key: str, value: str) -> None:
+    """Exit unless a provider set up here offers *value* for hybrid *key*."""
+    from gaia.llm.hybrid_templates import cli_text
+
+    inv = _cli_hybrid_inventory()
+    reason = inv.check(value.strip())
+    if reason:
+        print(f"❌ {key}: {cli_text(f'{reason}. {inv.checked()}')}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _use_hybrid(manager) -> None:

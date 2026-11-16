@@ -393,6 +393,8 @@ def model_price(model_id: str) -> Optional[Dict[str, Any]]:
             "cache_read_per_million": card["cached_input_per_million"],
             "source": card["source"],
         }
+    if model_id.startswith("claude-"):
+        return _anthropic_price(model_id)
     if cloud_provider(model_id) != "amd":
         return None
     from gaia.llm.gateway_prices import gateway_price
@@ -409,6 +411,26 @@ def model_price(model_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def _anthropic_price(model_id: str) -> Optional[Dict[str, Any]]:
+    """Anthropic's list price for a direct ``claude-*`` model, or None."""
+    from gaia.eval.config import MODEL_PRICING
+
+    card = MODEL_PRICING.get(model_id)
+    if card is None:
+        return None
+    return {
+        "input_per_million": card["input_per_mtok"],
+        "output_per_million": card["output_per_mtok"],
+        # Anthropic's table: no cached rate means cached input bills as input.
+        "cache_read_per_million": card.get("cached_per_mtok", card["input_per_mtok"]),
+        "source": ANTHROPIC_PRICE_SOURCE,
+    }
+
+
+#: Where a direct Claude model's price comes from.
+ANTHROPIC_PRICE_SOURCE = "Anthropic list price (anthropic.com/pricing)"
+
+
 def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:
     """Dollars for *counts* on *model* at its price; a local model costs nothing.
 
@@ -416,7 +438,7 @@ def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:
     a model whose cache-read rate is unknown has an unknown cost. Usage records
     no cache writes, so none are charged.
     """
-    if cloud_provider(model) is None:
+    if cloud_provider(model) is None and not model.startswith("claude-"):
         return 0.0
     card = model_price(model)
     if card is None or not counts:

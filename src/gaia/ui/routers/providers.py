@@ -69,19 +69,6 @@ _PRIVACY = {
     AMD: "Chat history is sent to your configured AMD gateway.",
 }
 
-#: Model labels that are not chat models (the TUI's set, plus speech-to-text).
-_NON_CHAT_LABELS = {
-    "embeddings",
-    "embedding",
-    "image",
-    "reranker",
-    "audio",
-    "tts",
-    "stt",
-    "transcription",
-    "realtime-transcription",
-}
-
 _TIMEOUT = 60
 
 
@@ -479,12 +466,9 @@ def _with_network(view: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _is_chat_model(model: Dict[str, Any]) -> bool:
-    labels = {str(label).lower() for label in model.get("labels") or []}
-    if "single-turn" in labels:
-        # FLM builds that answer one message at a time cannot hold a conversation.
-        return False
-    # ``chat`` wins: FLM omni models are labeled both ``chat`` and ``audio``.
-    return "chat" in labels or not labels & _NON_CHAT_LABELS
+    from gaia.llm.hybrid_templates import is_chat_entry
+
+    return is_chat_entry(model)
 
 
 def _suggested_local_models() -> set:
@@ -735,44 +719,6 @@ def display_name(model_id: str) -> str:
     return model_id.split(".", 1)[1].rsplit("/", 1)[-1]
 
 
-def _family(model_id: str) -> str:
-    """A model's short family name: ``amd.Claude-Opus-5-5`` -> ``Opus``."""
-    parts = [p for p in display_name(model_id).split("-") if p.lower() != "claude"]
-    return parts[0] if parts else model_id
-
-
-def _hybrid_entry() -> Dict[str, Any]:
-    """The ``hybrid`` choice in the gateway's model list, named by its two models."""
-    from gaia.config import GaiaConfigError
-    from gaia.llm.hybrid import HYBRID_MODEL_ID, HybridSettings
-
-    try:
-        settings = HybridSettings.load()
-    except (GaiaConfigError, HybridConfigError) as e:
-        # Still offered, with why it can't run yet, so the picker can say so.
-        name, error = "Hybrid", surface_wording(str(e), "agent_ui")
-    else:
-        cheap, strong = _family(settings.cheap_model), _family(settings.strong_model)
-        name, error = f"Hybrid ({cheap} + {strong})", None
-    return {
-        "id": HYBRID_MODEL_ID,
-        "display_name": name,
-        "hybrid": True,
-        "error": error,
-        "context_length": None,
-        "downloaded": True,
-        "labels": [],
-        "recipe": None,
-        "size_gb": None,
-        "rank": None,
-        "note": "picks a cheap or strong model for each turn",
-        "evidence": None,
-        "price": None,
-        "custom": False,
-        "source_url": None,
-    }
-
-
 def _active_view(db: ChatDatabase) -> Dict[str, Any]:
     from gaia.config import GaiaConfigError
 
@@ -961,18 +907,17 @@ def _check_model_available(model_id: str) -> Optional[str]:
 def _check_hybrid_available() -> Optional[str]:
     """None when every model ``hybrid`` routes to can run now, else why not."""
     from gaia.llm.hybrid import HybridSettings
+    from gaia.llm.hybrid_templates import availability
+
+    from .hybrid import inventory
 
     try:
         settings = HybridSettings.load()
     except HybridConfigError as e:
         return surface_wording(str(e), "agent_ui").rstrip(".")
-    for model in dict.fromkeys(
-        (settings.classifier_model, settings.cheap_model, settings.strong_model)
-    ):
-        reason = _check_model_available(model)
-        if reason is not None:
-            return f"{model}, which hybrid uses, can't run: {reason}"
-    return None
+    members = (settings.classifier_model, settings.cheap_model, settings.strong_model)
+    reason = availability(members, inventory())
+    return surface_wording(reason, "agent_ui").rstrip(".") if reason else None
 
 
 def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
@@ -1516,8 +1461,6 @@ def provider_models(
         }
     try:
         models = _list_models(provider)
-        if provider == AMD and models:
-            models.append(_hybrid_entry())
         if provider != LOCAL:
             return {"provider": provider, "models": models, "blocked": False}
         return {"provider": provider, **_local_report(models, db)}

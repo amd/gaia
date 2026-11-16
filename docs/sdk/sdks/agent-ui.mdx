@@ -3068,11 +3068,6 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `tokens_per_second`, the median of its recent turns on this PC. A model
     the user added from a Hugging Face link has `custom: true` and its
     `source_url`, and is listed before it is downloaded.
-
-    Once the gateway lists any model, `amd` also ends with a `hybrid` entry
-    (`hybrid: true`), its `display_name` built from the configured models, such
-    as "Hybrid (DeepSeek + Opus)". When the hybrid settings can't be used, its
-    `error` says why.
   </Accordion>
 
   <Accordion title="POST /api/providers/local/custom/check">
@@ -3182,16 +3177,23 @@ the same way.
     `policy` (`quality`, `balanced` or `custom`), and `rules`: the table the
     policy applies, one `{cheap_max_difficulty, allow_high_stakes}` rule per
     kind. Also `presets` (the `quality` and `balanced` tables), `kinds` (all
-    8, in display order), `models` (the gateway's chat models plus any
-    configured model it doesn't list, each with `display_name`, prices
-    `input_per_million` / `output_per_million` / `cache_read_per_million` and
-    their `price_source` — `null` when unknown, never $0 — and `available`,
-    `null` when the list couldn't be read, with `models_error` saying why), and
-    `is_active` (a new chat starts on `hybrid`). Gateway prices are the
-    gateway's own, read from its `/models` when the gateway is registered and
-    again once they are a day old; `prices_fetched_at` says when, and
-    `prices_error` why the last read failed (the last prices read are still
-    used). When the
+    8, in display order), and `models`: every model a provider set up here
+    offers — downloaded local models that can run on this PC, the AMD LLM
+    Gateway's models, Fireworks AI's when it has a key, and Anthropic's
+    `claude-*` models when `ANTHROPIC_API_KEY` is set — plus any configured
+    model none offers. Each has `provider` (`local`, `amd`, `fireworks` or
+    `claude`; listed in that order), `display_name`, `available` with a
+    `reason` when not, and prices `input_per_million` / `output_per_million` /
+    `cache_read_per_million` with their `price_source`, `null` when unknown,
+    never $0. Gateway prices are the gateway's own, read from its `/models`
+    when it is registered and again once they are a day old
+    (`prices_fetched_at`, and `prices_error` when the last read failed; the
+    last prices read are still used); Fireworks and Anthropic prices are their
+    list prices. `models_error` says why the list couldn't be read. Also
+    `measured` (the pairing is the one the shipped policies were tuned on),
+    `measured_note` when it isn't, `classifier_note` when the classifier runs
+    on this PC, `entry` (as `GET /api/hybrid/entry`), and `is_active` (a new
+    chat starts on `hybrid`). When the
     saved settings can't be used, `config_error` says why and the values are
     shown as saved, so they can be fixed.
   </Accordion>
@@ -3203,9 +3205,39 @@ the same way.
     exactly `cheap_max_difficulty` (0-5; 0 never runs cheap) and
     `allow_high_stakes` (true or false); `custom` needs rules, saved or sent in
     the same request. Switching to a preset keeps saved rules for later.
-    Returns the `GET` shape. **422**, with what to change, for an unknown
-    field, a wrong type or range, a self-routing `hybrid` model, the same cheap
-    and strong model, or `custom` without rules; nothing is saved then.
+    A model must be one a provider set up here offers. Returns the `GET`
+    shape. **422**, with what to change and which providers were checked, for
+    an unknown field, a wrong type or range, a model no provider offers, a
+    self-routing `hybrid` model, the same cheap and strong model, or `custom`
+    without rules; nothing is saved then. **503** when the model server can't
+    say which models are offered.
+  </Accordion>
+
+  <Accordion title="GET /api/hybrid/templates">
+    The built-in pairings, resolved on this PC: `id`, `name`, `description`,
+    `cheap_model`, `strong_model`, `classifier_model`, `policy`,
+    `providers_needed`, `available` with a `reason` when not (such as
+    "Download Qwen3.6-35B-A3B-GGUF in Settings › Models" or "Add a Fireworks
+    key in Settings › Models"), `measured` with `measured_note`, and
+    `classifier_note`. The ids are stable: `gateway-deepseek-opus` (the
+    default, and the only measured one), `gateway-deepseek-sonnet`,
+    `gateway-balanced`, `local-plus-cloud`, `all-local` (works under Local
+    only), `fireworks` and `claude-direct`.
+  </Accordion>
+
+  <Accordion title="POST /api/hybrid/templates/{template_id}/apply">
+    Set the models and policy a template names (saved custom rules are kept).
+    Returns the settings `GET` shape. **404** for an unknown id; **409** with
+    the reason when it can't run here, including a cloud model under Local
+    only.
+  </Accordion>
+
+  <Accordion title="GET /api/hybrid/entry">
+    The `hybrid` choice for a model picker, its own entry rather than one
+    under a provider: `display_name` built from the configured pair ("Hybrid
+    (DeepSeek + Opus)"), `remote` (any member is a cloud model), `available`
+    with a `reason`, and `shown`, true when the configured pair or any
+    template can run here.
   </Accordion>
 
   <Accordion title="POST /api/hybrid/preview">

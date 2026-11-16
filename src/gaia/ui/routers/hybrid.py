@@ -10,7 +10,7 @@ CLI and the TUI, and are validated by the same rules as ``gaia config set``.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
@@ -103,32 +103,88 @@ def _gateway_prices() -> Dict[str, Any]:
     }
 
 
-def _models(configured: List[str]) -> Dict[str, Any]:
-    """The gateway's chat models with list prices, plus any configured model it lacks.
+def _lemonade_payloads():
+    """The model server's ``/models?show_all=true`` and ``/system-info`` answers."""
+    from .providers import ProviderError, _lemonade
 
-    ``available`` is None when the catalog couldn't be read, never a guess.
-    """
-    from .providers import AMD, ProviderError, _list_models, display_name
+    answers = []
+    for path in ("models?show_all=true", "system-info"):
+        status, body = _lemonade("GET", path)
+        if status >= 400:
+            raise ProviderError(
+                f"The model server answered /{path} with HTTP {status}."
+            )
+        answers.append(body)
+    return answers[0], answers[1]
+
+
+def inventory():
+    """What every provider offers here; ProviderError when the model server can't say."""
+    from gaia.env import credential, load_env
+    from gaia.llm.hybrid_templates import build_inventory
+    from gaia.llm.local_only import cloud_blocked
+
+    load_env()
+    models, info = _lemonade_payloads()
+    try:
+        return build_inventory(
+            models,
+            info,
+            anthropic_key=bool(credential("ANTHROPIC_API_KEY")),
+            local_only=cloud_blocked(),
+        )
+    except HybridConfigError as e:
+        from .providers import ProviderError
+
+        raise ProviderError(str(e)) from e
+
+
+def _inventory_or_503():
+    from .providers import ProviderError
 
     try:
-        listed: Optional[List[str]] = [m["id"] for m in _list_models(AMD)]
-        error = None
+        return inventory()
     except ProviderError as e:
-        logger.warning("Hybrid settings without the gateway's model list: %s", e)
-        listed, error = None, surface_wording(str(e), "agent_ui")
-    ids = list(dict.fromkeys([*(listed or []), *configured]))
-    return {
-        "models": [
+        raise HTTPException(
+            status_code=503,
+            detail=surface_wording(
+                f"Couldn't list the models hybrid can use: {e}", "agent_ui"
+            ),
+        ) from e
+
+
+def _models(inv, configured: List[str]) -> Dict[str, Any]:
+    """Every model a set-up provider offers, plus configured ones none offers.
+
+    Grouped by ``provider``; prices are null when unknown, never $0.
+    """
+    from gaia.llm.hybrid_templates import PROVIDERS, provider_of
+
+    from .providers import ProviderError, display_name
+
+    if inv is None:
+        return {"models": [], "models_error": None}
+    rows = []
+    for model_id in dict.fromkeys([*inv.offers, *configured]):
+        offer = inv.offers.get(model_id)
+        reason = inv.check(model_id)
+        try:
+            name = display_name(model_id)
+        except ProviderError:
+            name = model_id
+        rows.append(
             {
                 "id": model_id,
-                "display_name": display_name(model_id),
+                "display_name": name,
+                "provider": offer.provider if offer else provider_of(model_id),
                 **_price(model_id),
-                "available": None if listed is None else model_id in listed,
+                "available": reason is None,
+                "reason": surface_wording(reason, "agent_ui") if reason else None,
             }
-            for model_id in ids
-        ],
-        "models_error": error,
-    }
+        )
+    order = {p: i for i, p in enumerate(PROVIDERS)}
+    rows.sort(key=lambda r: (order.get(r["provider"], len(order)), r["id"].lower()))
+    return {"models": rows, "models_error": None}
 
 
 def _is_active(db: ChatDatabase) -> bool:
@@ -175,14 +231,31 @@ def _view(db: ChatDatabase) -> Dict[str, Any]:
                 else cfg.hybrid_rules
             ),
         }
+    from gaia.llm.hybrid_templates import notes, picker_entry
+
+    from .providers import ProviderError
+
     configured = [values[f] for f in _MODEL_FIELDS]
     prices = _gateway_prices()
+    try:
+        inv, models_error = inventory(), None
+    except ProviderError as e:
+        logger.warning("Hybrid settings without the model list: %s", e)
+        inv, models_error = None, surface_wording(str(e), "agent_ui")
     return {
         **values,
         "presets": {p: preset_rules(p) for p in PRESETS},
         "kinds": list(KIND_ORDER),
-        **_models(configured),
+        **_models(inv, configured),
+        "models_error": models_error,
         **prices,
+        **notes(
+            values["cheap_model"],
+            values["strong_model"],
+            values["classifier_model"],
+            values["policy"],
+        ),
+        "entry": picker_entry(inv, settings, error) if inv is not None else None,
         "is_active": _is_active(db),
         "config_error": error,
     }
@@ -205,7 +278,7 @@ def _checked(field: str, value: Any) -> Any:
         if is_hybrid_model(value):
             raise _unprocessable(
                 f"{field} can't be 'hybrid', which would route to itself; pick a "
-                "model the gateway offers."
+                "model a provider offers."
             )
         return value
     if field == "classifier_timeout":
@@ -238,7 +311,7 @@ def put_hybrid_settings(
     body: Any = Body(...), db: ChatDatabase = Depends(get_db)
 ) -> Dict[str, Any]:
     """Change any of the hybrid settings; the rest keep their saved values."""
-    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.config import GaiaConfigError
 
     if not isinstance(body, dict):
         raise _unprocessable("Send a JSON object of the settings to change.")
@@ -267,11 +340,76 @@ def put_hybrid_settings(
         HybridSettings.load(cfg)
     except (GaiaConfigError, HybridConfigError) as e:
         raise _unprocessable(str(e)) from e
+    chosen = [f for f in _MODEL_FIELDS if body.get(f)]
+    if chosen:
+        inv = _inventory_or_503()
+        for f in chosen:
+            reason = inv.check(body[f])
+            if reason:
+                raise _unprocessable(f"{f}: {reason}. {inv.checked()}")
+    _save(values)
+    return _view(db)
+
+
+def _save(values: Dict[str, Any]) -> None:
+    from gaia.config import GaiaConfig, GaiaConfigError
+
     if values:
         try:
             GaiaConfig.save_keys(values)
         except GaiaConfigError as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/api/hybrid/entry")
+def hybrid_picker_entry() -> Dict[str, Any]:
+    """The ``hybrid`` choice for a model picker: its own entry, named from the pair.
+
+    ``shown`` is true when the configured pair or any template can run here.
+    """
+    from gaia.config import GaiaConfigError
+    from gaia.llm.hybrid_templates import picker_entry
+
+    inv = _inventory_or_503()
+    try:
+        settings, error = HybridSettings.load(), None
+    except (GaiaConfigError, HybridConfigError) as e:
+        settings, error = None, surface_wording(str(e), "agent_ui")
+    entry = picker_entry(inv, settings, error)
+    if entry["reason"]:
+        entry["reason"] = surface_wording(entry["reason"], "agent_ui")
+    return entry
+
+
+@router.get("/api/hybrid/templates")
+def hybrid_templates() -> List[Dict[str, Any]]:
+    """The built-in pairings, resolved on this PC, with whether each can be used."""
+    from gaia.llm.hybrid_templates import list_templates
+
+    templates = list_templates(_inventory_or_503())
+    for t in templates:
+        if t["reason"]:
+            t["reason"] = surface_wording(t["reason"], "agent_ui")
+    return templates
+
+
+@router.post("/api/hybrid/templates/{template_id}/apply")
+def apply_hybrid_template(
+    template_id: str, db: ChatDatabase = Depends(get_db)
+) -> Dict[str, Any]:
+    """Set the models and policy *template_id* names; 409 with why when it can't run here."""
+    from gaia.llm.hybrid_templates import template_settings
+
+    inv = _inventory_or_503()
+    try:
+        values = template_settings(template_id, inv)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=e.args[0]) from e
+    except HybridConfigError as e:
+        raise HTTPException(
+            status_code=409, detail=surface_wording(str(e), "agent_ui")
+        ) from e
+    _save(values)
     return _view(db)
 
 

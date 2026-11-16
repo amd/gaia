@@ -535,3 +535,173 @@ def test_cli_preview_with_unusable_settings_exits_with_the_reason(
         )
     assert excinfo.value.code == 1
     assert "nothing to route between" in capsys.readouterr().err
+
+
+# --- templates and model checks from the CLI ---------------------------------
+
+
+def _inventory(local=(), amd=(), anthropic=False, local_only=False):
+    from gaia.llm.hybrid_templates import build_inventory
+
+    data = [{"id": m, "recipe": "cloud", "labels": ["chat"]} for m in amd]
+    data += [
+        {"id": m, "recipe": "llamacpp", "labels": ["chat"], "downloaded": d}
+        for m, d in local
+    ]
+    cloud = [{"name": "amd", "runtime_key_set": True}] if amd else []
+    return build_inventory(
+        {"data": data},
+        {"cloud": {"providers": cloud}},
+        anthropic_key=anthropic,
+        local_only=local_only,
+    )
+
+
+GATEWAY_PAIR = (hybrid.DEFAULT_CHEAP_MODEL, hybrid.DEFAULT_STRONG_MODEL)
+LOCAL_PAIR = (("Gemma-4-E4B-it-GGUF", True), ("Qwen3.6-35B-A3B-GGUF", True))
+
+
+def test_cli_templates_lists_every_template_with_cli_advice(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_cli_hybrid_inventory", lambda: _inventory())
+    cli.handle_hybrid_command(argparse.Namespace(hybrid_action="templates", json=False))
+    out = capsys.readouterr().out
+    from gaia.llm.hybrid_templates import TEMPLATE_IDS
+
+    for template_id in TEMPLATE_IDS:
+        assert template_id in out
+    assert "`gaia gateway install`" in out
+    assert "Settings › Models" not in out
+
+
+def test_cli_use_applies_a_template(monkeypatch, tmp_path, capsys):
+    from gaia import config as config_mod
+
+    path = _config_path(tmp_path)
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", path)
+    monkeypatch.setattr(
+        cli, "_cli_hybrid_inventory", lambda: _inventory(local=LOCAL_PAIR)
+    )
+    cli.handle_hybrid_command(
+        argparse.Namespace(hybrid_action="use", template="all-local")
+    )
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["hybrid_cheap_model"] == "Gemma-4-E4B-it-GGUF"
+    assert saved["hybrid_strong_model"] == "Qwen3.6-35B-A3B-GGUF"
+    assert saved["hybrid_classifier_model"] == "Gemma-4-E4B-it-GGUF"
+    assert "✅" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "template,inventory,match",
+    [
+        ("nope", {}, "no hybrid template 'nope'"),
+        ("claude-direct", {}, "Anthropic API key"),
+        ("all-local", {"local": (("Gemma-4-E4B-it-GGUF", True),)}, "gaia download"),
+        (
+            "local-plus-cloud",
+            {"local": LOCAL_PAIR, "amd": GATEWAY_PAIR, "local_only": True},
+            "Local only is on",
+        ),
+    ],
+)
+def test_cli_use_refuses_what_cannot_run_here(
+    monkeypatch, tmp_path, capsys, template, inventory, match
+):
+    from gaia import config as config_mod
+
+    path = _config_path(tmp_path)
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", path)
+    monkeypatch.setattr(cli, "_cli_hybrid_inventory", lambda: _inventory(**inventory))
+    with pytest.raises(SystemExit) as excinfo:
+        cli.handle_hybrid_command(
+            argparse.Namespace(hybrid_action="use", template=template)
+        )
+    assert excinfo.value.code == 1
+    assert match in capsys.readouterr().err
+    assert not path.exists()
+
+
+def test_cli_config_set_refuses_a_model_no_provider_offers(
+    monkeypatch, tmp_path, capsys
+):
+    monkeypatch.setattr(
+        cli, "_cli_hybrid_inventory", lambda: _inventory(amd=GATEWAY_PAIR)
+    )
+    path = _config_path(tmp_path)
+    args = argparse.Namespace(
+        config=path,
+        config_action="set",
+        key="hybrid_strong_model",
+        value="claude-opus-5-5",
+    )
+    with pytest.raises(SystemExit):
+        cli.handle_config_command(args)
+    err = capsys.readouterr().err
+    assert "Anthropic API key" in err and "Checked" in err
+    assert not path.exists()
+
+
+def test_cli_config_set_accepts_a_local_model(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        cli, "_cli_hybrid_inventory", lambda: _inventory(local=LOCAL_PAIR)
+    )
+    path = _config_path(tmp_path)
+    args = argparse.Namespace(
+        config=path,
+        config_action="set",
+        key="hybrid_strong_model",
+        value="Qwen3.6-35B-A3B-GGUF",
+    )
+    cli.handle_config_command(args)
+    assert GaiaConfig.load(path).hybrid_strong_model == "Qwen3.6-35B-A3B-GGUF"
+
+
+def test_cli_config_set_empty_model_restores_the_default_without_asking(
+    monkeypatch, tmp_path
+):
+    def boom():
+        raise AssertionError("no provider check for a reset")
+
+    monkeypatch.setattr(cli, "_cli_hybrid_inventory", boom)
+    path = _config_path(tmp_path, {"hybrid_cheap_model": "amd.X"})
+    args = argparse.Namespace(
+        config=path, config_action="set", key="hybrid_cheap_model", value=""
+    )
+    cli.handle_config_command(args)
+    assert GaiaConfig.load(path).hybrid_cheap_model is None
+
+
+def test_cli_parser_has_templates_and_use():
+    parser = cli.build_parser()
+    assert parser.parse_args(["hybrid", "templates"]).hybrid_action == "templates"
+    args = parser.parse_args(["hybrid", "use", "all-local"])
+    assert (args.hybrid_action, args.template) == ("use", "all-local")
+
+
+# --- the classifier on a direct Claude model --------------------------------
+
+
+def test_a_direct_claude_classifier_is_asked_in_plain_text():
+    client = _Client("```json\n" + _label("write_prose", 1, "low") + "\n```")
+    settings = HybridSettings(
+        cheap_model="claude-haiku-5-5",
+        strong_model="claude-opus-5-5",
+        classifier_model="claude-haiku-5-5",
+    )
+    router = HybridRouter(settings, client_factory=lambda m, u: client)
+    route = router.decide("Reply to Sam")
+    assert route.classified and route.model == "claude-haiku-5-5"
+    assert "response_format" not in client.calls[0]
+    assert route.classifier_format == hybrid.FORMAT_PLAIN
+
+
+def test_the_default_factory_builds_a_claude_client_for_claude(monkeypatch):
+    made = []
+    monkeypatch.setattr(
+        "gaia.llm.factory.create_client",
+        lambda provider, **kw: made.append((provider, kw)) or object(),
+    )
+    hybrid._default_client_factory("claude-haiku-5-5", "http://x")
+    hybrid._default_client_factory("Gemma-4-E4B-it-GGUF", "http://x")
+    assert made[0] == ("claude", {"model": "claude-haiku-5-5"})
+    assert made[1][0] == "lemonade"
