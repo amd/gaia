@@ -105,8 +105,10 @@ def test_a_daemon_it_may_not_inspect_is_an_error_not_gone(monkeypatch):
 
     monkeypatch.setattr(parent_watch.psutil, "Process", denied)
     gone = threading.Event()
-    with pytest.raises(psutil.AccessDenied):
+    # A ValueError, so the agents' entry points print one line instead of a traceback.
+    with pytest.raises(ValueError, match="cannot watch the GAIA daemon") as raised:
         parent_watch.start(env={DAEMON_PID_ENV_VAR: "4242"}, on_gone=gone.set)
+    assert isinstance(raised.value.__cause__, psutil.AccessDenied)
     assert not gone.is_set()
 
 

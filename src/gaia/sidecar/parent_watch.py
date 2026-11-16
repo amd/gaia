@@ -71,8 +71,8 @@ def start(
     agent starts don't tie themselves to the daemon too.
 
     Raises:
-        ValueError: ``GAIA_DAEMON_PID`` is set but is not a pid.
-        psutil.AccessDenied: the daemon's process can't be inspected.
+        ValueError: ``GAIA_DAEMON_PID`` is set but is not a pid, or the
+            daemon's process can't be inspected.
     """
     global _watcher
     if env is None:
@@ -92,7 +92,13 @@ def start(
     with _lock:
         if _watcher is not None and _watcher.is_alive():
             return _watcher
-        born = _identity(pid)
+        try:
+            born = _identity(pid)
+        except psutil.AccessDenied as e:
+            raise ValueError(
+                f"cannot watch the GAIA daemon (pid {pid}): this agent may not "
+                "inspect its process. Run the agent as the same user as the daemon."
+            ) from e
 
         def _watch() -> None:
             while True:
