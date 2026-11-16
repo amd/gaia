@@ -211,7 +211,7 @@ def setup_report() -> Dict[str, Any]:
     """Bundle setup's record, every GAIA log and a system snapshot for a bug report."""
     record = runner.report()
     try:
-        record["plan"] = build_plan()
+        record["plan"] = build_plan(skip_chat_model=False)
     except SetupPlanError as e:
         # The report is for exactly this: say why the plan couldn't be read.
         record["plan_error"] = str(e)

@@ -611,10 +611,12 @@ def test_plan_endpoint_refuses_a_skip_chat_model_that_is_not_a_bool(
     assert r.status_code == 422
 
 
+@pytest.mark.parametrize("skip_chat_model", [False, True])
 def test_init_skip_model_keeps_its_own_choice_while_chat_is_on_the_cloud(
-    running, config_file
+    running, config_file, skip_chat_model
 ):
-    """`gaia init --skip-model` checks against what init downloads, not Settings' view."""
+    """`gaia init --skip-model` checks against what init downloads, not Settings' view,
+    with or without --skip-chat-model, as it always has."""
     from types import SimpleNamespace
 
     from gaia import cli
@@ -627,7 +629,7 @@ def test_init_skip_model_keeps_its_own_choice_while_chat_is_on_the_cloud(
         use_model=None,
         acknowledge_no_fit=False,
         plan=False,
-        skip_chat_model=False,
+        skip_chat_model=skip_chat_model,
         json=False,
     )
     assert cli._init_model_choices(args, sp.PROFILE) is None
