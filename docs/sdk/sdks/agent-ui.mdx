@@ -3183,6 +3183,12 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `X-Gaia-UI: 1` (**403** without it).
   </Accordion>
 
+  <Accordion title="GET /api/providers/list">
+    Every provider and whether it is set up, with no key or address: a summary
+    a client can show without seeing secrets. `lemonade_error` is set when
+    Lemonade could not be reached. Requires `X-Gaia-UI: 1` (**403** without it).
+  </Accordion>
+
   <Accordion title="GET /api/providers/active">
     The model new turns run — the one a new chat starts on: the picked model,
     else `default_model` from `~/.gaia/config.json`, else Gemma. Carries
