@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import shutil
-import struct
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +18,6 @@ from uuid import uuid4
 
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
 from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
-from gaia.llm.lemonade_launcher import describe_client_hint
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,54 +26,6 @@ _SAVE_TO_HELP = (
     "Pass an absolute folder (the file gets a generated name) or a new .wav "
     "file path, e.g. the user's project folder."
 )
-
-
-class InvalidWavError(ValueError):
-    """The bytes Lemonade returned are not a playable WAV file."""
-
-
-def wav_duration_seconds(path: Path) -> Optional[float]:
-    """Seconds of audio in a RIFF WAV, from its ``fmt `` and ``data`` chunks.
-
-    Returns None for RF64, whose sizes live in a ``ds64`` chunk this reader
-    does not parse. Raises InvalidWavError when a RIFF file has no audio.
-    """
-    size = path.stat().st_size
-    with path.open("rb") as wav:
-        header = wav.read(12)
-        if len(header) < 12 or header[8:] != b"WAVE":
-            raise InvalidWavError("missing RIFF/WAVE header")
-        if header[:4] == b"RF64":
-            return None
-        if header[:4] != b"RIFF":
-            raise InvalidWavError("missing RIFF/WAVE header")
-        byte_rate = 0
-        while True:
-            chunk = wav.read(8)
-            if len(chunk) < 8:
-                break
-            chunk_id = chunk[:4]
-            chunk_size = struct.unpack("<I", chunk[4:])[0]
-            if chunk_id == b"fmt ":
-                fmt = wav.read(chunk_size)
-                if len(fmt) < 12:
-                    raise InvalidWavError("truncated fmt chunk")
-                byte_rate = struct.unpack("<I", fmt[8:12])[0]
-                if chunk_size % 2:
-                    wav.seek(1, os.SEEK_CUR)
-                continue
-            if chunk_id == b"data":
-                if not byte_rate:
-                    raise InvalidWavError("data chunk before a valid fmt chunk")
-                # A streamed WAV may carry a 0 or 0xFFFFFFFF placeholder size.
-                available = size - wav.tell()
-                if chunk_size in (0, 0xFFFFFFFF) or chunk_size > available:
-                    chunk_size = available
-                if chunk_size <= 0:
-                    raise InvalidWavError("no audio samples")
-                return chunk_size / byte_rate
-            wav.seek(chunk_size + (chunk_size % 2), os.SEEK_CUR)
-    raise InvalidWavError("no fmt/data chunks")
 
 
 class AudioGenerationToolsMixin:
@@ -132,7 +82,7 @@ class AudioGenerationToolsMixin:
                 duration: Desired seconds.
                 steps: Optional generation steps; omit for backend defaults.
                 seed: Optional reproducibility seed.
-                save_to: Absolute folder or new .wav path to save into.
+                save_to: Absolute folder or new .wav path for a copy of the file.
             """
             return self._generate_lemonade_audio(
                 "music",
@@ -165,7 +115,7 @@ class AudioGenerationToolsMixin:
                 steps: Optional generation steps, if supported by the backend.
                 cfg: Optional guidance for ThinkSound; omit for other recipes.
                 seed: Optional reproducibility seed.
-                save_to: Absolute folder or new .wav path to save into.
+                save_to: Absolute folder or new .wav path for a copy of the file.
             """
             return self._generate_lemonade_audio(
                 "sfx",
@@ -212,13 +162,11 @@ class AudioGenerationToolsMixin:
             return {"status": "error", "error": str(exc)}
         selected = models.get(model)
         if selected is None:
-            available = ", ".join(sorted(models)) or "none"
             return {
                 "status": "error",
                 "error": (
-                    f"'{model}' is not a downloaded audio-generation model "
-                    f"(downloaded: {available}). Ask the user before adding it: "
-                    f"{describe_client_hint('pull', model).instruction}"
+                    f"'{model}' is not a downloaded audio-generation model. "
+                    "Call list_audio_generation_models() to see available models."
                 ),
             }
         recipe = selected.get("recipe")
@@ -251,14 +199,14 @@ class AudioGenerationToolsMixin:
                 payload[key] = value
 
         file_name = f"{kind}_{datetime.now():%Y%m%d_%H%M%S}_{uuid4().hex[:10]}.wav"
-        if save_to is None:
-            destination = self.audio_gen_output_dir / file_name
-        else:
-            destination, refusal = self._audio_save_target(save_to, file_name)
+        copy_to = None
+        if save_to is not None:
+            copy_to, refusal = self._audio_save_target(save_to, file_name)
             if refusal is not None:
                 return refusal
 
         client = self.audio_gen_client
+        destination = self.audio_gen_output_dir / file_name
         staging = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -268,43 +216,33 @@ class AudioGenerationToolsMixin:
             client.generate_audio(payload, staging, timeout=1800)
             # Reject empty/truncated/JSON responses even when the HTTP status
             # was 200; an agent must never claim a broken file was generated.
-            try:
-                if staging.stat().st_size < 44:
-                    raise InvalidWavError("response shorter than a WAV header")
-                seconds = wav_duration_seconds(staging)
-            except InvalidWavError as exc:
+            with staging.open("rb") as wav:
+                header = wav.read(12)
+            if staging.stat().st_size < 44 or not (
+                header[:4] in (b"RIFF", b"RF64") and header[8:] == b"WAVE"
+            ):
                 return {
                     "status": "error",
-                    "error": f"Lemonade returned invalid WAV data ({exc}).",
+                    "error": "Lemonade returned invalid WAV data.",
                 }
             before_change(destination, f"generate_{kind}")
-            if save_to is None:
-                os.replace(staging, destination)
-            else:
-                _publish_new_file(staging, destination)
-                staging.unlink()
+            os.replace(staging, destination)
             staging = None
             logger.info("Generated %s via %s: %s", kind, model, destination)
-            return {
+            result = {
                 "status": "success",
                 "audio_path": str(destination.resolve()),
                 "model": model,
                 "type": kind,
                 "format": "wav",
-                "prompt": prompt,
                 "duration_requested": duration,
-                "duration_seconds": (
-                    round(seconds, 2) if seconds is not None else None
-                ),
             }
-        except FileExistsError:
-            return {
-                "status": "error",
-                "error": (
-                    f"{destination} appeared while the audio was generating; "
-                    "it was kept. Choose a new file name."
-                ),
-            }
+            if copy_to is not None:
+                copy_error = _copy_for_user(destination, copy_to, kind)
+                if copy_error is not None:
+                    return copy_error
+                result["saved_to"] = str(copy_to)
+            return result
         except (LemonadeClientError, OSError, SnapshotError) as exc:
             return {"status": "error", "error": f"Audio generation failed: {exc}"}
         finally:
@@ -373,16 +311,32 @@ class AudioGenerationToolsMixin:
         return target, None
 
 
-def _publish_new_file(source: Path, destination: Path) -> None:
-    """Copy *source* to *destination*, which must not exist yet.
+def _copy_for_user(source: Path, destination: Path, kind: str):
+    """Copy the finished WAV to *destination*, which must not exist yet.
 
     Exclusive create closes the minutes-long window between the save_to check
-    and the copy; a failed copy removes its partial file.
+    and the copy; a failed copy removes its partial file. Returns ``None`` on
+    success, or an error result that says where the original is.
     """
-    with source.open("rb") as src, destination.open("xb") as dst:
-        try:
-            shutil.copyfileobj(src, dst, 1024 * 1024)
-        except BaseException:
-            dst.close()
-            destination.unlink(missing_ok=True)
-            raise
+    try:
+        before_change(destination, f"generate_{kind}")
+        with source.open("rb") as src, destination.open("xb") as dst:
+            try:
+                shutil.copyfileobj(src, dst, 1024 * 1024)
+            except BaseException:
+                dst.close()
+                destination.unlink(missing_ok=True)
+                raise
+    except FileExistsError:
+        reason = f"{destination} appeared while the audio was generating; it was kept"
+    except (OSError, SnapshotError) as exc:
+        reason = f"the copy to {destination} could not be saved: {exc}"
+    else:
+        return None
+    return {
+        "status": "error",
+        "error": (
+            f"The audio was made, but {reason}. The original is at {source}. "
+            "Ask the user for a new file name or folder."
+        ),
+    }

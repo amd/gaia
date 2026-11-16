@@ -260,12 +260,6 @@ func resultDetail(e event.CanonicalToolResultEvent) string {
 	// rely on.
 	failed := !toolResultSucceeded(e.Data)
 
-	if !failed {
-		if line, ok := generatedAudioDetail(e.Data); ok {
-			return line
-		}
-	}
-
 	if p := clean(e.Preview); p != "" {
 		return markFailed(p, failed)
 	}

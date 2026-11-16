@@ -723,3 +723,40 @@ class TestRelayedPhase:
         )
 
         assert _drain(handler) == [{"type": "status", "message": "Done."}]
+
+
+@pytest.mark.parametrize(
+    "tool, args, expected",
+    [
+        (
+            "generate_music",
+            {"duration": 12, "prompt": "lo-fi"},
+            "Composing 12 s of music: lo-fi",
+        ),
+        ("generate_music", {"duration": 2.5}, "Composing 2.5 s of music"),
+        ("generate_music", {}, "Composing music"),
+        ("generate_sound_effect", {"duration": 3}, "Generating a 3 s sound effect"),
+        (
+            "generate_sound_effect",
+            {"prompt": "door"},
+            "Generating a sound effect: door",
+        ),
+        (
+            "list_audio_generation_models",
+            {},
+            "Checking which audio models are downloaded",
+        ),
+    ],
+)
+def test_audio_narration_says_what_is_being_made(tool, args, expected):
+    assert derive_narration(tool, args) == expected
+
+
+@pytest.mark.parametrize("bogus", [0, -4, float("nan"), float("inf"), 1e9, True, "12"])
+def test_audio_narration_drops_a_bogus_duration(bogus):
+    assert derive_narration("generate_music", {"duration": bogus}) == "Composing music"
+
+
+def test_audio_narration_clips_a_long_prompt_to_one_line():
+    line = derive_narration("generate_music", {"prompt": "piano\n" * 200})
+    assert "\n" not in line and len(line) < 120

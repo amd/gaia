@@ -13,8 +13,6 @@ import { remarkNumericColumns } from '../utils/remarkNumericColumns';
 import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
-import { GeneratedAudioList } from './GeneratedAudioCard';
-import { generatedAudioOf } from '../utils/generatedAudio';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { plainAnswerText } from '../utils/plainText';
@@ -828,8 +826,6 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {(message.cards ?? cards)?.map((card, i) => (
                         <RenderCard key={i} render={card.render} data={card.data} />
                     ))}
-                    {/* Generated music / sound effects: playable here, not only as a path in a folded step. */}
-                    {message.role === 'assistant' && <GeneratedAudioList items={generatedAudioOf(echo.steps)} />}
                     {/* The cursor is a streaming indicator, not decoration — it never
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
                     {editing && onEdit ? (

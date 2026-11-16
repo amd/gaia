@@ -6,21 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-
-- **Music and sound effects.** "Make 30 seconds of menu music" or "a door
-  slam" now generates a WAV with Lemonade's ACE-Step or ThinkSound and reports
-  the path. Adds `generate_music`, `generate_sound_effect` and
-  `list_audio_generation_models` (95 tools → 98) plus an `audio_generation`
-  bundle (#6064). Both generators take `save_to` to write into the user's
-  project folder, refusing relative paths, existing files and folders the
-  write policy forbids. A successful result's `tool_result.data` carries
-  `audio_path` and `generated_audio` (`{path, model, kind, format,
-  duration_seconds, duration_requested, prompt}`) so a client can play it.
-  Generating swaps the resident model, so the next reply waits for the chat
-  model to reload. The `music-gen` starter skill covers choosing music or a
-  sound effect, prompts, durations and iterating.
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+
+- **Generated music and sound effects can be saved into a folder of the
+  user's.** `generate_music` and `generate_sound_effect` take `save_to`, an
+  absolute folder or a new `.wav` path, and write a copy there as
+  `saved_to`; the original stays in GAIA's audio folder as `audio_path`, so
+  the chat still plays it. Relative paths, missing folders, existing files and
+  places the write policy forbids are refused before anything is generated.
+  The track is listed under the session panel's Outputs, and the work log
+  reads "Composing 30 s of music" or "Generating a 3 s sound effect".
 
 - **Closing an agent stops the MCP servers it started.** Each server is a
   process tree (`uvx`, `uv`, the server), and it used to outlive the agent:

@@ -127,6 +127,8 @@ def list_outputs(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
         for out in summary.get("outputs") or []:
             if out["kind"] in ("image", "audio") and out.get("path"):
                 changes.pop((mid, _key(out["path"])), None)
+                if out.get("copy_of"):
+                    changes.pop((mid, _key(out["copy_of"])), None)
             items.append(
                 _item(
                     out["kind"],

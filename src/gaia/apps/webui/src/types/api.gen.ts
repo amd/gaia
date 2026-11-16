@@ -55,7 +55,6 @@ export interface ApiSchemas {
   FolderRequest: FolderRequest;
   FollowUpRequest: FollowUpRequest;
   ForwardConnectionRequest: ForwardConnectionRequest;
-  GeneratedAudioResponse: GeneratedAudioResponse;
   GoalCreate: GoalCreate;
   GoalStatusUpdate: GoalStatusUpdate;
   GpuMemoryApplyRequest: GpuMemoryApplyRequest;
@@ -247,7 +246,6 @@ export interface AgentStepResponse {
   declined?: boolean | null;
   detail?: string | null;
   fileList?: FileListResponse | null;
-  generatedAudio?: GeneratedAudioResponse | null;
   id: number;
   kept?: boolean | null;
   label: string;
@@ -292,18 +290,6 @@ export interface FileListResponse {
     [k: string]: unknown | undefined;
   }[];
   total?: number;
-}
-/**
- * A WAV a music or sound-effect tool generated, for the chat's audio card.
- */
-export interface GeneratedAudioResponse {
-  durationRequested?: number | null;
-  durationSeconds?: number | null;
-  format?: string;
-  kind?: string;
-  model?: string;
-  path: string;
-  prompt?: string | null;
 }
 /**
  * The text an MCP tool returned, capped for the tool row.

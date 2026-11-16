@@ -335,16 +335,20 @@ class TurnLedger:
                         }
                     )
             elif tool in _AUDIO_TOOLS and isinstance(data, dict):
-                path = data.get("audio_path")
-                if isinstance(path, str):
-                    out.append(
-                        {
-                            "kind": "audio",
-                            "name": Path(path).name,
-                            "path": path,
-                            "detail": args.get("prompt"),
-                        }
-                    )
+                kept = data.get("audio_path")
+                saved = data.get("saved_to")
+                # The user's copy is the one to open; GAIA's own is for the player.
+                path = saved if isinstance(saved, str) and saved else kept
+                if isinstance(path, str) and path:
+                    item = {
+                        "kind": "audio",
+                        "name": Path(path).name,
+                        "path": path,
+                        "detail": args.get("prompt"),
+                    }
+                    if path != kept and isinstance(kept, str):
+                        item["copy_of"] = kept
+                    out.append(item)
             elif tool in _INDEX_TOOLS:
                 path = args.get(_INDEX_TOOLS[tool])
                 if isinstance(path, str) and path:
