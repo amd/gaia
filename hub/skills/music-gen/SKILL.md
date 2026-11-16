@@ -2,7 +2,7 @@
 name: music-gen
 description: Generate original local music and sound effects (WAV) with Lemonade ACE-Step and ThinkSound for games, interactive stories, videos, and audio assets.
 license: MIT
-version: 1.0.0
+version: 1.1.0
 metadata:
   gaia:
     security_tier: community
@@ -33,8 +33,11 @@ For **sound effects**, use `generate_sound_effect` with ThinkSound (or a support
 OpenMOSS SFX model). Describe the physical sound and acoustic environment. `cfg`
 is a ThinkSound-specific knob and should be left unset otherwise.
 
-Both tools write WAV files and return an absolute `audio_path`. Check
-`status == "success"` and that path before reporting a completed asset.
-If using Ren'Py, copy the generated files into `game/audio/` through an
-approved file operation, and reference the relative paths from Ren'Py scripts.
+Both tools write WAV files and return an absolute `audio_path`. When the user
+names where the file should go (a project folder, `game/audio/`, a file name),
+pass it as `save_to`: an absolute folder or a new `.wav` path. The result then
+adds `saved_to`, the user's copy; report that path. Don't copy the file with a
+separate file operation. Check `status == "success"` and the path before
+reporting a completed asset. For Ren'Py, save into `game/audio/` and reference
+the relative path from Ren'Py scripts.
 Do not fabricate success, silently substitute a model, or retry indefinitely.
