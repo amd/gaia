@@ -234,17 +234,23 @@ def test_unreachable_lemonade_names_the_app_fix_not_a_command(
     assert "gaia " not in error
 
 
-def test_unreachable_user_run_lemonade_gives_this_machines_start_hint(
+def test_unreachable_user_run_lemonade_is_theirs_to_start_with_no_command(
     client, lemonade, keys, monkeypatch
 ):
+    """A PC with no Lemonade of its own used to read "not installed. Run `gaia init`"."""
     from gaia.llm import lemonade_launcher
+    from gaia.llm.surface_hints import APP_OTHER_SERVER_START_HINT
 
-    hint = lemonade_launcher.StartHint(instruction="Start Lemonade from its tray icon.")
+    hint = lemonade_launcher.StartHint(
+        instruction="Lemonade Server is not installed. Run `gaia init` to install it."
+    )
     monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
-    monkeypatch.setattr(lemonade_launcher, "describe_start_hint", lambda: hint)
+    monkeypatch.setattr(lemonade_launcher, "describe_start_hint", lambda *a, **k: hint)
     lemonade.down = True
     error = client.get("/api/providers").json()["lemonade_error"]
-    assert error.endswith(hint.instruction)
+    assert error.endswith(f"{APP_OTHER_SERVER_START_HINT}, then try again.")
+    assert "not installed" not in error
+    assert "`" not in error and "gaia init" not in error
 
 
 def test_list_does_not_repeat_a_provider_when_a_later_lookup_fails(
