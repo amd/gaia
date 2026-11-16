@@ -67,12 +67,39 @@ def _load_config():
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-def _price(model_id: str) -> Dict[str, Optional[float]]:
-    card = spending.price_card(model_id) or {}
+def _price(model_id: str) -> Dict[str, Any]:
+    from gaia.llm.gateway_prices import GatewayPriceError
+
+    try:
+        card = spending.model_price(model_id) or {}
+    except GatewayPriceError:
+        # An unreadable price list is reported once, as prices_error.
+        card = {}
     return {
         "input_per_million": card.get("input_per_million"),
         "output_per_million": card.get("output_per_million"),
-        "cache_read_per_million": card.get("cached_input_per_million"),
+        "cache_read_per_million": card.get("cache_read_per_million"),
+        "price_source": card.get("source"),
+    }
+
+
+def _gateway_prices() -> Dict[str, Any]:
+    """Read the gateway's prices again when stale; say when and whether it worked."""
+    from gaia.llm.gateway_prices import GatewayPriceError, ensure_fresh, load
+
+    try:
+        doc = ensure_fresh()
+        error = None
+    except GatewayPriceError as e:
+        logger.warning("Hybrid prices without a fresh gateway price list: %s", e)
+        error = surface_wording(str(e), "agent_ui")
+        try:
+            doc = load()
+        except GatewayPriceError as unreadable:
+            doc, error = None, surface_wording(str(unreadable), "agent_ui")
+    return {
+        "prices_fetched_at": doc.get("fetched_at") if doc else None,
+        "prices_error": error,
     }
 
 
@@ -149,11 +176,13 @@ def _view(db: ChatDatabase) -> Dict[str, Any]:
             ),
         }
     configured = [values[f] for f in _MODEL_FIELDS]
+    prices = _gateway_prices()
     return {
         **values,
         "presets": {p: preset_rules(p) for p in PRESETS},
         "kinds": list(KIND_ORDER),
         **_models(configured),
+        **prices,
         "is_active": _is_active(db),
         "config_error": error,
     }
@@ -302,7 +331,8 @@ def hybrid_route_stats(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
         raise HTTPException(
             status_code=409, detail=surface_wording(str(e), "agent_ui")
         ) from e
+    prices = _gateway_prices()
     try:
-        return spending.hybrid_stats(db, settings)
+        return {**spending.hybrid_stats(db, settings), **prices}
     except (RuntimeError, ValueError) as e:
         raise HTTPException(status_code=500, detail=str(e)) from e

@@ -337,7 +337,11 @@ gaia hybrid preview "Fix the typo in README.md"
 
 It prints the model, the label and the classifier's reason, and runs nothing.
 In the Agent UI, **Settings › Models › Hybrid** edits the same settings, has a
-box to try a request the same way, and shows how your hybrid turns have routed.
+box to try a request the same way, and shows how your hybrid turns have routed
+and what they cost next to running every turn on the strong model. Costs use
+the gateway's own per-model prices, which GAIA reads from the gateway when you
+register it and again once a day; a model the gateway gives no price for shows
+no cost rather than $0.
 
 - **One decision per turn.** Every step of the turn, and every `--attempts`
   attempt, runs on the model chosen at the start, so the tool format and the

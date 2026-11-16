@@ -376,11 +376,60 @@ def _token_counts(stats: Dict[str, Any]) -> Optional[tuple]:
     return inp, out, cached
 
 
+#: Where a gateway model's price comes from.
+GATEWAY_PRICE_SOURCE = "the AMD LLM Gateway's own price list"
+
+
+def model_price(model_id: str) -> Optional[Dict[str, Any]]:
+    """*model_id*'s price per million tokens, from the rate card or the gateway.
+
+    ``cache_read_per_million`` is the cached-input rate; ``None`` when unknown.
+    """
+    card = price_card(model_id)
+    if card is not None:
+        return {
+            "input_per_million": card["input_per_million"],
+            "output_per_million": card["output_per_million"],
+            "cache_read_per_million": card["cached_input_per_million"],
+            "source": card["source"],
+        }
+    if cloud_provider(model_id) != "amd":
+        return None
+    from gaia.llm.gateway_prices import gateway_price
+
+    gateway = gateway_price(model_id)
+    if gateway is None:
+        return None
+    tier = f" ({gateway['source']})" if gateway.get("source") else ""
+    return {
+        "input_per_million": gateway["input_per_million"],
+        "output_per_million": gateway["output_per_million"],
+        "cache_read_per_million": gateway.get("cache_read_per_million"),
+        "source": f"{GATEWAY_PRICE_SOURCE}{tier}",
+    }
+
+
 def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:
-    """List-price dollars for *counts* on *model*; a local model costs nothing."""
+    """Dollars for *counts* on *model* at its price; a local model costs nothing.
+
+    Cached input is charged at the cache-read rate; a turn with cached input on
+    a model whose cache-read rate is unknown has an unknown cost. Usage records
+    no cache writes, so none are charged.
+    """
     if cloud_provider(model) is None:
         return 0.0
-    return turn_cost(model, *counts) if counts else None
+    card = model_price(model)
+    if card is None or not counts:
+        return None
+    inp, out, cached = counts
+    cache_rate = card["cache_read_per_million"]
+    if cached and cache_rate is None:
+        return None
+    return (
+        (inp - cached) * card["input_per_million"]
+        + cached * (cache_rate or 0.0)
+        + out * card["output_per_million"]
+    ) / 1e6
 
 
 def hybrid_stats(db, settings) -> Dict[str, Any]:
@@ -388,8 +437,8 @@ def hybrid_stats(db, settings) -> Dict[str, Any]:
 
     Covers every hybrid answer still in the chat database (deleting a chat
     removes its turns); ``since`` is when the oldest was answered. Costs are
-    list prices, as the month total uses: ``cost`` is what the turns cost on the
-    models they ran on, ``cost_if_all_strong`` the same tokens at the strong
+    the models' prices (:func:`model_price`): ``cost`` is what the turns cost on
+    the models they ran on, ``cost_if_all_strong`` the same tokens at the strong
     model's price (the one *settings* name now). Either is None, never $0, when
     any turn's price is unknown; ``unpriced_turns`` counts those turns.
     """
@@ -434,5 +483,4 @@ def hybrid_stats(db, settings) -> Dict[str, Any]:
         "cost_if_all_strong": None if all_strong is None else round(all_strong, 6),
         "saving_pct": saving,
         "unpriced_turns": unpriced,
-        "price_source": PRICE_SOURCE,
     }

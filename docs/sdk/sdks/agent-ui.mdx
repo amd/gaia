@@ -3183,11 +3183,15 @@ the same way.
     policy applies, one `{cheap_max_difficulty, allow_high_stakes}` rule per
     kind. Also `presets` (the `quality` and `balanced` tables), `kinds` (all
     8, in display order), `models` (the gateway's chat models plus any
-    configured model it doesn't list, each with `display_name`, list prices
-    `input_per_million` / `output_per_million` / `cache_read_per_million` —
-    `null` when GAIA doesn't know them, as for every gateway model — and
-    `available`, `null` when the list couldn't be read, with `models_error`
-    saying why), and `is_active` (a new chat starts on `hybrid`). When the
+    configured model it doesn't list, each with `display_name`, prices
+    `input_per_million` / `output_per_million` / `cache_read_per_million` and
+    their `price_source` — `null` when unknown, never $0 — and `available`,
+    `null` when the list couldn't be read, with `models_error` saying why), and
+    `is_active` (a new chat starts on `hybrid`). Gateway prices are the
+    gateway's own, read from its `/models` when the gateway is registered and
+    again once they are a day old; `prices_fetched_at` says when, and
+    `prices_error` why the last read failed (the last prices read are still
+    used). When the
     saved settings can't be used, `config_error` says why and the values are
     shown as saved, so they can be fixed.
   </Accordion>
@@ -3220,12 +3224,14 @@ the same way.
     How every hybrid answer still in the chat database routed: `turns`,
     `cheap_turns`, `strong_turns`, `failed_closed` (turns the classifier
     couldn't judge), and `since`, when the oldest was answered (`null` with
-    none; deleting a chat removes its turns). `cost` is those turns at list
-    price on the models they ran on, `cost_if_all_strong` the same tokens at
-    the strong model's price, and `saving_pct` the difference. A turn whose
-    price is unknown — every gateway model, or a turn that reported no token
-    counts — makes `cost` and `cost_if_all_strong` `null`, never $0;
-    `unpriced_turns` counts them.
+    none; deleting a chat removes its turns). `cost` is those turns at the
+    prices above on the models they ran on (cached input at the cache-read
+    rate), `cost_if_all_strong` the same tokens at the strong model's price,
+    and `saving_pct` the difference. A turn whose price is unknown — a model
+    with no price, cached input with no cache-read rate, or a turn that
+    reported no token counts — makes `cost` and `cost_if_all_strong` `null`,
+    never $0; `unpriced_turns` counts them. Also carries `prices_fetched_at`
+    and `prices_error`.
   </Accordion>
 </AccordionGroup>
 

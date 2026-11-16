@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from gaia import config as config_mod
 from gaia.eval.bench.metering import price
-from gaia.llm import hybrid
+from gaia.llm import gateway_prices, hybrid
 from gaia.llm.hybrid import (
     DEFAULT_CHEAP_MODEL,
     DEFAULT_STRONG_MODEL,
@@ -49,6 +49,48 @@ def _config():
 def _cloud_allowed(monkeypatch):
     monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: False)
     monkeypatch.setattr(providers, "cloud_blocked", lambda: False)
+
+
+#: The gateway's /models, trimmed to what prices read.
+GATEWAY_PAYLOAD = {
+    "data": [
+        {
+            "id": "Claude-Opus-5-5",
+            "pricing": {
+                "source": "Enterprise",
+                "input_per_million": 4.0,
+                "output_per_million": 20.0,
+                "cache_read_input_per_million": 0.2,
+                "cache_creation_input_per_million": 5.0,
+            },
+        },
+        {
+            "id": "DeepSeek-V4.1-Flash",
+            "pricing": {
+                "source": "Public",
+                "input_per_million": 0.255,
+                "output_per_million": 1.02,
+                "cache_read_input_per_million": 0.00544,
+            },
+        },
+        {"id": "Gemma-4-31B"},
+    ]
+}
+
+
+@pytest.fixture(autouse=True)
+def gateway_list(monkeypatch):
+    """The gateway's own /models answer; empty (no prices) unless a test sets it."""
+    state = {"body": {"data": []}, "error": None, "reads": 0}
+
+    def refresh():
+        state["reads"] += 1
+        if state["error"] is not None:
+            raise state["error"]
+        return gateway_prices.record(state["body"], "https://gw.example/v1")
+
+    monkeypatch.setattr(gateway_prices, "refresh", refresh)
+    return state
 
 
 @pytest.fixture(autouse=True)
@@ -135,6 +177,7 @@ def test_get_shows_the_defaults_presets_kinds_and_gateway_models(client, gateway
         "input_per_million",
         "output_per_million",
         "cache_read_per_million",
+        "price_source",
         "available",
     }
     # The gateway's prices are its organization's: unknown, never $0.
@@ -621,3 +664,100 @@ def test_selecting_hybrid_is_refused_when_one_of_its_models_cannot_run(
     assert resp.status_code == 409
     assert DEFAULT_STRONG_MODEL in resp.json()["detail"]
     assert db.get_setting("custom_model") is None
+
+
+# ── gateway prices ──────────────────────────────────────────────────────────
+
+
+def test_settings_carry_the_gateways_own_prices(client, gateway, gateway_list):
+    gateway_list["body"] = GATEWAY_PAYLOAD
+    body = client.get("/api/hybrid/settings").json()
+    models = {m["id"]: m for m in body["models"]}
+    opus = models[DEFAULT_STRONG_MODEL]
+    assert (
+        opus["input_per_million"],
+        opus["output_per_million"],
+        opus["cache_read_per_million"],
+    ) == (4.0, 20.0, 0.2)
+    assert "Enterprise" in opus["price_source"]
+    assert models[DEFAULT_CHEAP_MODEL]["input_per_million"] == 0.255
+    # Listed with no pricing: unknown, never $0.
+    assert models["amd.Gemma-4-31B"]["input_per_million"] is None
+    assert body["prices_error"] is None and body["prices_fetched_at"]
+
+
+def test_prices_are_read_once_then_kept(client, gateway, gateway_list):
+    gateway_list["body"] = GATEWAY_PAYLOAD
+    client.get("/api/hybrid/settings")
+    client.get("/api/hybrid/settings")
+    client.get("/api/hybrid/stats")
+    assert gateway_list["reads"] == 1
+
+
+def test_stale_prices_are_read_again(client, gateway, gateway_list):
+    gateway_list["body"] = GATEWAY_PAYLOAD
+    doc = gateway_prices.record(GATEWAY_PAYLOAD, "https://gw.example/v1")
+    doc["fetched_at_epoch"] -= gateway_prices.MAX_AGE_S + 1
+    gateway_prices.prices_file().write_text(json.dumps(doc), encoding="utf-8")
+    client.get("/api/hybrid/settings")
+    assert gateway_list["reads"] == 1
+
+
+def test_a_failed_price_read_is_reported_and_keeps_the_last_prices(
+    client, gateway, gateway_list
+):
+    doc = gateway_prices.record(GATEWAY_PAYLOAD, "https://gw.example/v1")
+    doc["fetched_at_epoch"] -= gateway_prices.MAX_AGE_S + 1
+    gateway_prices.prices_file().write_text(json.dumps(doc), encoding="utf-8")
+    gateway_list["error"] = gateway_prices.GatewayPriceError("gateway said 401")
+    body = client.get("/api/hybrid/settings").json()
+    assert "401" in body["prices_error"]
+    assert body["prices_fetched_at"] == doc["fetched_at"]
+    opus = next(m for m in body["models"] if m["id"] == DEFAULT_STRONG_MODEL)
+    assert opus["input_per_million"] == 4.0
+
+
+def test_no_price_list_at_all_leaves_prices_unknown(client, gateway, gateway_list):
+    gateway_list["error"] = gateway_prices.GatewayPriceError("no gateway key")
+    body = client.get("/api/hybrid/settings").json()
+    assert "no gateway key" in body["prices_error"]
+    assert all(m["input_per_million"] is None for m in body["models"])
+
+
+def test_an_unreadable_price_file_is_reported_not_a_crash(
+    client, gateway, gateway_list
+):
+    gateway_prices.prices_file().write_text("{not json", encoding="utf-8")
+    gateway_list["error"] = gateway_prices.GatewayPriceError("offline")
+    body = client.get("/api/hybrid/settings").json()
+    assert "Delete the file" in body["prices_error"]
+    assert all(m["input_per_million"] is None for m in body["models"])
+
+
+def test_stats_price_gateway_turns_with_cached_input(client, db, gateway_list):
+    gateway_list["body"] = GATEWAY_PAYLOAD
+    session = db.create_session(model="hybrid")["id"]
+    _answer(
+        db, session, _route(DEFAULT_CHEAP_MODEL, "cheap"), (1_000_000, 100_000, 400_000)
+    )
+    _answer(db, session, _route(DEFAULT_STRONG_MODEL, "strong"), (10_000, 1_000, 0))
+    body = client.get("/api/hybrid/stats").json()
+    cheap = (600_000 * 0.255 + 400_000 * 0.00544 + 100_000 * 1.02) / 1e6
+    as_strong = (600_000 * 4.0 + 400_000 * 0.2 + 100_000 * 20.0) / 1e6
+    strong = (10_000 * 4.0 + 1_000 * 20.0) / 1e6
+    assert body["unpriced_turns"] == 0
+    assert body["cost"] == pytest.approx(cheap + strong, abs=1e-6)
+    assert body["cost_if_all_strong"] == pytest.approx(as_strong + strong, abs=1e-6)
+    assert body["saving_pct"] == pytest.approx(
+        100 * (1 - (cheap + strong) / (as_strong + strong)), abs=0.1
+    )
+
+
+def test_cached_input_without_a_cache_rate_is_unpriced(client, db, gateway_list):
+    payload = json.loads(json.dumps(GATEWAY_PAYLOAD))
+    del payload["data"][1]["pricing"]["cache_read_input_per_million"]
+    gateway_list["body"] = payload
+    session = db.create_session(model="hybrid")["id"]
+    _answer(db, session, _route(DEFAULT_CHEAP_MODEL, "cheap"), (1000, 100, 500))
+    body = client.get("/api/hybrid/stats").json()
+    assert body["unpriced_turns"] == 1 and body["cost"] is None
