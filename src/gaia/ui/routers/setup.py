@@ -106,10 +106,14 @@ def setup_check(skip_chat_model: bool = False, load: bool = False) -> Dict[str, 
 
 # Probes the Lemonade GAIA uses, so a cross-site GET must not reach it.
 @router.get("/api/setup/plan", dependencies=[Depends(require_ui_header)])
-def setup_plan() -> Dict[str, Any]:
-    """The server, chat model and downloads setup will use; loads nothing."""
+def setup_plan(skip_chat_model: Optional[bool] = None) -> Dict[str, Any]:
+    """The server, chat model and downloads setup will use; loads nothing.
+
+    *skip_chat_model* unset plans no local chat model while chat runs on a cloud
+    model; the setup screen passes false to see what a local setup downloads.
+    """
     try:
-        return build_plan()
+        return build_plan(skip_chat_model=skip_chat_model)
     except SetupPlanError as e:
         raise _plan_error(e, _PLAN_FAILED) from e
 
@@ -163,7 +167,9 @@ class ChatModelRequest(BaseModel):
 
 
 @router.post("/api/setup/chat-model", dependencies=[Depends(require_ui_header)])
-def setup_chat_model(body: ChatModelRequest) -> Dict[str, Any]:
+def setup_chat_model(
+    body: ChatModelRequest, skip_chat_model: Optional[bool] = None
+) -> Dict[str, Any]:
     """Pick the chat model, saved as ``default_model``; returns the new plan.
 
     One that may not fit this PC answers 409 ``no_fit`` until it is confirmed.
@@ -173,7 +179,7 @@ def setup_chat_model(body: ChatModelRequest) -> Dict[str, Any]:
         if warning and not body.acknowledge_no_fit:
             raise _confirm(warning)
         choose_chat_model(body.model_id, acknowledge_no_fit=True)
-        return build_plan()
+        return build_plan(skip_chat_model=skip_chat_model)
     except SetupPlanError as e:
         raise _plan_error(
             e,
@@ -189,11 +195,13 @@ class VisionModelRequest(BaseModel):
 
 
 @router.post("/api/setup/vision-model", dependencies=[Depends(require_ui_header)])
-def setup_vision_model(body: VisionModelRequest) -> Dict[str, Any]:
+def setup_vision_model(
+    body: VisionModelRequest, skip_chat_model: Optional[bool] = None
+) -> Dict[str, Any]:
     """Pick the model that reads images; returns the new plan."""
     try:
         plan_api.choose_vision_model(body.model_id)
-        return build_plan()
+        return build_plan(skip_chat_model=skip_chat_model)
     except SetupPlanError as e:
         raise _plan_error(e, f"{body.model_id} can't read images.") from e
 
@@ -247,11 +255,15 @@ class SkipModelRequest(BaseModel):
 
 
 @router.post("/api/setup/models/skip", dependencies=[Depends(require_ui_header)])
-def setup_skip_model(body: SkipModelRequest) -> Dict[str, Any]:
+def setup_skip_model(
+    body: SkipModelRequest, skip_chat_model: Optional[bool] = None
+) -> Dict[str, Any]:
     """Skip one of setup's models, or take it back; returns the new plan."""
     try:
-        plan_api.set_model_skipped(body.model_id, body.skipped)
-        return build_plan()
+        plan_api.set_model_skipped(
+            body.model_id, body.skipped, skip_chat_model=skip_chat_model
+        )
+        return build_plan(skip_chat_model=skip_chat_model)
     except SetupPlanError as e:
         raise _plan_error(
             e,
@@ -299,7 +311,9 @@ class RemoveModelRequest(BaseModel):
 
 
 @router.post("/api/setup/models/remove", dependencies=[Depends(require_ui_header)])
-def setup_remove_model(body: RemoveModelRequest) -> Dict[str, Any]:
+def setup_remove_model(
+    body: RemoveModelRequest, skip_chat_model: Optional[bool] = None
+) -> Dict[str, Any]:
     """Delete one model from Lemonade at the user's request; it joins
     ``skipped_models``. Returns the new plan and ``freed_gb``."""
     if runner.busy_with(body.model_id):
@@ -312,7 +326,7 @@ def setup_remove_model(body: RemoveModelRequest) -> Dict[str, Any]:
         )
     try:
         freed = plan_api.remove_model(body.model_id)
-        return {**build_plan(), "freed_gb": freed}
+        return {**build_plan(skip_chat_model=skip_chat_model), "freed_gb": freed}
     except SetupPlanError as e:
         raise _plan_error(
             e, f"{body.model_id} isn't downloaded, so there is nothing to remove."

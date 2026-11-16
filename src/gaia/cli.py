@@ -5086,9 +5086,9 @@ def _init_model_choices(args, profile: str):
 
     try:
         for model_id in args.skip_model:
-            setup_plan.set_model_skipped(model_id, True, profile)
+            setup_plan.set_model_skipped(model_id, True, profile, args.skip_chat_model)
         for model_id in args.download_model:
-            setup_plan.set_model_skipped(model_id, False, profile)
+            setup_plan.set_model_skipped(model_id, False, profile, args.skip_chat_model)
         if args.use_model:
             setup_plan.choose_chat_model(args.use_model, args.acknowledge_no_fit)
         if not args.plan:

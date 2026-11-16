@@ -905,12 +905,18 @@ def model_need(job: str) -> Dict[str, Any]:
     }
 
 
-def set_model_skipped(model_id: str, skipped: bool, profile: str = PROFILE) -> None:
+def set_model_skipped(
+    model_id: str,
+    skipped: bool,
+    profile: str = PROFILE,
+    skip_chat_model: Optional[bool] = None,
+) -> None:
     """Skip one of *profile*'s models, or take it back; saved in ``skipped_models``."""
     from gaia.config import GaiaConfigError
 
     if skipped:
-        planned = [e["id"] for e in build_plan(profile)["catalog"] if e["planned"]]
+        plan = build_plan(profile, skip_chat_model)
+        planned = [e["id"] for e in plan["catalog"] if e["planned"]]
         if not any(model_choice.ids_match(model_id, m) for m in planned):
             raise UnknownModel(
                 f"{model_id} is not one of the models setup downloads "
