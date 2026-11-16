@@ -379,9 +379,10 @@ def test_unreachable_lemonade_gets_actionable_copy(monkeypatch, gaias_own):
         ConnectionError("Max retries exceeded ... Connection refused")
     )["detail"]
 
-    assert "local LLM" in detail
+    assert ("local LLM" in detail) is gaias_own
     assert "Max retries" not in detail
-    # The daemon restarts GAIA's own server; one the user runs is theirs to start.
+    # The daemon restarts GAIA's own server; one the user runs is theirs to
+    # start, and the TUI names this machine's start instruction.
     assert ("Run: lemond --port 13305" in detail) is not gaias_own
 
 

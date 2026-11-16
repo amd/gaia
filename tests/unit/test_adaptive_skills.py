@@ -745,15 +745,19 @@ def test_no_shipped_skill_has_a_section_named_after_its_own_sample_data():
 
 
 def test_the_broken_command_really_fails_on_this_platform():
-    """The premise. `gh` need not be installed for the quoting failure to bite.
+    """The premise: cmd.exe hands the real `gh` a broken argv.
 
     On Windows `shell_tools` passes the raw string to cmd.exe (shell=True); on
     POSIX it passes a pre-split argv with no shell. The POSIX-quoted form is
     only broken on the former, which is exactly why this belongs in a
     machine-local learned delta and not in the cross-platform authored skill.
+    Needs the real `gh`: without it cmd.exe stops at "'gh' is not recognized",
+    and a stand-in would only echo back the failure the test asserts.
     """
     if os.name != "nt":
         pytest.skip("the cmd.exe quoting failure is Windows-only by construction")
+    if shutil.which("gh") is None:
+        pytest.skip("gh CLI not installed")
 
     result = subprocess.run(
         BROKEN_INBOX_CMD,

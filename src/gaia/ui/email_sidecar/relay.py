@@ -88,6 +88,14 @@ LEMONADE_CONNECTION_HINT = EMAIL_PROFILE.lemonade_hint
 #: stream ends with no terminal event (``gaia.daemon.relay``).
 _DAEMON_RELAY_SOURCE = "daemon_relay"
 
+#: GAIA's own model server failing to start, in the outage bar's words. The
+#: daemon starts it again on the next message, so that comes first.
+ENGINE_START_FAILED_MESSAGE = (
+    "The model server isn't answering, so GAIA can't reply yet. It normally "
+    "starts again on its own, so send your message again in a moment. If it "
+    "keeps happening, open Settings > Setup and press Run setup again."
+)
+
 #: Connection/timeout-shaped fragments of requests/urllib3 error reprs.
 #: Deliberately narrow: a non-match passes through untouched.
 _CONNECTION_SHAPED_RE = re.compile(
@@ -136,7 +144,20 @@ def _augment_error_detail(detail: str, profile: RelayProfile = EMAIL_PROFILE) ->
     """Append (never substitute) an actionable hint to connection-shaped
     error text — boundary translation, not a fallback: the original detail
     is preserved verbatim at the front. Text that already names its next
-    step is left alone, so the user never reads two versions of it."""
+    step is left alone, so the user never reads two versions of it.
+
+    GAIA's own server failing to start is the exception: its reason quotes raw
+    server log lines, so the chat gets the outage wording and the log the rest.
+    """
+    from gaia.llm.providers.lemonade import LemonadeEngineStartError
+
+    if detail.startswith(LemonadeEngineStartError.headline):
+        logger.warning(
+            "%s relay: GAIA's model server could not start: %s",
+            profile.agent_id,
+            detail,
+        )
+        return ENGINE_START_FAILED_MESSAGE
     if (
         profile.lemonade_hint
         and not _ALREADY_ADVISED_RE.search(detail)
@@ -509,6 +530,10 @@ def _dispatch_one(
         if isinstance(event.get("model_messages"), list):
             # Saved with the reply so later turns replay its tool calls.
             handler.relayed_model_messages = event["model_messages"]
+        route = event.get("route")
+        if isinstance(route, dict) and isinstance(route.get("model"), str):
+            # Contract >= 2.29: a hybrid turn is billed to the model it ran on.
+            handler.relayed_route = route
         performance = event.get("performance")
         problem = None if performance is None else turn_record_problem(performance)
         if performance is not None and problem is None:
@@ -618,9 +643,10 @@ def _send_internet_switch(
         )
 
 
-def _best_effort_cancel(proxy: Any, rid: str) -> None:
+def _best_effort_cancel(proxy: Any, rid: str) -> Optional[int]:
+    """Cancel run *rid*; how many attached documents it left unloaded, when it says."""
     try:
-        proxy.cancel_query(rid)
+        left = proxy.cancel_query(rid)
     except SidecarError as exc:
         logger.info(
             "%s relay: cancel_query for run_id=%s: %s",
@@ -628,6 +654,31 @@ def _best_effort_cancel(proxy: Any, rid: str) -> None:
             rid,
             exc,
         )
+        return None
+    if isinstance(left, int) and not isinstance(left, bool) and left > 0:
+        return left
+    return None
+
+
+def _emit_documents_left(handler: Any, left: int, profile: RelayProfile) -> None:
+    """Close the open document-loading step with how many Stop left unloaded.
+
+    Stop closes the stream before the sidecar's own closing line can arrive.
+    When they load depends on whether the index filled, which a count can't say.
+    """
+    noun = "1 document was" if left == 1 else f"{left} documents were"
+    message = f"Stopped: {noun} not loaded."
+    _dispatch_one(
+        handler,
+        {
+            "type": "tool_result",
+            "tool": "index_documents",
+            "data": {"status": "stopped", "message": message, "success": False},
+        },
+        profile,
+        False,
+        False,
+    )
 
 
 def relay_query(
@@ -956,7 +1007,9 @@ def relay_query(
         handler.active_relay_internet_session = None
 
     if handler.cancelled.is_set():
-        _best_effort_cancel(proxy, rid)
+        left = _best_effort_cancel(proxy, rid)
+        if left:
+            _emit_documents_left(handler, left, profile)
         if not terminated:
             handler._emit({"type": "status", "message": "Cancelled."})
     elif crashed or not terminated:

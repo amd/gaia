@@ -746,7 +746,7 @@ class EmailSearchRequest(_Strict):
     query: Optional[str] = Field(
         default=None,
         description=(
-            "Gmail-style search query (e.g. 'from:alice is:unread'). A query "
+            "Gmail-style search query (e.g. 'from:alice subject:invoice'). A query "
             "searches all mail; omit it to list by label (or the INBOX when "
             "labels are also omitted)."
         ),

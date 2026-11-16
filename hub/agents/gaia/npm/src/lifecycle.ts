@@ -56,7 +56,7 @@ export const DEFAULT_PORT = 8141;
 export const RESERVED_PORT = 4001;
 
 /** The apiVersion this package is built against (`server.py: API_VERSION`). */
-export const API_VERSION = "2.28";
+export const API_VERSION = "2.29";
 
 /** The agent id in the sidecar's route prefix (`/v1/gaia/...`). */
 export const AGENT_ID = "gaia";
@@ -81,14 +81,14 @@ export function sidecarExecutableName(
 }
 
 /**
- * Basename the TUI executable is written as. Deliberately `gaia-tui`, not
+ * Basename the TUI executable is written as. Deliberately `gaia-cli`, not
  * `gaia`: npm installs its own `gaia` bin shim, and a same-named executable in a
  * cache dir on PATH would shadow it.
  */
 export function tuiExecutableName(
   platform: NodeJS.Platform = process.platform,
 ): string {
-  return platform === "win32" ? "gaia-tui.exe" : "gaia-tui";
+  return platform === "win32" ? "gaia-cli.exe" : "gaia-cli";
 }
 
 export interface ResolveOptions {
@@ -182,7 +182,7 @@ export function resolveSidecarPath(opts: ResolveOptions): string {
 }
 
 export function resolveTuiPath(opts: ResolveOptions): string {
-  return resolveIn(opts, "tui", tuiExecutableName(), "gaia-tui");
+  return resolveIn(opts, "tui", tuiExecutableName(), "gaia-cli");
 }
 
 export interface SpawnOptions {
@@ -487,7 +487,7 @@ function majorOf(v: string): number {
 }
 
 export interface VersionCheckOptions {
-  /** apiVersion this package was built against. Default API_VERSION ("2.28"). */
+  /** apiVersion this package was built against. Default API_VERSION ("2.29"). */
   expectedApiVersion?: string;
 }
 
@@ -744,7 +744,7 @@ export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
 }
 
 export interface RunTuiOptions {
-  /** Absolute path to the gaia-tui binary. */
+  /** Absolute path to the gaia-cli binary. */
   binaryPath: string;
   /** Args forwarded verbatim to the TUI. */
   args?: string[];
@@ -762,7 +762,7 @@ export function runTui(opts: RunTuiOptions): Promise<number> {
     throw new TypeError("runTui requires { binaryPath }");
   }
   if (!fs.existsSync(opts.binaryPath)) {
-    throw new BinaryNotFoundError(`gaia-tui binary does not exist: ${opts.binaryPath}`);
+    throw new BinaryNotFoundError(`gaia-cli binary does not exist: ${opts.binaryPath}`);
   }
   return new Promise<number>((resolve, reject) => {
     const child = spawn(opts.binaryPath, opts.args ?? [], {

@@ -13,10 +13,8 @@ import { dateLocale, tEn, translator, useT, type Translate } from '../i18n/useT'
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useDialogFocus } from '../hooks/useDialogFocus';
+import { ConfirmSheet } from './setup/ConfirmSheet';
 import './ScheduleManager.css';
-
-/** How long the Delete button waits for its "Confirm?" click. */
-export const CONFIRM_DELETE_MS = 8000;
 
 const STATUS_LABEL: Record<Schedule['status'], MessageKey> = {
     active: 'schedules.status.active',
@@ -149,15 +147,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
     const { setCurrentSession, setShowSchedules } = useChatStore();
     const isSelected = selectedSchedule === schedule.name;
     const described = describeSchedule(schedule.description_parts, t);
-    const [confirmDelete, setConfirmDelete] = useState(false);
-    const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const clearConfirmTimer = useCallback(() => {
-        if (confirmTimerRef.current) {
-            clearTimeout(confirmTimerRef.current);
-            confirmTimerRef.current = null;
-        }
-    }, []);
-    useEffect(() => clearConfirmTimer, [clearConfirmTimer]);
+    const [askingDelete, setAskingDelete] = useState(false);
 
     // Live countdown: tick every second when next_run_at is < 60s away
     const [now, setNow] = useState(() => new Date());
@@ -212,18 +202,14 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 
     const handleDelete = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
-        clearConfirmTimer();
-        if (!confirmDelete) {
-            setConfirmDelete(true);
-            confirmTimerRef.current = setTimeout(() => {
-                confirmTimerRef.current = null;
-                setConfirmDelete(false);
-            }, CONFIRM_DELETE_MS);
-            return;
-        }
+        setAskingDelete(true);
+    }, []);
+
+    const confirmDelete = useCallback(() => {
+        setAskingDelete(false);
         log.ui.info(`Deleting schedule "${schedule.name}"`);
-        deleteSchedule(schedule.name);
-    }, [schedule.name, confirmDelete, deleteSchedule, clearConfirmTimer]);
+        void deleteSchedule(schedule.name);
+    }, [schedule.name, deleteSchedule]);
 
     const handleOpenChat = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
@@ -237,7 +223,8 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
     return (
         <div
             className={`schedule-card ${isSelected ? 'selected' : ''} ${justRan ? 'just-ran' : ''}`}
-            onClick={() => selectSchedule(isSelected ? null : schedule.name)}
+            // A click in the delete dialog reaches here through its portal; it isn't a card click.
+            onClick={(e) => { if (e.currentTarget.contains(e.target as Node)) selectSchedule(isSelected ? null : schedule.name); }}
         >
             <div className="schedule-card-header">
                 <span className="schedule-card-name" dir="auto" title={schedule.name}>{schedule.name}</span>
@@ -274,9 +261,23 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                         : <><Play size={11} /> {t('schedules.card.resume')}</>}
                 </button>
                 <button className={`btn-sm danger`} onClick={handleDelete} title={t('schedules.card.delete')}>
-                    <Trash2 size={11} /> {t(confirmDelete ? 'schedules.card.confirmDelete' : 'schedules.card.delete')}
+                    <Trash2 size={11} /> {t('schedules.card.delete')}
                 </button>
             </div>
+            {askingDelete && (
+                <ConfirmSheet
+                    title={t('schedules.delete.ask', { name: schedule.name })}
+                    confirmLabel={t('schedules.delete.confirm')}
+                    cancelLabel={t('schedules.delete.cancel')}
+                    onConfirm={confirmDelete}
+                    onCancel={() => setAskingDelete(false)}
+                    danger
+                >
+                    <p>{t('schedules.delete.what')}</p>
+                    {schedule.session_id && <p>{t('schedules.delete.chatStays')}</p>}
+                    {schedule.running && <p>{t('schedules.delete.runStops')}</p>}
+                </ConfirmSheet>
+            )}
 
             {isSelected && (
                 <div className="schedule-results">

@@ -34,6 +34,7 @@ import re
 from typing import Any, Dict, Optional, Set
 
 from gaia.agents.base.completion import mentioned_paths, save_obligations
+from gaia.agents.base.text_task import instruction_part
 from gaia.agents.base.tool_outcome import (
     FAILED_STATUSES,
     tool_result_dict,
@@ -254,10 +255,11 @@ class TurnScopeGuard:
         self.failed_calls = {}
         self.failed_targets = {}
         self._batch = None
-        self.paths = {_norm(p, root) for p in mentioned_paths(query or "")}
-        self.folders = self._output_folders(save_obligations(query or "")[0])
+        asked = instruction_part(query or "")
+        self.paths = {_norm(p, root) for p in mentioned_paths(asked)}
+        self.folders = self._output_folders(save_obligations(asked)[0])
         self.tables = set()
-        self.urls = _urls_in(query or "")
+        self.urls = _urls_in(asked)
         self.scratch = _norm(str(scratch), root) if scratch else None
 
     def begin_batch(self) -> None:

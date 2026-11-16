@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { ErrorNotice } from '../settings/ErrorNotice';
 import { useChatStore } from '../../stores/chatStore';
@@ -64,13 +64,44 @@ describe('a model picked from the list', () => {
 });
 
 describe('the start-up banner', () => {
-    it('names the boot task that is running', () => {
-        useChatStore.setState({ systemStatus: {
-            lemonade_running: true, init_state: 'initializing',
-            init_tasks: [{ name: 'Checking LLM server', status: 'done' }, { name: 'Loading AI model', status: 'running' }],
-        } as SystemStatus });
+    const booting = (step: string | undefined, name: string) => useChatStore.setState({ systemStatus: {
+        lemonade_running: true, init_state: 'initializing',
+        init_tasks: [{ name: 'Checking LLM server', step: 'check_server', status: 'done' }, { name, step, status: 'running' }],
+    } as SystemStatus });
+
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    it.each([
+        ['check_server', 'Checking LLM server', 'Checking the model server', 'جارٍ فحص خادم النماذج'],
+        ['load_libraries', 'Loading ML libraries', 'Getting document search ready', 'جارٍ تجهيز البحث في المستندات'],
+        ['load_model', 'Loading AI model', 'Loading the model', 'جارٍ تحميل النموذج'],
+    ])('names the %s step in the interface language, not the server\'s label', (step, name, en, ar) => {
+        booting(step, name);
+        const { unmount } = render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent(en);
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
         render(<ConnectionBanner />);
-        expect(screen.getByRole('status')).toHaveTextContent('Loading AI model');
+        expect(screen.getByRole('status')).toHaveTextContent(ar);
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
+    });
+
+    it.each([
+        ['an unknown step', 'warm_flux_capacitor', 'Warming the flux capacitor'],
+        ['no step at all', undefined, 'Loading AI model'],
+    ])('reads as getting GAIA ready for %s, never the server\'s label', (_, step, name) => {
+        booting(step, name);
+        const { unmount } = render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent('Getting GAIA ready');
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
+        unmount();
+
+        useChatStore.setState({ locale: 'ar' });
+        render(<ConnectionBanner />);
+        expect(screen.getByRole('status')).toHaveTextContent('جارٍ تجهيز GAIA');
+        expect(screen.getByRole('status')).not.toHaveTextContent(name);
     });
 
     it('never says it is loading once every boot task has finished', () => {
@@ -106,7 +137,7 @@ describe('the model server is down', () => {
     it('never invents a start command the backend did not give', () => {
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(screen.getByText(/The model server isn't running/)).toBeInTheDocument();
+        expect(screen.getByText(/The model server isn't answering/)).toBeInTheDocument();
         expect(container.querySelector('code')).toBeNull();
         expect(container).not.toHaveTextContent('lemonade-server serve');
     });
@@ -115,7 +146,7 @@ describe('the model server is down', () => {
         const install = 'Lemonade Server is not installed. Run `gaia init` to install it, or set LEMONADE_SERVER_PATH to an existing install.';
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null, start_instruction: install } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(container).toHaveTextContent("The model server isn't running. Set up models on this PC");
+        expect(container).toHaveTextContent("The model server isn't answering. Set up models on this PC");
         expect(container).not.toHaveTextContent('gaia init');
         expect(container).not.toHaveTextContent('stopped');
     });
@@ -143,14 +174,13 @@ describe('the model server is down', () => {
         expect(container).toHaveTextContent("The model server isn't answering.");
         expect(container).not.toHaveTextContent('Lemonade');
         expect(container).toHaveTextContent('may be busy');
-        expect(container).not.toHaveTextContent("isn't running");
         expect(container).toHaveTextContent('If it stays this way, restart it:');
         expect(container.querySelector('code')?.textContent).toBe('/usr/bin/lemond');
     });
 
     it.each([
         ['hung', { lemonade_error: 'Lemonade health query failed' }, 'خادم النماذج لا يستجيب', 'فأعد تشغيله'],
-        ['stopped', {}, 'خادم النماذج لا يعمل', 'لتشغيله يدويًا'],
+        ['stopped', {}, 'خادم النماذج لا يستجيب', 'لتشغيله يدويًا'],
     ])('reads in Arabic when the model server is %s, the command kept left to right', (_, extra, message, hint) => {
         useChatStore.setState({ locale: 'ar', systemStatus: {
             lemonade_running: false, start_command: '/usr/bin/lemond', ...extra,
@@ -192,6 +222,31 @@ describe('context window too small', () => {
         expect(screen.getByText(/LLM context window is too small/)).toBeInTheDocument();
         expect(screen.getByText(/Settings → Advanced/)).toBeInTheDocument();
         expect(container.querySelector('code')).toBeNull();
+    });
+});
+
+describe('a failed model download', () => {
+    const healthy = {
+        lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF', model_downloaded: true, expected_model_loaded: true,
+        context_size_sufficient: true,
+    };
+    const progress = (state: 'downloading' | 'error') => ({
+        state, model_name: 'Gemma-4-E4B-it-GGUF', percent: 40, file: null, file_index: 1, total_files: 1,
+        downloaded_bytes: 0, total_bytes: 0, message: state === 'error' ? 'disk full' : undefined,
+    });
+
+    it('goes away when dismissed, and a later failure shows again', () => {
+        useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus });
+        const { rerender } = render(<ConnectionBanner />);
+        expect(screen.getByRole('alert')).toHaveTextContent('failed');
+        fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+        expect(screen.queryByRole('alert')).toBeNull();
+
+        act(() => { useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('downloading') } as SystemStatus }); });
+        rerender(<ConnectionBanner />);
+        act(() => { useChatStore.setState({ systemStatus: { ...healthy, download_progress: progress('error') } as SystemStatus }); });
+        rerender(<ConnectionBanner />);
+        expect(screen.getByRole('alert')).toHaveTextContent('failed');
     });
 });
 

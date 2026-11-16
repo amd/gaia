@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react';
 import { AlertTriangle, X, AlertCircle, Bug } from 'lucide-react';
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
 import { useT } from '../i18n/useT';
+import { serverFailureText } from '../utils/documentFailure';
 import './UnsupportedFeature.css';
 
 const GITHUB_NEW_ISSUE_URL = 'https://github.com/amd/gaia/issues/new';
@@ -222,7 +223,10 @@ export const PERMANENT_FAILURE_HINTS: Record<string, string> = {
 
 /** The backend's message without its leading category label, e.g. "File not found:". */
 function stripPrefix(message: string, prefix: string): string {
-    return message.startsWith(prefix) ? message.slice(prefix.length).trim() : message;
+    if (!message.startsWith(prefix)) return message;
+    const rest = message.slice(prefix.length).trim();
+    // What follows the label is now the sentence's start.
+    return rest.charAt(0).toUpperCase() + rest.slice(1);
 }
 
 interface UploadErrorToastProps {
@@ -282,6 +286,12 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
     if (permanentHint) {
         title = `"${filename}" can't be read`;
         detail = permanentHint;
+        issueUrl = null;
+        Icon = AlertTriangle;
+    } else if (serverFailureText(kind, t)) {
+        // The file is fine; the model server didn't answer.
+        title = t('docs.notAddedServer', { name: filename });
+        detail = serverFailureText(kind, t) ?? error;
         issueUrl = null;
         Icon = AlertTriangle;
     } else if (kind === 'too_large') {

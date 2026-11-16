@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import unquote, urlparse
 
+from gaia.agents.base.text_task import instruction_part
 from gaia.agents.base.tool_outcome import tool_result_dict
 from gaia.home import gaia_home
 
@@ -272,6 +273,61 @@ _LEAD = re.compile(
 )
 
 
+# Tools that can read many files in one call, so the reads on record undercount.
+_BULK_READERS = _EXEC_TOOLS | {"index_directory", "index_codebase"}
+# "I read the actual content of every one", "we opened all 40 files".
+_FULL_READ = re.compile(
+    r"\b(?:I|we)(?:['’]ve|\s+have|\s+had)?"
+    r"(?:\s+(?:also|already|just|then|carefully|actually|personally|really))*\s+"
+    r"(?:(?:re-?)?read|opened|went\s+through|looked\s+(?:at|inside)|inspected|examined|"
+    r"(?:checked|verified|reviewed)(?=\s+the\s+(?:actual\s+|full\s+)?contents?\b))"
+    r"\s+(?:the\s+(?:actual\s+|full\s+|whole\s+)?contents?\s+of\s+)?"
+    r"(?:all|each|every)\b",
+    re.I,
+)
+_CLAIMED_COUNT = re.compile(
+    r"^\s*(?:one\s+)?(?:of\s+)?(?:the\s+|these\s+|those\s+)?(\d[\d,]*)\b"
+)
+_FILE_COUNT = re.compile(
+    r"(?<![\w.,])(\d[\d,]*)\s+(?:[\w-]+\s+)?(?:files|documents|docs|memos|notes|"
+    r"logs|reports|records|pages|sources|scripts|clues|pdfs)\b",
+    re.I,
+)
+_NUMBER = re.compile(r"\d")
+
+
+def _count(text: str) -> int:
+    return int(text.replace(",", ""))
+
+
+def claimed_full_read(answer: str) -> int | None:
+    """How many files *answer* says it read every one of, else ``None``.
+
+    The count is the one the claim names ("all 40 files"), or the file count
+    just before it ("1000 files ... I read every one"). A claim with another
+    number in front of it ("the 5 configs, and read every one") is ambiguous.
+    """
+    text = re.sub(r"[*`_]", "", _FENCES.sub("", answer or ""))
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip()]
+    for index, sentence in enumerate(sentences):
+        match = _FULL_READ.search(sentence)
+        if not match or _CONDITION.match(sentence) or _EARLIER.search(sentence):
+            continue
+        named = _CLAIMED_COUNT.match(sentence[match.end() :])
+        if named:
+            return _count(named.group(1))
+        before = sentence[: match.start()]
+        counts = _FILE_COUNT.findall(before)
+        if counts:
+            return _count(counts[-1])
+        if _NUMBER.search(before) or index == 0:
+            continue
+        earlier = _FILE_COUNT.findall(sentences[index - 1])
+        if earlier:
+            return max(_count(c) for c in earlier)
+    return None
+
+
 # Files checked under one requested folder for script-written outputs.
 _MAX_FOLDER_FILES = 2000
 # Above this, a script output may be checked in part instead of read whole.
@@ -466,7 +522,8 @@ def _source_paths(text: str) -> set[str]:
 
 def _instructions(query: str):
     """(verb, text after it) for each non-negated storage instruction."""
-    for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", query)):
+    asked = _FENCES.sub("", instruction_part(query))
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", asked):
         sentence = sentence.strip()
         for action in _SAVE_REQUEST.finditer(sentence):
             if not _NOT_REQUEST.search(sentence[: action.end()]):
@@ -652,7 +709,8 @@ class CompletionEvidence:
         # Downloads that ran and failed: key -> the URL's file name when the
         # call named only a folder, else None.
         self.failed_downloads: dict[str, str | None] = {}
-        self.query = query if isinstance(query, str) else ""
+        # A sentence handed over to translate names no file this turn owes.
+        self.query = instruction_part(query) if isinstance(query, str) else ""
         # Folders the request gives in full, and their parents: "in C:\w\project\
         # ... write project\stats.csv" means C:\w\project\stats.csv.
         self.anchors = list(
@@ -666,21 +724,25 @@ class CompletionEvidence:
         )
         # The subset of refused reasons that were prompts nobody answered.
         self.unconfirmed: set[str] = set()
-        self.requested, self.save_requested = save_obligations(query)
+        self.requested, self.save_requested = save_obligations(self.query)
         # Wider than ``requested``: every file the request asks to produce.
-        self.outputs = named_outputs(query)
-        self.instructed = save_instructed(query)
+        self.outputs = named_outputs(self.query)
+        self.instructed = save_instructed(self.query)
         # The paths the request names and their folders: where a bare output
         # ("also make tables.xlsx") lands.
         self.named_folders = list(
             dict.fromkeys(
                 folder
-                for path in mentioned_paths(query)
+                for path in mentioned_paths(self.query)
                 if ntpath.basename(path) != path
                 for folder in (self.key(path), os.path.dirname(self.key(path)))
             )
         )
         self.disk_tool_ran = False
+        # Files a successful call was given to read, and whether a call that
+        # can read many at once (a script, an indexer) succeeded.
+        self.read_paths: set[str] = set()
+        self.bulk_read = False
         # (started ns, ended ns, succeeded, ledger sequence) per executor run.
         self.exec_windows: list[tuple[int, int, bool, int]] = []
         # (ledger sequence, what the run named) for runs that printed something.
@@ -834,6 +896,18 @@ class CompletionEvidence:
             return
         if tool in WRITE_TOOLS or tool in SIDE_EFFECT_PATHS or tool in _EXEC_TOOLS:
             self.disk_tool_ran = True
+        if successful and tool in _BULK_READERS:
+            self.bulk_read = True
+        source = args.get("file_path")
+        if (
+            successful
+            and tool not in WRITE_TOOLS
+            and tool not in _EXEC_TOOLS
+            and tool not in SIDE_EFFECT_PATHS
+            and isinstance(source, str)
+            and "\x00" not in source
+        ):
+            self.read_paths.add(self.key(source, args.get("project_dir")))
         if tool == _DOWNLOAD_TOOL and not successful:
             # The source said no: no other tool can save this file.
             target, url_name = _download_target(args)
@@ -1492,6 +1566,25 @@ class CompletionEvidence:
             return os.path.getsize(item.path) > _FULL_READ_LIMIT
         except OSError:
             return False
+
+    def read_coverage_gap(self, answer: str) -> str | None:
+        """An "I read every one of N files" claim that far outruns the reads on record.
+
+        Files this turn wrote are outputs, not sources, so reading them back
+        does not count. After a script or indexer ran, any file may have been
+        read, so nothing is claimed against it.
+        """
+        claimed = claimed_full_read(answer)
+        if claimed is None or claimed < 3 or self.bulk_read:
+            return None
+        written = {key for key, item in self.files.items() if item.written}
+        opened = len(self.read_paths - written)
+        if opened * 2 >= claimed:
+            return None
+        return (
+            f"The answer says all {claimed} files were read, but only {opened} "
+            f"{'was' if opened == 1 else 'were'} opened this turn."
+        )
 
     def cleanup_gaps(self, answer: str) -> list[str]:
         """A deletion claim needs a concrete path observed disappearing."""

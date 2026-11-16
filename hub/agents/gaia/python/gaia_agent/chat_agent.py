@@ -57,7 +57,12 @@ from gaia_agent.python_jobs import (
     stopped_job_result,
     watch_folders,
 )
-from gaia_agent.python_runner import BUNDLED_LIBRARIES, is_frozen, python_command
+from gaia_agent.python_runner import (
+    BUNDLED_LIBRARIES,
+    GUARDED_FOLDERS_ENV,
+    is_frozen,
+    python_command,
+)
 from gaia_agent.session import SessionManager
 from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent.tool_requests import requested_tools
@@ -72,7 +77,13 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import before_change, note_untracked
+from gaia.agents.base.file_snapshots import (
+    SnapshotError,
+    before_change,
+    note_folder_changes,
+    note_untracked,
+    watch_script_folders,
+)
 from gaia.agents.base.goal_store import GOAL_OUTCOMES
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
@@ -114,8 +125,11 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import (
+    _forget_evicted,
+    attached_not_loaded,
     documents_failed_indexing,
     documents_still_indexing,
+    not_loaded_note,
 )
 from gaia.agents.tools.workspace_paths import (
     _resolve_target,
@@ -432,6 +446,23 @@ def _python_run_result(
     return result
 
 
+def _guarded_folders() -> str:
+    """The credential folders a script may not open files in, for its environment."""
+    from gaia.security import SECRET_DIRECTORIES
+
+    return os.pathsep.join(sorted(SECRET_DIRECTORIES))
+
+
+def _record_folder_changes(watch) -> Optional[str]:
+    """Record what a script added to the folders it names; a note if that failed."""
+    try:
+        note_folder_changes(watch)
+    except SnapshotError as e:
+        logger.error("Could not record the files a script added: %s", e)
+        return f"Undo won't remove the files this added: {e}"
+    return None
+
+
 def _python_script_run_context(
     script: Path, project_dir: os.PathLike | str | None
 ) -> tuple[Path, Dict[str, str]]:
@@ -448,8 +479,11 @@ def _python_script_run_context(
     env = child_env(relaunch_self=True)
     # The tools decode the output as UTF-8; the locale codec can't print a ✓.
     env["PYTHONIOENCODING"] = "utf-8"
+    env[GUARDED_FOLDERS_ENV] = _guarded_folders()
     # Files it writes with a bare open() are UTF-8, like the file tools write.
     env["PYTHONUTF8"] = "1"
+    # A timed-out run still returns what it printed before the kill.
+    env.setdefault("PYTHONUNBUFFERED", "1")
     if project_dir is None:
         return script.parent, env
     project = Path(project_dir).resolve()
@@ -640,6 +674,9 @@ class ChatAgentConfig:
     # any built-in or registered Chat instance.
     namespaced_agent_id: Optional[str] = None
 
+
+# Names listed of the attached documents the index does not hold; the rest are counted.
+_NOT_LOADED_SHOWN = 30
 
 # Added to the per-turn document list only when a document is not in Latin script.
 _CROSS_LANGUAGE_NOTE = (
@@ -847,6 +884,8 @@ class ChatAgent(
         self.observers = []
         self.file_handlers = []  # Track FileChangeHandler instances for telemetry
         self.indexed_files = set()
+        # Every document attached to the chat, held in the index or not.
+        self.attached_documents: List[str] = []
 
         # Initialize file system index service (optional)
         self._fs_index = None
@@ -1028,6 +1067,8 @@ class ChatAgent(
             if loaded:
                 self.current_session = loaded
                 for doc_path in loaded.indexed_documents:
+                    if self.rag.is_full():
+                        break
                     if doc_path not in self.indexed_files and os.path.exists(doc_path):
                         try:
                             real = os.path.realpath(doc_path)
@@ -1036,6 +1077,9 @@ class ChatAgent(
                             ) or self._is_path_allowed(real):
                                 result = self.rag.index_document(real)
                                 if result.get("success"):
+                                    _forget_evicted(
+                                        self.indexed_files, result.get("evicted", [])
+                                    )
                                     self.indexed_files.add(doc_path)
                                     logger.info(
                                         "Restored indexed doc from prior turn: %s",
@@ -1086,6 +1130,14 @@ class ChatAgent(
             lines.append(f"[Indexed documents: {', '.join(entries)}]")
             if any(s and s != ["Latin"] for s in scripts.values()):
                 lines.append(_CROSS_LANGUAGE_NOTE)
+        not_loaded = attached_not_loaded(self, self.rag)
+        if not_loaded:
+            shown = ", ".join(Path(fp).name for fp in not_loaded[:_NOT_LOADED_SHOWN])
+            more = len(not_loaded) - _NOT_LOADED_SHOWN
+            lines.append(
+                f"[{not_loaded_note(len(not_loaded), self.rag)} Not searched: "
+                f"{shown}{f', and {more} more' if more > 0 else ''}]"
+            )
         pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
         if pending:
             lines.append(
@@ -1132,6 +1184,39 @@ class ChatAgent(
         )
 
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
+
+    def follow_model_switch(self) -> None:
+        """Point what was chosen for the model this agent was built on at the
+        one it runs now: image reading, and the model documents are summarized with.
+        """
+        model = self.model_id
+        if "vlm_model" in vars(self):
+            vision = resolve_default_vision_model(model)
+            if vision != self.vlm_model:
+                from gaia.llm.vlm_client import VLMClient
+
+                self.vlm_model = vision
+                self.vlm_client = (
+                    None
+                    if vision is None
+                    else VLMClient(vlm_model=vision, base_url=self.vlm_base_url)
+                )
+        # vars(): tests build agents without running __init__.
+        if (
+            getattr(self, "_use_claude", False)
+            or not model
+            or "_rag_config_kwargs" not in vars(self)
+        ):
+            return
+        self._rag_config_kwargs["model"] = model
+        rag_config = self._rag_config
+        if rag_config is not _UNSET and rag_config is not None:
+            rag_config.model = model
+            rag_config.vlm_model = resolve_default_vision_model(model)
+        rag = self._rag
+        if rag is not _UNSET and rag is not None:
+            # Its own chat client names the model per call.
+            rag.chat.config.model = model
 
     @property
     def rag(self) -> Optional[RAGSDK]:
@@ -2691,6 +2776,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         note_untracked("execute_python_file", str(p))
                     # The script's own output folders first: the search is bounded.
                     watch = watch_folders(*folders_named_in(source), run_dir, project)
+                    named = None
+                    if writes:
+                        try:
+                            # A file the script moves or renames can be put back.
+                            named = watch_script_folders(
+                                folders_named_in(source), "execute_python_file"
+                            )
+                        except SnapshotError as e:
+                            return {
+                                "status": "error",
+                                "error": f"Not run: {e}",
+                                "has_errors": True,
+                                "executed": False,
+                            }
                     started = time.time()
                     try:
                         job = run_python_job(
@@ -2705,7 +2804,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("execute_python_file", str(p))
+                        _record_folder_changes(named)
                         raise
+                    undo_note = _record_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2728,7 +2829,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             retain_excerpt(self, r.stdout, 8000),
                             retain_excerpt(self, r.stderr, 2000),
                             time.monotonic() - start,
-                            finished_job_note(job),
+                            " ".join(
+                                n for n in (finished_job_note(job), undo_note) if n
+                            )
+                            or None,
                         ),
                         check_from_python_run(
                             " ".join([file_path, args]).strip(),
@@ -2870,7 +2974,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 env = child_env(relaunch_self=True)
                 env["PYTHONIOENCODING"] = "utf-8"
+                env[GUARDED_FOLDERS_ENV] = _guarded_folders()
                 env["PYTHONUTF8"] = "1"
+                env.setdefault("PYTHONUNBUFFERED", "1")
                 if project:
                     _with_project_paths(env, project)
 
@@ -2889,6 +2995,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 started = time.time()
                 start = time.monotonic()
                 try:
+                    named = None
+                    if writes:
+                        try:
+                            # A file the snippet moves or renames can be put back.
+                            named = watch_script_folders(
+                                folders_named_in(code), "run_python"
+                            )
+                        except SnapshotError as e:
+                            return {
+                                "status": "error",
+                                "error": f"Not run: {e}",
+                                "has_errors": True,
+                                "executed": False,
+                            }
                     try:
                         job = run_python_job(
                             cmd,
@@ -2902,7 +3022,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("run_python", detail)
+                        _record_folder_changes(named)
                         raise
+                    undo_note = _record_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2928,7 +3050,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         logger.warning(
                             "run_python: could not remove %s: %s", snippet_dir, e
                         )
-                notes = [finished_job_note(job)]
+                notes = [finished_job_note(job), undo_note]
                 if moved_from is not None:
                     notes.append(
                         f"The working folder {moved_from} no longer exists, so "
@@ -2967,7 +3089,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             # getattr: tools can register from super().__init__(), before
             # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                model=resolve_default_vision_model(),
+                model=resolve_default_vision_model(getattr(self, "model_id", None)),
                 base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
             )
             logger.debug(
@@ -3850,7 +3972,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         )
 
     def _index_documents(self, documents: List[str]) -> List[str]:
-        """Index initial documents and return any user-facing failure messages."""
+        """Index the chat's attached documents; return user-facing failure messages.
+
+        Stops loading once the index is full rather than push out documents it
+        just loaded: the rest stay attached, are named to the model as not
+        searched, and load one at a time through ``query_specific_file``.
+        """
+        self.attached_documents = list(documents)
         failures = []
         for doc in documents:
             doc_name = os.path.basename(doc)
@@ -3859,10 +3987,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     # Naming a file to index is the grant to read it; a folder is never granted.
                     if os.path.isfile(doc):
                         self.path_validator.add_allowed_path(doc)
+                    if self.rag.is_full():
+                        continue
                     logger.info(f"Indexing document: {doc}")
                     result = self.rag.index_document(doc)
 
                     if result.get("success"):
+                        _forget_evicted(self.indexed_files, result.get("evicted", []))
                         self.indexed_files.add(doc)
                         logger.info(
                             f"Successfully indexed: {doc} ({result.get('num_chunks', 0)} chunks)"
@@ -4130,6 +4261,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.cleanup_browser_use()
         except Exception as e:
             logger.error(f"Error closing browser during cleanup: {e}")
+        try:
+            # Each MCP server is a process tree (uvx, uv, the server) that outlives
+            # us. The collector may run this on the event loop, and stopping a
+            # server waits for it, so the stop happens on its own thread here;
+            # close() stops them synchronously first, leaving nothing to do.
+            manager = getattr(self, "_mcp_manager", None)
+            if manager is not None and getattr(manager, "_clients", None):
+                threading.Thread(
+                    target=manager.disconnect_all, name="gaia-mcp-stop", daemon=True
+                ).start()
+        except Exception as e:
+            logger.error(f"Error stopping MCP servers during cleanup: {e}")
         try:
             if self._fs_index:
                 self._fs_index.close_db()

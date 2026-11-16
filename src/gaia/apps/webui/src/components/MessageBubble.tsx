@@ -3,12 +3,13 @@
 
 import React, { createContext, useCallback, useContext, useId, useLayoutEffect, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText, Settings } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
+import { remarkNumericColumns } from '../utils/remarkNumericColumns';
 import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
@@ -23,13 +24,16 @@ import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
-import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, lineCount, sizeLabel } from './LongContent';
+import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, lineCount, messageExcerpt, sizeLabel } from './LongContent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
 import { useLogsStore } from '../stores/logsStore';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import { dropAnswerDrafts } from '../utils/answerDrafts';
+import { describeFailedTurn, failedTurnDetails } from '../utils/failedTurn';
+import { splitUploadedImages } from '../utils/messageImages';
+import { ImageThumbs } from './ImageThumbs';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
     type CitationIndex, type CitedDoc, type FoundPage,
@@ -454,6 +458,22 @@ function formatFullTimestamp(iso: string, t: Translate): string {
     });
 }
 
+/** "11:13 PM" today, "Yesterday, 4:10 PM", "Nov 9, 4:10 PM" this year, with the year before that. */
+export function formatShortTimestamp(iso: string, t: Translate, now: Date = new Date()): string {
+    if (!iso) return '';
+    const when = new Date(iso);
+    const locale = dateLocale(t);
+    const time = when.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' });
+    const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const daysAgo = Math.round((dayStart(now) - dayStart(when)) / 86_400_000);
+    if (daysAgo === 0) return time;
+    if (daysAgo === 1) return t('msg.yesterdayAt', { time });
+    return when.toLocaleString(locale, {
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+        ...(when.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+    });
+}
+
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
@@ -588,6 +608,12 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
     const place = useInferencePlace();
     const showServerLog = useLogsStore((s) => s.show);
+    const openSettings = useChatStore((s) => s.openSettings);
+    const jumpToSetting = useChatStore((s) => s.jumpToSetting);
+    const failedTurn = useMemo(
+        () => (isError && !isStreaming ? describeFailedTurn(message.content) : null),
+        [isError, isStreaming, message.content],
+    );
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
@@ -599,15 +625,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const endedBy = cutOff ? null : echo.endedBy;
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
+    const userParts = useMemo(
+        () => (message.role === 'user' ? splitUploadedImages(message.content) : null),
+        [message.content, message.role],
+    );
     const cleanedContent = useMemo(
         () => {
-            if (message.role === 'user') return message.content;
+            if (userParts) return userParts.text;
             const body = cutOff
                 ? cutOff.body
                 : endedBy ? message.content.trimEnd().slice(0, -endedBy.length) : message.content;
             return cleanToolCallContent(body, Boolean(isStreaming));
         },
-        [message.content, message.role, isStreaming, cutOff, endedBy],
+        [message.content, userParts, isStreaming, cutOff, endedBy],
     );
     const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
     const summaryFiles = message.turnSummary?.files;
@@ -616,6 +646,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
+    const excerpt = useMemo(() => (collapsibleUser ? messageExcerpt(message.content) : null), [collapsibleUser, message.content]);
     const [userExpanded, setUserExpanded] = useState(false);
     const userBodyId = useId();
     const userBodyRef = useRef<HTMLDivElement>(null);
@@ -786,7 +817,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {isError && (
                         <div className="error-banner">
                             <AlertTriangle size={14} />
-                            <span>{t('msg.error')}</span>
+                            <span>{t(failedTurn && failedTurn.kind !== 'unknown' ? `failedTurn.${failedTurn.kind}.title` : 'msg.error')}</span>
                         </div>
                     )}
                     {/* Structured cards (#2108) — finalized message.cards wins;
@@ -808,13 +839,21 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         />
                     ) : collapsibleUser ? (
                         <>
-                            <div
-                                ref={userBodyRef}
-                                id={userBodyId}
-                                className={`msg-collapsible${userExpanded ? '' : ' is-collapsed'}`}
-                            >
-                                <RenderedContent content={cleanedContent} />
-                            </div>
+                            {!userExpanded && excerpt ? (
+                                <div ref={userBodyRef} id={userBodyId} className="msg-excerpt md-content">
+                                    <div className="msg-excerpt-lines" dir="auto">{excerpt.head}</div>
+                                    <div className="msg-excerpt-gap">{t.plural('msg.moreLines', excerpt.hidden)}</div>
+                                    <div className="msg-excerpt-lines" dir="auto">{excerpt.tail}</div>
+                                </div>
+                            ) : (
+                                <div
+                                    ref={userBodyRef}
+                                    id={userBodyId}
+                                    className={`msg-collapsible${userExpanded ? '' : ' is-collapsed'}`}
+                                >
+                                    <RenderedContent content={cleanedContent} />
+                                </div>
+                            )}
                             <ExpandToggle
                                 expanded={userExpanded}
                                 onToggle={toggleUserExpanded}
@@ -824,9 +863,18 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 className="msg-expand-toggle"
                             />
                         </>
+                    ) : failedTurn?.raw ? (
+                        <>
+                            <p className="msg-failed-lead">{t(`failedTurn.${failedTurn.kind}.body`)}</p>
+                            <details className="msg-failed-details">
+                                <summary>{t('failedTurn.details')}</summary>
+                                <RenderedContent content={failedTurnDetails(cleanedContent)} />
+                            </details>
+                        </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
                         <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
                     )}
+                    {!editing && userParts && <ImageThumbs images={userParts.images} />}
                     {pendingDrop && !isStreaming && (
                         <div className="msg-drop-confirm" role="alertdialog" aria-labelledby={`${userBodyId}-drop`}>
                             <span id={`${userBodyId}-drop`}>{t.plural('msg.dropLater', laterCount)}</span>
@@ -874,6 +922,21 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {t('msg.tryAgain')}
                         </button>
                     )}
+                    {failedTurn?.sections.map((section) => (
+                        <button
+                            key={section}
+                            type="button"
+                            className="msg-try-again"
+                            onClick={() => {
+                                const target = failedTurn?.targets[section];
+                                if (target) jumpToSetting({ section, target });
+                                else openSettings(section);
+                            }}
+                        >
+                            <Settings size={12} aria-hidden="true" />
+                            {t.compose((say) => say('failedTurn.openSettings', { tab: say(`settings.section.${section}`) }))}
+                        </button>
+                    ))}
                     {/* A local model failed: what Lemonade and its backend wrote says why. */}
                     {(isError || (message.role === 'assistant' && isModelFailure(message.content))) && !isStreaming && place?.remote === false && (
                         <button type="button" className="msg-try-again" onClick={() => showServerLog('model_server')}>
@@ -892,15 +955,23 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
                         <div className="msg-stats" aria-label={t('msg.about')}>
                             {message.created_at && (
-                                <span className="msg-stats-ts" title={t('msg.timestamp')}>
-                                    {formatFullTimestamp(message.created_at, t)}
+                                <span className="msg-stats-ts" title={formatFullTimestamp(message.created_at, t)}>
+                                    {formatShortTimestamp(message.created_at, t)}
                                 </span>
                             )}
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
+                            {!message.stats?.retried && message.stats?.route?.model && (
+                                <span className="msg-stats-route" title={t('msg.route', { reason: message.stats.route.reason ?? '' })}>
+                                    {displayModelName(message.stats.route.model)}
+                                </span>
+                            )}
                             <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError || Boolean(endedBy))} />
                         </div>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && message.stats?.route?.degraded && message.stats.route.notice && (
+                        <div className="msg-route-notice" role="status">{message.stats.route.notice}</div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
                         <TurnChanges sessionId={message.session_id} messageId={message.id} />
@@ -1313,11 +1384,12 @@ const MARKDOWN_COMPONENTS: Components = {
         return <hr className="md-hr" />;
     },
     // Table cells set no dir: the table's dir="auto" skips any cell that has its own.
-    td({ children }) {
-        return <td><Linkified>{children}</Linkified></td>;
+    // The markdown's own alignment arrives as `style`, a numbers column as `className`.
+    td({ children, className, style }) {
+        return <td className={className} style={style}><Linkified>{children}</Linkified></td>;
     },
-    th({ children }) {
-        return <th><Linkified>{children}</Linkified></th>;
+    th({ children, className, style }) {
+        return <th className={className} style={style}><Linkified>{children}</Linkified></th>;
     },
 };
 
@@ -1335,7 +1407,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false, writ
         <WrittenFilesContext.Provider value={writtenFiles}>
         <div className="md-content">
             <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkSoftBreaks]}
+                remarkPlugins={[remarkGfm, remarkNumericColumns, remarkWindowsPaths, remarkSoftBreaks]}
                 disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
                 urlTransform={safeUrlTransform}
                 components={MARKDOWN_COMPONENTS}

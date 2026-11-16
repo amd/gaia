@@ -25,9 +25,14 @@ from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from gaia.upload_names import reserve_copy_path
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
-from .._chat_helpers import UnreadableDocumentError, index_progress
+from .._chat_helpers import (
+    ModelServerIndexError,
+    UnreadableDocumentError,
+    index_progress,
+)
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
 from ..models import (
@@ -65,17 +70,12 @@ MAX_DOCUMENT_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB
 # Streaming chunk size for multipart blob upload.
 UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
 
-# Length of the random hex ID prefixed to managed document filenames.
-# 12 hex chars = 48 bits ≈ 2.8e14 possibilities; collision probability with
-# 1 million concurrent uploads is ~1 in 1.4e14 — effectively zero. Files are
-# also deduped by SHA-256 hash before writing, so identical-content collisions
-# are impossible. 12 chars keeps the on-disk basename well under Windows
-# MAX_PATH limits once combined with the original filename.
+# Length of the random hex ID in a partial upload's name.
 MANAGED_ID_LEN = 12
 
 
 def _short_id() -> str:
-    """Return a short random hex identifier for managed document filenames."""
+    """Return a short random hex identifier for partial upload names."""
     return uuid.uuid4().hex[:MANAGED_ID_LEN]
 
 
@@ -134,6 +134,26 @@ _ILLEGAL_FILENAME_CHARS = '<>:"/\\|?*'
 _SHELL_QUOTING_CHARS = "'`"
 
 
+# Characters drawn like a slash or backslash, which would make a name read as a path.
+_SLASH_LOOKALIKES = "\u2044\u2215\u29f5\u29f8\u29f9\ufe68\uff0f\uff3c"
+
+# Zero-width joiners spell words in Persian, Indic scripts and emoji; they stay.
+_JOINERS = "\u200c\u200d"
+
+
+def _unsafe_name_char(c: str) -> bool:
+    """Whether *c* must not appear in a stored document name."""
+    return (
+        c in _ILLEGAL_FILENAME_CHARS
+        or c in _SHELL_QUOTING_CHARS
+        or c in _SLASH_LOOKALIKES
+        or (
+            unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co", "Zl", "Zp")
+            and c not in _JOINERS
+        )
+    )
+
+
 def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     """Sanitize a filename stem for safe cross-platform filesystem use.
 
@@ -143,19 +163,17 @@ def _sanitize_stem(stem: str, max_length: int = 80) -> str:
     and dots (Windows disallows trailing dots/spaces), and truncates to *max_length*
     characters. Returns ``"file"`` if nothing usable remains.
 
-    The returned stem is combined with a UUID prefix to form the final
-    on-disk filename, so collisions are impossible regardless of what the
-    user-provided name contained. The purpose of preserving the original
-    name is purely so downstream consumers (RAG tools, the LLM) can
+    Invisible and line-breaking characters (Unicode control, format and
+    separator categories) and characters drawn like a slash are replaced too,
+    since the name is shown to the model and the user as part of the path.
+
+    The returned stem becomes the on-disk name, with an id in front only when
+    that name is taken (see ``reserve_copy_path``). The purpose of preserving
+    the original name is so downstream consumers (RAG tools, the LLM) can
     recognize the document by its human-readable name.
     """
     cleaned = "".join(
-        (
-            "_"
-            if c in _ILLEGAL_FILENAME_CHARS or c in _SHELL_QUOTING_CHARS or ord(c) < 32
-            else c
-        )
-        for c in unicodedata.normalize("NFC", stem)
+        "_" if _unsafe_name_char(c) else c for c in unicodedata.normalize("NFC", stem)
     )
     cleaned = cleaned.strip(" .")
     cleaned = cleaned[:max_length]
@@ -464,20 +482,24 @@ async def upload_document_blob(
             )
             return doc_to_response(existing)
 
-        # 6. Promote partial -> final (atomic rename). The on-disk filename
-        # embeds the sanitized original stem so that downstream consumers
-        # (RAG tools, the agent LLM) can recognize the document by its
-        # human-readable name — a pure-UUID filename causes the LLM to
-        # hallucinate paths when it needs to reference the file in a tool
-        # call. The UUID prefix still guarantees uniqueness. After this,
+        # 6. Promote partial -> final (atomic rename) under the sanitized
+        # original name, so the agent reads and quotes the name the person
+        # gave; an id is added only when that name is taken. After this,
         # `partial_path` is cleared so the finally block won't unlink our
         # now-final file.
         safe_stem = _sanitize_stem(Path(display_name).stem)
-        final_path = managed_dir / f"{_short_id()}_{safe_stem}{ext}"
         try:
+            final_path = reserve_copy_path(
+                managed_dir,
+                safe_stem,
+                ext,
+                taken=lambda p: db.path_held_by_other_content(str(p), file_hash),
+            )
             os.replace(partial_path, final_path)
         except OSError as e:
             logger.error("Failed to promote %s -> %s: %s", partial_path, final_path, e)
+            if final_path is not None:
+                _cleanup_temp(final_path)
             raise HTTPException(status_code=500, detail="Failed to save uploaded file")
         partial_path = None  # ownership transferred
     finally:
@@ -508,6 +530,18 @@ async def upload_document_blob(
         logger.warning("Uploaded document %s can't be read: %s", display_name, e)
         raise HTTPException(
             status_code=422, detail={"status": e.kind, "message": str(e)}
+        ) from e
+    except ModelServerIndexError as e:
+        _cleanup_temp(final_path)
+        # The connection error stays in the log; the client words the reason.
+        logger.warning("Could not index uploaded document %s: %s", display_name, e)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": e.kind,
+                "message": "GAIA's model server isn't answering, so the "
+                "document couldn't be added. Retry once it's back.",
+            },
         ) from e
     except Exception as e:
         _cleanup_temp(final_path)

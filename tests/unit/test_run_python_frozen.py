@@ -92,8 +92,12 @@ def _spawn(**finished):
 # ---------------------------------------------------------------------------
 
 
-def test_from_source_the_interpreter_runs_the_script():
-    assert python_command("s.py", ["a", "b"]) == [sys.executable, "s.py", "a", "b"]
+def test_from_source_the_interpreter_runs_the_script_through_the_runner():
+    cmd = python_command("s.py", ["a", "b"])
+
+    assert cmd[:2] == [sys.executable, "-c"]
+    assert "run_python_file" in cmd[2]
+    assert cmd[3:] == ["s.py", "a", "b"]
 
 
 def test_frozen_the_binary_is_asked_for_its_runner_mode(frozen):
@@ -390,6 +394,33 @@ def test_a_script_runs_in_utf8_mode(tool, tools, project):
         tools[tool](**args)
 
     assert spawn.call_args.kwargs["env"]["PYTHONUTF8"] == "1"
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+def test_a_script_runs_unbuffered(tool, tools, project, monkeypatch):
+    """So a timed-out run still returns what it printed before the kill."""
+    monkeypatch.delenv("PYTHONUNBUFFERED", raising=False)
+    script = project / "job.py"
+    script.write_text("print(1)\n", encoding="utf-8")
+    args = {"code": "print(1)"} if tool == "run_python" else {"file_path": str(script)}
+
+    with _spawn() as spawn:
+        tools[tool](**args)
+
+    assert spawn.call_args.kwargs["env"]["PYTHONUNBUFFERED"] == "1"
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+def test_the_users_buffering_setting_is_kept(tool, tools, project, monkeypatch):
+    monkeypatch.setenv("PYTHONUNBUFFERED", "0")
+    script = project / "job.py"
+    script.write_text("print(1)\n", encoding="utf-8")
+    args = {"code": "print(1)"} if tool == "run_python" else {"file_path": str(script)}
+
+    with _spawn() as spawn:
+        tools[tool](**args)
+
+    assert spawn.call_args.kwargs["env"]["PYTHONUNBUFFERED"] == "0"
 
 
 _WRITES_TEXT = (

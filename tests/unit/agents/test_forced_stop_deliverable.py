@@ -493,3 +493,44 @@ def test_the_forced_stop_read_back_honours_the_off_switch(agent, monkeypatch):
 
     assert not any("parse" in gap.lower() for gap in result["completion_gaps"])
     assert "read back off disk" not in chat.sent[-1][-1]["content"]
+
+
+def test_a_step_cap_claim_with_no_write_is_reported_unfinished(agent, tmp_path):
+    distinct = [_native((f"call_{n}", _LOOKUP, {"path": f"src/{n}"})) for n in range(2)]
+    chat = _stub_chat(
+        agent,
+        *distinct,
+        _answer("Not now."),
+        _answer(f"`{_TARGET}` is written."),
+    )
+
+    result = agent.process_query(_REQUEST, max_steps=2)
+
+    assert not (tmp_path / _TARGET).exists()
+    assert result["status"] == "incomplete"
+    assert _UNWRITTEN in result["result"]
+    assert "do not say they are written" in chat.sent[-1][-1]["content"]
+
+
+def test_the_write_step_sends_what_the_loop_sends(agent, monkeypatch):
+    """Same session context and output budget as the loop's own calls."""
+    monkeypatch.setattr(
+        _Agent,
+        "session_context",
+        property(lambda self: "Workspace: the loader project."),
+    )
+    chat = _stub_chat(
+        agent,
+        *_repeats(),
+        _native(_write()),
+        _answer(f"`{_TARGET}` is written."),
+    )
+
+    agent.process_query(_REQUEST)
+
+    loop_call = chat.send_messages.call_args_list[0].kwargs
+    write_call = chat.send_messages.call_args_list[_CALLS].kwargs
+    assert "Workspace: the loader project." in json.dumps(write_call["messages"][0])
+    assert write_call["messages"][0] == loop_call["messages"][0]
+    assert write_call.get("max_tokens") == loop_call.get("max_tokens")
+    assert set(write_call) == set(loop_call)

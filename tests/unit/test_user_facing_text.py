@@ -140,6 +140,11 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
 NOT_USER_TEXT: dict[str, dict[str, tuple[int, str]]] = {
     "hub/agents/gaia/python/gaia_agent/server.py": {
         "removed feature": (2, "API schema text for developers"),
+        "pip": (
+            1,
+            "stderr of a pip-installed agent on an older amd-gaia; the app's "
+            "bundled agent always has the daemon watch",
+        ),
     },
     "src/gaia/agents/base/console.py": {
         "pip": (1, "printed by a pip install that lacks rich, never by an app"),

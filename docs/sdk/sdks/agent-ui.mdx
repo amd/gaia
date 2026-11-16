@@ -683,7 +683,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="POST /api/system/warm-up">
-    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens, and with `?fresh=true` when the user presses **Try again** on a picked model that failed to load. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. It is also skipped when the GAIA agent runs in its daemon sidecar (a Hub install), which warms its own prompt, on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. A chat turn on the model being warmed waits for the warm-up and reuses what it cached; a turn on any other model, local or cloud, stops it, so the warm-up never loads over the turn's model. A local turn that arrives while the warm-up is loading its model waits for that load to finish first, since it can't be interrupted and holds the memory the turn's own load needs. An NPU (FastFlowLM) model is only loaded, not primed: FastFlowLM reuses a prompt only when the next request continues it, so the first message reads the prompt either way. A fresh request (a model pick, or `?fresh=true`) skips the 30 s debounce, and one made while a warm-up runs starts as soon as that one ends. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
+    Read a new chat's system prompt and tool schemas into Lemonade's prompt cache, so the first message doesn't wait on them. The UI calls this when a new chat opens, and with `?fresh=true` when the user presses **Try again** on a picked model that failed to load. Only one warm-up runs at a time, a repeat within 30 s of a finished one does nothing, and none starts while a streamed chat turn runs; a fresh request made then starts once no turn is running. Cloud models and models that aren't downloaded are skipped, so it never starts a download or a paid request. When the GAIA agent runs in its daemon sidecar (a Hub install), the model is loaded but the prompt is not read, since the sidecar reads its own. It is skipped on a PC with under 24 GB of RAM, where the model loads with the first message instead, and before first-run setup has finished, when it would load a model setup didn't pick. A chat turn on the model being warmed waits for the warm-up and reuses what it cached; a turn on any other model, local or cloud, stops it, so the warm-up never loads over the turn's model. A local turn that arrives while the warm-up is loading its model waits for that load to finish first, since it can't be interrupted and holds the memory the turn's own load needs. An NPU (FastFlowLM) model is only loaded, not primed: FastFlowLM reuses a prompt only when the next request continues it, so the first message reads the prompt either way. A fresh request (a model pick, or `?fresh=true`) skips the 30 s debounce, and one made while a warm-up runs starts as soon as that one ends, stopping it first when it is loading a different model. Returns the warm-up state, with the `model` it loads and its `device` (`npu`, `gpu` or `cpu`) once known. `GET /api/system/warm-up` returns the same state without starting one, and `GET /api/system/status` carries it as `warm_up`.
 
     **Response:**
     ```json
@@ -722,7 +722,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="PUT /api/settings">
-    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and go back to the model picked under Model (`POST /api/providers/select`); omitting it or sending `null` leaves it unchanged. With no pick on record, clearing reverts to the default model, except for a cloud model whose user has not downloaded the local default, which stays in use. The model left running is also saved as `last_model` in `~/.gaia/config.json`, so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on, including one from a provider GAIA knows only from the model server's list; when that list can't be read to tell, the save is refused with `503`.
+    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and go back to the model picked under Model (`POST /api/providers/select`); omitting it or sending `null` leaves it unchanged. With no pick on record, clearing reverts to the default model, except for a cloud model whose user has not downloaded the local default, which stays in use. The model left running is also saved as `last_model` in `~/.gaia/config.json`, so the flagship's start-up warm-up and the next launch use the same model. A change that leaves a different local model running starts a fresh warm-up, as picking one does. A cloud model is refused with `409` while Local only is on, including one from a provider GAIA knows only from the model server's list; when that list can't be read to tell, the save is refused with `503`.
 
     **Request:**
     ```json
@@ -1168,7 +1168,7 @@ Deleting a chat deletes its copies.
     | `outputs` | What it made besides files, for the session panel's Outputs: `kind` (`image`, `document` indexed, `memory` saved, `schedule` created), `name`, and `path`, `detail` or `ref` (a memory's id) where they apply. |
     | `live_data` | `attempted` and `failed` counts for the internet tools. All failed means the answer has no live data. |
     | `model` | `remote`, `provider`, `provider_name`, `name`. Absent when the location could not be determined. |
-    | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), `unknown` (no known price), or `unreported` (the model is priced but no usage came back, such as a stopped answer). |
+    | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), `unknown` (no known price), `unreported` (the model is priced but no usage came back, such as a stopped answer), or `no_reply` (a cloud turn that was stopped or failed before any reply, which spending leaves out). |
     | `error` | Set, with the rest empty, when the summary could not be built. |
 
     **Non-streaming response:**
@@ -1356,7 +1356,9 @@ Deleting a chat deletes its copies.
     `indexing_status: "failed"`, the reason in `last_error`, and `error_kind`
     set to `corrupted`, `encrypted`, `empty` (no text), `empty_file` (nothing
     to index) or `unsupported_workbook` (a legacy `.xls` or password-protected
-    workbook) when retrying can't help until the file is fixed.
+    workbook) when retrying can't help until the file is fixed, or to
+    `model_server_down` / `model_server_busy` when the file is fine and the
+    model server didn't answer, so Retry works once it does.
 
     **Errors:** 400 with `detail.status: "is_folder"` when the path is a folder
     (index it with `index-folder`); 400 for a file type GAIA doesn't index; 404
@@ -1837,7 +1839,10 @@ Used to reach the UI from a phone.
     takes its place. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
     `upload-path` and whose
-    `detail.message` says what to do.
+    `detail.message` says what to do. When the model server didn't answer,
+    it is a **503** with `detail.status` `model_server_down` or
+    `model_server_busy`: the file is fine, and sending it again works once
+    the server is back.
   </Accordion>
 
   <Accordion title="GET /api/documents/{doc_id}/status">
@@ -2207,10 +2212,12 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   <Accordion title="GET /api/memory/stream-inference">
     SSE stream of LLM-assisted profile inference over the discovery findings
     — each `insight` event is a candidate fact awaiting approval. It runs on
-    the machine's default local chat model (`default_model` in
-    `~/.gaia/config.json`), never the chat's cloud model; a cloud
-    `default_model`, or a local one that isn't downloaded yet, ends the stream
-    with an `error` event rather than a download.
+    the local model chat runs now (the last pick, its cheap model for
+    `hybrid`), so no second chat model loads; when that pick is a cloud model
+    or isn't downloaded, it runs on the machine's default local chat model
+    (`default_model` in `~/.gaia/config.json`), never the chat's cloud model.
+    A cloud `default_model`, or a local one that isn't downloaded yet, ends
+    the stream with an `error` event rather than a download.
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-discovery">
@@ -3091,7 +3098,10 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   <Accordion title="DELETE /api/providers/local/custom/{model_id}">
     Remove a model the user added: delete it from Lemonade if it was
     downloaded, forget it, and clear `default_model` / `last_model` if either
-    named it. Returns `{"removed", "display_name", "cleared"}`. **404** for a
+    named it. When it was the custom model in use, chat goes back to the
+    model picked under Model (as clearing `custom_model` does), that model is
+    saved as `last_model`, and a local one starts loading at once. Returns
+    `{"removed", "display_name", "cleared"}`. **404** for a
     model the user didn't add; **502** when Lemonade refuses the delete, and
     the model stays in the list.
   </Accordion>
@@ -3112,8 +3122,9 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `started: false` with `reason` `already_loaded` (it is loaded at that size
     already), `busy` (a reply is running), `warm_up` (GAIA is preparing a new
     chat), `restarting`, or `not_gaias_server` (GAIA never reloads a model on a
-    server it doesn't run); in the last four cases the size applies on the next
-    load. **422** for a size not offered on this PC, or for a cloud model
+    server it doesn't run). After `busy` or `warm_up`, GAIA reloads the model
+    once the reply or warm-up ends; after the other two the size applies on the
+    next load. **422** for a size not offered on this PC, or for a cloud model
     (nothing is saved then). A saved size that stops
     fitting, or that can't be checked because this PC's memory can't be read,
     is refused at load with how to fix it; `GAIA_CTX_SIZE` still overrides it.
@@ -3184,7 +3195,8 @@ model with no known price reads as unknown, never $0. Cloud models from
     What one chat's cloud answers cost, and every cloud turn billed since `since`
     (an ISO instant: the start of the viewer's local day). The chat sums the
     cost each answer's turn summary saved, cache discounts included; answers on this PC
-    are left out. `paid` is true when `model` has a known cloud price, the only
+    are left out, and so is a turn stopped or failed before any reply, by the
+    rule `GET /api/spending` uses. `paid` is true when `model` has a known cloud price, the only
     time the composer shows it. `chat` carries `usd`, `answers`,
     `unpriced_answers` (stopped or unpriced answers, counted apart, never as
     $0) and `items` (`message_id`, `created_at`, `model`, `kind`, `usd` per

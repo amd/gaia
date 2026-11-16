@@ -49,6 +49,7 @@ from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
 from gaia_agent_email.tools.llm_triage import make_llm_classifier  # noqa: F401
+from gaia_agent_email.tools.lookalikes import ASCII_FOLD, LOOKALIKES
 from gaia_agent_email.tools.triage_condense import condense_triage_result
 
 # Read-only reuse of the existing automated-sender signal for needs_review's
@@ -202,26 +203,59 @@ def _neutralize_fence_runs(body: str) -> str:
     return "".join(out)
 
 
+#: "LATIN SMALL LETTER O WITH STROKE", "LATIN LETTER SMALL CAPITAL E": the letter.
+_LATIN_LETTER_NAME = re.compile(
+    r"LATIN (?:(?:SMALL|CAPITAL) LETTER|LETTER SMALL CAPITAL) ([A-Z])(?: WITH .+)?\Z"
+)
+
+
+def _latin_base(char: str) -> str:
+    """The plain letter a non-ASCII Latin letter is a form of, else *char*."""
+    if char.isascii():
+        return char
+    named = _LATIN_LETTER_NAME.match(unicodedata.name(char, ""))
+    return named.group(1) if named else char
+
+
+def _marker_letters(char: str) -> str:
+    """The ASCII letters and digits *char* reads as, for comparing marker names.
+
+    NFKC folds width, NFD then splits a precomposed accented letter (``É``)
+    into its base letter and a combining mark, which is dropped so the base
+    letter survives the ASCII filter below the same way an already-decomposed
+    accented letter does. A Latin letter Unicode never splits (``Ø``, ``Ł``,
+    small capital ``ᴇ``) is read by its name. The UTS #39 table maps other look-alikes (Cyrillic,
+    Greek, Cherokee and so on) to the letters they imitate, and the ASCII fold
+    makes ``m`` and ``rn``, or ``I``, ``l`` and ``1``, compare equal.
+    """
+    decomposed = unicodedata.normalize("NFD", unicodedata.normalize("NFKC", char))
+    base = "".join(c for c in decomposed if not unicodedata.combining(c))
+    mapped = "".join(LOOKALIKES.get(c) or _latin_base(c) for c in base)
+    return "".join(
+        ASCII_FOLD.get(c, c) for c in mapped.casefold() if c.isascii() and c.isalnum()
+    )
+
+
 def _skeleton(name: str) -> str:
-    folded = unicodedata.normalize("NFKC", name).casefold()
-    return "".join(c for c in folded if c.isascii() and c.isalnum())
+    return "".join(_marker_letters(char) for char in name)
 
 
 def neutralize_marker_names(text: str, names: Tuple[str, ...]) -> str:
     """*text* with every spelling of a fence marker's name replaced.
 
     Names are compared on ASCII letters and digits alone, after width and case
-    fold, so brackets of any shape, spacing, or line breaks can't rebuild one.
+    fold and with Unicode look-alikes read as the letters they imitate, so
+    brackets of any shape, spacing, line breaks or another script's letters
+    can't rebuild one.
     """
     targets = [_skeleton(name) for name in names]
     while True:
         letters: List[str] = []
         origin: List[int] = []
         for at, char in enumerate(text):
-            for folded in unicodedata.normalize("NFKC", char).casefold():
-                if folded.isascii() and folded.isalnum():
-                    letters.append(folded)
-                    origin.append(at)
+            for folded in _marker_letters(char):
+                letters.append(folded)
+                origin.append(at)
         skeleton = "".join(letters)
         spans = []
         for target in targets:
@@ -2223,6 +2257,7 @@ def pre_scan_inbox_impl(
     include_informational: bool = False,
     action_db: Any = None,
     debug: bool = False,
+    keep_preference_tags: bool = False,
 ) -> Dict[str, Any]:
     """Pre-scan the inbox for the chat surface.
 
@@ -2238,7 +2273,8 @@ def pre_scan_inbox_impl(
     classification. The caller is expected to set ``kind`` in the
     rendered output to ``email_pre_scan``
     so the chat surface can detect and render the structured card
-    component.
+    component. ``keep_preference_tags`` leaves that tag on the items so
+    ``merge_pre_scan_backends`` can re-sort across mailboxes (#3623).
 
     ``session_preferences`` flow through to ``triage_inbox_impl`` so
     sender overrides shape the underlying classification, and category
@@ -2514,17 +2550,19 @@ def pre_scan_inbox_impl(
         bulk_count = len(informational) + len(suggested_archives)
         bulk_view = {"count": bulk_count, "filter_tests": sorted(filter_test_ids)}
 
+        # ``internal_date`` is a needs_you-only working field (#2743) and
+        # ``preference_applied`` is the sort-key tag consumed by
+        # _preference_sort_key — neither is part of the public PreScanItem
+        # shape (extra="forbid").
+        working_fields = (
+            ("internal_date",)
+            if keep_preference_tags
+            else ("internal_date", "preference_applied")
+        )
+
         def _drop_working_fields(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            # ``internal_date`` is a needs_you-only working field (#2743) and
-            # ``preference_applied`` is the sort-key tag consumed by
-            # _preference_sort_key — neither is part of the public
-            # PreScanItem shape (extra="forbid").
             return [
-                {
-                    k: v
-                    for k, v in item.items()
-                    if k not in ("internal_date", "preference_applied")
-                }
+                {k: v for k, v in item.items() if k not in working_fields}
                 for item in items
             ]
 
@@ -2692,6 +2730,7 @@ def merge_pre_scan_backends(
                 debug=debug,
                 slm_classifier=slm_classifier,
                 slm_phishing_classifier=slm_phishing_classifier,
+                keep_preference_tags=True,
             )
         except ConnectorsError as exc:
             msg = format_connector_error(exc)
@@ -2778,15 +2817,29 @@ def merge_pre_scan_backends(
                 seen_message_ids.add(mid)
             needs_you_total += 1
 
+    # Same per-section order pre_scan_inbox_impl applies, now across every
+    # mailbox, so the caps below drop the right rows (#3623).
+    for section in (urgent, actionable, informational, needs_review):
+        section.sort(key=_preference_sort_key)
+    suggested_archives.sort(key=_preference_sort_key, reverse=True)
+
+    def _untag(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {k: v for k, v in item.items() if k != "preference_applied"}
+            for item in items
+        ]
+
     result = {
         "kind": "email_pre_scan",
-        "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
-        "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
+        "urgent": _untag(urgent[: max(0, PRE_SCAN_URGENT_CAP)]),
+        "actionable": _untag(actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)]),
         "informational_count": informational_count,
-        "informational": informational,
-        "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
+        "informational": _untag(informational),
+        "suggested_archives": _untag(
+            suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)]
+        ),
         "suggested_drafts": [],
-        "needs_review": needs_review[: max(0, PRE_SCAN_NEEDS_REVIEW_CAP)],
+        "needs_review": _untag(needs_review[: max(0, PRE_SCAN_NEEDS_REVIEW_CAP)]),
         "preferences_applied": merged_prefs_applied,
         "totals": {
             "urgent": len(urgent),
@@ -2806,7 +2859,7 @@ def merge_pre_scan_backends(
         # left uncapped like informational): each backend already capped its
         # own contribution to PRE_SCAN_SUSPICIOUS_CAP, so an uncapped merge
         # here could still return up to N-backends x that cap.
-        "suspicious": suspicious[: max(0, PRE_SCAN_SUSPICIOUS_CAP)],
+        "suspicious": _untag(suspicious[: max(0, PRE_SCAN_SUSPICIOUS_CAP)]),
         "suspicious_total": suspicious_total,
     }
     if mailbox_errors and len(mailbox_errors) == len(backends):

@@ -679,6 +679,8 @@ class SSEOutputHandler(OutputHandler):
         self.relay_hidden_turns = 0
         self.relay_context_error: Optional[str] = None
         self.relay_performance: Optional[Dict[str, Any]] = None
+        # The route a relayed hybrid turn took, from the sidecar's ``final``.
+        self.relayed_route: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
@@ -945,6 +947,9 @@ class SSEOutputHandler(OutputHandler):
         # A "denied" call nobody answered is not one the user declined.
         if isinstance(data, dict) and data.get("timed_out") is True:
             event["timed_out"] = True
+        # Nor is one GAIA turned down itself without showing a prompt.
+        if isinstance(data, dict) and data.get("declined_by") == "agent":
+            event["declined_by"] = "agent"
         # A refusal must not read as a site contacted, relayed or not.
         if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
             event[EXECUTED_KEY] = False
@@ -2212,7 +2217,7 @@ class SSEOutputHandler(OutputHandler):
         if scope is not None:
             request["always_scope"] = scope.label
             # ``always_scope`` is matched as-is by the MCP control; this is its wording.
-            always_label = grant_phrase(tool_name, scope.subject)
+            always_label = scope.phrase or grant_phrase(tool_name, scope.subject)
             if always_label:
                 request["always_label"] = always_label
         # What this call does — `pytest` is not `rm -rf` — so the prompt's label

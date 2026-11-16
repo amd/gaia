@@ -43,12 +43,21 @@ class _Host(ShellToolsMixin):
         self.path_validator = _Validator(root)
 
 
+@pytest.fixture(autouse=True)
+def posix_grep(monkeypatch):
+    """grep that reads its arguments as given; the Windows tests switch it off."""
+    monkeypatch.setattr(shell_tools, "_greps_expand_arguments", lambda: False)
+
+
 def _refusal(command, cwd, root):
     host = _Host(root)
     steps, error = _parse_line(command, bypass_gates=True)
     assert error is None, error
+    searchable = shell_tools._search_plan(command, steps) is not None
     for step in steps:
-        refusal = host._path_traversal_refusal(step, str(cwd), frozenset())
+        refusal = host._path_traversal_refusal(
+            step, str(cwd), frozenset(), searchable=searchable
+        )
         if refusal:
             return refusal
     return None
@@ -246,7 +255,7 @@ def test_a_folder_named_like_a_credential_stays_listable(home):
 
 
 def test_a_credential_in_a_subfolder_does_not_stop_a_recursive_search(home):
-    """Its lines are masked in the output, like a root-level one's."""
+    """grep skips it by name, like a root-level one."""
     (home / "proj" / ".env").unlink()
     (home / "proj" / "secrets.json").unlink()
     (home / "proj" / "src" / ".env").write_text("TOKEN=abc\n")
@@ -289,7 +298,8 @@ def run_shell(monkeypatch):
     [
         "findstr TOKEN .env" if os.name == "nt" else "cat .env",
         "findstr x SECRETS.JSON" if os.name == "nt" else "cat SECRETS.JSON",
-        "findstr TOKEN *" if os.name == "nt" else "grep -rh TOKEN .",
+        "findstr TOKEN *" if os.name == "nt" else "cat *",
+        "grep -rl TOKEN -- .",
         "python -c \"print(open('.env').read())\"",
     ],
 )
@@ -413,7 +423,7 @@ def test_a_backslash_escaped_grep_pattern_is_not_a_credential_read(home):
     assert refusal is None or "credentials" not in refusal["error"], refusal
 
 
-# ------------------------------------------------- a recursive search still runs
+# --------------------------- a recursive search runs with credential files left out
 
 
 @pytest.mark.parametrize(
@@ -428,17 +438,9 @@ def test_a_backslash_escaped_grep_pattern_is_not_a_credential_read(home):
         "grep -rl TOKEN .",
         "grep -rc TOKEN .",
         "grep -rno TOKEN .",
-        "grep -rn TODO . | head -20",
-        "grep -rn TODO . | sort | head",
-        "grep -rn TODO . | grep -v test",
-        "grep -rn TODO . | wc -l",
-        'bash -c "grep -rn TODO ."',
-        pytest.param("findstr /s TOKEN *", marks=WINDOWS_ONLY),
-        pytest.param("findstr /S /I TOKEN *.*", marks=WINDOWS_ONLY),
-        pytest.param("findstr /s /c:TOKEN *", marks=WINDOWS_ONLY),
-        'powershell -Command "Get-ChildItem . -Recurse | Select-String TOKEN"',
-        'powershell -Command "gci -r | sls TOKEN"',
-        'powershell -Command "Select-String -Path * -Pattern TOKEN -Recurse"',
+        "grep -rh TOKEN .",
+        "grep -r --no-filename TOKEN .",
+        "grep -rz TOKEN .",
     ],
 )
 def test_a_recursive_search_of_a_folder_with_credentials_runs(home, command):
@@ -448,23 +450,39 @@ def test_a_recursive_search_of_a_folder_with_credentials_runs(home, command):
 @pytest.mark.parametrize(
     "command",
     [
-        "grep -rh TOKEN .",
-        "grep -r --no-filename TOKEN .",
-        "grep -rz TOKEN .",
+        # Piped, so not run as plain argv with the exclusions.
+        "grep -rn TODO . | head -20",
+        "grep -rn TODO . | sort | head",
+        "grep -rn TODO . | grep -v test",
+        "grep -rn TODO . | wc -l",
         "grep -r TOKEN . | cut -d: -f2-",
         "grep -r TOKEN . | tail -c 200",
         "grep -r TOKEN . | grep -o 'TOKEN=.*'",
         "grep -r TOKEN . | sed s/^.*://",
         "grep -rl TOKEN . | xargs cat",
+        "grep -rn TODO . | head --byt 2000",
+        "grep -rn TODO . | tail -n 5",
+        "grep -rn TODO . | tail --lines 5",
+        "grep -rn TODO . | grep --invert x",
+        "grep -rn TOKEN . | grep --only x",
+        "grep -rn TOKEN . | tail -c 100",
+        "grep -rn TOKEN . | head --frob",
+        'bash -c "grep -rn TODO ."',
         'bash -c "grep -r TOKEN . | cut -d: -f2"',
         'bash -c "grep -r TOKEN . > out.txt"',
+        pytest.param("findstr /s TOKEN *", marks=WINDOWS_ONLY),
+        pytest.param("findstr /S /I TOKEN *.*", marks=WINDOWS_ONLY),
+        pytest.param("findstr /s /c:TOKEN *", marks=WINDOWS_ONLY),
+        'powershell -Command "Get-ChildItem . -Recurse | Select-String TOKEN"',
+        'powershell -Command "gci -r | sls TOKEN"',
         'powershell -Command "gci -r | sls TOKEN | % Line"',
         'powershell -Command "gci -r | sls TOKEN -Raw"',
+        'powershell -Command "Select-String -Path * -Pattern TOKEN -Recurse"',
         "cat *",
         "findstr TOKEN *",
     ],
 )
-def test_a_search_whose_file_names_are_lost_is_refused(home, command):
+def test_a_search_that_cannot_skip_credential_files_is_refused(home, command):
     refusal = _refusal(command, home / "proj", home)
 
     assert refusal is not None, command
@@ -473,7 +491,7 @@ def test_a_search_whose_file_names_are_lost_is_refused(home, command):
 
 
 def test_a_recursive_search_over_a_disguised_link_is_refused(home, monkeypatch):
-    """Masking goes by name, so a link hiding a credential file still refuses."""
+    """Exclusions go by name, so a link hiding a credential file still refuses."""
     proj = home / "proj"
     (proj / "notes.txt").write_text("innocent\n")
     real = os.path.realpath
@@ -502,60 +520,47 @@ def test_a_recursive_search_over_a_disguised_link_is_refused(home, monkeypatch):
         "grep --recursive --line-n TODO .",
         "grep -d recurse TODO .",
         "grep --directories=recurse TODO .",
-        "grep -rn TODO . | head --byt 2000",
-        "grep -rn TODO . | tail -n 5",
-        "grep -rn TODO . | tail --lines 5",
-        "grep -rn TODO . | grep --invert x",
+        "grep --rec -h TOKEN .",
+        "grep -d recurse -h TOKEN .",
+        "grep -drecurse --no-file TOKEN .",
+        "grep --dir=recurse -h TOKEN .",
+        "grep -r --null-d TOKEN .",
         "rg TODO",
         "rg -n TODO src",
         "rg --hidden TODO",
         "rg -uu TODO",
         "rg -n -g '!node_modules' TODO",
-        "git grep TODO",
-        "git grep -n TODO",
-        "git -C . grep --line-n TODO",
-        "grep --frobnicate TODO env.txt",
-    ],
-)
-def test_searches_whose_lines_keep_their_file_names_run(home, command):
-    assert _refusal(command, home / "proj", home) is None, command
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "grep -r --no-f TOKEN .",
-        "grep -r --no-filename TOKEN .",
-        "grep -r --null-d TOKEN .",
-        "grep --rec -h TOKEN .",
-        "grep -d recurse -h TOKEN .",
-        "grep -drecurse --no-file TOKEN .",
-        "grep --directories=recurse -h TOKEN .",
-        "grep --dir=recurse -h TOKEN .",
-        "grep -r --frobnicate TOKEN .",
-        "grep -r --n TOKEN .",
-        "grep -rn TOKEN . | grep --only x",
-        "grep -rn TOKEN . | grep -o x",
-        "grep -rn TOKEN . | tail --byt 100",
-        "grep -rn TOKEN . | tail -c 100",
-        "grep -rn TOKEN . | head --frob",
-        "grep -rn TOKEN . | grep --frob x",
         "rg -I TOKEN",
         "rg --no-filename TOKEN",
         "rg --heading TOKEN",
         "rg -p TOKEN",
         "rg --json TOKEN",
         "rg --null-data TOKEN",
-        "rg --frobnicate TOKEN",
-        "rg --no-filen TOKEN",
+        "git grep TODO",
+        "git grep -n TODO",
+        "git -C . grep --line-n TODO",
         "git grep -h TOKEN",
         "git grep --head TOKEN",
-        "git grep --heading TOKEN",
         "git -C . grep -h TOKEN",
+        "grep --frobnicate TODO env.txt",
+    ],
+)
+def test_every_spelling_of_a_search_runs(home, command):
+    assert _refusal(command, home / "proj", home) is None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -r --frobnicate TOKEN .",
+        "grep -r --n TOKEN .",
+        "rg --frobnicate TOKEN",
+        "rg --no-filen TOKEN",
         "git grep --frobnicate TOKEN",
     ],
 )
-def test_searches_that_may_drop_file_names_are_refused(home, command):
+def test_a_search_with_an_option_this_check_does_not_know_is_refused(home, command):
+    """Exclusions added after an unknown option might not be read as options."""
     refusal = _refusal(command, home / "proj", home)
 
     assert refusal is not None, command

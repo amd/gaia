@@ -84,6 +84,7 @@ from gaia.utils.file_lock import (
     write_text_atomic,
 )
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.text_decoding import TRIED_ENCODINGS, decode_text
 
 _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -91,10 +92,6 @@ _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF32_BE, "utf-32"),
     (codecs.BOM_UTF16_LE, "utf-16"),
     (codecs.BOM_UTF16_BE, "utf-16"),
-)
-_TEXT_TRIED_ENCODINGS = ", ".join(
-    list(dict.fromkeys(e for _, e in _TEXT_BOM_ENCODINGS))
-    + ["utf-8", "cp1252", "detected legacy encodings (Windows-1256, Shift-JIS, GBK…)"]
 )
 
 
@@ -196,39 +193,6 @@ def folder_index_skip_reason(file_path) -> Optional[str]:
     if not ext:
         return "no file extension, so the document type is unknown"
     return f"{ext} files are not a supported document type"
-
-
-def _decode_text_bytes(data: bytes) -> str:
-    """Decode text bytes, detecting legacy encodings; raise when none fits."""
-    for bom, encoding in _TEXT_BOM_ENCODINGS:
-        if data.startswith(bom):
-            return data.decode(encoding)
-
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        pass
-
-    from charset_normalizer import from_bytes
-
-    matches = from_bytes(data)
-    try:
-        cp1252_text = data.decode("cp1252")
-    except UnicodeDecodeError:
-        cp1252_text = None
-    # Short Western text scores as cp1250/cp775 too; keep cp1252 when it reads cleanly.
-    if cp1252_text is not None and any(str(m) == cp1252_text for m in matches):
-        return cp1252_text
-    best = matches.best()
-    if best is not None:
-        return str(best)
-    # Symbol-heavy Western text ("12€ — 15€") the detector can't place.
-    high = sum(byte >= 0x80 for byte in data)
-    if cp1252_text is not None and high <= sum(0x20 < byte < 0x80 for byte in data):
-        return cp1252_text
-    raise UnicodeDecodeError(
-        "text", data, 0, len(data), "no text encoding fits these bytes"
-    )
 
 
 # --- PDF extraction errors ---------------------------------------------------
@@ -996,6 +960,8 @@ class RAGSDK:
         self.file_content_keys = {}
         # {file_path: (_stat_key, ns it was taken)} of those same bytes
         self.file_stat_keys = {}
+        # A load pushed a document out to fit under max_total_chunks.
+        self._evicted_for_size = False
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -2780,11 +2746,11 @@ These positions indicate where to split the text."""
                 data = f.read()
 
             try:
-                text = _decode_text_bytes(data)
+                text = decode_text(data)[0]
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
@@ -2815,11 +2781,11 @@ These positions indicate where to split the text."""
                 data = f.read()
 
             try:
-                decoded = _decode_text_bytes(data)
+                decoded = decode_text(data)[0]
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode CSV file: {csv_path}\n"
-                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
                     "  2. Check if the file is a valid CSV (not corrupted)\n"
@@ -3920,6 +3886,7 @@ These positions indicate where to split the text."""
 
                 # Remove from indexed files
                 self.indexed_files.discard(file_path)
+                self._evicted_for_size = False
 
                 # Clean up LRU tracking
                 if file_path in self.file_access_times:
@@ -4134,6 +4101,8 @@ These positions indicate where to split the text."""
                 )
                 break
             evicted_files.append(path)
+        if evicted_files:
+            self._evicted_for_size = True
 
         # Check indexed files limit
         while (
@@ -4159,6 +4128,27 @@ These positions indicate where to split the text."""
             or len(self.indexed_files) <= self.config.max_indexed_files
         )
         return chunks_ok and files_ok, evicted_files
+
+    def full_by(self) -> Optional[str]:
+        """Which limit stops the index taking one more document without pushing one out.
+
+        ``"size"`` once its passages reach ``max_total_chunks``, or a load had
+        to push a document out to fit under it; ``"files"`` at
+        ``max_indexed_files`` documents; None while there is room.
+        """
+        with self._state_lock:
+            files = len(self.indexed_files)
+            chunks = len(self.chunks)
+            evicted_for_size = self._evicted_for_size
+        if evicted_for_size or 0 < self.config.max_total_chunks <= chunks:
+            return "size"
+        if 0 < self.config.max_indexed_files <= files:
+            return "files"
+        return None
+
+    def is_full(self) -> bool:
+        """True when indexing one more document would push out one already held."""
+        return self.full_by() is not None
 
     def _has_indexing_capacity(self, replacing: Optional[str] = None) -> bool:
         """Check if there is capacity to index another document.
