@@ -19,7 +19,7 @@ from typing import Any, Dict
 def add_subparser(subparsers) -> None:
     parser = subparsers.add_parser(
         "model",
-        help="Add or remove local GGUF models from a Hugging Face link",
+        help="Add or remove local models from a Hugging Face link",
     )
     actions = parser.add_subparsers(dest="model_action", help="Model action")
 

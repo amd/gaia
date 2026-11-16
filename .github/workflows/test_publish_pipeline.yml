@@ -69,6 +69,7 @@ jobs:
         run: python -m pip install --upgrade requests pyyaml boto3
 
       - name: Run the pipeline harness
+        shell: bash
         run: python util/verify_publish_pipeline.py 2>&1 | tee harness.log
 
       # The harness tears down its Worker on exit, so a failure otherwise leaves

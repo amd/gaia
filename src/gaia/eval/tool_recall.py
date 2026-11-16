@@ -60,7 +60,7 @@ _MIDLOOP_EVENTS = frozenset({"load_tools", "admit_skill_tools"})
 
 # Tools that never count as a recall miss: ``load_tools`` is the always-on
 # escape hatch (CORE), so calling it is always satisfiable by construction.
-_ALWAYS_SATISFIED = frozenset({"load_tools"})
+_ALWAYS_SATISFIED = frozenset({"load_tools", "search_tools"})
 
 
 # ── pure join logic (unit-tested) ─────────────────────────────────────────

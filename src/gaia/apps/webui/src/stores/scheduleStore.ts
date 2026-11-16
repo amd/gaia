@@ -6,7 +6,9 @@
 import { create } from 'zustand';
 import type { Schedule, ScheduleResult } from '../types';
 import * as api from '../services/api';
+import { getT } from '../i18n/useT';
 import { log } from '../utils/logger';
+import { plainPreview } from '../utils/plainPreview';
 import { useNotificationStore } from './notificationStore';
 
 /** Extract a human-readable message from an API error. */
@@ -24,6 +26,48 @@ function parseApiError(err: unknown, fallback: string): string {
     return raw;
 }
 
+const ANNOUNCED_ERRORS_KEY = 'gaia-schedule-announced-errors';
+
+/** error_count per schedule id that the bell has already covered, from the last session. */
+function loadAnnouncedErrors(): Record<string, number> {
+    let raw: string | null;
+    try {
+        raw = localStorage.getItem(ANNOUNCED_ERRORS_KEY);
+    } catch (err) {
+        log.system.warn(
+            'Announced schedule failures unreadable; failures from before launch may be announced again. ' +
+                'localStorage is blocked -- check private-browsing or site-data settings.',
+            err,
+        );
+        return {};
+    }
+    if (!raw) return {};
+    try {
+        const parsed: unknown = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return Object.fromEntries(
+                Object.entries(parsed).filter(([, v]) => typeof v === 'number'),
+            ) as Record<string, number>;
+        }
+        log.system.warn(`Ignored malformed "${ANNOUNCED_ERRORS_KEY}"; failures from before launch may be announced again.`);
+    } catch (err) {
+        log.system.warn(`"${ANNOUNCED_ERRORS_KEY}" is corrupt; failures from before launch may be announced again.`, err);
+    }
+    return {};
+}
+
+function saveAnnouncedErrors(counts: Record<string, number>): void {
+    try {
+        localStorage.setItem(ANNOUNCED_ERRORS_KEY, JSON.stringify(counts));
+    } catch (err) {
+        log.system.warn(
+            'Announced schedule failures not saved; they may be announced again on the next launch. ' +
+                'localStorage is blocked -- check private-browsing or site-data settings.',
+            err,
+        );
+    }
+}
+
 /** Raise an error notification for each schedule that failed since *seen* was taken. */
 function notifyNewFailures(seen: Record<string, number>, list: Schedule[]): void {
     const { addNotification } = useNotificationStore.getState();
@@ -34,7 +78,7 @@ function notifyNewFailures(seen: Record<string, number>, list: Schedule[]): void
             type: 'error',
             agentId: 'scheduler',
             agentName: 'GAIA',
-            title: `Scheduled task "${s.name}" failed`,
+            title: getT()('schedules.failed', { name: s.name }),
             message: s.last_error,
             timestamp: Date.now(),
             read: false,
@@ -44,6 +88,35 @@ function notifyNewFailures(seen: Record<string, number>, list: Schedule[]): void
         });
     }
 }
+
+/** Runs that have ended; a run in flight is already counted in run_count. */
+function finishedRuns(s: Schedule): number {
+    return s.run_count - (s.running ? 1 : 0);
+}
+
+/** Raise an info notification for each schedule that finished a run cleanly since the snapshots were taken. */
+function notifyNewFinishes(seenErrors: Record<string, number>, seenFinished: Record<string, number>, list: Schedule[]): void {
+    const { addNotification } = useNotificationStore.getState();
+    for (const s of list) {
+        const finished = finishedRuns(s);
+        if (finished <= (seenFinished[s.id] ?? 0) || s.error_count > (seenErrors[s.id] ?? 0)) continue;
+        addNotification({
+            id: `schedule-done-${s.id}-${finished}`,
+            type: 'info',
+            agentId: 'scheduler',
+            agentName: 'GAIA',
+            title: getT()('schedules.finished', { name: s.name }),
+            message: plainPreview(s.last_result ?? ''),
+            timestamp: Date.now(),
+            read: false,
+            dismissed: false,
+            priority: 'medium',
+            ...(s.session_id ? { sessionId: s.session_id } : {}),
+        });
+    }
+}
+
+export interface ScheduleDraft { when: string; name: string; prompt: string }
 
 interface ScheduleState {
     schedules: Schedule[];
@@ -59,6 +132,11 @@ interface ScheduleState {
     resultsLoading: boolean;
     /** error_count per schedule id at the last load; null before the first. */
     errorCounts: Record<string, number> | null;
+    /** Finished runs per schedule id at the last load. */
+    finishedCounts: Record<string, number>;
+    /** What was typed in the New schedule form, kept so closing the dialog doesn't lose it. */
+    draft: ScheduleDraft | null;
+    setDraft: (draft: ScheduleDraft | null) => void;
 
     loadSchedules: () => Promise<void>;
     createSchedule: (name: string, interval: string, prompt: string) => Promise<void>;
@@ -79,6 +157,9 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     results: [],
     resultsLoading: false,
     errorCounts: null,
+    finishedCounts: {},
+    draft: null,
+    setDraft: (draft) => set({ draft }),
 
     loadSchedules: async () => {
         // Only show loading spinner on initial load, not poll refreshes
@@ -88,13 +169,23 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         try {
             const data = await api.listSchedules();
             const schedules: Schedule[] = data.schedules || [];
-            const seen = get().errorCounts;
-            // The first load is the state at launch, not news.
-            if (seen) notifyNewFailures(seen, schedules);
+            const loaded = get().errorCounts;
+            const seenFinished = get().finishedCounts;
+            // On the first load, compare against what the last session announced, so failures while the app was closed still reach the bell.
+            const seen = loaded ?? loadAnnouncedErrors();
+            notifyNewFailures(seen, schedules);
+            // Finished runs at launch are not news.
+            if (loaded) notifyNewFinishes(seen, seenFinished, schedules);
+            const errorCounts = Object.fromEntries(schedules.map((s) => [s.id, s.error_count]));
+            saveAnnouncedErrors(errorCounts);
             set({
                 schedules,
                 loading: false,
-                errorCounts: Object.fromEntries(schedules.map((s) => [s.id, s.error_count])),
+                errorCounts,
+                // Max, because Run now marks a run in flight just before counting it.
+                finishedCounts: Object.fromEntries(
+                    schedules.map((s) => [s.id, Math.max(finishedRuns(s), seenFinished[s.id] ?? 0)]),
+                ),
             });
         } catch (err) {
             log.api.error('Failed to load schedules', err);

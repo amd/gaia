@@ -27,6 +27,12 @@ def default_model(monkeypatch):
     return chosen
 
 
+@pytest.fixture(autouse=True)
+def off_mac(monkeypatch):
+    """Macs skip the NPU check, so pin a PC platform for the NPU cases."""
+    monkeypatch.setattr(compatibility, "detect_platform", lambda: "linux-x64")
+
+
 @pytest.fixture
 def client(gaia_home_dir):  # noqa: ARG001 - fixture applies the env override
     app = create_app(db_path=":memory:")
@@ -69,6 +75,20 @@ def test_preflight_full_tier_compatible(client, monkeypatch):
     assert not any("NPU" in w for w in body["warnings"])
 
 
+def test_preflight_reports_memory_and_disk_in_the_gb_model_sizes_use(
+    client, monkeypatch
+):
+    # The probe reads GiB; setup shows these beside model sizes in decimal GB.
+    monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _stub_devices())
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 32.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 631.0)
+
+    body = client.get("/api/onboarding/preflight").json()
+    assert body["ram_gb"] == 34.4
+    assert body["disk_free_gb"] == 677.5
+    assert body["tier"] == "full"
+
+
 @pytest.mark.allow_network
 def test_preflight_recommends_the_model_chat_will_load(
     client, monkeypatch, default_model
@@ -104,11 +124,33 @@ def test_preflight_blocks_when_the_default_model_does_not_fit_on_disk(
     assert body["blockers"]
 
 
+NPU_MODEL = "gemma4-it-e4b-FLM"
+
+
 @pytest.mark.allow_network
-def test_preflight_no_npu_with_gpu_is_informational(client, monkeypatch):
+def test_preflight_has_no_npu_notice_for_a_gpu_model_on_a_pc_without_one(
+    client, monkeypatch
+):
+    """#7229: Gemma's GGUF build said it "requests an NPU" on a PC with none."""
+    monkeypatch.setattr(
+        onboarding_mod,
+        "_probe_lemonade_devices",
+        _stub_devices(npu_detected=False, gpu_vram_gb=None, gpu_name=None),
+    )
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 16.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+
+    body = client.get("/api/onboarding/preflight").json()
+    assert body["recommended_model"] == "Gemma-4-E4B-it-GGUF"
+    assert not any("NPU" in w for w in body["warnings"])
+
+
+@pytest.mark.allow_network
+def test_preflight_no_npu_with_gpu_is_informational(client, monkeypatch, default_model):
     # No-NPU box with a capable GPU (the #2396 Radeon dGPU case): the Hardware
     # check must read as informational — no "agent" framing, no "install your
     # Ryzen AI NPU driver" CTA.
+    default_model["model"] = NPU_MODEL
     monkeypatch.setattr(
         onboarding_mod, "_probe_lemonade_devices", _stub_devices(npu_detected=False)
     )
@@ -127,8 +169,27 @@ def test_preflight_no_npu_with_gpu_is_informational(client, monkeypatch):
 
 
 @pytest.mark.allow_network
-def test_preflight_no_npu_no_gpu_still_warns_to_remediate(client, monkeypatch):
-    # A box with neither NPU nor a detectable GPU keeps the remediation warning.
+def test_preflight_on_mac_has_no_npu_line(client, monkeypatch, default_model):
+    default_model["model"] = NPU_MODEL
+    monkeypatch.setattr(compatibility, "detect_platform", lambda: "darwin-arm64")
+    monkeypatch.setattr(
+        onboarding_mod,
+        "_probe_lemonade_devices",
+        _stub_devices(npu_detected=False, gpu_name="Apple M3", gpu_vram_gb=None),
+    )
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 16.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+
+    body = client.get("/api/onboarding/preflight").json()
+    assert not any("NPU" in w for w in body["warnings"])
+
+
+@pytest.mark.allow_network
+def test_preflight_no_npu_no_gpu_still_warns_to_remediate(
+    client, monkeypatch, default_model
+):
+    # An NPU model on a box with neither NPU nor GPU keeps the remediation warning.
+    default_model["model"] = NPU_MODEL
     monkeypatch.setattr(
         onboarding_mod,
         "_probe_lemonade_devices",
@@ -168,7 +229,9 @@ def test_preflight_insufficient_ram_warns(client, monkeypatch):
 
 
 @pytest.mark.allow_network
-def test_preflight_lemonade_down_leaves_npu_unknown(client, monkeypatch):
+def test_preflight_lemonade_down_leaves_npu_unknown(client, monkeypatch, default_model):
+    default_model["model"] = NPU_MODEL
+
     async def _probe():
         return {
             "lemonade_running": False,

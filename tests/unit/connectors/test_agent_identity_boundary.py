@@ -75,7 +75,6 @@ def _make_probe_agent(tool_body):
     }
     agent._policy_refusal = lambda name, args: None
     agent._tool_requires_confirmation = lambda name, args: False
-    agent._on_tool_invoked = lambda name: None
     agent._fold_tool_usage = lambda name, result: None
     agent._resolve_tool_timeout = lambda name: 10.0
     agent._finish_turn_record = lambda answer, steps: None

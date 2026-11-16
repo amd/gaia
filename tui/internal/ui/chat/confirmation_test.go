@@ -58,7 +58,7 @@ func TestNeedsConfirmationPutsUpTheModal(t *testing.T) {
 			m.confirmation.RunID(), m.confirmation.Action())
 	}
 	view := m.View()
-	for _, want := range []string{"send_draft", "alice@example.com", "WRITE"} {
+	for _, want := range []string{"Send this email?", "alice@example.com", "WRITE"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("modal not rendered in chat (missing %q):\n%s", want, view)
 		}

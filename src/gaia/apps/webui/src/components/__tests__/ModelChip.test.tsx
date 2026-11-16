@@ -3,7 +3,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelChip } from '../ModelChip';
 import { useModelStore } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
@@ -19,6 +19,7 @@ const LOCAL_ACTIVE: ActiveModel = {
 };
 const CLOUD_ACTIVE: ActiveModel = {
     provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false,
+    provider_name: 'Fireworks AI',
 };
 
 const LOCAL: ProviderInfo = { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC.' };
@@ -56,8 +57,13 @@ beforeEach(() => {
 });
 
 async function openPicker() {
-    fireEvent.click(screen.getByRole('button', { name: /Gemma|kimi|Model/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Gemma|kimi|auto|Model/ }));
     return screen.findByRole('dialog', { name: 'Choose a model' });
+}
+
+/** Says yes to the download the list asks about. */
+function confirmDownload(dialog: HTMLElement) {
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Download' }));
 }
 
 /** The model's row in the list, not its download icon. */
@@ -91,13 +97,57 @@ describe('ModelChip', () => {
         expect(chip.getAttribute('title')).toBe('Sent to Fireworks AI.');
     });
 
+    it('collapses unranked Fireworks variants until the user asks to see all', async () => {
+        const fireworks: ProviderInfo = { ...FIREWORKS, models_discovered: true };
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, fireworks], active: LOCAL_ACTIVE, lemonade_error: null });
+        mockedApi.listProviderModels.mockImplementation(async (id) => (id === 'fireworks'
+            ? {
+                provider: 'fireworks',
+                models: [
+                    model('fireworks.recommended', { rank: 1, note: 'best overall' }),
+                    model('fireworks.auto'),
+                    model('fireworks.spot'),
+                ],
+            }
+            : { provider: 'local', models: [model('Gemma-4-E4B-it-GGUF')] }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        expect(within(dialog).getByRole('option', { name: /recommended/ })).toBeInTheDocument();
+        expect(within(dialog).queryByRole('option', { name: /fireworks\.auto/ })).not.toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: 'Show all models' })).toBeInTheDocument();
+
+        fireEvent.click(within(dialog).getByRole('option', { name: 'Show all models' }));
+        expect(await within(dialog).findByRole('option', { name: /^auto$/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: /^spot$/ })).toBeInTheDocument();
+    });
+
+    it('keeps the active unranked Fireworks model visible while collapsed', async () => {
+        const activeCloud = { ...CLOUD_ACTIVE, model: 'fireworks.auto' };
+        useModelStore.setState({ active: activeCloud });
+        const fireworks: ProviderInfo = { ...FIREWORKS, models_discovered: true };
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, fireworks], active: activeCloud, lemonade_error: null });
+        mockedApi.listProviderModels.mockImplementation(async (id) => (id === 'fireworks'
+            ? {
+                provider: 'fireworks',
+                models: [model('fireworks.recommended', { rank: 1 }), model('fireworks.auto'), model('fireworks.other')],
+            }
+            : { provider: 'local', models: [model('Gemma-4-E4B-it-GGUF')] }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        expect(within(dialog).getByRole('option', { name: /^recommended$/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: /^auto$/ })).toBeInTheDocument();
+        expect(within(dialog).queryByRole('option', { name: /^other$/ })).not.toBeInTheDocument();
+    });
+
     it('shows the model name in the tooltip without Markdown backticks', () => {
         useChatStore.setState({
-            sessions: [{ ...SESSION, inference_remote: false, inference_description: 'Runs here, model `Qwen3`.' }],
+            sessions: [{ ...SESSION, inference_remote: true, inference_provider_name: 'Fireworks AI', inference_description: 'Runs there, model `Qwen3`.' }],
         });
         render(<ModelChip />);
         const chip = screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF/ });
-        expect(chip.getAttribute('title')).toBe('Runs here, model Qwen3.');
+        expect(chip.getAttribute('title')).toBe('Runs there, model Qwen3.');
     });
 
     it('labels a cloud model with its provider', () => {
@@ -194,6 +244,19 @@ describe('ModelChip', () => {
         expect(screen.getByRole('button', { name: /kimi-k2 · Fireworks AI/ })).toBeInTheDocument();
     });
 
+    it('shows the cloud notice under the clicked row and scrolls it into view', async () => {
+        const scrolled = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        const row = await within(dialog).findByRole('option', { name: /^kimi-k2/ });
+        fireEvent.click(row);
+
+        const notice = within(dialog).getByRole('alert');
+        expect(row.closest('.popover-row')?.nextElementSibling).toBe(notice);
+        expect(scrolled.mock.contexts).toContain(notice);
+        scrolled.mockRestore();
+    });
+
     it('switches between local models without a notice', async () => {
         mockedApi.listProviderModels.mockImplementation(async (id) => ({
             provider: id, models: id === 'local' ? [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF')] : [],
@@ -217,6 +280,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
@@ -243,9 +307,71 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'), { timeout: 9000 });
     }, 12000);
+
+    it('never starts a download without a yes, and says how big it is', async () => {
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local' ? [model('Gemma-4-E4B-it-GGUF'), model('Qwen3-8B-GGUF', { downloaded: false, size_gb: 5.2 })] : [],
+        }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+        expect(within(dialog).getByRole('alert')).toHaveTextContent('Download Qwen3-8B-GGUF (5.2 GB)? GAIA switches to it when the download finishes.');
+        expect(mockedApi.downloadModel).not.toHaveBeenCalled();
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Download Qwen3-8B-GGUF' }));
+        expect(within(dialog).getByRole('alert')).toHaveTextContent('Download Qwen3-8B-GGUF (5.2 GB)?');
+        expect(within(dialog).getByRole('alert')).not.toHaveTextContent('switches');
+        expect(mockedApi.downloadModel).not.toHaveBeenCalled();
+        confirmDownload(dialog);
+        await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    });
+
+    it('keeps one question open: a download question replaces the cloud one', async () => {
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        fireEvent.click(await within(dialog).findByRole('option', { name: /^kimi-k2/ }));
+        expect(within(dialog).getByRole('alert')).toHaveTextContent('Chat history is sent to Fireworks AI.');
+
+        fireEvent.click(await rowFor(dialog, /Qwen3/));
+        expect(within(dialog).getAllByRole('alert')).toHaveLength(1);
+        expect(within(dialog).getByRole('alert')).toHaveTextContent('Download Qwen3-8B-GGUF');
+
+        fireEvent.click(within(dialog).getByRole('option', { name: /^kimi-k2/ }));
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Download Qwen3-8B-GGUF' }));
+        expect(within(dialog).getAllByRole('alert')).toHaveLength(1);
+        expect(mockedApi.downloadModel).not.toHaveBeenCalled();
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+    });
+
+    it('lists the provider in use first, and models on this PC before ones to download', async () => {
+        useModelStore.setState({ active: CLOUD_ACTIVE });
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [model('Qwen3-8B-GGUF', { downloaded: false, size_gb: 5.2 }), model('Gemma-4-E4B-it-GGUF', { size_gb: 5.6 })]
+                : [model('fireworks.accounts/fireworks/models/kimi-k2', { rank: 1 })],
+        }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        await within(dialog).findByRole('option', { name: /^kimi-k2/ });
+
+        const headings = Array.from(dialog.querySelectorAll('.popover-heading')).map((h) => h.textContent);
+        expect(headings).toEqual(['Fireworks AI', 'Local']);
+        const rows = within(dialog).getAllByRole('option').map((o) => o.textContent);
+        expect(rows).toEqual(['kimi-k2', 'Gemma-4-E4B-it-GGUF5.6 GB', 'Qwen3-8B-GGUF5.2 GB']);
+        const subheading = dialog.querySelector('.popover-subheading')!;
+        expect(subheading).toHaveTextContent('Available to download');
+        expect(subheading.compareDocumentPosition(within(dialog).getByRole('option', { name: /^Qwen3/ })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
 
     it('a download the server reports as failed drops the pick and says why', async () => {
         let qwen: Partial<ProviderModel> = { downloaded: false };
@@ -261,6 +387,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         expect(await within(dialog).findByRole('alert')).toHaveTextContent(/Downloading Qwen3-8B-GGUF failed: No space left on device/);
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
@@ -272,6 +399,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         expect(await within(dialog).findByRole('alert', {}, { timeout: 13000 }))
             .toHaveTextContent(/download of Qwen3-8B-GGUF never started/);
@@ -295,6 +423,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
         await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
         // While Qwen downloads, the user picks Phi, which is already here.
         fireEvent.click(await rowFor(dialog, /Phi/));
@@ -318,6 +447,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         expect(await within(dialog).findByRole('alert', {}, { timeout: 13000 }))
             .toHaveTextContent(/Qwen3-8B-GGUF is no longer in the model list/);
@@ -342,10 +472,12 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
         await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith('Qwen3-8B-GGUF'));
         const phi = await within(dialog).findByRole('button', { name: 'Download Phi-4-GGUF' });
         await waitFor(() => expect(phi).not.toBeDisabled());
         fireEvent.click(phi);
+        confirmDownload(dialog);
         expect(await within(dialog).findByText(/Disk full/)).toBeInTheDocument();
 
         qwen = { downloaded: true };
@@ -364,6 +496,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         await waitFor(() => expect(screen.getByLabelText('Model switch failed')).toBeInTheDocument());
         const chip = screen.getByLabelText('Model switch failed').closest('button')!;
@@ -376,6 +509,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         fireEvent.click(await rowFor(dialog, /Qwen3/));
+        confirmDownload(dialog);
 
         expect(await within(dialog).findByText(/Disk full/)).toBeInTheDocument();
         expect(mockedApi.selectModel).not.toHaveBeenCalled();
@@ -419,6 +553,29 @@ describe('ModelChip', () => {
         expect(within(dialog).queryByText(/keychain access/)).not.toBeInTheDocument();
     });
 
+    it('offers Try again for a locked key store instead of polling or "Add your key"', async () => {
+        const locked: ProviderInfo = {
+            ...FIREWORKS, models_discovered: false, key_source: null,
+            key_state: 'store_locked',
+            key_message: 'The OS credential store is locked: its unlock prompt was closed.',
+        };
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, locked, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null });
+        mockedApi.retryKeyStore.mockResolvedValue({ retrying: true });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        const retry = await within(dialog).findByRole('option', { name: /Try again/ });
+        expect(within(dialog).getByText(/key store is locked/)).toBeInTheDocument();
+        expect(within(dialog).queryByText('Add your key')).not.toBeInTheDocument();
+        const reads = mockedApi.listProviders.mock.calls.length;
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        expect(mockedApi.listProviders.mock.calls.length).toBe(reads);
+
+        fireEvent.click(retry);
+        await waitFor(() => expect(mockedApi.retryKeyStore).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(mockedApi.listProviders.mock.calls.length).toBe(reads + 1));
+    });
+
     it('opens model settings from the picker', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();
@@ -460,6 +617,13 @@ describe('ModelChip keyboard', () => {
         await within(dialog).findByRole('option', { name: /^kimi-k2/ });
         return dialog;
     }
+    async function openLocalWithKeyboard(user: ReturnType<typeof userEvent.setup>) {
+        screen.getByRole('button', { name: /Gemma|kimi|Model/ }).focus();
+        await user.keyboard('{Enter}');
+        const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
+        await within(dialog).findByRole('option', { name: /^Gemma-4-E4B-it-GGUF/ });
+        return dialog;
+    }
     const option = (dialog: HTMLElement, name: RegExp) => within(dialog).getByRole('option', { name });
 
     it('opens on the current model, scrolled into view, as the only Tab stop', async () => {
@@ -484,22 +648,41 @@ describe('ModelChip keyboard', () => {
         const dialog = await openWithKeyboard(user);
         await waitFor(() => expect(option(dialog, /^kimi-k2/)).toHaveFocus());
 
+        // The provider in use (Fireworks) is listed first; the downloading row is skipped.
         await user.keyboard('{ArrowUp}');
-        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
-        await user.keyboard('{ArrowUp}');
-        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
-        await user.keyboard('{ArrowUp}');
-        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
-        await user.keyboard('{End}');
         expect(option(dialog, /^kimi-k2/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
         await user.keyboard('{Home}');
-        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus();
-        await user.keyboard('{ArrowDown}');
-        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
-        await user.keyboard('{ArrowDown}');
         expect(option(dialog, /^kimi-k2/)).toHaveFocus();
-        expect(option(dialog, /^kimi-k2/).tabIndex).toBe(0);
-        expect(option(dialog, /^Gemma-4-E4B-it-GGUF/).tabIndex).toBe(-1);
+        await user.keyboard('{End}');
+        expect(option(dialog, /^Qwen3-8B-GGUF/)).toHaveFocus();
+        expect(option(dialog, /^Qwen3-8B-GGUF/).tabIndex).toBe(0);
+        expect(option(dialog, /^kimi-k2/).tabIndex).toBe(-1);
+    });
+
+    it('makes the expanded Fireworks list keyboard-reachable and focuses its first new row', async () => {
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [model('Gemma-4-E4B-it-GGUF')]
+                : [model('fireworks.recommended', { rank: 1 }), model('fireworks.auto')],
+        }));
+        const user = userEvent.setup();
+        render(<ModelChip />);
+        const dialog = await openLocalWithKeyboard(user);
+        await waitFor(() => expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus());
+
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^recommended$/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Show all models$/)).toHaveFocus();
+        await user.keyboard('{Enter}');
+        await waitFor(() => expect(option(dialog, /^auto$/)).toHaveFocus());
     });
 
     it('picks the focused row on Enter', async () => {
@@ -553,5 +736,48 @@ describe('ModelChip keyboard', () => {
         await user.keyboard('{ArrowLeft}');
         expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
         expect(gemma).not.toHaveAttribute('aria-describedby');
+    });
+});
+
+describe('ModelChip in Arabic', () => {
+    // The backend's own wording, which the UI translates by provider.
+    const LOCAL_SERVER: ProviderInfo = { ...LOCAL, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' };
+    const FIREWORKS_SERVER: ProviderInfo = { ...FIREWORKS, privacy_notice: 'Chat history is sent to Fireworks AI. Usage may incur charges.' };
+
+    beforeEach(() => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL_SERVER, FIREWORKS_SERVER], active: LOCAL_ACTIVE, lemonade_error: null });
+    });
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    it('names the local group in Arabic and keeps the cloud brand name', async () => {
+        render(<ModelChip />);
+        fireEvent.click(screen.getByRole('button', { name: /Gemma/ }));
+        const dialog = await screen.findByRole('dialog', { name: /Choose a model/ });
+        const headings = await waitFor(() => {
+            const found = Array.from(dialog.querySelectorAll('.popover-heading')).map((h) => h.textContent);
+            expect(found).toHaveLength(2);
+            return found;
+        });
+        expect(headings).toEqual(expect.arrayContaining(['محلي', 'Fireworks AI']));
+        expect(headings).not.toContain('Local');
+    });
+
+    it('warns in Arabic before a cloud model is used', async () => {
+        render(<ModelChip />);
+        fireEvent.click(screen.getByRole('button', { name: /Gemma/ }));
+        const dialog = await screen.findByRole('dialog', { name: /Choose a model/ });
+        fireEvent.click(await rowFor(dialog, /kimi-k2/));
+        const alert = await within(dialog).findByRole('alert');
+        expect(alert).toHaveTextContent('يُرسَل سجل المحادثة إلى Fireworks AI');
+        expect(within(alert).getByRole('button', { name: /استخدام.*kimi-k2/ })).toBeInTheDocument();
+    });
+
+    it('says a cloud chat leaves this PC in Arabic on hover', () => {
+        useModelStore.setState({ active: CLOUD_ACTIVE });
+        useChatStore.setState({ sessions: [{ ...SESSION, inference_remote: true, inference_provider_name: 'Fireworks AI' }] });
+        render(<ModelChip />);
+        const chip = screen.getByRole('button', { name: /kimi-k2/ });
+        expect(chip.getAttribute('title')).toContain('ويغادر سجل المحادثة هذا الجهاز');
     });
 });

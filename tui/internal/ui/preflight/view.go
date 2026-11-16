@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -30,7 +31,7 @@ var (
 )
 
 const (
-	indentW = 2
+	indentW = components.IndentW
 	cursorW = 2
 	markerW = 6
 	minW    = 40
@@ -99,9 +100,9 @@ func (m Model) render() string {
 		body = body[:budget]
 	}
 
-	out := []string{head, pad(dividerStyle.Render(div))}
+	out := []string{head, components.Pad(dividerStyle.Render(div))}
 	out = append(out, body...)
-	out = append(out, pad(dividerStyle.Render(div)), foot)
+	out = append(out, components.Pad(dividerStyle.Render(div)), foot)
 	return clipToTerminal(out, m.width, m.height)
 }
 
@@ -162,9 +163,9 @@ func (m Model) header(w int) string {
 	}
 	gap := w - 2*indentW - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		return pad(titleStyle.Render(truncate(left, w-2*indentW)))
+		return components.Pad(titleStyle.Render(truncate(left, w-2*indentW)))
 	}
-	return pad(titleStyle.Render(left) + strings.Repeat(" ", gap) + summaryStyle.Render(right))
+	return components.Pad(titleStyle.Render(left) + strings.Repeat(" ", gap) + summaryStyle.Render(right))
 }
 
 func (m Model) footer(w int) string {
@@ -195,6 +196,12 @@ func (m Model) footer(w int) string {
 	if m.cfg.AgentID == "gaia" && !m.Busy() {
 		keys = append(keys, [2]string{"p", "AI provider"})
 	}
+	if m.offersUpdate() {
+		keys = append(keys, [2]string{"u", "update GAIA"})
+	}
+	if m.offersBack() {
+		keys = append(keys, [2]string{"b", "back to " + m.previous})
+	}
 	keys = append(keys, [2]string{"r", "re-check"})
 	keys = append(keys, [2]string{"d", "details"})
 	// `enter` is offered whenever pressing it would actually do something:
@@ -223,20 +230,12 @@ func (m Model) fitFooter(w int, keys [][2]string) string {
 	avail -= 2 * indentW
 
 	for first := 0; first < len(keys); first++ {
-		line := renderKeys(keys[first:])
+		line := components.RenderKeys(keys[first:])
 		if first == len(keys)-1 || lipgloss.Width(line) <= avail {
-			return pad(truncateStyled(line, avail))
+			return components.Pad(truncateStyled(line, avail))
 		}
 	}
-	return pad("")
-}
-
-func renderKeys(keys [][2]string) string {
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, keyStyle.Render(k[0])+" "+dimStyle.Render(k[1]))
-	}
-	return strings.Join(parts, dimStyle.Render(" · "))
+	return components.Pad("")
 }
 
 // startStepLabel is the enter hint on a first-run step: "start step 1".
@@ -311,7 +310,7 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 			bodyStyle = dimStyle
 		}
 		if row.State == StateChecking {
-			line = m.spin.View() + " " + line
+			line = m.spinPrefix() + line
 		}
 		if row.State == StatePending && row.Detail != "" {
 			line = row.Line + "  " + row.Detail
@@ -328,20 +327,20 @@ func (m Model) checklistLines(labelW, lineW, w int) (checklist, remedy []string,
 		switch {
 		case provisioning && row.Key == m.provision.Row:
 			markerText, st, bodyStyle = StateChecking.Marker(), keyStyle, labelStyle
-			line = m.spin.View() + " " + lowerFirst(m.provision.Text) + "…"
+			line = m.spinPrefix() + lowerFirst(m.provision.Text) + "…"
 		case provisioning && m.provisionDone[row.Key]:
 			markerText, st, bodyStyle = StateOK.Marker(), okStyle, dimStyle
 			line = "done"
 		}
 		marker := st.Render(fmt.Sprintf("%-*s", markerW-1, markerText)) + " "
 		label := labelStyle.Render(fmt.Sprintf("%-*s", labelW, truncate(row.Label, labelW)))
-		checklist = append(checklist, pad(cursor+marker+label+bodyStyle.Render(truncate(line, lineW))))
+		checklist = append(checklist, components.Pad(cursor+marker+label+bodyStyle.Render(truncate(line, lineW))))
 
 		if !focused || provisioning || row.State == StateOK || row.State == StatePending {
 			continue
 		}
 		focusAt = i
-		remedy = indentAll(m.remedyLines(row, remedyW), remedyIndent)
+		remedy = components.IndentAll(m.remedyLines(row, remedyW), remedyIndent)
 	}
 	return checklist, remedy, focusAt
 }
@@ -371,8 +370,8 @@ func (m Model) trailerLines(w int) []string {
 		}
 		return []string{
 			"",
-			pad(noteStyle.Render(truncate(m.spin.View()+" "+m.progressLine(), w-2*indentW))),
-			pad(dimStyle.Render(leaving)),
+			components.Pad(noteStyle.Render(truncate(m.spinPrefix()+m.progressLine(), w-2*indentW))),
+			components.Pad(dimStyle.Render(leaving)),
 		}
 	case m.HeldForReview() && m.rep.Ready():
 		// A fix just ran and everything passed. Say so, and say the screen is
@@ -382,10 +381,10 @@ func (m Model) trailerLines(w int) []string {
 		if m.rep.Chat != "" {
 			msg = "Setup finished and the models load. Chat runs on " + m.rep.Chat + "."
 		}
-		return append([]string{""}, indentAll(styleAll(noteStyle,
+		return append([]string{""}, components.IndentAll(styleAll(noteStyle,
 			wrap(msg+" Press enter to start "+m.cfg.AgentName+".", w-2*indentW)), indentW)...)
 	case m.note != "":
-		return append([]string{""}, indentAll(wrap(m.note, w-2*indentW), indentW)...)
+		return append([]string{""}, components.IndentAll(wrap(m.note, w-2*indentW), indentW)...)
 	case m.phase == phaseDone:
 		// Only when a hand-off is actually scheduled — under ManualProceed
 		// nothing is starting, and saying so would be a lie.
@@ -393,7 +392,7 @@ func (m Model) trailerLines(w int) []string {
 		if m.rep.Chat != "" {
 			msg = "Starting " + m.cfg.AgentName + " — chat runs on " + m.rep.Chat + "…"
 		}
-		return []string{"", pad(dimStyle.Render(truncate(msg, w-2*indentW)))}
+		return []string{"", components.Pad(dimStyle.Render(truncate(msg, w-2*indentW)))}
 	}
 	return nil
 }
@@ -497,7 +496,7 @@ func (m Model) remedyLines(row Row, w int) []string {
 // bug can copy exactly what the probe saw.
 func (m Model) detailLines(w, budget int) []string {
 	if m.focus < 0 || m.focus >= len(m.rep.Rows) {
-		return []string{pad(dimStyle.Render("no row selected"))}
+		return []string{components.Pad(dimStyle.Render("no row selected"))}
 	}
 	row := m.rep.Rows[m.focus]
 	word := row.State.Word()
@@ -506,7 +505,7 @@ func (m Model) detailLines(w, budget int) []string {
 		word = "not set up yet"
 	}
 	out := []string{
-		pad(labelStyle.Render(fmt.Sprintf("%s — %s", row.Label, word))),
+		components.Pad(labelStyle.Render(fmt.Sprintf("%s — %s", row.Label, word))),
 		"",
 	}
 	raw := row.Raw
@@ -514,7 +513,7 @@ func (m Model) detailLines(w, budget int) []string {
 		raw = "(this check recorded no raw answer)"
 	}
 	for _, l := range wrap(raw, w-2*indentW) {
-		out = append(out, pad(dimStyle.Render(l)))
+		out = append(out, components.Pad(dimStyle.Render(l)))
 		if len(out) >= budget {
 			break
 		}
@@ -523,17 +522,6 @@ func (m Model) detailLines(w, budget int) []string {
 }
 
 // --- text helpers ----------------------------------------------------------
-
-func pad(s string) string { return strings.Repeat(" ", indentW) + s }
-
-func indentAll(lines []string, n int) []string {
-	prefix := strings.Repeat(" ", n)
-	out := make([]string, 0, len(lines))
-	for _, l := range lines {
-		out = append(out, prefix+l)
-	}
-	return out
-}
 
 // truncate cuts a plain (ANSI-free) string to w display columns.
 func truncate(s string, w int) string {

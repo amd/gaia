@@ -23,10 +23,10 @@ import requests
 
 import gaia.ui._chat_helpers as helpers
 from gaia.agents.base.agent import Agent
+from gaia.daemon.sidecars.errors import SidecarError
 from gaia.ui import session_environment, turn_insights
 from gaia.ui.database import ChatDatabase
 from gaia.ui.email_sidecar import daemon_client, relay
-from gaia.ui.email_sidecar.errors import SidecarError
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,

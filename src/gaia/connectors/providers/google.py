@@ -51,6 +51,15 @@ SCOPE_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+# The one spelling of Google's identity scopes, shared by the catalog spec.
+# The URL form is what Google echoes back in a token response, so a stored
+# connection carries exactly what was requested.
+GOOGLE_IDENTITY_SCOPES: tuple[str, ...] = (
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+)
+
+
 class GoogleOAuthProvider:
     """
     Concrete provider for ``accounts.google.com``. Implements ``OAuthProvider``
@@ -71,10 +80,7 @@ class GoogleOAuthProvider:
     # never assume every provider has one (Microsoft does not; see
     # ``MicrosoftOAuthProvider.revoke_url``).
     revoke_url: str | None = "https://oauth2.googleapis.com/revoke"
-    default_scopes: Sequence[str] = (
-        "openid",
-        "https://www.googleapis.com/auth/userinfo.email",
-    )
+    default_scopes: Sequence[str] = GOOGLE_IDENTITY_SCOPES
 
     def __init__(self, client_id: str | None = None, client_secret: str | None = None):
         # Resolution order (per AC; user-friendliness first):

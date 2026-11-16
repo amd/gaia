@@ -75,6 +75,8 @@ _DEFAULT_STARTUP_TIMEOUT = 10.0
 _CRASH_DETECT_DELAY = 0.1
 # Cap on retained stderr lines for crash diagnostics.
 _STDERR_RING = 200
+# Bound how long a terminated agent's stderr reader may take to reach EOF.
+_STDERR_DRAIN_JOIN_TIMEOUT = 0.5
 
 
 class NativeAgentError(RuntimeError):
@@ -396,7 +398,9 @@ class NativeAgentLauncher:
         if extra_args:
             cmd.extend(str(a) for a in extra_args)
 
-        merged_env = child_env(env)
+        from gaia.llm.lemonade_choice import child_lemonade_env
+
+        merged_env = child_lemonade_env(child_env(env))
 
         if self.debug:
             logger.debug("native-launcher: spawning %s", cmd)
@@ -719,6 +723,16 @@ class NativeAgentLauncher:
             self._states.pop(pid, None)
 
     def _dead_process_error(self, state: _ProcState) -> NativeAgentError:
+        # stdout EOF can land before the exit is reapable and before the
+        # stderr reader drains; both waits are bounded (descendants may hold
+        # the pipes open).
+        try:
+            state.proc.wait(timeout=_STDERR_DRAIN_JOIN_TIMEOUT)
+            exited = True
+        except subprocess.TimeoutExpired:
+            exited = False
+        if exited:
+            state._stderr_reader.join(timeout=_STDERR_DRAIN_JOIN_TIMEOUT)
         code = self._format_exit_code(state.proc.returncode)
         stderr = state.recent_stderr()
         msg = f"Native agent process died (exit code {code}, pid={state.proc.pid})"

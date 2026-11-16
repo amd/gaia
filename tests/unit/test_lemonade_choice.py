@@ -58,7 +58,7 @@ class FakeResponse:
         return self._body
 
 
-def _lemonade(version="11.8.1"):
+def _lemonade(version="2026.44.1"):
     return FakeResponse(body={"status": "ok", "version": version, "model_loaded": None})
 
 
@@ -226,6 +226,174 @@ class TestPrecedence:
             assert gaia_runs_lemonade() is True
 
 
+class TestEnvChosenAwayFrom:
+    """GAIA's own picked in the app over a LEMONADE_BASE_URL that wasn't answering."""
+
+    def test_the_env_value_it_overrode_is_ignored(self, monkeypatch):
+        from gaia.llm.lemonade_client import (
+            configured_lemonade_url,
+            resolve_lemonade_api_key,
+        )
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        monkeypatch.setenv("LEMONADE_API_KEY", "for-that-server")
+        assert choice.configured_source() == "env"
+
+        assert choice.ignore_env_url() == "http://127.0.0.1:59999/api/v1"
+        saved = GaiaConfig.load()
+        assert saved.lemonade_env_url_ignored == "http://127.0.0.1:59999/api/v1"
+        assert configured_lemonade_url() is None
+        assert choice.configured_source() is None
+        assert choice.env_override_note() is None
+        # Its key belonged to the server it named, never GAIA's own.
+        assert resolve_lemonade_api_key() is None
+        info = choice.describe()
+        assert info["source"] == "gaia"
+        assert info["env_url_ignored"] == "http://127.0.0.1:59999/api/v1"
+
+    def test_a_trailing_slash_is_the_same_value(self, monkeypatch):
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", " http://127.0.0.1:59999/api/v1/ ")
+        assert choice.configured_source() is None
+
+    def test_a_bare_origin_and_its_api_path_are_the_same_value(self, monkeypatch):
+        # The TUI hands its Python child the normalized form of the user's value.
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        assert choice.configured_source() is None
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            "http://127.0.0.1:59998",
+            "http://127.0.0.1:59999/proxy/api/v1",
+            "https://127.0.0.1:59999",
+        ],
+    )
+    def test_a_different_server_is_not_the_ignored_value(self, monkeypatch, other):
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", other)
+        assert choice.configured_source() == "env"
+
+    def test_a_changed_env_value_applies_again(self, monkeypatch):
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://gpu-box:13305")
+        assert configured_lemonade_url() == "http://gpu-box:13305"
+        assert choice.configured_source() == "env"
+        assert choice.describe()["env_url_ignored"] is None
+        assert "gpu-box" in choice.env_override_note()
+
+    def test_the_saved_external_server_still_applies_over_an_ignored_env(
+        self, monkeypatch
+    ):
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        assert configured_lemonade_url() == USER_URL
+        assert choice.configured_source() == "config"
+
+    def test_gaia_lemonade_status_says_the_env_value_is_ignored(
+        self, monkeypatch, capsys
+    ):
+        from gaia.cli import handle_lemonade_choice_command
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+        choice.ignore_env_url()
+        handle_lemonade_choice_command(
+            SimpleNamespace(lemonade_action="status", json=False)
+        )
+        out = capsys.readouterr().out
+        assert "GAIA uses its own Lemonade Server" in out
+        assert "LEMONADE_BASE_URL=http://127.0.0.1:59999/api/v1 is ignored" in out
+
+    def test_an_unreadable_config_is_an_error_with_the_env_value_set(self, monkeypatch):
+        from gaia.config import GaiaConfigError
+        from gaia.llm.lemonade_client import configured_lemonade_url
+
+        GaiaConfig.config_path().parent.mkdir(parents=True, exist_ok=True)
+        GaiaConfig.config_path().write_text('{"lemonade_mode":', encoding="utf-8")
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://gpu-box:13305")
+        # It can't say whether that value is ignored, so it can't be guessed.
+        with pytest.raises(GaiaConfigError, match="not valid JSON"):
+            configured_lemonade_url()
+
+    def _gaias_own_running(self, tmp_path, port=63207):
+        state = tmp_path / "gaia-home" / "lemonade" / "state.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(json.dumps({"port": port, "api_key": "k"}), encoding="utf-8")
+
+    DEAD = "http://127.0.0.1:59999/api/v1"
+    INHERITED = {"LEMONADE_BASE_URL": DEAD, "LEMONADE_API_KEY": "dead", "PATH": "p"}
+
+    def test_a_child_gets_gaias_own_instead_of_an_ignored_value(
+        self, monkeypatch, tmp_path
+    ):
+        # Agents are built apart from GAIA and may never read the saved choice.
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        self._gaias_own_running(tmp_path)
+        assert choice.child_lemonade_env(self.INHERITED) == {
+            "LEMONADE_BASE_URL": "http://localhost:63207/api/v1",
+            "GAIA_LEMONADE_EMBEDDED": "1",
+            "PATH": "p",
+        }
+
+    def test_a_child_gets_no_address_while_gaias_own_is_down(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        assert choice.child_lemonade_env(self.INHERITED) == {"PATH": "p"}
+
+    def test_a_child_follows_a_saved_server_over_an_ignored_value(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        self._gaias_own_running(tmp_path)
+        _save(lemonade_mode="external", lemonade_base_url=USER_URL)
+        assert choice.child_lemonade_env(self.INHERITED) == {"PATH": "p"}
+
+    def test_a_child_keeps_a_value_that_is_not_ignored(self, monkeypatch, tmp_path):
+        self._gaias_own_running(tmp_path)
+        assert choice.child_lemonade_env(self.INHERITED) == self.INHERITED
+        own = {**self.INHERITED, "GAIA_LEMONADE_EMBEDDED": "1"}
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        choice.ignore_env_url()
+        assert choice.child_lemonade_env(own) == own
+
+    def test_the_daemon_and_setup_children_never_inherit_an_ignored_value(
+        self, monkeypatch, tmp_path
+    ):
+        from gaia.daemon.client import _daemon_env
+        from gaia.ui.setup_runner import _child_env
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.DEAD)
+        monkeypatch.setenv("LEMONADE_API_KEY", "dead")
+        choice.ignore_env_url()
+        self._gaias_own_running(tmp_path)
+        for env in (_daemon_env(), _child_env()):
+            assert env["LEMONADE_BASE_URL"] == "http://localhost:63207/api/v1"
+            assert env["GAIA_LEMONADE_EMBEDDED"] == "1"
+            assert "LEMONADE_API_KEY" not in env
+
+    def test_nothing_is_saved_without_an_env_value(self, monkeypatch):
+        assert choice.ignore_env_url() is None
+        monkeypatch.setenv("LEMONADE_BASE_URL", "http://localhost:50601/api/v1")
+        monkeypatch.setenv("GAIA_LEMONADE_EMBEDDED", "1")
+        # GAIA's own exported URL is not the user's choice to override.
+        assert choice.ignore_env_url() is None
+        assert GaiaConfig.load().lemonade_env_url_ignored is None
+
+
 # ---------------------------------------------------------------------------
 # API keys
 # ---------------------------------------------------------------------------
@@ -334,16 +502,16 @@ class TestProbe:
         assert choice.probe(USER_URL, "wrong").status == choice.BAD_KEY
 
     def test_too_old_names_both_versions_and_the_upgrade(self, http):
-        http.routes[f"{USER_URL}/health"] = _lemonade("10.2.0")
+        http.routes[f"{USER_URL}/health"] = _lemonade("11.9.0")
         result = choice.probe(USER_URL)
         assert result.status == choice.TOO_OLD
         msg = result.message()
-        assert "v10.2.0" in msg and f"v{choice.minimum_version()}" in msg
+        assert "v11.9.0" in msg and f"v{choice.minimum_version()}" in msg
         assert "Upgrade" in msg and "lemonade_mode" not in msg
         assert "lemonade_mode gaia" in result.message(in_use=True)
 
     def test_calver_is_new_enough(self, http):
-        http.routes[f"{USER_URL}/health"] = _lemonade("2026.40.0")
+        http.routes[f"{USER_URL}/health"] = _lemonade("2026.45.0~3.abc1234")
         assert choice.probe(USER_URL).status == choice.OK
 
     def test_down_server_is_unreachable(self, http):
@@ -464,7 +632,7 @@ class TestDetect:
             assert choice.detect_running_lemonade() is None
 
     def test_too_old_is_reported_not_offered(self, http):
-        http.routes[f"{USER_URL}/health"] = _lemonade("10.2.0")
+        http.routes[f"{USER_URL}/health"] = _lemonade("11.9.0")
         assert choice.detect_running_lemonade().status == choice.TOO_OLD
 
     def test_a_busy_server_gets_time_to_answer(self, http, monkeypatch):
@@ -508,7 +676,7 @@ class TestUseExternal:
         "response,status",
         [
             (FakeResponse(401), choice.NEEDS_KEY),
-            (_lemonade("10.2.0"), choice.TOO_OLD),
+            (_lemonade("11.9.0"), choice.TOO_OLD),
             (FakeResponse(body=None, content_type="text/html"), choice.NOT_LEMONADE),
             (None, choice.UNREACHABLE),
         ],
@@ -763,6 +931,152 @@ class TestDaemonReconfigure:
         ):
             with pytest.raises(DaemonError, match="gaia daemon restart"):
                 client.reconfigure_lemonade()
+
+
+class TestAdoptedDaemonMatchesTheLaunch:
+    """#7976: a relaunch adopted a daemon left on another model server, so the
+    banner said the server was down while chats still answered through it."""
+
+    LAUNCH_URL = "http://127.0.0.1:49999/api/v1"
+
+    def _inst(self, pid=1):
+        from gaia.daemon.instance import DaemonInstance
+
+        return DaemonInstance(
+            pid=pid, port=5000 + pid, token="t", host="127.0.0.1", started_at=0.0,
+            api_version="1.5",
+        )  # fmt: skip
+
+    def _target(self, http, inst, body):
+        http.routes[f"{inst.base_url}/daemon/v1/lemonade/target"] = FakeResponse(
+            body=body
+        )
+
+    def test_a_daemon_on_the_launchs_server_is_kept(self, http, monkeypatch):
+        from gaia.daemon import client
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        inst = self._inst()
+        self._target(http, inst, {"mode": "external", "base_url": self.LAUNCH_URL})
+        with (
+            mock.patch.object(client, "attach", return_value=inst),
+            mock.patch.object(client, "request_shutdown") as shutdown,
+        ):
+            assert client.match_launch_lemonade() is None
+        shutdown.assert_not_called()
+        assert http.calls[0].headers == {"Authorization": "Bearer t"}
+
+    def test_an_idle_daemon_on_another_server_is_restarted(self, http, monkeypatch):
+        from gaia.daemon import client
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        old, fresh = self._inst(1), self._inst(2)
+        self._target(http, old, {"mode": "gaia", "base_url": None})
+        self._target(http, fresh, {"mode": "external", "base_url": self.LAUNCH_URL})
+        with (
+            mock.patch.object(client, "attach", return_value=old),
+            mock.patch.object(client, "outdated_daemon_busy", return_value=None),
+            mock.patch.object(
+                client, "request_shutdown", return_value=True
+            ) as shutdown,
+            mock.patch.object(client, "wait_until_gone", return_value=True),
+            mock.patch.object(client, "start_or_attach", return_value=fresh) as start,
+        ):
+            why = client.match_launch_lemonade()
+        shutdown.assert_called_once_with(old)
+        start.assert_called_once_with()
+        assert self.LAUNCH_URL in why and "GAIA's own server" in why
+
+    def test_a_busy_daemon_is_left_running_and_says_why(self, http, monkeypatch):
+        from gaia.daemon import client
+        from gaia.daemon.errors import DaemonError
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        inst = self._inst()
+        self._target(http, inst, {"mode": "gaia", "base_url": None})
+        with (
+            mock.patch.object(client, "attach", return_value=inst),
+            mock.patch.object(
+                client,
+                "outdated_daemon_busy",
+                return_value="gaia-cli is still using it",
+            ),
+            mock.patch.object(client, "request_shutdown") as shutdown,
+        ):
+            with pytest.raises(DaemonError, match="gaia-cli is still using it"):
+                client.match_launch_lemonade()
+        shutdown.assert_not_called()
+
+    def test_a_daemon_that_will_not_stop_is_an_error(self, http, monkeypatch):
+        from gaia.daemon import client
+        from gaia.daemon.errors import DaemonError
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        inst = self._inst()
+        self._target(http, inst, {"mode": "gaia", "base_url": None})
+        with (
+            mock.patch.object(client, "attach", return_value=inst),
+            mock.patch.object(client, "outdated_daemon_busy", return_value=None),
+            mock.patch.object(client, "request_shutdown", return_value=False),
+            mock.patch.object(client, "start_or_attach") as start,
+        ):
+            with pytest.raises(DaemonError, match="did not stop"):
+                client.match_launch_lemonade()
+        start.assert_not_called()
+
+    def test_a_restart_that_lands_on_another_server_is_an_error(
+        self, http, monkeypatch
+    ):
+        from gaia.daemon import client
+        from gaia.daemon.errors import DaemonError
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        old, fresh = self._inst(1), self._inst(2)
+        self._target(http, old, {"mode": "gaia", "base_url": None})
+        self._target(http, fresh, {"mode": "gaia", "base_url": None})
+        with (
+            mock.patch.object(client, "attach", return_value=old),
+            mock.patch.object(client, "outdated_daemon_busy", return_value=None),
+            mock.patch.object(client, "request_shutdown", return_value=True),
+            mock.patch.object(client, "wait_until_gone", return_value=True),
+            mock.patch.object(client, "start_or_attach", return_value=fresh),
+        ):
+            with pytest.raises(DaemonError, match="still uses another"):
+                client.match_launch_lemonade()
+
+    def test_a_daemon_too_old_to_name_its_server_is_restarted(self, http, monkeypatch):
+        from gaia.daemon import client
+        from gaia.daemon.instance import DaemonInstance
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        old = DaemonInstance(
+            pid=1, port=5001, token="t", host="127.0.0.1", started_at=0.0,
+            api_version="1.4",
+        )  # fmt: skip
+        fresh = self._inst(2)
+        self._target(http, fresh, {"mode": "external", "base_url": self.LAUNCH_URL})
+        with (
+            mock.patch.object(client, "attach", return_value=old),
+            mock.patch.object(client, "outdated_daemon_busy", return_value=None),
+            mock.patch.object(client, "request_shutdown", return_value=True),
+            mock.patch.object(client, "wait_until_gone", return_value=True),
+            mock.patch.object(client, "start_or_attach", return_value=fresh),
+        ):
+            why = client.match_launch_lemonade()
+        assert "too old to name" in why and "GAIA's own server" not in why
+
+    @pytest.mark.parametrize("kind, checked", [("app", True), ("cli", False)])
+    def test_only_an_app_launch_checks_the_daemon(self, kind, checked):
+        from gaia.daemon import client
+        from gaia.llm import lemonade_service
+
+        with (
+            mock.patch.object(client, "start_or_attach"),
+            mock.patch.object(client, "match_launch_lemonade") as match,
+            mock.patch.object(lemonade_service, "hold_lemonade_open"),
+        ):
+            lemonade_service.ensure_daemon_owns_lemonade(kind)
+        assert match.called is checked
 
 
 class TestReviewRegressions:

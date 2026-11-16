@@ -10,11 +10,16 @@ and session-document attachments.
 import asyncio
 import json
 import logging
+import sqlite3
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
+from gaia.llm.hybrid import is_hybrid_model
+from gaia.llm.lemonade_client import cloud_model_provider
+from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
@@ -49,7 +54,8 @@ from ..models import (
 )
 from ..run_manager import run_manager
 from ..security import flagship_only
-from ..utils import message_to_response, session_to_response
+from ..utils import UPLOAD_LINK_RE, message_to_response, session_to_response
+from .memory import _get_store as get_memory_store
 
 logger = logging.getLogger(__name__)
 
@@ -187,22 +193,25 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     # here told the user 'gaia' was both unknown and registered.
     valid_ids = sorted(
         {reg.id for reg in registry.list()}
-        | {"chat"}
         | {aid for aid in _SIDECAR_AGENT_TYPES if profile_for(aid).always_relay}
     )
     load_error = registry.get_load_error(agent_type)
     reason = f" It failed to load: {load_error}." if load_error else ""
+    # The app lists only registered agents, so an unknown non-gaia id comes
+    # from an API caller, who can install it from the Agent Hub on the host.
     install = (
-        "`gaia init`"
+        f" To install the GAIA agent: {AGENT_UI_SETUP_HINT}"
         if agent_type == "gaia"
-        else f"`gaia hub install {agent_type} --trust`"
+        else (
+            " Or install it from the Agent Hub on the GAIA host with "
+            f"`gaia hub install {agent_type} --trust`, then try again."
+        )
     )
     raise HTTPException(
         status_code=422,
         detail=(
             f"Unknown agent_type '{agent_type}'.{reason} Registered agent ids: "
-            f"{', '.join(valid_ids)}. Pick one of these, or install the agent "
-            f"with {install} and try again."
+            f"{', '.join(valid_ids)}. Pick one of these.{install}"
         ),
     )
 
@@ -386,8 +395,9 @@ async def update_session(
         existing = db.get_session(session_id)
         agent_type = request.agent_type or (existing or {}).get("agent_type") or "chat"
         resolved, _ = resolve_device_model(agent_type, request.device)
-        if resolved:
-            current_model = (existing or {}).get("model")
+        current_model = (existing or {}).get("model")
+        # A device only picks among local models; hybrid routes to its own.
+        if resolved and not is_hybrid_model(current_model):
             try:
                 configured_default = resolved_default_model()
             except Exception as e:
@@ -446,6 +456,19 @@ async def delete_session(
     session_locks = http_request.app.state.session_locks
     # Every turn and goal tick holds this lock for its whole run.
     async with session_locks.setdefault(session_id, asyncio.Lock()):
+        # First, so a failure leaves the chat in place to delete again.
+        try:
+            await asyncio.to_thread(get_memory_store().delete_session, session_id)
+        except (sqlite3.Error, OSError) as e:
+            logger.error("Could not delete the memory of %s: %s", session_id, e)
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"The chat was not deleted: its conversation in Memory "
+                    f"could not be removed ({e}). Try again; the GAIA log has "
+                    f"the details."
+                ),
+            ) from e
         if not db.delete_session(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         session_locks.pop(session_id, None)
@@ -454,6 +477,7 @@ async def delete_session(
         session_permissions.forget_session(session_id)
         followups.forget(session_id)
         answer_retry.forget(session_id)
+        session_environment.forget_session(session_id)
     try:
         await asyncio.to_thread(file_snapshots.delete_session, session_id)
     except OSError as e:
@@ -564,6 +588,24 @@ def _answer_model(msg: dict) -> str | None:
     return stats.get("model") if isinstance(stats, dict) else None
 
 
+def _model_label(model: str) -> str:
+    """The model as the app shows it: no cloud provider prefix, no catalogue path."""
+    if cloud_model_provider(model):
+        model = model.partition(".")[2]
+    return model.rsplit("/", 1)[-1]
+
+
+def _local_time(stamp: str) -> str:
+    """A stored UTC timestamp as local time, e.g. "November 12, 2026, 2:21 PM"."""
+    t = datetime.fromisoformat(stamp).astimezone()
+    return f"{t:%B} {t.day}, {t.year}, {t.hour % 12 or 12}:{t:%M} {t:%p}"
+
+
+def _plain_attachments(content: str) -> str:
+    """Name each attachment instead of linking a file that exists only inside the app."""
+    return UPLOAD_LINK_RE.sub(lambda m: f"Attached: {m['label']}", content)
+
+
 @router.get("/api/sessions/{session_id}/export")
 async def export_session(
     session_id: str,
@@ -591,23 +633,25 @@ async def export_session(
             _answer_model(msg) for msg in messages if msg["role"] == "assistant"
         ]
         if answer_models and all(answer_models):
-            used = list(dict.fromkeys(answer_models))
+            used = list(dict.fromkeys(_model_label(m) for m in answer_models))
             label = "Models" if len(used) > 1 else "Model"
             model_line = f"*{label}: {', '.join(used)}*"
         else:
             # An answer saved before its model was recorded can't say what wrote it.
-            model_line = f"*Model (current setting): {effective_model}*"
+            model_line = f"*Model (current setting): {_model_label(effective_model)}*"
 
         lines = [f"# {session['title']}\n"]
-        lines.append(f"*Created: {session['created_at']}*\n")
+        lines.append(f"*Created: {_local_time(session['created_at'])}*\n")
         lines.append(f"{model_line}\n\n---\n")
 
         for msg in messages:
             role_label = "User" if msg["role"] == "user" else "Assistant"
             answer_model = _answer_model(msg)
             if answer_model:
-                role_label = f"{role_label} ({answer_model})"
-            lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
+                role_label = f"{role_label} ({_model_label(answer_model)})"
+            lines.append(
+                f"**{role_label}:**\n\n{_plain_attachments(msg['content'])}\n\n---\n"
+            )
 
         content = "\n".join(lines)
         return {"content": content, "format": "markdown"}

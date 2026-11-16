@@ -66,10 +66,16 @@
  * `microsoft` Outlook.com connector), is now valid wherever a provider
  * string is accepted or returned. No existing field or value changed
  * (additive).
+ * Schema 2.15 (additive over 2.14, #6043): the published OpenAPI document
+ * now lists the stateful `/v1/email/agent/*` routes the sidecar already
+ * served. No request or response shape changed (additive).
+ * Schema 2.16 (additive over 2.15, #5482): `EmailQueryRequest` gains an
+ * optional `memory` mode so private and memory-off turns do not write to the
+ * email agent's memory store.
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.14" as const;
+export const SCHEMA_VERSION = "2.16" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -290,7 +296,7 @@ export interface EmailTriageResponse {
 export interface EmailSearchRequest {
   /** Contract version. Defaults to SCHEMA_VERSION; mismatch fails loudly. */
   schema_version?: string;
-  /** Gmail-style query (e.g. "from:alice is:unread"). Omit to list the inbox. */
+  /** Gmail-style query (e.g. "from:alice subject:invoice", which Outlook accepts too). Omit to list the inbox. */
   query?: string | null;
   /** Label ids to filter by (e.g. ["INBOX", "UNREAD"]). Omit → INBOX. */
   labels?: string[] | null;
@@ -989,6 +995,11 @@ export interface EmailQueryRequest {
    * keys a real, stateful agent off it, so the caller controls
    * conversation boundaries, not the server.
    */
+  /**
+   * Memory mode (schema 2.16, #5482). `private` and `off` suppress memory
+   * reads and writes; omit to keep the retained session's current mode.
+   */
+  memory?: "on" | "private" | "off";
   session_id?: string;
 }
 

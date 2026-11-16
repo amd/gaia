@@ -92,3 +92,53 @@ def test_an_empty_piece_shows_nothing():
     relay._dispatch_one(handler, {"type": "reasoning", "delta": ""}, GAIA_PROFILE)
 
     assert handler.event_queue.empty()
+
+
+def test_a_relayed_retraction_takes_the_tokens_back():
+    """The sidecar saw the lone ``</think>``; the host's tokens were reasoning."""
+    handler = SSEOutputHandler()
+    for event in (
+        {"type": "token", "delta": "Weigh the forecast."},
+        {"type": "reasoning", "delta": "Weigh the forecast.", "retracts_answer": True},
+        {"type": "tool_call", "tool": "get_weather", "args": {}},
+    ):
+        relay._dispatch_one(handler, event, GAIA_PROFILE)
+
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    assert {
+        "type": "thinking",
+        "content": "Weigh the forecast.",
+        "retracts_answer": True,
+    } in events
+    # Already in the thinking step, so it is not narration of the call too.
+    assert not any(e and e.get("type") == "commentary" for e in events)
+
+
+def test_a_relayed_answer_restart_takes_the_tokens_back():
+    """The sidecar's model server stopped mid-reply; the step starts over."""
+    handler = SSEOutputHandler()
+    for event in (
+        {"type": "token", "delta": "The ledger bal"},
+        {
+            "type": "status",
+            "message": "cut off",
+            "phase": "answer_restart",
+            "retracts_answer": True,
+        },
+        {"type": "tool_call", "tool": "read_ledger", "args": {}},
+    ):
+        relay._dispatch_one(handler, event, GAIA_PROFILE)
+
+    events = []
+    while not handler.event_queue.empty():
+        events.append(handler.event_queue.get_nowait())
+    assert {
+        "type": "status",
+        "message": "cut off",
+        "phase": "answer_restart",
+        "retracts_answer": True,
+    } in events
+    # The dropped text is not narration of the call that follows.
+    assert not any(e and e.get("type") == "commentary" for e in events)

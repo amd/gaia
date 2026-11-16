@@ -27,5 +27,5 @@ docs/deployment/ @kovtcharov-amd
 
 # Security-sensitive files
 src/gaia/llm/ @kovtcharov-amd
-docs/sdk/security.md @kovtcharov-amd
+docs/sdk/security.mdx @kovtcharov-amd
 .github/workflows/test_security.yml @kovtcharov-amd

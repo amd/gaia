@@ -112,7 +112,9 @@ class TestGetMessageMetadataSelect:
 
 class TestGraphMessageToGmailIncludeBody:
     def test_include_body_false_omits_data_key(self):
-        out = graph_message_to_gmail(_graph_message(include_body=False), include_body=False)
+        out = graph_message_to_gmail(
+            _graph_message(include_body=False), include_body=False
+        )
         assert "data" not in out["payload"]["body"]
         assert out["payload"]["body"]["size"] == 0
 

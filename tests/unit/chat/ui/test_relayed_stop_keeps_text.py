@@ -21,6 +21,7 @@ import gaia.ui.email_sidecar.relay as relay_module
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
 from gaia.ui.models import ChatRequest
+from gaia.ui.utils import message_to_response
 
 
 class _FakeProxy:
@@ -86,6 +87,8 @@ def test_a_relayed_turn_saves_its_streamed_text(monkeypatch, stopped):
     assert len(saved) == 1
     done = [e for e in sent if e.get("type") == "done"]
     assert len(done) == 1, sent
+    # A reload shows the stop, not a finished answer.
+    assert message_to_response(saved[0]).stopped is stopped
     if stopped:
         assert saved[0]["content"] == "Once upon a time, a fox"
         assert done[0].get("cancelled") is True, done

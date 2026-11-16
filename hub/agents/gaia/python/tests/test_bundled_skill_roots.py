@@ -157,3 +157,70 @@ class TestTheFlagshipCanSearchCode:
         ).is_dir(), (
             "the code index has no valid repository root, so indexing cannot start"
         )
+
+
+# --------------------------------------------------------------------------
+# Only the checkout's own hub/skills is a bundled root
+# --------------------------------------------------------------------------
+#
+# A bundled root is trusted: its skills' code registers without
+# `gaia skill promote` and outranks the user root. An installed package sits at
+# no fixed depth, so "four folders up, then skills/" from it names whatever
+# folder the environment lives beside -- that must never become a trusted root.
+
+
+def _agent_file(base: Path, *parts: str) -> Path:
+    path = base.joinpath(*parts, "gaia_agent", "agent.py")
+    path.parent.mkdir(parents=True)
+    path.write_text("", encoding="utf-8")
+    return path
+
+
+def test_a_checkout_layout_resolves_to_hub_skills(tmp_path):
+    from gaia_agent.agent import _checkout_skills_dir
+
+    agent_file = _agent_file(tmp_path / "repo", "hub", "agents", "gaia", "python")
+
+    assert _checkout_skills_dir(agent_file) == tmp_path / "repo" / "hub" / "skills"
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        # Windows venv: <project>\.venv\Lib\site-packages -> parents[4] is <project>
+        ("project", ".venv", "Lib", "site-packages"),
+        # Linux user site: ~/.local/lib/python3.12/site-packages -> parents[4] is ~
+        ("home", ".local", "lib", "python3.12", "site-packages"),
+        # Windows user site: %APPDATA%\Python\Python312\site-packages
+        ("AppData", "Roaming", "Python", "Python312", "site-packages"),
+        # Right folder names, wrong order.
+        ("agents", "hub", "gaia", "python"),
+        # Almost the checkout: one folder renamed.
+        ("hub", "agents", "other", "python"),
+        # Too shallow to have four parents above the package.
+        (),
+    ],
+)
+def test_an_installed_package_never_names_a_skills_folder_beside_it(tmp_path, parts):
+    from gaia_agent.agent import _checkout_skills_dir
+
+    agent_file = _agent_file(tmp_path, *parts)
+    # Plant the folder the old parents[4] arithmetic would have trusted.
+    planted = agent_file.parents[4] / "skills" if len(agent_file.parents) > 4 else None
+    if planted is not None:
+        planted.mkdir(exist_ok=True)
+
+    assert _checkout_skills_dir(agent_file) is None
+
+
+def test_bundled_roots_skip_the_checkout_root_when_not_in_a_checkout(
+    monkeypatch, tmp_path
+):
+    import gaia_agent.agent as agent_module
+
+    packaged = tmp_path / "pkg" / "skills"
+    packaged.mkdir(parents=True)
+    monkeypatch.setattr(agent_module, "_SKILLS_DIR", packaged)
+    monkeypatch.setattr(agent_module, "_HUB_SKILLS_DIR", None)
+
+    assert agent_module._bundled_skill_roots() == [str(packaged)]

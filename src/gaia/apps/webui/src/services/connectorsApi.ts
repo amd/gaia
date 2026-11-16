@@ -3,14 +3,14 @@
 
 /** Connector calls, re-exported by api.ts; callers keep importing from there. */
 
-import type { AgentMcpServer, ConnectorRow } from '../types';
+import type { AgentMcpServer, ConnectorListEntry, ConnectorRow } from '../types';
 import { apiFetch, UI_HEADER } from './api';
 
 // -- Connections (issue #915) ---------------------------------------------------
 
 // New framework endpoints (T-8b) — /api/connectors
 
-export async function listConnectors(): Promise<{ connectors: ConnectorRow[] }> {
+export async function listConnectors(): Promise<{ connectors: ConnectorListEntry[] }> {
     return apiFetch('GET', '/connectors');
 }
 
@@ -65,6 +65,13 @@ export async function configureConnector(
     config: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
     return apiFetch('POST', `/connectors/${connectorId}/configure`, { config }, UI_HEADER);
+}
+
+/** Start the connector once and report whether it started. */
+export async function testConnector(
+    connectorId: string,
+): Promise<{ ok: boolean; detail: string; reason?: 'timeout' | 'disabled' }> {
+    return apiFetch('POST', `/connectors/${connectorId}/test`, undefined, UI_HEADER);
 }
 
 export async function disconnectConnector(connectorId: string): Promise<void> {

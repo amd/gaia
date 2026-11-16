@@ -76,6 +76,13 @@ def test_category_tags_and_icon_match(spec_and_registration):
     assert spec.icon == registration.icon
 
 
+def test_mcp_consumption_matches(spec_and_registration):
+    """A mismatch hides the per-agent MCP switch, so a connected Slack or GitHub
+    tile can never be turned on for a binary-installed flagship."""
+    _, spec, registration = spec_and_registration
+    assert spec.consumes_mcp_servers == registration.consumes_mcp_servers
+
+
 def test_card_is_actually_populated(spec_and_registration):
     """Guards the guard: two empty values also "match"."""
     _, spec, _ = spec_and_registration

@@ -2,7 +2,6 @@ package client
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,17 +37,23 @@ const closeGrace = 2 * time.Second
 // nothing to save exits at once, so this only costs time when it is needed.
 const agentExitGrace = 20 * time.Second
 
-var subprocessLemonadePorts = []string{"13305", "8000"}
+var subprocessLemonadePorts = []string{"13305"}
+
+// markEmbedded reports whether the URL handed to the child is GAIA's own
+// server, which moves port and key when the daemon restarts it.
+func markEmbedded() bool {
+	return lemonade.EnvBaseURL() == "" && lemonade.ReadEmbedded() != nil
+}
 
 // detectLemonadeURL resolves configured and embedded endpoints before probing
-// legacy ports. An unrelated local server cannot override the private runtime.
+// the default port. An unrelated local server cannot override the private runtime.
 func detectLemonadeURL() string {
 	// The user's own server: the child reads the saved choice itself, so
 	// pinning a URL here could only point it somewhere else.
 	if lemonade.ExternalModeActive() {
 		return ""
 	}
-	if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) != "" || lemonade.ReadEmbedded() != nil {
+	if lemonade.EnvBaseURL() != "" || lemonade.ReadEmbedded() != nil {
 		return lemonade.ResolveBaseURL("")
 	}
 	// GAIA's own server is restarting. A probed port would reach the child as
@@ -171,6 +176,9 @@ type SubprocessClient struct {
 	path  string
 	args  []string
 	debug bool
+	// logf receives --dev diagnostics. The caller picks it because stderr is
+	// safe for a one-shot but lands on the frame of an interactive session.
+	logf func(format string, args ...any)
 	// canonical selects the event dialect read off the pipe: the frozen legacy
 	// vocabulary (false) or the canonical one (true).
 	canonical bool
@@ -182,7 +190,7 @@ type SubprocessClient struct {
 	proc    *procHandle
 	stdin   io.WriteCloser
 	stdout  *bufio.Scanner
-	stderr  *bytes.Buffer
+	stderr  *tailBuffer
 	started bool
 	// turnDone is closed by the in-flight turn's reader when it exits. nil when
 	// no turn is running.
@@ -269,13 +277,26 @@ func (s *SubprocessClient) WithTrace(w *event.TraceWriter) *SubprocessClient {
 	return s
 }
 
+// WithLogf sends --dev diagnostics to logf. Returns the client so it can be
+// chained onto a constructor.
+func (s *SubprocessClient) WithLogf(logf func(format string, args ...any)) *SubprocessClient {
+	s.logf = logf
+	return s
+}
+
+func (s *SubprocessClient) debugf(format string, args ...any) {
+	if s.debug && s.logf != nil {
+		s.logf(format, args...)
+	}
+}
+
 // turnState is everything one turn needs, captured under a single lock so it can
 // never be read while a concurrent cancel is clearing the client's fields.
 type turnState struct {
 	stdin    io.WriteCloser
 	scanner  *bufio.Scanner
 	proc     *procHandle
-	stderr   *bytes.Buffer
+	stderr   *tailBuffer
 	turnDone chan struct{}
 	// notice is non-empty when this turn is the first against a REPLACEMENT
 	// child, and says what the replacement no longer knows.
@@ -315,7 +336,7 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 	}
 
 	cmd := exec.Command(s.path, s.spawnArgs(s.fullAccess)...)
-	stderr := &bytes.Buffer{}
+	stderr := newTailBuffer(agentStderrCap)
 	cmd.Stderr = stderr
 
 	// Created before Start so a POSIX child is forked straight into its own
@@ -331,17 +352,15 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 		return turnState{}, err
 	}
 	// Resolve once for the child so provider setup and Python use the same
-	// endpoint, even when a second server answers on a legacy port.
+	// endpoint.
 	if url := detectLemonadeURL(); url != "" {
 		cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
 		// GAIA's own server moves port and key when the daemon restarts it; the
 		// marker tells the child this URL is that server's, so it follows it.
-		if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) == "" && lemonade.ReadEmbedded() != nil {
+		if markEmbedded() {
 			cmd.Env = append(cmd.Env, "GAIA_LEMONADE_EMBEDDED=1")
 		}
-		if s.debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Lemonade endpoint: %s\n", url)
-		}
+		s.debugf("Lemonade endpoint: %s", url)
 	}
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -412,7 +431,6 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	if err == nil {
 		s.turnCtx = ctx
 	}
-	debug := s.debug
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -510,8 +528,8 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			// mid-turn, so a raw stderr write would land on top of the UI. The
 			// writer keeps the first failure and Close() reports it once the
 			// event loop has stopped.
-			if terr := s.trace.Write(line); terr != nil && debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] trace: %v\n", terr)
+			if terr := s.trace.Write(line); terr != nil {
+				s.debugf("trace: %v", terr)
 			}
 
 			var evt interface{}
@@ -524,9 +542,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			if perr != nil {
 				// Visible, not dropped: a status warning keeps the turn alive
 				// while making a bad producer obvious.
-				if debug {
-					fmt.Fprintf(os.Stderr, "[DEBUG] parse error: %v (line: %s)\n", perr, string(line))
-				}
+				s.debugf("parse error: %v (line: %s)", perr, string(line))
 				if !emit(event.StatusEvent{
 					Type:    "status",
 					Status:  "warning",
@@ -599,7 +615,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	return ch, nil
 }
 
-// exitedOutputLabel heads the stderr a dead child wrote over its whole life.
+// exitedOutputLabel heads the tail of the stderr a dead child wrote.
 const exitedOutputLabel = "Output from the process that exited:"
 
 // isTerminalEvent reports whether evt ends a turn in either dialect.

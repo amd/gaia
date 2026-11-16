@@ -4,23 +4,37 @@
 /** Zustand store for GAIA Agent UI state. */
 
 import { create } from 'zustand';
-import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId } from '../types';
-import { applyTheme, resolveTheme, type ThemePreference } from '../utils/theme';
+import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, SystemStatus, AgentInfo, RenderCardData, PermissionMode, ProviderId, FoundItem } from '../types';
+import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
 /** Settings sections, in the order the settings nav shows them. */
 export type SettingsSection =
     | 'general'
+    | 'setup'
     | 'model'
     | 'permissions'
     | 'skills'
     | 'connectors'
+    | 'messaging'
+    | 'automations'
     | 'memory'
     | 'privacy'
     | 'notifications'
-    | 'advanced';
+    | 'voice'
+    | 'advanced'
+    | 'about';
+
+export interface SettingsJump {
+    section: SettingsSection;
+    /** CSS selector for the setting inside that section. */
+    target: string;
+    /** The tab that sent the user here, offered as the way back; none from outside Settings. */
+    from?: SettingsSection;
+}
 
 /**
  * Read a UI preference, saying so when the store is unreadable.
@@ -70,6 +84,27 @@ export function readCustomColors(): CustomColors {
     return DEFAULT_CUSTOM;
 }
 
+const LOCALE_KEY = 'gaia-chat-locale';
+
+/**
+ * The saved interface language; anything unregistered reads as English. With
+ * nothing saved (a first run), the PC's own language when GAIA has it.
+ */
+export function readLocale(): string {
+    const v = readPref(LOCALE_KEY, '');
+    if (v) {
+        if (isLocaleCode(v)) return v;
+        log.system.warn(`Saved interface language "${v}" is not a registered locale; using English.`);
+        return DEFAULT_LOCALE;
+    }
+    const system = typeof navigator === 'undefined' ? [] : (navigator.languages?.length ? navigator.languages : [navigator.language]);
+    for (const tag of system) {
+        const code = (tag ?? '').split('-')[0].toLowerCase();
+        if (isLocaleCode(code)) return code;
+    }
+    return DEFAULT_LOCALE;
+}
+
 /** Persist a UI preference. Never throws: a zustand setter must still update state. */
 function writePref(key: string, value: string): void {
     try {
@@ -98,12 +133,40 @@ function readQueues(): Record<string, QueuedMessage[]> {
 export interface PendingPrompt {
     sessionId: string;
     text: string;
+    /** Its chat has scheduled the send; New chat can still take it back until then. */
+    sending?: boolean;
 }
 
 /** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
+export interface QuestionOption {
+    value: string;
+    label: string;
+}
+
 export interface LiveQuestion {
     sessionId: string;
     expiresAt: number | null;
+    /** Lets the message box answer it: the choices, and whether any text will do. */
+    options?: QuestionOption[];
+    allowFreeText?: boolean;
+    sensitive?: boolean;
+}
+
+/** One stage of a recording: 0 running, 1 done, 2 skipped. */
+export interface RecordingStage {
+    state: number;
+    percent?: number;
+    etaSeconds?: number;
+}
+
+/** One section of a recording, read while the rest are still being read. */
+export interface RecordingSection {
+    section: number;
+    sections: number;
+    start: string;
+    end: string;
+    summary: string;
+    items: FoundItem[];
 }
 
 interface ChatState {
@@ -133,10 +196,12 @@ interface ChatState {
     queuedSessionIds: string[];
     /** Chats whose running turn is paused on a permission prompt or a question (#5221). */
     awaitingBySession: Record<string, AwaitingUser>;
-    /** When the last applied GET /api/chat/active was sent (ms); 0 before the first. */
+    /** When the last applied GET /api/chat/active was sent (ms); 0 before the first, or while GAIA is unreachable. */
     activeRunsAt: number;
     /** Apply one GET /api/chat/active poll, sent at `requestedAt`. */
     setActiveRuns: (runs: ActiveRuns, requestedAt: number) => void;
+    /** GAIA is unreachable: show no chat running, and treat none as idle until a poll lands. */
+    loseActiveRuns: () => void;
     /** Messages typed while a chat answered, by chat. Each goes out when that
      *  chat's turn ends, open or not, and survives a reload. */
     messageQueues: Record<string, QueuedMessage[]>;
@@ -172,21 +237,41 @@ interface ChatState {
     appendThinkingContent: (content: string) => void;
     /** Update the last tool step (not the absolute last step). */
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
+    /** Note a skill_use event; with a step, add it before the running tool call that brought the skill in. */
+    addSkillStep: (step: AgentStep | null) => void;
+    /** Add a finished step before the running tool call it happened inside, so steps stay in time order. */
+    addStepBeforeRunningCall: (step: AgentStep) => void;
+    /** Counts skill_use events, so the session panel's Skills section re-reads mid-reply. */
+    skillUses: number;
     clearAgentSteps: () => void;
     /** What the model is doing right now, from the latest phase status event; null before one arrives. */
     liveStatus: string | null;
     /** The backend's phase for `liveStatus` (`loading_model`, `reasoning`, `tool`…); null when it sent none. */
     livePhase: string | null;
     setLiveStatus: (status: string | null, phase?: string | null) => void;
+    /** Where the recording being worked on stands, by stage; null when there is none. */
+    recordingStages: Record<number, RecordingStage> | null;
+    setRecordingStage: (stage: number, report: RecordingStage) => void;
+    /** Sections of the recording already read, by section number; null when none yet. */
+    recordingSections: Record<number, RecordingSection> | null;
+    addRecordingSection: (section: RecordingSection) => void;
     /** The run is blocked on the user's approval or answer, not on the model. */
     awaitingUser: boolean;
     setAwaitingUser: (awaiting: boolean) => void;
     /** Mid-run questions the agent is still blocked on, by request id. A card
      *  missing from here can no longer be answered. */
     liveQuestions: Record<string, LiveQuestion>;
-    openQuestion: (requestId: string, sessionId: string, timeoutSeconds?: number | null) => void;
+    openQuestion: (
+        requestId: string,
+        sessionId: string,
+        timeoutSeconds?: number | null,
+        shape?: Pick<LiveQuestion, 'options' | 'allowFreeText' | 'sensitive'>,
+    ) => void;
     closeQuestion: (requestId: string) => void;
     closeSessionQuestions: (sessionId: string) => void;
+    /** What the user answered, by request id, so the card keeps it as a record; null hides a sensitive one. */
+    questionAnswers: Record<string, string | null>;
+    recordAnswer: (requestId: string, shown: string | null) => void;
 
     // Structured cards from tool_result.render events (issue #2108).
     // Accumulated during the stream, transferred onto the finalized
@@ -212,10 +297,21 @@ interface ChatState {
     theme: 'light' | 'dark';
     showDocLibrary: boolean;
     showFileBrowser: boolean;
+    /** The file browser was opened from the document library, so closing it goes back there. */
+    fileBrowserFromLibrary: boolean;
     /** Open settings section, or null when settings is closed. */
     settingsSection: SettingsSection | null;
+    /** Setup was asked to run again from Settings. */
+    setupAgain: boolean;
+    runSetupAgain: (on: boolean) => void;
     /** Provider tab Settings > Model opens on; null follows the active model. */
     settingsProvider: ProviderId | null;
+    /** The connector Settings › Connectors opens at, if one was asked for. */
+    settingsConnector: string | null;
+    /** A setting to scroll to in the open section, and the section that sent the user there. */
+    settingsJump: SettingsJump | null;
+    /** The section Settings was last closed on, so it reopens there this session. */
+    lastSettingsSection: SettingsSection;
     showMemoryDashboard: boolean;
     showSchedules: boolean;
     /** Permission mode picked on the new-chat screen, applied when the chat is created. */
@@ -238,6 +334,9 @@ interface ChatState {
     /** A message queued for one chat; only that chat's view sends it. */
     pendingPrompt: PendingPrompt | null;
     setThemePreference: (pref: ThemePreference) => void;
+    /** Interface language, a code registered in src/i18n/registry.ts. */
+    locale: string;
+    setLocale: (code: string) => void;
     /** Color palette; `default` is the built-in warm gray look. */
     palette: PaletteId;
     customColors: CustomColors;
@@ -246,8 +345,16 @@ interface ChatState {
     /** Re-resolve a `system` preference after the OS appearance changed. */
     syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
+    /** Closing returns to the document library when that is where it was opened from. */
     setShowFileBrowser: (show: boolean) => void;
+    /** Swap the document library for the file browser, to come back to on close. */
+    openFileBrowserFromLibrary: () => void;
+    /** Close the file browser without going back to the library, e.g. to start a chat. */
+    leaveFileBrowser: () => void;
     openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
+    /** Open Settings › Connectors with *connectorId*'s tile open. */
+    openConnectorSettings: (connectorId: string) => void;
+    jumpToSetting: (jump: SettingsJump, provider?: ProviderId) => void;
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
     setShowSchedules: (show: boolean) => void;
@@ -271,6 +378,19 @@ interface ChatState {
 
 /** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */
 const NO_DESTINATION = { showMemoryDashboard: false, showSchedules: false, showDocLibrary: false };
+
+/** *steps* with *step* just before the last tool call if it is still running, else at the end. */
+function beforeRunningCall(steps: AgentStep[], step: AgentStep): AgentStep[] {
+    const next = [...steps];
+    let at = next.length;
+    for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].type !== 'tool') continue;
+        if (next[i].active) at = i;
+        break;
+    }
+    next.splice(at, 0, step);
+    return next;
+}
 
 export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
@@ -301,6 +421,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
             }
             return next;
         }),
+    loseActiveRuns: () =>
+        set((state) => (state.runningSessionIds.length > 0
+            ? { activeRunsAt: 0, runningSessionIds: [] }
+            : { activeRunsAt: 0 })),
     messageQueues: readQueues(),
     updateQueue: (sessionId, fn) =>
         set((state) => {
@@ -388,7 +512,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setStreaming: (streaming) => set({ isStreaming: streaming }),
     setStreamContent: (content) => set({ streamingContent: content }),
     clearStreamContent: () => set({ streamingContent: '' }),
-    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, livePhase: null, awaitingUser: false }),
+    resetStreaming: () => set({ isStreaming: false, streamingContent: '', agentSteps: [], cards: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
 
     // Agent activity
     agentSteps: [],
@@ -416,11 +540,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const steps = [...state.agentSteps];
             const last = steps[steps.length - 1];
             if (last.type !== 'thinking') return state;
+            const prior = last.detail ?? '';
+            // Streamed pieces carry their own spacing; a closed thought ends with a break, as in consolidateSteps.
+            const gap = !last.active && last.latencyMs != null && /\S$/.test(prior) && /^\S/.test(content) ? '\n\n' : '';
             steps[steps.length - 1] = {
                 ...last,
-                // Streamed pieces carry their own spacing, as the saved turn joins them.
-                detail: (last.detail ?? '') + content,
+                detail: prior + gap + content,
                 active: true,
+                latencyMs: undefined,
             };
             return { agentSteps: steps };
         }),
@@ -438,28 +565,55 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // No tool step found — don't corrupt non-tool steps
             return state;
         }),
-    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, awaitingUser: false }),
+    addSkillStep: (step) =>
+        set((state) => {
+            if (!step) return { skillUses: state.skillUses + 1 };
+            return { agentSteps: beforeRunningCall(state.agentSteps, step), skillUses: state.skillUses + 1 };
+        }),
+    addStepBeforeRunningCall: (step) =>
+        set((state) => ({ agentSteps: beforeRunningCall(state.agentSteps, step) })),
+    skillUses: 0,
+    clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
     liveStatus: null,
     livePhase: null,
     setLiveStatus: (status, phase = null) => set({ liveStatus: status, livePhase: phase }),
+    recordingStages: null,
+    setRecordingStage: (stage, report) => set((state) => {
+        const next: Record<number, RecordingStage> = { ...state.recordingStages };
+        // Reaching a stage means the earlier ones are behind it, reused or finished.
+        for (let earlier = 1; earlier < stage; earlier++) {
+            if (next[earlier]?.state !== 2) next[earlier] = { state: 1 };
+        }
+        next[stage] = report;
+        return { recordingStages: next };
+    }),
+    recordingSections: null,
+    addRecordingSection: (section) => set((state) => ({
+        recordingSections: { ...state.recordingSections, [section.section]: section },
+    })),
     awaitingUser: false,
     setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
     liveQuestions: {},
-    openQuestion: (requestId, sessionId, timeoutSeconds) =>
+    openQuestion: (requestId, sessionId, timeoutSeconds, shape) =>
         set((state) => ({
             liveQuestions: {
                 ...state.liveQuestions,
                 [requestId]: {
                     sessionId,
                     expiresAt: timeoutSeconds != null && timeoutSeconds > 0 ? Date.now() + timeoutSeconds * 1000 : null,
+                    ...shape,
                 },
             },
         })),
+    questionAnswers: {},
+    recordAnswer: (requestId, shown) =>
+        set((state) => ({ questionAnswers: { ...state.questionAnswers, [requestId]: shown } })),
     closeQuestion: (requestId) =>
         set((state) => {
             if (!(requestId in state.liveQuestions)) return state;
             const { [requestId]: _closed, ...rest } = state.liveQuestions;
-            return { liveQuestions: rest };
+            // The agent stops waiting once its question is answered or expires.
+            return { liveQuestions: rest, awaitingUser: false };
         }),
     closeSessionQuestions: (sessionId) =>
         set((state) => {
@@ -490,8 +644,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     theme: resolveTheme(readThemePreference()),
     showDocLibrary: false,
     showFileBrowser: false,
+    fileBrowserFromLibrary: false,
     settingsSection: null,
+    setupAgain: false,
+    runSetupAgain: (on) => set({ setupAgain: on }),
     settingsProvider: null,
+    settingsConnector: null,
+    settingsJump: null,
+    lastSettingsSection: 'general',
     showMemoryDashboard: false,
     showSchedules: false,
     draftPermissionMode: 'ask',
@@ -515,6 +675,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
         applyPalette(get().palette, get().customColors, theme);
         set({ theme });
     },
+    locale: readLocale(),
+    setLocale: (code) => {
+        applyLocale(code);
+        syncTitleBar();
+        writePref(LOCALE_KEY, code);
+        set({ locale: code });
+    },
     palette: readPalette(),
     customColors: readCustomColors(),
     setPalette: (palette) => {
@@ -534,9 +701,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
     pendingPrompt: null,
     setShowDocLibrary: (show) =>
         set(show ? { ...NO_DESTINATION, showDocLibrary: true } : { showDocLibrary: false }),
-    setShowFileBrowser: (show) => set({ showFileBrowser: show }),
-    openSettings: (section = 'general', provider) => set({ settingsSection: section, settingsProvider: provider ?? null }),
-    closeSettings: () => set({ settingsSection: null, settingsProvider: null }),
+    setShowFileBrowser: (show) => {
+        if (show) {
+            set({ showFileBrowser: true });
+            return;
+        }
+        const backToLibrary = get().fileBrowserFromLibrary;
+        set({ showFileBrowser: false, fileBrowserFromLibrary: false });
+        if (backToLibrary) get().setShowDocLibrary(true);
+    },
+    openFileBrowserFromLibrary: () => set({ showDocLibrary: false, showFileBrowser: true, fileBrowserFromLibrary: true }),
+    leaveFileBrowser: () => set({ showFileBrowser: false, fileBrowserFromLibrary: false }),
+    openSettings: (section, provider) => set((s) => ({
+        settingsSection: section ?? s.lastSettingsSection,
+        settingsProvider: provider ?? null,
+        settingsConnector: null,
+        settingsJump: null,
+    })),
+    openConnectorSettings: (connectorId) => set({
+        settingsSection: 'connectors',
+        settingsProvider: null,
+        settingsConnector: connectorId,
+        settingsJump: null,
+    }),
+    jumpToSetting: (jump, provider) => set({ settingsSection: jump.section, settingsProvider: provider ?? null, settingsConnector: null, settingsJump: jump }),
+    closeSettings: () => set((s) => ({
+        settingsSection: null,
+        settingsProvider: null,
+        settingsConnector: null,
+        settingsJump: null,
+        lastSettingsSection: s.settingsSection ?? s.lastSettingsSection,
+    })),
     setShowMemoryDashboard: (show) =>
         set(show ? { ...NO_DESTINATION, showMemoryDashboard: true } : { showMemoryDashboard: false }),
     setShowSchedules: (show) =>

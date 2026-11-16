@@ -50,7 +50,6 @@ _ALLOWLISTED_UNDOCUMENTED = _INTENTIONALLY_UNDOCUMENTED | {
     ("connectors", "list"),
     ("connectors", "status"),
     ("connectors", "test"),
-    ("eval", "sessions"),
     ("schedule", "remove"),
     ("slack", "connect"),
     ("slack", "decline"),

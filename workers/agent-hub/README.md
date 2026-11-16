@@ -86,10 +86,29 @@ the cycle.
   someone else's agent id.
 - **Version immutability (per filename).** A published artifact is never
   overwritten: re-uploading the same `agents/<id>/<version>/<filename>` is
-  rejected with `409`, enforced by an object-level `head()` check. A version's
+  rejected with `409`. The record of "published" is the per-agent manifest, not
+  the R2 object, so a `409` means the catalog lists that artifact. A version's
   artifact set is **append-only per distinct filename** — see *Multi-platform
   releases* below. A `409` on an artifact that already matches is the idempotent
   re-run signal a release job treats as "already published".
+- **All-or-nothing publish.** The per-agent (or per-skill) manifest write is the
+  commit point; every object is stored before it. A publish that fails earlier
+  leaves objects no manifest lists, the catalog never shows them, and a retry
+  overwrites them and commits. A retry that hits `409` re-derives `index.json`,
+  so a publish that failed after its manifest committed still reaches the index.
+- **Race-safe catalog writes.** Manifests and `index.json` are written with an
+  R2 etag precondition (`onlyIf`). A writer that loses a race re-reads and
+  re-applies its change, up to 5 attempts, then fails with
+  `503 catalog_conflict`. This covers `POST /reindex` too, so running it during
+  a release can't drop the release's entry.
+- **Racing uploads of one filename fail loudly.** Two publishes of the same
+  filename write the same R2 key, so the loser's bytes can replace the winner's
+  after the winner committed. When the loser's checksum differs from the one
+  the catalog lists, it gets `409 concurrent_publish_conflict` instead of
+  `version_exists`, so a release job can't report it as already published.
+  A re-run stays red too: when the filename is already listed, the stored
+  object's R2 sha256 is compared with the listed one before `version_exists`,
+  and the release publisher checks the downloaded bytes against the catalog.
 - **Multi-platform releases.** A single `<id>@<version>` may hold more than one
   artifact — one per platform for a native binary (e.g. the frozen email agent
   ships four binaries under `email@0.1.0`). The first publish of a version
@@ -159,6 +178,12 @@ skills/<name>/<version>/audit.json              # security-audit report (#2468) 
 skills/<name>/<version>/<filename>              # the skill bundle artifact
 ```
 
+An artifact shares its version directory with that version's docs, so the
+artifact `<filename>` may not be one of the doc names listed above (nor
+`package-files.json` for agents). Such a publish is rejected with `400
+invalid_artifact`, since the doc write would otherwise replace the artifact
+after its SHA-256 was recorded.
+
 Example:
 
 ```
@@ -201,9 +226,11 @@ schemas live in [`schemas/`](./schemas):
   `capability_matrix` (latest version's SPEC.md / SKILL.md / EVALUATION.md /
   CAPABILITY_MATRIX.md markdown, `""` if none was published), `scorecard` (latest
   version's SCORECARD.md body with the YAML front matter stripped, `""` if none
-  was published), the optional `eval_scorecard_url` + `eval_score` (the raw
-  scorecard's public URL and its parsed 0–100 aggregate, absent when no scorecard
-  was published), the optional `npm_package` /
+  was published), the optional `eval_scorecard_url` + `eval_score` +
+  `eval_score_version` (the raw scorecard's public URL, its parsed 0–100
+  aggregate, and the agent version it was measured at, all absent when no
+  scorecard was published; a scorecard whose aggregate falls outside 0–100 is
+  refused at publish with `400 invalid_eval_score`), the optional `npm_package` /
   `playground_url` (present only when the manifest declares them — they drive the
   hub page's npm install method and playground launcher), and the optional
   `package` (`{ filename, size_bytes, files: [{name, size_bytes}] }` — the

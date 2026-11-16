@@ -26,15 +26,15 @@ and [model registry](https://github.com/lemonade-sdk/lemonade/blob/main/src/cpp/
 
 ## Generate audio
 
-1. Download the model in Lemonade Server, for example `lemonade pull ACE-Step-Music`
-   and `lemonade pull ThinkSound-SFX` (the exact client command depends on
-   your install; GAIA's error message names the right one).
-2. Ask the flagship GAIA agent for music or a sound effect, describing the
-   style or the sound, e.g. *"30 seconds of calm lo-fi piano for my menu"* or
-   *"a 3 second heavy wooden door slam"*.
-3. To save straight into a project, say where: *"save it in
-   C:\Users\me\game\audio"*. GAIA passes that folder as `save_to`; otherwise
-   the WAV goes to `~/.gaia/cache/audio/generations/`.
+1. Install or download the desired model in Lemonade Server.
+2. Ask the flagship GAIA agent to list the available audio generators.
+3. Ask for instrumental music or a sound effect, specifying the style or sound.
+4. In the Agent UI, the track appears in the chat with a player, its file name
+   and its length. The terminal UI shows the saved path and length instead.
+5. To save into a project, say where: *"save it in C:\Users\me\game\audio"*.
+   GAIA passes that folder (or a new `.wav` path) as `save_to` and writes a copy
+   there, never replacing a file that already exists. The original stays in
+   `~/.gaia/cache/audio/generations/`, where the chat plays it from.
 
 GAIA lists downloaded audio models and refuses unavailable models; it does not
 silently download a large model when a user requests audio. ACE-Step accepts

@@ -7,7 +7,7 @@ Tests the pure functions in gaia.agents.tools.rag_tools that were
 modified in the Agent UI PR to improve nil-RAG handling and page extraction.
 """
 
-from gaia.agents.tools.rag_tools import extract_page_from_chunk
+from gaia.agents.tools.rag_tools import extract_page_from_chunk, split_entries_at_pages
 
 
 class TestExtractPageFromChunk:
@@ -21,11 +21,33 @@ class TestExtractPageFromChunk:
 
     def test_page_bracket_format_large_number(self):
         """Extract large page number."""
-        assert extract_page_from_chunk("Some text [Page 142] more text") == 142
+        assert extract_page_from_chunk("[Page 142] more text") == 142
 
-    def test_page_bracket_format_at_end(self):
-        """Extract page when marker is at end of chunk."""
-        assert extract_page_from_chunk("Content at end [Page 5]") == 5
+    def test_text_before_a_mid_chunk_marker_is_on_the_previous_page(self):
+        """A chunk that crosses into page 5 starts on page 4."""
+        assert extract_page_from_chunk("Content at end [Page 5]") == 4
+        assert extract_page_from_chunk("tail of 141\n[Page 142]\nhead") == 141
+
+    def test_image_text_marker_inside_a_page_keeps_that_page(self):
+        text = "revenue grew 40% in Q3.\n\n---\n[Page 7]\n**Content Extracted from Images:**\n"
+        assert extract_page_from_chunk(text) == 7
+        chunks = ["[Page 7]\nrevenue", text]
+        assert extract_page_from_chunk(chunks[1], 1, chunks) == 7
+
+    def test_text_before_a_page_start_uses_the_earlier_chunks_page(self):
+        chunks = ["[Page 3] a", "[Page 4] b", "end of four\n[Page 5]\nnext"]
+        assert extract_page_from_chunk(chunks[2], 2, chunks) == 4
+
+    def test_mid_chunk_marker_on_page_one_never_gives_page_zero(self):
+        assert extract_page_from_chunk("cover text [Page 1] body") == 1
+
+    def test_a_crossing_chunk_cites_where_it_starts_not_the_next_page(self):
+        """The payment clause sits at the end of page 29; the chunk runs into 30."""
+        chunks = [
+            "[Page 29]\n12.1 The Customer shall pay",
+            "within 14 days of the invoice date.\n[Page 30]\n12.8 Migration",
+        ]
+        assert extract_page_from_chunk(chunks[1], 1, chunks) == 29
 
     # -- Strategy 2: (Page X) format --
 
@@ -76,6 +98,10 @@ class TestExtractPageFromChunk:
         ]
         result = extract_page_from_chunk(chunks[2], chunk_index=2, all_chunks=chunks)
         assert result == 5
+
+    def test_backward_search_uses_the_last_marker_of_the_previous_chunk(self):
+        chunks = ["[Page 7] a [Page 8] b [Page 9] c", "continues page 9"]
+        assert extract_page_from_chunk(chunks[1], 1, chunks) == 9
 
     def test_backward_search_stops_at_another_document(self):
         """A text file indexed after a PDF never inherits the PDF's last page.
@@ -142,3 +168,41 @@ class TestExtractPageFromChunk:
         """With multiple markers in one chunk, returns the first match."""
         result = extract_page_from_chunk("[Page 3] text [Page 7] more text")
         assert result == 3
+
+
+class TestSplitEntriesAtPages:
+    """Every entry's 'page' field holds for all its text, which is what gets cited."""
+
+    @staticmethod
+    def _entry(content, page=22):
+        return {"chunk_id": 1, "content": content, "page": page}
+
+    def test_a_chunk_crossing_a_page_splits_at_the_marker(self):
+        entries = split_entries_at_pages(
+            [self._entry("Tail of 22. [Page 23]\nWater main breaks: 137.")]
+        )
+        assert [(e["page"], e["content"]) for e in entries] == [
+            (22, "Tail of 22."),
+            (23, "[Page 23]\nWater main breaks: 137."),
+        ]
+
+    def test_entries_are_renumbered_for_display(self):
+        entries = split_entries_at_pages(
+            [self._entry("a [Page 23]\nb [Page 24]\nc"), self._entry("d", page=30)]
+        )
+        assert [e["chunk_id"] for e in entries] == [1, 2, 3, 4]
+        assert [e["page"] for e in entries] == [22, 23, 24, 30]
+
+    def test_a_chunk_starting_at_its_marker_stays_whole(self):
+        entries = split_entries_at_pages([self._entry("[Page 22]\nbody", page=22)])
+        assert [(e["page"], e["content"]) for e in entries] == [(22, "[Page 22]\nbody")]
+
+    def test_an_in_page_label_does_not_split(self):
+        text = "Slide body [Page 3] **Speaker Notes:**\nnotes"
+        assert split_entries_at_pages([self._entry(text, page=3)]) == [
+            {"chunk_id": 1, "content": text, "page": 3}
+        ]
+
+    def test_a_chunk_with_no_page_is_left_alone(self):
+        entry = {"chunk_id": 1, "content": "a note quoting [Page 9] of a book"}
+        assert split_entries_at_pages([entry]) == [entry]

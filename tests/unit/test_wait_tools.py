@@ -112,14 +112,47 @@ def test_a_full_length_wait_outlives_the_default_tool_timeout(agent):
 
 
 @pytest.mark.usefixtures("agent")
-@pytest.mark.parametrize("seconds", [MAX_SLEEP_SECONDS + 1, 3600])
+@pytest.mark.parametrize("seconds", [MAX_SLEEP_SECONDS + 0.001, 3600, 86400])
 def test_over_the_cap_is_refused_not_clamped(clock, seconds):
     result = _sleep(seconds=seconds)
 
     assert result["status"] == "error"
     assert f"{MAX_SLEEP_SECONDS:g}" in result["error"]  # states the limit
-    assert "again" in result["error"]  # and how to wait longer
     assert clock.naps == []
+
+
+@pytest.mark.usefixtures("agent")
+@pytest.mark.parametrize("seconds", [MAX_SLEEP_SECONDS + 1, 600, 3600])
+def test_over_the_cap_hands_the_wait_back_instead_of_chaining(clock, seconds):
+    """Chained sleeps burn the whole turn; a long wait belongs to the user."""
+    error = _sleep(seconds=seconds)["error"]
+
+    assert "too long to wait in this turn" in error
+    assert "do not chain sleep calls" in error
+    assert "tell the user" in error.lower() and "when to retry" in error
+    # No leftover-seconds arithmetic or "call it again" invites a chain.
+    assert "remaining" not in error
+    assert "again" not in error
+    assert f"sleep({MAX_SLEEP_SECONDS:g})" not in error
+    assert clock.naps == []
+
+
+@pytest.mark.usefixtures("clock")
+def test_the_cap_itself_still_waits_in_one_call(agent):
+    result = _sleep(seconds=MAX_SLEEP_SECONDS)
+
+    assert result["status"] == "success"
+    assert result["slept_seconds"] == pytest.approx(MAX_SLEEP_SECONDS)
+
+
+@pytest.mark.usefixtures("agent")
+def test_the_seconds_description_does_not_invite_chaining():
+    seconds = _TOOL_REGISTRY["sleep"]["parameters"]["seconds"]["description"]
+
+    assert "300" in seconds
+    assert "when to retry" in seconds
+    assert "don't chain" in seconds
+    assert "call sleep again" not in seconds.lower()
 
 
 @pytest.mark.usefixtures("agent")

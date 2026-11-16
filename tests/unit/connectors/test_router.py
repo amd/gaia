@@ -191,5 +191,6 @@ class TestExceptionMapping:
             headers=UI_HEADER,
         )
         assert resp.status_code == 503
-        body = resp.json()
-        assert "GAIA_GOOGLE_CLIENT_ID" in body.get("detail", "")
+        detail = resp.json()["detail"]
+        assert detail["error"] == "not_configured"
+        assert "GAIA_GOOGLE_CLIENT_ID" in detail["message"]

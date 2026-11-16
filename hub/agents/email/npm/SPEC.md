@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.14**, matching
+[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.16**, matching
 the sidecar's current contract — every schema bump since 2.4 has been additive
 (see `contract.py`'s own per-version changelog for the full log), so nothing
 here is a breaking upgrade for an existing integration.
@@ -111,7 +111,7 @@ and a `Retry-After` header instead.
 | `POST /v1/email/unarchive` | `unarchive()` | **Connector** | A connected mailbox + the `batch_id`. **Ungated** (it restores). Window expired / unknown handle → `409`. |
 | `POST /v1/email/quarantine` | `quarantine()` | **Connector (Gmail)** | A valid `confirm` token (`action="quarantine"`) **and** a connected **Gmail** mailbox. Applies `GAIA_PHISHING_QUARANTINE` + archives; refuses `is_phishing: false` → `400`; refuses an Outlook mailbox → `400` (label-undo can't reverse a folder move, #1738). |
 | `POST /v1/email/unquarantine` | `unquarantine()` | **Connector** | A connected mailbox + the `action_id`. **Ungated** (it restores prior labels). Window expired / unknown → `409`. |
-| `GET /v1/email/calendar/events` | `listCalendarEvents()` | **Connector** | A connected mailbox whose **calendar scope** was granted. Read-only view of the primary calendar; `403` (reconnect CTA) if the scope is missing. Optional `time_min`/`time_max` — omitting both defaults to a forward window (now → +30 days); `provider` only when 2+ accounts are connected. |
+| `GET /v1/email/calendar/events` | `listCalendarEvents()` | **Connector** | A connected mailbox whose **calendar scope** was granted. Read-only view of the primary calendar; `403` (reconnect CTA) if the scope is missing. Optional `time_min`/`time_max` — omitting both defaults to a forward window (now → +30 days); `provider` only when 2+ accounts are connected. Returns `events`, `count`, and `truncated`; `truncated: true` means the provider has more events in the window, so the list is not the whole window — say so, or ask again with a narrower `time_min`/`time_max`. |
 | `POST /v1/email/calendar/events/preview` | `previewCalendarEvent()` | **Standalone** | Nothing external — mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
 | `POST /v1/email/calendar/events` | `createCalendarEvent()` | **Connector** | A valid `preview` token **and** a connected calendar. Token gate fires first: no/invalid token → `403`; then the calendar-scope / account checks. |
 | `POST /v1/email/calendar/events/respond` | `respondToCalendarEvent()` | **Connector** | A connected calendar. RSVPs `accepted`/`declined`/`tentative` to an existing invite. |
@@ -164,7 +164,7 @@ answer stays in view. The response is
 
 | `type` | Payload | Meaning |
 |---|---|---|
-| `status` | `{ message, phase?, queue? }` | progress narration (also folds `step`/`thinking`/`plan`). `phase: "model_queue"` means the turn is waiting for the model behind another request: it repeats every ~2 s with `queue` (`event` queued/granted, `scope`, `position`, `queue_length`, `holder`, `holder_model`, `held_for_s`, `waited_s`, `model`; a field the wait cannot know is omitted) |
+| `status` | `{ message, level?, phase?, queue? }` | progress narration (also folds `step`/`thinking`/`plan`). `level: "warning"` marks a warning for the user rather than progress. `phase: "model_queue"` means the turn is waiting for the model behind another request: it repeats every ~2 s with `queue` (`event` queued/granted, `scope`, `position`, `queue_length`, `holder`, `holder_model`, `held_for_s`, `waited_s`, `model`; a field the wait cannot know is omitted) |
 | `token` | `{ delta }` | an incremental chunk of assistant text |
 | `tool_call` | `{ tool, args }` | the agent is invoking a tool |
 | `tool_result` | `{ tool, render?, data }` | a tool returned; `render` names a typed card |
@@ -258,7 +258,7 @@ emits the canonical event vocabulary.
 | `GET /v1/email/agent/session/{id}/history` | Conversation so far (`turns[]`, oldest first). |
 | `POST /v1/email/agent/memory` | Runtime memory toggle (#1666), `{ session_id, enabled }` → `{ enabled, available, message }`. Enabling memory that was never initialized (started with `GAIA_MEMORY_DISABLED` / Lemonade unreachable) → **409**, never a silent no-op. |
 | `GET /v1/email/agent/memory/{id}` | Memory status without changing it. |
-| `GET /v1/email/agent/autonomy/{id}` | Inspectable autonomy status: `{ level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes[] }` — the earned-trust ledger, never a black box. |
+| `GET /v1/email/agent/autonomy/{id}` | Inspectable autonomy status: `{ level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes[], last_cycle }` — the earned-trust ledger, never a black box. `last_cycle` is `null` until a cycle has run against this mailbox's state, then the most recent cycle (REST, CLI or scheduler): `{ outcome: "completed", started_at, finished_at, level, executed, proposals, decisions, skipped, already_proposed, errors, stopped }` as counts only, or `{ outcome: "failed", started_at, finished_at, level, error }` with the error redacted (#2618). |
 | `POST /v1/email/agent/autonomy` | Set the autonomy level, `{ session_id, level }` where level ∈ `off` \| `suggest` \| `earn_trust` \| `full` (`off` = kill switch). Bad level → **400**. |
 | `POST /v1/email/agent/autonomy/run` | Trigger one observe→decide→act cycle, `{ session_id, max_messages? }` → `{ level, executed[], proposals[], decisions[], skipped }`. `decisions[]` (#2529) is a per-message log — `{ message_id, tool, action, outcome, reason, sender }` for every candidate considered, whatever the outcome — so a held-back decision (importance guard, confirm floor) is explained, not silent. The daemon clock / scheduler drives this in production. Refused with **409** while the session's level is `off` — the kill switch is never mistakable for "ran and found nothing to do" (#2528). |
 | `POST /v1/email/agent/autonomy/undo` | Reverse one auto-executed action and record the correction against its trust scope, `{ session_id, action_id }` → `{ action_id, action_type, message_id, undone, correction_captured }` (#2529). `action_id` comes from a prior `executed[]` entry. Unknown/expired/already-undone id → **409**; an action_type with no reversal implemented → **400**. `correction_captured` is `false` (mutation still reversed) when `action_id` wasn't an autonomy-executed action. |
@@ -287,7 +287,8 @@ let a scope cross the bar through earned trust is not yet wired. See
 `archive` and `quarantine` mutate the live mailbox, so each is gated on a single-use
 token exactly like `send` — but minted by `confirmAction` (not `draft`), bound to the
 `(action, message_id)`. A token for one action/message cannot authorize a different
-one. Both are reversible inside the 30s undo window:
+one. Both are reversible inside the undo window (120 s by default; set
+`GAIA_EMAIL_UNDO_WINDOW_SECONDS` to change it):
 
 ```ts
 // Archive (gated) → undo within the window (ungated):
@@ -509,8 +510,17 @@ token is involved. Both `query` and `labels` are optional: a `query` searches **
 mail** (Gmail search semantics), `labels` filter to those labels, and with **neither**
 it lists the INBOX. `max_results` is `1–100` (default `25`); each match is hydrated
 with a per-message fetch, so the cap bounds that fan-out. To page, pass the
-response's `next_page_token` back as the request's `page_token`. Each `messages[]`
-item:
+response's `next_page_token` back as the request's `page_token`.
+
+**Outlook mailboxes accept fewer operators.** On an Outlook mailbox a `query`
+supports a plain phrase, `from:`, `subject:`, `is:unread`/`is:read`, and
+`newer_than:`/`older_than:` durations (e.g. `newer_than:7d`). These operators
+are rejected with an error rather than run: any other `is:` value (such as
+`is:starred`), `after:`, `before:`, `newer:`, `older:`, `label:`, `has:`, and
+`in:`. One Outlook query also cannot mix `from:`/`subject:`/phrase terms with
+`is:`/`newer_than:`/`older_than:`; split it into two searches.
+
+Each `messages[]` item:
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -547,7 +557,7 @@ exported individually:
 - `resolveBinaryPath({ resourcesDir })` → locate a fetched binary (throws `BinaryNotFoundError` if absent).
 - `spawnSidecar({ binaryPath, host?, port?, extraArgs? })` → spawn with `--host 127.0.0.1 --port <p>` (default port **8131**).
 - `waitForHealth(baseUrl, { timeoutMs, signal })` → poll `/health`; throws `HealthTimeoutError` on timeout or when `signal` aborts (never assumes ready).
-- `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted).
+- `checkVersion(client, { expectedApiVersion })` → throws `VersionMismatchError` if the sidecar's apiVersion **MAJOR** differs (a higher MINOR is accepted, but MINOR bumps can be breaking; see [CONTRACT.md's version history](https://github.com/amd/gaia/blob/main/hub/agents/email/python/CONTRACT.md#version-history)).
 - `verifySha256(buf, expected, label)` → throws `IntegrityError` on mismatch.
 - `shutdown(sidecar, timeoutMs = 5000)` → kill the **whole process tree** (`taskkill /F /T` on Windows; detached process-group `SIGTERM`, escalating to `SIGKILL` after `timeoutMs`, on POSIX). The default auto-reaper does the same on process exit/crash/signal, so only a hard `SIGKILL` of the host can still orphan the child. Resolves once the process exits. If it is still alive `timeoutMs` after the forced kill, rejects with an `Error` naming the pid, the manual kill command, and the still-bound port; the sidecar stays registered with the auto-reaper so process exit still gets a last try.
 - `connectSidecar({ baseUrl, authToken?, timeoutMs?, healthTimeoutMs?, verifyVersion?, expectedApiVersion?, signal? })` → **attach mode**: `waitForHealth` + (default) `checkVersion` against a server this package did **not** spawn, returning an `AttachedSidecar` (`{ host, port, baseUrl, client, authToken? }` — no `child`). Spawns nothing and owns no lifecycle, so there is nothing to `shutdown()`. Pass an `AbortSignal` as `signal` to cancel the health wait early (e.g. the server process you're waiting on died). This is the client half of the fast dev loop — pair it with the Python source server (`gaia-agent-email serve --reload`), which serves an identical contract to the frozen binary. See [Fast local iteration](#fast-local-iteration-dev-mode).
@@ -898,15 +908,20 @@ each): OAuth-forward `/v1/connections` (2.5, #2154), mid-run `needs_input` +
 worklist view (`NeedsYouItem[]`) plus the filtered-remainder `BulkSummary`
 (2.11, #2743, see below), `EmailQueryRequest.session_id`: an optional
 conversation id that resolves the same agent across turns sharing it,
-instead of a throwaway per-call agent (2.12, #2829),
+instead of a throwaway per-call agent (2.12, #2829; a turn that names a
+different `model` than the session's agent was built on rebuilds that agent
+on the new model rather than ignoring it, #2834),
 `PreScanItem.is_phishing`/`is_spam` plus
 `EmailPreScanResult.suspicious`/`suspicious_total`: the phishing/spam-flagged
 subset of `actionable`, captured before its own cap so a flagged message
 ranked past it is never silently dropped from the count (2.13, #2900), and —
-current, `SCHEMA_VERSION = "2.14"` — a third mailbox provider value,
-`microsoft_work` (work Microsoft 365 / Entra, distinct from the personal
-`microsoft` Outlook.com connector), now valid wherever a provider string is
-accepted or returned (#2629).
+a third mailbox provider value, `microsoft_work` (work Microsoft 365 / Entra,
+distinct from the personal `microsoft` Outlook.com connector), now valid
+wherever a provider string is accepted or returned (2.14, #2629), and —
+`SCHEMA_VERSION = "2.16"` adds `EmailQueryRequest.memory` (`on`, `private`, or
+`off`) so a host can keep private and memory-off email chats out of the agent's
+memory store (#5482). The preceding 2.15 bump published the stateful
+`/v1/email/agent/*` routes without changing their shapes (#6043).
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is
 small and version-gated, keeping the published package free of a typegen build

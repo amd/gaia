@@ -8,6 +8,7 @@ imports ``oauth_pkce`` so its handler is registered into ``_HANDLER_REGISTRY``.
 """
 
 import gaia.connectors.oauth_pkce  # noqa: F401  # pylint: disable=unused-import
+from gaia.connectors.providers.google import GOOGLE_IDENTITY_SCOPES
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.spec import ConfigField, ConnectorSpec
 
@@ -26,21 +27,17 @@ GOOGLE_SPEC = ConnectorSpec(
     ),
     product_url="https://workspace.google.com/",
     docs_url="https://amd-gaia.ai/docs/connectors/google",
-    default_scopes=(
-        "openid",
-        "email",
-        "profile",
-    ),
+    default_scopes=GOOGLE_IDENTITY_SCOPES,
     available_scopes=(
-        "openid",
+        *GOOGLE_IDENTITY_SCOPES,
+        # Short aliases stay accepted: connections and grants made before the
+        # spellings were unified may still carry them.
         "email",
         "profile",
-        # GoogleOAuthProvider.default_scopes requests this URL spelling of
-        # "email" on a first connect, so it lands in stored connections and
-        # in the reconnect command prior_state.py prints back to the user.
-        "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.send",
+        # gmail.compose lets the flagship draft and send without gmail.modify.
+        "https://www.googleapis.com/auth/gmail.compose",
         # gmail.modify is required by the email triage agent (#962) for label
         # mutations, archive, trash/untrash, and starring. Listed in
         # available_scopes so the per-agent grant ledger will accept the

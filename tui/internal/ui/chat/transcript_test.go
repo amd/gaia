@@ -150,6 +150,7 @@ func TestTheLiveLineNamesTheModelsPhase(t *testing.T) {
 		{phase("reading", 0), "Reading your request"},
 		{phase("loading_model", 0), "Loading Qwen3.6 35B into memory"},
 		{phase("reading", 0), "Reading your request"},
+		{phase("loading_tools", 0), "Loading more tools"},
 		{phase("reasoning", 0), "Reasoning"},
 		// Reasoning text is narration: folded, and it must not end the phase.
 		{event.CanonicalStatusEvent{Type: "status", Message: "The user wants revenue by region."}, "Reasoning"},

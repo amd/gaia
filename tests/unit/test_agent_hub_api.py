@@ -71,10 +71,10 @@ class TestAgentRegistrationHubMetadata:
 class TestBuiltinAgentHubMetadata:
     """Verify framework + installed agents have Hub metadata populated.
 
-    chat/doc migrated to the gaia-agent-chat wheel (#1102), so they are now
-    discovered via the ``gaia.agent`` entry point rather than registered as
-    builtins — the fixture runs full discovery and the chat/doc cases skip when
-    the wheel is absent.
+    The flagship is discovered via the ``gaia.agent`` entry point rather
+    than registered as a builtin — the fixture runs full discovery and the
+    flagship cases skip when its wheel is absent. ChatAgent's chat/doc/file
+    ids are aliases of the flagship since #6099.
     """
 
     @pytest.fixture()
@@ -83,24 +83,24 @@ class TestBuiltinAgentHubMetadata:
         r.discover()
         return r
 
-    def test_chat_agent_metadata(self, registry):
-        pytest.importorskip("gaia_agent_chat")
+    def test_legacy_chat_id_shows_the_flagship_metadata(self, registry):
+        pytest.importorskip("gaia_agent")
         reg = registry.get("chat")
         assert reg is not None
-        assert reg.category == "conversation"
+        assert reg.id == "gaia"
+        assert reg.category == "general"
         assert "chat" in reg.tags
-        assert reg.icon == "message-circle"
+        assert reg.icon == "sparkles"
         assert reg.language == "python"
 
-    def test_gaia_lite_resolves_to_doc_with_lite_tier(self, registry):
-        pytest.importorskip("gaia_agent_chat")
-        # #1162: gaia-lite is a legacy alias for the doc agent on the lite tier,
-        # not a standalone registration.
-        assert registry.canonical_id("gaia-lite") == "doc"
+    def test_gaia_lite_resolves_to_the_flagship_with_lite_tier(self, registry):
+        pytest.importorskip("gaia_agent")
+        # #1162: gaia-lite is a legacy alias on the lite tier, not a
+        # standalone registration; since #6099 it resolves to the flagship.
+        assert registry.canonical_id("gaia-lite") == "gaia"
         reg = registry.get("gaia-lite")
         assert reg is not None
-        assert reg.id == "doc"
-        assert reg.category == "documents"
+        assert reg.id == "gaia"
         lite = next(t for t in reg.model_tiers if t.name == "lite")
         assert lite.models
         assert lite.min_memory_gb == 5.0
@@ -194,7 +194,7 @@ class TestConsumesMcpServersExposure:
     Settings "Active for" panel can list dynamic MCP consumers."""
 
     def test_reg_to_info_exposes_flag_for_chat(self):
-        pytest.importorskip("gaia_agent_chat")
+        pytest.importorskip("gaia_agent")
         from gaia.ui.routers.agents import _reg_to_info
 
         registry = AgentRegistry()
@@ -203,10 +203,17 @@ class TestConsumesMcpServersExposure:
         assert info.consumes_mcp_servers is True
 
     def test_reg_to_info_defaults_false_for_non_consumer(self):
-        pytest.importorskip("gaia_agent_chat")
         from gaia.ui.routers.agents import _reg_to_info
 
-        registry = AgentRegistry()
-        registry.discover()
-        info = _reg_to_info(registry.get("doc"))
+        reg = AgentRegistration(
+            id="plain",
+            name="Plain",
+            description="",
+            source="custom_python",
+            conversation_starters=[],
+            factory=lambda **_kw: None,
+            agent_dir=None,
+            models=[],
+        )
+        info = _reg_to_info(reg)
         assert info.consumes_mcp_servers is False

@@ -30,10 +30,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 AGENTS_DIR = REPO_ROOT / "hub" / "agents"
 
 
-CHAT_SPEC = (
-    "gaia-agent-chat @ git+https://github.com/amd/gaia.git"
+FLAGSHIP_SPEC = (
+    "gaia-agent-gaia @ git+https://github.com/amd/gaia.git"
     f"@{install_hints._core_release_tag(importlib.metadata.version('amd-gaia'))}"
-    "#subdirectory=hub/agents/chat/python"
+    "#subdirectory=hub/agents/gaia/python"
 )
 
 
@@ -213,24 +213,24 @@ class TestSourceInstallCommand:
     def test_stock_venv_gets_python_m_pip(self, stock_venv):
         """#2358: a stock `python -m venv` has no uv, so the hint must not
         require one."""
-        cmd = source_install_command("gaia-agent-chat")
+        cmd = source_install_command("gaia-agent-gaia")
         assert cmd.startswith(f"{sys.executable} -m pip install ")
-        assert f'"{CHAT_SPEC}"' in cmd
+        assert f'"{FLAGSHIP_SPEC}"' in cmd
 
     def test_installer_venv_gets_uv_with_python_flag(self, installer_venv):
         """`python -m pip` fails with "No module named pip" on the installer's
         venv; the hint must be the uv form pinned to this interpreter."""
-        cmd = source_install_command("gaia-agent-chat")
+        cmd = source_install_command("gaia-agent-gaia")
         assert cmd.startswith("uv pip install --python ")
         assert sys.executable in cmd
-        assert cmd.endswith(f'"{CHAT_SPEC}"')
+        assert cmd.endswith(f'"{FLAGSHIP_SPEC}"')
         assert "-m pip" not in cmd
 
     def test_no_installer_says_to_install_uv_first(self, no_installer):
-        cmd = source_install_command("gaia-agent-chat")
+        cmd = source_install_command("gaia-agent-gaia")
         assert cmd.startswith("install uv (")
         assert "then run: uv pip install --python" in cmd
-        assert f'"{CHAT_SPEC}"' in cmd
+        assert f'"{FLAGSHIP_SPEC}"' in cmd
 
     def test_unknown_wheel_raises(self):
         with pytest.raises(KeyError):
@@ -250,34 +250,34 @@ class TestAgentNotInstalledMessage:
     def test_never_recommends_the_broken_pip_commands(self):
         """Regression guard: neither broken install path appears (#2240)."""
         message = agent_not_installed_message(
-            "The chat agent is not installed", "gaia-agent-chat"
+            "The GAIA agent is not installed", "gaia-agent-gaia"
         )
-        assert "pip install gaia-agent-chat`" not in message
+        assert "pip install gaia-agent-gaia`" not in message
         assert "amd-gaia[agents]" not in message
 
     def test_includes_working_source_install_command(self):
         message = agent_not_installed_message(
-            "The chat agent is not installed", "gaia-agent-chat"
+            "The GAIA agent is not installed", "gaia-agent-gaia"
         )
-        assert source_install_command("gaia-agent-chat") in message
+        assert source_install_command("gaia-agent-gaia") in message
 
     def test_references_tracking_issue(self):
         message = agent_not_installed_message(
-            "The chat agent is not installed", "gaia-agent-chat"
+            "The GAIA agent is not installed", "gaia-agent-gaia"
         )
         assert "github.com/amd/gaia/issues/2240" in message
 
     def test_next_step_is_appended(self):
         message = agent_not_installed_message(
-            "The chat agent is not installed",
-            "gaia-agent-chat",
+            "The GAIA agent is not installed",
+            "gaia-agent-gaia",
             next_step="Then re-run `gaia chat`.",
         )
         assert message.endswith("Then re-run `gaia chat`.")
 
     def test_no_next_step_has_no_trailing_space(self):
         message = agent_not_installed_message(
-            "The chat agent is not installed", "gaia-agent-chat"
+            "The GAIA agent is not installed", "gaia-agent-gaia"
         )
         assert not message.endswith(" ")
 
@@ -298,8 +298,8 @@ class TestSourceInstallRef:
     )
     def test_ref_matches_the_release_tag(self, monkeypatch, installed, ref):
         monkeypatch.setattr(install_hints, "_installed_version", lambda _pkg: installed)
-        command = source_install_command("gaia-agent-chat")
-        assert f"gaia.git{ref}#subdirectory=hub/agents/chat/python" in command
+        command = source_install_command("gaia-agent-gaia")
+        assert f"gaia.git{ref}#subdirectory=hub/agents/gaia/python" in command
 
     def test_rc_tag_agrees_with_the_release_tooling(self):
         spec = importlib.util.spec_from_file_location(
@@ -317,14 +317,14 @@ class TestSourceInstallRef:
 
 class TestAgentImportErrorMessage:
     def test_missing_top_level_module_name_reports_not_installed(self):
-        # No CI environment can produce this for real -- gaia-agent-chat is
+        # No CI environment can produce this for real -- gaia-agent-email is
         # installed for the wheel's own tests. CPython assigns ImportError.name
         # exactly this way at raise time, so the constructed object is the
         # identical shape the real import machinery produces.
-        error = ModuleNotFoundError("No module named 'gaia_agent_chat'")
-        error.name = "gaia_agent_chat"
+        error = ModuleNotFoundError("No module named 'gaia_agent_email'")
+        error.name = "gaia_agent_email"
         message = agent_import_error_message(
-            error, "The chat agent is not installed", "gaia-agent-chat"
+            error, "The email agent is not installed", "gaia-agent-email"
         )
         assert "is not installed" in message
 
@@ -333,7 +333,7 @@ class TestAgentImportErrorMessage:
         declared "not installed" (the old misdiagnosis) -- report the real
         error and both package versions. Produced via a real failed import of
         a symbol the core doesn't export, the exact shape of the 0.24.1 +
-        gaia-agent-chat@main failure."""
+        agent-wheel@main failure."""
         try:
             from gaia.config import _symbol_not_exported_by_core  # noqa: F401
 
@@ -341,7 +341,7 @@ class TestAgentImportErrorMessage:
         except ImportError as exc:
             error = exc
         message = agent_import_error_message(
-            error, "The chat agent is not installed", "gaia-agent-chat"
+            error, "The GAIA agent is not installed", "gaia-agent-gaia"
         )
         assert "is not installed" not in message
         assert "is installed, but it could not be imported" in message
@@ -349,7 +349,7 @@ class TestAgentImportErrorMessage:
         assert "Detected versions:" in message
         assert "amd-gaia" in message
         assert (
-            source_install_command("gaia-agent-chat", force_reinstall=True) in message
+            source_install_command("gaia-agent-gaia", force_reinstall=True) in message
         )
         assert "--force-reinstall" in message
         assert "--no-deps" in message
@@ -365,7 +365,7 @@ class TestAgentImportErrorMessage:
             error = exc
         assert error.name == "_gaia_missing_transitive_dep"
         message = agent_import_error_message(
-            error, "The chat agent is not installed", "gaia-agent-chat"
+            error, "The GAIA agent is not installed", "gaia-agent-gaia"
         )
         assert "is installed, but it could not be imported" in message
         assert "_gaia_missing_transitive_dep" in message
@@ -382,18 +382,17 @@ class TestAgentImportErrorMessage:
         assert source_install_command("gaia-agent-gaia") in message
         assert "--no-deps" not in message
 
-    def test_gaia_agent_gaia_missing_sibling_chat_reports_not_installed(self):
-        """A missing required sibling should reinstall the primary wheel with
-        dependencies enabled, restoring gaia-agent-chat."""
+    def test_the_flagship_no_longer_treats_the_chat_package_as_its_own(self):
+        """ChatAgent moved into gaia-agent-gaia (#6099): a missing
+        gaia_agent_chat is some other package's broken import, not the
+        flagship being absent."""
         error = ModuleNotFoundError("No module named 'gaia_agent_chat'")
         error.name = "gaia_agent_chat"
         message = agent_import_error_message(
             error, "The GAIA agent is not installed", "gaia-agent-gaia"
         )
-        assert "is not installed" in message
-        assert source_install_command("gaia-agent-gaia") in message
-        assert "subdirectory=hub/agents/gaia/python" in message
-        assert "--no-deps" not in message
+        assert "is installed, but it could not be imported" in message
+        assert "gaia_agent_chat" in message
 
 
 class TestGaiaExtraRequirements:

@@ -171,8 +171,7 @@ class TestTriageEscalationBodyIsReduced:
         assert "review the attached proposal" in received["body"]
         assert "before our call tomorrow" in received["body"]
         assert "Dana Whitfield" not in received["body"], (
-            "signature block must be stripped before the body reaches the "
-            "classifier"
+            "signature block must be stripped before the body reaches the " "classifier"
         )
         assert "555" not in received["body"]
         assert "Sending over the draft" not in received["body"], (

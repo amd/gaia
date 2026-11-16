@@ -91,11 +91,8 @@ def test_namespaced_id_matches_source_of_truth():
 
 # ---------------------------------------------------------------------------
 # AC-1 — agent (mailbox) scopes agree across every surface. Identity scopes
-# are deliberately NOT folded into this check: the catalog spec's
-# default_scopes and the raw OAuthProvider's default_scopes legitimately
-# differ in literal form today (#2730 checkpoint-1 finding, tracked as its
-# own follow-up) — lumping them together would make this guard either fail
-# spuriously or get written loosely enough to miss real agent-scope drift.
+# have one spelling too (#2738); test_identity_scope_spelling.py guards them
+# without needing the email wheel.
 # ---------------------------------------------------------------------------
 
 
@@ -152,18 +149,15 @@ class TestAgentScopesAgreeAcrossSurfaces:
             assert (set(agent["required"]) | set(agent["optional"])) <= union
             assert union == set(fixture[provider]["connect_union"])
 
-    def test_default_required_scopes_by_provider_matches_required_scopes_not_all(self):
-        """#2730 D1: this gates a forwarded connection's usability at
-        ``import_forwarded_connection`` time — the same mail-only
-        enforcement the daemon's forward-out mint applies (D5). It must NOT
-        equal ALL_SCOPES: requiring calendar here would reject a mail-only
-        forwarded connection outright, the same all-or-nothing failure this
-        issue removes, just relocated to the import boundary."""
-        from gaia_agent_email.scopes import ALL_SCOPES, REQUIRED_SCOPES
+    def test_forwarded_default_still_accepts_the_email_agents_mail_scopes(self):
+        """The None-path forward default is any-of mail read. The email
+        agent's own required set must still satisfy it, or retiring the
+        modify+send default would break its forwarded connections; calendar
+        must never be what satisfies it (#2730 D1)."""
+        from gaia_agent_email.scopes import CALENDAR_SCOPES, REQUIRED_SCOPES
 
-        from gaia.connectors.api import _DEFAULT_REQUIRED_SCOPES_BY_PROVIDER
+        from gaia.connectors.api import _DEFAULT_READ_SCOPES_BY_PROVIDER
 
-        assert set(_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER["google"]) == set(
-            REQUIRED_SCOPES
-        )
-        assert set(_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER["google"]) != set(ALL_SCOPES)
+        read = set(_DEFAULT_READ_SCOPES_BY_PROVIDER["google"])
+        assert read & set(REQUIRED_SCOPES)
+        assert not read & set(CALENDAR_SCOPES)

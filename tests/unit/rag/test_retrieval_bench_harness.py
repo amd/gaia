@@ -63,7 +63,7 @@ def _fake_make_rag(cache_dir, allowed, model=None, **overrides):
 def _needs_chat_agent():
     """The ``agent`` pipeline calls the chat agent's real ``query_documents``."""
     pytest.importorskip(
-        "gaia_agent_chat", reason="runs in test_chat_agent.yml, with the chat wheel"
+        "gaia_agent", reason="runs in test_chat_agent.yml, with the flagship wheel"
     )
 
 

@@ -319,6 +319,57 @@ def test_no_root_outside_a_repository(tmp_path, monkeypatch):
     assert resolve_project_root() is None
 
 
+# ── the session's working directory (#3591) ───────────────────────────────
+# A daemon-spawned sidecar's cwd is the daemon's folder; the client's start
+# folder arrives as the session's working_directory and must pick the project.
+
+
+def test_the_start_folder_resolves_its_repository_not_the_cwd(
+    repo, tmp_path_factory, monkeypatch
+):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(tmp_path_factory.mktemp("daemon-folder"))
+    assert resolve_project_root(start=str(repo / "src" / "demo")) == str(repo.resolve())
+
+
+def test_a_start_folder_outside_any_repository_has_no_root(
+    repo, tmp_path_factory, monkeypatch
+):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    # The process cwd is a repository; the start folder must still win.
+    monkeypatch.chdir(repo)
+    plain = tmp_path_factory.mktemp("plain")
+    assert resolve_project_root(start=str(plain)) is None
+
+
+def test_explicit_and_env_roots_still_win_over_the_start_folder(
+    repo, tmp_path_factory, monkeypatch
+):
+    other = tmp_path_factory.mktemp("other")
+    (other / ".git").mkdir()
+    assert resolve_project_root(str(repo), start=str(other)) == str(repo.resolve())
+    monkeypatch.setenv(PROJECT_ROOT_ENV, str(repo))
+    assert resolve_project_root(start=str(other)) == str(repo.resolve())
+
+
+def test_a_start_folder_of_home_maps_nothing(monkeypatch, tmp_path):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: tmp_path))
+    assert resolve_project_root(start=str(tmp_path)) is None
+
+
+def test_a_vanished_start_folder_resolves_to_no_root(tmp_path, monkeypatch):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    assert resolve_project_root(start=str(tmp_path / "gone" / "away")) is None
+
+
+def test_a_start_folder_inside_gaias_own_source_maps_nothing(monkeypatch, repo):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.setattr(project_map, "is_agent_own_source", lambda _: True)
+    assert resolve_project_root(start=str(repo)) is None
+
+
 def _install_gaia_at(monkeypatch, package: pathlib.Path) -> None:
     """Point the imported ``gaia`` package at *package* for one test."""
     import gaia
@@ -463,6 +514,32 @@ def test_outside_a_project_the_fragment_is_only_the_working_directory(
     text = agent.get_project_map_system_prompt()
     assert text.startswith("Working directory: ") and str(plain) in text
     assert "PROJECT MAP" not in text and len(text.splitlines()) == 1
+
+
+def test_the_map_follows_the_sessions_working_directory(
+    repo, tmp_path_factory, monkeypatch
+):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    monkeypatch.chdir(tmp_path_factory.mktemp("daemon-folder"))
+    agent = _FakeAgent(repo)
+    agent.config.project_root = None
+    agent.config.working_directory = str(repo / "src")
+    assert agent._project_map_root() == str(repo.resolve())
+    text = agent.get_project_map_system_prompt()
+    assert text.startswith("==== PROJECT MAP ====") and str(repo.resolve()) in text
+
+
+def test_a_working_directory_outside_the_env_scope_is_not_mapped(
+    repo, tmp_path_factory, monkeypatch
+):
+    monkeypatch.delenv(PROJECT_ROOT_ENV, raising=False)
+    agent = _FakeAgent(repo)
+    agent.config.project_root = None
+    agent.config.working_directory = str(repo)
+    agent.path_validator = type(
+        "V", (), {"in_env_scope": staticmethod(lambda _p: False)}
+    )()
+    assert agent._project_map_root() is None
 
 
 def test_gaia_own_source_is_not_named_as_the_working_directory(monkeypatch):

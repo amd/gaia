@@ -46,7 +46,7 @@ if str(_REPO_ROOT) not in sys.path:
 pytest.importorskip("gaia_agent_email")
 
 from gaia_agent_email import attention_cache  # noqa: E402
-from gaia_agent_email.agent import EmailTriageAgent, _SYSTEM_PROMPT  # noqa: E402
+from gaia_agent_email.agent import _SYSTEM_PROMPT, EmailTriageAgent  # noqa: E402
 from gaia_agent_email.answer_grounding import (  # noqa: E402
     UNGROUNDED_SUCCESS_FALLBACK,
     _honest_prescan_summary,
@@ -68,6 +68,7 @@ from gaia_agent_email.answer_grounding import (  # noqa: E402
 )
 from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
 
+from gaia.agents.base.verification import build_verification_scope  # noqa: E402
 from gaia.database.mixin import DatabaseMixin  # noqa: E402
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
@@ -258,9 +259,9 @@ class TestFindUngroundedSuccessClaim:
         ],
     )
     def test_detects_completion_claim_with_empty_tool_trace(self, phrase):
-        assert find_ungrounded_success_claim(phrase, []) == find_ungrounded_success_claim(
-            phrase, None
-        )
+        assert find_ungrounded_success_claim(
+            phrase, []
+        ) == find_ungrounded_success_claim(phrase, None)
         assert find_ungrounded_success_claim(phrase, []) is not None
 
     @pytest.mark.parametrize(
@@ -421,7 +422,7 @@ class TestFindUnlicensedCrossMailboxClaim:
 _LEAKED_TEXT = (
     "Informational Count: 22 messages were categorized as general information.\n\n"
     "[shown to the user]\n\n"
-    "\u2022 [suggested_archives] \"DeepLearning.AI\" hello@deeplearning.ai \u2014 AI "
+    '\u2022 [suggested_archives] "DeepLearning.AI" hello@deeplearning.ai \u2014 AI '
     "writes your code. Who reviews it? (id 19faf805d75f51eb)\n"
     "\u2022 [suggested_archives] The Associated Press donations@apnews.com \u2014 "
     "Thank you for signing up \\u2013 support AP\\u2019s mission "
@@ -431,10 +432,14 @@ _LEAKED_TEXT = (
 
 class TestFindScaffoldingLeak:
     def test_detects_shown_to_user_marker(self):
-        assert find_scaffolding_leak("some text\n\n[shown to the user]\nmore") is not None
+        assert (
+            find_scaffolding_leak("some text\n\n[shown to the user]\nmore") is not None
+        )
 
     def test_detects_envelope_field_label(self):
-        assert find_scaffolding_leak("• [suggested_archives] DeepLearning.AI") is not None
+        assert (
+            find_scaffolding_leak("• [suggested_archives] DeepLearning.AI") is not None
+        )
 
     def test_detects_raw_message_id(self):
         assert find_scaffolding_leak("archived it (id 19faf805d75f51eb)") is not None
@@ -523,11 +528,17 @@ class TestRenderNeedsYouList:
             "Needs a manual look",
         ):
             assert heading in rendered
-        assert rendered.index("Waiting on your reply") < rendered.index("Needs a response")
+        assert rendered.index("Waiting on your reply") < rendered.index(
+            "Needs a response"
+        )
         assert rendered.index("Needs a response") < rendered.index("Meetings to decide")
-        assert rendered.index("Meetings to decide") < rendered.index("Needs a manual look")
+        assert rendered.index("Meetings to decide") < rendered.index(
+            "Needs a manual look"
+        )
         # Refs ascend in the order they appear on the page, unbroken.
-        seen_refs = [int(tok) for tok in re.findall(r"^(\d+)\.", rendered, re.MULTILINE)]
+        seen_refs = [
+            int(tok) for tok in re.findall(r"^(\d+)\.", rendered, re.MULTILINE)
+        ]
         assert seen_refs == [1, 2, 3, 4]
 
     def test_urgent_and_waiting_on_you_share_one_reply_section(self):
@@ -553,7 +564,9 @@ class TestRenderNeedsYouList:
     def test_sender_address_is_dropped_when_a_display_name_exists(self):
         envelope = _prescan_envelope(
             needs_you=[
-                _needs_you_row(1, "waiting_on_you", sender="Jane Doe <jane@example.com>")
+                _needs_you_row(
+                    1, "waiting_on_you", sender="Jane Doe <jane@example.com>"
+                )
             ]
         )
         rendered = render_needs_you_list(envelope)
@@ -1143,7 +1156,10 @@ class TestGroundFinalAnswerCalendarConflict:
         text = "These two events overlap by 30 minutes."
         result = {
             "result": text,
-            "conversation": [_list_events_tool_entry(2), _detect_conflicts_tool_entry()],
+            "conversation": [
+                _list_events_tool_entry(2),
+                _detect_conflicts_tool_entry(),
+            ],
         }
         out = ground_final_answer(result)
         assert out["result"] == text
@@ -1309,9 +1325,16 @@ def _build_agent(tmp_path: Path) -> EmailTriageAgent:
     )
     with (
         patch("gaia.agents.base.agent.AgentSDK") as mock_sdk,
-        patch("gaia.agents.base.memory.MemoryMixin._get_embedder", return_value=MagicMock()),
-        patch("gaia.agents.base.memory.MemoryMixin._embed_text", side_effect=_fake_embed),
-        patch("gaia.agents.base.memory.MemoryMixin._backfill_embeddings", return_value=0),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._get_embedder",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._embed_text", side_effect=_fake_embed
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._backfill_embeddings", return_value=0
+        ),
         patch("gaia.agents.base.memory.MemoryMixin._rebuild_faiss_index"),
         patch("gaia.agents.base.memory.MemoryMixin.init_system_context"),
     ):
@@ -1399,6 +1422,50 @@ class TestProcessQueryWiring:
             ):
                 out = agent.process_query("anything need my attention?")
             assert out["result"] == grounded_by_loop
+            assert out["result"].count("attention card") == 1
+        finally:
+            agent.close_db()
+
+    def test_loop_verification_line_does_not_trigger_a_second_grounding(self, tmp_path):
+        # #3572: the loop appends a "Verification:" line after finalize_answer,
+        # so process_query only recognises an already-grounded answer by
+        # stripping it. Built with the loop's own appender, so a change to the
+        # line's wording or spacing that breaks the strip fails here.
+        _store_attention_view(items=[_attention_item("action_item")], scanned=7)
+        agent = _build_agent(tmp_path)
+        try:
+            conversation = [{"role": "user", "content": "anything need my attention?"}]
+            grounded_by_loop = agent.finalize_answer(
+                "No urgent or actionable items found.", conversation
+            )
+            statement = build_verification_scope([], unchecked_change="notes.txt")
+            assert statement
+            with patch.object(
+                EmailTriageAgent,
+                "verification_scope_statement",
+                return_value=statement,
+            ):
+                emitted = agent._with_verification_scope(grounded_by_loop)
+            assert emitted != grounded_by_loop
+            assert emitted.endswith(statement)
+
+            canned = {
+                "status": "success",
+                "result": emitted,
+                "conversation": conversation,
+                "steps_taken": 1,
+            }
+            with (
+                patch(
+                    "gaia.agents.base.agent.Agent.process_query", return_value=canned
+                ),
+                patch(
+                    "gaia_agent_email.agent.ground_final_answer",
+                    side_effect=AssertionError("answer was grounded twice"),
+                ),
+            ):
+                out = agent.process_query("anything need my attention?")
+            assert out["result"] == emitted
             assert out["result"].count("attention card") == 1
         finally:
             agent.close_db()

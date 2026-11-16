@@ -30,8 +30,8 @@ v0.17.5); an in-repo package under `hub/agents/` adds a `gaia-agent.yaml` manife
    gaia agent init my-agent -o hub/agents/ --layout hub
    ```
 
-   Then mirror an existing package for structure: `hello-world` or `word-count`
-   for a minimal one, `email` for a full published agent.
+   Then mirror an existing package for structure: `tests/fixtures/agents/hello-world/`
+   for a minimal one, `hub/agents/email/python/` for a full published agent.
 
 2. **Write the `Agent` subclass.** Inherit from `Agent` (or a closer base like
    `ChatAgent`, which the flagship `GaiaAgent` extends). **Leave `model_id` unset** — that inherits the base default,

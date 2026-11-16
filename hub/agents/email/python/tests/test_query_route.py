@@ -61,10 +61,23 @@ class _HappyFakeAgent:
         self.console = None
         self.streaming = False  # GaiaAgentConfig's default; the route turns it on
         self._cancel_event = None
+        self._memory_store = object()
+        self._incognito = False
+        self.memory_enabled_during_query = None
         self.seen_query = None
         self.seen_history = None
 
+    def memory_status(self):
+        return {
+            "available": self._memory_store is not None,
+            "enabled": not self._incognito,
+        }
+
+    def set_memory_enabled(self, enabled):
+        self._incognito = not enabled
+
     def process_query(self, query, max_steps=None):
+        self.memory_enabled_during_query = not self._incognito
         self.seen_query = query
         self.seen_history = list(self.conversation_history)
         self.console.print_processing_start(query, 20, "fake-model")
@@ -625,6 +638,39 @@ def test_unknown_field_is_rejected(app_client):
     assert resp.status_code == 422
 
 
+def test_memory_mode_is_optional_and_enum_validated(app_client, monkeypatch):
+    fake = _HappyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+
+    request = query_routes.QueryRequest(
+        query="hi", run_id=str(uuid.uuid4()), context=[], memory="private"
+    )
+    assert request.memory == "private"
+    assert (
+        app_client.post("/v1/email/query", json=_req(memory="private")).status_code
+        == 200
+    )
+    assert (
+        app_client.post("/v1/email/query", json=_req(memory="sometimes")).status_code
+        == 422
+    )
+
+
+def test_private_mode_disables_memory_before_the_turn(app_client, monkeypatch):
+    fake = _HappyFakeAgent()
+    built_with = {}
+
+    def build(**kwargs):
+        built_with.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(query_routes, "build_query_agent", build)
+    response = app_client.post("/v1/email/query", json=_req(memory="private"))
+    assert response.status_code == 200
+    assert built_with["memory_enabled"] is False
+    assert fake.memory_enabled_during_query is False
+
+
 def test_non_lemonade_provider_is_400(app_client, monkeypatch):
     fake = _HappyFakeAgent()
     monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
@@ -1068,7 +1114,234 @@ def test_pushed_history_too_big_beside_the_prompt_is_refit(app_client, monkeypat
     assert resp.status_code == 200
     seen = fake.seen_history
     assert 0 < len(seen) < len(context)
-    assert seen == context[-len(seen) :]
-    assert seen[0]["role"] == "user"
+    # The oldest turn the model still reads says earlier ones were left out.
+    as_sent = context[-len(seen) :]
+    assert seen[1:] == as_sent[1:]
+    assert seen[0] == {
+        "role": "user",
+        "content": f"{history.HIDDEN_TURNS_NOTE}\n\n{as_sent[0]['content']}",
+    }
     warnings = [e for e in _parse_sse(resp.text) if "out of the model's view" in str(e)]
     assert len(warnings) == 1
+
+
+# ---------------------------------------------------------------------------
+# A retained session follows the model the caller asks for (#2834). The Agent
+# UI now sends session_id, and its chats can switch model between turns.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def model_tracking_registry(monkeypatch):
+    from gaia_agent_email import agent_routes
+
+    fresh = agent_routes._SessionRegistry()
+    monkeypatch.setattr(agent_routes, "registry", fresh, raising=True)
+    built: list = []
+    closed: list = []
+
+    def _factory(**kwargs):
+        agent = _HappyFakeAgent()
+        agent.built_with = kwargs.get("model_id")
+        built.append(agent)
+        return agent
+
+    monkeypatch.setattr(agent_routes, "build_session_agent", _factory, raising=True)
+    monkeypatch.setattr(agent_routes, "_close_agent", closed.append, raising=True)
+    return fresh, built, closed
+
+
+def test_same_model_keeps_the_session_agent(app_client, model_tracking_registry):
+    registry, built, closed = model_tracking_registry
+    for query in ("one", "two"):
+        resp = app_client.post(
+            "/v1/email/query", json=_req(query, session_id="s1", model="m-a")
+        )
+        assert resp.status_code == 200
+    assert len(built) == 1 and closed == []
+
+
+def test_a_new_model_rebuilds_the_session_agent_on_it(
+    app_client, model_tracking_registry
+):
+    registry, built, closed = model_tracking_registry
+    app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
+    resp = app_client.post(
+        "/v1/email/query", json=_req("two", session_id="s1", model="m-b")
+    )
+    assert resp.status_code == 200
+    assert [a.built_with for a in built] == ["m-a", "m-b"]
+    session = registry.get("s1")
+    assert session.agent is built[1] and session.model_id == "m-b"
+    assert closed == [built[0]]
+    assert built[1].seen_query == "two"
+
+
+def test_omitting_the_model_keeps_whatever_the_session_runs(
+    app_client, model_tracking_registry
+):
+    registry, built, closed = model_tracking_registry
+    app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
+    app_client.post("/v1/email/query", json=_req("two", session_id="s1"))
+    assert len(built) == 1 and closed == []
+
+
+def test_a_failed_rebuild_is_loud_and_releases_the_session(
+    app_client, model_tracking_registry, monkeypatch
+):
+    from gaia_agent_email import agent_routes
+
+    registry, built, closed = model_tracking_registry
+    app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
+
+    def _boom(**kwargs):
+        raise RuntimeError("model m-b is not installed")
+
+    monkeypatch.setattr(agent_routes, "build_session_agent", _boom, raising=True)
+    resp = app_client.post(
+        "/v1/email/query", json=_req("two", session_id="s1", model="m-b")
+    )
+    assert resp.status_code == 502
+    assert "m-b" in resp.json()["detail"]
+    session = registry.get("s1")
+    assert session.agent is built[0] and session.model_id == "m-a"
+    assert closed == []
+    assert session.run_lock.acquire(blocking=False)
+    session.run_lock.release()
+
+
+class _StatefulFakeAgent(_HappyFakeAgent):
+    """A fake with the runtime toggles a model switch must carry over."""
+
+    def __init__(self, model_id=None, *, memory_available=True):
+        super().__init__()
+        from types import SimpleNamespace
+
+        self.model_id = model_id
+        self.config = SimpleNamespace(autonomy_level="suggest")
+        self._memory_available = memory_available
+        self._memory_on = memory_available
+
+    def memory_status(self):
+        return {"available": self._memory_available, "enabled": self._memory_on}
+
+    def set_memory_enabled(self, enabled):
+        self._memory_on = enabled and self._memory_available
+
+    def set_autonomy_level(self, level):
+        self.config.autonomy_level = level
+
+
+@pytest.fixture()
+def stateful_registry(monkeypatch):
+    from gaia_agent_email import agent_routes
+
+    fresh = agent_routes._SessionRegistry()
+    monkeypatch.setattr(agent_routes, "registry", fresh, raising=True)
+    built: list = []
+
+    def _factory(**kwargs):
+        agent = _StatefulFakeAgent(kwargs.get("model_id") or "default-model")
+        built.append(agent)
+        return agent
+
+    monkeypatch.setattr(agent_routes, "build_session_agent", _factory, raising=True)
+    closed: list = []
+    monkeypatch.setattr(agent_routes, "_close_agent", closed.append, raising=True)
+    fresh.closed = closed
+    return fresh, built
+
+
+def test_session_memory_mode_is_kept_when_omitted_on_a_follow_up(
+    app_client, stateful_registry
+):
+    registry, built = stateful_registry
+    app_client.post(
+        "/v1/email/query", json=_req("one", session_id="s1", memory="private")
+    )
+    app_client.post("/v1/email/query", json=_req("two", session_id="s1"))
+    assert len(built) == 1
+    assert built[0].memory_status()["enabled"] is False
+
+
+def test_session_memory_mode_can_be_reenabled_on_a_follow_up(
+    app_client, stateful_registry
+):
+    registry, built = stateful_registry
+    app_client.post(
+        "/v1/email/query", json=_req("one", session_id="s1", memory="private")
+    )
+    app_client.post("/v1/email/query", json=_req("two", session_id="s1", memory="on"))
+    assert len(built) == 1
+    assert built[0].memory_status()["enabled"] is True
+
+
+def test_a_model_switch_keeps_memory_off(app_client, stateful_registry):
+    registry, built = stateful_registry
+    app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
+    built[0].set_memory_enabled(False)
+    app_client.post("/v1/email/query", json=_req("two", session_id="s1", model="m-b"))
+    assert len(built) == 2
+    assert built[1].memory_status()["enabled"] is False
+
+
+def test_a_model_switch_keeps_memory_on_when_it_was_on(app_client, stateful_registry):
+    registry, built = stateful_registry
+    app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
+    app_client.post("/v1/email/query", json=_req("two", session_id="s1", model="m-b"))
+    assert built[1].memory_status()["enabled"] is True
+
+
+def test_a_model_switch_keeps_the_autonomy_level(app_client, stateful_registry):
+    registry, built = stateful_registry
+    app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
+    built[0].set_autonomy_level("full")
+    app_client.post("/v1/email/query", json=_req("two", session_id="s1", model="m-b"))
+    assert built[1].config.autonomy_level == "full"
+
+
+def test_naming_the_model_a_modelless_session_already_runs_does_not_rebuild(
+    app_client, stateful_registry
+):
+    registry, built = stateful_registry
+    registry.get_or_create("s1")
+    assert built[0].model_id == "default-model"
+    resp = app_client.post(
+        "/v1/email/query", json=_req("one", session_id="s1", model="default-model")
+    )
+    assert resp.status_code == 200
+    assert len(built) == 1
+    assert registry.get("s1").model_id == "default-model"
+
+
+def test_a_failed_carry_over_keeps_the_old_agent(
+    app_client, stateful_registry, monkeypatch
+):
+    registry, built = stateful_registry
+    app_client.post("/v1/email/query", json=_req("one", session_id="s1", model="m-a"))
+    built[0].set_autonomy_level("full")
+
+    def _refuse(level):
+        raise ValueError(f"unknown level {level!r}")
+
+    original_factory = __import__(
+        "gaia_agent_email.agent_routes", fromlist=["x"]
+    ).build_session_agent
+
+    def _factory(**kwargs):
+        agent = original_factory(**kwargs)
+        agent.set_autonomy_level = _refuse
+        return agent
+
+    from gaia_agent_email import agent_routes
+
+    monkeypatch.setattr(agent_routes, "build_session_agent", _factory, raising=True)
+    resp = app_client.post(
+        "/v1/email/query", json=_req("two", session_id="s1", model="m-b")
+    )
+    assert resp.status_code == 502
+    session = registry.get("s1")
+    assert session.agent is built[0] and session.model_id == "m-a"
+    assert registry.closed == [built[1]], "the half-built agent is closed"
+    assert session.run_lock.acquire(blocking=False)
+    session.run_lock.release()

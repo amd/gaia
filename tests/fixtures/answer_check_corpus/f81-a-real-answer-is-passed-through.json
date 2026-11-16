@@ -1,0 +1,20 @@
+{
+  "kind": "question",
+  "finding": "F81 (amd/gaia#7294)",
+  "why": "When the user does answer, the model gets exactly what they chose.",
+  "question": {
+    "message": "What kind of cleanup do you want for la1?",
+    "choices": [
+      "Organize into subfolders by type",
+      "Delete duplicates"
+    ],
+    "default_if_no_response": "Organize into subfolders by type",
+    "timeout_seconds": 300
+  },
+  "reply": "Delete duplicates",
+  "expect": {
+    "result_has": [
+      "Delete duplicates"
+    ]
+  }
+}

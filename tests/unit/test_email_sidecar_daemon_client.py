@@ -31,6 +31,7 @@ from gaia.daemon.sidecars.errors import (
     KIND_SERVICE_UNREACHABLE,
     SidecarError,
 )
+from gaia.llm.surface_hints import APP_RESTART_HINT
 from gaia.ui.email_sidecar.proxy import EmailSidecarProxy  # noqa: E402
 
 ENSURE_PAYLOAD = {
@@ -125,7 +126,7 @@ def test_acquire_daemon_start_error_wraps_as_sidecar_error(monkeypatch):
         daemon_client_module.acquire_handle()
 
     message = str(excinfo.value)
-    assert "gaia daemon status" in message
+    assert APP_RESTART_HINT in message
     assert str(paths.log_path()) in message
     assert "boom-xyz" in message
 
@@ -140,7 +141,7 @@ def test_acquire_generic_daemon_error_wraps_as_sidecar_error(monkeypatch):
         daemon_client_module.acquire_handle()
 
     message = str(excinfo.value)
-    assert "gaia daemon status" in message
+    assert APP_RESTART_HINT in message
     assert str(paths.log_path()) in message
     assert "version-skew-xyz" in message
 
@@ -424,7 +425,7 @@ def test_stop_sidecar_daemon_error_from_attach_wraps_as_sidecar_error(monkeypatc
         daemon_client_module.stop_sidecar()
 
     message = str(excinfo.value)
-    assert "gaia daemon status" in message
+    assert APP_RESTART_HINT in message
     assert str(paths.log_path()) in message
     assert "attach-boom-xyz" in message
 

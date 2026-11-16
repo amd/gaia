@@ -61,6 +61,36 @@ class TestDispatch:
             assert getattr(args, "use_claude", False) is False
             assert getattr(args, "use_chatgpt", False) is False
 
+    def test_handle_email_command_checks_daemon_deps_before_lemonade(
+        self, capsys, monkeypatch
+    ):
+        """A base install gets the [api] remedy before any server probe (#3423)."""
+        import argparse
+
+        from gaia import cli
+
+        ns = argparse.Namespace(
+            action="email",
+            query="triage my inbox",
+            interactive=False,
+            verbose=False,
+            debug=False,
+            no_lemonade_check=True,
+            base_url=None,
+            model=None,
+            spec=False,
+        )
+        monkeypatch.setattr(
+            "gaia.daemon.client.missing_daemon_deps", lambda: ["fastapi", "uvicorn"]
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli.handle_email_command(ns)
+
+        assert exc.value.code == 1
+        output = capsys.readouterr().out
+        assert "fastapi, uvicorn" in output
+        assert 'pip install "amd-gaia[api]"' in output
+
     def test_handle_email_command_relays_query_through_daemon(self):
         """``handle_email_command`` is a thin client (#2191): the query path
         ensures the daemon + ``email`` sidecar and relays through
@@ -221,3 +251,131 @@ class TestDispatch:
         assert "--base-url" in err
         assert "LEMONADE_BASE_URL=http://lemonade.example:13305/api/v1" in err
         assert "gaia daemon stop" in err
+
+
+class TestNoSilentNoOpFlags:
+    """#3149: every flag ``gaia email`` accepts must do something on the
+    daemon-relay path. Flags the thin client never reads are usage errors."""
+
+    @staticmethod
+    def _parse(argv):
+        from gaia.cli import build_parser
+
+        return build_parser().parse_args(argv)
+
+    @pytest.mark.parametrize(
+        "flag",
+        [
+            ["--debug"],
+            ["--stats"],
+            ["--show-stats"],
+            ["--list-tools"],
+            ["--stream"],
+            ["--max-steps=3"],
+            ["--use-claude"],
+        ],
+    )
+    @pytest.mark.parametrize("position", ["before-query", "after-query"])
+    def test_unread_flag_is_rejected(self, capsys, flag, position):
+        argv = (
+            ["email", *flag, "-q", "ping"]
+            if position == "before-query"
+            else ["email", "-q", "ping", *flag]
+        )
+        with pytest.raises(SystemExit) as exc:
+            self._parse(argv)
+        assert exc.value.code == 2
+        assert flag[0].split("=")[0] in capsys.readouterr().err
+
+    def test_unread_flag_before_subcommand_is_rejected(self):
+        with pytest.raises(SystemExit) as exc:
+            self._parse(["--debug", "email", "-q", "ping"])
+        assert exc.value.code == 2
+
+    def test_flags_the_relay_reads_still_parse(self):
+        args = self._parse(
+            [
+                "email",
+                "-q",
+                "ping",
+                "-v",
+                "--trace",
+                "--model",
+                "m",
+                "--logging-level",
+                "DEBUG",
+                "--no-lemonade-check",
+            ]
+        )
+        assert args.verbose is True
+        assert args.trace is True
+        assert args.model == "m"
+        assert args.logging_level == "DEBUG"
+        assert args.no_lemonade_check is True
+        assert not hasattr(args, "debug")
+        assert not hasattr(args, "show_stats")
+
+    def test_email_defaults_without_optional_flags(self):
+        args = self._parse(["email", "-q", "ping"])
+        assert args.logging_level == "INFO"
+        assert args.no_lemonade_check is False
+        assert args.verbose is False
+
+    @pytest.mark.parametrize("cmd", [["llm", "hi"], ["chat"], ["prompt", "hi"]])
+    def test_other_commands_keep_stats_and_shared_flags(self, cmd):
+        """Splitting --stats off the shared parent must not drop it elsewhere."""
+        args = self._parse(
+            [*cmd, "--stats", "--no-lemonade-check", "--logging-level", "WARNING"]
+        )
+        assert args.show_stats is True
+        assert args.no_lemonade_check is True
+        assert args.logging_level == "WARNING"
+
+    def test_stale_debug_attribute_does_not_turn_on_verbose(self):
+        """A namespace carrying ``debug`` (e.g. from an old caller) must not
+        silently re-enable the removed alias."""
+        import argparse
+
+        from gaia import cli
+        from gaia.daemon.agent_query import QueryOutcome
+
+        ns = argparse.Namespace(
+            action="email",
+            query="ping",
+            interactive=False,
+            verbose=False,
+            debug=True,
+            no_lemonade_check=True,
+            base_url=None,
+            model=None,
+            spec=False,
+        )
+        with patch("gaia.daemon.agent_query.run_query") as run_query:
+            run_query.return_value = QueryOutcome(
+                exit_code=0, terminal_type="final", final_answer="pong"
+            )
+            with pytest.raises(SystemExit):
+                cli.handle_email_command(ns)
+        assert run_query.call_args.kwargs["verbose"] is False
+
+    def test_email_autonomy_checks_daemon_deps_before_relay(self, capsys, monkeypatch):
+        """Autonomy routes must fail early on a base install too (#3423)."""
+        import argparse
+
+        from gaia import cli
+
+        ns = argparse.Namespace(
+            action="email",
+            email_action="autonomy",
+            autonomy_action="status",
+        )
+        monkeypatch.setattr(
+            "gaia.daemon.client.missing_daemon_deps", lambda: ["fastapi"]
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli.handle_email_command(ns)
+
+        assert exc.value.code == 1
+        output = capsys.readouterr().out
+        assert "This command needs the GAIA daemon" in output
+        assert 'pip install "amd-gaia[api]"' in output

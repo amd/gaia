@@ -17,7 +17,6 @@ import os
 import subprocess
 import sys
 import threading
-import time
 import urllib.parse
 from pathlib import Path
 
@@ -389,11 +388,23 @@ async def test_the_slot_and_file_lock_waits_share_one_budget(
         await asyncio.sleep(seconds)
         entry.lock.release()
 
+    # Assert the file-lock wait's budget, not wall time: a loaded runner
+    # stretches elapsed time past any ceiling that separates the two.
+    real_held = _refresh_lock.held
+    granted = []
+
+    def spy_held(provider_id, timeout=None):
+        granted.append(timeout)
+        return real_held(provider_id, timeout=timeout)
+
+    monkeypatch.setattr(_refresh_lock, "held", spy_held)
+
     peer = asyncio.create_task(peer_finishes_after(0.6))
-    started = time.monotonic()
     with pytest.raises(ConnectorsError, match="has been busy"):
         await asyncio.wait_for(get_or_refresh("google"), 10)
-    elapsed = time.monotonic() - started
     await peer
 
-    assert elapsed < 1.4, f"waited {elapsed:.2f}s on a 1.0 s budget"
+    assert len(granted) == 1
+    assert (
+        granted[0] is not None and granted[0] <= 0.45
+    ), f"file-lock wait got {granted[0]}s after a 0.6 s slot wait on a 1.0 s budget"

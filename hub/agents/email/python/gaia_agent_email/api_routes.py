@@ -391,9 +391,10 @@ def _resolve_email_model_id(base_url: Optional[str] = None) -> str:
 def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
     """Parse a dotted version string into a comparable int tuple.
 
-    Same semantics as :func:`gaia.version.parse_version`: strip a leading ``v``,
-    take the first three dotted parts as ints, keeping each part's leading digits
-    so CalVer development builds (``2026.39.0~12.abc1234``) still compare.
+    Same semantics as :func:`gaia.version.parse_version`: strip a leading ``v``
+    and any ``~``/``+`` build suffix, take the first three dotted parts as ints,
+    keeping each part's leading digits so CalVer development builds
+    (``2026.39.0~12.abc1234``) still compare.
     Returns ``None`` when the string is missing or unparseable.
 
     Vendored rather than imported: ``gaia.version`` does an
@@ -403,7 +404,8 @@ def _parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
     if not version:
         return None
     try:
-        parts = str(version).strip().lstrip("v").split(".")[:3]
+        release = re.split(r"[~+]", str(version).strip().lstrip("v"), maxsplit=1)[0]
+        parts = release.split(".")[:3]
         return tuple(int(re.match(r"\s*(\d+)", p).group(1)) for p in parts)
     except (ValueError, IndexError, AttributeError):
         return None
@@ -621,7 +623,6 @@ class EmailTriageService:
             model=model_id,
             use_local_llm=True,
             use_claude=False,
-            use_chatgpt=False,
             # Output cap (not input); context window governs what fits.
             # 4096 gives Gemma-4-E4B room for its reasoning chain + JSON.
             max_tokens=4096,
@@ -3075,8 +3076,10 @@ def _compute_init_status(base_url: Optional[str] = None) -> InitResponse:
             model=model,
             hint=(
                 f"Lemonade {version} is older than the required "
-                f"{MIN_LEMONADE_VERSION} — upgrade it (see "
-                "https://lemonade-server.ai or run `gaia init`), then retry."
+                f"{MIN_LEMONADE_VERSION}. GAIA updates its own Lemonade Server "
+                "the next time its daemon starts it (`gaia daemon restart` does "
+                "that now); update any other from https://lemonade-server.ai, "
+                "then retry."
             ),
         )
 

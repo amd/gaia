@@ -11,6 +11,8 @@ export type ScopeSource =
 
 export interface ScopeEntry {
     path: string;
+    /** A document's own name; its library copy's file name carries an id prefix. */
+    name?: string | null;
     kind: 'folder' | 'file';
     source: ScopeSource;
     removable: boolean;
@@ -47,6 +49,31 @@ export interface OutputItem {
 export interface SessionOutputs {
     session_id: string;
     items: OutputItem[];
+}
+
+/** One tool the chat's agent can call (#440). */
+export interface AgentTool {
+    name: string;
+    /** The description the model is given. */
+    description: string;
+    /** A KNOWN_TOOLS mixin name (`rag`, `file_io`, ...), `mcp`, `skill` or `agent`. */
+    category: string;
+}
+
+/** How a skill came to be loaded in a chat. */
+export type SkillOrigin = 'model' | 'auto' | 'always';
+
+export interface ActiveSkill {
+    name: string;
+    how: SkillOrigin;
+}
+
+export interface AgentCapabilities {
+    session_id: string;
+    agent_type: string;
+    tools: AgentTool[];
+    /** Loaded skills, in load order; null when the agent runs elsewhere and doesn't report them. */
+    skills?: ActiveSkill[] | null;
 }
 
 export interface ChatFileChange {
@@ -104,9 +131,4 @@ export interface SessionGit {
     available: boolean;
     repos: GitRepo[];
     reason?: string;
-}
-
-export interface TunnelDevice {
-    name: string;
-    lastSeen: string;
 }

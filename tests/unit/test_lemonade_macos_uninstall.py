@@ -9,9 +9,6 @@ ai.lemonadeserver.* somewhere after 11.5.0. Nothing in the tree pinned them, so
 the steps went stale silently: they told users to bootout a plist that no longer
 exists and to forget receipts that match nothing. Pinning them here means the
 next version bump has to look at the BOMs again instead of assuming.
-
-Kept out of test_lemonade_macos_install.py deliberately — that file exercises
-install control flow, these are pure string checks against the pinned BOMs.
 """
 
 import pytest

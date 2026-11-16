@@ -69,8 +69,8 @@ type CanonicalStatusEvent struct {
 	AgentVersion string `json:"agent_version,omitempty"`
 	GaiaVersion  string `json:"gaia_version,omitempty"`
 	// Phase names what the model is doing while nothing else is on the wire:
-	// "loading_model", "downloading_model", "reading", "reasoning" or
-	// "tool_call". Empty on narration and on agents that predate it. Words
+	// "loading_model", "downloading_model", "reading", "loading_tools",
+	// "reasoning" or "tool_call". Empty on narration and on agents that predate it. Words
 	// (reasoning) and Chars (tool_call) count the progress so far.
 	Phase string `json:"phase,omitempty"`
 	Words int    `json:"words,omitempty"`
@@ -108,7 +108,7 @@ type CanonicalToolCallEvent struct {
 // CanonicalToolResultEvent — a tool's structured result.
 //
 // Render is the sidecar's declared card key (e.g. "email_pre_scan", or one of the
-// generic primitives "table" / "key_value" / "list" / "image" / "diff"). Data is
+// generic primitives "table" / "key_value" / "list" / "image" / "audio" / "media" / "diff"). Data is
 // the render-specific payload. An unknown Render must degrade to a generic result
 // card — never to a blank.
 //

@@ -179,6 +179,38 @@ func TestPathAccessPromptAsksInWords(t *testing.T) {
 	}
 }
 
+// A read outside the chat's folders raised this card headed WRITE.
+func TestPathAccessPromptIsNotHeadedWrite(t *testing.T) {
+	m := NewConfirmationModel("run-1", "allow_path_access", "Allow GAIA to use the file note.txt for this session?", "")
+	view := m.View()
+	if !strings.Contains(view, "ACCESS") || strings.Contains(view, "WRITE") {
+		t.Errorf("path access card = %q, want it headed ACCESS, not WRITE", view)
+	}
+}
+
+// The trust question is asked in words and is not mistaken for a destructive action.
+func TestProjectTrustPromptAsksInWords(t *testing.T) {
+	if got := ActionTitle("trust_project_folder"); strings.Contains(got, "_") {
+		t.Errorf("ActionTitle(trust_project_folder) = %q, want a plain question", got)
+	}
+	if got := ClassifyActionRisk("trust_project_folder"); got != RiskWrite {
+		t.Errorf("ClassifyActionRisk(trust_project_folder) = %v, want %v", got, RiskWrite)
+	}
+}
+
+// The yes is kept for the folder, so the key must not promise "once".
+func TestProjectTrustPromptNamesWhatYesKeeps(t *testing.T) {
+	m := NewConfirmationModel("run-1", "trust_project_folder", "Trust this folder?", "").
+		WithLiveChannel("cid-1", "")
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "y trust this folder") {
+		t.Errorf("trust prompt should offer y to trust the folder:\n%s", view)
+	}
+	if strings.Contains(view, "y once") {
+		t.Errorf("trust prompt must not say once; the answer is saved:\n%s", view)
+	}
+}
+
 // An action this client has never heard of still gated the sidecar on
 // confirmation, so it gets the MORE cautious tier, not less.
 func TestClassifyActionRiskUnknownDefaultsToDestructive(t *testing.T) {
@@ -228,7 +260,7 @@ func TestRiskTierBadgeWords(t *testing.T) {
 func TestConfirmationViewShowsActionSummaryAndBadge(t *testing.T) {
 	m := NewConfirmationModel("run-1", "send_draft", `Send reply to alice@example.com — subject "Re: invoice"?`, "")
 	view := stripANSI(m.View())
-	for _, want := range []string{"send_draft", "alice@example.com", "WRITE"} {
+	for _, want := range []string{"Send this email?", "alice@example.com", "WRITE"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
@@ -519,7 +551,7 @@ func TestDestructiveWarningDistinguishesUnboundedFromIrreversible(t *testing.T) 
 		t.Errorf("shell warning must point at the command on screen: %q", shell)
 	}
 
-	if got := destructiveWarning("run_cli_command", false); got != shell {
+	if got := destructiveWarning("wait_for_condition", false); got != shell {
 		t.Errorf("both shell tools must share the wording, got %q", got)
 	}
 
@@ -587,8 +619,8 @@ func TestAgentRiskReplacesTheToolNameGuess(t *testing.T) {
 // An unknown risk word never softens the label.
 func TestUnknownRiskKeepsTheCautiousTier(t *testing.T) {
 	m := NewConfirmationModel("run-1", "run_shell_command", "x", "").WithRisk("harmless")
-	if m.Tier() != RiskDestructive {
-		t.Errorf("tier = %v, want the cautious default", m.Tier())
+	if m.tier != RiskDestructive {
+		t.Errorf("tier = %v, want the cautious default", m.tier)
 	}
 }
 
@@ -705,5 +737,178 @@ func TestATimerOnlyResolvesThePromptItWasArmedFor(t *testing.T) {
 	}
 	if msg := cmd().(ConfirmationDecidedMsg); msg.Seq != b.Seq() || msg.ConfirmID != "cid-B" {
 		t.Errorf("decision = %+v, want it to name B", msg)
+	}
+}
+
+// --- a prompt that must be read whole --------------------------------------
+
+func longMail(lines int) string {
+	rows := make([]string, 0, lines)
+	for i := 1; i <= lines; i++ {
+		rows = append(rows, "line-"+strconv.Itoa(i)+"-end")
+	}
+	return "To: a@b.co\n\n" + strings.Join(rows, "\n")
+}
+
+func pressKey(m ConfirmationModel, key string) ConfirmationModel {
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+	switch key {
+	case "down":
+		msg = tea.KeyMsg{Type: tea.KeyDown}
+	case "up":
+		msg = tea.KeyMsg{Type: tea.KeyUp}
+	case "pgdown":
+		msg = tea.KeyMsg{Type: tea.KeyPgDown}
+	}
+	updated, _ := m.Update(msg)
+	return updated
+}
+
+func TestLongEmailCannotBeApprovedUntilAllOfItWasShown(t *testing.T) {
+	m := NewConfirmationModel("r", "send_now", longMail(40), "").WithLiveChannel("c", "")
+	m.SetMaxRows(10)
+	shown := map[string]bool{}
+	collect := func() {
+		for _, line := range strings.Split(m.View(), "\n") {
+			shown[strings.TrimSpace(line)] = true
+		}
+	}
+	collect()
+	if m = pressKey(m, "y"); !m.Pending() {
+		t.Fatal("y approved a mail whose end was never on screen")
+	}
+	if strings.Contains(m.View(), "once") {
+		t.Error("the prompt offers y before it works")
+	}
+	for guard := 0; m.unread() && guard < 100; guard++ {
+		m = pressKey(m, "down")
+		if h := lipgloss.Height(m.View()); h > 10 {
+			t.Fatalf("view is %d rows, over the 10 it was given", h)
+		}
+		collect()
+		if m.unread() {
+			if m = pressKey(m, "y"); !m.Pending() {
+				t.Fatal("y approved before the last line was shown")
+			}
+		}
+	}
+	for i := 1; i <= 40; i++ {
+		if want := "line-" + strconv.Itoa(i) + "-end"; !shown[want] {
+			t.Errorf("%s was never on screen", want)
+		}
+	}
+	if !strings.Contains(m.View(), "once") {
+		t.Error("y is not offered once everything was read")
+	}
+	if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
+		t.Fatalf("state = %v after reading it all, want Approved", m.State())
+	}
+}
+
+func TestPagingShowsEveryLineWithNoGap(t *testing.T) {
+	m := NewConfirmationModel("r", "forward_message", longMail(60), "")
+	m.SetMaxRows(9)
+	shown := strings.Builder{}
+	shown.WriteString(m.View())
+	for guard := 0; m.unread() && guard < 100; guard++ {
+		m = pressKey(m, "pgdown")
+		shown.WriteString(m.View())
+	}
+	for i := 1; i <= 60; i++ {
+		if want := "line-" + strconv.Itoa(i) + "-end"; !strings.Contains(shown.String(), want) {
+			t.Errorf("paging skipped %s", want)
+		}
+	}
+}
+
+func TestDenyWorksWhileUnread(t *testing.T) {
+	m := NewConfirmationModel("r", "send_now", longMail(40), "")
+	m.SetMaxRows(8)
+	if m = pressKey(m, "n"); m.State() != ConfirmationDenied {
+		t.Fatalf("state = %v, want Denied", m.State())
+	}
+}
+
+func TestMailThatFitsApprovesAtOnce(t *testing.T) {
+	m := NewConfirmationModel("r", "send_now", longMail(2), "")
+	m.SetMaxRows(30)
+	if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
+		t.Fatalf("state = %v, want Approved", m.State())
+	}
+}
+
+func TestOtherToolsStillApproveWithoutScrolling(t *testing.T) {
+	m := NewConfirmationModel("r", "run_shell_command", longMail(40), "")
+	m.SetMaxRows(8)
+	if !strings.Contains(m.View(), "line-40-end") {
+		t.Error("a shell prompt should still render whole for the caller to clip")
+	}
+	if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
+		t.Fatalf("state = %v, want Approved", m.State())
+	}
+}
+
+func TestResizingMakesTheMailBeReadAgain(t *testing.T) {
+	m := NewConfirmationModel("r", "send_now", longMail(40), "")
+	m.SetMaxRows(8)
+	for guard := 0; m.unread() && guard < 100; guard++ {
+		m = pressKey(m, "down")
+	}
+	m.SetWidth(50)
+	if !m.unread() {
+		t.Fatal("rewrapped text counted as already read")
+	}
+}
+
+func TestTerminalTooShortForAnyTextNeverApproves(t *testing.T) {
+	m := NewConfirmationModel("r", "send_now", longMail(40), "")
+	m.SetMaxRows(1)
+	if m = pressKey(m, "y"); !m.Pending() {
+		t.Fatal("y approved with no room to show any of the mail")
+	}
+	if !strings.Contains(m.View(), "deny") {
+		t.Error("the deny key is off screen")
+	}
+}
+
+func TestWindowFitsEverySize(t *testing.T) {
+	for width := 24; width <= 100; width += 19 {
+		for rows := 1; rows <= 20; rows++ {
+			m := NewConfirmationModel("r", "reply_to_message", longMail(50), "")
+			m.SetWidth(width)
+			m.SetMaxRows(rows)
+			if h := lipgloss.Height(m.View()); h > rows && rows >= 3 {
+				t.Errorf("width %d rows %d: view is %d rows", width, rows, h)
+			}
+		}
+	}
+}
+
+func TestTheFlagshipSkillsMailPromptsMustBeReadToTheEnd(t *testing.T) {
+	for _, action := range []string{
+		"send-email/send_now",
+		"send-email/send_draft",
+		"send-email/reply_to_message",
+		"send-email/forward_message",
+		"send-email/discard_draft",
+		"send-email/update_draft",
+	} {
+		if ActionTitle(action) == "Allow "+action+"?" {
+			t.Errorf("%s has no plain-language title", action)
+		}
+		if _, ok := confirmationRiskTiers[action]; !ok {
+			t.Errorf("%s has no risk tier", action)
+		}
+		m := NewConfirmationModel("r", action, longMail(40), "").WithLiveChannel("c", "")
+		m.SetMaxRows(10)
+		if m = pressKey(m, "y"); !m.Pending() {
+			t.Fatalf("%s: y approved a mail whose end was never on screen", action)
+		}
+		for guard := 0; m.unread() && guard < 100; guard++ {
+			m = pressKey(m, "pgdown")
+		}
+		if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
+			t.Fatalf("%s: state = %v after reading it all, want Approved", action, m.State())
+		}
 	}
 }

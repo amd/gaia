@@ -68,7 +68,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			if m.awaitingModelSwitch {
 				m.switchedTo = savedChoice{provider: providerOfBackend(e.ModelBackend), model: e.ModelID}
 				// A refused switch sends no ping, so a match is the confirmation.
-				if e.ModelID == m.switchTarget {
+				if sameModelID(e.ModelID, m.switchTarget) {
 					if r, ok := m.client.(modelSwitchRecorder); ok {
 						r.RecordModelSwitch(e.ModelID, e.ModelBackend == "claude")
 					}
@@ -280,10 +280,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		content = StripVerificationScope(content)
 		m.buffer = ""
-		m.confirmRelayedSwitch()
-		if m.awaitingModelSwitch && m.switchTarget != "" && m.switchedTo.model == m.switchTarget {
+		// A stopped turn never answered on the new model; the next reply saves it.
+		if !m.cancelPending {
+			m.confirmRelayedSwitch()
+		}
+		if m.awaitingModelSwitch && m.switchTarget != "" && sameModelID(m.switchedTo.model, m.switchTarget) {
 			m.rememberModel(m.switchedTo)
-			if m.startup.inFlight && m.switchTarget == m.startup.model {
+			if m.startup.inFlight && sameModelID(m.switchTarget, m.startup.model) {
 				m.startup.confirmed = true
 				m.startup.warmNext = true
 				if m.startup.kind == StartupRestore {
@@ -367,8 +370,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// `final` with the "stopped" text) must still clear cancelPending here,
 		// or the next Esc/Ctrl+C's guard is stuck failing for the rest of the
 		// session (#2901 second-cycle crash).
+		// Only a reply the user asked for: not a stopped turn, a /model
+		// switch's confirmation, or the hidden warm-up.
+		readable := content != "" && !m.cancelPending && !m.awaitingModelSwitch && !m.warming
 		m.settleTurn()
 		m.updateViewport()
+		if readable {
+			read, readCmd := m.autoReadAloud(content)
+			return read, readCmd, true
+		}
 		return m, nil, true
 
 	case event.CanonicalErrorEvent:

@@ -43,6 +43,6 @@ API_VERSION = SCHEMA_VERSION
 # ``test_init_endpoint.py::test_min_lemonade_version_locksteps_with_manifest``
 # fails if the two drift — keep them in lock-step when bumping (mirrors the
 # INIT_PROFILES lock-step note in ``gaia.llm.lemonade_client``).
-MIN_LEMONADE_VERSION = "10.2.0"
+MIN_LEMONADE_VERSION = "2026.44.1"
 
 __all__ = ["AGENT_VERSION", "API_VERSION", "MIN_LEMONADE_VERSION"]

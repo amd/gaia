@@ -4,6 +4,10 @@
 /** Types shared across the GAIA Agent UI frontend. */
 
 import type { TurnSummaryResponse } from './api.gen';
+import type { SetupNpuProblem } from './setup';
+
+export * from './setup';
+export * from './stream';
 
 export interface Session {
     id: string;
@@ -217,6 +221,10 @@ export interface ConnectorRow {
      * provider credentials.
      */
     oauth_setup_fields: ConnectorConfigField[];
+    /** Label, example and help for each ``mcp_env_keys`` entry. */
+    config_fields?: ConnectorConfigField[];
+    /** The service's page that creates what the user pastes back (a pre-filled Slack app). */
+    setup_url?: string | null;
     /**
      * Which OAuth *client* (app credentials) the provider resolves (#2104).
      * ``source`` is ``'keyring'`` for credentials saved via Settings /
@@ -232,6 +240,19 @@ export interface ConnectorRow {
     } | null;
 }
 
+/** A catalog connector whose live state the backend failed to read; its summary raised. */
+export interface UnavailableConnectorRow {
+    id: string;
+    display_name: string;
+    error: 'unavailable';
+    /** Set when the shared activations file can't be read; `path` names it. */
+    reason?: 'activations_unreadable';
+    path?: string;
+}
+
+/** One entry of GET /api/connectors. */
+export type ConnectorListEntry = ConnectorRow | UnavailableConnectorRow;
+
 /**
  * One field in a connector's first-time setup form. Mirrors
  * ``gaia.connectors.spec.ConfigField`` on the backend.
@@ -243,6 +264,8 @@ export interface ConnectorConfigField {
     required: boolean;
     placeholder: string;
     help_md: string;
+    /** The value must start with this, e.g. `xoxb-` for a Slack bot token. */
+    prefix?: string;
 }
 
 /**
@@ -274,6 +297,18 @@ export interface InferenceStats {
     retried?: boolean | null;
     /** Where the turn was answered: "on your GPU", "via Fireworks AI". */
     place?: string | null;
+    /** Set on a `hybrid` chat's turns: the model the turn was routed to, and why. */
+    route?: TurnRoute | null;
+}
+
+/** The model a `hybrid` turn was routed to (`inference_stats.route`). */
+export interface TurnRoute {
+    model: string;
+    reason?: string;
+    /** True once the router's classifier has failed several turns in a row. */
+    degraded?: boolean;
+    /** The warning to show while `degraded`; empty otherwise. */
+    notice?: string;
 }
 
 /** Estimated tokens the next model call holds, by kind (GET /api/chat/context). */
@@ -352,7 +387,8 @@ export interface TurnPerformance {
     /** A null name is tool time measured outside any recorded step. */
     tools: Array<{ name: string | null; seconds: number | null }>;
     loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
-    cost: { kind: 'local' | 'estimate' | 'unknown'; usd: number | null };
+    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). `no_reply`: a cloud turn that failed or was stopped before any reply; spending leaves it out. */
+    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported' | 'no_reply'; usd: number | null };
     /** Why a value is unknown, keyed by field. */
     unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
 }
@@ -438,10 +474,18 @@ export interface Message {
     stopState?: 'stopped' | 'unconfirmed';
     /** Error the server reported while a stopped turn was closing. */
     stopError?: string;
+    /** Client-side: this reply stands in for a turn that failed before answering. */
+    failed?: boolean;
+    /** Client-side: the raw error, to recognize the server's saved copy of this failure. */
+    failureText?: string;
+    /** Client-side: the cause a failed turn named (`done.failure`), for its fix. */
+    failure?: string;
     /** Set when this turn pushed older turns out of the model's view. */
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
     turnSummary?: TurnSummary;
+    /** Notices from adding indexed files to the document library. */
+    libraryNotices?: string[];
 }
 
 /** What one turn used, wrote, and sent off this PC (`done.turn_summary`). */
@@ -486,6 +530,10 @@ export interface Attachment {
     uploaded: boolean;
     serverUrl?: string; // Server URL after upload completes
     isImage: boolean;
+    /** A recording, which GAIA transcribes rather than reads. */
+    isMedia?: boolean;
+    /** Upload progress of a recording, 0 to 100. */
+    progress?: number;
     error?: string;
 }
 
@@ -493,6 +541,8 @@ export interface ModelStatus {
     found: boolean;
     downloaded: boolean;
     loaded: boolean;
+    /** The model list was read, so `found` false means the ID isn't in it. */
+    checked: boolean;
 }
 
 export interface Settings {
@@ -500,12 +550,16 @@ export interface Settings {
     model_status: ModelStatus | null;
     /** Persisted context window size override (tokens). null = use default 32768. */
     context_size: number | null;
-    /** Beta dynamic tool loader (#1798). Effective value: GAIA_DYNAMIC_TOOLS wins when set, else the persisted setting. */
+    /** Dynamic tool loading. Effective value: GAIA_DYNAMIC_TOOLS wins when set, else config.json. */
     dynamic_tools: boolean;
     /** True when GAIA_DYNAMIC_TOOLS locks the value — the toggle reflects the effective value and disables. */
     dynamic_tools_locked: boolean;
-    /** Background agent behaviour; a legacy stored "autonomous" is reported as "goal_driven". */
+    /** Background agent behaviour; a legacy stored "autonomous" is migrated to "goal_driven". */
     agent_mode: 'manual' | 'goal_driven';
+    /** Shared network policy controlling cloud AI use. */
+    network_policy: 'cloud_allowed' | 'local_ai_only';
+    policy_warnings?: string[];
+    policy_notices?: Array<{ code: string; severity: 'info' | 'warning'; url?: string; reason?: string; cause?: string | null; models?: string[] | null }>;
 }
 
 /**
@@ -526,7 +580,7 @@ export interface DownloadProgress {
     downloaded_bytes: number;
     /** Sum of every file's ``bytes_total`` in this download. */
     total_bytes: number;
-    /** Populated only when state === 'error'. */
+    /** Set on 'error', and on 'starting' while a backend installs first. */
     message: string | null;
 }
 
@@ -590,7 +644,8 @@ export interface SystemStatus {
     download_progress: DownloadProgress | null;
     // Boot-time initialization tracking
     init_state?: 'initializing' | 'ready' | 'degraded';
-    init_tasks?: Array<{ name: string; status: string }>;
+    /** `step` picks the banner's translated line; `name` is an English log label, never shown. */
+    init_tasks?: Array<{ name: string; step?: string | null; status: string }>;
     /** Priming of a new chat's prompt; never blocks sending. */
     warm_up?: WarmUpStatus | null;
     /** Devices detected on this system (e.g. ['cpu', 'gpu', 'npu']). */
@@ -657,6 +712,8 @@ export interface BrowseResponse {
     parent_path: string | null;
     entries: FileEntry[];
     quick_links: QuickLink[];
+    /** Why a chat can't be given this folder; absent when it can. */
+    folder_refusal?: string | null;
 }
 
 /** Response from the /documents/index-folder endpoint. */
@@ -665,6 +722,8 @@ export interface IndexFolderResponse {
     failed: number;
     /** Files in the folder of a type GAIA doesn't index. */
     skipped?: number;
+    /** Images in the folder; GAIA reads an image only when it is added on its own. */
+    skipped_images?: number;
     documents: Document[];
     errors: string[];
 }
@@ -679,6 +738,20 @@ export interface MCPServerStatus {
 }
 
 // ── Scheduled Tasks ──────────────────────────────────────────────────────
+
+/** When a schedule runs, as data the UI words in its own language. */
+export interface ScheduleDescription {
+    /** every: count + unit, optional days; window: that plus start/end hour; days: named days, optional time; daily: a time. */
+    kind: 'every' | 'window' | 'days' | 'daily';
+    count: number | null;
+    unit: 'second' | 'minute' | 'hour' | 'day' | 'week' | null;
+    /** 0 = Monday … 6 = Sunday. */
+    days: number[] | null;
+    /** "HH:MM", 24-hour. */
+    time: string | null;
+    start_hour: number | null;
+    end_hour: number | null;
+}
 
 /** A recurring scheduled task. */
 export interface Schedule {
@@ -696,8 +769,9 @@ export interface Schedule {
     session_id: string | null;
     /** Parsed natural-language schedule as JSON; null for plain-interval schedules. */
     schedule_config: string | null;
-    /** When it runs, e.g. "Weekdays at 8:00 AM" — the same words the form preview shows. */
+    /** When it runs in English, e.g. "Weekdays at 8:00 AM"; the UI words `description_parts` instead. */
     description: string;
+    description_parts: ScheduleDescription;
     /** The last run's error; null when it succeeded. */
     last_error: string | null;
     /** A run is in flight right now, timed or Run now. */
@@ -721,6 +795,8 @@ export interface ParsedSchedule {
     end_hour: number | null;
     days_of_week: number[] | null;
     description: string;
+    /** Null when the input was rejected; `description` then says what to fix. */
+    description_parts?: ScheduleDescription | null;
     next_run_at: string | null;
     /** IANA zone the times are in. */
     timezone?: string | null;
@@ -736,6 +812,10 @@ export interface TunnelStatus {
     token: string | null;
     startedAt: string | null;
     error: string | null;
+    /** `ngrok_not_installed` when the failure is a one-time setup step. */
+    reason?: 'ngrok_not_installed' | null;
+    /** This OS's ngrok install commands, set only with that reason. */
+    installCommands?: string[];
     publicIp: string | null;
     /** The device behind the latest authenticated remote request. */
     device?: { name: string; lastSeen: string } | null;
@@ -791,6 +871,14 @@ export interface AgentStep {
     result?: string;
     /** Whether this step completed successfully. */
     success?: boolean;
+    /** A finished status the user waited on, such as a download; drawn with the turn (for type='status'). */
+    kept?: boolean;
+    /** The user said no to this call, so it never ran (for type='tool'). */
+    declined?: boolean;
+    /** Nobody answered its permission prompt in time, so it never ran (for type='tool'). */
+    timedOut?: boolean;
+    /** GAIA turned this call down itself without asking, so it never ran (for type='tool'). */
+    autoDeclined?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
     /** Plan steps (for type='plan'). */
@@ -820,316 +908,20 @@ export interface AgentStep {
     mcpTool?: string;
     /** The text an MCP tool returned. */
     mcpOutput?: McpOutput;
-    /** A WAV a music or sound-effect tool generated (for generate_music / generate_sound_effect). */
-    generatedAudio?: GeneratedAudio;
     /** Tool call latency in milliseconds. */
     latencyMs?: number;
-}
-
-/** A generated music track or sound effect, played inline in the chat. */
-export interface GeneratedAudio {
-    /** Absolute path of the WAV on the user's machine. */
-    path: string;
-    /** Lemonade model id, e.g. "ACE-Step-Music" or "ThinkSound-SFX". */
-    model?: string;
-    kind?: 'music' | 'sfx' | string;
-    format?: string;
-    /** Seconds measured from the WAV header. */
-    durationSeconds?: number | null;
-    /** Seconds the agent asked for. */
-    durationRequested?: number | null;
-    prompt?: string | null;
+    /** Card key the tool's result drew, persisted for reload (for type='tool'). */
+    render?: string;
+    /** That card's payload. */
+    data?: unknown;
+    /** A model the call needed and didn't find, so the row offers it (for type='tool'). */
+    needsModel?: 'vision';
 }
 
 /** The text an MCP tool returned, capped by the server. */
 export interface McpOutput {
     text: string;
     truncated?: boolean;
-}
-
-/** Extended SSE event types for agent communication. */
-export type StreamEventType =
-    | 'chunk'        // Text content chunk
-    | 'done'         // Stream complete
-    | 'error'        // Error
-    | 'status'       // Agent state change
-    | 'step'         // Step progress
-    | 'thinking'     // Agent reasoning
-    | 'commentary'   // A note the agent wrote before a tool call
-    | 'plan'         // Agent plan
-    | 'tool_start'   // Tool execution started
-    | 'tool_end'     // Tool execution completed
-    | 'tool_result'  // Tool result summary
-    | 'tool_args'    // Tool arguments detail
-    | 'answer'       // Final answer from agent
-    | 'agent_error'  // Agent-level error (non-fatal)
-    | 'permission_request' // Tool confirmation request
-    | 'needs_confirmation' // Stateless confirmation card (email /query, #2109) — informational, non-blocking
-    | 'needs_input' // Mid-run question (#2595) — answerable; the run blocks until POST /chat/user-input
-    | 'policy_alert' // Governance policy blocked a tool
-    | 'mcp_status'   // MCP server connection status update
-    | 'agent_created' // New agent created — triggers agent list refresh
-    | 'followup_taken'    // The running turn took a message sent mid-turn
-    | 'followup_returned' // The turn ended without taking these mid-turn messages
-    | 'context_usage';    // What this turn's model call holds, by kind
-
-export interface StreamEvent {
-    type: StreamEventType;
-    content?: string;
-    message_id?: number;
-    /** On `done`: the user's Stop ended this run (absent when it completed normally). */
-    cancelled?: boolean;
-    /** On `followup_taken`: the message the running turn took. */
-    text?: string;
-    /** On `followup_returned`: messages the turn ended without taking. */
-    texts?: string[];
-    // Agent-specific fields
-    status?: string;
-    message?: string;
-    /** Model phase on a status event: reading, loading_model, reasoning, tool_call, … */
-    phase?: string;
-    step?: number;
-    total?: number;
-    tool?: string;
-    summary?: string;
-    success?: boolean;
-    steps?: string[];
-    /** One plain line per plan step, parallel to `steps` (for plan events). */
-    step_narrations?: string[];
-    current_step?: number;
-    /** What a tool call does, in plain words (for tool_start and tool_args). */
-    narration?: string;
-    title?: string;
-    detail?: string;
-    args?: Record<string, unknown>;
-    model?: string;
-    elapsed?: number;
-    tools_used?: number;
-    /** Inference stats from the LLM backend (attached to done events). */
-    stats?: InferenceStats;
-    /** Per-turn sources, files and data flow (attached to done events). */
-    turn_summary?: TurnSummary;
-    /** MCP server statuses (for mcp_status events). */
-    servers?: MCPServerStatus[];
-    /** Structured command output (for tool_result of run_shell_command). */
-    command_output?: {
-        command: string;
-        stdout: string;
-        stderr: string;
-        return_code: number;
-        expected_exit?: string | null;
-        cwd?: string;
-        duration_seconds?: number;
-        truncated?: boolean;
-    };
-    /** Agent ID of the newly created agent (for agent_created events). */
-    agent_id?: string;
-    /** Confirmation ID (for permission_request events). */
-    confirm_id?: string;
-    /** What "always allow" would grant for this call; absent means it is not offered. */
-    always_scope?: string;
-    /** `always_scope` in plain words, e.g. "editing notes.txt" (for permission_request events). */
-    always_label?: string;
-    /** The tool in plain words, e.g. "writing file" (for permission_request events). */
-    tool_label?: string;
-    /** What the call does: read, write, execute, or destructive (for permission_request events). */
-    risk?: string;
-    /** Machine tool name a confirmation is about (for needs_confirmation events). */
-    action?: string;
-    /** Question id to echo back on POST /chat/user-input (for needs_input events). */
-    request_id?: string;
-    /** The question text (for needs_input events). */
-    question?: string;
-    /** 2-4 mutually-exclusive answer options (for needs_input events). */
-    options?: Array<{ value: string; label: string; description: string }>;
-    /** Whether a free-text answer is also accepted (for needs_input events). */
-    allow_free_text?: boolean;
-    /** Whether the answer must never be echoed into visible history (for needs_input events). */
-    sensitive?: boolean;
-    /** Timeout in seconds (for tool_confirm events). */
-    timeout_seconds?: number;
-    /** MCP server name (for tool_start of MCP tools). */
-    mcp_server?: string;
-    /** The connector's display name (for tool_start of MCP tools). */
-    mcp_server_label?: string;
-    /** The server's own tool name (for tool_start of MCP tools). */
-    mcp_tool?: string;
-    /** The text an MCP tool returned (for tool_result of MCP tools). */
-    mcp_output?: McpOutput;
-    /** A generated WAV the chat plays inline (for tool_result of generate_music / generate_sound_effect). */
-    generated_audio?: {
-        path: string;
-        model?: string;
-        kind?: string;
-        format?: string;
-        duration_seconds?: number | null;
-        duration_requested?: number | null;
-        prompt?: string;
-    };
-    /** Tool call latency in milliseconds (for tool_result). */
-    latency_ms?: number;
-    /** agent_error the agent recovers from by retrying, rather than a turn-ending one. */
-    recoverable?: boolean;
-    /** Governance decision (for policy_alert). */
-    decision?: string;
-    /** Governance policy reason (for policy_alert). */
-    reason?: string;
-    /** Governance rule IDs (for policy_alert). */
-    rule_ids?: string[];
-    /** Governance policy version (for policy_alert). */
-    policy_version?: string;
-    /** Governance receipt ID (for policy_alert). */
-    receipt_id?: string;
-    /** Structured result data (for tool_result with search results, file lists, etc.). */
-    result_data?: {
-        type: string;
-        count?: number;
-        source_files?: string[];
-        chunks?: Array<{
-            id: number;
-            source?: string;
-            sourcePath?: string;
-            page?: number | null;
-            score?: number | null;
-            preview: string;
-            content: string;
-        }>;
-        files?: Array<Record<string, unknown>>;
-        total?: number;
-    };
-    /**
-     * Card render key (issue #2108, additive on `tool_result`). Non-empty
-     * string means the frontend should mount a registered card via
-     * RenderCard against `data`. Absent on every other event type.
-     */
-    render?: string;
-    /** Card payload for `render` (issue #2108, additive on `tool_result`). */
-    data?: unknown;
-}
-
-// ── First-run setup (GET /api/setup/*) ────────────────────────────────────
-
-export type SetupStepStatus = 'pending' | 'active' | 'done' | 'failed' | 'cancelled';
-
-export interface SetupStep {
-    key: 'server' | 'models' | 'finish';
-    label: string;
-    detail: string;
-    status?: SetupStepStatus;
-}
-
-/** `gaia init --check --json`: ready, or the stage and reasons it is not. */
-export interface SetupCheck {
-    ready: boolean;
-    stage?: 'setup' | 'server' | 'load' | string;
-    reasons?: string[];
-    models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
-    steps: SetupStep[];
-    /** The steps for a cloud provider, which downloads only the embedding model. */
-    cloud_steps?: SetupStep[];
-}
-
-/** A failed setup with a known fix: the user's Lemonade Server isn't answering. */
-export interface SetupProblem {
-    kind: 'server_unreachable';
-    /** One plain sentence: what is wrong. */
-    message: string;
-    /** How to start that server, or null when this PC has none to start. */
-    start: string | null;
-    /** Setup can switch to GAIA's own server instead. */
-    use_gaia: boolean;
-    /** Set when it can't switch from here (LEMONADE_BASE_URL), and what does. */
-    switch_hint: string | null;
-}
-
-export interface SetupRunStatus {
-    state: 'idle' | 'running' | 'verifying' | 'ready' | 'failed' | 'cancelled';
-    steps?: SetupStep[];
-    text?: string;
-    percent?: number | null;
-    /** How much of the current download is done, e.g. "1.20 GB of 5.60 GB". */
-    size?: string | null;
-    error?: string | null;
-    problem?: SetupProblem | null;
-    command?: string;
-    log_tail?: string[];
-    skip_chat_model?: boolean;
-    /** The run is switching to GAIA's own server; a retry must keep switching. */
-    gaia_lemonade?: boolean;
-    /** The chat model setup chose, once it has said. */
-    chat_model?: string | null;
-}
-
-/** GET /api/setup/plan: what setup will use and download, before it starts. */
-export interface SetupPlan {
-    /** `url` is null while GAIA's own server isn't running: it has no address yet. */
-    lemonade: { mode: 'gaia' | 'external'; url: string | null; reachable: boolean };
-    chat_model: { id: string; user_set: boolean; size_gb: number | null; downloaded: boolean | null };
-    recommended_model: string | null;
-    /** GAIA's own server isn't running yet, so the final pick comes once it is. */
-    decided_after_server: boolean;
-    memory_gb: number | null;
-    memory_source: string | null;
-    options: Array<{ id: string; size_gb: number | null; fits: boolean | null; reason: string | null }>;
-    models: Array<{ id: string; role: 'chat' | 'embedding'; size_gb: number | null }>;
-    download_gb: number | null;
-}
-
-/** A task a new chat offers, from what is set up on this PC. */
-export interface StartCard {
-    /** The skill that sharpens this task when installed; also the card's id. */
-    skill: string;
-    title: string;
-    note: string;
-    prompt: string;
-    /** The prompt ends where the user types the subject, so it fills the box instead of sending. */
-    needs_input: boolean;
-}
-
-/** GET /api/onboarding/start */
-export interface StartScreen {
-    cards: StartCard[];
-    /** choosable: a new chat can be given another folder. */
-    working_folder: { path: string; name: string; gaia_folder: boolean; choosable: boolean };
-    /** Why there are no cards: the agent couldn't list its skills. */
-    skills_error?: string | null;
-}
-
-// ── Which Lemonade Server GAIA uses (/api/lemonade/*) ─────────────────────
-
-export type LemonadeMode = 'gaia' | 'external';
-
-/** GET /api/lemonade/target: the server GAIA uses now and who chose it. */
-export interface LemonadeTarget {
-    mode: LemonadeMode;
-    /** null until the user (or `gaia init`) has chosen. */
-    saved_mode: LemonadeMode | null;
-    /** `env` means LEMONADE_BASE_URL chose it, so the UI cannot change it. */
-    source: 'env' | 'config' | 'gaia';
-    base_url: string | null;
-    saved_base_url: string | null;
-    api_key_stored: boolean;
-    gaia_installed: boolean;
-    /** Nobody has chosen yet: offer a Lemonade found running. */
-    offer: boolean;
-    what_gaia_does: string;
-}
-
-export type LemonadeProbeStatus = 'ok' | 'needs_key' | 'bad_key' | 'too_old' | 'not_lemonade' | 'unreachable';
-
-/** A Lemonade the user already runs, from GET /api/lemonade/detect. */
-export interface LemonadeFound {
-    url: string;
-    status: LemonadeProbeStatus;
-    version: string | null;
-    minimum: string | null;
-    message: string;
-}
-
-export interface LemonadeTargetBody {
-    mode: LemonadeMode;
-    base_url?: string;
-    api_key?: string;
 }
 
 // ── AI providers (GET /api/providers) ─────────────────────────────────────
@@ -1144,19 +936,30 @@ export interface ProviderInfo {
     registered?: boolean;
     /** Where Lemonade's key comes from; null when none is configured. */
     key_source?: 'environment' | 'lemonade' | 'stored' | null;
+    /** The saved key's last four characters; null when there is none to read. */
+    key_hint?: string | null;
     /**
      * `waiting_for_os_permission` while the OS holds the saved-key read for the
      * user's permission (a macOS keychain dialog): `key_source` is then unknown,
-     * not absent, and `key_message` says what to do.
+     * not absent, and `key_message` says what to do. `store_locked` once the
+     * user closed the store's unlock prompt: GAIA holds off asking for five
+     * minutes, or until Try again.
      */
-    key_state?: 'read' | 'waiting_for_os_permission';
+    key_state?: 'read' | 'waiting_for_os_permission' | 'store_locked';
     key_message?: string | null;
     models_discovered?: boolean;
+    /** The provider's model list is down, so GAIA offers models it already knows. */
+    known_models?: boolean;
     env_var?: string;
+    /** An environment key GAIA handed Lemonade itself, so a typed key can replace it. */
+    key_from_gaia_env?: boolean;
     base_url?: string | null;
     error?: string;
     /** AMD gateway only: whether its host answers from this network. */
     network?: ProviderNetwork;
+    /** Local only blocks cloud providers without hiding the policy state. */
+    blocked?: boolean;
+    blocked_reason?: string | null;
 }
 
 export interface ProviderNetwork {
@@ -1173,6 +976,8 @@ export interface ActiveModel {
     display_name?: string | null;
     label: string | null;
     remote: boolean;
+    /** Who answers a cloud model, including one GAIA has no provider tab for; null when local. */
+    provider_name?: string | null;
     is_default: boolean;
     /** Local model on disk; null for a cloud model or while the server starts. */
     downloaded?: boolean | null;
@@ -1181,7 +986,8 @@ export interface ActiveModel {
     inference_remote?: boolean | null;
     inference_description?: string | null;
     /** `pending` while the model server is still starting; ask again. */
-    restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null };
+    /** `retry`: a failed cloud restore the backend checks again on the next read. */
+    restore?: { status: 'restored' | 'failed' | 'none' | 'pending'; message: string | null; retry?: boolean };
 }
 
 export interface ProvidersResponse {
@@ -1208,6 +1014,8 @@ export interface ProviderModel {
     fits?: boolean | null;
     available?: boolean;
     unavailable_reason?: string | null;
+    /** What stops this NPU model on this PC's NPU (Linux setup), in place of the reason. */
+    npu_problems?: SetupNpuProblem[];
     /** Median tokens/s of its recent turns on this PC. */
     tokens_per_second?: number | null;
     /** An in-flight (or just-finished) download of this model. */
@@ -1276,6 +1084,8 @@ export interface ModelPlacement {
 export interface ProviderModelsResponse {
     provider: string;
     models: ProviderModel[];
+    blocked?: boolean;
+    blocked_reason?: string | null;
     memory_gb?: number | null;
     memory_source?: string | null;
     capacity_error?: string | null;
@@ -1312,6 +1122,8 @@ export interface LocalModelStatus {
     /** One plain line; `error_detail` carries the raw cause. */
     error: string | null;
     error_detail?: string | null;
+    /** Set when `error` is the server not answering, so the UI words it in its language. */
+    error_cause?: 'model_server_down' | null;
     base_url: string | null;
     /** `gaia` for GAIA's own Lemonade; GAIA asks before reloading on `user` or `remote`. */
     owner: 'gaia' | 'user' | 'remote' | null;
@@ -1345,9 +1157,27 @@ export interface SpendingReport {
     turns: number;
     /** Turns on a model with no known price, counted apart rather than as $0. */
     unpriced_turns: number;
+    /** Turns on a priced model whose usage never came back, such as a stopped answer. */
+    unreported_turns: number;
     limit_usd: number | null;
     state: 'no_limit' | 'ok' | 'near' | 'reached' | 'allowed_over';
-    by_model: Array<{ model: string; provider: string; turns: number; usd: number; unpriced_turns: number }>;
+    by_model: Array<{ model: string; provider: string; turns: number; usd: number; unpriced_turns: number; unreported_turns: number }>;
+    price_source: string;
+}
+
+/** GET /api/spending/chat/{session_id}: this chat's and today's cloud answers at list price. */
+export interface ChatSpending {
+    /** The model asked about has a known cloud price; only then is spending shown. */
+    paid: boolean;
+    model: string | null;
+    chat: {
+        usd: number;
+        answers: number;
+        /** Cloud answers with no price, such as a stopped one, counted apart rather than as $0. */
+        unpriced_answers: number;
+        items: Array<{ message_id: number; created_at: string; model: string | null; kind: string; usd: number | null }>;
+    };
+    today: { usd: number; answers: number; unpriced_answers: number; chats: number; since: string };
     price_source: string;
 }
 
@@ -1371,7 +1201,7 @@ export interface SessionPermissions {
 // ── Skills (GET /api/skills) ──────────────────────────────────────────────
 
 /** Which discovery root a skill was found in. */
-export type SkillSource = 'agent-bundled' | 'user' | 'claude-import';
+export type SkillSource = 'agent-bundled' | 'user' | 'claude-project' | 'claude-import';
 
 export interface SkillInfo {
     name: string;
@@ -1384,4 +1214,108 @@ export interface SkillInfo {
     path: string;
     /** Absent when an older GAIA agent answered the listing. */
     source?: SkillSource | null;
+}
+
+// ── Resource usage (GET /api/system/resources) ────────────────────────────
+
+/** One CPU, memory, GPU, NPU or network reading; histories are oldest first, one per interval. */
+export interface CpuUsage {
+    percent: number;
+    ghz: number | null;
+    history: number[];
+}
+
+export interface MemoryUsage {
+    used_bytes: number;
+    total_bytes: number;
+    percent: number;
+    history: number[];
+}
+
+export interface DeviceUsage {
+    id: string;
+    name: string;
+    kind: 'gpu' | 'npu';
+    percent: number;
+    memory_used_bytes: number | null;
+    history: number[];
+}
+
+export interface NetworkUsage {
+    id: string;
+    /** The connection's name, such as "Ethernet 3". */
+    name: string;
+    /** The adapter's hardware name. */
+    description: string;
+    kind: 'ethernet' | 'wifi' | 'network';
+    send_bps: number;
+    recv_bps: number;
+    send_history: number[];
+    recv_history: number[];
+}
+
+export interface ResourceUsage {
+    interval_ms: number;
+    /** False until the first sample is in. */
+    ready: boolean;
+    cpu?: CpuUsage | null;
+    memory?: MemoryUsage | null;
+    devices?: DeviceUsage[];
+    networks?: NetworkUsage[];
+    /** Why GPUs and NPUs can't be read, when CPU and memory still can. */
+    devices_error?: string | null;
+    /** Why network adapters can't be read, when CPU and memory still can. */
+    networks_error?: string | null;
+    /** Why NPUs can't be read, where they're read apart from GPUs (Linux). */
+    npus_error?: string | null;
+}
+
+/** A library the Skills panel offers as a one-click add. */
+export interface FeaturedLibrary {
+    id: string;
+    name: string;
+    url: string;
+    description: string;
+}
+
+/** One permission a skill from a link declares, e.g. `network:read` and what it lets the skill do. */
+export interface LinkPermission {
+    grant: string;
+    text: string;
+}
+
+/** One skill found behind a pasted link (POST /api/skills/link/preview). */
+export interface LinkSkill {
+    name: string;
+    description: string;
+    /** Folder of the skill inside the library. */
+    path: string;
+    /** Ships tools.py or scripts/ — code that would run on this PC. */
+    has_code: boolean;
+    /** What the skill declares it may do: the raw grant and a plain-language sentence. */
+    permissions: LinkPermission[];
+    /** The permissions could not be read, so an empty list does not mean none. */
+    permissions_unreadable: boolean;
+    /** Security-audit verdict: ALLOW, REVIEW, or BLOCK. */
+    verdict: string;
+    findings: string[];
+    installed: boolean;
+    /** Installed from this same link before; adding it again updates it to the latest version. */
+    update: boolean;
+    /** Why this skill can't be added. */
+    error: string | null;
+}
+
+export interface LinkPreview {
+    link: string;
+    source: string;
+    skills: LinkSkill[];
+    /** What was audited; sent back on add so exactly this version installs. */
+    pin: string;
+    warning: string;
+}
+
+export interface LinkAddResult {
+    added: Array<{ name: string; updated: boolean; verdict: string; has_code: boolean; findings: string[] }>;
+    failed: Record<string, string>;
 }

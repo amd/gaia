@@ -11,23 +11,42 @@ from __future__ import annotations
 
 from typing import Tuple
 
+from gaia.agents.tools._calendar.scopes import CALENDAR_SCOPES
 from gaia.agents.tools._email.scopes import (
     DECLARED_SCOPES,
     GOOGLE_CONNECTOR_ID,
     MICROSOFT_CONNECTOR_ID,
+    READ_ONLY_SCOPES,
 )
 from gaia.connectors.providers.base import ConnectorRequirement
 
 MAILBOX_REQUIREMENTS: Tuple[ConnectorRequirement, ...] = (
     ConnectorRequirement(
         connector_id=GOOGLE_CONNECTOR_ID,
-        scopes=list(DECLARED_SCOPES[GOOGLE_CONNECTOR_ID]),
-        reason="Read and search your Gmail so the agent can triage your inbox.",
+        scopes=[
+            *DECLARED_SCOPES[GOOGLE_CONNECTOR_ID],
+            CALENDAR_SCOPES[GOOGLE_CONNECTOR_ID],
+        ],
+        required_scopes=list(DECLARED_SCOPES[GOOGLE_CONNECTOR_ID]),
+        reason=(
+            "Read and search your Gmail, draft and send mail when you approve it, "
+            "and see and, with your approval, change your Google calendar."
+        ),
     ),
     ConnectorRequirement(
         connector_id=MICROSOFT_CONNECTOR_ID,
-        scopes=list(DECLARED_SCOPES[MICROSOFT_CONNECTOR_ID]),
-        reason="Read and search your Outlook mail so the agent can triage your inbox.",
+        # Mail.Read too: a connection made only to read mail carries it.
+        scopes=[
+            *READ_ONLY_SCOPES[MICROSOFT_CONNECTOR_ID],
+            *DECLARED_SCOPES[MICROSOFT_CONNECTOR_ID],
+            CALENDAR_SCOPES[MICROSOFT_CONNECTOR_ID],
+        ],
+        required_scopes=list(DECLARED_SCOPES[MICROSOFT_CONNECTOR_ID]),
+        reason=(
+            "Read and search your Outlook mail, draft and send mail when you "
+            "approve it, and see and, with your approval, change your Outlook "
+            "calendar."
+        ),
     ),
 )
 

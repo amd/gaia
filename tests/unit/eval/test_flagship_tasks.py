@@ -874,9 +874,12 @@ def fake_agent(monkeypatch, tmp_path):
 def test_the_agent_never_sees_the_judges_credentials(fake_agent, tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-secret")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "key-secret")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "backup-secret")
     ft.run_suite("one", "some-model", tmp_path / "out", tasks_file=fake_agent)
     assert _FakeAgent.seen[0]["credentials"] == {
         "CLAUDE_CODE_OAUTH_TOKEN": None,
+        "CLAUDE_CODE_OAUTH_TOKEN_BACKUP": None,
+        "CLAUDE_CODE_OAUTH_TOKEN_SECONDARY": None,
         "ANTHROPIC_API_KEY": None,
     }
 
@@ -1332,13 +1335,56 @@ def test_an_unusable_reply_is_an_error_not_a_score(stdout):
         ft.parse_judgement(stdout, [_attempt("a")])
 
 
-def test_the_judge_has_no_tools_and_uses_the_key_only_when_given(monkeypatch):
+def test_the_judge_has_no_tools_and_uses_the_key_only_when_given(
+    monkeypatch, claude_login
+):
     monkeypatch.setattr(ft.shutil, "which", lambda name: "/bin/claude")
     oauth = ft.judge_command("claude-opus-5", {"CLAUDE_CODE_OAUTH_TOKEN": "t"})
     assert oauth[oauth.index("--tools") + 1] == ""
     assert "--dangerously-skip-permissions" not in oauth
     assert "--bare" not in oauth
-    assert "--bare" in ft.judge_command("claude-opus-5", {"ANTHROPIC_API_KEY": "k"})
+    # The subscription comes first: a logged-in CLI beats a key.
+    assert "--bare" not in ft.judge_command("m", {"ANTHROPIC_API_KEY": "k"})
+
+
+def test_the_judge_uses_the_key_only_without_a_login(monkeypatch, capsys):
+    from gaia.eval import claude_credential
+
+    monkeypatch.setattr(ft.shutil, "which", lambda name: "/bin/claude")
+    monkeypatch.setattr(
+        claude_credential, "_auth_status", lambda _b, _e: {"loggedIn": False}
+    )
+    env = {"ANTHROPIC_API_KEY": "sk-ant-KEYSECRET", "PATH": "p"}
+    assert "--bare" in ft.judge_command("m", env)
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout=_envelope({"a": GRADE}), stderr="")
+
+    monkeypatch.setattr(ft.subprocess, "run", fake_run)
+    ft.judge_batch([_attempt("a")], "m", env)
+    assert seen["env"] == env
+    err = capsys.readouterr().err
+    assert "Claude judge: using ANTHROPIC_API_KEY from the environment" in err
+    assert "KEYSECRET" not in err
+
+
+def test_the_subscription_judge_does_not_inherit_the_key(monkeypatch, capsys):
+    monkeypatch.setattr(ft.shutil, "which", lambda name: "/bin/claude")
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout=_envelope({"a": GRADE}), stderr="")
+
+    monkeypatch.setattr(ft.subprocess, "run", fake_run)
+    env = {"ANTHROPIC_API_KEY": "sk-ant-KEYSECRET", "CLAUDE_CODE_OAUTH_TOKEN": "t"}
+    ft.judge_batch([_attempt("a")], "m", env)
+    assert seen["env"] == {"CLAUDE_CODE_OAUTH_TOKEN": "t"}
+    err = capsys.readouterr().err
+    assert "Claude judge: using the Claude Code subscription" in err
+    assert "KEYSECRET" not in err
 
 
 def test_a_missing_claude_cli_is_named(monkeypatch):

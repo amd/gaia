@@ -68,6 +68,7 @@ Misconfigured reverse proxies can reflect the `Authorization` header back in a 4
 - OpenAI SDK sites use `api_key=self.api_key or "lemonade"` placeholder when unauthenticated — the SDK rejects `None`/`""` with `OpenAIError`; Lemonade ignores the placeholder value
 - Auth headers: `{"Authorization": f"Bearer {api_key}"}` — omit the header entirely when key is None (don't send `Bearer `)
 - Log key presence at DEBUG level only: `self.log.debug("Lemonade API key configured")` — NEVER log the value
+- Lemonade reports every backend this PC *can* run (`/system-info` `recipes`); GAIA offers only the ones it has proven, `GaiaConfig.TESTED_LLAMACPP_BACKENDS` (Vulkan) plus FastFlowLM for the NPU. Never surface a Lemonade-reported backend in a list, setting, API or error remedy without adding it there first — see [Offer users only what GAIA has proven](../../../CLAUDE.md#important-offer-users-only-what-gaia-has-proven)
 
 ## Gotchas & Learned the Hard Way
 

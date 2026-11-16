@@ -182,7 +182,9 @@ def _has_gated_meeting_signal(subject: str, body: str) -> bool:
     return bool(detection.is_meeting_request and detection.confidence == "high")
 
 
-def _has_meeting_signal(subject: str, body: str, subject_lower: str, body_lower: str) -> bool:
+def _has_meeting_signal(
+    subject: str, body: str, subject_lower: str, body_lower: str
+) -> bool:
     if has_meeting_time_signal(subject_lower, body_lower):
         return True
     return _has_gated_meeting_signal(subject, body)
@@ -254,7 +256,9 @@ def _scan_opted_out_senders(gmail, *, user_email: str, max_sent: int) -> Set[str
             if not is_opt_out_reply(body.lower()):
                 continue
             recipients = [
-                a for a in _recipient_addresses(headers.get("to", "")) if a != user_email
+                a
+                for a in _recipient_addresses(headers.get("to", ""))
+                if a != user_email
             ]
             opted_out.update(_normalize_address_for_suppression(a) for a in recipients)
     return opted_out
@@ -492,9 +496,7 @@ class WaitingOnYouToolsMixin:
         agent = self  # captured for live access to backends + provenance map
 
         @tool
-        def list_waiting_on_you(
-            max_inbox: int = 0, min_age_hours: int = 0
-        ) -> str:
+        def list_waiting_on_you(max_inbox: int = 0, min_age_hours: int = 0) -> str:
             """Flag inbound mail that is waiting on the user's reply.
 
             Scans the inbox of every connected mailbox for messages that

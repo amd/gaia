@@ -384,6 +384,25 @@ def _claim_cross_process_slot(agent_id: str, install_root: Optional[Path], actio
         raise InstallFailedError(f"cannot {action} '{agent_id}': {exc}") from exc
 
 
+def _read_process(proc, what: str, read):
+    """*read()* for one process, or None when this user cannot see it."""
+    import psutil
+
+    try:
+        return read()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return None
+    except SystemError as e:
+        # psutil's macOS cmdline read can raise this for a live process.
+        logger.warning(
+            "install: could not read the %s of pid %s (%s); judging it by the rest",
+            what,
+            proc.pid,
+            e,
+        )
+        return None
+
+
 def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
     """Refuse to mutate *install_dir* while any live process runs from it.
 
@@ -399,26 +418,26 @@ def assert_no_live_process_in(install_dir: Path, agent_id: str) -> None:
 
     target = install_dir.resolve()
     survivors = []
-    for proc in psutil.process_iter(["pid", "exe", "cmdline"]):
-        try:
-            info = proc.info
-            # exe + argv[0] catch a frozen sidecar (the daemon always spawns it
-            # by absolute path); argv[1] catches an interpreter running a script
-            # from the dir. Later argv entries are deliberately NOT scanned — a
-            # log path passed to `tail` must not block an install. Relative argv
-            # would need the process's cwd and is not what the daemon produces.
-            candidates = [info.get("exe") or ""] + list(info.get("cmdline") or [])[:2]
-            for candidate in candidates:
-                if not candidate:
-                    continue
-                try:
-                    Path(candidate).resolve().relative_to(target)
-                except (ValueError, OSError):
-                    continue
-                survivors.append(info.get("pid"))
-                break
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            continue
+    # Attributes are read one at a time: inside process_iter, a read error
+    # ends the whole scan.
+    for proc in psutil.process_iter():
+        # exe + argv[0] catch a frozen sidecar (the daemon always spawns it
+        # by absolute path); argv[1] catches an interpreter running a script
+        # from the dir. Later argv entries are deliberately NOT scanned — a
+        # log path passed to `tail` must not block an install. Relative argv
+        # would need the process's cwd and is not what the daemon produces.
+        exe = _read_process(proc, "executable", proc.exe)
+        argv = _read_process(proc, "command line", proc.cmdline)
+        candidates = [exe or ""] + list(argv or [])[:2]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                Path(candidate).resolve().relative_to(target)
+            except (ValueError, OSError):
+                continue
+            survivors.append(proc.pid)
+            break
     if survivors:
         unique = sorted(set(survivors))
         raise StopFailedError(

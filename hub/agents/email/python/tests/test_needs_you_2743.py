@@ -133,7 +133,12 @@ class TestNeedsYouNeverDropsClassifiedMail:
             for section in ("urgent", "actionable", "needs_review")
             for item in out[section]
         }
-        assert source_ids == {"urgent-1", "urgent-meeting-1", "actionable-1", "needs-review-1"}
+        assert source_ids == {
+            "urgent-1",
+            "urgent-meeting-1",
+            "actionable-1",
+            "needs-review-1",
+        }
 
         needs_you_ids = {item["message_id"] for item in out["needs_you"]}
         assert source_ids <= needs_you_ids, (
@@ -233,9 +238,9 @@ class TestNeedsYouOrdering:
         refs = [item["ref"] for item in out["needs_you"]]
         assert refs == list(range(1, len(refs) + 1)), "ref must be contiguous, 1-based"
         ids_in_order = [item["message_id"] for item in out["needs_you"]]
-        assert ids_in_order.index("urgent-old") < ids_in_order.index("urgent-new"), (
-            "oldest-first within the same kind"
-        )
+        assert ids_in_order.index("urgent-old") < ids_in_order.index(
+            "urgent-new"
+        ), "oldest-first within the same kind"
 
     def test_kind_order_groups_by_verb_not_interleaved(self):
         """#2743 redirect (checkpoint review): ordering must group by the
@@ -287,12 +292,12 @@ class TestNeedsYouCap:
 class TestBulkFilterTests:
     def test_filter_tests_non_empty_when_count_positive(self):
         gmail = FakeGmailBackend(user_email="me@example.com")
-        gmail.add_message(
-            _msg("promo-1", label_ids=["INBOX", "CATEGORY_PROMOTIONS"])
-        )
+        gmail.add_message(_msg("promo-1", label_ids=["INBOX", "CATEGORY_PROMOTIONS"]))
         out = pre_scan_inbox_impl(gmail, max_messages=10)
         assert out["bulk"]["count"] > 0
-        assert out["bulk"]["filter_tests"], "filter_tests must be non-empty when count > 0"
+        assert out["bulk"][
+            "filter_tests"
+        ], "filter_tests must be non-empty when count > 0"
         assert FILTER_TEST_NO_DIRECT_QUESTION in out["bulk"]["filter_tests"]
 
     def test_bulk_count_zero_and_no_filter_tests_when_nothing_filtered(self):
@@ -448,14 +453,18 @@ class TestActionItemWiring:
 
         gmail = FakeGmailBackend(user_email="me@example.com")
         out = pre_scan_inbox_impl(gmail, max_messages=10, action_db=db)
-        action_items = [item for item in out["needs_you"] if item["kind"] == "action_item"]
+        action_items = [
+            item for item in out["needs_you"] if item["kind"] == "action_item"
+        ]
         assert len(action_items) == 1
         assert action_items[0]["subject"] == "Renew the SSL certificate"
 
     def test_no_action_db_means_no_action_items_and_no_error(self):
         gmail = FakeGmailBackend(user_email="me@example.com")
         out = pre_scan_inbox_impl(gmail, max_messages=10, action_db=None)
-        assert [item for item in out["needs_you"] if item["kind"] == "action_item"] == []
+        assert [
+            item for item in out["needs_you"] if item["kind"] == "action_item"
+        ] == []
 
     def test_action_item_with_message_id_none_surfaces(self):
         # A task carried from a prior triage with no recoverable source
@@ -553,19 +562,29 @@ class TestScanDefaultUnification:
     def test_triage_inbox_impl_default_is_shared_constant(self):
         from gaia_agent_email.tools.read_tools import triage_inbox_impl
 
-        default = inspect.signature(triage_inbox_impl).parameters["max_messages"].default
+        default = (
+            inspect.signature(triage_inbox_impl).parameters["max_messages"].default
+        )
         assert default == DEFAULT_INBOX_SCAN_MESSAGES
 
     def test_pre_scan_inbox_impl_default_is_shared_constant(self):
-        default = inspect.signature(pre_scan_inbox_impl).parameters["max_messages"].default
+        default = (
+            inspect.signature(pre_scan_inbox_impl).parameters["max_messages"].default
+        )
         assert default == DEFAULT_INBOX_SCAN_MESSAGES
 
     def test_merge_pre_scan_backends_default_is_shared_constant(self):
-        default = inspect.signature(merge_pre_scan_backends).parameters["max_messages"].default
+        default = (
+            inspect.signature(merge_pre_scan_backends)
+            .parameters["max_messages"]
+            .default
+        )
         assert default == DEFAULT_INBOX_SCAN_MESSAGES
 
     def test_attention_scan_default_is_shared_constant(self):
-        from gaia_agent_email.tools.attention_tools import DEFAULT_ATTENTION_SCAN_MESSAGES
+        from gaia_agent_email.tools.attention_tools import (
+            DEFAULT_ATTENTION_SCAN_MESSAGES,
+        )
 
         assert DEFAULT_ATTENTION_SCAN_MESSAGES == DEFAULT_INBOX_SCAN_MESSAGES
 

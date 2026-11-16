@@ -140,8 +140,8 @@ def record_action_items(
 def list_tasks(
     db, *, message_id: Optional[str] = None, status: Optional[str] = None
 ) -> List[Dict[str, Any]]:
-    """Return task rows (oldest first), optionally filtered by source message
-    and/or status ('open' / 'done')."""
+    """Return task rows (oldest first, then in the order saved), optionally
+    filtered by source message and/or status ('open' / 'done')."""
     clauses = []
     params: Dict[str, Any] = {}
     if message_id is not None:
@@ -152,7 +152,7 @@ def list_tasks(
         params["s"] = status
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = db.query(
-        f"SELECT * FROM email_tasks{where} ORDER BY created_at, task_id", params
+        f"SELECT * FROM email_tasks{where} ORDER BY created_at, rowid", params
     )
     return rows or []
 

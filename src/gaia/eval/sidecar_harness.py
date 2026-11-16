@@ -7,7 +7,7 @@ daemon path (not in-process) and assert the canonical SSE event *sequence*
 Why a dedicated harness
 -----------------------
 An in-process Agent UI test cannot see the v2 distributed seam at all: the sidecar's
-``POST /v1/<agent>/query`` loop (V2-2 / #2016) and the frozen seven-event wire
+``POST /v1/<agent>/query`` loop (V2-2 / #2016) and the frozen canonical-event wire
 contract (§0.2) that every front-door — the daemon relay, ``gaia email``,
 ``gaia api`` — relays. This harness exercises exactly that surface over REST, so
 a drift in the §0.2 vocabulary or the loop→SSE translation is caught before a
@@ -71,12 +71,14 @@ logger = get_logger(__name__)
 # own copy on purpose: the harness must fail if the sidecar drifts from THIS
 # set, so it cannot import the set it is checking. The distributed-seams suite
 # asserts this copy stays equal to the relay's and the translator's copies.
+# ``reasoning`` is additive in contract 2.22 and is emitted only when requested.
 # ---------------------------------------------------------------------------
 
 CANONICAL_EVENT_TYPES: "frozenset[str]" = frozenset(
     {
         "status",
         "token",
+        "reasoning",
         "tool_call",
         "tool_result",
         "needs_confirmation",

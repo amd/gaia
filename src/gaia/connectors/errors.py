@@ -26,6 +26,10 @@ class ConfigurationError(ConnectorsError):
     """Required configuration (env var, runbook entry) is missing."""
 
 
+class InvalidConfigValueError(ConnectorsError):
+    """A value the user typed into a connector's configure form is not usable."""
+
+
 class OAuthClientNotConfiguredError(ConfigurationError):
     """An ``oauth_pkce`` connector has no OAuth *client* credentials configured.
 
@@ -325,7 +329,7 @@ class ConsentDeniedError(ConnectorsError):
 
 
 class FlowTimeoutError(ConnectorsError):
-    """OAuth flow exceeded its 120-second callback timeout."""
+    """OAuth flow's browser sign-in window lapsed before the callback."""
 
 
 class FlowInProgressError(ConnectorsError):

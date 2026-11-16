@@ -199,6 +199,8 @@ def _patch_failing_client(monkeypatch, error):
     # key is set, so without this the test asserts nothing on a keyless runner.
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    # A CLI login comes before the key, so take the CLI off PATH.
+    monkeypatch.setattr("gaia.eval.claude_credential.shutil.which", lambda _: None)
     client = MagicMock()
     client.get_completion.side_effect = error
     monkeypatch.setattr("gaia.eval.claude.ClaudeClient", MagicMock(return_value=client))

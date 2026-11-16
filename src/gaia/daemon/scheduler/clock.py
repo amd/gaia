@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from gaia.daemon.scheduler import store
 from gaia.daemon.scheduler.lease import (
@@ -78,6 +78,7 @@ class DaemonClock:
         poll_seconds: float = 30.0,
         stale_firing_seconds: float = DEFAULT_STALE_FIRING_SECONDS,
         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
+        on_pass: Sequence[Callable[[], None]] = (),
     ) -> None:
         if poll_seconds <= 0:
             raise ValueError(f"poll_seconds must be > 0, got {poll_seconds}")
@@ -98,6 +99,7 @@ class DaemonClock:
             )
         self._db_path = db_path
         self._executors = dict(executors)
+        self._on_pass = list(on_pass)
         self._poll_seconds = poll_seconds
         self._stale_firing_seconds = stale_firing_seconds
         self._heartbeat_seconds = heartbeat_seconds
@@ -164,11 +166,18 @@ class DaemonClock:
                     job["job_id"],
                 )
             elif outcome == "failed":
+                current = store.get_job(db, job_id=job["job_id"]) or job
+                error = str(
+                    current.get("error")
+                    or "The send was interrupted while firing and may already have "
+                    "been sent; check your Sent folder before retrying."
+                )
                 log.error(
                     "daemon clock: one-shot job %s stopped renewing its lease "
                     "while firing; marked it failed instead of running it twice",
                     job["job_id"],
                 )
+                self._notify_failed(current, error, source="daemon clock recovery")
                 failed.append(job["job_id"])
         return failed
 
@@ -193,6 +202,52 @@ class DaemonClock:
                 outcome,
             )
 
+    @staticmethod
+    def _notify_failed(
+        job: Dict[str, Any], error: str, *, source: str = "daemon clock"
+    ) -> None:
+        """Best-effort host notification after a durable daemon failure."""
+        try:
+            from gaia.schedule import sinks
+
+            payload = job.get("payload") or {}
+            nested_payload = payload.get("payload") or {}
+            kind = str(payload.get("kind") or job.get("kind") or "")
+            subject = payload.get("subject") or nested_payload.get("subject")
+            is_recovery = "recovery" in source.lower() or "may already" in error.lower()
+            if kind == "scheduled_send":
+                detail = (
+                    f"the scheduled email ({subject})"
+                    if subject
+                    else "the scheduled email"
+                )
+                if is_recovery:
+                    title = "Scheduled email may not have been sent"
+                    message = (
+                        f"GAIA could not confirm {detail} was sent. It may already "
+                        "have been sent; check your Sent folder before retrying. "
+                        f"{error}"
+                    )
+                else:
+                    title = "Scheduled email failed"
+                    message = f"GAIA could not send {detail}. {error}"
+            elif kind == "snooze":
+                detail = (
+                    f"the snoozed email ({subject})" if subject else "the snoozed email"
+                )
+                title = "Snoozed email restore failed"
+                message = f"GAIA could not restore {detail}. {error}"
+            else:
+                title = "Scheduled task failed"
+                message = f"GAIA could not complete the scheduled task. {error}"
+            sinks.dispatch("notification", {"title": title}, message)
+        except Exception as exc:  # notification must not mask scheduler state
+            log.warning(
+                "daemon clock: could not notify user about failed job %s: %s",
+                job.get("job_id", "unknown"),
+                exc,
+            )
+
     def _fire_due_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
         fired: List[str] = []
         failed = self._recover_abandoned(db, now if now is not None else time.time())
@@ -208,8 +263,12 @@ class DaemonClock:
                     f"(source {job['source']!r}) — the job cannot fire in the "
                     "daemon process"
                 )
-                store.mark_failed(db, job_id=job_id, claim_id=claim_id, error=msg)
+                recorded = store.mark_failed(
+                    db, job_id=job_id, claim_id=claim_id, error=msg
+                )
                 log.error("daemon clock: job %s failed: %s", job_id, msg)
+                if recorded:
+                    self._notify_failed(job, msg)
                 failed.append(job_id)
                 continue
             try:
@@ -221,11 +280,16 @@ class DaemonClock:
                     executor(job, db)
             except Exception as exc:
                 emsg = f"{type(exc).__name__}: {exc}"
-                self._record(
-                    store.mark_failed(db, job_id=job_id, claim_id=claim_id, error=emsg),
-                    job,
-                    "failed",
+                current = store.get_job(db, job_id=job_id)
+                recovered_holder = bool(
+                    current
+                    and current["status"] == STATUS_FAILED
+                    and current.get("superseded_claim") == claim_id
                 )
+                recorded = store.mark_failed(
+                    db, job_id=job_id, claim_id=claim_id, error=emsg
+                )
+                self._record(recorded, job, "failed")
                 log.exception(
                     "daemon clock: %s job %s (source %s) failed to fire: %s",
                     job["kind"],
@@ -233,6 +297,8 @@ class DaemonClock:
                     job["source"],
                     emsg,
                 )
+                if recorded and not recovered_holder:
+                    self._notify_failed(job, emsg)
                 failed.append(job_id)
                 continue
             self._record(
@@ -246,6 +312,19 @@ class DaemonClock:
             )
             fired.append(job_id)
         return {"fired": fired, "failed": failed}
+
+    def run_pass_hooks(self) -> None:
+        """Run each ``on_pass`` hook once; one that fails is logged, not fatal.
+
+        Hooks are the clock's other duties that keep their own state, such as
+        GAIA automations (:mod:`gaia.automations.daemon_tick`). A hook with a
+        ``stop()`` method is stopped with the clock.
+        """
+        for hook in self._on_pass:
+            try:
+                hook()
+            except Exception:  # noqa: BLE001 - logged; the next pass runs it again
+                log.exception("daemon clock: pass hook %r failed", hook)
 
     # -- Default driver: polling thread ---------------------------------
 
@@ -281,6 +360,12 @@ class DaemonClock:
             )
             return
         self._thread = None
+        for hook in self._on_pass:
+            # A hook holding something for this daemon (the automations tick)
+            # gives it back here.
+            stop = getattr(hook, "stop", None)
+            if stop is not None:
+                stop()
 
     @property
     def running(self) -> bool:
@@ -323,6 +408,7 @@ class DaemonClock:
                 # Log loudly and keep the thread alive — jobs stay pending in
                 # SQLite and fire once the store recovers.
                 log.exception("daemon clock: polling pass failed")
+            self.run_pass_hooks()
             if self._stop_event.wait(self._poll_seconds):
                 return
 

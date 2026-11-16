@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -191,5 +192,91 @@ func TestAFailedScriptDownloadSaysWhy(t *testing.T) {
 	assertEmpty(t, tmp)
 	if cfg, _ := ReadConfig(); cfg.PinnedVersion != "" {
 		t.Errorf("a failed install pinned %q", cfg.PinnedVersion)
+	}
+}
+
+func serveInstallScript(t *testing.T) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintln(w, "exit 0")
+	}))
+	t.Cleanup(srv.Close)
+	prevPS, prevSH := installPS1URL, installSHURL
+	installPS1URL, installSHURL = srv.URL+"/install.ps1", srv.URL+"/install.sh"
+	t.Cleanup(func() { installPS1URL, installSHURL = prevPS, prevSH })
+}
+
+func TestAnUpdateRemembersTheWayBack(t *testing.T) {
+	withHome(t)
+	t.Cleanup(Cancel)
+	serveInstallScript(t)
+	prev := Current
+	Current = "0.25.4-rc.2"
+	t.Cleanup(func() { Current = prev })
+
+	Schedule(Plan{Tag: "v0.26.0", Kind: KindScript})
+	if err := RunPending(context.Background(), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ := ReadConfig(); cfg.Previous != "v0.25.4-rc2" {
+		t.Errorf("previous = %q", cfg.Previous)
+	}
+}
+
+func TestGoingBackIsNotAnUpdateToUndo(t *testing.T) {
+	withHome(t)
+	t.Cleanup(Cancel)
+	serveInstallScript(t)
+	prev := Current
+	Current = "0.26.0"
+	t.Cleanup(func() { Current = prev })
+	if err := setPrevious("v0.25.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	Schedule(Plan{Tag: "v0.25.0", Kind: KindScript, Pin: true})
+	if err := RunPending(context.Background(), io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := ReadConfig()
+	if cfg.Previous != "v0.25.0" || cfg.PinnedVersion != "v0.25.0" {
+		t.Errorf("config = %+v", cfg)
+	}
+}
+
+func TestAWindowedInstallAppliesItsPinOnceItLands(t *testing.T) {
+	withHome(t)
+	prev := Current
+	t.Cleanup(func() { Current = prev })
+	if err := writeKey(awaitingKey, Awaiting{Tag: "v0.25.0", Previous: "", Pin: true}); err != nil {
+		t.Fatal(err)
+	}
+	Current = "0.25.0"
+	if err := Settle(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := ReadConfig()
+	if cfg.PinnedVersion != "v0.25.0" || cfg.Awaiting.Tag != "" {
+		t.Errorf("config = %+v", cfg)
+	}
+}
+
+func TestACancelledWindowedInstallChangesNothing(t *testing.T) {
+	withHome(t)
+	prev := Current
+	t.Cleanup(func() { Current = prev })
+	if err := setPrevious("v0.24.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeKey(awaitingKey, Awaiting{Tag: "v0.26.0", Previous: "v0.25.0"}); err != nil {
+		t.Fatal(err)
+	}
+	Current = "0.25.0"
+	if err := Settle(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := ReadConfig()
+	if cfg.Previous != "v0.24.0" || cfg.Awaiting.Tag != "" {
+		t.Errorf("config = %+v", cfg)
 	}
 }

@@ -9,10 +9,118 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The sidecar stops when the GAIA daemon that started it is killed.** The
+  daemon now passes its pid in `GAIA_DAEMON_PID`; the sidecar polls it and
+  shuts down through its normal SIGINT path within seconds of the daemon dying,
+  instead of running until the next daemon reaps it.
+- **A Lemonade build suffix no longer leaks into the version number.** A
+  Lemonade build reporting `2026.48~1809.2d1f23e4` read its hash's leading
+  digit as the patch number; the `~`/`+` build suffix is now dropped before
+  the version is compared, matching core GAIA.
+
+- **`CONTRACT.md` now documents `GET /v1/email/briefing` (#3625).** The
+  briefing endpoint and its `cache_age_seconds`/`stale` fields were missing
+  from the reference, and the `2.14` history row now names the four response
+  fields that shipped under it without a version bump.
+- **Sender preferences now order a pre-scan across every connected mailbox
+  (#3623).** With two mailboxes, each was sorted on its own and the results
+  were joined in connection order, so the archive list could keep the first
+  mailbox's priority senders and drop the second's low-priority ones. The
+  merged lists are now sorted together before their caps.
+
+- **The search guidance no longer teaches Outlook queries that Microsoft
+  Graph rejects (#3587).** The `search_messages` description and the agent's
+  SEARCH prompt now say `label:` and `after:`/`before:` are Gmail-only, and
+  that one Outlook search cannot mix `from:`/`subject:` with
+  `is:`/`newer_than:`/`older_than:`. On Outlook they point at two separate
+  searches and at `newer_than:`/`older_than:` durations instead. The
+  translator is unchanged: the same queries still raise a named error.
+
+- **An email body can no longer break out of its untrusted-content fence
+  (#2034).** Marker-like text inside a body is neutralized before the body is
+  fenced, so the model keeps reading all of it as data.
+
+- **A fence marker's name spelled with look-alike letters is neutralized too
+  (#7853).** Letters from another script that read as Latin ones (Cyrillic,
+  Greek, Cherokee and so on), and ASCII swaps such as `rn` for `m`, are read as
+  the letters they imitate, so a near-copy of a marker no longer reaches the
+  model.
+
+- **Under the daemon, a forwarded-token hiccup no longer asks for a browser
+  re-sign-in (#6995).** A token the daemon hasn't re-forwarded yet, or an
+  unexpected error in the check, now reports `error` ("couldn't check") like the
+  standalone path; a token short on scopes reports `connection_missing_scopes`
+  with the scopes to add. Only a missing forwarded token still reports
+  `reauth_required`.
+
+### Changed
+
+- **Unattended scheduler failures now notify users with the right action.** Failed scheduled sends, snooze restores, and interrupted sends use distinct messages; an interrupted send warns that it may already have been delivered and advises checking Sent before retrying (#5411).
+
+- **Private and memory-off turns are now safe for the email sidecar (#5482, schema 2.16).** `POST /v1/email/query` accepts `memory: "on" | "private" | "off"`; private and memory-off modes suppress memory reads and writes before the agent loop starts. Older sidecars are refused for those turns instead of silently persisting email-derived memories.
+
+- **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/email/init` now
+  reports `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on
+  anything older. GAIA updates its own Lemonade Server itself; the `hint` for
+  a user-run server points at https://lemonade-server.ai instead of a command.
+  `gaia-agent.yaml`'s `requirements.min_lemonade_version` moves with it.
+### Added
+
+- **The published OpenAPI contract now includes the sidecar's stateful Agent UI
+  routes (#6043, schema 2.15).** Session creation/deletion/history, memory and
+  autonomy controls, pending-tool confirmation, cancellation, and the SSE query
+  route were already served but absent from `openapi.email.json`; generated
+  clients can now discover and negotiate the complete supported surface.
+
+### Fixed
+
+- **A batch archive, label, star or mark that went through is no longer
+  reported as failed (#6994).** When the change landed in Gmail or Outlook but
+  its undo record could not be saved, the message was listed under `failed`, so
+  the agent could retry it or tell the user nothing changed. It is now listed
+  under `succeeded` with `action_id: null` and an `undo_error`, and the batch
+  result adds `not_undoable_count` and a summary saying it can't be undone.
+
+- **The OpenAPI contract lists the errors the `/query` routes return (#4429).**
+  `POST /v1/email/query` documents 400, 409, 500 and 502, `/query/{run_id}/cancel`
+  documents 404, and `/query/{run_id}/respond` documents 404 and 409. The routes
+  already returned them, but `openapi.email.json` listed only 200 and 422, so
+  generated clients never saw them. No request or response shape changed.
+
+- **A sidecar left running for days keeps working.** The one-file binary
+  unpacks its files into the OS temp folder, and macOS deletes files there
+  that are older than three days, so a long-running sidecar lost files it
+  still read. It now marks its own unpacked files as in use at startup and
+  every six hours. Leftovers from a sidecar that has exited still get
+  cleaned (#6850).
+- **A chat that switches model mid-conversation gets the model it asked
+  for.** `POST /v1/email/query` with a `session_id` used to keep running the
+  session's agent on whatever model it was first built with, even when a later
+  turn named another `model`. That turn now rebuilds the session's agent on
+  the requested model, keeping the session's memory-off toggle and autonomy
+  level, and a failed rebuild is a 502 that leaves the session usable. Naming
+  the model the session already runs does not rebuild. This matters now that the Agent UI sends `session_id`, so a
+  follow-up can name a thread the previous turn showed. (#2834)
+
+- **`gaia email autonomy status` now says what the last cycle did.** Every
+  autonomy cycle, whether run over REST, from the CLI or on the scheduler,
+  records a counts-only summary (or a redacted error if it failed).
+  `GET /v1/email/agent/autonomy/{id}` returns it as `last_cycle`, so "ran,
+  nothing to do" is no longer indistinguishable from "never ran", and a run
+  whose caller timed out still has a readable result. (#2618)
+
+- **The served endpoint spec (`GET /v1/email/spec`) now documents `POST /v1/email/agent/autonomy/undo` and the `/v1/connections` intake routes.** A new test checks every route on the agent and connection routers against the rendered spec. (#3321)
+- **Concurrent startup no longer fails to open the email state database
+  during SQLite WAL-mode setup.** The agent now uses GAIA core's bounded WAL
+  retry helper when another email agent is opening the same `state.db`.
+  Its core floor is now 0.25.3, the first release with that helper. (#6041)
+- **Unread Outlook listings no longer fail at Microsoft Graph.** The core and
+  email-agent backends now put a broad `receivedDateTime` predicate before
+  `isRead` whenever they sort unread mail newest-first. That meets Graph's
+  `$filter` / `$orderby` rule instead of returning `InefficientFilter` (#4806).
 - **The email package no longer installs beside an incompatible GAIA core.**
-  Its declared core floor is now 0.25.1, the first release covering the
-  email agent module-level imports, including its guided Outlook setup route.
-  (#4430)
+  Its declared core floor covers the email agent module-level imports,
+  including its guided Outlook setup route. (#4430)
 - **A note the model writes before a tool call no longer shows as
   `[unmapped agent event: commentary]`.** The host's output handler now marks
   that text as `commentary`; the translator drops it, since the words already
@@ -253,16 +361,17 @@ contract version is tracked separately as
   `outlook_backend.py` never parses Gmail operator syntax, so converting
   `w` to days has no effect there. Quoted Outlook `$search` values are
   escaped separately (see the Graph quote escape entry above).
-- **An Outlook search using `is:starred`, `after:`, `before:`, `label:`,
-  `has:`, or `in:` returned nothing instead of an error (#2996).** These
+- **An Outlook search using `is:starred`, `after:`, `before:`, `newer:`,
+  `older:`, `label:`, `has:`, or `in:` returned nothing instead of an error (#2996).** These
   Gmail-style operators have no Microsoft Graph translation, so
   `translate_query` let each one fall through to the `$search` bucket and
   reach Graph as inert literal text: Graph never errors on an unrecognised
   `$search` token, so the search silently matched nothing. The agent's own
-  tool description recommends several of these (`label:promotions`,
+  tool description recommended several of these (`label:promotions`,
   `after:YYYY/MM/DD`), so a model following its own instructions could hit
-  this. `translate_query` now raises an actionable error naming the
-  unsupported operator instead of degrading to a phrase match.
+  this; #3587 later scoped that guidance by backend. `translate_query` now
+  raises an actionable error naming the unsupported operator instead of
+  degrading to a phrase match.
 - **An Outlook search on an ordinary quoted phrase containing a colon word
   (`subject:"check in: monday"`) no longer raises the unsupported-operator
   error above (#3592).** The guard matched `is:`/`after:`/`has:`/etc.

@@ -110,10 +110,26 @@ def test_always_on_a_relative_write_covers_the_same_file_next_time(agent, tmp_pa
     agent._execute_tool("write_file", {"file_path": "shop2.txt", "content": "eggs"})
 
     assert len(agent.console.shown) == 1
-    # The grant is for the file itself, whichever way the path is spelled.
-    absolute = {"file_path": str(tmp_path.resolve() / "shop2.txt"), "content": "x"}
+    # The grant is for the file's resolved folder, whichever way the path is spelled.
+    absolute_path = str(tmp_path.resolve() / "shop2.txt")
+    absolute = {
+        "file_path": absolute_path,
+        "_resolved_file_path": absolute_path,
+        "content": "x",
+    }
     assert agent.console.call_is_granted("write_file", absolute)
     assert (tmp_path / "shop2.txt").read_text(encoding="utf-8") == "eggs"
+
+
+def test_always_on_a_write_covers_sibling_files_in_the_resolved_folder(agent):
+    agent.console = _AlwaysConsole()
+
+    agent._execute_tool("write_file", {"file_path": "first.txt", "content": "one"})
+    agent._execute_tool("write_file", {"file_path": "second.txt", "content": "two"})
+
+    assert len(agent.console.shown) == 1
+    assert (Path.cwd() / "first.txt").read_text(encoding="utf-8") == "one"
+    assert (Path.cwd() / "second.txt").read_text(encoding="utf-8") == "two"
 
 
 def test_a_tool_without_a_target_is_left_alone():

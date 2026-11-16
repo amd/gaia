@@ -300,7 +300,8 @@ def test_init_lemonade_too_old_returns_503_with_upgrade_hint(client):
     assert body["lemonade"]["compatible"] is False
     assert "9.0.0" in body["hint"]
     assert MIN_LEMONADE_VERSION in body["hint"]
-    assert "upgrade" in body["hint"].lower()
+    assert "lemonade-server.ai" in body["hint"]
+    assert "gaia init" not in body["hint"]
 
 
 def test_init_too_old_takes_priority_over_missing_model(client):
@@ -318,7 +319,7 @@ def test_init_too_old_takes_priority_over_missing_model(client):
 
 def test_init_newer_lemonade_is_compatible(client):
     with (
-        _patch_health("11.5.0"),
+        _patch_health("2027.1.0"),
         patch.object(ar, "_probe_model_present", return_value=True),
     ):
         resp = client.get("/v1/email/init")

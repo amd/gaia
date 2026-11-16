@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
+
 from gaia.agents.base.tools import tool
 from gaia.logger import get_logger
 

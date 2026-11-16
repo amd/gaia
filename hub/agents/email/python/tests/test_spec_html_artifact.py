@@ -49,3 +49,27 @@ def test_write_artifact_round_trips_through_check(tmp_path):
     dest = tmp_path / "specification.html"
     spec_html.write_artifact(dest)
     assert spec_html.check_artifact(dest) is True
+
+
+def _rendered_paths(html: str) -> set:
+    import re
+
+    return set(re.findall(r'<span class="path">([^<]+)</span>', html))
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["gaia_agent_email.agent_routes", "gaia_agent_email.connection_intake_routes"],
+)
+def test_every_router_route_is_in_the_spec(module):
+    """The generator is compared only to its own output above, so a route
+    missing from both sides (#3321: autonomy/undo, /v1/connections) went unseen.
+    Enumerate the real router instead."""
+    import importlib
+
+    router = importlib.import_module(module).router
+    rendered = _rendered_paths(spec_html.render_endpoint_spec_html())
+    actual = {r.path for r in router.routes}
+    assert actual, f"{module} router has no routes - enumeration is broken"
+    missing = sorted(actual - rendered)
+    assert not missing, f"routes missing from specification.html: {missing}"

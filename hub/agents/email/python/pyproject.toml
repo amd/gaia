@@ -14,15 +14,15 @@ requires-python = ">=3.10"
 # AND keyring automatically — the email REST router's import chain needs keyring
 # at module load and at request time (connected_mailbox_providers). Closes the
 # "consumer forgot [api]" half of #1617.
-# Floor: 0.25.1 is the first released core covering the email
-# agent module-level imports, including the guided Outlook walkthrough.
+# Floor: 0.25.3 is the first core release containing the WAL retry helper
+# used when the email state database opens concurrently with another agent.
 # tests/test_dependency_floor.py guards this floor.
 #
 # specific-ai-tools is pinned exactly, not floored: it supplies the SLM
 # classifier the agent loads model weights through, so the version that ships
 # is the version the SLM path was validated against.
 dependencies = [
-    "amd-gaia[api]>=0.25.1",
+    "amd-gaia[api]>=0.25.3",
     "specific-ai-tools==0.1.1",
 ]
 

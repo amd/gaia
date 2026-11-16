@@ -51,6 +51,7 @@ beforeEach(() => {
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'session', mode: 'ask', grants: [] });
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     mockedApi.updateSession.mockResolvedValue(undefined as never);
+    mockedApi.getModelNeed.mockResolvedValue({ job: 'chat', needed: false, model: null, disk_free_gb: null });
     mockedApi.sendMessageStream.mockImplementation((_sid, _msg, cbs) => {
         callbacks = cbs as api.StreamCallbacks;
         return new AbortController();
@@ -85,6 +86,7 @@ describe('ChatView session panel: this answer', () => {
             fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'what is new at amd' } });
             fireEvent.click(screen.getByLabelText('Send'));
         });
+        await waitFor(() => expect(callbacks).not.toBeNull());
         await act(async () => {
             callbacks!.onDone({ type: 'done', content: 'answer', message_id: 7, turn_summary: SUMMARY } as StreamEvent);
         });

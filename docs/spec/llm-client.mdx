@@ -42,6 +42,9 @@ The LLM client package provides a unified interface for generating text from mul
 | `chat()` | ✓ | ✓ |
 | `embed()` | ✓ | ✗ |
 | `vision()` | ✓ | ✓ |
+| `generate_image()` | ✓ | ✗ |
+| `transcribe_audio()` | ✓ | ✗ |
+| `create_image_variation()` | ✓ | ✗ |
 | `get_performance_stats()` | ✓ | ✓ |
 | `load_model()` | ✓ | ✗ |
 | `unload_model()` | ✓ | ✗ |
@@ -60,11 +63,9 @@ The direct `openai` and `litellm` adapters were removed because they discarded
 native tool calls. The `litellm` installation extra is removed too. The
 `openai` Python dependency remains: Lemonade uses it for compatible HTTP requests.
 
-`provider="openai"`, `provider="litellm"`, and `use_openai=True` raise `ValueError`
-with migration guidance before importing a provider or issuing requests.
-`use_chatgpt=True` in the agent, chat/audio/talk SDK chain and the legacy
-`--use-chatgpt` CLI flag also fail explicitly. These flags are retained only as
-migration-error shims; they do not select another backend or ignore the setting.
+`provider="openai"` and `provider="litellm"` raise `ValueError` with migration
+guidance before importing a provider or issuing requests. The `use_openai` and
+`use_chatgpt` keyword arguments were removed; passing one raises `TypeError`.
 
 Configure the upstream model in Lemonade, then pass the Lemonade server URL and
 its catalog model ID. Do not substitute a raw upstream endpoint for Lemonade's
@@ -84,8 +85,8 @@ Historical release notes describe the providers that shipped in those releases.
    - Backward-compatible `use_claude` flag
    - Auto-detection of provider from flags when `provider` not specified
    - Default to Lemonade provider when no flags set
-   - Retired names (`"openai"`, `"litellm"`) and a true `use_openai` flag raise
-     `ValueError` with migration guidance before any provider is imported
+   - Retired names (`"openai"`, `"litellm"`) raise `ValueError` with migration
+     guidance before any provider is imported
 
 2. **Abstract Interface**
    - `LLMClient` ABC defines unified interface
@@ -96,6 +97,9 @@ Historical release notes describe the providers that shipped in those releases.
    - **Optional methods** (raise `NotSupportedError` if not implemented):
      - `embed()` - Generate embeddings
      - `vision()` - Vision/image understanding
+     - `generate_image()` - Text-to-image generation
+     - `transcribe_audio()` - Speech-to-text from a WAV file
+     - `create_image_variation()` - Variations of an existing PNG
      - `get_performance_stats()` - Performance statistics
      - `load_model()` - Load a model
      - `unload_model()` - Unload current model
@@ -165,7 +169,6 @@ from gaia.llm import create_client, LLMClient, VLMClient, NotSupportedError
 def create_client(
     provider: Optional[str] = None,
     use_claude: bool = False,
-    use_openai: bool = False,
     **kwargs,
 ) -> LLMClient:
     """
@@ -175,15 +178,14 @@ def create_client(
         provider: Explicit provider name ("lemonade" or "claude").
                   If not specified, auto-detected from the use_claude flag.
         use_claude: If True, use Claude provider (ignored if provider is specified)
-        use_openai: Retained only to reject legacy callers; True always raises
         **kwargs: Provider-specific arguments (base_url, model, api_key, etc.)
 
     Returns:
         LLMClient instance for the specified or detected provider
 
     Raises:
-        ValueError: If provider is unknown, is a retired name ("openai",
-                    "litellm"), or use_openai is True
+        ValueError: If provider is unknown or is a retired name ("openai",
+                    "litellm")
 
     Examples:
         # Default Lemonade provider
@@ -320,6 +322,42 @@ class LLMClient(ABC):
             Supported by: Lemonade, Claude
         """
         raise NotSupportedError(self.provider_name, "vision")
+
+    def generate_image(self, prompt: str, **kwargs) -> dict:
+        """
+        Generate an image from a text prompt.
+
+        Returns:
+            The server response; images are in ``data[].b64_json``
+
+        Note:
+            Only supported by: Lemonade
+        """
+        raise NotSupportedError(self.provider_name, "generate_image")
+
+    def transcribe_audio(self, audio_path: str, **kwargs) -> Any:
+        """
+        Transcribe a 16 kHz mono WAV file.
+
+        Returns:
+            A ``Transcript`` (segments, words, language, duration)
+
+        Note:
+            Only supported by: Lemonade
+        """
+        raise NotSupportedError(self.provider_name, "transcribe_audio")
+
+    def create_image_variation(self, image_path: str, **kwargs) -> dict:
+        """
+        Generate variations of an existing PNG, without a prompt.
+
+        Returns:
+            The server response; images are in ``data[].b64_json``
+
+        Note:
+            Only supported by: Lemonade
+        """
+        raise NotSupportedError(self.provider_name, "create_image_variation")
 
     def get_performance_stats(self) -> dict:
         """
@@ -473,9 +511,9 @@ The factory function auto-detects the provider based on parameters:
 
 ```python
 # From factory.py
-def create_client(provider=None, use_claude=False, use_openai=False, **kwargs):
+def create_client(provider=None, use_claude=False, **kwargs):
     # Retired selections fail before any provider import
-    if use_openai or (provider and provider.lower() in {"openai", "litellm"}):
+    if provider and provider.lower() in {"openai", "litellm"}:
         raise ValueError(REMOVED_PROVIDER_MESSAGE)
     if provider is None:
         provider = "claude" if use_claude else "lemonade"

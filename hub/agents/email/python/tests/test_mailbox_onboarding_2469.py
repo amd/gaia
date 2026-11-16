@@ -686,6 +686,50 @@ def test_forwarded_mode_reads_usability_from_the_forwarded_token(connectors, for
     assert ms.inspect_provider("google")["state"] == ms.STATE_OK
 
 
+def test_forwarded_mode_expired_token_is_not_reported_as_reauth(connectors, forwarded):
+    """A lapsed forward is renewed by the daemon — a browser sign-in fixes nothing."""
+    connectors["connection"] = _connection()
+    connectors["granted"] = True
+    forwarded.set_forwarded(
+        "google", access_token="tok", scopes=GMAIL_SCOPES, expires_at=time.time()
+    )
+
+    state = ms.inspect_provider("google")
+    assert state["state"] == ms.STATE_ERROR
+    assert "Retry in a moment" in state["detail"]
+
+
+def test_forwarded_mode_short_scopes_name_the_missing_scopes(connectors, forwarded):
+    connectors["connection"] = _connection()
+    connectors["granted"] = True
+    forwarded.set_forwarded(
+        "google",
+        access_token="tok",
+        scopes=GMAIL_SCOPES[:1],
+        expires_at=time.time() + 3600,
+    )
+
+    state = ms.inspect_provider("google")
+    assert state["state"] == ms.STATE_MISSING_SCOPES
+    assert state["missing_scopes"] == list(GMAIL_SCOPES[1:])
+
+
+def test_forwarded_mode_unexpected_probe_failure_is_unknown_not_reauth(
+    connectors, forwarded, monkeypatch
+):
+    connectors["connection"] = _connection()
+    connectors["granted"] = True
+
+    def boom(*_):
+        raise OSError("lock contention")
+
+    monkeypatch.setattr(forwarded, "get_forwarded_token", boom)
+
+    state = ms.inspect_provider("google")
+    assert state["state"] == ms.STATE_ERROR
+    assert "lock contention" in state["detail"]
+
+
 def test_forwarded_mode_reports_a_pending_handover_not_a_failure(connectors, forwarded):
     """Connecting under the daemon succeeds even though the token lags behind."""
     connectors["connection"] = None

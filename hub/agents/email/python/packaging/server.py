@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import sys
 
+from gaia.logger import configure
+
+configure()
 from gaia_agent_email.server import (  # noqa: F401  (re-exported for the freeze/tests)
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -37,6 +40,16 @@ from gaia_agent_email.server import (  # noqa: F401  (re-exported for the freeze
     main,
 )
 
+if __name__ != "__main__":
+    # The daemon's dev mode serves this module with `uvicorn server:app`,
+    # which never reaches main(), where the watch otherwise starts.
+    from gaia.sidecar import parent_watch
+
+    try:
+        parent_watch.start()
+    except ValueError as exc:  # one line, as main() prints it
+        raise SystemExit(f"gaia-agent-email: {exc}") from None
+
 # Loaded as the TOP-LEVEL module `server` via `uvicorn server:app --app-dir
 # <this dir>` — NOT `packaging.server:app`, which would resolve to the PyPI
 # `packaging` library (this dir has no __init__.py by design). The module-level
@@ -44,4 +57,7 @@ from gaia_agent_email.server import (  # noqa: F401  (re-exported for the freeze
 # freeze and the source dev server serve.
 
 if __name__ == "__main__":
+    from gaia.sidecar.bundle_freshness import keep_unpacked_bundle_fresh
+
+    keep_unpacked_bundle_fresh()
     sys.exit(main())

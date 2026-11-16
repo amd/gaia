@@ -52,9 +52,7 @@ def test_explicit_empty_scopes_takes_the_union_path(client, monkeypatch):
         json={"client_id": "id", "client_secret": "secret", "scopes": []},
     )
     assert resp.status_code == 200, resp.text
-    assert captured["config"]["scopes"] == connector_routes._build_scope_union(
-        "google"
-    )
+    assert captured["config"]["scopes"] == connector_routes._build_scope_union("google")
     assert captured["config"]["scopes"] != []
 
 
@@ -125,9 +123,7 @@ def test_omitted_scopes_takes_the_same_union_path(client, monkeypatch):
         json={"client_id": "id", "client_secret": "secret"},
     )
     assert resp.status_code == 200, resp.text
-    assert captured["config"]["scopes"] == connector_routes._build_scope_union(
-        "google"
-    )
+    assert captured["config"]["scopes"] == connector_routes._build_scope_union("google")
 
 
 def test_explicit_nonempty_scopes_is_honored_unchanged(client, monkeypatch):

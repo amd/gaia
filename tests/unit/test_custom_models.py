@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Local GGUF models added from a pasted Hugging Face link (gaia.llm.custom_models).
+"""Local models added from a pasted Hugging Face link (gaia.llm.custom_models).
 
 Hugging Face and GitHub are faked at ``_http_get``; the repo payload mirrors
 the shape of ``/api/models/<repo>?blobs=true`` and the architecture source the

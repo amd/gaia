@@ -21,6 +21,7 @@ var (
 	addLink          = gaiamodel.Add
 	removeModel      = gaiamodel.Remove
 	readCustomModels = lemonade.ReadCustomModels
+	readChosenModels = lemonade.ReadChosenModels
 )
 
 type customCheckedMsg struct {
@@ -197,7 +198,7 @@ func (m Model) addView(w int) []string {
 	f.Width = max(10, w-4)
 	lines := []string{
 		title.Render("Add a model from Hugging Face"),
-		"Paste the link to a GGUF model. GAIA checks that it is a chat model your Lemonade can run and that it fits this PC.",
+		"Paste the link to a GGUF or FastFlowLM (NPU) model. GAIA checks that it is a chat model your Lemonade can run and that it fits this PC.",
 		"",
 		"› Link",
 		"  " + f.View(),

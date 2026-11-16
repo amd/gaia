@@ -8,9 +8,10 @@ Two properties, both latency-motivated (``docs/plans/gaia-agent-latency.md``):
    block — it already gets the full JSON schemas via ``tools=``, and the block
    restated every name and summary for 1,678 duplicate tokens per call on the
    flagship's registry.
-2. Fragments that change mid-session compose LAST. llama.cpp reuses its KV cache
-   only up to the first differing token, so volatile text above static text
-   invalidates all of it.
+2. Fragments that differ between sessions or change during one leave the
+   system prompt for ``session_context``, sent at the start of the first user
+   message. A hybrid model resumes only from a checkpoint, never from inside
+   the system prompt, so any per-session byte there re-reads all of it.
 """
 
 from __future__ import annotations
@@ -107,53 +108,54 @@ def test_response_format_template_and_tool_block_share_one_gate():
     assert "==== AVAILABLE TOOLS ====" in text
 
 
-# ── volatile-last ordering ─────────────────────────────────────────────────
+# ── volatile fragments leave the system prompt ─────────────────────────────
 
 
-def _positions(prompt: str, *markers: str):
-    return [prompt.index(m) for m in markers]
-
-
-def test_volatile_fragments_compose_after_the_static_ones():
-    agent = _StubAgent()
+def _compose(agent):
     with patch("gaia.llm.lemonade_client.is_tool_calling_model", return_value=True):
-        prompt = agent._compose_system_prompt()
-
-    vision, static, memory, skills = _positions(
-        prompt, "STATIC-VISION", "STATIC-AGENT-PROMPT", "MEMORY-BLOCK", "SKILLS-BLOCK"
-    )
-    assert vision < static < memory
-    assert vision < static < skills
+        return agent._compose_system_prompt(), agent.session_context
 
 
-def test_the_static_head_is_byte_identical_when_only_memory_changes():
-    """The whole point: a remember() must not re-prefill the static text."""
+def test_volatile_fragments_move_to_the_session_context():
+    prompt, context = _compose(_StubAgent())
+
+    assert "STATIC-VISION" in prompt and "STATIC-AGENT-PROMPT" in prompt
+    assert "MEMORY-BLOCK" not in prompt and "SKILLS-BLOCK" not in prompt
+    assert context == "MEMORY-BLOCK\n\nSKILLS-BLOCK"
+
+
+def test_the_system_prompt_is_byte_identical_when_only_memory_changes():
+    """The whole point: a fresh session with new memory reuses the cached prompt."""
     agent = _StubAgent()
-    with patch("gaia.llm.lemonade_client.is_tool_calling_model", return_value=True):
-        before = agent._compose_system_prompt()
-        agent._memory_text = "MEMORY-BLOCK plus a newly stored fact"
-        after = agent._compose_system_prompt()
+    before, old_context = _compose(agent)
+    agent._memory_text = "MEMORY-BLOCK plus a newly stored fact"
+    after, new_context = _compose(agent)
 
-    assert before != after
-    shared = _common_prefix(before, after)
-    # Everything static survives the change; only the memory tail differs.
-    assert "STATIC-AGENT-PROMPT" in shared
-    assert "STATIC-VISION" in shared
+    assert before == after
+    assert "newly stored fact" in new_context and "newly" not in old_context
 
 
-def test_the_static_head_is_byte_identical_when_only_skills_change():
+def test_the_system_prompt_is_byte_identical_when_only_skills_change():
     """Per-turn skill-body selection is designed to change every turn."""
     agent = _StubAgent()
-    with patch("gaia.llm.lemonade_client.is_tool_calling_model", return_value=True):
-        before = agent._compose_system_prompt()
-        agent._skills_text = "SKILLS-BLOCK with a different body selected"
-        after = agent._compose_system_prompt()
+    before, _ = _compose(agent)
+    agent._skills_text = "SKILLS-BLOCK with a different body selected"
+    after, context = _compose(agent)
 
-    shared = _common_prefix(before, after)
-    assert "STATIC-AGENT-PROMPT" in shared
+    assert before == after
+    assert "different body" in context
 
 
-def test_a_subclass_filtering_mixin_prompts_still_gets_the_ordering():
+def test_no_volatile_text_leaves_an_empty_session_context():
+    agent = _StubAgent()
+    agent._memory_text = agent._skills_text = ""
+    prompt, context = _compose(agent)
+
+    assert context == ""
+    assert prompt.endswith("STATIC-AGENT-PROMPT")
+
+
+def test_a_subclass_filtering_mixin_prompts_still_gets_the_split():
     """ChatAgent overrides _get_mixin_prompts to drop the SD fragment; the
     volatile/static split is applied to whatever survives that filter."""
 
@@ -161,13 +163,10 @@ def test_a_subclass_filtering_mixin_prompts_still_gets_the_ordering():
         def _get_mixin_prompts(self):
             return [p for p in super()._get_mixin_prompts() if p != "STATIC-VISION"]
 
-    agent = _Filtering()
-    with patch("gaia.llm.lemonade_client.is_tool_calling_model", return_value=True):
-        prompt = agent._compose_system_prompt()
+    prompt, context = _compose(_Filtering())
 
-    assert "STATIC-VISION" not in prompt
-    static, memory = _positions(prompt, "STATIC-AGENT-PROMPT", "MEMORY-BLOCK")
-    assert static < memory
+    assert "STATIC-VISION" not in prompt + context
+    assert "MEMORY-BLOCK" in context and "MEMORY-BLOCK" not in prompt
 
 
 def test_a_raising_fragment_is_skipped_not_fatal():
@@ -175,12 +174,10 @@ def test_a_raising_fragment_is_skipped_not_fatal():
         def get_memory_system_prompt(self):
             raise RuntimeError("memory store is down")
 
-    agent = _Raising()
-    with patch("gaia.llm.lemonade_client.is_tool_calling_model", return_value=True):
-        prompt = agent._compose_system_prompt()
+    prompt, context = _compose(_Raising())
 
     assert "STATIC-AGENT-PROMPT" in prompt
-    assert "MEMORY-BLOCK" not in prompt
+    assert "MEMORY-BLOCK" not in prompt + context
 
 
 def test_filtered_tool_block_stays_at_the_very_end():
@@ -191,17 +188,9 @@ def test_filtered_tool_block_stays_at_the_very_end():
         prompt = agent._compose_system_prompt()
 
     tools = prompt.index("==== AVAILABLE TOOLS ====")
-    assert tools > prompt.index("MEMORY-BLOCK")
     assert tools > prompt.index("RESPONSE-FORMAT-TEMPLATE")
+    assert "MEMORY-BLOCK" not in prompt
     assert "beta" not in prompt
-
-
-def _common_prefix(a: str, b: str) -> str:
-    limit = min(len(a), len(b))
-    i = 0
-    while i < limit and a[i] == b[i]:
-        i += 1
-    return a[:i]
 
 
 @pytest.mark.parametrize(

@@ -214,8 +214,9 @@ def _clamped_ceiling(monkeypatch, config):
     """Register the read tools on a stub host; return the ceiling triage applied."""
     from types import SimpleNamespace
 
-    from gaia.agents.base.tools import _TOOL_REGISTRY
     from gaia_agent_email.tools.read_tools import ReadToolsMixin
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
 
     seen = {}
 
@@ -274,8 +275,9 @@ def test_ceiling_is_resolved_once_at_registration_not_per_call(monkeypatch):
     """Changing the env mid-run must not move the ceiling under a live agent."""
     from types import SimpleNamespace
 
-    from gaia.agents.base.tools import _TOOL_REGISTRY
     from gaia_agent_email.tools.read_tools import ReadToolsMixin
+
+    from gaia.agents.base.tools import _TOOL_REGISTRY
 
     seen = []
 

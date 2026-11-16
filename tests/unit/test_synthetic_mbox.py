@@ -21,6 +21,7 @@ import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import Iterator
 
 import pytest
 
@@ -51,10 +52,13 @@ def _ensure_generated() -> None:
     generate(MBOX_PATH, GT_PATH)
 
 
-@pytest.fixture(scope="module")
-def mbox_obj() -> mailbox.mbox:
+@pytest.fixture
+def mbox_obj() -> Iterator[mailbox.mbox]:
     _ensure_generated()
-    return mailbox.mbox(str(MBOX_PATH), create=False)
+    box = mailbox.mbox(str(MBOX_PATH), create=False)
+    yield box
+    # Windows can't replace a file that is open, and the generator tests do.
+    box.close()
 
 
 @pytest.fixture(scope="module")

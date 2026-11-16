@@ -56,6 +56,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia_agent_email import schedule_store
+from gaia_agent_email.failure_notify import notify_scheduled_failure
 from gaia_agent_email.lease import (
     DEFAULT_HEARTBEAT_SECONDS,
     DEFAULT_STALE_AFTER_SECONDS,
@@ -166,11 +167,18 @@ class EmailJobScheduler:
                     job["job_id"],
                 )
             elif outcome == "failed":
+                current = schedule_store.get_job(db, job_id=job["job_id"]) or job
+                error = str(
+                    current.get("error")
+                    or "The send was interrupted while firing and may already have "
+                    "been sent; check your Sent folder before retrying."
+                )
                 log.error(
                     "email scheduler: job %s stopped renewing its lease while "
                     "firing; marked it failed instead of running it twice",
                     job["job_id"],
                 )
+                self._notify_failed(current, error, source="email scheduler recovery")
                 failed.append(job["job_id"])
         return failed
 
@@ -195,6 +203,13 @@ class EmailJobScheduler:
                 outcome,
             )
 
+    @staticmethod
+    def _notify_failed(
+        job: Dict[str, Any], error: str, *, source: str = "email scheduler"
+    ) -> None:
+        """Best-effort desktop notice after the durable failure write succeeded."""
+        notify_scheduled_failure(job, error, source=source)
+
     def _fire_due_jobs_on(self, db, *, now: Optional[float]) -> Dict[str, List[str]]:
         now = now if now is not None else self._clock()
         fired: List[str] = []
@@ -210,10 +225,12 @@ class EmailJobScheduler:
                     f"no executor registered for job kind {job['kind']!r} — "
                     "the job cannot fire in this process"
                 )
-                schedule_store.mark_failed(
+                recorded = schedule_store.mark_failed(
                     db, job_id=job_id, claim_id=claim_id, error=msg
                 )
                 log.error("email scheduler: job %s failed: %s", job_id, msg)
+                if recorded:
+                    self._notify_failed(job, msg)
                 failed.append(job_id)
                 continue
             try:
@@ -225,19 +242,24 @@ class EmailJobScheduler:
                     executor(job, db)
             except Exception as exc:
                 msg = f"{type(exc).__name__}: {exc}"
-                self._record(
-                    schedule_store.mark_failed(
-                        db, job_id=job_id, claim_id=claim_id, error=msg
-                    ),
-                    job,
-                    "failed",
+                current = schedule_store.get_job(db, job_id=job_id)
+                recovered_holder = bool(
+                    current
+                    and current["status"] == schedule_store.STATUS_FAILED
+                    and current.get("superseded_claim") == claim_id
                 )
+                recorded = schedule_store.mark_failed(
+                    db, job_id=job_id, claim_id=claim_id, error=msg
+                )
+                self._record(recorded, job, "failed")
                 log.exception(
                     "email scheduler: %s job %s failed to fire: %s",
                     job["kind"],
                     job_id,
                     msg,
                 )
+                if recorded and not recovered_holder:
+                    self._notify_failed(job, msg)
                 failed.append(job_id)
                 continue
             self._record(

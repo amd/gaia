@@ -116,7 +116,6 @@ export function useConnectorsSSE(
     }, [onChange]);
 
     useEffect(() => {
-        const url = `${getApiBase()}/connectors/events`;
         let es: EventSource | null = null;
         let backoff = 1000;
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -124,7 +123,8 @@ export function useConnectorsSSE(
 
         const connect = () => {
             if (cancelled) return;
-            es = new EventSource(url);
+            // Read the base on every try: a restarted backend can be on a new port.
+            es = new EventSource(`${getApiBase()}/connectors/events`);
 
             es.onopen = () => {
                 // Reset backoff once the stream is healthy.

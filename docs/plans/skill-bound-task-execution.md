@@ -59,12 +59,12 @@ Admission runs at **submit**, not at run. Every one of these is a `CLAUDE.md`-st
 
 | Check | Why it must be a hard reject |
 |---|---|
-| Skill needs tools, resolved model has `tool_calling=False` | The FLM/NPU server **500-errors on an OpenAI `tools` payload** — verified on hardware (`lemonade_client.py:349-360`). A tool-heavy skill physically cannot bind to `gemma4-it-e2b-FLM`. |
+| Skill needs tools, resolved model has `tool_calling=False` | A model without native tool calls gets its tools as JSON in text, which a small model answers unreliably. FLM v1.0.7 serves native tool calls for the Gemma 4 NPU builds, so `gemma4-it-e2b-FLM` now declares `tool_calling=True` (#6008); it still skips tools it was asked to use, so it is no target for tool-heavy skills. |
 | `requires.ctx` exceeds the device ceiling | FLM cannot load above `NPU_CTX_SIZE` (32768); handing it 65536 fails the load outright. |
 | `pin`ned model not installed | Fresh-machine failure (#1655 class). Name the install command. |
 | No `verified` config for detected hardware | Warn-and-degrade or reject — a product decision, but never silent. |
 
-That first row is the sharpest constraint in the whole design and it is easy to miss: **the NPU model is not a general-purpose target.** It is right for classification, triage, summarization, and embedded-JSON work; it is wrong for anything tool-driven.
+That first row is the sharpest constraint in the whole design and it is easy to miss: **the small NPU model is not a general-purpose target.** E2B is right for classification, triage, summarization, and embedded-JSON work; it is wrong for anything tool-driven.
 
 ### 3. Multi-slot broker
 

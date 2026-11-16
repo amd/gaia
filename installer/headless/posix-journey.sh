@@ -4,7 +4,7 @@
 #
 # One phase of one installer journey on macOS or Linux:
 #
-#   posix-journey.sh <download|install|upgrade|launch|health|preflight|quit|uninstall|leftovers>
+#   posix-journey.sh <download|install|upgrade|launch|health|setup|preflight|quit|engine|uninstall|leftovers>
 #
 # It installs and uninstalls system packages, writes under /usr and /Applications,
 # and deletes the sandbox home it creates. It refuses to run anywhere but a
@@ -20,6 +20,8 @@
 #   PKG_DIR       (rebuilt packages) where this run's rebuilt packages are
 #   PREV_PKG_DIR  (tui-deb-upgrade) where the previous version's package is
 #   TUI_PLATFORM  (tui-pkg) darwin-arm64 | darwin-x64
+#   SETUP_JOURNEY 1 when the row runs the setup phase: the app starts against
+#                 a fake Lemonade with nothing downloaded
 #
 # Bash 3.2 compatible: it runs on the macOS system bash.
 
@@ -102,18 +104,20 @@ pkg_suffix() {
 }
 
 # ── The fake model server and the TUI checks ─────────────────────────────────
-start_fake() {
+run_fake() {
   rm -f "${WORK}/fake.port"
-  # The flagship profile's models (INIT_PROFILES in src/gaia/installer/
-  # init_command.py) and the larger default a big machine picks, as downloaded.
-  "${PYTHON}" "${HERE}/fake_model_server.py" --port-file "${WORK}/fake.port" \
-    --log "${LOGS}/fake-requests.jsonl" --model Gemma-4-E4B-it-GGUF \
-    --model user.embeddinggemma-300m-GGUF --model Qwen3.6-35B-A3B-GGUF \
-    >"${LOGS}/fake-server.log" 2>&1 &
+  nohup "${PYTHON}" "${HERE}/fake_model_server.py" --port-file "${WORK}/fake.port" \
+    --log "${LOGS}/fake-requests.jsonl" "$@" >"${LOGS}/fake-server.log" 2>&1 &
   echo $! >"${WORK}/fake.pid"
   for _ in $(seq 1 150); do [ -s "${WORK}/fake.port" ] && break; sleep 0.2; done
   [ -s "${WORK}/fake.port" ] || { cat "${LOGS}/fake-server.log"; die "the fake model server did not start"; }
   FAKE_URL="http://127.0.0.1:$(cat "${WORK}/fake.port")/api/v1"
+}
+# The flagship profile's models (INIT_PROFILES in src/gaia/installer/
+# init_command.py) and the larger default a big machine picks, as downloaded.
+start_fake() {
+  run_fake --model Gemma-4-E4B-it-GGUF --model user.embeddinggemma-300m-GGUF \
+    --model Qwen3.6-35B-A3B-GGUF
 }
 stop_fake() { kill "$(cat "${WORK}/fake.pid" 2>/dev/null)" 2>/dev/null || true; }
 
@@ -127,27 +131,36 @@ target() {
   fi
 }
 
+# The Terminal UI the row installed. A release from before the binary became
+# gaia-cli (the one a PR tests, and the one the upgrade row starts from) has
+# gaia-tui there instead.
 tui_bin() {
+  local dir
   case "${KIND}" in
-    tui-pkg) echo /usr/local/bin/gaia-tui ;;
-    install-sh) echo "${HOME}/.gaia/bin/gaia-tui" ;;
-    *) echo /usr/bin/gaia-tui ;;
+    tui-pkg) dir=/usr/local/bin ;;
+    install-sh) dir="${HOME}/.gaia/bin" ;;
+    *) dir=/usr/bin ;;
   esac
+  if ! target test -x "${dir}/gaia-cli" && target test -x "${dir}/gaia-tui"; then
+    echo "${dir}/gaia-tui"
+  else
+    echo "${dir}/gaia-cli"
+  fi
 }
 
-# A release stamps gaia-tui in two spellings today: the raw binaries say the
+# A release stamps gaia-cli in two spellings today: the raw binaries say the
 # tag (v0.25.1-rc2), the installers' copies the package version (0.25.1-rc.2).
 check_tui_version() {  # check_tui_version <expected substring>...
   local out want
-  out="$(target "$(tui_bin)" version 2>&1)" || die "gaia-tui version exited non-zero: ${out}"
-  echo "gaia-tui version -> ${out}"
+  out="$(target "$(tui_bin)" version 2>&1)" || die "gaia-cli version exited non-zero: ${out}"
+  echo "gaia-cli version -> ${out}"
   for want in "$@"; do
     case "${out}" in *"${want}"*) return 0 ;; esac
   done
-  die "gaia-tui reports '${out}', expected one of: $*"
+  die "gaia-cli reports '${out}', expected one of: $*"
 }
 
-# One real non-interactive turn: gaia-tui spawns the installed gaia-agent, which
+# One real non-interactive turn: gaia-cli spawns the installed gaia-agent, which
 # talks to the fake model server. Exit 0 and the server's answer on stdout is a
 # pass; anything else fails with both streams and the request log printed.
 one_shot() {
@@ -194,9 +207,13 @@ launch_agent_ui() {
   local cmd
   cmd="$(agent_ui_cmd)"
   [ -x "${cmd}" ] || die "${cmd} is not there to launch"
-  # gaia init downloads Lemonade and several GB of models; that needs hardware
-  # and is covered elsewhere. Everything up to a serving backend is under test.
+  # These rows install a published release; one before #5629 runs gaia init
+  # (several GB of models) on first launch. Later apps ignore the variable.
   export GAIA_SKIP_GAIA_INIT=1
+  if [ "${SETUP_JOURNEY:-}" = "1" ]; then
+    run_fake --catalog
+    export LEMONADE_BASE_URL="${FAKE_URL}"
+  fi
   if [ "${OS}" = "Linux" ]; then
     nohup xvfb-run --auto-servernum "${cmd}" >"${LOGS}/app.out" 2>"${LOGS}/app.err" &
   else
@@ -205,12 +222,29 @@ launch_agent_ui() {
   echo $! >"${WORK}/app.pid"
   sleep 10
   kill -0 "$(cat "${WORK}/app.pid")" 2>/dev/null || { tail -n 50 "${LOGS}/app.err"; die "the app exited within 10s of launch"; }
-  [ -f "${GAIA_HOME}/electron-main.log" ] || die "the app is running but wrote no ${GAIA_HOME}/electron-main.log"
+  wait_for_main_log "$(cat "${WORK}/app.pid")" "${GAIA_HOME}/electron-main.log" 50
   echo "launched pid $(cat "${WORK}/app.pid")"
 }
 
-# First launch installs the Python backend from PyPI before it can serve, so
-# the bound is generous; the threshold file is what flags it getting slower.
+# wait_for_main_log <pid> <log> <seconds>: a cold AppImage mount plus a first
+# fontconfig scan can open the log just past the 10s survival check.
+wait_for_main_log() {
+  local deadline=$(( $(date +%s) + $3 ))
+  while [ ! -f "$2" ]; do
+    kill -0 "$1" 2>/dev/null || { tail -n 50 "${LOGS}/app.err"; die "the app exited without writing $2"; }
+    [ "$(date +%s)" -lt "${deadline}" ] || die "the app is running but wrote no $2 within $(( $3 + 10 ))s of launch"
+    sleep 1
+  done
+}
+
+# The `gaia` the app runs, from the backend start it logged: the one it ships
+# (an AppImage's copy under ~/.gaia), or an older release's venv.
+backend_gaia() {
+  grep -oE 'Starting backend: .+ chat --ui' "${GAIA_HOME}/electron-main.log" 2>/dev/null | tail -n1 | sed -E 's/^Starting backend: //; s/ chat --ui$//'
+}
+
+# A release from before the app shipped its backend installs it from PyPI on
+# first launch, so the bound is generous; the threshold file flags it slowing.
 wait_agent_ui_health() {
   local port="" body="" deadline=$(( $(date +%s) + 1500 ))
   while [ "$(date +%s)" -lt "${deadline}" ]; do
@@ -227,9 +261,29 @@ wait_agent_ui_health() {
     *) tail -n 80 "${GAIA_HOME}/electron-main.log" || true; die "the backend did not answer /api/health within 25 min" ;;
   esac
   local got
-  got="$("${GAIA_HOME}/venv/bin/gaia" --version 2>&1 || true)"
-  echo "backend gaia --version -> ${got}"
-  case "${got}" in *"${PEP440}"*) ;; *) die "the backend the app installed is '${got}', expected ${PEP440}" ;; esac
+  local gaia
+  gaia="$(backend_gaia)"
+  [ -n "${gaia}" ] || die "no backend start in ${GAIA_HOME}/electron-main.log"
+  got="$("${gaia}" --version 2>&1 || true)"
+  echo "backend ${gaia} --version -> ${got}"
+  case "${got}" in *"${PEP440}"*) ;; *) die "the backend the app runs is '${got}', expected ${PEP440}" ;; esac
+}
+
+# First-run setup through the installed app's own UI, which has been talking to
+# the fake since it launched. HOME is the sandbox, so the browser stays in WORK.
+setup_journey() {
+  local port
+  port="$(grep -oE 'ui-port[ =]+[0-9]+' "${GAIA_HOME}/electron-main.log" | tail -n1 | grep -oE '[0-9]+$' || true)"
+  [ -n "${port}" ] || die "no backend port in ${GAIA_HOME}/electron-main.log"
+  (
+    cd "${REPO}/src/gaia/apps/webui"
+    export PLAYWRIGHT_BROWSERS_PATH="${WORK}/playwright-browsers"
+    npm ci --ignore-scripts
+    npx playwright install --with-deps chromium
+    GAIA_E2E_BASE_URL="http://127.0.0.1:${port}" GAIA_E2E_SCREENS="${LOGS}/setup-screens" \
+      npx playwright test -c e2e/playwright.config.ts --project=en
+  ) || die "setup did not finish through the installed app; its Playwright report is above"
+  stop_fake
 }
 
 # The app's own processes and the backend it started.
@@ -242,11 +296,31 @@ app_pids() {
   } | sort -u
 }
 
+# With no Lemonade answering, the app's setup screen starts installing one by
+# itself shortly after launch, and SIGTERM during that run is #6579's case.
+# Quit once it is under way, so every row quits in the same state instead of
+# racing it.
+wait_for_setup_run() {
+  local port state="" deadline=$(( $(date +%s) + 120 ))
+  port="$(grep -oE 'ui-port[ =]+[0-9]+' "${GAIA_HOME}/electron-main.log" | tail -n1 | grep -oE '[0-9]+$' || true)"
+  [ -n "${port}" ] || die "no backend port in ${GAIA_HOME}/electron-main.log"
+  while [ "$(date +%s)" -lt "${deadline}" ]; do
+    state="$(curl -fsS --max-time 5 -H 'X-Gaia-UI: 1' "http://127.0.0.1:${port}/api/setup/status" 2>/dev/null \
+      | "${PYTHON}" -c 'import json,sys; print(json.load(sys.stdin).get("state", ""))' 2>/dev/null || true)"
+    case "${state}" in
+      ''|idle) sleep 1 ;;
+      *) echo "setup is ${state}"; return 0 ;;
+    esac
+  done
+  echo "::warning::the app had not started setup 120 s into the quit phase (last state '${state:-no answer}'); quitting anyway"
+}
+
 # Quit the way the OS does at logout: SIGTERM to the app's main process (the
 # one without a Chromium --type= flag), which runs the app's own quit path and
 # stops the backend. Whatever is still running 30 s later is recorded for the
 # leftovers phase, then killed so the uninstall can proceed.
 stop_agent_ui() {
+  [ "${SETUP_JOURNEY:-}" = "1" ] || wait_for_setup_run
   local p mains=""
   for p in $(pgrep -f "${APP_PATTERN}" || true); do
     ps -o args= -p "${p}" 2>/dev/null | grep -q -- '--type=' || mains="${mains} ${p}"
@@ -268,12 +342,64 @@ stop_agent_ui() {
   kill -9 $(app_pids) 2>/dev/null || true
 }
 
+# The daemon the backend started outlives the app by design, and keeps the
+# agent sidecar it supervises running, so stop it the way a user would.
+stop_daemon() {
+  local gaia
+  gaia="$(backend_gaia)"
+  if [ -z "${gaia}" ] || [ ! -x "${gaia}" ]; then echo "no backend gaia ('${gaia}'): the app started no backend, so no daemon"; return 0; fi
+  local rc=0
+  "${gaia}" daemon stop || rc=$?
+  [ "${rc}" -eq 0 ] || die "\`gaia daemon stop\` exited ${rc}"
+}
+
 assert_gone() { for p in "$@"; do [ ! -e "${p}" ] || die "left behind: ${p}"; done; }
 
 no_gaia_processes() {
   local left
-  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/gaia' || true)"
+  left="$(pgrep -fl 'gaia-desktop|gaia-cli|gaia-tui|gaia-agent|\.gaia/venv/bin/|\.gaia/core/|\.gaia/app-core/|resources/core/gaia|-m gaia\.daemon' || true)"
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
+}
+
+# ── The real AI engine ────────────────────────────────────────────────────────
+# The packaged gaia starts its own real Lemonade, exactly as setup's "Check this
+# PC" does: no fake server, no model download. A bundle library leaking into
+# lemond (rc13's libstdc++) fails here, not on a user's PC.
+real_engine() {
+  local gaia="$1" rc=0
+  [ -x "${gaia}" ] || die "no packaged gaia at '${gaia}' to start the engine with"
+  env -u LEMONADE_BASE_URL "${gaia}" lemonade embedded start --timeout 180 || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "--- lemond.log (last 60 lines) ---"
+    tail -n 60 "${GAIA_HOME}/lemonade/lemond.log" 2>/dev/null || echo "(no lemond.log)"
+    die "the packaged gaia could not start its real Lemonade (exit ${rc})"
+  fi
+  env -u LEMONADE_BASE_URL "${gaia}" lemonade embedded status
+  "${gaia}" lemonade embedded stop || die "\`gaia lemonade embedded stop\` failed after a good start"
+}
+
+# The reporter of rc13's bug runs Fedora, where nothing else starts the
+# packaged gaia: install it with install.sh in the container, then start its
+# real Lemonade there, with the libraries a Fedora desktop has.
+fedora_engine() {
+  local tag rc=0
+  tag="$(rel "d['tag']")"
+  cp "${REPO}/installer/scripts/install.sh" "${WORK}/install.sh"
+  # shellcheck disable=SC2046  # one package per word
+  docker exec gaia-fedora dnf install -y --setopt=install_weak_deps=False \
+    $(grep -v '^#' "${REPO}/installer/core/fedora-engine-packages.txt") >/dev/null \
+    || die "could not prepare the Fedora container"
+  docker exec -e HOME=/root -e GAIA_RELEASE_TAG="${tag}" gaia-fedora sh /work/install.sh \
+    || die "install.sh failed in the Fedora container"
+  docker exec -e HOME=/root gaia-fedora /root/.gaia/bin/gaia lemonade embedded start --timeout 180 || rc=$?
+  if [ "${rc}" -ne 0 ]; then
+    echo "--- lemond.log (last 60 lines) ---"
+    docker exec gaia-fedora tail -n 60 /root/.gaia/lemonade/lemond.log 2>/dev/null || echo "(no lemond.log)"
+    die "the packaged gaia could not start its real Lemonade on Fedora (exit ${rc})"
+  fi
+  docker exec -e HOME=/root gaia-fedora /root/.gaia/bin/gaia lemonade embedded status
+  docker exec -e HOME=/root gaia-fedora /root/.gaia/bin/gaia lemonade embedded stop \
+    || die "\`gaia lemonade embedded stop\` failed after a good start"
 }
 
 # ── install.sh ────────────────────────────────────────────────────────────────
@@ -296,9 +422,9 @@ download)
 install)
   case "${KIND}" in
     tui-pkg)
-      test ! -e /usr/local/bin/gaia-tui || die "gaia-tui is already installed: the runner is not clean"
+      for b in gaia-cli gaia-tui; do test ! -e "/usr/local/bin/${b}" || die "${b} is already installed: the runner is not clean"; done
       sudo installer -pkg "$(package_file "tui-pkg-${TUI_PLATFORM}")" -target /
-      for b in gaia-tui gaia-agent; do [ -x "/usr/local/bin/${b}" ] || die "${b} did not land in /usr/local/bin"; done
+      for b in "$(tui_bin)" /usr/local/bin/gaia-agent; do [ -x "${b}" ] || die "${b} did not land"; done
       ;;
     agent-ui-dmg)
       dmg="${WORK}/dl/$(asset_name agent-ui-dmg)"
@@ -345,9 +471,10 @@ install)
       else
         deb="$(package_file tui-deb)"
       fi
+      test ! -e /usr/bin/gaia-cli || die "gaia-cli is already installed: the runner is not clean"
       test ! -e /usr/bin/gaia-tui || die "gaia-tui is already installed: the runner is not clean"
       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deb}"
-      for b in gaia-tui gaia-agent; do [ -x "/usr/bin/${b}" ] || die "${b} did not land in /usr/bin"; done
+      for b in "$(tui_bin)" /usr/bin/gaia-agent; do [ -x "${b}" ] || die "${b} did not land"; done
       if [ "${KIND}" = "tui-deb-upgrade" ]; then
         check_tui_version "$(rel "d['prev_tui_version']")" "$(rel "d['prev_version']")"
         mkdir -p "${GAIA_HOME}"
@@ -359,9 +486,9 @@ install)
       rpm="$(package_file tui-rpm)"
       # The container sees only WORK (as /work); a rebuilt package lives outside it.
       case "${rpm}" in "${WORK}/dl/"*) ;; *) cp "${rpm}" "${WORK}/dl/" ;; esac
-      docker exec gaia-fedora test ! -e /usr/bin/gaia-tui || die "gaia-tui is already in the container"
+      for b in gaia-cli gaia-tui; do docker exec gaia-fedora test ! -e "/usr/bin/${b}" || die "${b} is already in the container"; done
       docker exec gaia-fedora dnf install -y "/work/dl/$(basename "${rpm}")"
-      for b in gaia-tui gaia-agent; do docker exec gaia-fedora test -x "/usr/bin/${b}" || die "${b} did not land in /usr/bin"; done
+      for b in "$(tui_bin)" /usr/bin/gaia-agent; do docker exec gaia-fedora test -x "${b}" || die "${b} did not land"; done
       ;;
     install-sh)
       [ ! -e "${GAIA_HOME}" ] || die "${GAIA_HOME} exists before install: the sandbox is not fresh"
@@ -373,9 +500,11 @@ install)
       fi
       # Exactly the documented `curl ... | sh`, with the script from this checkout.
       sh <"${REPO}/installer/scripts/install.sh"
-      for f in "${GAIA_HOME}/venv/bin/gaia" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
+      for f in "${GAIA_HOME}/core/gaia" "${GAIA_HOME}/bin/gaia" "${GAIA_HOME}/bin/gaia-mcp" "${GAIA_HOME}/bin/gaia-cli" "${GAIA_HOME}/bin/gaia-agent"; do
         [ -x "${f}" ] || die "install.sh finished but ${f} is not there"
       done
+      # It installs the frozen gaia: no venv, so no Python of GAIA's on any PATH.
+      [ ! -e "${GAIA_HOME}/venv" ] || die "install.sh built ${GAIA_HOME}/venv; it installs the frozen gaia"
       ;;
     *) die "no install for ${KIND}" ;;
   esac
@@ -384,6 +513,10 @@ install)
 upgrade)
   [ "${KIND}" = "tui-deb-upgrade" ] || die "no upgrade for ${KIND}"
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$(package_file tui-deb)"
+  # Only a release that ships gaia-cli can be held to having removed gaia-tui.
+  if [ -x /usr/bin/gaia-cli ]; then
+    test ! -e /usr/bin/gaia-tui || die "the upgrade left the old /usr/bin/gaia-tui behind"
+  fi
   check_tui_version "${TUI_VERSION}" "${VERSION}"
   cmp -s "${WORK}/marker.expected" "${GAIA_HOME}/headless-upgrade-marker" \
     || die "the upgrade lost or changed ${GAIA_HOME}/headless-upgrade-marker"
@@ -395,11 +528,11 @@ launch)
     agent-ui-dmg|agent-ui-deb|appimage) launch_agent_ui ;;
     install-sh)
       check_tui_version ""
-      "${GAIA_HOME}/venv/bin/gaia" --version
+      "${GAIA_HOME}/bin/gaia" --version
       if script_pins_release; then
         check_tui_version "${TUI_VERSION}" "${VERSION}"
-        "${GAIA_HOME}/venv/bin/gaia" --version 2>&1 | grep -q "${PEP440}" \
-          || die "install.sh was asked for $(rel "d['tag']") but installed $("${GAIA_HOME}/venv/bin/gaia" --version 2>&1)"
+        "${GAIA_HOME}/bin/gaia" --version 2>&1 | grep -q "${PEP440}" \
+          || die "install.sh was asked for $(rel "d['tag']") but installed $("${GAIA_HOME}/bin/gaia" --version 2>&1)"
       fi
       ;;
     *) check_tui_version "${TUI_VERSION}" "${VERSION}" ;;
@@ -409,15 +542,28 @@ launch)
 health)
   case "${KIND}" in
     agent-ui-dmg|agent-ui-deb|appimage) wait_agent_ui_health ;;
-    install-sh) PATH="${GAIA_HOME}/bin:${GAIA_HOME}/venv/bin:${PATH}" one_shot ;;
+    install-sh) PATH="${GAIA_HOME}/bin:${PATH}" one_shot ;;
     *) one_shot ;;
   esac
   ;;
+
+engine)
+  case "${KIND}" in
+    # After quit, so the app's own Lemonade can't stand in for a fresh start.
+    agent-ui-deb|appimage) real_engine "$(backend_gaia)" ;;
+    install-sh) real_engine "${GAIA_HOME}/bin/gaia" ;;
+    tui-rpm) fedora_engine ;;
+    *) die "no packaged gaia to start the engine with for ${KIND}" ;;
+  esac
+  ;;
+
+setup) setup_journey ;;
 
 preflight) preflight_no_lemonade ;;
 
 quit)
   stop_agent_ui
+  stop_daemon
   if [ -s "${WORK}/quit-leftovers" ]; then
     finding "processes outlived the app's quit by 30 s (killed to continue): $(tr '\n' ';' <"${WORK}/quit-leftovers")"
   fi
@@ -428,8 +574,8 @@ uninstall)
     tui-pkg)
       # A .pkg ships no uninstaller (macOS convention); this is the documented
       # removal from installer/tui/macos/README.md.
-      sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
-      sudo rm -rf /usr/local/share/doc/gaia-tui
+      sudo rm -f /usr/local/bin/gaia-cli /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
+      sudo rm -rf /usr/local/share/doc/gaia-cli /usr/local/share/doc/gaia-tui
       for id in $(pkgutil --pkgs | grep '^ai\.amd\.gaia\.' || true); do sudo pkgutil --forget "${id}"; done
       ;;
     agent-ui-dmg) rm -rf "$(cat "${WORK}/app.bundle")" ;;
@@ -437,7 +583,7 @@ uninstall)
     appimage) rm -f "${HOME}/Applications/gaia-agent-ui.AppImage" ;;
     tui-deb|tui-deb-upgrade) sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y gaia ;;
     tui-rpm) docker exec gaia-fedora dnf remove -y gaia ;;
-    install-sh) "${GAIA_HOME}/venv/bin/gaia" uninstall --purge --yes ;;
+    install-sh) "${GAIA_HOME}/bin/gaia" uninstall --purge --yes ;;
     *) die "no uninstall for ${KIND}" ;;
   esac
   ;;
@@ -445,7 +591,7 @@ uninstall)
 leftovers)
   case "${KIND}" in
     tui-pkg)
-      assert_gone /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/share/doc/gaia-tui
+      assert_gone /usr/local/bin/gaia-cli /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/share/doc/gaia-cli /usr/local/share/doc/gaia-tui
       [ -z "$(pkgutil --pkgs | grep '^ai\.amd\.gaia\.' || true)" ] || die "package receipts remain: $(pkgutil --pkgs | grep '^ai\.amd\.gaia\.')"
       ;;
     agent-ui-dmg)
@@ -465,15 +611,15 @@ leftovers)
       [ -z "${entries}" ] || echo "::warning::the AppImage left desktop entries: ${entries}"
       ;;
     tui-deb|tui-deb-upgrade)
-      assert_gone /usr/bin/gaia-tui /usr/bin/gaia-agent /usr/share/applications/gaia-tui.desktop
+      assert_gone /usr/bin/gaia-cli /usr/bin/gaia-tui /usr/bin/gaia-agent /usr/share/applications/gaia-tui.desktop
       ;;
     tui-rpm)
-      for p in /usr/bin/gaia-tui /usr/bin/gaia-agent /usr/share/applications/gaia-tui.desktop; do
+      for p in /usr/bin/gaia-cli /usr/bin/gaia-tui /usr/bin/gaia-agent /usr/share/applications/gaia-tui.desktop; do
         docker exec gaia-fedora test ! -e "${p}" || die "left behind in the container: ${p}"
       done
       ;;
     install-sh)
-      assert_gone "${GAIA_HOME}/venv" "${GAIA_HOME}/bin"
+      assert_gone "${GAIA_HOME}/venv" "${GAIA_HOME}/bin" "${GAIA_HOME}/core"
       for rc in .bashrc .zshrc .profile .bash_profile; do
         if [ -f "${HOME}/${rc}" ] && grep -n "\.gaia" "${HOME}/${rc}"; then
           die "${HOME}/${rc} still puts GAIA on PATH"

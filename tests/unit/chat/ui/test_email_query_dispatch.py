@@ -22,10 +22,11 @@ import threading
 
 import pytest
 
+import gaia.ui._chat_helpers as chat_helpers
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
+from gaia.daemon.sidecars.errors import SidecarError
 from gaia.ui._chat_helpers import _dispatch_sidecar_query
-from gaia.ui.email_sidecar.errors import SidecarError
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, api_version_supported
 from gaia.ui.email_sidecar.relay import EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
 from gaia.ui.models import ChatRequest
@@ -211,6 +212,93 @@ class TestDispatchEmailQuery:
         assert "lemonade server not reachable" in content
         assert relay_calls == []
 
+    @pytest.mark.parametrize("local_only", [True, False])
+    def test_a_missing_local_model_is_said_once_with_the_in_app_fix(
+        self, monkeypatch, tmp_path, local_only
+    ):
+        """It was the sidecar's CLI hint, said twice, inside "isn't ready yet"."""
+        from gaia.llm import local_only as policy
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        policy.set_policy("local_ai_only" if local_only else "cloud_allowed")
+        model = "Gemma-4-E4B-it-GGUF"
+        sidecar_hint = (
+            f"The model {model} is not downloaded. {model} is not downloaded, and "
+            "no Lemonade client CLI was found to do it — see "
+            "https://lemonade-server.ai, then re-check."
+        )
+        fake_handle = _FakeHandle(
+            api_version="2.4",
+            init_result=(
+                503,
+                {
+                    "ready": False,
+                    "hint": sidecar_hint,
+                    "lemonade": {"reachable": True, "compatible": True},
+                    "model": {"id": model, "present": False},
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
+        monkeypatch.setattr(relay_module, "relay_query", lambda *a, **k: None)
+
+        handler = _FakeSSEHandler()
+        _dispatch_sidecar_query(handler, _make_request(), [], model, "email")
+
+        [event] = handler.events
+        content = event["content"]
+        assert event["type"] == "agent_error"
+        assert content.count("downloaded") == 1
+        assert "Settings > Model" in content
+        assert ("Local only is on" in content) is local_only
+        assert ("Settings > Privacy" in content) is local_only
+        for developer_word in ("CLI", "agent card", "re-check", "lemonade-server.ai"):
+            assert developer_word not in content
+
+    @pytest.mark.parametrize("local_only", [True, False])
+    def test_a_cloud_model_that_lost_its_key_is_not_called_not_downloaded(
+        self, monkeypatch, tmp_path, local_only
+    ):
+        """A cloud model can't be downloaded; the fix is to reconnect it."""
+        from gaia.llm import local_only as policy
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        policy.set_policy("local_ai_only" if local_only else "cloud_allowed")
+        model = "fireworks.big-model"
+        fake_handle = _FakeHandle(
+            api_version="2.4",
+            init_result=(
+                503,
+                {
+                    "ready": False,
+                    "hint": f"The model {model} is not downloaded.",
+                    "lemonade": {"reachable": True, "compatible": True},
+                    "model": {"id": model, "present": False},
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
+        monkeypatch.setattr(relay_module, "relay_query", lambda *a, **k: None)
+        monkeypatch.setattr(
+            chat_helpers, "_replay_cloud_key_for_relay", lambda *a, **k: None
+        )
+
+        handler = _FakeSSEHandler()
+        _dispatch_sidecar_query(handler, _make_request(), [], model, "email")
+
+        [event] = handler.events
+        content = event["content"]
+        assert event["type"] == "agent_error"
+        assert "downloaded" not in content
+        assert "big-model" in content
+        assert "Settings > Model" in content
+        assert ("Local only is on" in content) is local_only
+        assert ("Reconnect Fireworks AI" in content) is not local_only
+
     def test_cancelled_before_relay_short_circuits_no_relay_call(self, monkeypatch):
         fake_handle = _FakeHandle(api_version="2.4")
         monkeypatch.setattr(
@@ -267,8 +355,38 @@ class TestDispatchEmailQuery:
             {"role": "assistant", "content": "hi there"},
         ]
         assert call["model_id"] == "model-x"
-        # No terminal error was emitted before the relay handoff.
-        assert handler.events == []
+        # No terminal error was emitted before the relay handoff; email takes
+        # no mid-turn messages, so the chat is told not to offer adding one.
+        assert handler.events == [{"type": "followup_unavailable"}]
+
+
+class TestSessionIdReachesTheEmailSidecar:
+    """#2834: the chat's session id goes to an email sidecar that takes it, so
+    a follow-up resolves against the agent that showed the thread."""
+
+    def _session_id_sent(self, monkeypatch, api_version):
+        fake_handle = _FakeHandle(api_version=api_version)
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
+        calls = []
+        monkeypatch.setattr(
+            relay_module, "relay_query", lambda *a, **k: calls.append(k)
+        )
+        _dispatch_sidecar_query(
+            _FakeSSEHandler(), _make_request(), [], "model", "email", session_id="s1"
+        )
+        assert len(calls) == 1
+        return calls[0]["session_id"]
+
+    def test_sent_to_a_sidecar_that_takes_it(self, monkeypatch):
+        assert self._session_id_sent(monkeypatch, "2.14") == "s1"
+
+    def test_sent_at_exactly_the_contract_that_added_it(self, monkeypatch):
+        assert self._session_id_sent(monkeypatch, "2.12") == "s1"
+
+    def test_withheld_from_an_older_sidecar_that_would_422(self, monkeypatch):
+        assert self._session_id_sent(monkeypatch, "2.11") is None
 
 
 if __name__ == "__main__":

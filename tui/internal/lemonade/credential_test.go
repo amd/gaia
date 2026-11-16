@@ -26,6 +26,8 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	os.Setenv("GAIA_HOME", home)
+	// A developer's own Local only must not change what these tests send.
+	os.Setenv("GAIA_POLICY_FILE", filepath.Join(home, "policy.json"))
 	os.Setenv("LEMONADE_BASE_URL", "")
 	os.Setenv("GAIA_LEMONADE_EMBEDDED", "")
 	os.Setenv("GAIA_CONFIG_FILE", "")

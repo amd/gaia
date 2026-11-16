@@ -89,10 +89,6 @@ const maxCardRows = 22
 // (" NN  " is five columns wide).
 const rationaleIndent = "     "
 
-// maxBannerRows bounds the per-account warning banner's message lines, before
-// its "+N more accounts" and "unaffected" lines.
-const maxBannerRows = 4
-
 // sectionCost is the interior rows one section occupies: a header, the rows the
 // first `show` items actually render to (itemRows already counts each item's own
 // row plus however many lines its rationale wraps to), and a "+N more" line only

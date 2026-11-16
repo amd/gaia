@@ -70,8 +70,8 @@ def cold_cache():
         (USED, WINDOW),
         (UNUSED, WINDOW),
         (LOCAL, 65536),
-        # Older Lemonade lists only context_length, which is then the real window.
-        ({"id": "amd.x", "recipe": "cloud", "context_length": 200000}, 200000),
+        # A cloud entry's context_length is a placeholder, never its window.
+        ({"id": "amd.x", "recipe": "cloud", "context_length": 200000}, None),
         ({"id": "amd.x", "recipe": "cloud"}, None),
         # Same cloud rule as the provider list and the TUI: cloud_provider counts.
         (

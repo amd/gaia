@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"errors"
+	"github.com/amd/gaia/tui/internal/gaiainit"
 	"strings"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 				return l.Error("restore the key", &daemon.RouteMissingError{
 					Op: "restore the fireworks key", Path: "/daemon/v1/providers/fireworks/authenticate"})
 			},
-			wantCmd: "pip install --upgrade amd-gaia",
+			wantCmd: gaiainit.InstallCommand,
 			wantIn:  "out of date",
 			wantNot: "/daemon/v1/",
 		},
@@ -82,7 +83,7 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 				return l.Error("attach", &daemon.VersionError{
 					Have: "1.0", Want: "1.1", Reason: "predates the relay"})
 			},
-			wantCmd: "pip install --upgrade amd-gaia",
+			wantCmd: gaiainit.InstallCommand,
 			wantIn:  "v1.0",
 		},
 		{

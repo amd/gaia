@@ -94,6 +94,13 @@ type fakeRelay struct {
 	// wait on to know it has been asked to stop, without the client tearing
 	// down its own read (#2901).
 	onCancelPost func()
+	// cancelDelay holds a POST .../cancel before it is recorded: a slow daemon.
+	cancelDelay time.Duration
+	// cancelStatus overrides the status POST .../cancel answers with; zero is 200.
+	cancelStatus int
+	// cancelDropped closes a POST .../cancel's connection without an answer:
+	// a cancel that never reaches the agent.
+	cancelDropped bool
 
 	// followUpStatus overrides the status POST .../followup answers with.
 	// Zero means 200. The interesting values are the two refusals the real
@@ -290,9 +297,25 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 
 	case strings.HasSuffix(r.URL.Path, "/cancel"):
 		parts := strings.Split(r.URL.Path, "/")
+		if f.cancelDelay > 0 {
+			time.Sleep(f.cancelDelay)
+		}
+		if f.cancelDropped {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				f.t.Errorf("hijack the cancel: %v", err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
 		f.mu.Lock()
 		f.cancelled = append(f.cancelled, parts[len(parts)-2])
 		f.mu.Unlock()
+		if f.cancelStatus != 0 {
+			w.WriteHeader(f.cancelStatus)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		if f.onCancelPost != nil {
 			// Real /cancel returns before the worker thread notices anything
@@ -411,6 +434,20 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			dec.DisallowUnknownFields()
 			var derr error
 			switch {
+			case contractAtLeast(f.contractVersion, 2, 24):
+				var strict struct {
+					Query              string   `json:"query"`
+					RunID              string   `json:"run_id"`
+					Context            []Turn   `json:"context"`
+					Model              string   `json:"model"`
+					MaxSteps           int      `json:"max_steps"`
+					CanAnswerQuestions *bool    `json:"can_answer_questions"`
+					SessionID          string   `json:"session_id"`
+					Surface            string   `json:"surface"`
+					WorkingDirectory   string   `json:"working_directory"`
+					AllowedPaths       []string `json:"allowed_paths"`
+				}
+				derr = dec.Decode(&strict)
 			case contractAtLeast(f.contractVersion, 2, 20):
 				var strict struct {
 					Query              string `json:"query"`
@@ -719,11 +756,11 @@ func TestSSEClientPushesHostOwnedTranscript(t *testing.T) {
 		t.Errorf("context[1] = %+v", q.Context[1])
 	}
 
-	if got := c.Transcript(); len(got) != 4 {
+	if got := c.transcriptSnapshot(); len(got) != 4 {
 		t.Errorf("transcript = %+v, want 4 entries after two turns", got)
 	}
 	c.ResetTranscript()
-	if got := c.Transcript(); len(got) != 0 {
+	if got := c.transcriptSnapshot(); len(got) != 0 {
 		t.Errorf("ResetTranscript left %+v", got)
 	}
 }
@@ -747,13 +784,126 @@ func TestSSEClientTranscriptFallsBackToStreamedTokens(t *testing.T) {
 	}
 	collect(t, ch)
 
-	tr := c.Transcript()
+	tr := c.transcriptSnapshot()
 	if len(tr) != 2 || tr[1].Content != "streamed answer" {
 		t.Fatalf("transcript = %+v", tr)
 	}
 }
 
 // --- terminal-event contract -------------------------------------------------
+
+// A connection cut mid-answer (the daemon was killed) reads as GAIA stopping,
+// not as a raw socket error; the socket error stays in RawDetail for the log.
+func TestSSEClientConnectionCutMidStreamSaysGaiaStopped(t *testing.T) {
+	f := newFakeRelay(t)
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"token","delta":"half an ans"}`)
+		flush()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack the stream: %v", err)
+			return
+		}
+		// Unterminated chunked body: the client's read fails, as on a reset.
+		_ = conn.Close()
+	}
+
+	c := f.client(t)
+	defer c.Close()
+
+	ch, err := c.Send(context.Background(), "triage")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	got := collect(t, ch)
+	if len(got) == 0 {
+		t.Fatal("expected events")
+	}
+	last, ok := got[len(got)-1].(event.CanonicalErrorEvent)
+	if !ok {
+		t.Fatalf("last event = %T, want a CanonicalErrorEvent (%v)", got[len(got)-1], typeNames(got))
+	}
+	if last.Detail != event.AgentStoppedDetail {
+		t.Errorf("detail = %q, want the plain stopped message", last.Detail)
+	}
+	if !strings.Contains(last.RawDetail, "failed mid-run") {
+		t.Errorf("RawDetail must keep the socket error for the log: %q", last.RawDetail)
+	}
+	if last.Source != "tui" {
+		t.Errorf("synthesized errors must be attributed to the tui, got %q", last.Source)
+	}
+}
+
+// Cut before any answer text (mid tool call): nothing is "kept above".
+func TestSSEClientConnectionCutBeforeAnyTextSaysSoBeforeAnswering(t *testing.T) {
+	f := newFakeRelay(t)
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"working"}`)
+		flush()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Errorf("hijack the stream: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}
+
+	c := f.client(t)
+	defer c.Close()
+
+	ch, err := c.Send(context.Background(), "triage")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	got := collect(t, ch)
+	if len(got) == 0 {
+		t.Fatal("expected events")
+	}
+	last, ok := got[len(got)-1].(event.CanonicalErrorEvent)
+	if !ok {
+		t.Fatalf("last event = %T, want a CanonicalErrorEvent (%v)", got[len(got)-1], typeNames(got))
+	}
+	if last.Detail != event.AgentStoppedBeforeAnswerDetail {
+		t.Errorf("detail = %q, want the stopped-before-answering message", last.Detail)
+	}
+}
+
+// The daemon's "agent crashed" frame keeps "kept above" only when text came first.
+func TestSSEClientDaemonCrashFrameMatchesWhatWasStreamed(t *testing.T) {
+	crash := `{"type":"error","source":"daemon_relay","detail":"agent 'gaia' stream ended unexpectedly"}`
+	for _, tc := range []struct {
+		name   string
+		frames []string
+		want   string
+	}{
+		{"before any text", []string{`{"type":"status","message":"working"}`, crash}, event.AgentStoppedBeforeAnswerDetail},
+		{"after some text", []string{`{"type":"token","delta":"half"}`, crash}, event.AgentStoppedDetail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+				for _, fr := range tc.frames {
+					frame(w, fr)
+				}
+				flush()
+			}
+			c := f.client(t)
+			defer c.Close()
+			ch, err := c.Send(context.Background(), "triage")
+			if err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+			got := collect(t, ch)
+			last, ok := got[len(got)-1].(event.CanonicalErrorEvent)
+			if !ok {
+				t.Fatalf("last event = %T, want a CanonicalErrorEvent (%v)", got[len(got)-1], typeNames(got))
+			}
+			if last.Detail != tc.want {
+				t.Errorf("detail = %q, want %q", last.Detail, tc.want)
+			}
+		})
+	}
+}
 
 // A stream that ends without final/error is a FAILURE, not an empty success.
 func TestSSEClientStreamWithoutTerminalEventIsAnError(t *testing.T) {
@@ -791,7 +941,7 @@ func TestSSEClientStreamWithoutTerminalEventIsAnError(t *testing.T) {
 		t.Errorf("synthesized errors must be attributed to the tui, got %q", last.Source)
 	}
 	// A failed turn must not poison the next one's context.
-	if tr := c.Transcript(); len(tr) != 0 {
+	if tr := c.transcriptSnapshot(); len(tr) != 0 {
 		t.Errorf("a turn without `final` must not be appended to the transcript: %+v", tr)
 	}
 }
@@ -826,7 +976,7 @@ func TestSSEClientTerminalErrorEvent(t *testing.T) {
 	if last.Source != "" {
 		t.Errorf("a wire error must not be attributed to the tui, got %q", last.Source)
 	}
-	if tr := c.Transcript(); len(tr) != 0 {
+	if tr := c.transcriptSnapshot(); len(tr) != 0 {
 		t.Errorf("an errored turn must not be appended to the transcript: %+v", tr)
 	}
 }
@@ -1258,7 +1408,7 @@ func TestSSEClientCancelPostsToCancelEndpoint(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	if tr := c.Transcript(); len(tr) != 0 {
+	if tr := c.transcriptSnapshot(); len(tr) != 0 {
 		t.Errorf("a cancelled turn must not be appended to the transcript: %+v", tr)
 	}
 }

@@ -31,7 +31,12 @@
     "description": { "type": "string" },
     "author": { "type": "string" },
     "license": { "type": "string" },
-    "language": { "type": "string", "enum": ["python", "cpp"] },
+    "language": { "type": "string", "enum": ["python", "cpp", "go", "typescript"] },
+    "type": {
+      "type": "string",
+      "enum": ["agent", "app", "component"],
+      "description": "Package kind (#1716). Absent on manifests stored before it was recorded, which were published as \"agent\". Skills have their own manifest and never appear here."
+    },
     "category": { "type": "string" },
     "tags": { "type": "array", "items": { "type": "string" } },
     "icon": { "type": "string" },

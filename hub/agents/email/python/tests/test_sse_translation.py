@@ -323,6 +323,17 @@ def test_tool_result_carries_tool_and_data():
     ]
 
 
+def test_mapped_tool_without_a_card_payload_stays_a_plain_result():
+    t = _tr()
+    t.translate({"type": "tool_start", "tool": "get_thread"})
+    t.translate({"type": "tool_args", "tool": "get_thread", "args": {}})
+    [result] = t.translate(
+        {"type": "tool_result", "title": "Result", "summary": "plain text thread"}
+    )
+    assert "render" not in result
+    assert result["data"]["summary"] == "plain text thread"
+
+
 def test_pre_scan_draws_no_card():
     """The triage reply is the single inbox view: a pre-scan card landing
     mid-turn showed a partial list beside the answer still being written."""

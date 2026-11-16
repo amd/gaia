@@ -142,13 +142,15 @@ def test_the_environment_check_reads_a_weakened_expression(workflow):
 
 
 def test_a_dispatch_never_waits_hours_for_a_missing_release(workflow):
-    steps = workflow["jobs"]["github-release-installers"]["steps"]
-    find = next(s for s in steps if s.get("name") == "Find the GitHub release")
-    assert 'if [ "${EVENT}" = "workflow_dispatch" ]' in find["run"]
-    dispatch_branch = find["run"].split('if [ "${EVENT}" = "workflow_dispatch" ]')[1]
-    dispatch_branch = dispatch_branch.split("exit 0", 1)[0]
-    assert "sleep" not in dispatch_branch
+    job = workflow["jobs"]["github-release-installers"]
+    # Dispatch only: on a tag publish.yml attaches the installers itself.
+    assert "github.event_name == 'workflow_dispatch'" in job["if"]
+    find = next(s for s in job["steps"] if s.get("name") == "Find the GitHub release")
+    assert "gh release view" in find["run"]
+    assert "sleep" not in find["run"]
     attach = next(
-        s for s in steps if s.get("name") == "Attach the installers and their checksums"
+        s
+        for s in job["steps"]
+        if s.get("name") == "Attach the installers and their checksums"
     )
     assert "steps.release.outputs.exists == 'true'" in attach["if"]

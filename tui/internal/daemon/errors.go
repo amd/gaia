@@ -36,7 +36,7 @@ func Brief(err error) string {
 }
 
 // upgradeCoreBrief is the status-line form of UpgradeCoreHint.
-const upgradeCoreBrief = "GAIA's background service is out of date. Run `pip install --upgrade amd-gaia`."
+const upgradeCoreBrief = "GAIA's background service is out of date. Update GAIA."
 
 // NotRunningError means no daemon has registered itself at all — instance.json
 // is absent. Distinct from StaleError so a caller can decide to start one.
@@ -118,9 +118,9 @@ func (e *VersionError) Brief() string { return upgradeCoreBrief }
 
 // UpgradeCoreHint is the remedy for any host-API skew. It says a restart is not
 // the fix, so a user who tries one does not loop on it.
-const UpgradeCoreHint = "Upgrade the installed GAIA core so it matches this app: " +
-	"`pip install --upgrade amd-gaia`, or re-run the installer from https://amd-gaia.ai. " +
-	"The version comes from the installed core, so `gaia daemon restart` brings the same one back."
+const UpgradeCoreHint = "Update GAIA so its core matches this app: re-run the installer " +
+	"from https://amd-gaia.ai/#install. The version comes from the installed core, so " +
+	"`gaia daemon restart` brings the same one back."
 
 // StartError means we could not bring a daemon up (lock contention, launch
 // failure, or it never registered in time).

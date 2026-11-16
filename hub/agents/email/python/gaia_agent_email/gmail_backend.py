@@ -1224,8 +1224,8 @@ def _get_gmail_token() -> str:
     normal grant-checked connectors path (``get_access_token_sync``). Both raise
     loudly on no-grant / missing-scope / expiry — never a silent empty token.
 
-    Module-level (not a method) so it mirrors ``connectors_demo`` and can be
-    unit-tested without instantiating the agent. Requests ``GMAIL_SCOPES`` (a
+    Module-level (not a method) so it can be unit-tested without
+    instantiating the agent. Requests ``GMAIL_SCOPES`` (a
     NARROWER set than ``ALL_SCOPES``), so a user who declines calendar can still
     use Gmail tools.
     """
