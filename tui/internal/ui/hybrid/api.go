@@ -78,17 +78,22 @@ func (e *RouteMissingError) Error() string {
 
 // Stats is GET /api/hybrid/stats: how hybrid turns were routed and what they cost.
 type Stats struct {
-	Since           string  `json:"since"`
-	Turns           int     `json:"turns"`
-	CheapTurns      int     `json:"cheap_turns"`
-	StrongTurns     int     `json:"strong_turns"`
-	FailedClosed    int     `json:"failed_closed"`
-	Cost            float64 `json:"cost"`
-	CostIfAllStrong float64 `json:"cost_if_all_strong"`
-	SavingPct       float64 `json:"saving_pct"`
+	Since        string `json:"since"`
+	Turns        int    `json:"turns"`
+	CheapTurns   int    `json:"cheap_turns"`
+	StrongTurns  int    `json:"strong_turns"`
+	FailedClosed int    `json:"failed_closed"`
+	// Cost and CostIfAllStrong are nil when a turn's price is unknown, never $0.
+	Cost            *float64 `json:"cost"`
+	CostIfAllStrong *float64 `json:"cost_if_all_strong"`
+	SavingPct       *float64 `json:"saving_pct"`
+	// UnpricedTurns ran on a model with an unknown price.
+	UnpricedTurns int `json:"unpriced_turns"`
 	// Scope is which chats the record covers; absent from a server that
 	// records only Agent UI turns.
 	Scope string `json:"scope"`
+	// ScopeLabel is Scope in the server's own words, shown verbatim.
+	ScopeLabel string `json:"scope_label"`
 }
 
 // Line is the stats in one line.
@@ -101,9 +106,12 @@ func (s Stats) Line() string {
 	if s.FailedClosed > 0 {
 		line += fmt.Sprintf(" (%d unclassified)", s.FailedClosed)
 	}
-	line += " · " + usd(s.Cost) + " spent, " + usd(s.CostIfAllStrong) + " if all strong"
-	if s.SavingPct > 0 {
-		line += fmt.Sprintf(" · %.0f%% saved", s.SavingPct)
+	line += " · " + spent(s.Cost) + ", " + allStrong(s.CostIfAllStrong)
+	if s.SavingPct != nil && *s.SavingPct > 0 {
+		line += fmt.Sprintf(" · %.0f%% saved", *s.SavingPct)
+	}
+	if s.UnpricedTurns > 0 {
+		line += fmt.Sprintf(" · %d %s at an unknown price", s.UnpricedTurns, plural(s.UnpricedTurns, "turn"))
 	}
 	if s.Since != "" {
 		line = "since " + day(s.Since) + ": " + line
@@ -114,13 +122,30 @@ func (s Stats) Line() string {
 // scopeLabel says whose turns the record holds. Until the server reports a
 // scope, only Agent UI chats are recorded, so this terminal's turns are not in it.
 func (s Stats) scopeLabel() string {
+	if label := strings.TrimSpace(s.ScopeLabel); label != "" {
+		return label
+	}
 	switch s.Scope {
-	case "", "agent_ui":
+	case "", "agent_ui", "agent_ui_chats":
 		return "Agent UI chats (this terminal's turns aren't counted yet)"
 	case "all":
 		return "All chats"
 	}
 	return "Chats in " + s.Scope
+}
+
+func spent(c *float64) string {
+	if c == nil {
+		return "cost unknown"
+	}
+	return usd(*c) + " spent"
+}
+
+func allStrong(c *float64) string {
+	if c == nil {
+		return "unknown if all strong"
+	}
+	return usd(*c) + " if all strong"
 }
 
 // usd shows a cost to the cent, or to a hundredth of a cent below one cent,

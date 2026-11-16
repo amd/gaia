@@ -208,7 +208,7 @@ func TestABrokenConfigIsShownAndCanBeReplaced(t *testing.T) {
 	if !strings.Contains(view(m), "can't be used") || !strings.Contains(view(m), "hybrid_policy") {
 		t.Fatalf("the read error is not shown:\n%s", view(m))
 	}
-	m = key(t, m, "ctrl+s")
+	_ = key(t, m, "ctrl+s")
 	if len(st.saved) != 1 || st.saved[0].Policy != lemonade.HybridPolicyQuality {
 		t.Fatalf("saving should replace the bad value with the defaults: %+v", st.saved)
 	}

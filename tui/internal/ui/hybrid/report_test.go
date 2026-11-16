@@ -4,6 +4,7 @@
 package hybrid
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -18,12 +19,13 @@ import (
 // The record holds only Agent UI turns until the server says otherwise, so
 // the line must not read as this terminal's own.
 func TestStatsLineSaysWhoseTurnsItCounts(t *testing.T) {
-	base := Stats{Turns: 1, CheapTurns: 1, Cost: 0.002832, CostIfAllStrong: 0.04452, SavingPct: 93.6}
+	base := Stats{Turns: 1, CheapTurns: 1, Cost: ptr(0.002832), CostIfAllStrong: ptr(0.04452), SavingPct: ptr(93.6)}
 	for scope, want := range map[string]string{
-		"":         "Agent UI chats (this terminal's turns aren't counted yet), ",
-		"agent_ui": "Agent UI chats (this terminal's turns aren't counted yet), ",
-		"all":      "All chats, ",
-		"eval":     "Chats in eval, ",
+		"":               "Agent UI chats (this terminal's turns aren't counted yet), ",
+		"agent_ui":       "Agent UI chats (this terminal's turns aren't counted yet), ",
+		"agent_ui_chats": "Agent UI chats (this terminal's turns aren't counted yet), ",
+		"all":            "All chats, ",
+		"eval":           "Chats in eval, ",
 	} {
 		s := base
 		s.Scope = scope
@@ -33,6 +35,41 @@ func TestStatsLineSaysWhoseTurnsItCounts(t *testing.T) {
 	}
 	if got := base.Line(); !strings.Contains(got, "$0.0028 spent, $0.04 if all strong · 94% saved") {
 		t.Errorf("a sub-cent spend must not read $0.00: %q", got)
+	}
+}
+
+func ptr(v float64) *float64 { return &v }
+
+// The server's scope_label is its own plain words; it wins over the TUI's guess.
+func TestStatsLineShowsTheServersScopeLabelVerbatim(t *testing.T) {
+	label := "Agent UI chats only; turns from the terminal UI and `gaia -p` aren't counted yet"
+	s := Stats{Turns: 2, CheapTurns: 1, StrongTurns: 1, Cost: ptr(0.5), CostIfAllStrong: ptr(1), Scope: "agent_ui_chats", ScopeLabel: label}
+	if got := s.Line(); !strings.HasPrefix(got, label+", ") {
+		t.Fatalf("%q", got)
+	}
+	if got := (Stats{Scope: "all", ScopeLabel: "Every chat"}).Line(); got != "Every chat: no hybrid turns recorded yet." {
+		t.Fatalf("%q", got)
+	}
+}
+
+// An unknown price is null from the server; it must read as unknown, never $0.00.
+func TestStatsLineShowsAnUnknownCostAsUnknown(t *testing.T) {
+	s := Stats{Turns: 3, CheapTurns: 2, StrongTurns: 1, UnpricedTurns: 1}
+	got := s.Line()
+	if strings.Contains(got, "$0.00") || !strings.Contains(got, "cost unknown, unknown if all strong") ||
+		!strings.Contains(got, "1 turn at an unknown price") || strings.Contains(got, "saved") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestStatsDecodesNullCosts(t *testing.T) {
+	var s Stats
+	raw := `{"turns":1,"cheap_turns":1,"cost":null,"cost_if_all_strong":null,"saving_pct":null,"unpriced_turns":1,"scope":"agent_ui_chats","scope_label":"Agent UI chats only"}`
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Cost != nil || s.CostIfAllStrong != nil || s.SavingPct != nil || s.UnpricedTurns != 1 || s.ScopeLabel != "Agent UI chats only" {
+		t.Fatalf("%+v", s)
 	}
 }
 
