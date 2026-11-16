@@ -10,9 +10,10 @@ contract version is tracked separately as
 ### Fixed
 
 - **A conflict check no longer calls a slot free when it couldn't read a
-  meeting's time (#8261).** Outlook's 7-digit fractional seconds now parse on
-  Python 3.10, and any meeting whose time still can't be read is returned in
-  a new `unreadable` list so the agent says it couldn't check it.
+  meeting's time (#8261).** Outlook's 7-digit fractional seconds, and any
+  other fraction width, now parse on Python 3.10. A meeting whose time still
+  can't be read is returned in a new `unreadable` list so the agent says it
+  couldn't check it.
 
 - **The search guidance no longer teaches Outlook queries that Microsoft
   Graph rejects (#3587).** The `search_messages` description and the agent's

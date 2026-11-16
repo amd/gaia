@@ -39,6 +39,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 pytest.importorskip("gaia_agent_email")  # noqa: E402
 from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
+    _parse_event_dt,
     detect_calendar_conflicts_impl,
     intervals_overlap,
 )
@@ -118,6 +119,45 @@ class TestIntervalsOverlap:
             )
             is True
         )
+
+
+# ---------------------------------------------------------------------------
+# _parse_event_dt — every fraction width parses on the 3.10 floor (#8261)
+# ---------------------------------------------------------------------------
+
+
+class TestParseEventDt:
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("2026-05-06T10:00:00.0000000", datetime(2026, 5, 6, 10)),
+            ("2026-05-06T10:00:00.1Z", datetime(2026, 5, 6, 10, 0, 0, 100000)),
+            ("2026-05-06T10:00:00.12Z", datetime(2026, 5, 6, 10, 0, 0, 120000)),
+            ("2026-05-06T10:00:00.1234Z", datetime(2026, 5, 6, 10, 0, 0, 123400)),
+            ("2026-05-06T10:00:00.12345Z", datetime(2026, 5, 6, 10, 0, 0, 123450)),
+            ("2026-05-06T10:00:00.1234567Z", datetime(2026, 5, 6, 10, 0, 0, 123456)),
+            (
+                "2026-05-06T10:00:00.123456789",
+                datetime(2026, 5, 6, 10, 0, 0, 123456),
+            ),
+            (
+                "2026-05-06T10:00:00.1234567+02:00",
+                datetime(2026, 5, 6, 8, 0, 0, 123456),
+            ),
+            ("2026-05-06T10:00:00-08:00", datetime(2026, 5, 6, 18)),
+            ("2026-05-06T10:00:00+05:30", datetime(2026, 5, 6, 4, 30)),
+            ("2026-05-06", datetime(2026, 5, 6)),
+        ],
+    )
+    def test_parses_to_utc_naive(self, value, expected):
+        assert _parse_event_dt(value) == expected
+
+    @pytest.mark.parametrize(
+        "value", ["", "   ", "not-a-timestamp", "2026-05-06T10:00:00.", "1.5"]
+    )
+    def test_garbage_still_raises(self, value):
+        with pytest.raises(ValueError):
+            _parse_event_dt(value)
 
 
 # ---------------------------------------------------------------------------

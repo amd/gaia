@@ -600,8 +600,12 @@ def _parse_event_dt(value: str) -> datetime:
     if not text:
         raise ValueError("empty datetime value")
     normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
-    # Graph emits 7-digit (100 ns) fractions; py3.10 fromisoformat caps at 6.
-    normalized = re.sub(r"(\.\d{6})\d+", r"\1", normalized)
+    # py3.10 fromisoformat takes only 3 or 6 fraction digits; Graph sends 7.
+    normalized = re.sub(
+        r"(:\d{2})\.(\d+)",
+        lambda m: f"{m.group(1)}.{m.group(2)[:6].ljust(6, '0')}",
+        normalized,
+    )
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
