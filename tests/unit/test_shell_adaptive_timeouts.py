@@ -17,6 +17,7 @@ timeout rework runs straight through them: the applied timeout comes back in the
 result, a timed-out command is flagged, and partial output survives the kill.
 """
 
+import os
 import subprocess
 import time
 
@@ -529,6 +530,11 @@ def test_a_granted_binary_reaches_its_class_through_the_real_allowlist(monkeypat
     host, tools = _shell_tools()
     host._granted_binaries = BinaryGrants()
     host._granted_binaries.grant("pytest", skill_name="python-testing")
+    # The process is faked below, so pytest need not be on this machine's PATH.
+    monkeypatch.setattr(
+        "gaia.agents.tools.shell_tools._program_on_path",
+        lambda name, _cwd: os.path.join(os.sep, "tools", f"{name}.exe"),
+    )
     clock = _fake_clock(monkeypatch)
     _hangs_forever(monkeypatch, clock)
 
@@ -629,9 +635,11 @@ class TestNoRegression:
 
         assert "timed out after 5 seconds" in error["error"]
         assert "ls" in error["error"]
-        # The hint carries the next step: which class it ran as, and the ceiling.
+        # The hint carries the next step: which class it ran as, and to narrow
+        # the run rather than raise the ceiling.
         assert "'default'" in error["hint"]
-        assert str(MAX_COMMAND_TIMEOUT) in error["hint"]
+        assert str(MAX_COMMAND_TIMEOUT) not in error["hint"]
+        assert "larger timeout" not in error["hint"]
 
 
 class TestStopDuringACommand:

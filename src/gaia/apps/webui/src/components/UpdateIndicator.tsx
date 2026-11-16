@@ -9,6 +9,8 @@ import { useT } from '../i18n/useT';
 import { log } from '../utils/logger';
 import './UpdateIndicator.css';
 
+const RELEASES_PAGE = 'https://github.com/amd/gaia/releases';
+
 /**
  * Small, subtle indicator shown in the corner of the main view when an
  * app update is available, downloading, ready, or failed. Hidden in the
@@ -118,7 +120,11 @@ export function UpdateIndicator() {
             <div
                 className="update-chip update-chip--available"
                 role="status"
-                title={actionError || installFailedDetail || update.releaseNotes || t('update.chip.availableTitle')}
+                title={
+                    update.manualInstall
+                        ? t('update.chip.manualTitle', { version: update.version ?? '' })
+                        : actionError || installFailedDetail || update.releaseNotes || t('update.chip.availableTitle')
+                }
             >
                 <Download size={13} className="update-chip__icon" />
                 <span className="update-chip__label">
@@ -128,7 +134,16 @@ export function UpdateIndicator() {
                           ? t('update.chip.installFailed')
                           : t('update.chip.available', { version: update.version ?? '' })}
                 </span>
-                {!update.pinnedVersion && (
+                {update.manualInstall ? (
+                    <a
+                        className="update-chip__action"
+                        href={update.downloadUrl ?? RELEASES_PAGE}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                    >
+                        {t('update.chip.download')}
+                    </a>
+                ) : !update.pinnedVersion && (
                     <button
                         type="button"
                         className="update-chip__action"

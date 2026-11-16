@@ -841,6 +841,8 @@ def test_ledger_entry_removed_when_start_fails(daemon_home, monkeypatch, tmp_pat
     m = mgr_mod.AgentSidecarManager(spec, cache_dir=tmp_path, log_dir=tmp_path / "logs")
     _wire_manager_ledger(m, spec.agent_id)
     monkeypatch.setattr(m, "_http_get", lambda url, timeout: None)
+    # The fake pid is not ours: a real host process may hold that number.
+    monkeypatch.setattr(m, "_tree_survives", lambda pid: False)
 
     with pytest.raises(SidecarSpawnError):
         m.start(max_attempts=2)

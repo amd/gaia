@@ -344,7 +344,7 @@ def test_shipped_agent_loads_zero_skills(tmp_path, monkeypatch):
     assert agent.active_skill_set is None
     assert not agent.get_skills_system_prompt()
     for name in ("inbox-triage", "meeting-scheduling", "newsletter-digest"):
-        assert name not in agent.system_prompt
+        assert name not in agent._prompt_text()
 
 
 def test_shipped_agent_envelope_budget_is_the_pre_skills_6144(tmp_path, monkeypatch):
@@ -476,7 +476,7 @@ def test_the_other_sets_skills_are_absent_from_the_prompt(
     tmp_path, monkeypatch, declared_sets
 ):
     agent = _build_agent(tmp_path, monkeypatch, account_type=ACCOUNT_TYPE_WORK)
-    prompt = agent.system_prompt
+    prompt = agent._prompt_text()
 
     assert "meeting-scheduling" in prompt
     assert "newsletter-digest" not in prompt
@@ -648,7 +648,7 @@ def test_the_whole_post_tool_turn_fits_the_window_with_skills_loaded(
     assert envelope_tokens <= envelope_budget_tokens(extra_fixed_tokens=cost)
 
     # The prompt the model re-reads on the post-tool turn, end to end.
-    prompt_tokens = estimate_tokens(agent.system_prompt)
+    prompt_tokens = estimate_tokens(agent._prompt_text())
     total = prompt_tokens + envelope_tokens + _RESPONSE_RESERVE_TOKENS
     assert total <= CONTEXT_TARGET_TOKENS, (
         f"post-tool turn would be ~{total} tokens against a "

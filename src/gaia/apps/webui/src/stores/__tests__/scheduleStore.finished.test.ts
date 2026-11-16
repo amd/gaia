@@ -63,6 +63,13 @@ describe('scheduled runs that finish', () => {
         expect(n.read).toBe(false);
     });
 
+    it('show the answer as plain text, without markdown symbols', async () => {
+        await load(schedule());
+        await load(schedule({ run_count: 1, last_result: '**Three headlines** today, see [the full story](https://example.com/story).' }));
+
+        expect(infos()[0].message).toBe('Three headlines today, see the full story.');
+    });
+
     it('notify once per run, not on every poll', async () => {
         await load(schedule());
         const done = schedule({ run_count: 1, last_result: 'ok' });

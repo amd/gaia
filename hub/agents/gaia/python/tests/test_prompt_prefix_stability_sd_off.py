@@ -33,5 +33,4 @@ def test_prompt_without_image_generation_stays_fixed(sd_off, flagship):
     system = [request[0][0]["content"] for request in model.requests]
     assert "**IMAGE GENERATION:** Not available in this session." in system[0]
     assert system[0] == system[1]
-    before, after = (stability._render(request) for request in model.requests)
-    assert after.startswith(before)
+    stability._assert_each_extends_the_last(model.requests)

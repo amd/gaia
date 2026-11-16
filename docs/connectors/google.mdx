@@ -187,7 +187,7 @@ explains how to copy or download the credentials.
 2. Click **Settings** (gear) → **Connectors**.
 3. Click the **Google** tile to expand it.
 4. Paste the **Client ID** and **Client Secret** from Step 4.
-5. Click **Save & Connect**.
+5. Click **Save and connect**.
 
 Already past first-time setup (client came from env vars, or you need to
 rotate it)? Expand the tile's collapsible **OAuth client** section — it
@@ -345,9 +345,10 @@ Google's own opaque failure page, shown **after** you complete the
 consent screen — not the "Google hasn't verified this app" interstitial
 from Step 5. GAIA never sees why: the browser lands on Google's error
 page instead of coming back to GAIA's loopback callback, so the callback
-handler never runs and the CLI/UI just times out once the sign-in window
-closes after 15 minutes (`Sign-in to google was not finished within 15
-minutes ...`) — that message will not name the real cause.
+handler never runs and the sign-in just times out once its window
+closes after 15 minutes: the CLI prints `Sign-in to google was not
+finished within 15 minutes ...` and the app says sign-in did not finish.
+Neither names the real cause.
 
 Nothing found while researching this guide ties this error page
 authoritatively to one cause for a loopback (Desktop-app) OAuth flow.

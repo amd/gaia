@@ -77,6 +77,12 @@
     text-wrap: balance;
 }
 
+/* The serif has no Arabic, so the Arabic line renders small and the default gloss would out-size it. */
+.new-chat-greeting .i18n-gloss.i18n-gloss {
+    display: block;
+    font-size: 0.55em;
+}
+
 /* Holds its height before the folder arrives, so nothing below jumps. */
 .new-chat-meta {
     display: flex;
@@ -182,6 +188,19 @@
     margin: 0;
     padding: 0;
     list-style: none;
+}
+
+/* Opened in full, the list scrolls in its own box so the composer stays on screen. */
+.new-chat-doc-list.is-expanded {
+    max-height: min(30vh, 220px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.new-chat-doc-toggle {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
 }
 
 .new-chat-doc {

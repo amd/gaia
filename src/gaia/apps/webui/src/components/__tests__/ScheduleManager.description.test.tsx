@@ -112,7 +112,7 @@ function typeSchedule(text: string) {
 
 beforeEach(() => {
     useChatStore.setState({ showSchedules: true });
-    useScheduleStore.setState({ schedules: [], loading: false, error: null, actionError: null, loadSchedules: vi.fn(async () => {}) });
+    useScheduleStore.setState({ draft: null, schedules: [], loading: false, error: null, actionError: null, loadSchedules: vi.fn(async () => {}) });
 });
 
 afterEach(() => {

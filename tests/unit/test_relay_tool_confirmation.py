@@ -103,6 +103,8 @@ class TestRelayMapsAnswerableConfirmation:
 
         assert terminal is False, "the sidecar run is parked, not over"
         [event] = _drain(handler)
+        assert event.pop("timeout_seconds") == 600
+        assert event.pop("expires_at") > 0
         assert event == {
             "type": "permission_request",
             "tool": "write_file",

@@ -42,7 +42,7 @@ describe('permission prompt in Arabic', () => {
     });
 
     it('asks in Arabic, the tool kept left to right', () => {
-        prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt', old_content: 'a', new_content: 'b' } });
+        prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt', old_content: 'a', new_content: 'b' } });
         const title = screen.getByRole('heading');
         expect(title.textContent).toMatch(/^⁧?هل تسمح بـ/);
         expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^editing file$/);

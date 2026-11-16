@@ -52,6 +52,8 @@ export interface GaiaNotification {
   receiptId?: string;
   actions?: string[];
   timeoutSeconds?: number;
+  /** When the prompt times out, in ms since the epoch. */
+  expiresAt?: number;
   /** Response (after user action). */
   response?: 'allow' | 'deny';
   respondedAt?: number;

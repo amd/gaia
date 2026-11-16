@@ -111,7 +111,7 @@ and a `Retry-After` header instead.
 | `POST /v1/email/unarchive` | `unarchive()` | **Connector** | A connected mailbox + the `batch_id`. **Ungated** (it restores). Window expired / unknown handle → `409`. |
 | `POST /v1/email/quarantine` | `quarantine()` | **Connector (Gmail)** | A valid `confirm` token (`action="quarantine"`) **and** a connected **Gmail** mailbox. Applies `GAIA_PHISHING_QUARANTINE` + archives; refuses `is_phishing: false` → `400`; refuses an Outlook mailbox → `400` (label-undo can't reverse a folder move, #1738). |
 | `POST /v1/email/unquarantine` | `unquarantine()` | **Connector** | A connected mailbox + the `action_id`. **Ungated** (it restores prior labels). Window expired / unknown → `409`. |
-| `GET /v1/email/calendar/events` | `listCalendarEvents()` | **Connector** | A connected mailbox whose **calendar scope** was granted. Read-only view of the primary calendar; `403` (reconnect CTA) if the scope is missing. Optional `time_min`/`time_max` — omitting both defaults to a forward window (now → +30 days); `provider` only when 2+ accounts are connected. |
+| `GET /v1/email/calendar/events` | `listCalendarEvents()` | **Connector** | A connected mailbox whose **calendar scope** was granted. Read-only view of the primary calendar; `403` (reconnect CTA) if the scope is missing. Optional `time_min`/`time_max` — omitting both defaults to a forward window (now → +30 days); `provider` only when 2+ accounts are connected. Returns `events`, `count`, and `truncated`; `truncated: true` means the provider has more events in the window, so the list is not the whole window — say so, or ask again with a narrower `time_min`/`time_max`. |
 | `POST /v1/email/calendar/events/preview` | `previewCalendarEvent()` | **Standalone** | Nothing external — mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
 | `POST /v1/email/calendar/events` | `createCalendarEvent()` | **Connector** | A valid `preview` token **and** a connected calendar. Token gate fires first: no/invalid token → `403`; then the calendar-scope / account checks. |
 | `POST /v1/email/calendar/events/respond` | `respondToCalendarEvent()` | **Connector** | A connected calendar. RSVPs `accepted`/`declined`/`tentative` to an existing invite. |
@@ -510,8 +510,17 @@ token is involved. Both `query` and `labels` are optional: a `query` searches **
 mail** (Gmail search semantics), `labels` filter to those labels, and with **neither**
 it lists the INBOX. `max_results` is `1–100` (default `25`); each match is hydrated
 with a per-message fetch, so the cap bounds that fan-out. To page, pass the
-response's `next_page_token` back as the request's `page_token`. Each `messages[]`
-item:
+response's `next_page_token` back as the request's `page_token`.
+
+**Outlook mailboxes accept fewer operators.** On an Outlook mailbox a `query`
+supports a plain phrase, `from:`, `subject:`, `is:unread`/`is:read`, and
+`newer_than:`/`older_than:` durations (e.g. `newer_than:7d`). These operators
+are rejected with an error rather than run: any other `is:` value (such as
+`is:starred`), `after:`, `before:`, `newer:`, `older:`, `label:`, `has:`, and
+`in:`. One Outlook query also cannot mix `from:`/`subject:`/phrase terms with
+`is:`/`newer_than:`/`older_than:`; split it into two searches.
+
+Each `messages[]` item:
 
 | Field | Type | Notes |
 |-------|------|-------|

@@ -29,6 +29,10 @@ describe('readsAloudWhenDone', () => {
         expect(readsAloudWhenDone(reply({ stopState: 'stopped' }))).toBe(false);
     });
 
+    it('skips an answer that is only code', () => {
+        expect(readsAloudWhenDone(reply({ content: '```python\nprint("hello")\n```' }))).toBe(false);
+    });
+
     it('skips a turn that failed', () => {
         expect(readsAloudWhenDone(reply({ failure: 'model_server_down' }))).toBe(false);
         expect(readsAloudWhenDone(reply({ failed: true }))).toBe(false);

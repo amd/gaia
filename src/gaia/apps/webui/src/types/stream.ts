@@ -83,6 +83,8 @@ export interface StreamEvent {
     success?: boolean;
     /** On a `tool_result`: no answer came in time, so a "denied" status is not the user's no. */
     timed_out?: boolean;
+    /** On a `tool_result`: "agent" when GAIA turned the call down itself and showed no prompt. */
+    declined_by?: string;
     steps?: string[];
     /** One plain line per plan step, parallel to `steps` (for plan events). */
     step_narrations?: string[];
@@ -148,6 +150,8 @@ export interface StreamEvent {
     sensitive?: boolean;
     /** Timeout in seconds (for tool_confirm events). */
     timeout_seconds?: number;
+    /** When that timeout ends, in Unix seconds, so a replayed prompt keeps counting from it. */
+    expires_at?: number;
     /** MCP server name (for tool_start of MCP tools). */
     mcp_server?: string;
     /** The connector's display name (for tool_start of MCP tools). */

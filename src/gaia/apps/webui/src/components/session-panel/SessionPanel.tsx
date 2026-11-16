@@ -165,15 +165,17 @@ export function SessionPanel({ sessionId, messages, busy, onUsage, onJumpToMessa
                             <ThisAnswer messages={messages} busy={busy} />
                         </PanelSection>
                     )}
+                    {/* What the chat made and may touch first; how it ran sits under Details. */}
+                    <OutputsSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
+                    <ChangesSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
                     <EnvironmentSection sessionId={sessionId} busy={busy} />
+                    <SkillsSection sessionId={sessionId} busy={busy} />
+                    <h3 className="sp-group-title">{t('sp.details')}</h3>
                     <PanelSection id="context" title={t('sp.section.context')}>
                         <div className="sp-context">
                             <ContextDetails sessionId={sessionId} busy={busy} onUsage={onUsage} />
                         </div>
                     </PanelSection>
-                    <OutputsSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
-                    <ChangesSection sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
-                    <SkillsSection sessionId={sessionId} busy={busy} />
                     <AgentInfoSection sessionId={sessionId} busy={busy} />
                 </div>
             </aside>

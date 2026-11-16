@@ -116,6 +116,14 @@ def test_asking_for_the_shell_stays_on_the_short_list(message):
     assert set(requested_tools(message, registry)) <= FULL_CORE_TOOLS
 
 
+def test_skill_request_tools_exist_and_cost_the_jump(flagship_registry):
+    """A renamed skill tool would silently stop being requested."""
+    from gaia_agent.tool_requests import SKILL_REQUEST_TOOLS
+
+    assert set(SKILL_REQUEST_TOOLS) <= flagship_registry
+    assert not set(SKILL_REQUEST_TOOLS) & FULL_CORE_TOOLS
+
+
 def test_core_is_the_list_every_session_starts_on():
     """A change here moves the first-turn cost of every session."""
     assert FULL_CORE_TOOLS == {

@@ -145,13 +145,15 @@ async def test_background_tick_uses_latest_completed_exchanges(transcript):
 
     loop = AgentLoop()
     loop._db = db
+    goal = SimpleNamespace(priority="high", title="t", description="")
     module = SimpleNamespace(ChatAgent=Agent, ChatAgentConfig=object)
     with (
         patch.dict(sys.modules, {"gaia_agent.chat_agent": module}),
         patch.object(helpers, "_get_cached_agent", return_value=Agent()),
         patch.object(loop, "_get_actionable_goals", return_value=[]),
+        patch.object(loop, "_settle_goal"),
     ):
-        await loop._execute_tick(session["id"], session, [])
+        await loop._execute_tick(session["id"], session, [goal])
     assert [entry["content"] for entry in captured] == [
         content for i in range(12) for content in (f"USER_{i}", f"ASST_{i}")
     ]
