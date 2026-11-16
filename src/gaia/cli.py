@@ -7550,6 +7550,7 @@ def handle_knowledge_command(args):
 
     import requests
 
+    from gaia.web.client import SearchUnavailableError
     from gaia.web.tavily import (
         BudgetConfig,
         TavilyBudgetExceeded,
@@ -7585,22 +7586,22 @@ def handle_knowledge_command(args):
     except TavilyBudgetExceeded as e:
         print(f"🛑 {e}")
         sys.exit(1)
-    except TavilyConfigError as e:
+    except (TavilyConfigError, SearchUnavailableError) as e:
         print(f"❌ {e}")
         sys.exit(1)
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
-        # A dropped or blocked connection is the user's network, not a crash.
+        service = "Tavily" if client.configured else "DuckDuckGo"
         print(
-            "❌ Could not reach the web search service: the connection failed "
-            "or timed out. Check your internet connection, then try again.\n"
-            f"   Detail: {type(e).__name__}"
+            f"❌ Web {action} failed: {service} could not be reached ({e}). "
+            "Check your internet connection or proxy settings and try again."
         )
         sys.exit(1)
     except requests.exceptions.HTTPError as e:
-        # The service answered with an error: the network is fine.
+        # The service answered with an error, so the user's network is fine.
+        service = "Tavily" if client.configured else "DuckDuckGo"
         status = getattr(e.response, "status_code", None) or "an error"
         print(
-            f"❌ The web search service answered with {status}. "
+            f"❌ Web {action} failed: {service} answered with {status}. "
             "It may be down for a moment; try again later."
         )
         sys.exit(1)
