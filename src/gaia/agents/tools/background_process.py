@@ -780,7 +780,9 @@ class BackgroundProcess:
         for pgid in list(self._groups):
             if not _GUARDIAN.registered(pgid) or not _group_alive(pgid):
                 _GUARDIAN.unregister(pgid)
-                self._groups.remove(pgid)
+                # The supervisor and a stop can both release the same group.
+                if pgid in self._groups:
+                    self._groups.remove(pgid)
 
     def begin_stop(self) -> None:
         """Ask the whole tree to stop, without waiting; :meth:`finish_stop` waits."""

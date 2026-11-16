@@ -880,6 +880,31 @@ def test_a_group_the_guardian_dropped_is_never_signalled(tmp_path, monkeypatch):
     assert signalled and set(signalled) == {tracked}
 
 
+def test_a_group_released_twice_does_not_raise(tmp_path, monkeypatch):
+    """The supervisor and a stop can both see the same group empty."""
+    plan = SimpleNamespace(steps=[], step_cwds=[], granted=frozenset(), bypass=False)
+    process = bp.BackgroundProcess(
+        "p1", "", "noop", plan, OutputLog(tmp_path / "p1.log")
+    )
+    if process._job is not None:
+        process._job.close()
+        process._job = None
+
+    class _Racing(_TrackingGuardian):
+        def unregister(self, pgid):
+            super().unregister(pgid)
+            # The other thread releases the same group in between.
+            if pgid in process._groups:
+                process._groups.remove(pgid)
+
+    monkeypatch.setattr(bp, "_GUARDIAN", _Racing(set()))
+    monkeypatch.setattr(bp, "_group_alive", lambda pgid: False)
+    process._groups = [4242]
+    process._release_empty_groups()
+    assert process._groups == []
+    process.log.close()
+
+
 def test_a_host_without_shell_tools_is_refused_by_name():
     class Bare(ProcessToolsMixin):
         pass
