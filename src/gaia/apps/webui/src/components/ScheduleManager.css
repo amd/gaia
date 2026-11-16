@@ -23,7 +23,8 @@
     color: var(--text-secondary);
 }
 
-.schedule-field-hint {
+.schedule-field-hint,
+.schedule-prompt-hint {
     font-size: 11px;
     color: var(--text-muted);
 }
@@ -231,8 +232,10 @@
     color: var(--text-secondary);
     margin-top: 4px;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow-wrap: anywhere;
 }
 
 .schedule-card-actions {
@@ -366,6 +369,7 @@
 
 .schedule-result-error {
     color: var(--accent);
+    max-height: none;
 }
 
 .schedule-results-empty {

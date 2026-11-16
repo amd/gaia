@@ -45,6 +45,21 @@ def test_named_workspace_paths(workspace, request_text, expected):
     assert named_workspace_paths(request_text, str(workspace)) == expected
 
 
+def test_a_path_inside_text_to_translate_is_not_something_to_look_at(workspace):
+    """The path is part of the sentence the user wants translated (#7439)."""
+    request_text = (
+        "Translate this Spanish sentence to English and reply with only the "
+        "translation, nothing else: Guardé una copia de seguridad en "
+        f"{workspace}/toybox/dates.py.bak."
+    )
+    assert named_workspace_paths(request_text, str(workspace)) == []
+
+
+def test_a_file_the_translation_request_itself_names_is_still_found(workspace):
+    request_text = "Translate README.md into Spanish: keep the headings."
+    assert named_workspace_paths(request_text, str(workspace)) == ["README.md"]
+
+
 def test_the_working_folder_alone_is_not_something_to_look_at(workspace):
     request_text = f"You are working in {workspace}. What is 2 + 2?"
     assert named_workspace_paths(request_text, str(workspace)) == []

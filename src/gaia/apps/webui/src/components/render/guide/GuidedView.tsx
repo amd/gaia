@@ -113,7 +113,7 @@ export function GuidedView({ doc, state, timers, onClose }: {
                     <span className="render-guided__guide-title">{doc.title}</span>
                     {doc.items.length > 0 && (
                         <details className="render-guided__items">
-                            <summary>{doc.features.itemsLabel}</summary>
+                            <summary>{t(doc.features.itemsLabel)}</summary>
                             <ul>
                                 {doc.items.map((_, i) => {
                                     const { qty, text } = itemDisplay(doc, i, state);

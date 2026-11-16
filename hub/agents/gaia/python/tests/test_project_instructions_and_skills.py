@@ -55,15 +55,14 @@ def test_claude_md_and_project_skills_reach_a_stable_prompt(repo, flagship):
     assert "==== PROJECT INSTRUCTIONS ====" in system[0] and RULE in system[0]
     assert "- release-steps: How this repo cuts a release." in system[0]
     assert system[0] == system[1]
-    before, after = (stability._render(request) for request in model.requests)
-    assert after.startswith(before)
+    stability._assert_each_extends_the_last(model.requests)
 
 
 def test_the_model_can_load_a_project_skill_by_name(repo, flagship):
     agent, _model, _doc = flagship
     result = agent._tools_registry["load_skill"]["function"](name="release-steps")
     assert result["status"] == "success", result
-    assert "Tag, then publish." in agent.system_prompt
+    assert "Tag, then publish." in agent._prompt_text()
 
 
 # --------------------------------------------------------------------------

@@ -150,6 +150,19 @@ def test_version_history_table_records_the_current_version():
     )
 
 
+def test_contract_doc_describes_the_briefing_endpoint():
+    """The briefing route and its freshness fields must be in the reference.
+
+    ``GET /v1/email/briefing`` shipped with ``cache_age_seconds``/``stale``
+    while CONTRACT.md never named it, so integrators reading the contract
+    never learned it existed.
+    """
+    text = _CONTRACT_DOC.read_text(encoding="utf-8")
+    assert "GET /v1/email/briefing" in text
+    for field in ("cache_age_seconds", "stale", "generated_at"):
+        assert re.search(rf"briefing[\s\S]*`{field}`", text), field
+
+
 # ---------------------------------------------------------------------------
 # npm client — its pinned version must match the sidecar's (#2922)
 # ---------------------------------------------------------------------------
@@ -190,4 +203,61 @@ def test_npm_spec_states_the_contract_version():
     assert match.group(1) == version, (
         f"schema version split: contract.py = {version}, "
         f"npm/SPEC.md says {match.group(1)}. Update the SPEC.md intro too."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Outlook search — every operator the translator rejects is documented (#3588)
+# ---------------------------------------------------------------------------
+
+
+def _outlook_rejected_operators() -> list:
+    from gaia_agent_email.outlook_query import _UNSUPPORTED_OPERATOR_RE
+
+    match = re.search(r"\(\?P<op>([a-z|]+)\)", _UNSUPPORTED_OPERATOR_RE.pattern)
+    assert match, "_UNSUPPORTED_OPERATOR_RE no longer has a plain <op> alternation"
+    return match.group(1).split("|")
+
+
+@pytest.mark.parametrize(
+    "doc", [_NPM_SPEC, _CONTRACT_DOC], ids=["npm/SPEC.md", "CONTRACT.md"]
+)
+def test_search_docs_name_every_operator_outlook_rejects(doc):
+    """An integrator reading the search reference must see Outlook's limits.
+
+    The SPEC said "Gmail search semantics" with no backend caveat while
+    Outlook raised on eight operators.
+    """
+    text = doc.read_text(encoding="utf-8")
+    # Only the paragraph that lists what Outlook rejects: a stray `in:` elsewhere
+    # in the doc must not satisfy the check.
+    at = text.find("rejected with an error")
+    assert at != -1, f"{doc.name} no longer says which operators Outlook rejects"
+    rejected = text[text.rfind("\n\n", 0, at) : text.find("\n\n", at)]
+    missing = [op for op in _outlook_rejected_operators() if f"`{op}:" not in rejected]
+    assert not missing, (
+        f"{doc.name} does not name the Outlook-rejected search operators "
+        f"{missing}; list them in the inbox-search section."
+    )
+
+
+@pytest.mark.parametrize(
+    "doc, row_start",
+    [
+        ("SPEC.md", "| `GET /v1/email/calendar/events` |"),
+        ("SKILL.md", "| `listCalendarEvents(opts?)` |"),
+    ],
+)
+def test_npm_calendar_listing_row_mentions_truncation(doc, row_start):
+    """The calendar-listing row must tell integrators the page can be partial.
+
+    The response gained ``count``/``truncated`` (#2664) while both npm docs
+    still described a bare ``events`` list.
+    """
+    text = (_NPM_ROOT / doc).read_text(encoding="utf-8")
+    rows = [line for line in text.splitlines() if line.startswith(row_start)]
+    assert len(rows) == 1, f"npm/{doc} has no single {row_start!r} row"
+    assert "`truncated`" in rows[0], (
+        f"npm/{doc}'s calendar-listing row never mentions `truncated`, so an "
+        "integrator can't tell a partial page from the whole window."
     )

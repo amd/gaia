@@ -59,6 +59,7 @@ from gaia.agents.tools.shell_tools import (
     TIER_REFUSE,
     ShellToolsMixin,
     _is_lone_granted_segment,
+    _strip_heredoc_bodies,
 )
 
 # ---------------------------------------------------------------------------
@@ -937,11 +938,12 @@ class TestOperatorsUnderBypass:
         # What bypass actually lifts now: redirection, backgrounding,
         # substitution and the newline — the operators that only a shell can
         # act on, and that no per-segment check can judge. By default they are
-        # a one-time approval of the exact line; a line break is refused, since
-        # the line would not read on screen the way it runs.
+        # a one-time approval of the exact command, line breaks included; cmd
+        # refuses a line break, since it would run only the first line.
         result = check(command, bypass=False)
         assert result is not None
-        expected = TIER_REFUSE if "\n" in command else TIER_CONFIRM_ONCE
+        first_line_only = "\n" in command and shell_tools._pipe_dialect() == "cmd"
+        expected = TIER_REFUSE if first_line_only else TIER_CONFIRM_ONCE
         assert result["tier"] == expected, result
 
     def test_a_pipe_is_refused_for_its_binary_not_for_the_pipe(self):
@@ -1078,6 +1080,247 @@ class TestHeredocUnderBypass:
         # they must see the text and refuse it rather than guess.
         command = "python3 - <<'EOF'\nprint(1 + 1)"
         assert check(command, bypass=True) is not None
+
+
+class TestHeredocCannotHideARefusedCommand:
+    """The developer-set refusal must hold for every line sh executes.
+
+    The body stripper used to open a heredoc wherever a ``<<`` token appeared,
+    including where sh reads it as data — so lines sh runs as commands were
+    dropped from the walk as if they were body text, and a refused binary
+    on them was never checked (#4464)."""
+
+    #: Shapes where sh runs ``rm -rf x`` as a command.
+    HIDING_SHAPES = [
+        # '<<' after a '#' is a comment to sh: no heredoc opens.
+        "echo hi # <<EOF\nrm -rf x\nEOF",
+        "echo hi;# <<EOF\nrm -rf x\nEOF",
+        # Arithmetic shift, not a heredoc.
+        "echo $((1<<2))\nrm -rf x\n2))",
+        "echo $((1 << EOF ))\nrm -rf x\nEOF",
+        "((x = 1 << EOF))\nrm -rf x\nEOF",
+        # Inside a parameter expansion.
+        "echo ${x:-<<EOF}\nrm -rf x\nEOF}",
+        # Inside a quote that spans lines.
+        'echo "x\n<<EOF\n" ; rm -rf x ; echo "\nEOF\n"',
+        "echo 'x\n<<EOF\n' ; rm -rf x ; echo '\nEOF\n'",
+        # A here-string has no body.
+        "cat <<<EOF\nrm -rf x\nEOF",
+        # The delimiter is '-', so EOF is an argument and rm runs.
+        "cat << - EOF\n-\nrm -rf x\nEOF",
+        # sh joins an unquoted body's backslash-newline into the terminator.
+        "cat <<EOF\nEO\\\nF\nrm -rf x\nEOF",
+        # The opener is continued onto the next line.
+        "cat <<EOF \\\n\nrm -rf x\nEOF",
+        # ANSI-C quoting escapes its own quote.
+        "echo $'\\'\ncat <<EOF\n'; rm -rf x; echo '\nEOF\n'",
+        # A line after the body runs.
+        "cat <<'EOF' > out.txt\nhello\nEOF\nrm -rf x",
+        # The second heredoc's body ends before rm.
+        "cat <<'A' <<'B'\none\nA\ntwo\nB\nrm -rf x",
+    ]
+
+    @pytest.mark.parametrize("command", HIDING_SHAPES)
+    def test_a_refused_binary_around_heredoc_syntax_is_still_refused(self, command):
+        assert check(command, bypass=True) is not None
+
+    @pytest.mark.parametrize("command", HIDING_SHAPES)
+    def test_the_executed_line_stays_in_the_walk(self, command):
+        # The gates and the audit record are built from this walk.
+        assert "rm -rf x" in _strip_heredoc_bodies(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cat <<EOF > notes.txt\nhello $USER; it's done\nEOF",
+            "cat <<'EOF' > notes.txt\nrm -rf / && echo it's fine | tee x\nEOF",
+            'cat <<"EOF" > notes.txt\nline\nEOF',
+            "cat > notes.txt <<-EOF\n\tindented; body\n\tEOF",
+            "cat<<EOF>notes.txt\nx\nEOF",
+            "python3 - <<'PY'\nimport os; print(os.getcwd())  # rm\nPY",
+            "cat <<'A' <<'B'\nrm one\nA\nrm two\nB",
+            "cat <<'EOF' > a.txt\none\nEOF\ncat <<'EOF' > b.txt\ntwo\nEOF",
+            "cat <<EOF > f.txt # write the file\nbody\nEOF",
+            "cat <<'EOF' > script.sh\nmake \\\n  all\nEOF",
+        ],
+    )
+    def test_ordinary_heredocs_still_run(self, command):
+        assert check(command, bypass=True) is None
+
+    #: Openers that name their target with a plain expansion.
+    EXPANSION_OPENERS = [
+        "cat > \"${OUT}/a.txt\" <<'EOF'\nhello world\nEOF",
+        'cat > "${OUT}/a.json" <<\'EOF\'\n{"a": 1}\nEOF',
+        "cat > ${OUT}/a.txt <<'EOF'\nhello world\nEOF",
+        'cat > "${DIR}/${NAME}.txt" <<EOF\nhello $USER\nEOF',
+        "cat > \"$(pwd)/a.txt\" <<'EOF'\nhello world\nEOF",
+        'cat > "$(dirname "$0")/a.txt" <<\'EOF\'\nhello world\nEOF',
+        "cat > \"$(git rev-parse --show-toplevel)/n.md\" <<'EOF'\n# Notes\nhi\nEOF",
+        "cat > \"${OUT}/$(date +%s).log\" <<'EOF'\nhello world\nEOF",
+        "cat > '${OUT}' <<'EOF'\nhello world\nEOF",
+        "git commit -m \"$(cat <<'EOF'\nfix: thing\n\nhello body\nEOF\n)\"",
+        # Operator-form expansions end where sh ends them, too.
+        "cat > \"${OUT:-.}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${VAR%/}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > ${1:-out}.txt <<'EOF'\nhello world\nEOF",
+        "cat > \"${FILE:?msg}\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${BASE/.md/.txt}\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${name,,}.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"part${#x}.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"part$((i+1)).txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${OUT:-${HOME}/out}/$(date +%s).log\" <<'EOF'\nhello world\nEOF",
+        'cat > "$(dirname "$(pwd)")/a.txt" <<\'EOF\'\nhello world\nEOF',
+        "cat > \"part$(( (i + 1) * 2 )).txt\" <<'EOF'\nhello world\nEOF",
+    ]
+
+    @pytest.mark.parametrize("command", EXPANSION_OPENERS)
+    def test_a_plain_expansion_on_the_opener_still_runs(self, command):
+        assert check(command, bypass=True) is None
+
+    #: Unquoted bodies with backslash-continued lines.
+    CONTINUED_BODIES = [
+        "cat > Dockerfile <<EOF\nFROM ubuntu\nRUN apt-get update \\\n"
+        "    && apt-get install -y curl\nEOF",
+        "cat > Makefile <<EOF\nall:\n\tgcc -o app \\\n\t  main.c\nEOF",
+        "cat > notes.txt <<EOF\nhello \\\n  world \\\n  again\nEOF",
+        "cat > notes.txt <<-EOF\n\thello \\\n\tworld\n\tEOF",
+        'cat > "${OUT}/Dockerfile" <<EOF\nRUN make \\\n  install\nEOF',
+        # A doubled backslash is an escaped backslash, not a continuation.
+        "cat > paths.txt <<EOF\nC:\\\\\\\\\nhello world\nEOF",
+    ]
+
+    @pytest.mark.parametrize("command", CONTINUED_BODIES)
+    def test_a_continued_body_line_still_runs(self, command):
+        assert check(command, bypass=True) is None
+
+    #: Expansions and continuations sh could read differently from the scan.
+    UNREADABLE_SHAPES = [
+        # A case pattern's ')' does not close the substitution.
+        'echo "$(case a in a) echo " <<EOF ;; esac)\n'
+        '"; rm -rf x; echo "\nEOF\n" ;; esac)"',
+        # '<<' quoted inside a substitution is data.
+        "echo $(echo '<<EOF')\nrm -rf x\nEOF",
+        # A heredoc inside a one-line substitution.
+        "echo $(cat <<EOF)\nrm -rf x\nEOF",
+        # An operator expansion can hide syntax.
+        "echo ${OUT}${x:-<<EOF}\nrm -rf x\nEOF",
+        # Shells disagree on whether a continued line can end the body.
+        "cat <<EOF\nhello \\\nEOF\nrm -rf x",
+        # A '<<' inside any expansion, quote or arithmetic is not an opener.
+        "echo `cat <<EOF`\nrm -rf x\nEOF",
+        'echo "${x:-<<EOF}"\nrm -rf x\nEOF',
+        "echo $(( $(cat) <<EOF ))\nrm -rf x\nEOF",
+        "[[ a <<EOF ]]\nrm -rf x\nEOF",
+        "cat <(cat <<EOF\nrm -rf x\nEOF\n)",
+        "echo $[1<<EOF]\nrm -rf x\nEOF",
+        # A comment inside $( ) can swallow its ')'.
+        "echo $(echo # ) <<EOF\nrm -rf x\nEOF\n)",
+        # Shells disagree on a quote inside ${ } inside double quotes.
+        'echo "${x:-"}"}" <<EOF\nrm -rf x\nEOF',
+        # Shells disagree on a brace inside ${ }.
+        "echo ${x:-{}<<EOF}\nrm -rf x\nEOF",
+        # A $(( closed by a single ')' is a subshell, not arithmetic.
+        "echo $((echo a) ; (echo b)) <<EOF\nrm -rf x\nEOF",
+        # Never balanced.
+        "echo ${x:-a <<EOF\nrm -rf x\nEOF",
+        "echo $(echo a <<EOF\nrm -rf x\nEOF",
+    ]
+
+    @pytest.mark.parametrize("command", UNREADABLE_SHAPES)
+    def test_an_unreadable_expansion_or_continuation_is_still_walked(self, command):
+        assert "rm -rf x" in _strip_heredoc_bodies(command)
+        assert check(command, bypass=True) is not None
+
+    #: Real-world heredocs main runs under full access; none may regress.
+    MAIN_ALLOWS_UNDER_FULL_ACCESS = [
+        'cat > Dockerfile <<EOF\nFROM python:${PY_VERSION}-slim\nWORKDIR /app\nCOPY . .\nRUN pip install -r requirements.txt && \\n    rm -rf /root/.cache\nCMD ["python", "app.py"]\nEOF',
+        "cat > Makefile <<'EOF'\nCC=gcc\nall: app\n\napp: main.o\n\t$(CC) -o $@ $^\n\nclean:\n\trm -f *.o app\nEOF",
+        "cat > .github/workflows/ci.yml <<'EOF'\nname: CI\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: pytest -q | tee out.txt\nEOF",
+        'cat > config.json <<EOF\n{\n  "name": "$NAME",\n  "version": "1.0.0",\n  "home": "${HOME}/app"\n}\nEOF',
+        "python - <<'PY'\nimport json, sys\nd = {'a': 1}; print(json.dumps(d))\nif d['a'] > 0 and True: print('ok')\nPY",
+        "git commit -m \"$(cat <<'EOF'\nfix(shell): read heredocs right\n\nBody line with it's apostrophe; and semicolons & pipes |.\nEOF\n)\"",
+        "cat > out.sh <<-EOF\n\t#!/bin/sh\n\techo hi; echo there\n\tEOF",
+        "cat > a.txt <<'EOF'\nalpha\nEOF\ncat > b.txt <<'EOF'\nbeta\nEOF\nls -la",
+        'cat > env.sh <<EOF\nexport PATH="$PATH:/opt/bin"\nexport BUILD=$(git rev-parse --short HEAD)\nEOF',
+        "cat <<'EOF' | grep -v '^#'\n# comment\nkeep me\nEOF",
+        "cat > a.py <<'EOF'\nprint('hi')\nEOF\npython a.py && echo done",
+        "cd build && cat > CMakeLists.txt <<'EOF'\ncmake_minimum_required(VERSION 3.10)\nproject(App)\nadd_executable(app main.cpp)\nEOF",
+        'cat > README.md <<"EOF"\n# Title\n`code` and $VAR stay literal\nEOF',
+        "cat > script.py <<'END_OF_SCRIPT'\nfor i in range(3):\n    print(i)\nEND_OF_SCRIPT",
+        "cat <<EOF >> ~/.bashrc\nalias ll='ls -la'\nEOF",
+        "python3 <<'EOF'\nimport re\nprint(re.sub(r'\\s+', ' ', 'a   b'))\nEOF",
+        "cat > notes.txt <<EOF\n    indented line\n  another\nEOF",
+        "node <<'JS'\nconst x = [1,2,3].map(n => n * 2);\nconsole.log(x.join(','));\nJS",
+        "cat > Dockerfile <<'EOF'\nFROM node:20\nRUN npm ci \\n && npm run build\nEOF",
+        "git commit -F - <<'EOF'\nchore: bump\n\nDetails here.\nEOF",
+        'gh pr create --title "fix: x" --body "$(cat <<\'EOF\'\n## Summary\n- one\n- two\nEOF\n)"',
+        'cat > run.sh <<EOF\nPORT=${PORT:-8080}\necho "listening on \\$PORT"\nEOF',
+        "cat > \"${OUT:-.}/x.txt\" <<'EOF'\nhello\nEOF",
+        "cat <<EOF\nhi\nEOF\n",
+        "python - <<'EOF'\nname = 'x'  # comment << not heredoc\nprint(f'{name}')\nEOF",
+        "cat > n.txt <<EOF\ncount=$((1 + 2))\nEOF",
+        "cat > n.txt <<EOF\nnow=`date`\nEOF",
+        "cat > \"${OUT:-.}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${OUT_DIR%/}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"$1\" <<'EOF'\nhello world\nEOF",
+        "cat > \"$HOME/.config/app.toml\" <<'EOF'\nhello world\nEOF",
+        "cat > ~/.config/app.toml <<'EOF'\nhello world\nEOF",
+        'export NAME=demo\ncat > "$NAME.txt" <<EOF\n$NAME\nEOF',
+        "cat > \"$(git rev-parse --show-toplevel)/.env\" <<'EOF'\nKEY=1\nEOF",
+        "cat > out.txt <<EOF\nlines: $(wc -l < in.txt)\nEOF",
+        "cat > out.txt <<EOF\n`whoami`\nEOF",
+        'cat >"$OUT" <<EOF\nhello world\nEOF',
+        "cat <<EOF | python -\nprint('${X:-y}')\nEOF",
+        "python - \"$@\" <<'EOF'\nimport sys; print(sys.argv)\nEOF",
+        "cat > \"${DIR}/a b.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > ${1:-out}.txt <<'EOF'\nhello world\nEOF",
+        "cat > \"$TMPDIR/$(date +%Y%m%d).log\" <<'EOF'\nhello world\nEOF",
+        "cat > x.sh <<'EOF'\n#!/usr/bin/env bash\nset -euo pipefail\necho \"${1:-none}\" | tr a-z A-Z\nEOF",
+        "cat > x.py <<'EOF'\nprint(\"a\" << 2 if False else 1)\nEOF",
+        "git commit -m \"$(cat <<'EOF'\nfeat: x\n\nUses ${VAR} and $(cmd) in text.\nEOF\n)\"",
+        "git tag -a v1 -m \"$(cat <<'EOF'\nRelease v1\nEOF\n)\"",
+        'cat <<EOF > "${OUT}"\nhello world\nEOF',
+    ]
+
+    def test_a_test_bracket_before_the_opener_keeps_the_body_out(self):
+        command = "[[ -d out ]] && cat > out/a.txt <<'EOF'\nhello world\nEOF"
+        assert "hello world" not in _strip_heredoc_bodies(command)
+
+    @pytest.mark.parametrize("command", MAIN_ALLOWS_UNDER_FULL_ACCESS)
+    def test_every_heredoc_main_runs_still_runs(self, command):
+        assert check(command, bypass=True) is None
+
+    @pytest.mark.parametrize(
+        "make_command",
+        [
+            lambda n: 'cat > "' + "${OUT:-x}" * n + "/a.txt\" <<'EOF'\nhello\nEOF",
+            lambda n: 'cat > "'
+            + "${a:-" * n
+            + "x"
+            + "}" * n
+            + "\" <<'EOF'\nhello\nEOF",
+            lambda n: "echo $((" + "(" * n + "1" + ")" * n + "))",
+            lambda n: 'cat > "' + "$(" * n + "x" + ")" * n + "\" <<'EOF'\nhello\nEOF",
+            # Many long names inside an unclosed or rejected $( ).
+            lambda n: 'echo "$('
+            + " $LONG_VARIABLE_NAME_" * n
+            + ' <x" <<EOF\nhello\nEOF',
+            lambda n: "echo $(" + " $LONG_VARIABLE_NAME_" * n + " <x <<EOF\nhello\nEOF",
+        ],
+    )
+    def test_the_scan_stays_linear(self, make_command):
+        # Growth ratio, not wall time: a loaded runner slows both sizes alike.
+        small, big = make_command(400), make_command(3200)
+        small_best = big_best = float("inf")
+        for _ in range(5):
+            start = time.perf_counter()
+            _strip_heredoc_bodies(small)
+            small_best = min(small_best, time.perf_counter() - start)
+            start = time.perf_counter()
+            _strip_heredoc_bodies(big)
+            big_best = min(big_best, time.perf_counter() - start)
+        # 8x the input: linear is ~8x the time, quadratic ~64x.
+        assert big_best < 24 * small_best + 0.005
 
 
 class TestReadOnlySubGuardsLiftUnderBypassOnly:
@@ -1438,6 +1681,88 @@ def env_pre_approves(monkeypatch):
     )
 
 
+def _desktop_full_access_host():
+    """The Agent UI's Full access: prompts pre-approved, shell gates still on."""
+    host = _Host(auto_approve=True)
+    host.console.asks_past_preapproval = True
+    host.console.answers_confirmations = True
+    host.console.grants_paths = True
+    return host
+
+
+class TestMultiLineCommandsAreJudgedNotRefusedOnSight:
+    """A line break alone must not refuse a command before anyone is asked (#8028).
+
+    The Agent UI's Full access keeps the shell gates on, so a heredoc becomes a
+    one-time approval, and every one was refused for "line breaks" before the
+    prompt. The prompt shows the exact text with its lines, and sh runs every
+    line, so the line is judged like any other; cmd.exe runs only the first.
+    """
+
+    HEREDOCS = [
+        "cat <<'EOF' > hd_notes.txt\nhello heredoc\nEOF",
+        "cat > notes.txt <<'EOF'\none; two | three\nEOF",
+        "echo one\necho two",
+    ]
+
+    HIDDEN_DELETES = [
+        "cat <<'EOF' > out.txt\nhello\nEOF\nrm -rf x",
+        "echo hi\nrm -rf x",
+        "cat <<'A' <<'B'\none\nA\ntwo\nB\nrm -rf x",
+    ]
+
+    @pytest.fixture
+    def posix(self, monkeypatch):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "posix")
+
+    @pytest.mark.parametrize("command", HEREDOCS)
+    def test_desktop_full_access_puts_a_heredoc_to_the_person(self, posix, command):
+        host = _desktop_full_access_host()
+        assert (
+            host.policy_refusal_for_call("run_shell_command", {"command": command})
+            is None
+        )
+        shown = host.confirmation_args_for_call(
+            "run_shell_command", {"command": command}
+        )
+        assert shown["command"] == command
+        assert shown.get("_needs_person") is True
+
+    @pytest.mark.parametrize("command", HEREDOCS)
+    def test_ask_mode_offers_a_heredoc_once(self, posix, command):
+        assert refusal(command) is None
+
+    @pytest.mark.parametrize("command", HIDDEN_DELETES)
+    def test_a_delete_on_another_line_is_still_refused(self, posix, command):
+        for host in (_desktop_full_access_host(), _Host()):
+            error = host.policy_refusal_for_call(
+                "run_shell_command", {"command": command}
+            )
+            assert error is not None and error["tier"] == TIER_REFUSE, error
+            assert "rm -rf x" in error["error"]
+        assert refusal(command, full_access=True) is not None
+
+    @pytest.mark.parametrize(
+        "command", ["echo hi\recho there", "git commit -m wip\u2028echo x"]
+    )
+    def test_a_carriage_return_or_invisible_break_is_still_refused(
+        self, posix, command
+    ):
+        error = refusal(command)
+        assert error is not None and error["tier"] == TIER_REFUSE
+
+    @pytest.mark.parametrize("command", HEREDOCS)
+    def test_windows_says_it_runs_only_the_first_line(self, monkeypatch, command):
+        monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
+        error = _desktop_full_access_host().policy_refusal_for_call(
+            "run_shell_command", {"command": command}
+        )
+        assert error is not None and error["tier"] == TIER_REFUSE
+        assert "only the first line" in error["error"]
+        assert "invisible" not in error["error"]
+        assert "file tools" in error["hint"]
+
+
 class TestTiers:
     """A block is refused only when a yes/no prompt cannot honestly describe it."""
 
@@ -1502,7 +1827,11 @@ class TestASpellingDoesNotChangeTheTier:
             "/opt/homebrew/bin/gh auth token",
         ],
     )
-    def test_a_refused_invocation_stays_unvouched_by_path_or_alias(self, command):
+    def test_a_refused_invocation_stays_unvouched_by_path_or_alias(
+        self, command, request
+    ):
+        if "/gh " in command:
+            request.getfixturevalue("gh_on_path")
         error, _ = _Host()._validate_shell_command(command)
         assert error is not None
         # An encoded script is refused by any spelling; the rest are asked once.
@@ -1519,8 +1848,12 @@ class TestASpellingDoesNotChangeTheTier:
             "/opt/homebrew/bin/gh issue list",
         ],
     )
-    def test_another_spelling_of_a_read_asks_rather_than_runs_unasked(self, command):
+    def test_another_spelling_of_a_read_asks_rather_than_runs_unasked(
+        self, command, request
+    ):
         """The no-prompt list names bare programs; nothing else joins it."""
+        if "/gh " in command:
+            request.getfixturevalue("gh_on_path")
         assert validate(command)["tier"] == TIER_CONFIRM
         assert refusal(command) is None
 

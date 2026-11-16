@@ -917,9 +917,13 @@ class CodeIndexSDK:
 
     def _embed_batch_call(self, batch: List[str]) -> List[list]:
         """One HTTP call to the embeddings endpoint. Raises on transport failure."""
-        response = self._embedder.embeddings(
-            batch, model=self.config.embedding_model, timeout=180
-        )
+        # Document indexing reloads the shared embedder; wait that out.
+        from gaia.rag.sdk import _EMBEDDER_SWAP
+
+        with _EMBEDDER_SWAP.request():
+            response = self._embedder.embeddings(
+                batch, model=self.config.embedding_model, timeout=180
+            )
         return [item.get("embedding", []) for item in (response or {}).get("data", [])]
 
     def _embed_batch(self, batch: List[str]) -> List[list]:

@@ -11,7 +11,7 @@ import type { DiscordStatus } from '../../../services/messagingApi';
 
 const BASE: DiscordStatus = {
     connected: false, paired: false, running: false, state: 'stopped', detail: '',
-    bot_name: '', owner_name: '', autostart: false, model: null,
+    bot_name: '', owner_name: '', autostart: false, always_allowed: [], model: null,
     portal_url: 'https://discord.com/developers/applications',
     bot_page_url: '', invite_url: '', bot_profile_url: '',
     pairing_code: '', pairing_expires_at: 0, discord_installed: true, should_offer_setup: true,
@@ -152,8 +152,30 @@ describe('MessagingSettings', () => {
         expect(calls.find((c) => c.key === 'POST /messaging/discord/start')?.body).toEqual({ take_over: true });
     });
 
-    it('stopped: offers Start', async () => {
+    it('connected: lists what is always allowed and forgets it on request', async () => {
+        let allowed = ['dir', 'write_file in Documents'];
+        const forgot = vi.fn(() => { allowed = []; return { body: { ...ANSWERING, always_allowed: allowed } }; });
+        serve({
+            'GET /messaging/discord': () => ({ body: { ...ANSWERING, always_allowed: allowed } }),
+            'POST /messaging/discord/forget-always': forgot,
+        });
+        render(<MessagingSettings />);
+        expect(await screen.findByText('write_file in Documents')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Restart' })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Ask me again for all of these' }));
+        await waitFor(() => expect(screen.queryByText('write_file in Documents')).not.toBeInTheDocument());
+        expect(forgot).toHaveBeenCalled();
+    });
+
+    it('stopped unexpectedly: says so and offers Start', async () => {
         serve({ 'GET /messaging/discord': ok({ ...ANSWERING, state: 'stopped', running: false }) });
+        render(<MessagingSettings />);
+        expect(await screen.findByText(/stopped answering on Discord unexpectedly/)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();
+    });
+
+    it('stopped: offers Start', async () => {
+        serve({ 'GET /messaging/discord': ok({ ...ANSWERING, state: 'stopped', running: false, autostart: false }) });
         render(<MessagingSettings />);
         expect(await screen.findByText("GAIA isn't answering on Discord right now.")).toBeInTheDocument();
         expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument();

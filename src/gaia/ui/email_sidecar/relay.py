@@ -88,6 +88,14 @@ LEMONADE_CONNECTION_HINT = EMAIL_PROFILE.lemonade_hint
 #: stream ends with no terminal event (``gaia.daemon.relay``).
 _DAEMON_RELAY_SOURCE = "daemon_relay"
 
+#: GAIA's own model server failing to start, in the outage bar's words. The
+#: daemon starts it again on the next message, so that comes first.
+ENGINE_START_FAILED_MESSAGE = (
+    "The model server isn't answering, so GAIA can't reply yet. It normally "
+    "starts again on its own, so send your message again in a moment. If it "
+    "keeps happening, open Settings > Setup and press Run setup again."
+)
+
 #: Connection/timeout-shaped fragments of requests/urllib3 error reprs.
 #: Deliberately narrow: a non-match passes through untouched.
 _CONNECTION_SHAPED_RE = re.compile(
@@ -114,10 +122,15 @@ def _loop_state_directive(args: Dict[str, Any]) -> Dict[str, Any]:
         wake = 0
     if state == "scheduled":
         wake = max(30, min(86400, wake))
+    from gaia.agents.base.goal_store import GOAL_OUTCOMES
+
+    outcome = str(args.get("goal_outcome") or "")
     return {
         "directive": state,
         "reason": str(args.get("reason") or ""),
         "wake_in_seconds": wake,
+        # An unknown outcome is the tool's refusal, so the goal is unfinished.
+        "goal_outcome": outcome if outcome in GOAL_OUTCOMES else "",
     }
 
 
@@ -131,7 +144,20 @@ def _augment_error_detail(detail: str, profile: RelayProfile = EMAIL_PROFILE) ->
     """Append (never substitute) an actionable hint to connection-shaped
     error text — boundary translation, not a fallback: the original detail
     is preserved verbatim at the front. Text that already names its next
-    step is left alone, so the user never reads two versions of it."""
+    step is left alone, so the user never reads two versions of it.
+
+    GAIA's own server failing to start is the exception: its reason quotes raw
+    server log lines, so the chat gets the outage wording and the log the rest.
+    """
+    from gaia.llm.providers.lemonade import LemonadeEngineStartError
+
+    if detail.startswith(LemonadeEngineStartError.headline):
+        logger.warning(
+            "%s relay: GAIA's model server could not start: %s",
+            profile.agent_id,
+            detail,
+        )
+        return ENGINE_START_FAILED_MESSAGE
     if (
         profile.lemonade_hint
         and not _ALREADY_ADVISED_RE.search(detail)
@@ -278,7 +304,17 @@ def _dispatch_one(
                 if offers_always and tool not in _FRESH_CONSENT_TOOLS
                 else ""
             )
-            handler.set_relay_confirmation(confirm_id, always_scope or None)
+            event_args = event.get("args")
+            path_access = (
+                event_args.get("path")
+                if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(event_args, dict)
+                else None
+            )
+            handler.set_relay_confirmation(
+                confirm_id,
+                always_scope or None,
+                path_access if isinstance(path_access, str) else None,
+            )
             # The UI's own approval prompt.
             request: Dict[str, Any] = {
                 "type": "permission_request",
@@ -445,6 +481,18 @@ def _dispatch_one(
             }
         )
 
+    elif etype == "context_usage":
+        # A live measurement from a sidecar on contract 2.28, streamed before
+        # the answer so the composer fills during a long turn. Its shape is the
+        # in-process one; the relay's own cuts are turns the sidecar never saw,
+        # so they are added here as they are on ``final``.
+        payload = {k: v for k, v in event.items() if k != "type"}
+        hidden = getattr(handler, "relay_hidden_turns", 0)
+        if hidden:
+            payload["turns_hidden"] = payload.get("turns_hidden", 0) + hidden
+        handler.relay_context = payload
+        handler._emit({"type": "context_usage", **payload})
+
     elif etype == "final":
         answer = str(event.get("answer", "") or "")
         cleaned = _strip_balanced_json_blobs(answer, _kind_re()).strip()
@@ -454,6 +502,9 @@ def _dispatch_one(
             out["failed"] = True
             if isinstance(event.get("failure"), str):
                 out["failure"] = event["failure"]
+            # A live pre-answer estimate is not this failed turn's usage, and
+            # ``final`` carries none: do not leave the meter showing the guess.
+            handler.relay_context = None
         # Same top-level fields an in-process answer carries, so the turn's
         # token counts and cost are recorded for a relayed turn too.
         usage = event.get("usage")
@@ -471,10 +522,18 @@ def _dispatch_one(
             handler.relay_context = context
             handler._emit({"type": "context_usage", **context})
         elif isinstance(event.get("context_error"), str):
+            # A live pre-answer estimate is only a hint. When the measurement
+            # failed, the error is the turn's result and the estimate must not
+            # outrank it when the meter is recorded.
+            handler.relay_context = None
             handler.relay_context_error = event["context_error"]
         if isinstance(event.get("model_messages"), list):
             # Saved with the reply so later turns replay its tool calls.
             handler.relayed_model_messages = event["model_messages"]
+        route = event.get("route")
+        if isinstance(route, dict) and isinstance(route.get("model"), str):
+            # Contract >= 2.29: a hybrid turn is billed to the model it ran on.
+            handler.relayed_route = route
         performance = event.get("performance")
         problem = None if performance is None else turn_record_problem(performance)
         if performance is not None and problem is None:
@@ -584,9 +643,10 @@ def _send_internet_switch(
         )
 
 
-def _best_effort_cancel(proxy: Any, rid: str) -> None:
+def _best_effort_cancel(proxy: Any, rid: str) -> Optional[int]:
+    """Cancel run *rid*; how many attached documents it left unloaded, when it says."""
     try:
-        proxy.cancel_query(rid)
+        left = proxy.cancel_query(rid)
     except SidecarError as exc:
         logger.info(
             "%s relay: cancel_query for run_id=%s: %s",
@@ -594,6 +654,31 @@ def _best_effort_cancel(proxy: Any, rid: str) -> None:
             rid,
             exc,
         )
+        return None
+    if isinstance(left, int) and not isinstance(left, bool) and left > 0:
+        return left
+    return None
+
+
+def _emit_documents_left(handler: Any, left: int, profile: RelayProfile) -> None:
+    """Close the open document-loading step with how many Stop left unloaded.
+
+    Stop closes the stream before the sidecar's own closing line can arrive.
+    When they load depends on whether the index filled, which a count can't say.
+    """
+    noun = "1 document was" if left == 1 else f"{left} documents were"
+    message = f"Stopped: {noun} not loaded."
+    _dispatch_one(
+        handler,
+        {
+            "type": "tool_result",
+            "tool": "index_documents",
+            "data": {"status": "stopped", "message": message, "success": False},
+        },
+        profile,
+        False,
+        False,
+    )
 
 
 def relay_query(
@@ -726,7 +811,7 @@ def relay_query(
         # that takes it (profiles.session_id_supported); the request models
         # are extra="forbid".
         body["session_id"] = session_id
-    if documents:
+    if documents is not None:
         body["documents"] = list(documents)
     if allowed_paths is not None:
         body["allowed_paths"] = list(allowed_paths)
@@ -922,7 +1007,9 @@ def relay_query(
         handler.active_relay_internet_session = None
 
     if handler.cancelled.is_set():
-        _best_effort_cancel(proxy, rid)
+        left = _best_effort_cancel(proxy, rid)
+        if left:
+            _emit_documents_left(handler, left, profile)
         if not terminated:
             handler._emit({"type": "status", "message": "Cancelled."})
     elif crashed or not terminated:

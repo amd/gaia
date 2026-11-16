@@ -296,7 +296,7 @@ export interface EmailTriageResponse {
 export interface EmailSearchRequest {
   /** Contract version. Defaults to SCHEMA_VERSION; mismatch fails loudly. */
   schema_version?: string;
-  /** Gmail-style query (e.g. "from:alice is:unread"). Omit to list the inbox. */
+  /** Gmail-style query (e.g. "from:alice subject:invoice", which Outlook accepts too). Omit to list the inbox. */
   query?: string | null;
   /** Label ids to filter by (e.g. ["INBOX", "UNREAD"]). Omit → INBOX. */
   labels?: string[] | null;

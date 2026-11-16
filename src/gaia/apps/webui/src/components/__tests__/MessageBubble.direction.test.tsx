@@ -33,11 +33,16 @@ const ANSWER = [
 ].join('\n');
 
 describe('text direction in an answer', () => {
-    it('gives every paragraph, heading, list item, quote and cell dir="auto"', () => {
+    it('gives every paragraph, heading, list item, quote and table dir="auto"', () => {
         const { container } = render(<RenderedContent content={ANSWER} />);
-        const blocks = container.querySelectorAll('p, h3, ul, li, blockquote, table, td, th');
-        expect(blocks.length).toBeGreaterThan(10);
+        const blocks = container.querySelectorAll('p, h3, ul, li, blockquote, table');
+        expect(blocks.length).toBeGreaterThan(8);
         for (const el of blocks) expect(el, el.outerHTML).toHaveAttribute('dir', 'auto');
+    });
+
+    it('lets a table\'s cells follow the table, since auto skips a cell with its own direction', () => {
+        const { container } = render(<RenderedContent content={ANSWER} />);
+        for (const cell of container.querySelectorAll('td, th')) expect(cell, cell.outerHTML).not.toHaveAttribute('dir');
     });
 
     it('keeps inline code and code blocks left to right', () => {

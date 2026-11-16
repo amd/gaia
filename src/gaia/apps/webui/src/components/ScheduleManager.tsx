@@ -14,10 +14,8 @@ import { dateLocale, tEn, translator, useT, type Translate } from '../i18n/useT'
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { useDialogFocus } from '../hooks/useDialogFocus';
+import { ConfirmSheet } from './setup/ConfirmSheet';
 import './ScheduleManager.css';
-
-/** How long the Delete button waits for its "Confirm?" click. */
-export const CONFIRM_DELETE_MS = 8000;
 
 const STATUS_LABEL: Record<Schedule['status'], MessageKey> = {
     active: 'schedules.status.active',
@@ -171,15 +169,7 @@ function ScheduleCard({ schedule, onEdit }: { schedule: Schedule; onEdit: (sched
     const { setCurrentSession, setShowSchedules } = useChatStore();
     const isSelected = selectedSchedule === schedule.name;
     const described = describeSchedule(schedule.description_parts, t);
-    const [confirmDelete, setConfirmDelete] = useState(false);
-    const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const clearConfirmTimer = useCallback(() => {
-        if (confirmTimerRef.current) {
-            clearTimeout(confirmTimerRef.current);
-            confirmTimerRef.current = null;
-        }
-    }, []);
-    useEffect(() => clearConfirmTimer, [clearConfirmTimer]);
+    const [askingDelete, setAskingDelete] = useState(false);
 
     // Live countdown: tick every second when next_run_at is < 60s away
     const [now, setNow] = useState(() => new Date());
@@ -234,18 +224,14 @@ function ScheduleCard({ schedule, onEdit }: { schedule: Schedule; onEdit: (sched
 
     const handleDelete = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
-        clearConfirmTimer();
-        if (!confirmDelete) {
-            setConfirmDelete(true);
-            confirmTimerRef.current = setTimeout(() => {
-                confirmTimerRef.current = null;
-                setConfirmDelete(false);
-            }, CONFIRM_DELETE_MS);
-            return;
-        }
+        setAskingDelete(true);
+    }, []);
+
+    const confirmDelete = useCallback(() => {
+        setAskingDelete(false);
         log.ui.info(`Deleting schedule "${schedule.name}"`);
-        deleteSchedule(schedule.name);
-    }, [schedule.name, confirmDelete, deleteSchedule, clearConfirmTimer]);
+        void deleteSchedule(schedule.name);
+    }, [schedule.name, deleteSchedule]);
 
     const handleEdit = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
@@ -269,21 +255,22 @@ function ScheduleCard({ schedule, onEdit }: { schedule: Schedule; onEdit: (sched
     return (
         <div
             className={`schedule-card ${isSelected ? 'selected' : ''} ${justRan ? 'just-ran' : ''}`}
-            onClick={() => selectSchedule(isSelected ? null : schedule.name)}
+            // A click in the delete dialog reaches here through its portal; it isn't a card click.
+            onClick={(e) => { if (e.currentTarget.contains(e.target as Node)) selectSchedule(isSelected ? null : schedule.name); }}
         >
             <div className="schedule-card-header">
-                <span className="schedule-card-name" dir="auto">{schedule.name}</span>
+                <span className="schedule-card-name" dir="auto" title={schedule.name}>{schedule.name}</span>
                 <span className={`schedule-card-status ${schedule.status}`}>{t(STATUS_LABEL[schedule.status])}</span>
             </div>
-            <div className="schedule-card-prompt" dir="auto">{schedule.prompt}</div>
+            <div className="schedule-card-prompt" dir="auto" title={schedule.prompt}>{schedule.prompt}</div>
             <div className="schedule-card-meta">
                 <span title={stripIsolates(described ?? schedule.description)}><Clock size={11} /> {described ?? <bdi>{schedule.description}</bdi>}</span>
                 <span>{t('schedules.card.runs', { n: schedule.run_count })}</span>
                 {schedule.error_count > 0 && <span>{t('schedules.card.errors', { n: schedule.error_count })}</span>}
-                <span>{t.compose((say) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(t)) }))}</span>
-                <span>{t.compose((say) => say('schedules.card.next', { when: schedule.status === 'paused' ? say('schedules.status.paused') : formatNextRun(schedule.next_run_at, now, say, dateLocale(t)) }))}</span>
+                <span>{t.compose((say, code) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(translator(code))) }))}</span>
+                <span>{t.compose((say, code) => say('schedules.card.next', { when: schedule.status === 'paused' ? say('schedules.status.paused') : formatNextRun(schedule.next_run_at, now, say, dateLocale(translator(code))) }))}</span>
             </div>
-            {schedule.last_error && (
+            {schedule.last_error && !(isSelected && !resultsLoading && results.some((r) => r.error)) && (
                 <div className="schedule-card-error">{t('schedules.card.lastFailed', { error: schedule.last_error })}</div>
             )}
             <div className="schedule-card-actions">
@@ -309,12 +296,26 @@ function ScheduleCard({ schedule, onEdit }: { schedule: Schedule; onEdit: (sched
                     <Pencil size={11} /> {t('schedules.card.edit')}
                 </button>
                 <button className={`btn-sm danger`} onClick={handleDelete} title={t('schedules.card.delete')}>
-                    <Trash2 size={11} /> {t(confirmDelete ? 'schedules.card.confirmDelete' : 'schedules.card.delete')}
+                    <Trash2 size={11} /> {t('schedules.card.delete')}
                 </button>
                 <button className="btn-sm schedule-history-toggle" onClick={handleToggleHistory} aria-expanded={isSelected}>
                     {isSelected ? <ChevronUp size={11} /> : <ChevronDown size={11} />} {t('schedules.card.pastRuns')}
                 </button>
             </div>
+            {askingDelete && (
+                <ConfirmSheet
+                    title={t('schedules.delete.ask', { name: schedule.name })}
+                    confirmLabel={t('schedules.delete.confirm')}
+                    cancelLabel={t('schedules.delete.cancel')}
+                    onConfirm={confirmDelete}
+                    onCancel={() => setAskingDelete(false)}
+                    danger
+                >
+                    <p>{t('schedules.delete.what')}</p>
+                    {schedule.session_id && <p>{t('schedules.delete.chatStays')}</p>}
+                    {schedule.running && <p>{t('schedules.delete.runStops')}</p>}
+                </ConfirmSheet>
+            )}
 
             {isSelected && (
                 <div className="schedule-results">
@@ -327,7 +328,7 @@ function ScheduleCard({ schedule, onEdit }: { schedule: Schedule; onEdit: (sched
                         <div className="schedule-results-list">
                             {results.map((r) => (
                                 <div key={r.id} className="schedule-result-item">
-                                    <div className="schedule-result-time">{t.compose((say) => formatTime(r.executed_at, say, undefined, dateLocale(t)))}</div>
+                                    <div className="schedule-result-time">{t.compose((say, code) => formatTime(r.executed_at, say, undefined, dateLocale(translator(code))))}</div>
                                     {r.error ? (
                                         <div className="schedule-result-content schedule-result-error"><bdi>{r.error}</bdi></div>
                                     ) : (
@@ -354,10 +355,11 @@ export function ScheduleManager() {
     useDialogFocus(dialogRef, true);
 
     // Create form state
-    const [showCreate, setShowCreate] = useState(false);
-    const [nlInput, setNlInput] = useState('');
-    const [scheduleName, setScheduleName] = useState('');
-    const [schedulePrompt, setSchedulePrompt] = useState('');
+    const [draft] = useState(() => useScheduleStore.getState().draft);
+    const [showCreate, setShowCreate] = useState(draft !== null);
+    const [nlInput, setNlInput] = useState(draft?.when ?? '');
+    const [scheduleName, setScheduleName] = useState(draft?.name ?? '');
+    const [schedulePrompt, setSchedulePrompt] = useState(draft?.prompt ?? '');
     const [parsed, setParsed] = useState<ParsedSchedule | null>(null);
     const [parsing, setParsing] = useState(false);
     const [creating, setCreating] = useState(false);
@@ -376,6 +378,13 @@ export function ScheduleManager() {
     const scheduleRejected = !parsing && parsed !== null && !parsed.valid;
     // The parser's reason is English; with no English in the input, the hint says what to fix.
     const showRejectReason = scheduleRejected && /[A-Za-z]/.test(nlInput);
+
+    useEffect(() => {
+        // A draft is an unsaved new schedule; an edit in progress is not one.
+        if (editing) return;
+        const filled = nlInput.trim() || scheduleName.trim() || schedulePrompt.trim();
+        useScheduleStore.getState().setDraft(filled ? { when: nlInput, name: scheduleName, prompt: schedulePrompt } : null);
+    }, [editing, nlInput, scheduleName, schedulePrompt]);
 
     // Debounced parse of NL input
     const parseTimerRef = useRef<number | null>(null);
@@ -456,6 +465,7 @@ export function ScheduleManager() {
                 log.ui.info(`Schedule "${editing}" edited`);
             } else {
                 await createSchedule(scheduleName.trim(), nlInput.trim(), schedulePrompt.trim());
+                useScheduleStore.getState().setDraft(null);
                 log.ui.info(`Schedule "${scheduleName}" created`);
             }
             closeForm();
@@ -539,7 +549,7 @@ export function ScheduleManager() {
                                                 )}
                                                 {parsed.valid && parsed.next_run_at && (
                                                     <div className="schedule-parsed-next">
-                                                        {t.compose((say) => say('schedules.nextRun', { when: formatNextRun(parsed.next_run_at, undefined, say, dateLocale(t)) }))}
+                                                        {t.compose((say, code) => say('schedules.nextRun', { when: formatNextRun(parsed.next_run_at, undefined, say, dateLocale(translator(code))) }))}
                                                     </div>
                                                 )}
                                                 {parsed.valid && (
@@ -593,6 +603,7 @@ export function ScheduleManager() {
                                         value={schedulePrompt}
                                         onChange={(e) => setSchedulePrompt(e.target.value)}
                                     />
+                                    <div className="schedule-prompt-hint">{t('schedules.promptHint')}</div>
                                 </div>
 
                                 {formError && <p className="schedule-form-error"><bdi>{formError}</bdi></p>}

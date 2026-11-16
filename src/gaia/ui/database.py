@@ -99,6 +99,11 @@ def is_placeholder_title(title: str | None) -> bool:
     return (title or "").strip().lower() in PLACEHOLDER_TITLES
 
 
+def _path_key(filepath: str) -> str:
+    """A case-insensitive form of *filepath*, for comparing stored paths."""
+    return str(Path(filepath)).replace("\\", "/").casefold()
+
+
 # Sentinel used by update_document_status to distinguish "caller passed None to clear
 # last_error" from "caller did not pass last_error at all" (leaving it unchanged).
 _UNSET = object()
@@ -1726,6 +1731,19 @@ class ChatDatabase:
 
             return self._enrich_document(dict(row))
 
+    def path_held_by_other_content(self, filepath: str, file_hash: str) -> bool:
+        """Whether a library row for different content still names *filepath*.
+
+        Compared case-insensitively: on Windows and macOS two names that differ
+        only in case are one file.
+        """
+        wanted = _path_key(filepath)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT filepath FROM documents WHERE file_hash != ?", (file_hash,)
+            ).fetchall()
+        return any(_path_key(row["filepath"] or "") == wanted for row in rows)
+
     def _enrich_document(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         """Add sessions_using count to document dict.
 
@@ -2021,6 +2039,18 @@ class ChatDatabase:
                 "output_tokens, usd) VALUES (?, ?, ?, ?, ?, ?)",
                 (month, model, provider, input_tokens, output_tokens, usd),
             )
+
+    def cloud_spend_since(self, since: datetime) -> List[Dict]:
+        """Every cloud turn recorded at or after the aware instant *since*."""
+        # Rows are SQLite's UTC "YYYY-MM-DD HH:MM:SS", so the bound is written alike.
+        bound = since.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT model, provider, input_tokens, output_tokens, usd "
+                "FROM cloud_spend WHERE created_at >= ? ORDER BY id",
+                (bound,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def cloud_spend_for_month(self, month: str) -> List[Dict]:
         """Every cloud turn recorded in *month* (``YYYY-MM``)."""

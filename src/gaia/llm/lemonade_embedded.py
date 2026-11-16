@@ -565,6 +565,16 @@ def gaia_home() -> Path:
     return Path.home() / ".gaia"
 
 
+def is_gaias_to_start(embedded: "EmbeddedLemonade") -> bool:
+    """Whether this machine was set up with GAIA's own server: installed, in
+    need of repair, or on a version this GAIA replaces."""
+    return bool(
+        embedded.is_installed()
+        or embedded.replaces_other_install()
+        or embedded.is_incomplete()
+    )
+
+
 def _normalized_machine() -> str:
     """Return this host's architecture in the naming the asset table uses.
 
@@ -1808,6 +1818,10 @@ class EmbeddedLemonade:
             )
             return None
         return port if 1024 <= port <= 65535 else None
+
+    def last_port(self) -> Optional[int]:
+        """The port the last start used: where a stopped server comes back."""
+        return self._read_last_port()
 
     def _choose_port(self) -> int:
         """Reuse the last start's port while it is free, else take a new one."""

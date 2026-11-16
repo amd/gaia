@@ -10,10 +10,16 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/amd/gaia/tui/internal/filelock"
 )
+
+// defaultChatModel mirrors DEFAULT_MODEL_NAME in gaia.llm.lemonade_client.
+const defaultChatModel = "Gemma-4-E4B-it-GGUF"
 
 // llamacppBackends are the backends Lemonade's /load accepts, the same list as
 // gaia.llm.model_server_info.LLAMACPP_BACKENDS.
@@ -44,7 +50,11 @@ type ServerInfo struct {
 	// or "remote".
 	Owner   string
 	Version string
-	Chat    *LoadedModel
+	// ChatModel is the model GAIA chats with (GaiaChatModel), "" when unknown.
+	// Chat is that model when it is loaded; on a server shared with other
+	// apps, the model Lemonade loaded last may be another app's.
+	ChatModel string
+	Chat      *LoadedModel
 	// LocalChat is the chat model running on this Lemonade itself: Chat when
 	// that is local, else another local one loaded beside a cloud Chat.
 	LocalChat *LoadedModel
@@ -126,8 +136,11 @@ func backendFromLaunch(raw json.RawMessage) string {
 }
 
 // describeServer reads /health and /system-info replies into a ServerInfo.
-func describeServer(base string, embeddedPort int, health healthReply, sys sysInfoReply) ServerInfo {
-	info := ServerInfo{BaseURL: base, Owner: serverOwner(base, embeddedPort), Version: health.Version}
+// With chatModel (the model GAIA chats with), Chat is only that model, as
+// model_server_info._chat_entry picks it; without it, Lemonade's model_loaded
+// if it is a chat model, else the first one loaded.
+func describeServer(base string, embeddedPort int, health healthReply, sys sysInfoReply, chatModel string) ServerInfo {
+	info := ServerInfo{BaseURL: base, Owner: serverOwner(base, embeddedPort), Version: health.Version, ChatModel: chatModel}
 	if u, err := url.Parse(base); err == nil {
 		info.Port, _ = strconv.Atoi(u.Port())
 	}
@@ -141,17 +154,24 @@ func describeServer(base string, embeddedPort int, health healthReply, sys sysIn
 			chat = append(chat, e)
 		}
 	}
+	wanted := chatModel
+	if wanted == "" {
+		wanted = health.ModelLoaded
+	}
 	for _, e := range chat {
-		if health.ModelLoaded != "" && strings.EqualFold(e.ModelName, health.ModelLoaded) {
+		if SameLocalID(e.ModelName, wanted) {
 			info.Chat = describeEntry(e, def)
+			break
 		}
 	}
-	if info.Chat == nil && len(chat) > 0 {
+	if info.Chat == nil && chatModel == "" && len(chat) > 0 {
 		info.Chat = describeEntry(chat[0], def)
 	}
 	if info.Chat != nil && info.Chat.Backend != "remote" {
 		info.LocalChat = info.Chat
-	} else {
+	} else if info.Chat != nil || chatModel == "" || IsCloudID(chatModel) {
+		// A local model loaded beside a cloud chat model. When GAIA's own local
+		// model isn't loaded, another app's is not shown in its place.
 		for _, e := range chat {
 			if m := describeEntry(e, def); m.Backend != "remote" {
 				info.LocalChat = m
@@ -198,7 +218,7 @@ func clip(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-// StatusLine is one line for a status bar or `gaia-tui status`:
+// StatusLine is one line for a status bar or `gaia-cli status`:
 // "Lemonade 2026.41.1 (GAIA's own) at localhost:51234 · Qwen3.6-35B-A3B-GGUF on Vulkan, 64K ctx".
 func (s ServerInfo) StatusLine() string {
 	owner := map[string]string{"gaia": "GAIA's own", "user": "yours", "remote": "remote"}[s.Owner]
@@ -211,6 +231,9 @@ func (s ServerInfo) StatusLine() string {
 		where = u.Host
 	}
 	line := fmt.Sprintf("%s (%s) at %s", head, owner, where)
+	if s.Chat == nil && s.ChatModel != "" && !IsCloudID(s.ChatModel) {
+		return line + " · " + clip(s.ChatModel, 48) + " not loaded"
+	}
 	if s.Chat == nil {
 		return line + " · no chat model loaded"
 	}
@@ -280,5 +303,41 @@ func (c *Client) ServerInfo(ctx context.Context) (ServerInfo, error) {
 	if state := ReadEmbedded(); state != nil {
 		port = state.Port
 	}
-	return describeServer(base, port, health, sys), nil
+	return describeServer(base, port, health, sys, GaiaChatModel()), nil
+}
+
+// GaiaChatModel is the model GAIA chats with, resolved as
+// gaia.llm.lemonade_client.resolve_chat_model does: config.json's last_model,
+// else default_model, else Gemma. A hybrid choice is its cheap model, the one
+// a session starts on. "" when config.json can't be read, so the status line
+// falls back to what Lemonade reports.
+func GaiaChatModel() string {
+	var doc struct {
+		Last    string `json:"last_model"`
+		Default string `json:"default_model"`
+	}
+	if path := ConfigPathFrom(os.Getenv, os.UserHomeDir); path != "" {
+		raw, err := filelock.ReadFile(path)
+		if err != nil && !os.IsNotExist(err) {
+			return ""
+		}
+		if err == nil && json.Unmarshal(raw, &doc) != nil {
+			return ""
+		}
+	}
+	model := strings.TrimSpace(doc.Last)
+	if model == "" {
+		model = strings.TrimSpace(doc.Default)
+	}
+	if model == "" {
+		return defaultChatModel
+	}
+	if IsHybridID(model) {
+		h, err := ReadHybridModels()
+		if err != nil {
+			return ""
+		}
+		return h.Cheap
+	}
+	return model
 }
