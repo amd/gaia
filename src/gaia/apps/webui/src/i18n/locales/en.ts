@@ -1057,6 +1057,7 @@ export const enMessages = {
     'docs.pathSubfolders': 'A folder typed here adds only the files directly inside it; subfolders are skipped.',
     'docs.notAdded': '{name} couldn\'t be added: GAIA can\'t read it. Why, and Retry, are on its row below.',
     'docs.notAddedServer': '{name} couldn\'t be added: GAIA\'s model server isn\'t answering. GAIA adds it when the server is back.',
+    'docs.notAddedServerBusy': '{name} couldn\'t be added: GAIA\'s model server was busy. Retry on its row in a moment.',
     'docs.unreadable.one': '{n} couldn\'t be read',
     'docs.unreadable.other': '{n} couldn\'t be read',
     'docs.serverWaiting.one': '{n} waiting for the model server',

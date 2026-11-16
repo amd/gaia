@@ -1057,6 +1057,7 @@ const messages: Messages = {
     'docs.pathSubfolders': 'المجلد الذي تكتبه هنا يضيف الملفات الموجودة فيه مباشرة فقط، وتُتخطّى المجلدات الفرعية.',
     'docs.notAdded': 'تعذّرت إضافة {name}: لا يستطيع GAIA قراءته. السبب وزر إعادة المحاولة في صفّه أدناه.',
     'docs.notAddedServer': 'تعذّرت إضافة {name}: خادم النماذج في GAIA لا يستجيب. ستضيفه GAIA عندما يعود الخادم.',
+    'docs.notAddedServerBusy': 'تعذّرت إضافة {name}: كان خادم النماذج في GAIA مشغولًا. أعد المحاولة من صفّه بعد قليل.',
     'docs.unreadable.one': 'تعذّرت قراءتها: {n}',
     'docs.unreadable.other': 'تعذّرت قراءتها: {n}',
     'docs.serverWaiting.one': 'بانتظار خادم النماذج: {n}',
