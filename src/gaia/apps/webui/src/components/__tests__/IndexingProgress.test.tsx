@@ -32,6 +32,12 @@ describe('IndexingProgress', () => {
         expect(screen.getByText('· 34%')).toBeInTheDocument();
     });
 
+    it('says it is waiting for the model server at launch, with no count', () => {
+        render(<IndexingProgress progress={{ phase: 'starting', done: 0, total: null }} />);
+        expect(screen.getByText("Waiting for GAIA's model server to start")).toBeInTheDocument();
+        expect(screen.queryByText(/%|Embedding/)).toBeNull();
+    });
+
     it('shows just the count, and no percent, when the total is unknown', () => {
         render(<IndexingProgress progress={{ phase: 'reading', done: 12, total: null }} />);
         expect(screen.getByText('Reading page 12')).toBeInTheDocument();
