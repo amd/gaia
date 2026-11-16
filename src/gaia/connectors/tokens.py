@@ -61,6 +61,7 @@ from gaia.connectors.errors import (
     ConnectionBusyError,
     ConnectionRevokedError,
     ConnectorsError,
+    ProfileRefusedError,
 )
 from gaia.connectors.providers import OAuthProvider
 from gaia.connectors.providers import get as get_provider
@@ -437,7 +438,7 @@ async def _identify_for_backfill(
         return await identify_account(
             provider, refreshed.id_token, refreshed.access_token
         )
-    except ConnectorsError as e:
+    except ProfileRefusedError as e:
         _identity_unavailable.add(key)
         logger.warning(
             "connectors: could not learn the account id of a %s connection "
@@ -446,7 +447,14 @@ async def _identify_for_backfill(
             provider.provider_id,
             e,
         )
-        return None
+    except ConnectorsError as e:
+        logger.warning(
+            "connectors: could not learn the account id of a %s connection "
+            "on refresh (%s); will retry on the next refresh",
+            provider.provider_id,
+            e,
+        )
+    return None
 
 
 async def get_token_with_expiry(
@@ -589,21 +597,6 @@ async def _refresh_token(provider, refresh_token: str) -> _Refreshed:
     )
 
 
-def _save_if_still_holds(
-    slot_provider: str, slot_name: str, sent_refresh_token: str, **save_kwargs
-) -> bool:
-    """Save a rotated token only if the stored one is still the token sent.
-
-    The compare and the write run in one call under the connection lock, so a
-    reconnect or disconnect can't land between them.
-    """
-    current = peek_connection(slot_provider, slot=slot_name)
-    if current is None or current.get("refresh_token") != sent_refresh_token:
-        return False
-    save_connection(**save_kwargs)
-    return True
-
-
 def _save_refreshed(
     provider_id: str,
     slot_name: str,
@@ -613,59 +606,47 @@ def _save_refreshed(
 ) -> bool:
     """Save a refresh's result, filling in the account's id and address when
     the refresh revealed them. Returns False when the stored connection was
-    replaced meanwhile.
+    replaced meanwhile. Blocking; the caller holds this slot's account lock.
 
-    When another slot already holds that id (an old build stored the account
-    twice), the two become one: this slot keeps the newer sign-in's token and
-    the default flag, and the other is deleted. Blocking; the caller holds
-    this slot's account lock.
+    The account list is written before the token, so a crash between them
+    leaves the token without its id and the next refresh finishes the job.
     """
+    current = peek_connection(provider_id, slot=slot_name)
+    if current is None or current.get("refresh_token") != stored["refresh_token"]:
+        return False
+    if identity is not None:
+        if stored.get("account_email") in (None, "", DEFAULT_ACCOUNT):
+            fields["account_email"] = identity.email
+        if _claim_identity(
+            provider_id, slot_name, identity.account_id, fields["account_email"]
+        ):
+            fields["account_id"] = identity.account_id
+    save_connection(**fields)
+    return True
+
+
+def _claim_identity(provider_id: str, slot: str, account_id: str, email: str) -> bool:
+    """Record ``account_id`` for ``slot``. When an old build stored the same
+    account in a second slot, that slot is deleted first and ``slot``, whose
+    token was just proven, takes its default flag. False when that needs a
+    lock someone holds now; a later refresh tries again."""
     from gaia.connectors import accounts
 
-    sent = stored["refresh_token"]
-    if identity is None:
-        return _save_if_still_holds(provider_id, slot_name, sent, **fields)
-    if stored.get("account_email") in (None, "", DEFAULT_ACCOUNT):
-        fields["account_email"] = identity.email
-    twin_slot = accounts.slot_holding(
-        provider_id, identity.account_id, besides=slot_name
-    )
-    if twin_slot is None:
-        fields["account_id"] = identity.account_id
-        if not _save_if_still_holds(provider_id, slot_name, sent, **fields):
+    twin = accounts.slot_holding(provider_id, account_id, besides=slot)
+    if twin is None:
+        return accounts.record_identity(provider_id, slot, account_id, email)
+    # Never waits: this thread already holds an account lock.
+    with (
+        _refresh_lock.try_held_sync(provider_id) as provider_free,
+        _refresh_lock.try_held_account_sync(provider_id, twin) as twin_free,
+    ):
+        if not (provider_free and twin_free):
             return False
-        accounts.record_identity(
-            provider_id, slot_name, identity.account_id, fields["account_email"]
-        )
-        return True
-    with _refresh_lock.try_held_account_sync(provider_id, twin_slot) as got:
-        if not got:
-            # Merged on a later refresh; one id is never stored in two slots.
-            return _save_if_still_holds(provider_id, slot_name, sent, **fields)
-        twin = peek_connection(provider_id, slot=twin_slot)
-        if (
-            twin is not None
-            and twin.get("client_id_hash") == fields["client_id_hash"]
-            and (twin.get("connected_at") or 0) > (stored.get("connected_at") or 0)
-        ):
-            fields.update(
-                account_email=twin.get("account_email") or fields["account_email"],
-                refresh_token=twin["refresh_token"],
-                scopes=twin.get("scopes", []),
-                connected_at=twin.get("connected_at"),
-                tenant=twin.get("tenant") or fields["tenant"],
-                account_type=twin.get("account_type") or fields["account_type"],
-                forwarded=bool(twin.get("forwarded")),
-            )
-        fields["account_id"] = identity.account_id
-        if not _save_if_still_holds(provider_id, slot_name, sent, **fields):
+        if accounts.slot_holding(provider_id, account_id, besides=slot) != twin:
             return False
-        delete_connection(provider_id, slot=twin_slot)
-    accounts.drop_duplicate(provider_id, keep=slot_name, drop=twin_slot)
-    accounts.record_identity(
-        provider_id, slot_name, identity.account_id, fields["account_email"]
-    )
-    return True
+        delete_connection(provider_id, slot=twin)
+        accounts.drop_duplicate(provider_id, keep=slot, drop=twin)
+        return accounts.record_identity(provider_id, slot, account_id, email)
 
 
 def _delete_if_unchanged(provider_id: str, slot: str, sent_refresh_token: str) -> bool:

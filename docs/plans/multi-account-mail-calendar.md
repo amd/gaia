@@ -104,8 +104,11 @@ Status: built on `claude/multi-account-store`. A person with one account sees no
   `default`. Until then it is matched by address, but only when the account kinds (personal or
   work) don't conflict. A lone old account stored without an address is updated by a reconnect
   and kept beside an added account. If the id it learns is already stored in another slot, the
-  two merge into one, keeping the newer sign-in's token and the default flag. A token that can't
-  read its profile is asked once per process.
+  two merge into one, keeping the token the refresh just proved and the default flag. The merge
+  waits for a later refresh while a sign-in or another refresh holds either account, and one id
+  is never written to two slots. The list is written before the token, so a crash between them
+  is finished by the next refresh. A token refused its profile (401 or 403) is asked once per
+  process; a network error is retried on the next refresh.
 - A sign-in whose reply names no account id fails loudly and saves nothing.
 - The same stable id updates the stored account in place. A different id is added; it never
   overwrites another account, even with the same address.

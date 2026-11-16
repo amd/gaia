@@ -390,7 +390,13 @@ def save_signed_in_account(
         account_type=account_type,
     )
     _evict_token(connector_id, slot)
-    account = next(a for a in list_accounts(connector_id) if a.slot == slot)
+    account = next((a for a in list_accounts(connector_id) if a.slot == slot), None)
+    if account is None:
+        raise ConnectorsError(
+            f"The {connector_id} sign-in was saved, but its entry is missing from "
+            f"the account list at {index_path()}: another GAIA process changed "
+            "the list at the same moment. Connect the account again."
+        )
     logger.info(
         "accounts: %s %s account in slot %s",
         "added" if added else "updated",
@@ -541,19 +547,29 @@ def record_account(
         )
 
 
-def record_identity(connector_id: str, slot: str, account_id: str, email: str) -> None:
-    """Fill in the stable id and address of an account stored without them."""
+def record_identity(connector_id: str, slot: str, account_id: str, email: str) -> bool:
+    """Fill in the stable id and address of an account stored without them.
+
+    Returns False, writing nothing, when another slot already holds the id or
+    ``slot`` is gone: one id is never stored in two slots.
+    """
     with _mutate(connector_id) as section:
-        for entry in section["accounts"]:
+        entries = section["accounts"]
+        if any(
+            e["slot"] != slot and e.get("account_id") == account_id for e in entries
+        ):
+            return False
+        for entry in entries:
             if entry["slot"] == slot:
                 entry["account_id"] = account_id
                 entry["email"] = email
+                return True
+    return False
 
 
 def slot_holding(connector_id: str, account_id: str, *, besides: str) -> Optional[str]:
     """Another slot already stored under ``account_id``, or None."""
-    section = _load_index()["connectors"].get(connector_id) or {}
-    for entry in section.get("accounts", []):
+    for entry in _entries(connector_id, _load_index()):
         if entry["slot"] != besides and entry.get("account_id") == account_id:
             return entry["slot"]
     return None
@@ -561,7 +577,8 @@ def slot_holding(connector_id: str, account_id: str, *, besides: str) -> Optiona
 
 def drop_duplicate(connector_id: str, *, keep: str, drop: str) -> None:
     """Forget ``drop``, a second slot of the account in ``keep``, after its
-    token was deleted. ``keep`` inherits the default flag."""
+    token was deleted. ``keep`` inherits the default flag. The caller holds the
+    provider lock and ``drop``'s account lock."""
     with _mutate(connector_id) as section:
         slots = [e["slot"] for e in section["accounts"]]
         if _default_of(section, slots) == drop:

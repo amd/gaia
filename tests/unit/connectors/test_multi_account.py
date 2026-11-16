@@ -596,8 +596,8 @@ async def test_an_old_slot_learning_an_id_already_stored_merges_into_one(google)
     assert [(a.account_id, a.email, a.is_default) for a in listed] == [
         ("alice-sub", "alice@example.com", True)
     ]
-    # The newer sign-in's token is the one kept.
-    assert peek_connection("google", slot=listed[0].slot)["refresh_token"] == "rt-new"
+    # The token the refresh just proved is the one kept.
+    assert peek_connection("google", slot=listed[0].slot)["refresh_token"] == "rt-old"
     assert accounts.resolve_slot("google", "alice-sub") == listed[0].slot
 
 
@@ -659,3 +659,123 @@ async def test_a_token_that_cannot_read_its_profile_asks_only_once(monkeypatch, 
 
     assert me.call_count == 1
     assert len([r for r in caplog.records if "account id" in r.getMessage()]) == 1
+
+
+async def _refresh_default():
+    from gaia.connectors import tokens
+
+    tokens._cache.clear()
+    return await api.get_access_token(provider="google", scopes=[GMAIL])
+
+
+async def test_a_merge_waits_while_a_sign_in_holds_the_provider(google):
+    _old_store_without_an_address()
+    await _sign_in(google, ALICE, "rt-new", add=True)
+    google.refresh_identity = ALICE
+
+    with _refresh_lock.held_sync("google"):
+        assert await _refresh_default() == "access-for-rt-old"
+    # Nothing merged under a sign-in's feet, and nothing was lost.
+    assert len(accounts.list_accounts("google")) == 2
+    assert peek_connection("google").get("account_id") is None
+
+    await _refresh_default()
+    assert [a.account_id for a in accounts.list_accounts("google")] == ["alice-sub"]
+
+
+async def test_one_id_is_never_recorded_in_two_slots(google, monkeypatch):
+    _old_store_without_an_address()
+    await _sign_in(google, ALICE, "rt-new", add=True)
+    google.refresh_identity = ALICE
+    # Another process recorded the id in the second slot after we looked.
+    monkeypatch.setattr(accounts, "slot_holding", lambda *a, **k: None)
+
+    await _refresh_default()
+
+    ids = [a.account_id for a in accounts.list_accounts("google")]
+    assert ids.count("alice-sub") == 1
+    assert peek_connection("google").get("account_id") is None
+
+    monkeypatch.undo()
+    await _refresh_default()
+    assert [a.account_id for a in accounts.list_accounts("google")] == ["alice-sub"]
+
+
+async def test_a_crash_while_recording_an_id_is_finished_by_the_next_refresh(
+    google, monkeypatch
+):
+    _old_store_without_an_address()
+    await _sign_in(google, BOB, "rt-bob", add=True)
+    google.refresh_identity = ALICE
+    real_record = accounts.record_identity
+
+    class PowerCut(Exception):
+        pass
+
+    def crash(*a, **k):
+        raise PowerCut()
+
+    monkeypatch.setattr(accounts, "record_identity", crash)
+    with pytest.raises(PowerCut):
+        await _refresh_default()
+    monkeypatch.setattr(accounts, "record_identity", real_record)
+
+    # The same Gmail is added beside it, then the old slot refreshes again.
+    await _sign_in(google, ALICE, "rt-new", add=True)
+    await _refresh_default()
+
+    ids = sorted(a.account_id for a in accounts.list_accounts("google"))
+    assert ids == ["alice-sub", "bob-sub"]
+
+
+def test_a_sign_in_whose_account_vanished_says_so(monkeypatch):
+    monkeypatch.setattr(accounts, "list_accounts", lambda _cid: [])
+
+    with pytest.raises(ConnectorsError, match="account list"):
+        accounts.save_signed_in_account(
+            "google",
+            account_id="alice-sub",
+            email="alice@example.com",
+            refresh_token="rt",
+            scopes=SCOPES,
+            client_id_hash="h",
+        )
+
+
+async def test_a_network_error_reading_the_profile_is_retried(monkeypatch):
+    from gaia.connectors import tokens
+    from gaia.connectors.providers import _registry
+    from gaia.connectors.providers import get as get_provider
+
+    monkeypatch.setenv(
+        "GAIA_MICROSOFT_CLIENT_ID", "11112222-bbbb-3333-cccc-4444dddd5555"
+    )
+    monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
+    _registry.clear()
+    provider = get_provider("microsoft")
+    save_connection(
+        provider="microsoft",
+        account_email="pat@outlook.com",
+        refresh_token="rt",
+        scopes=["Mail.Read", "User.Read", "offline_access"],
+        client_id_hash=provider.client_id_hash,
+        tenant=getattr(provider, "tenant", None),
+    )
+    with respx.mock(assert_all_called=False) as router:
+        router.post(provider.token_url).mock(
+            return_value=httpx.Response(
+                200, json={"access_token": "at", "expires_in": 3600}
+            )
+        )
+        me = router.get(url__startswith="https://graph.microsoft.com/v1.0/me").mock(
+            side_effect=[
+                httpx.ConnectTimeout("slow"),
+                httpx.Response(200, json={"id": "pat-id", "mail": "pat@outlook.com"}),
+            ]
+        )
+        for _ in range(2):
+            tokens._cache.clear()
+            assert await get_or_refresh("microsoft") == "at"
+
+    assert me.call_count == 2
+    assert [a.account_id for a in accounts.list_accounts("microsoft")] == ["pat-id"]

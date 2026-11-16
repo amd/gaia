@@ -51,6 +51,7 @@ from gaia.connectors.errors import (
     FlowTimeoutError,
     GrantAfterConnectError,
     OAuthProviderError,
+    ProfileRefusedError,
     ScopeNotAllowedError,
 )
 from gaia.connectors.events import emit
@@ -266,7 +267,8 @@ async def _fetch_userinfo(provider_id: str, url: str, access_token: str) -> dict
             f"({type(e).__name__}) at {url}. Check the network and connect again."
         ) from e
     if resp.status_code != 200:
-        raise ConnectorsError(
+        refused = resp.status_code in (401, 403)
+        raise (ProfileRefusedError if refused else ConnectorsError)(
             f"Looking up which {provider_id} account signed in failed with HTTP "
             f"{resp.status_code} at {url}. Connect again with the connector's "
             "default scopes (they include the profile permission)."

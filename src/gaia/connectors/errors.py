@@ -251,6 +251,11 @@ class ConnectionBusyError(ConnectorsError):
         )
 
 
+class ProfileRefusedError(ConnectorsError):
+    """The provider refused to show the signed-in account's profile (HTTP 401
+    or 403): the token lacks the profile permission, so asking again won't help."""
+
+
 class UnknownAccountError(ConnectorsError):
     """An account name that matches none, or more than one, of a connector's
     stored accounts. ``choices`` lists the addresses the caller can name."""
