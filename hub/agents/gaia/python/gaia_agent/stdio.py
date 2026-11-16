@@ -713,7 +713,55 @@ def _snapshot_switch_state(agent: Any) -> _SwitchState:
         "model_features": getattr(agent, "model_features", None),
         "instance_tools": _copy_or_none(getattr(agent, "_instance_tools", None)),
         "withheld_tools": _copy_or_none(getattr(agent, "_withheld_tool_entries", None)),
+        "tool_overrides": _copy_or_none(getattr(agent, "_tool_overrides", None)),
+        "followers": _snapshot_followers(agent),
     }
+
+
+#: What ``follow_model_switch`` and ``apply_context_eviction`` move with the model.
+_FOLLOWER_ATTRS = (
+    "vlm_model",
+    "vlm_client",
+    "context_eviction_enabled",
+    "_context_evictor",
+)
+
+
+def _rag_model_holders(agent: Any) -> list:
+    """The objects that name the model documents are summarized with."""
+    state = vars(agent)
+    holders = [state.get("_rag_config")]
+    holders.append(getattr(getattr(state.get("_rag"), "chat", None), "config", None))
+    return [h for h in holders if hasattr(h, "model")]
+
+
+def _snapshot_followers(agent: Any) -> Dict[str, Any]:
+    state = {name: vars(agent)[name] for name in _FOLLOWER_ATTRS if name in vars(agent)}
+    rag_kwargs = vars(agent).get("_rag_config_kwargs")
+    if isinstance(rag_kwargs, dict):
+        state["rag_model"] = rag_kwargs.get("model")
+        state["rag_vlm_models"] = [
+            (h, h.vlm_model)
+            for h in _rag_model_holders(agent)
+            if hasattr(h, "vlm_model")
+        ]
+    return state
+
+
+def _restore_followers(agent: Any, state: Dict[str, Any]) -> None:
+    state = dict(state)
+    rag_vlm_models = state.pop("rag_vlm_models", [])
+    has_rag = "rag_model" in state
+    rag_model = state.pop("rag_model", None)
+    for name, value in state.items():
+        setattr(agent, name, value)
+    if not has_rag:
+        return
+    agent._rag_config_kwargs["model"] = rag_model
+    for holder in _rag_model_holders(agent):
+        holder.model = rag_model
+    for holder, vlm_model in rag_vlm_models:
+        holder.vlm_model = vlm_model
 
 
 def _copy_or_none(mapping: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -741,6 +789,12 @@ def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
         agent._instance_tools = snapshot["instance_tools"]
     if snapshot["withheld_tools"] is not None:
         agent._withheld_tool_entries = snapshot["withheld_tools"]
+    if snapshot["tool_overrides"] is not None:
+        agent._tool_overrides = snapshot["tool_overrides"]
+    elif "_tool_overrides" in vars(agent):
+        # The switch created it; the old model had none.
+        del agent._tool_overrides
+    _restore_followers(agent, snapshot["followers"])
 
 
 def _apply_switch(
@@ -787,6 +841,22 @@ def _apply_switch(
         # The new model may be offered more features than the old one, or fewer.
         if hasattr(agent, "apply_model_features"):
             agent.apply_model_features(agent.model_id)
+        # A chat started on a model with no reasoning-effort setting has no tool for it.
+        if hasattr(agent, "register_reasoning_effort_tools") and (
+            "set_reasoning_effort"
+            not in (getattr(agent, "_instance_tools", None) or {})
+        ):
+            agent.register_reasoning_effort_tools()
+        # getattr: tests build agents without running Agent.__init__.
+        if getattr(agent, "_context_eviction_mode", None) is not None:
+            lookup = getattr(new_client, "cloud_model_provider", None)
+            agent.apply_context_eviction(
+                agent.model_id,
+                cloud=use_claude or bool(callable(lookup) and lookup(agent.model_id)),
+            )
+        # Image reading and document summaries were set up for the old model.
+        if hasattr(agent, "follow_model_switch"):
+            agent.follow_model_switch()
         # Gemma-family prompts carry an embedded-JSON tool-call envelope
         # Claude doesn't need (it speaks native tool_calls) — the cached
         # system prompt must be recomposed under the new backend or the next
@@ -1600,18 +1670,36 @@ def model_server_failure(exc: BaseException) -> Optional[Any]:
     return classify_lemonade_exception(exc)
 
 
-def model_server_message(typed: Any) -> str:
-    """*typed*'s user message, with a start instruction for a server GAIA doesn't run.
+def model_server_message(typed: Any, surface: str = "tui") -> str:
+    """*typed*'s user message; a lost server GAIA doesn't run is its owner's to start.
 
-    The daemon restarts GAIA's own server; a server the user runs is theirs
-    to start.
+    The daemon restarts GAIA's own server. For the other, a terminal gets this
+    machine's start instruction; the Agent UI never names a command.
     """
     from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
-    from gaia.llm.providers.lemonade import LemonadeNetworkError
+    from gaia.llm.providers.lemonade import (
+        LemonadeNetworkError,
+        LemonadeServerUnreachableError,
+    )
+    from gaia.llm.surface_hints import APP_OTHER_SERVER_START_HINT
 
-    if isinstance(typed, LemonadeNetworkError) and not gaia_runs_lemonade():
+    if not isinstance(typed, LemonadeNetworkError) or gaia_runs_lemonade():
+        return typed.user_message
+    app = surface == "agent_ui"
+    if isinstance(typed, LemonadeServerUnreachableError):
+        # That one already says to start the server.
+        if app:
+            return typed.user_message
         return f"{typed.user_message} {describe_start_hint().instruction}"
-    return typed.user_message
+    hint = (
+        f"{APP_OTHER_SERVER_START_HINT}." if app else describe_start_hint().instruction
+    )
+    # Also a running server whose request failed, so sending again comes first.
+    return (
+        "The model server didn't answer. It may be loading or briefly busy, "
+        "so send your message again. If it keeps failing, it may have "
+        f"stopped. {hint}"
+    )
 
 
 def _terminal_error(exc: BaseException) -> Dict[str, Any]:

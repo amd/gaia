@@ -545,6 +545,7 @@ class AgentLoop:
         db = self._db
 
         def _run_agent() -> None:
+            fresh_agent = None  # built for this tick alone, so closed after it
             try:
                 import gaia.ui._chat_helpers as _helpers
 
@@ -637,9 +638,12 @@ class AgentLoop:
                         surface="agent_ui",
                     )
                     with _helpers.writing_tool_registry():
-                        agent = GaiaAgent(config)
+                        agent = fresh_agent = GaiaAgent(config)
                     _helpers._register_agent_memory_ops(agent)
                     agent.console = sse_handler
+                    # The tick's input is GAIA's own goal prompt, not the user's words;
+                    # a queued extraction would also keep this throwaway agent alive.
+                    agent._auto_extract_enabled = False
 
                 _helpers._restore_model_history(agent, db, session_id, tick_prompt)
 
@@ -676,6 +680,14 @@ class AgentLoop:
                         )
                 finally:
                     sse_handler.signal_done()
+                    # After done: a slow MCP server stopping must not delay the tick.
+                    if fresh_agent is not None:
+                        try:
+                            fresh_agent.close()
+                        except Exception as exc:  # noqa: BLE001 — logged, tick ended
+                            logger.warning(
+                                "AgentLoop: closing the tick's agent failed: %s", exc
+                            )
 
         def _billed_model() -> Optional[str]:
             """The model the tick ran on; a hybrid tick bills its route's model."""

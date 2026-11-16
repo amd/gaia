@@ -15,8 +15,8 @@
 
 .settings-dialog {
     display: flex;
-    width: min(920px, 100%);
-    height: min(680px, 100%);
+    width: min(960px, 100%);
+    height: min(820px, 100%);
     overflow: hidden;
     background: var(--bg-primary);
     border: 1px solid var(--border-light);
@@ -781,7 +781,7 @@
 
 .skill-row-desc {
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 1;
     animation: fade-cut-block both;
     animation-timeline: scroll(self block);
     -webkit-box-orient: vertical;
@@ -793,15 +793,24 @@
     overflow: visible;
 }
 
+.skill-row-desc.is-toggle {
+    cursor: pointer;
+}
+
 .skill-row-more {
     align-self: flex-start;
     padding: 0;
-    color: var(--text-primary);
-    font-size: 12.5px;
-    text-decoration: underline;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-decoration: none;
     background: none;
     border: 0;
     cursor: pointer;
+}
+
+.skill-row-more:hover {
+    color: var(--text-primary);
+    text-decoration: underline;
 }
 
 .model-row > button,

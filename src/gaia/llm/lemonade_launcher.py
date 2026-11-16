@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from gaia.env import child_env
+from gaia.llm.surface_hints import APP_OTHER_SERVER_START_HINT
 
 log = logging.getLogger(__name__)
 
@@ -343,20 +344,17 @@ def server_down_advice(base_url: Optional[str] = None) -> str:
     """What an app user does about a model server that isn't answering.
 
     GAIA's own server is started by the daemon on the next message; one the
-    user runs needs this machine's start instruction.
+    user runs is theirs to start, and an app never names a terminal command.
     """
-    from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT
+    from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT, APP_SERVER_DOWN_HINT
 
     if gaia_runs_lemonade(base_url):
         return APP_SERVER_DOWN_HINT
-    return describe_start_hint().instruction
+    return APP_OTHER_SERVER_DOWN_HINT
 
 
 #: A server the user pointed GAIA at, that GAIA can't find installed here.
-OTHER_SERVER_START_HINT = (
-    "GAIA doesn't run this model server, so it can't start it. Start it the "
-    "way you usually do."
-)
+OTHER_SERVER_START_HINT = f"{APP_OTHER_SERVER_START_HINT}."
 
 
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
@@ -369,11 +367,10 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     context changes also return manual configuration steps.
     """
     if gaia_runs_lemonade():
+        from gaia.llm.surface_hints import CLI_OWN_SERVER_START_HINT
+
         return StartHint(
-            instruction=(
-                "GAIA starts its Lemonade Server when it needs it. To start it "
-                "now, run: gaia lemonade embedded start"
-            ),
+            instruction=CLI_OWN_SERVER_START_HINT,
             command="gaia lemonade embedded start",
         )
 

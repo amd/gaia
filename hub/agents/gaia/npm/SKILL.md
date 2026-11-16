@@ -6,11 +6,11 @@ description: Use when integrating the @amd-gaia/gaia npm package — running GAI
 # Integrating `@amd-gaia/gaia`
 
 `@amd-gaia/gaia` delivers **two binaries** and owns their process lifecycle: the
-frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-tui`).
+frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-cli`).
 It ships no agent logic of its own, and it **builds neither binary at install
 time** — both are published artifacts it downloads and verifies. The terminal UI
 is the published `terminal-hub` component, the same binary a full GAIA install
-runs as `gaia-tui`, so its behaviour cannot differ from that one. By default everything
+runs as `gaia-cli`, so its behaviour cannot differ from that one. By default everything
 runs on the local machine against a local model server, and nothing you type or index
 leaves it. If you pick a cloud provider (Fireworks AI, the AMD LLM Gateway or Claude
 in the terminal UI, or `provider: "claude"` on `/query`), the conversation is sent to
@@ -372,6 +372,9 @@ Rules a client must respect:
 - **Cancel with `POST /v1/gaia/query/{run_id}/cancel`.** It returns
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
+  When the cancel stops the turn's attached documents from loading, the reply
+  also has `documents_left`: how many were not loaded. Show it, since a stream
+  you closed never delivers that step's result.
   Dropping the HTTP connection also cancels the run. A run stopped mid-answer
   ends with an empty `final`, and no `token` follows the cancel, so keep the
   text the `token` events already delivered. Text not yet sent when the
@@ -764,7 +767,7 @@ There is no silent null.
   comes up. It must also be **0.26.0+**: an older core's daemon starts fine but
   cannot run this agent, which reads as a UI with a dead agent rather than as
   a version problem.
-- **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
+- **The TUI is installed as `gaia-cli`, never `gaia`** — the terminal-hub artifact
   *is* called `gaia-<platform>`, and a file named `gaia` in a cache directory would
   shadow the npm bin shim. The lock's `filename` and `executable` differ for that
   reason. Don't rename it back.
@@ -814,7 +817,8 @@ loop on `/v1/gaia/init` — it will report ready. Wait for a running turn to
 finish (or close an idle session) and retry the same `/query`. A 503 whose
 `detail` says the model server or GAIA's AI engine couldn't start is not
 a busy slot: show the user that `detail`, which names the fix, instead of
-retrying.
+retrying. Neither is a 503 whose `detail` says there is no model by that name:
+it never succeeds on retry, so pick another model.
 
 **Three more refusals are yours to avoid**, each naming its fix in `detail`
 (SPEC §5.2 has the reasoning):
