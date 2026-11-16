@@ -22,6 +22,8 @@ from gaia.agents.base.goal_store import (
     is_damaged_store_error,
 )
 
+from ..security import audit_approval
+
 logger = logging.getLogger(__name__)
 
 
@@ -329,7 +331,7 @@ def get_goal(goal_id: str):
 
 
 @router.put("/api/goals/{goal_id}/approve")
-def approve_goal(goal_id: str):
+def approve_goal(goal_id: str, http_request: Request):
     """Approve an agent-inferred goal for autonomous execution."""
     try:
         goal = _get_store().approve_goal(goal_id)
@@ -337,11 +339,12 @@ def approve_goal(goal_id: str):
         raise HTTPException(status_code=409, detail=str(e)) from e
     if goal is None:
         raise HTTPException(status_code=404, detail="Goal not found")
+    audit_approval(http_request, f"goal {goal_id} approved")
     return _goal_to_dict(goal)
 
 
 @router.put("/api/goals/{goal_id}/reject")
-def reject_goal(goal_id: str):
+def reject_goal(goal_id: str, http_request: Request):
     """Reject an agent-inferred goal."""
     try:
         goal = _get_store().reject_goal(goal_id)
@@ -349,6 +352,7 @@ def reject_goal(goal_id: str):
         raise HTTPException(status_code=409, detail=str(e)) from e
     if goal is None:
         raise HTTPException(status_code=404, detail="Goal not found")
+    audit_approval(http_request, f"goal {goal_id} rejected")
     return _goal_to_dict(goal)
 
 

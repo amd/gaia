@@ -42,6 +42,7 @@ from ..models import (
     IndexFolderRequest,
     IndexFolderResponse,
 )
+from ..security import refuse_on_device_listener
 from ..utils import (
     ALLOWED_EXTENSIONS,
     FOLDER_INDEX_EXTENSIONS,
@@ -198,7 +199,11 @@ async def list_documents(db: ChatDatabase = Depends(get_db)):
     )
 
 
-@router.post("/api/documents/upload-path", response_model=DocumentResponse)
+@router.post(
+    "/api/documents/upload-path",
+    response_model=DocumentResponse,
+    dependencies=[Depends(refuse_on_device_listener)],
+)
 async def upload_by_path(
     request: DocumentUploadRequest,
     db: ChatDatabase = Depends(get_db),
@@ -607,7 +612,9 @@ _INLINE_MEDIA_TYPES = {
 }
 
 
-@router.get("/api/documents/{doc_id}/file")
+@router.get(
+    "/api/documents/{doc_id}/file", dependencies=[Depends(refuse_on_device_listener)]
+)
 async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
     """Serve a library document's file inline, so a citation can open it at its page."""
     doc = db.get_document(doc_id)
@@ -786,7 +793,11 @@ def _record_failed_document(
     )
 
 
-@router.post("/api/documents/index-folder", response_model=IndexFolderResponse)
+@router.post(
+    "/api/documents/index-folder",
+    response_model=IndexFolderResponse,
+    dependencies=[Depends(refuse_on_device_listener)],
+)
 async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(get_db)):
     """Index all supported documents in a folder.
 

@@ -16,7 +16,12 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..models import LogReadResponse, LogSourcesResponse
-from ..security import _is_loopback_name, require_ui_header, via_tunnel
+from ..security import (
+    _is_loopback_name,
+    refuse_on_device_listener,
+    require_ui_header,
+    via_tunnel,
+)
 
 router = APIRouter(tags=["logs"])
 
@@ -35,7 +40,11 @@ def _at_this_pc(request: Request) -> None:
 @router.get(
     "/api/logs",
     response_model=LogSourcesResponse,
-    dependencies=[Depends(require_ui_header), Depends(_at_this_pc)],
+    dependencies=[
+        Depends(require_ui_header),
+        Depends(_at_this_pc),
+        Depends(refuse_on_device_listener),
+    ],
 )
 def list_logs() -> Dict[str, Any]:
     """Each log source and the files it has now."""
@@ -47,7 +56,11 @@ def list_logs() -> Dict[str, Any]:
 @router.get(
     "/api/logs/{source}",
     response_model=LogReadResponse,
-    dependencies=[Depends(require_ui_header), Depends(_at_this_pc)],
+    dependencies=[
+        Depends(require_ui_header),
+        Depends(_at_this_pc),
+        Depends(refuse_on_device_listener),
+    ],
 )
 async def read_log(
     source: str,
