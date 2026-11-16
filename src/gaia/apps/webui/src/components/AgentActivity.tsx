@@ -28,7 +28,6 @@ import {
     Circle,
     Sparkles,
     Link,
-    ImageIcon,
     AudioLines,
     Captions,
     Image as ImageIcon,
@@ -114,8 +113,6 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     forget: Brain,
     forget_everything: Brain,
     search_past_conversations: Brain,
-    // Images
-    generate_image: ImageIcon,
     request_user_input: MessageCircleQuestionMark,
     // Skills
     load_skill: Sparkles,
