@@ -310,7 +310,11 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     // Takes priority over all other cases (including dismiss and active-conversation suppression)
     // because the system is not yet ready to serve requests. A status the backend
     // can't refresh (slow or failing) is not proof the boot is still running.
-    if (isStarting(systemStatus) && !backendSlow && !backendError) {
+    // Once the server check is over, a server that isn't answering outranks the later boot steps.
+    const serverCheck = systemStatus?.init_tasks?.find(t => t.step === 'check_server');
+    const serverDownAfterCheck = systemStatus?.lemonade_running === false
+        && !!serverCheck && serverCheck.status !== 'pending' && serverCheck.status !== 'running';
+    if (isStarting(systemStatus) && !backendSlow && !backendError && !serverDownAfterCheck) {
         // The task's English `name` is a log label; only its `step` is shown, translated.
         const step = systemStatus?.init_tasks?.find(t => t.status === 'running')?.step;
         const stepKey = `banner.boot.${step}`;
