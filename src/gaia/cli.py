@@ -7713,6 +7713,9 @@ def handle_config_command(args):
         except GaiaConfigError as e:
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(1)
+        if isinstance(value, (dict, list)):
+            # JSON, so the output pastes back into `gaia config set`.
+            value = json.dumps(value)
         print(value if value is not None else "")
         return
 
@@ -7974,7 +7977,7 @@ def _hybrid_templates_command(args) -> None:
     print(
         f"✅ hybrid now runs on {values['hybrid_cheap_model']} or "
         f"{values['hybrid_strong_model']} (policy {values['hybrid_policy']}). "
-        "Pick it with `gaia config set default_model hybrid`."
+        "Pick it with `gaia gateway use hybrid`."
     )
 
 

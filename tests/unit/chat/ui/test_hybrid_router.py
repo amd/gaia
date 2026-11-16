@@ -975,3 +975,83 @@ def test_cached_input_without_a_cache_rate_is_unpriced(client, db, gateway_list)
     _answer(db, session, _route(DEFAULT_CHEAP_MODEL, "cheap"), (1000, 100, 500))
     body = client.get("/api/hybrid/stats").json()
     assert body["unpriced_turns"] == 1 and body["cost"] is None
+
+
+# ── a hand-broken config.json ───────────────────────────────────────────────
+
+
+def _broken_rules():
+    rules = _rules()
+    del rules["other"]
+    return rules
+
+
+def test_broken_rules_return_settings_with_the_fault_not_a_500(client, gateway):
+    _write_config({"hybrid_policy": "custom", "hybrid_rules": _broken_rules()})
+    resp = client.get("/api/hybrid/settings")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "no rule for other" in body["config_error"]
+    assert "Settings › Models › Hybrid" in body["config_error"]
+    assert "`gaia " not in body["config_error"]
+    assert body["policy"] == "custom" and body["rules"] == _broken_rules()
+    assert body["is_active"] is None and body["models"]
+
+
+def test_put_repairs_broken_rules(client, gateway):
+    _write_config(
+        {
+            "hybrid_policy": "custom",
+            "hybrid_rules": _broken_rules(),
+            "full_access": True,
+        }
+    )
+    resp = client.put("/api/hybrid/settings", json={"rules": _rules()})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["config_error"] is None
+    saved = _config()
+    assert saved["hybrid_rules"] == _rules() and saved["full_access"] is True
+
+
+def test_put_repairs_by_switching_to_a_preset(client, gateway):
+    _write_config({"hybrid_policy": "custom", "hybrid_rules": _broken_rules()})
+    resp = client.put("/api/hybrid/settings", json={"policy": "quality"})
+    # The broken table is still saved, so it is still refused, by name.
+    assert resp.status_code == 422 and "no rule for other" in resp.json()["detail"]
+    resp = client.put("/api/hybrid/settings", json={"policy": "quality", "rules": None})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["config_error"] is None
+
+
+def test_put_that_leaves_it_broken_is_refused(client, gateway):
+    _write_config({"hybrid_policy": "custom", "hybrid_rules": _broken_rules()})
+    resp = client.put("/api/hybrid/settings", json={"classifier_timeout": 20})
+    assert resp.status_code == 422 and "no rule for other" in resp.json()["detail"]
+    assert _config()["hybrid_rules"] == _broken_rules()
+
+
+def test_broken_timeout_in_the_file_is_shown_and_repairable(client, gateway):
+    _write_config({"hybrid_classifier_timeout": 999})
+    body = client.get("/api/hybrid/settings").json()
+    assert "1-120" in body["config_error"] and body["classifier_timeout"] == 999
+    resp = client.put("/api/hybrid/settings", json={"classifier_timeout": 30})
+    assert resp.status_code == 200 and resp.json()["config_error"] is None
+
+
+def test_templates_still_list_with_a_broken_config(client, gateway):
+    _write_config({"hybrid_policy": "custom", "hybrid_rules": _broken_rules()})
+    templates = _templates(client)
+    assert templates["gateway-deepseek-opus"]["available"] is True
+    assert "config.json can't be read" in templates["local-plus-cloud"]["reason"]
+
+
+def test_config_that_is_not_json_is_a_500_naming_the_file(client, gateway):
+    config_mod.GAIA_CONFIG_FILE.write_text("{nope", encoding="utf-8")
+    resp = client.get("/api/hybrid/settings")
+    assert resp.status_code == 500 and "not valid JSON" in resp.json()["detail"]
+
+
+def test_stats_say_what_they_cover(client):
+    body = client.get("/api/hybrid/stats").json()
+    assert body["scope"] == "agent_ui_chats"
+    assert body["scope_label"].startswith("Agent UI chats only")

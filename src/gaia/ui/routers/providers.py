@@ -905,7 +905,11 @@ def _check_model_available(model_id: str) -> Optional[str]:
 
 
 def _check_hybrid_available() -> Optional[str]:
-    """None when every model ``hybrid`` routes to can run now, else why not."""
+    """None when every model ``hybrid`` routes to can run now, else why not.
+
+    Raises :class:`_ServerNotReady` while the local model server is still
+    starting, as :func:`_check_model_available` does for other models.
+    """
     from gaia.llm.hybrid import HybridSettings
     from gaia.llm.hybrid_templates import availability
 
@@ -915,8 +919,14 @@ def _check_hybrid_available() -> Optional[str]:
         settings = HybridSettings.load()
     except HybridConfigError as e:
         return surface_wording(str(e), "agent_ui").rstrip(".")
+    try:
+        inv = inventory()
+    except ProviderError as e:
+        if e.status == 503 or isinstance(e, _ModelListFailed):
+            raise _ServerNotReady(str(e)) from e
+        return surface_wording(str(e), "agent_ui").rstrip(".")
     members = (settings.classifier_model, settings.cheap_model, settings.strong_model)
-    reason = availability(members, inventory())
+    reason = availability(members, inv)
     return surface_wording(reason, "agent_ui").rstrip(".") if reason else None
 
 
@@ -1460,12 +1470,30 @@ def provider_models(
             "blocked_reason": "Local only is on; turn it off in Settings to use cloud models.",
         }
     try:
+        if provider == AMD:
+            _refresh_gateway_prices()
         models = _list_models(provider)
         if provider != LOCAL:
             return {"provider": provider, "models": models, "blocked": False}
         return {"provider": provider, **_local_report(models, db)}
     except ProviderError as e:
         _raise(e)
+
+
+def _refresh_gateway_prices() -> None:
+    """Read the gateway's price list when it is a day old, so its models show prices.
+
+    A failed read leaves the last prices (or none); the Hybrid settings say why.
+    """
+    from gaia.llm.gateway_prices import GatewayPriceError, ensure_fresh
+
+    try:
+        entry = _cloud_entry(AMD)
+        if not entry or not (entry.get("env_var_set") or entry.get("runtime_key_set")):
+            return
+        ensure_fresh()
+    except (ProviderError, GatewayPriceError) as e:
+        logger.warning("Gateway models listed without fresh prices: %s", e)
 
 
 def _read_system_info() -> Dict[str, Any]:

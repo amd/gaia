@@ -3035,3 +3035,30 @@ def test_a_malformed_model_list_ends_a_switch_or_restore_with_one_full_stop(
     assert resp.status_code == 409, resp.text
     assert resp.json()["detail"].endswith("points at Lemonade.")
     assert ".." not in restore["message"] + resp.json()["detail"]
+
+
+def test_restoring_hybrid_waits_for_a_starting_server(client, lemonade, keys, db):
+    """The TUI saves ``hybrid`` as the last model; a cold start must not 500."""
+    _write_config({"last_model": "hybrid"})
+    lemonade.down = True
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {"status": "pending", "message": None}
+    assert db.get_setting("custom_model") is None
+
+
+def test_restoring_hybrid_waits_when_lemonade_answers_with_a_5xx(
+    client, lemonade, keys, db
+):
+    _write_config({"last_model": "hybrid"})
+    lemonade.answers[("GET", "system-info")] = (500, {})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {"status": "pending", "message": None}
+
+
+def test_selecting_hybrid_while_the_server_is_starting_is_503(
+    client, lemonade, keys, db
+):
+    lemonade.down = True
+    resp = client.post("/api/providers/select", json={"model": "hybrid"})
+    assert resp.status_code == 503
+    assert db.get_setting("custom_model") is None

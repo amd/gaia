@@ -265,6 +265,12 @@ def validate_rules(value: Any) -> Dict[str, Dict[str, Any]]:
                 f"{', '.join(map(repr, extra[:5]))}; a rule has only "
                 f"{' and '.join(RULE_FIELDS)}."
             )
+        absent = [f for f in RULE_FIELDS if f not in rule]
+        if absent:
+            raise HybridConfigError(
+                f"hybrid_rules['{kind}'] has no {' or '.join(absent)}; a rule needs "
+                f"both {' and '.join(RULE_FIELDS)}."
+            )
         difficulty = rule.get("cheap_max_difficulty")
         if (
             isinstance(difficulty, bool)

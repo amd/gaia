@@ -83,10 +83,10 @@ def cloud_prices(provider: str) -> Dict[str, Any]:
         "provider": provider,
         "models": models,
         "source": spending.PRICE_SOURCE if models else None,
-        # The gateway bills through the organization that runs it.
+        # The gateway's prices come from the gateway itself, once connected.
         "note": (
             None
             if models
-            else "Prices are set by the organization that runs the gateway; GAIA doesn't know them."
+            else "GAIA reads the gateway's prices from it once it is connected."
         ),
     }

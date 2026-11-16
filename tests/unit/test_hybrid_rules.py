@@ -198,7 +198,9 @@ def test_custom_without_rules_fails_loudly():
             _rules(other={"cheap_max_difficulty": 2, "allow_high_stakes": 0}),
             "true or false",
         ),
-        (_rules(other={"cheap_max_difficulty": 2}), "true or false"),
+        (_rules(other={"cheap_max_difficulty": 2}), "has no allow_high_stakes"),
+        (_rules(other={"allow_high_stakes": True}), "has no cheap_max_difficulty"),
+        (_rules(other={}), "has no cheap_max_difficulty or allow_high_stakes"),
         (
             _rules(
                 other={
@@ -705,3 +707,20 @@ def test_the_default_factory_builds_a_claude_client_for_claude(monkeypatch):
     hybrid._default_client_factory("Gemma-4-E4B-it-GGUF", "http://x")
     assert made[0] == ("claude", {"model": "claude-haiku-5-5"})
     assert made[1][0] == "lemonade"
+
+
+def test_cli_config_get_prints_rules_as_json_that_round_trips(tmp_path, capsys):
+    path = _config_path(tmp_path, {"hybrid_policy": "custom", "hybrid_rules": _rules()})
+    cli.handle_config_command(
+        argparse.Namespace(config=path, config_action="get", key="hybrid_rules")
+    )
+    printed = capsys.readouterr().out.strip()
+    assert json.loads(printed) == _rules()
+    (tmp_path / "fresh").mkdir()
+    other = _config_path(tmp_path / "fresh")
+    cli.handle_config_command(
+        argparse.Namespace(
+            config=other, config_action="set", key="hybrid_rules", value=printed
+        )
+    )
+    assert GaiaConfig.load(other).hybrid_rules == _rules()
