@@ -201,6 +201,12 @@ describe('ThisAnswer', () => {
         expect(screen.queryByText('Not known for this model')).not.toBeInTheDocument();
     });
 
+    it('says a turn no reply came from is left out of spending, not that it was stopped', () => {
+        render(<Host messages={turn(summary({ model: CLOUD_MODEL, cost: { kind: 'no_reply', usd: null } }))} />);
+        expect(screen.getByText('Not counted: no reply came')).toBeInTheDocument();
+        expect(screen.queryByText(/Not reported/)).not.toBeInTheDocument();
+    });
+
     it("says a priced turn's cost wasn't reported when no usage came back", () => {
         render(<Host messages={turn(summary({ model: CLOUD_MODEL, cost: { kind: 'unreported' } }))} />);
         expect(screen.getByText('Not reported for this answer')).toBeInTheDocument();

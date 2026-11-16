@@ -57,9 +57,10 @@ turn 3 accept an honest empty/unreadable result.
   tests, the T2 `needs_confirmation` pin, and the `tui`-tagged TUI lane.
   REFUSE-tier behaviour is unaffected by auto-approve.
 - `GAIA_MEMORY_ADMIN=1` — exposes the eval MCP admin tools
-  (`memory_clear(scope=all)` / `memory_seed`). Every `gaia_memory` scenario's
-  first turn instructs the simulator to call `memory_clear(scope=all)` before
-  sending the first user message — the only cross-scenario isolation.
+  (`memory_clear(scope=all)` / `memory_seed`) and the endpoint the runner
+  uses to clear memory before every `gaia_*` and memory scenario
+  (`POST /api/memory/admin/clear`). `setup.memory_clear: false` opts a
+  scenario out, for one that reads what an earlier scenario left behind.
 - `GAIA_EVAL_SCRIPTED_USER=1` — lets a scenario's `setup.decline_commands`
   script a user who declines those shell commands (checked before
   auto-approve, so it is the transport's only "no") and answers no

@@ -134,6 +134,22 @@ def test_project_skills_follow_the_catalogue(monkeypatch):
     assert agent.skill_suggester.calls[0][3] is True
 
 
+def test_text_handed_over_to_translate_suggests_no_skill(monkeypatch):
+    agent = _wired(monkeypatch, ["file-ops"])
+    suggested = agent._select_skill_suggestions_for_turn(
+        'Translate this sentence to French, do nothing else: "The file '
+        'C:\\Users\\maria\\budget.xlsx is missing, please check the shared folder".'
+    )
+    assert suggested == []
+    assert agent.skill_suggester.calls == []
+
+
+def test_a_file_the_request_names_is_still_matched_against_skills(monkeypatch):
+    agent = _wired(monkeypatch, [])
+    agent._select_skill_suggestions_for_turn("Translate README.md to French")
+    assert agent.skill_suggester.calls[0][0] == "Translate README.md to French"
+
+
 def test_no_suggestions_without_the_memory_embedder(monkeypatch):
     agent = _wired(monkeypatch, ["summarize"], memory_store=None)
     assert agent._select_skill_suggestions_for_turn("sum this up") == []
@@ -161,8 +177,9 @@ def test_the_line_joins_this_turns_context(monkeypatch):
     context = _with_turn_context(monkeypatch, agent, "sum up this spreadsheet")
     assert context.splitlines() == [
         "Current time: now",
-        "Skills that match this request and are not loaded yet: summarize, "
-        "data-explore — load them with load_skill before starting.",
+        "Skills that may fit this request and are not loaded yet: summarize, "
+        "data-explore — use load_skill for the ones that cover what was asked "
+        "and ignore the rest.",
     ]
     assert agent.skill_suggester.calls[0][0] == "sum up this spreadsheet"
 

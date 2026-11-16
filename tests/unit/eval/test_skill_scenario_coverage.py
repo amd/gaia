@@ -44,6 +44,10 @@ MIN_SCENARIOS_PER_SKILL = 2
 #: Skills with no scenarios yet, each with the reason it can wait.
 DEFERRED: dict[str, str] = {
     "analyze-recording": "Requires audio input; belongs with the audio tests.",
+    "automations": (
+        "Runs later through a delivery channel; its store, runner, CLI and policy "
+        "are unit-tested."
+    ),
     "calculators": (
         "The card does the math in the client; a skill scenario needs a judge "
         "that reads the card payload rather than the short reply."
@@ -55,6 +59,11 @@ DEFERRED: dict[str, str] = {
     "guides": (
         "The answer is a card the client draws; a skill scenario needs a judge "
         "that reads the card payload rather than the short reply."
+    ),
+    "log-triage": "Needs an invented multi-file log corpus with a planted incident.",
+    "meeting-actions": "Needs a multi-meeting notes corpus with implicit commitments.",
+    "report-from-sources": (
+        "Needs a mixed-period source corpus and a rubric that opens the saved file."
     ),
     "send-email": (
         "Every send needs a person to approve the exact message; the email eval "

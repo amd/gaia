@@ -45,6 +45,8 @@ export interface SetupComponent {
     /** null when it can't be known before the download starts. */
     size_gb: number | null;
     source: string;
+    /** It comes with the installer, so nothing is downloaded from `source`. */
+    bundled?: boolean;
     /** null when the plan can't tell yet. */
     installed: boolean | null;
 }
@@ -191,6 +193,8 @@ export interface SetupCheck {
     warnings?: string[];
     /** The hub has no GAIA agent build for this PC, so chat can't run here. */
     no_agent_build?: boolean;
+    /** The model server answers, but its model list could not be read (a `server` stage). */
+    model_list_unread?: boolean;
     steps: SetupStep[];
     /** The steps for a cloud provider, which downloads only the embedding model. */
     cloud_steps?: SetupStep[];

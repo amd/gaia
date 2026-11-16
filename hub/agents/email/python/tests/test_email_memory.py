@@ -492,17 +492,17 @@ class TestRuntimeMemoryToggle:
                 category="preference", content=marker, context="email"
             )
             agent.rebuild_system_prompt()
-            assert marker in agent.system_prompt, "sanity: pref injected while on"
+            assert marker in agent._prompt_text(), "sanity: pref injected while on"
 
             # Runtime disable must flush the cached prompt immediately.
             agent.set_memory_enabled(False)
             assert (
-                marker not in agent.system_prompt
+                marker not in agent._prompt_text()
             ), "cached system prompt still leaks memory after runtime disable"
 
             # Re-enabling restores it.
             agent.set_memory_enabled(True)
-            assert marker in agent.system_prompt
+            assert marker in agent._prompt_text()
         finally:
             agent.close_db()
 
@@ -822,7 +822,7 @@ class TestQueryRouteMemoryMode:
                 turns.append(
                     {
                         "memory": agent.memory_status()["enabled"],
-                        "marker_in_prompt": self._MARKER in agent.system_prompt,
+                        "marker_in_prompt": self._MARKER in agent._prompt_text(),
                     }
                 )
                 agent._record_interaction("alice@example.com", "URGENT")

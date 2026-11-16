@@ -107,7 +107,7 @@ class TestPathGrants:
                 "_resolved_file_path": "/tmp/a/notes.md",
             },
         )
-        assert scope.key == "write_file:/tmp/a/*"
+        assert scope.key == "file_change:/tmp/a/*"
         assert scope.subject == "files in /tmp/a"
 
     def test_a_folder_grant_covers_sibling_files(self):
@@ -274,7 +274,7 @@ class TestCommandFamilies:
     @pytest.mark.parametrize(
         "tool,label",
         [
-            ("run_python", "Python snippets (run_python)"),
+            ("run_python", "Python snippets"),
             ("execute_python_file", "running Python files"),
         ],
     )

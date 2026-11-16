@@ -74,6 +74,35 @@ dynamically linked and replaceable, which LGPL permits. Each is reported on ever
 an entry to `REVIEWED` in `util/check_licenses.py` must show the evidence that the licence
 is permissive.
 
+## Third-party integrations
+
+A third-party integration wires an outside company's product or service into GAIA: a
+connector, a hub skill, a model entry, a hosted API, or docs that send users to it. Apply
+the `third-party integration` label to the PR or issue.
+
+**The default is an opt-in connector** (Settings → Connectors), and only when it adds clear
+value: it solves a real problem for GAIA users that a vendor-neutral path doesn't, rather
+than adding one more vendor to a list. A hub skill, a default, or a core code path needs an
+explicit maintainer decision, because hub skills enter every user's prompt and ship signed.
+Without that decision, flag it as a 🟡.
+
+Vet it before judging the code. Report each unmet item as a 🟡:
+
+- The company is real and reputable: funding, a named team, public coverage.
+- Any package it adds is minimal, pinned to an exact version, and has no install scripts.
+- The author says how they relate to the vendor.
+- The PR documents what data leaves the PC, and local-only mode refuses it.
+- No promotional copy, and no single vendor privileged in code where a vendor-neutral
+  mechanism would do.
+
+A PR whose main purpose is marketing a product is closed, with a warm comment that explains
+this policy and, if the product has real value, points to the opt-in connector route.
+
+## Don't over-gate
+
+Read-only tool calls that run without approval (e.g. `gh` reads) are intended, not findings.
+For a real risk, recommend that GAIA ask the user rather than block the action.
+
 ## Nit cap
 
 Post **at most 5 nits** total across the whole review. If you find more, post the five

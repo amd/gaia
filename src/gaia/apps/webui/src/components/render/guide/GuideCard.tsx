@@ -42,8 +42,6 @@ function saveChecked(doc: GuideDoc, checked: ReadonlySet<number>): void {
     }
 }
 
-const SYSTEM_LABEL: Record<UnitSystem, string> = { us: 'US', metric: 'Metric' };
-
 export function GuideCard({ data }: { data: unknown }) {
     if (!isGuideWire(data)) return <UnsupportedCard variant="invalid" render="guide" data={data} />;
     return <Guide wire={data} />;
@@ -61,6 +59,7 @@ function Guide({ wire }: { wire: GuideWire }) {
     const tipDismissed = useGuideTipDismissed();
     const state: GuideViewState = { servings, system, checked };
     const { features } = doc;
+    const copiedNotice = t('cards.copied');
 
     useEffect(() => {
         if (!notice) return;
@@ -76,24 +75,25 @@ function Guide({ wire }: { wire: GuideWire }) {
         saveChecked(doc, next);
     };
 
-    const fail = (verb: string) => (err: unknown) =>
-        setNotice(`Couldn't ${verb}: ${err instanceof Error ? err.message : String(err)}`);
+    const fail = (key: 'cards.copyFailed' | 'cards.shareFailed' | 'cards.printFailed') => (err: unknown) =>
+        setNotice(t(key, { error: err instanceof Error ? err.message : String(err) }));
 
     const onCopy = () => {
-        copyGuide(formatGuideText(doc, state)).then(() => setNotice('Copied'), fail('copy'));
+        copyGuide(formatGuideText(doc, state, t)).then(() => setNotice(copiedNotice), fail('cards.copyFailed'));
     };
     const onShare = () => {
-        shareGuide(doc.title, formatGuideText(doc, state)).catch(fail('share'));
+        shareGuide(doc.title, formatGuideText(doc, state, t)).catch(fail('cards.shareFailed'));
     };
     const onPrint = () => {
         try {
-            printGuide(doc.title, formatGuideText(doc, state));
+            printGuide(doc.title, formatGuideText(doc, state, t));
         } catch (err) {
-            fail('print')(err);
+            fail('cards.printFailed')(err);
         }
     };
 
     const other: UnitSystem = system === 'us' ? 'metric' : 'us';
+    const systemLabel = (s: UnitSystem) => t.bare(s === 'us' ? 'cards.system.us' : 'cards.system.metric');
     const showUnits = features.units && doc.convertible;
 
     return (
@@ -119,7 +119,7 @@ function Guide({ wire }: { wire: GuideWire }) {
                             <Minus size={14} />
                         </button>
                         <output className="render-guide__servings-count" aria-live="polite">
-                            {servingsLabel(servings)}
+                            {servingsLabel(t, servings)}
                         </output>
                         <button
                             type="button"
@@ -144,11 +144,11 @@ function Guide({ wire }: { wire: GuideWire }) {
                                 dismissGuideTip();
                                 setSystem(other);
                             }}
-                            aria-label={t('cards.unitsSwitch', { current: SYSTEM_LABEL[system], other: SYSTEM_LABEL[other] })}
-                            title={t('cards.unitsTitle', { other: SYSTEM_LABEL[other] })}
+                            aria-label={t('cards.unitsSwitch', { current: systemLabel(system), other: systemLabel(other) })}
+                            title={t('cards.unitsTitle', { other: systemLabel(other) })}
                         >
                             <Ruler size={15} />
-                            <span>{SYSTEM_LABEL[system]}</span>
+                            <span>{systemLabel(system)}</span>
                         </button>
                     )}
                     {canShare() && (
@@ -160,7 +160,7 @@ function Guide({ wire }: { wire: GuideWire }) {
                         <Printer size={15} />
                     </button>
                     <button type="button" className="render-guide__icon" onClick={onCopy} aria-label={t('cards.copy')} title={t('cards.copy')}>
-                        {notice === 'Copied' ? <Check size={15} /> : <Copy size={15} />}
+                        {notice === copiedNotice ? <Check size={15} /> : <Copy size={15} />}
                     </button>
                 </div>
                 {features.startLabel && doc.steps.length > 0 && (
@@ -169,7 +169,7 @@ function Guide({ wire }: { wire: GuideWire }) {
                         setGuided(true);
                     }}>
                         <Play size={14} />
-                        {features.startLabel}
+                        {t(features.startLabel)}
                     </button>
                 )}
             </div>
@@ -177,7 +177,7 @@ function Guide({ wire }: { wire: GuideWire }) {
 
             {doc.items.length > 0 && (
                 <section className="render-guide__section">
-                    <h4 className="render-guide__label">{features.itemsLabel}</h4>
+                    <h4 className="render-guide__label">{t(features.itemsLabel)}</h4>
                     <ul className="render-guide__items">
                         {doc.items.map((_, i) => {
                             const { qty, text } = itemDisplay(doc, i, state);
@@ -205,10 +205,10 @@ function Guide({ wire }: { wire: GuideWire }) {
 
             {doc.steps.length > 0 && features.stepsLabel && (
                 <section className="render-guide__section">
-                    <h4 className="render-guide__label">{features.stepsLabel}</h4>
+                    <h4 className="render-guide__label">{t(features.stepsLabel)}</h4>
                     <ol className={`render-guide__steps${features.timeline ? ' is-timeline' : ''}`}>
                         {doc.steps.map((step, i) => {
-                            const title = stepTitle(doc, i);
+                            const title = stepTitle(doc, i, (n) => t('cards.dayN', { n }));
                             return (
                                 <li key={i} className="render-guide__step">
                                     {features.timeline ? (
@@ -244,7 +244,7 @@ function Guide({ wire }: { wire: GuideWire }) {
             {features.tip && !tipDismissed && (
                 <div className="render-guide__tip" role="note">
                     <Lightbulb size={15} aria-hidden="true" />
-                    <span>{features.tip}</span>
+                    <span>{t(features.tip)}</span>
                     <button type="button" className="render-guide__icon" onClick={dismissGuideTip} aria-label={t('cards.dismissTip')}>
                         <X size={14} />
                     </button>

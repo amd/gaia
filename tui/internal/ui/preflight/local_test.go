@@ -496,7 +496,7 @@ func stubCLIInstall(t *testing.T, can bool, install func(io.Writer) error) *int 
 	return &calls
 }
 
-// The .pkg, .deb and .rpm install only gaia-tui and gaia-agent, so setup found
+// The .pkg, .deb and .rpm install only gaia-cli and gaia-agent, so setup found
 // no CLI and stopped at step 1 (#6659). It now installs the CLI and carries on.
 func TestSetupInstallsAMissingCLIThenRuns(t *testing.T) {
 	stubLemonadeNotInstalled(t, true)
@@ -1053,6 +1053,25 @@ func TestAServerThatStopsAnsweringIsAFaultNotAStep(t *testing.T) {
 	}
 	if !strings.Contains(row.Detail, "installed but not running") {
 		t.Errorf("detail = %q, want the reason", row.Detail)
+	}
+}
+
+// #8058: setup cannot fix a server that sends its model list in the wrong shape.
+func TestAnUnreadableModelListIsNotASetupFix(t *testing.T) {
+	stubGaiaInit(t, func() (string, error) {
+		return jsonStub(t, 1, `{"ready": false, "stage": "server", "model_list_unread": true, "reasons": ["Could not read the model list"], "models": []}`), nil
+	})
+
+	row := modelRow(localRunner{})
+
+	if row.FirstRun || row.State != StateFailed {
+		t.Fatalf("an unreadable model list rendered as a first-run step: %+v", row)
+	}
+	if row.Fix == FixRunSetup || strings.Contains(row.Line, "not answering") {
+		t.Errorf("row offers setup for a server that answers: %+v", row)
+	}
+	if !strings.Contains(row.Line, "model list") {
+		t.Errorf("line = %q, want it to name the model list", row.Line)
 	}
 }
 
