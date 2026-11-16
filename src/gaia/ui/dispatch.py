@@ -52,6 +52,10 @@ class Job:
     completed_at: Optional[float] = None
 
 
+#: The running server's boot queue, so request handlers can wait on a boot step.
+BOOT_QUEUE: Optional["DispatchQueue"] = None
+
+
 class DispatchQueue:
     """Background task dispatcher with job tracking.
 
@@ -90,6 +94,30 @@ class DispatchQueue:
 
     def get_job(self, job_id: str) -> Optional[Job]:
         return self._jobs.get(job_id)
+
+    def step_pending(self, step: str) -> bool:
+        """Whether the job for *step* is still pending or running."""
+        return any(
+            j.step == step and j.status in (JobStatus.PENDING, JobStatus.RUNNING)
+            for j in self._jobs.values()
+        )
+
+    async def wait_for_step(self, step: str, timeout: float) -> Optional[JobStatus]:
+        """Wait while the job for *step* is pending or running; its status, or None.
+
+        None when no job has that step. A job still unfinished at *timeout*
+        returns its status as is; the caller's own work then reports what fails.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            job = next((j for j in self._jobs.values() if j.step == step), None)
+            if job is None:
+                return None
+            if job.status in (JobStatus.DONE, JobStatus.FAILED):
+                return job.status
+            if time.monotonic() >= deadline:
+                return job.status
+            await asyncio.sleep(_DEPENDENCY_POLL_INTERVAL)
 
     def get_visible_jobs(self) -> List[Job]:
         return [j for j in self._jobs.values() if j.visible]

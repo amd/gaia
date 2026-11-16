@@ -7548,6 +7548,9 @@ def handle_knowledge_command(args):
         print("Run 'gaia knowledge --help' for more information")
         return
 
+    import requests
+
+    from gaia.web.client import SearchUnavailableError
     from gaia.web.tavily import (
         BudgetConfig,
         TavilyBudgetExceeded,
@@ -7583,8 +7586,15 @@ def handle_knowledge_command(args):
     except TavilyBudgetExceeded as e:
         print(f"🛑 {e}")
         sys.exit(1)
-    except TavilyConfigError as e:
+    except (TavilyConfigError, SearchUnavailableError) as e:
         print(f"❌ {e}")
+        sys.exit(1)
+    except requests.exceptions.RequestException as e:
+        service = "Tavily" if client.configured else "DuckDuckGo"
+        print(
+            f"❌ Web {action} failed: {service} could not be reached ({e}). "
+            "Check your internet connection or proxy settings and try again."
+        )
         sys.exit(1)
     finally:
         client.close()
