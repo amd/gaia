@@ -105,7 +105,7 @@ from gaia.ports import (
 )
 from gaia.utils import awake_clock, perf_trace
 from gaia.utils.terminal import windows_hidden_popen_kwargs
-from gaia.version import parse_version
+from gaia.version import base_version, parse_version
 
 # For the module-level helpers; the client class keeps its own ``self.log``.
 log = get_logger(__name__)
@@ -10850,7 +10850,7 @@ class LemonadeClient:
 
         check_lemonade_version(actual_version, self.base_url)
 
-        if actual_version != expected_version and not quiet:
+        if base_version(actual_version) != base_version(expected_version) and not quiet:
             print(
                 f"{_emoji('⚠️', '[WARN]')}  Lemonade Server version: "
                 f"v{actual_version} (expected v{expected_version})"
