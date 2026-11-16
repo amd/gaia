@@ -1,0 +1,3 @@
+# Values come from the environment (see README.md); none are committed.
+app_identifier(ENV["GAIA_IOS_BUNDLE_ID"])
+team_id(ENV["GAIA_APPLE_TEAM_ID"])

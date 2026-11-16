@@ -271,7 +271,7 @@ def test_pair_rate_limit_is_per_peer():
 def test_device_name_sanitized():
     spoof = "‮enohPi s'hciR‬"
     assert sanitize_device_name(spoof) == "enohPi s'hciR"
-    assert sanitize_device_name("Alex's\tiPhone\n\x07 15") == "Alex's iPhone 15"
+    assert sanitize_device_name("Test\tphone\n\x07 15") == "Test phone 15"
     assert len(sanitize_device_name("x" * 500)) == 64
     with pytest.raises(ValueError):
         sanitize_device_name("⁦⁩\x00 ")

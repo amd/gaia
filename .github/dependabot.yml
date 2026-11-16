@@ -65,8 +65,8 @@ updates:
           - "*"
 
   # JavaScript - standalone npm packages outside the root workspace: the two
-  # published hub sidecars, the website, the docs proxy, the Cloudflare workers
-  # and the VS Code extension. util/check_dependabot.py fails lint if a tracked
+  # published hub sidecars, the website, the docs proxy, the Cloudflare workers,
+  # the VS Code extension and the mobile app. util/check_dependabot.py fails lint if a tracked
   # lockfile is missing here (#3525). One grouped PR per directory.
   - package-ecosystem: "npm"
     directories:
@@ -78,6 +78,7 @@ updates:
       - "/workers/admin"
       - "/workers/website-router"
       - "/src/vscode/gaia"
+      - "/src/gaia/apps/mobile"
     schedule:
       interval: "weekly"
       day: "monday"

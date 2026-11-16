@@ -280,7 +280,7 @@ def _redeem(served, invite, pin=None):
         "/api/devices/pair",
         body={
             "invitation": invite,
-            "device_name": "Alex's \u202ePhone",
+            "device_name": "Test \u202ephone",
             "platform": "ios",
         },
     )
@@ -311,7 +311,7 @@ def test_pair_allow_use_and_unpair(served):
         for secret in (token, token[:14], token_hash(token), offer["invite"]):
             assert secret not in resp.text
     (device,) = listing.json()["devices"]
-    assert device["name"] == "Alex's Phone" and device["status"] == "pending"
+    assert device["name"] == "Test phone" and device["status"] == "pending"
     assert device["expires_at"] is not None
     assert status_now.json()["pairing_open"] is False
 
