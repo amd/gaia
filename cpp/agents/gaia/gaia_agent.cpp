@@ -889,6 +889,22 @@ std::optional<std::string> GaiaAgent::handBackNote(const std::string& answer, co
            "deleting something the user did not ask for.";
 }
 
+std::optional<std::string> GaiaAgent::swappedFileNote(const std::string& answer,
+                                                      const std::vector<CallSeen>& calls) {
+    for (const auto& c : calls) {
+        if (c.name != "file_read" || !c.args.is_object() || !c.args.contains("path") || !c.args["path"].is_string() ||
+            c.output.find("has nearly the same name") == std::string::npos) {
+            continue;
+        }
+        const std::string asked = fs::u8path(c.args["path"].get<std::string>()).filename().u8string();
+        if (asked.empty() || answer.find(asked) != std::string::npos) continue;
+        return "The user asked for " + asked + ", which does not exist; you read a file with a similar name "
+               "instead and your answer doesn't say so. Give your whole answer again and state that " + asked +
+               " does not exist and which file you used.";
+    }
+    return std::nullopt;
+}
+
 std::optional<std::string> GaiaAgent::uncomputedFiguresNote(const std::string& answer,
                                                             const std::vector<CallSeen>& calls) {
     static const std::regex figure(
@@ -1478,6 +1494,7 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
             if (auto note = unopenedFilesNote(answer, roots, seen)) notes.push_back(*note);
         }
         if (auto note = handBackNote(answer, seen)) notes.push_back(*note);
+        if (auto note = swappedFileNote(answer, seen)) notes.push_back(*note);
         if (auto note = uncomputedFiguresNote(answer, seen)) notes.push_back(*note);
         if (missing.empty() && comparable && !savedText.empty()) {
             if (auto note = unsavedFiguresNote(answer, turnRequest(), savedText)) notes.push_back(*note);

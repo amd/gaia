@@ -126,6 +126,10 @@ public:
     static std::optional<std::string> handBackNote(const std::string& answer,
                                                    const std::vector<CallSeen>& calls);
 
+    /// The file asked for was missing, a near-named one was read, and the answer doesn't say so.
+    static std::optional<std::string> swappedFileNote(const std::string& answer,
+                                                      const std::vector<CallSeen>& calls);
+
     /// The answer gives totals or rates from a data file no program computed.
     static std::optional<std::string> uncomputedFiguresNote(const std::string& answer,
                                                             const std::vector<CallSeen>& calls);

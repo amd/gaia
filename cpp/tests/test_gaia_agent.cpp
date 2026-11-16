@@ -788,6 +788,21 @@ TEST(GaiaAgentTest, NotFoundInALargeFolderIsNotSentBack) {
     EXPECT_FALSE(GaiaAgent::unopenedFilesNote("Not found.", {w.path}, {{"file_read", {{"path", "note1.txt"}}}}));
 }
 
+TEST(GaiaAgentTest, AFileReadInPlaceOfAMistypedOneIsSaid) {
+    const std::vector<GaiaAgent::CallSeen> calls = {
+        {"file_read",
+         {{"path", "reports/q3_sumary.md"}},
+         "{\"error\":\"reports/q3_sumary.md does not exist. reports/q3_summary.md is in the same folder and has "
+         "nearly the same name.\"}"},
+        {"file_read", {{"path", "reports/q3_summary.md"}}, "Revenue: 412,000"}};
+    auto note = GaiaAgent::swappedFileNote("Revenue reached $412,000 (from reports/q3_summary.md).", calls);
+    ASSERT_TRUE(note.has_value());
+    EXPECT_NE(note->find("q3_sumary.md"), std::string::npos) << *note;
+    EXPECT_FALSE(GaiaAgent::swappedFileNote(
+        "q3_sumary.md does not exist, so I read q3_summary.md: revenue reached $412,000.", calls));
+    EXPECT_FALSE(GaiaAgent::swappedFileNote("Revenue reached $412,000.", {calls[1]}));
+}
+
 TEST(GaiaAgentTest, AnOfferToReadInsteadOfReadingIsSentBack) {
     const std::vector<GaiaAgent::CallSeen> listed = {{"bash_execute", {{"command", "ls"}}}};
     auto note = GaiaAgent::handBackNote(
