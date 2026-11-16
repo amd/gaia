@@ -817,6 +817,8 @@ class MessageResponse(BaseModel):
     library_notices: Optional[List[str]] = None
     # The user's Stop ended this reply before it finished.
     stopped: bool = False
+    # A model failure ended this reply's turn; its content says why.
+    failed: bool = False
 
 
 class MessageListResponse(BaseModel):
