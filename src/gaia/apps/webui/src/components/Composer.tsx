@@ -8,6 +8,7 @@ import { useT } from '../i18n/useT';
 import { middleTruncate } from '../utils/format';
 import { isVideoFile } from '../utils/mediaFiles';
 import { isEditLastKey } from '../utils/editLast';
+import { MAX_MESSAGE_CHARS } from '../utils/messageLimits';
 import type { Attachment } from '../types';
 import './Composer.css';
 
@@ -44,8 +45,7 @@ interface ComposerProps {
 
 const MAX_INPUT_HEIGHT = 240;
 
-/** The most a message may carry; the backend refuses more (`ChatRequest.message` in ui/models.py). */
-export const MAX_MESSAGE_CHARS = 100_000;
+export { MAX_MESSAGE_CHARS };
 
 export function Composer({
     value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, answering = false, disabledReason, attachments,

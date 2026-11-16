@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { Check, ChevronDown, Loader2 } from 'lucide-react';
-import { useT, type Translate } from '../../i18n/useT';
-import type { MessageKey } from '../../i18n/registry';
+import { useT } from '../../i18n/useT';
+import { measuredText, modelFacts, RANK_NOTES } from '../../utils/modelList.core';
 import { isDownloading } from '../modelMeta';
 import { NpuNotReady } from '../setup/NpuNotReady';
 import { formatPrice } from './cloudPrice';
@@ -24,37 +24,11 @@ interface Props {
     onNpuRecheck?: () => void;
 }
 
-// "1M" reads at a glance; "1,048,576" has to be counted.
-const compactCount = (n: number): string =>
-    new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 0 }).format(n);
-
-// The backend's recommendation notes and evidence (gaia/llm/recommended_models.py), in English.
-const NOTES: Record<string, MessageKey> = {
-    'best overall, fastest': 'settings.model.note.bestFastest',
-    cheapest: 'settings.model.note.cheapest',
-    'most truthful': 'settings.model.note.mostTruthful',
-};
-const EVIDENCE = /^(\d+\/\d+) tasks · quality ([\d.]+\/5) · (\$[\d.]+) per (\d+)-task run$/;
-
-/** "Measured: …" in the chosen language; evidence worded differently from ours shows as sent. */
-function measuredText(t: Translate, evidence: string): string {
-    const parts = EVIDENCE.exec(evidence);
-    return t.compose((say) => say('settings.model.measured', {
-        evidence: parts ? say('settings.model.evidence', { tasks: parts[1], quality: parts[2], cost: parts[3], n: parts[4] }) : evidence,
-    }));
-}
-
 /** One model: its name and chips, with the long facts one click away. */
 export function ModelRow({ model: m, label, current, remote, busy, onUse, onDownload, onAskRemove, onNpuRecheck }: Props) {
     const t = useT();
     const progress = isDownloading(m) ? m.download_progress : null;
-    const placement = m.placement?.label;
-    const facts = t.compose((say) => [
-        placement && (m.placement?.source === 'expected' ? say('settings.model.expected', { label: placement }) : placement),
-        m.size_gb ? say(m.downloaded ? 'settings.model.sizeOnDisk' : 'settings.model.sizeDownload', { size: `${m.size_gb} GB` }) : null,
-        m.tokens_per_second ? say('settings.model.speed', { speed: `${Math.round(m.tokens_per_second)} tok/s` }) : null,
-        !m.placement && m.context_length ? say('settings.model.contextTokens', { size: compactCount(m.context_length) }) : null,
-    ].filter(Boolean).join(' · '));
+    const facts = modelFacts(t, m);
     const hasDetails = !!(m.display_name || facts || m.evidence || (m.custom && m.source_url));
 
     return (
@@ -63,7 +37,7 @@ export function ModelRow({ model: m, label, current, remote, busy, onUse, onDown
                 <bdi className="model-row-name" title={m.id}>{label}</bdi>
                 <div className="model-chips">
                     {m.placement?.device && <span className="model-badge is-device">{m.placement.device.toUpperCase()}</span>}
-                    {m.rank && <span className="model-badge is-rank"><bdi dir="ltr">#{m.rank}</bdi> {m.note && (NOTES[m.note] ? t(NOTES[m.note]) : <bdi>{m.note}</bdi>)}</span>}
+                    {m.rank && <span className="model-badge is-rank"><bdi dir="ltr">#{m.rank}</bdi> {m.note && (RANK_NOTES[m.note] ? t(RANK_NOTES[m.note]) : <bdi>{m.note}</bdi>)}</span>}
                     {m.state === 'loaded' && <span className="model-badge is-loaded">{t('settings.model.loaded')}</span>}
                     {m.fits === true && m.available !== false && <span className="model-badge is-fit">{t('settings.model.fits')}</span>}
                     {m.custom && <span className="model-badge is-custom">{t('settings.model.custom')}</span>}

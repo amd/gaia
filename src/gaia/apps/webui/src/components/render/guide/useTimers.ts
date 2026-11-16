@@ -3,30 +3,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-export type TimerStatus = 'idle' | 'running' | 'paused' | 'done';
+import {
+    TICK_MS,
+    finishedTimers,
+    hasRunning,
+    markDone,
+    readTimer,
+    resetTimer,
+    toggleTimer,
+} from './timerState';
+import type { TimerEntries, TimerView, Timers } from './timerState';
 
-export interface TimerView {
-    status: TimerStatus;
-    remainingSeconds: number;
-}
-
-interface Entry {
-    status: TimerStatus;
-    totalMs: number;
-    /** Wall-clock end while running, so a hidden tab or a re-render never drifts the count. */
-    endsAt: number | null;
-    /** Left on the clock while paused. */
-    leftMs: number;
-}
-
-export interface Timers {
-    read(id: string, seconds: number): TimerView;
-    /** Start, pause, or resume; a finished timer starts over. */
-    toggle(id: string, seconds: number): void;
-    reset(id: string): void;
-}
-
-const TICK_MS = 250;
+export type { TimerStatus, TimerView, Timers } from './timerState';
 
 let audio: AudioContext | null = null;
 
@@ -54,25 +42,20 @@ function chime(): void {
 
 /** One timer store per card, shared by the inline steps and the guided view. */
 export function useTimers(): Timers {
-    const [entries, setEntries] = useState<Record<string, Entry>>({});
+    const [entries, setEntries] = useState<TimerEntries>({});
     const [now, setNow] = useState(() => Date.now());
     const entriesRef = useRef(entries);
     useEffect(() => { entriesRef.current = entries; }, [entries]);
 
-    const running = Object.values(entries).some((e) => e.status === 'running');
+    const running = hasRunning(entries);
     useEffect(() => {
         if (!running) return;
         const id = setInterval(() => {
             const t = Date.now();
             setNow(t);
-            const finished = Object.entries(entriesRef.current)
-                .filter(([, e]) => e.status === 'running' && e.endsAt !== null && e.endsAt <= t);
+            const finished = finishedTimers(entriesRef.current, t);
             if (!finished.length) return;
-            setEntries((prev) => {
-                const next = { ...prev };
-                for (const [key] of finished) next[key] = { ...next[key], status: 'done', endsAt: null, leftMs: 0 };
-                return next;
-            });
+            setEntries((prev) => markDone(prev, finished));
             chime();
         }, TICK_MS);
         return () => clearInterval(id);
@@ -82,34 +65,12 @@ export function useTimers(): Timers {
         primeAudio();
         const t = Date.now();
         setNow(t);
-        setEntries((prev) => {
-            const e = prev[id];
-            const totalMs = seconds * 1000;
-            if (!e || e.status === 'idle' || e.status === 'done') {
-                return { ...prev, [id]: { status: 'running', totalMs, endsAt: t + totalMs, leftMs: totalMs } };
-            }
-            if (e.status === 'running') {
-                return { ...prev, [id]: { ...e, status: 'paused', endsAt: null, leftMs: Math.max(0, e.endsAt! - t) } };
-            }
-            return { ...prev, [id]: { ...e, status: 'running', endsAt: t + e.leftMs } };
-        });
+        setEntries((prev) => toggleTimer(prev, id, seconds, t));
     }, []);
 
-    const reset = useCallback((id: string) => {
-        setEntries((prev) => {
-            if (!prev[id]) return prev;
-            const next = { ...prev };
-            delete next[id];
-            return next;
-        });
-    }, []);
+    const reset = useCallback((id: string) => setEntries((prev) => resetTimer(prev, id)), []);
 
-    const read = useCallback((id: string, seconds: number): TimerView => {
-        const e = entries[id];
-        if (!e) return { status: 'idle', remainingSeconds: seconds };
-        const leftMs = e.status === 'running' && e.endsAt !== null ? Math.max(0, e.endsAt - now) : e.leftMs;
-        return { status: e.status, remainingSeconds: leftMs / 1000 };
-    }, [entries, now]);
+    const read = useCallback((id: string, seconds: number): TimerView => readTimer(entries, id, seconds, now), [entries, now]);
 
     return useMemo(() => ({ read, toggle, reset }), [read, toggle, reset]);
 }

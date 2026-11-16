@@ -28,6 +28,10 @@ import { AlertCircle, ExternalLink, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import './EmailConnectCta.css';
+import { detectProvider, isAuthRequiredMessage, type EmailProvider } from '../../utils/connectorRetry.core';
+
+export { detectProvider, isAuthRequiredMessage };
+export type { EmailProvider };
 
 // The base agent id this CTA belongs to. The connect CTA lives in the email
 // chat, so it may only grant the email agent — never co-installed agents that
@@ -69,79 +73,6 @@ export function emailAgentGrantIds(
 }
 
 // ── Detection ────────────────────────────────────────────────────────────────
-
-/** Match the canonical prefixes the connectors framework emits. The
- *  prefixes are stable (see ``connectors/formatting.py``); fuzzy
- *  fallbacks handle agent-specific override messages.
- */
-export function isAuthRequiredMessage(content: string): boolean {
-    if (!content) return false;
-    if (content.includes('NOT_CONNECTED:')) return true;
-    if (content.includes('AGENT_NOT_GRANTED:')) return true;
-    if (content.includes('AUTH_REQUIRED:')) return true;
-    // Agent-specific override (``_AGENT_GRANT_MIGRATION_MESSAGES`` for
-    // installed:email). Lowercased substring check so wording tweaks
-    // upstream don't silently break the detection.
-    const lower = content.toLowerCase();
-    if (
-        lower.includes('connectors → google') ||
-        lower.includes('connections → google') ||
-        lower.includes('email agent needs additional google permissions')
-    ) {
-        return true;
-    }
-    // Microsoft-side error messages from format_connector_error. Each
-    // connector id needs its own phrase check below — "microsoft_work is not
-    // currently connected" does NOT contain "microsoft is not currently
-    // connected" as a substring.
-    if (
-        lower.includes('connectors → microsoft') ||
-        lower.includes('connections → microsoft') ||
-        lower.includes('microsoft is not currently connected') ||
-        lower.includes('microsoft_work is not currently connected')
-    ) {
-        return true;
-    }
-    return false;
-}
-
-/** The three mailbox connectors the email agent can grant-check (#2629):
- *  ``google`` (Gmail), ``microsoft`` (personal Outlook), and
- *  ``microsoft_work`` (work Microsoft 365 / Entra). */
-export type EmailProvider = 'google' | 'microsoft' | 'microsoft_work';
-
-/**
- * Detect which provider(s) an error message references.
- *
- * Returns:
- * - ``'google'``         — only Google connector mentioned
- * - ``'microsoft'``      — only the personal Outlook connector mentioned
- * - ``'microsoft_work'`` — only the work Microsoft 365 connector mentioned
- * - ``'all'``            — ambiguous / no specific provider found → show all three
- *
- * The work connector must be checked BEFORE the generic Microsoft check:
- * ``format_connector_error`` embeds the literal connector id, and
- * "microsoft_work" contains "microsoft" as a substring, so checking in the
- * wrong order would always classify a work-mailbox error as personal.
- */
-export function detectProvider(content: string): EmailProvider | 'all' {
-    if (!content) return 'all';
-    const lower = content.toLowerCase();
-    const mentionsGoogle = lower.includes('google') || lower.includes('gmail');
-    const mentionsWork =
-        lower.includes('microsoft_work') ||
-        lower.includes('microsoft 365') ||
-        lower.includes('office365') ||
-        lower.includes('o365');
-    const mentionsPersonal =
-        !mentionsWork && (lower.includes('microsoft') || lower.includes('outlook'));
-
-    const hits = [mentionsGoogle, mentionsPersonal, mentionsWork].filter(Boolean).length;
-    if (hits !== 1) return 'all';
-    if (mentionsGoogle) return 'google';
-    if (mentionsWork) return 'microsoft_work';
-    return 'microsoft';
-}
 
 // ── OAuth helpers (mirror ConnectorsSection.openAuthUrl) ─────────────────────
 

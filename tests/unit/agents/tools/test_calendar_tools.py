@@ -1755,7 +1755,7 @@ class TestTheHiddenCharacterFilter:
     def test_the_browser_mirrors_the_same_lists(self):
         source = (
             Path(__file__).resolve().parents[4]
-            / "src/gaia/apps/webui/src/components/CalendarApproval.tsx"
+            / "src/gaia/apps/webui/src/utils/calendarApproval.core.ts"
         ).read_text(encoding="utf-8")
 
         def block(name):

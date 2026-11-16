@@ -7,14 +7,9 @@ import { Popover } from './Popover';
 import { ContextPanel } from './ContextPanel';
 import { pluralKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
+import { formatTokens } from '../utils/format';
 import type { ContextUsage } from '../types';
 import './ContextMeter.css';
-
-export function formatTokens(n: number): string {
-    if (n < 1000) return String(n);
-    if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
-    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
-}
 
 const PARTS = [
     { key: 'system', label: 'ctx.meter.part.system' },

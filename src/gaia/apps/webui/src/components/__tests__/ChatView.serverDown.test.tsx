@@ -82,7 +82,7 @@ describe('ChatView model server down', () => {
         mockedApi.getMessages.mockResolvedValue({
             messages: [
                 { id: 6, session_id: SESSION.id, role: 'user', content: 'hi', created_at: '2026-07-16T00:00:00.000Z', rag_sources: null },
-                { id: 7, session_id: SESSION.id, role: 'assistant', content: REPLY, created_at: '2026-07-16T00:00:01.000Z', rag_sources: null },
+                { id: 7, session_id: SESSION.id, role: 'assistant', content: REPLY, created_at: '2026-07-16T00:00:01.000Z', rag_sources: null, failed: true },
             ],
             total: 2,
         } as never);
@@ -96,6 +96,8 @@ describe('ChatView model server down', () => {
         await waitFor(() => expect(mockedApi.getMessages).toHaveBeenCalled());
         await waitFor(() => expect(useChatStore.getState().messages.map((m) => m.id)).toEqual([6, 7]));
         expect(document.querySelectorAll('.server-down-notice')).toHaveLength(1);
+        // The fix names the failure, so the reply doesn't also say "Something went wrong".
+        expect(screen.queryByText('Something went wrong')).toBeNull();
     });
 
     it('offers nothing for another failure', async () => {
@@ -105,5 +107,6 @@ describe('ChatView model server down', () => {
         });
         await waitFor(() => expect(useChatStore.getState().isStreaming).toBe(false));
         expect(document.querySelector('.server-down-notice')).toBeNull();
+        expect(screen.getAllByText('Something went wrong')).toHaveLength(1);
     });
 });

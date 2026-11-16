@@ -3,6 +3,9 @@
 
 /** Turning a reply's markdown into text a voice can read, in pieces. */
 
+/** Longest text one `/speech` request takes; mirrors MAX_SPEECH_CHARS in routers/speech.py. */
+export const MAX_SPEECH_CHARS = 1000;
+
 /** The first piece is short so speech starts quickly; the rest are longer. */
 export const FIRST_PIECE_CHARS = 180;
 export const PIECE_CHARS = 600;

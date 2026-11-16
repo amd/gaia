@@ -21,15 +21,17 @@ import { useT } from '../../i18n/useT';
 import { SetupSettings } from './SetupSettings';
 import { AboutSettings } from './AboutSettings';
 import { ErrorBoundary } from '../ErrorBoundary';
+import { useDeviceStore } from '../../stores/deviceStore';
 
 // The heaviest panes, and ones most people never open, load on first open.
 const ConnectorsPane = lazy(() => import('./ConnectorsPane').then((m) => ({ default: m.ConnectorsPane })));
 const MessagingPane = lazy(() => import('./MessagingSettings').then((m) => ({ default: m.MessagingSettings })));
 const AutomationsPane = lazy(() => import('./AutomationsSettings').then((m) => ({ default: m.AutomationsSettings })));
 const AdvancedPane = lazy(() => import('./AdvancedSettings').then((m) => ({ default: m.AdvancedSettings })));
+const DevicesPane = lazy(() => import('./DevicesSettings').then((m) => ({ default: m.DevicesSettings })));
 
 const SECTIONS: SettingsSection[] = [
-    'general', 'setup', 'model', 'permissions', 'skills', 'connectors', 'messaging', 'automations', 'memory', 'notifications', 'voice', 'privacy', 'advanced', 'about',
+    'general', 'setup', 'model', 'permissions', 'skills', 'connectors', 'messaging', 'devices', 'automations', 'memory', 'notifications', 'voice', 'privacy', 'advanced', 'about',
 ];
 
 /** One settings window with a section list on the left. */
@@ -39,6 +41,9 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     const open = useChatStore((s) => s.openSettings);
     const close = useChatStore((s) => s.closeSettings);
     const jump = useChatStore((s) => s.settingsJump);
+    // Paired devices stay out of sight unless device_pairing is on and this is the PC.
+    const devicesAvailable = useDeviceStore((s) => s.available === true);
+    const sections = devicesAvailable ? SECTIONS : SECTIONS.filter((id) => id !== 'devices');
     const panel = useRef<HTMLDivElement>(null);
     const scroller = useRef<HTMLDivElement>(null);
 
@@ -124,6 +129,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
             case 'skills': return <SkillsSettings onUseSkill={(name) => { close(); onUseSkill(name); }} />;
             case 'connectors': return <ConnectorsPane />;
             case 'messaging': return <MessagingPane />;
+            case 'devices': return devicesAvailable ? <DevicesPane /> : null;
             case 'automations': return <AutomationsPane />;
             case 'memory': return <MemorySettings />;
             case 'notifications': return <NotificationSettings />;
@@ -139,7 +145,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
             <div ref={panel} className="settings-dialog" role="dialog" aria-modal="true" aria-label={t('settings.title')}>
                 <nav className="settings-nav" aria-label={t('settings.sections')} onKeyDown={moveInNav}>
                     <h1 className="settings-nav-title">{t('settings.title')}</h1>
-                    {SECTIONS.map((id) => (
+                    {sections.map((id) => (
                         <button
                             key={id}
                             type="button"

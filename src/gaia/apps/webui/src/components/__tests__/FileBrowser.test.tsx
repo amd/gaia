@@ -123,9 +123,9 @@ describe('FileBrowser row selection', () => {
         const previewBtn = within(row).getByRole('button', { name: /Preview/i });
         fireEvent.click(previewBtn);
 
-        // previewFile should have been called
+        // Names the chat: away from the PC, previews read only that chat's folders.
         await waitFor(() => {
-            expect(mockedApi.previewFile).toHaveBeenCalledWith('/home/user/docs/report.pdf');
+            expect(mockedApi.previewFile).toHaveBeenCalledWith('/home/user/docs/report.pdf', undefined, 'session-1');
         });
 
         // Checkbox should stay unchecked

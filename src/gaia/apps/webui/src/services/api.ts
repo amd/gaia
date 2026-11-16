@@ -9,112 +9,9 @@ import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/c
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
+import { ApiError, getFriendlyError, isBareInternalError, parseErrorBody, parseErrorDetail, parseErrorFields, parseErrorStatus, StreamDroppedError, StreamStalledError, StreamTimeoutError } from './apiErrors';
 
-// -- Helpers -------------------------------------------------------------------
-
-/**
- * Pull a human-readable message out of an error response body.
- *
- * FastAPI's `detail` is a plain string for `HTTPException`, but a *list of
- * error objects* for request-validation failures (422) — interpolating one of
- * those into a message renders "[object Object]" in the UI.
- */
-export function parseErrorDetail(errorText: string): string {
-    try {
-        const parsed = JSON.parse(errorText).detail;
-        if (Array.isArray(parsed)) {
-            return parsed.map((e) => e?.msg ?? JSON.stringify(e)).join('; ') || errorText;
-        }
-        if (parsed && typeof parsed === 'object' && typeof parsed.message === 'string') return parsed.message;
-        if (parsed && typeof parsed !== 'string') return JSON.stringify(parsed);
-        return parsed || errorText;
-    } catch {
-        // Body isn't JSON (proxy HTML, empty response) — the raw text is the useful thing.
-        return errorText;
-    }
-}
-
-/** `detail.status` from a structured error body, e.g. `needs_key`; null otherwise. */
-export function parseErrorStatus(errorText: string): string | null {
-    try {
-        const status = JSON.parse(errorText).detail?.status;
-        return typeof status === 'string' ? status : null;
-    } catch {
-        return null;
-    }
-}
-
-/** Request fields a 422 names, from the last part of each error's `loc` (e.g. `retention_days`). */
-export function parseErrorFields(errorText: string): string[] {
-    try {
-        const parsed = JSON.parse(errorText).detail;
-        if (!Array.isArray(parsed)) return [];
-        return parsed
-            .map((e) => (Array.isArray(e?.loc) ? e.loc[e.loc.length - 1] : undefined))
-            .filter((f): f is string => typeof f === 'string');
-    } catch {
-        return [];
-    }
-}
-
-/** `detail` when the backend sent an object (e.g. a 409 asking to confirm), else null. */
-function parseErrorBody(errorText: string): Record<string, unknown> | null {
-    try {
-        const parsed = JSON.parse(errorText).detail;
-        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-    } catch {
-        return null;
-    }
-}
-
-/** A non-2xx answer: the message to show, the backend's own words, and its machine-readable reason. */
-export class ApiError extends Error {
-    readonly httpStatus: number;
-    readonly detail: string;
-    readonly reason: string | null;
-    readonly fields: string[];
-    /** The structured `detail` object, when the backend sent one. */
-    readonly body: Record<string, unknown> | null;
-
-    constructor(message: string, httpStatus: number, detail: string, reason: string | null, fields: string[] = [], body: Record<string, unknown> | null = null) {
-        super(message);
-        this.name = 'ApiError';
-        this.httpStatus = httpStatus;
-        this.detail = detail;
-        this.reason = reason;
-        this.fields = fields;
-        this.body = body;
-    }
-}
-
-/** Starlette's bare body or the UI server's catch-all ("Internal server error") — no cause. */
-function isBareInternalError(detail: string): boolean {
-    return detail.trim().toLowerCase() === 'internal server error';
-}
-
-/**
- * False when a 500 carries no real cause: a bare "Internal Server Error",
- * a proxy HTML page, or a raw JSON body with an empty or missing `detail`.
- */
-function hasUsefulServerDetail(detail: string): boolean {
-    const text = detail.trim();
-    return text !== '' && !isBareInternalError(text) && !/^[<{[]/.test(text);
-}
-
-export function getFriendlyError(status: number, detail: string): string {
-    switch (status) {
-        case 403: return detail || 'Access denied.';
-        // The backend's detail first: a canned "moved or deleted" hid a malformed path (#728).
-        case 404: return detail || 'The requested item was not found.';
-        case 413: return detail || 'File too large to process.';
-        case 500: return hasUsefulServerDetail(detail) ? detail : 'Server error. Please try again.';
-        // GAIA's own 502 says what the model server did; a proxy's carries no sentence.
-        case 502: return hasUsefulServerDetail(detail) && !/^(502\s+)?bad gateway\.?$/i.test(detail.trim())
-            ? detail : 'Service unavailable. Is the backend running?';
-        case 503: return detail || 'Service unavailable.';
-        default: return detail || `Request failed (HTTP ${status})`;
-    }
-}
+export { ApiError, getFriendlyError, parseErrorDetail, parseErrorFields, parseErrorStatus, StreamDroppedError, StreamStalledError, StreamTimeoutError } from './apiErrors';
 
 /**
  * CSRF marker required by the backend on every mutating request.
@@ -711,30 +608,6 @@ export const SEND_WAITING_NOTICE_TEXT = 'Waiting for GAIA to start this answer�
 /** An attach replays at once; a slower answer means the backend is stuck or unreachable. */
 export const ATTACH_HEADER_TIMEOUT_MS = 30_000;
 
-/** The stream went silent past STREAM_IDLE_MS; the run may still be going server-side. */
-export class StreamStalledError extends Error {
-    constructor(readonly idleMs: number) {
-        super(`The connection to GAIA went silent for ${Math.round(idleMs / 1000)} s.`);
-        this.name = 'StreamStalledError';
-    }
-}
-
-/** The connection broke after the run started (network switch, proxy reset, restart). */
-export class StreamDroppedError extends Error {
-    /** `unreachable`: the request never reached GAIA, so nothing there is still answering. */
-    constructor(readonly cause: unknown, readonly unreachable = false) {
-        super(`The connection to GAIA was cut: ${cause instanceof Error ? cause.message : String(cause)}`);
-        this.name = 'StreamDroppedError';
-    }
-}
-
-/** The backend never started answering the request. */
-export class StreamTimeoutError extends Error {
-    constructor(readonly endpoint: 'send' | 'attach', readonly timeoutMs: number) {
-        super(`GAIA did not start answering within ${Math.round(timeoutMs / 1000)} s.`);
-        this.name = 'StreamTimeoutError';
-    }
-}
 
 /** Bound the wait for response headers, and say so when it runs long. */
 function watchHeaders(
@@ -995,8 +868,10 @@ export async function listDocuments(): Promise<{ documents: Document[]; total: n
     return apiFetch('GET', '/documents');
 }
 
-export async function uploadDocumentByPath(filepath: string): Promise<Document> {
-    return apiFetch('POST', '/documents/upload-path', { filepath });
+/** Away from the PC, the file must be in the folders of the chat `sessionId` names. */
+export async function uploadDocumentByPath(filepath: string, sessionId?: string | null): Promise<Document> {
+    const params = withChat(new URLSearchParams(), sessionId).toString();
+    return apiFetch('POST', `/documents/upload-path${params ? `?${params}` : ''}`, { filepath });
 }
 
 function uploadError(status: number, errorText: string): ApiError {
@@ -1047,13 +922,8 @@ export async function deleteDocument(id: string): Promise<void> {
     return apiFetch('DELETE', `/documents/${id}`);
 }
 
-/** How far a running index has got: PDF pages read, then chunks embedded. */
-export interface IndexProgress {
-    phase: 'reading' | 'embedding';
-    done: number;
-    /** Null when the count isn't known upfront (e.g. pages of a non-PDF). */
-    total: number | null;
-}
+import type { IndexProgress } from '../utils/documentLibrary.core';
+export type { IndexProgress };
 
 export async function getDocumentStatus(id: string): Promise<{
     id: string;
@@ -1069,10 +939,12 @@ export async function getDocumentStatus(id: string): Promise<{
 /**
  * Where a library document opens, at `page` when given. Absolute, so it opens
  * the same in a browser tab and, from the desktop app's file:// page, in the
- * system browser (the shell hands http links to it).
+ * system browser (the shell hands http links to it). Away from the PC only the
+ * chat `sessionId` names may open its documents.
  */
-export function documentFileUrl(id: string, page?: number): string {
+export function documentFileUrl(id: string, sessionId?: string | null, page?: number): string {
     const url = new URL(`${getApiBase()}/documents/${encodeURIComponent(id)}/file`, window.location.href);
+    if (sessionId) url.searchParams.set('session_id', sessionId);
     if (page) url.hash = `page=${page}`;
     return url.href;
 }
@@ -1095,13 +967,21 @@ export async function detachDocument(sessionId: string, documentId: string): Pro
 
 // -- File Browser -----------------------------------------------------------------
 
-export async function browseFiles(path?: string): Promise<BrowseResponse> {
-    const params = path ? `?path=${encodeURIComponent(path)}` : '';
-    return apiFetch('GET', `/files/browse${params}`);
+/** On a paired device, file reads name the chat and see only its folders. */
+function withChat(params: URLSearchParams, sessionId?: string | null): URLSearchParams {
+    if (sessionId) params.set('session_id', sessionId);
+    return params;
 }
 
-export async function indexFolder(folderPath: string, recursive: boolean = true): Promise<IndexFolderResponse> {
-    return apiFetch('POST', '/documents/index-folder', { folder_path: folderPath, recursive });
+export async function browseFiles(path?: string, sessionId?: string | null): Promise<BrowseResponse> {
+    const params = withChat(new URLSearchParams(path ? { path } : {}), sessionId).toString();
+    return apiFetch('GET', `/files/browse${params ? `?${params}` : ''}`);
+}
+
+/** Away from the PC, the folder must be in the folders of the chat `sessionId` names. */
+export async function indexFolder(folderPath: string, recursive: boolean = true, sessionId?: string | null): Promise<IndexFolderResponse> {
+    const params = withChat(new URLSearchParams(), sessionId).toString();
+    return apiFetch('POST', `/documents/index-folder${params ? `?${params}` : ''}`, { folder_path: folderPath, recursive });
 }
 
 export async function openFileOrFolder(path: string, reveal: boolean = true): Promise<{ status: string; path: string }> {
@@ -1183,7 +1063,7 @@ export function uploadMedia(file: File, onProgress: (percent: number) => void, s
 
 // -- File Search & Preview ----------------------------------------------------------
 
-export async function searchFiles(query: string, fileTypes?: string, maxResults?: number): Promise<{
+export async function searchFiles(query: string, fileTypes?: string, maxResults?: number, sessionId?: string | null): Promise<{
     results: Array<{ name: string; path: string; size: number; size_display: string; extension: string; modified: string; directory: string }>;
     total: number;
     query: string;
@@ -1193,10 +1073,10 @@ export async function searchFiles(query: string, fileTypes?: string, maxResults?
     const params = new URLSearchParams({ query });
     if (fileTypes) params.set('file_types', fileTypes);
     if (maxResults) params.set('max_results', String(maxResults));
-    return apiFetch('GET', `/files/search?${params}`);
+    return apiFetch('GET', `/files/search?${withChat(params, sessionId)}`);
 }
 
-export async function previewFile(path: string, lines?: number): Promise<{
+export async function previewFile(path: string, lines?: number, sessionId?: string | null): Promise<{
     path: string;
     name: string;
     size: number;
@@ -1211,7 +1091,7 @@ export async function previewFile(path: string, lines?: number): Promise<{
 }> {
     const params = new URLSearchParams({ path });
     if (lines) params.set('lines', String(lines));
-    return apiFetch('GET', `/files/preview?${params}`);
+    return apiFetch('GET', `/files/preview?${withChat(params, sessionId)}`);
 }
 
 // -- Mobile Access / Tunnel -------------------------------------------------------

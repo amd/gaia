@@ -4,12 +4,10 @@
 import { ChevronDown } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import { useChatStore } from '../../stores/chatStore';
+import { isServerDown } from '../../utils/serverDown';
 import type { SystemStatus } from '../../types';
 
-/** True for a failure to reach the model server; its raw text means nothing to a person. */
-export function isServerDown(message: string): boolean {
-    return /not reachable|not answering|model server at|ConnectionPool|NewConnectionError|Connection refused|Max retries/i.test(message);
-}
+export { isServerDown };
 
 /** True for a remedy that sends a person to a terminal for GAIA's own setup, which the app handles. */
 export function namesSetupCommand(text: string | null | undefined): boolean {

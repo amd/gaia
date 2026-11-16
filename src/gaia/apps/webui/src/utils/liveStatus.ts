@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import type { Translate } from '../i18n/useT';
+import type { Translate } from '../i18n/translator';
 
 /** Live status lines the backend and ChatView write in English, matched whole. */
 const EXACT: Record<string, Parameters<Translate>[0]> = {

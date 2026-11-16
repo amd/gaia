@@ -5,10 +5,11 @@
 
 import { useChatStore } from '../stores/chatStore';
 import type { StreamEvent } from '../types';
+import { RECONNECTING_PHASE } from './constants';
 import { agentEventToStep, isProgressTick, statusText } from './streamSteps';
 
-/** Live phases that are a call's own label or the client's wait notice, not the call's progress. */
-const CALL_LABEL_PHASES = new Set(['tool', 'waiting']);
+/** Live phases that are a call's own label or the client's own notice, not the call's progress. */
+const CALL_LABEL_PHASES = new Set(['tool', 'waiting', RECONNECTING_PHASE]);
 
 /** A phase sent while a call runs comes from that call's own model calls, not the turn's. */
 export function selectToolStatus(s: { livePhase: string | null; liveStatus: string | null }): string | null {

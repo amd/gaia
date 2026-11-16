@@ -6,64 +6,31 @@ import { X } from 'lucide-react';
 import * as api from '../services/api';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
-import { cloudProviderName } from '../stores/modelStore';
 import { log } from '../utils/logger';
 import type { ChatPerformance, ContextUsage, TurnPerformance } from '../types';
 import { ref } from '../i18n/registry';
-import { tEn, useT, type Translate } from '../i18n/useT';
+import { useT, type Translate } from '../i18n/useT';
+import { exact, hitRate, latestTurn, MIN_TOKENS_TO_RATE, pct, pctLabel, placement, secondsShort, tokensShort } from '../utils/contextPanel.core';
 import './ContextPanel.css';
-
-const exact = (n: number) => n.toLocaleString('en-US');
 
 /** "1.2K", with the exact count on hover. */
 function Tokens({ n }: { n: number | null | undefined }) {
     const t = useT();
     if (n == null) return <span className="cp-unknown">{t('ctx.unknown')}</span>;
-    const short = n < 1000
-        ? String(n)
-        : n < 1_000_000
-            ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`
-            : `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
-    return <span title={t('ctx.tokens', { n: exact(n) })} dir="ltr">{short}</span>;
+    return <span title={t('ctx.tokens', { n: exact(n) })} dir="ltr">{tokensShort(n)}</span>;
 }
 
 /** "1.2 s", with milliseconds on hover. */
 function Seconds({ s }: { s: number | null | undefined }) {
     const t = useT();
     if (s == null) return <span className="cp-unknown">{t('ctx.unknown')}</span>;
-    const short = s < 0.1 ? (s === 0 ? '0 s' : '<0.1 s') : s < 10 ? `${s.toFixed(1)} s` : `${Math.round(s)} s`;
-    return <span title={`${(s * 1000).toFixed(0)} ms`} dir="ltr">{short}</span>;
+    return <span title={`${(s * 1000).toFixed(0)} ms`} dir="ltr">{secondsShort(s)}</span>;
 }
 
 function Rate({ r }: { r: number | null | undefined }) {
     const t = useT();
     if (r == null) return <span className="cp-unknown">{t('ctx.unknown')}</span>;
     return <span title={t('ctx.rateTitle', { n: r })}>{t('ctx.rate', { n: Math.round(r).toLocaleString('en-US') })}</span>;
-}
-
-const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
-/** A share that rounds to nothing but isn't nothing reads "<1", never "0". */
-const pctLabel = (part: number, whole: number) => {
-    const p = pct(part, whole);
-    return p === 0 && part > 0 ? '<1' : String(p);
-};
-/** Rounded down, so 99.7% reuse never reads as "100%". */
-const hitRate = (cached: number | null, total: number | null) =>
-    total && cached != null ? Math.floor((cached / total) * 100) : null;
-
-/** Below this, time to first token is mostly fixed cost, not reading speed. */
-const MIN_TOKENS_TO_RATE = 256;
-
-function placement(now: ChatPerformance['now'], t: Translate = tEn): string {
-    if (now.provider === 'unknown') return t('ctx.unknown');
-    if (now.provider === 'cloud') return t('ctx.cloud');
-    if (now.provider !== 'local') return t('ctx.cloudVia', { provider: cloudProviderName(now.provider) });
-    if (!now.device) return now.loaded === false ? t('ctx.notLoadedNow') : t('ctx.unknown');
-    const device = now.device.toUpperCase();
-    const backend = now.backend === 'npu' ? 'FLM' : now.backend;
-    return backend && backend !== now.device
-        ? `${device} · ${backend.charAt(0).toUpperCase()}${backend.slice(1)}`
-        : device;
 }
 
 function Row({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
@@ -325,9 +292,8 @@ export function ContextDetails({ sessionId, busy, onUsage }: ContextDetailsProps
         return ended ? load() : undefined;
     }, [busy, load]);
 
-    const last = perf?.turns[perf.turns.length - 1] ?? null;
     // A newer answer with no record (e.g. a kept "Retry with") makes the last turn unknown.
-    const latest = last && last.message_id === perf?.latest_message_id ? last : null;
+    const latest = perf ? latestTurn(perf) : null;
     const free = usage ? Math.max(0, usage.window - usage.used) : 0;
 
     return (

@@ -14,7 +14,14 @@ import { useChatStore } from '../../stores/chatStore';
 import type { Message, Session } from '../../types';
 import * as api from '../../services/api';
 
-vi.mock('../../services/api');
+// The error classes stay real: streamErrors matches them against services/apiErrors, which api re-exports.
+vi.mock('../../services/api', async (importOriginal) => {
+    const actual = await importOriginal<typeof api>();
+    const stubbed = Object.fromEntries(
+        Object.entries(actual).map(([k, v]) => [k, typeof v === 'function' && !/^(Api|Stream)\w*Error$/.test(k) ? vi.fn() : v]),
+    );
+    return stubbed;
+});
 
 const mockedApi = vi.mocked(api);
 

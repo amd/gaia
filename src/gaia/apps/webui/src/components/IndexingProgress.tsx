@@ -2,30 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import type { IndexProgress } from '../services/api';
-import { useT, type Translate } from '../i18n/useT';
+import { useT } from '../i18n/useT';
+import { progressLabel, progressPercent } from '../utils/documentLibrary.core';
 import './IndexingProgress.css';
 
-// One digit style in both halves of a bracketed label.
-const fmt = (n: number) => n.toLocaleString('en-US');
-
-/** "Reading page 37 of 229", "Embedding 412 of 1,180"; just the count when the total isn't known. */
-export function progressLabel(p: IndexProgress, t: Translate): string {
-    const done = fmt(p.done);
-    if (p.phase === 'reading') {
-        return p.total != null
-            ? t('docs.progress.reading', { done, total: fmt(p.total) })
-            : t('docs.progress.readingCount', { done });
-    }
-    return p.total != null
-        ? t('docs.progress.embedding', { done, total: fmt(p.total) })
-        : t('docs.progress.embeddingCount', { done });
-}
-
-/** Whole percent done, or null when there is no total to measure against. */
-export function progressPercent(p: IndexProgress): number | null {
-    if (p.total == null || p.total <= 0) return null;
-    return Math.min(100, Math.floor((p.done / p.total) * 100));
-}
+export { progressLabel, progressPercent };
 
 /** A bar and a line saying how far indexing has got; indeterminate without a total. */
 export function IndexingProgress({ progress }: { progress: IndexProgress }) {

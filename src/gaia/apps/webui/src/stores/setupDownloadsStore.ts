@@ -11,6 +11,7 @@
 import { create } from 'zustand';
 import * as api from '../services/api';
 import type { SetupRunStatus } from '../types';
+import { isMoving, scopedStatus } from '../components/setup/downloadModel';
 
 const POLL_MS = 1000;
 
@@ -34,41 +35,7 @@ interface SetupDownloadsState {
     cancel: (id?: string) => Promise<void>;
 }
 
-export function isMoving(status: SetupRunStatus | null): boolean {
-    if (!status) return false;
-    if (status.state === 'running' || status.state === 'verifying') return true;
-    // A row verifying outside a run is Retry testing it again.
-    return !!status.models?.some((m) => m.state === 'downloading' || m.state === 'verifying');
-}
-
-/**
- * The rows a person outside setup cares about: a run still going shows all of
- * its models; otherwise only the ones this session started, or that need an
- * answer (failed, cancelled). Overall is re-added over those rows, as the
- * backend adds it.
- */
-export function scopedStatus(status: SetupRunStatus | null, started: readonly string[]): SetupRunStatus | null {
-    if (!status) return null;
-    if (status.state === 'running' || status.state === 'verifying') return status;
-    const models = (status.models ?? []).filter((m) =>
-        started.includes(m.id) || m.state === 'downloading' || m.state === 'failed' || m.state === 'cancelled');
-    const counted = models.filter((m) => m.state !== 'skipped');
-    const done = counted.reduce((sum, m) => sum + Math.min(m.bytes_done, m.bytes_total), 0);
-    const total = counted.reduce((sum, m) => sum + m.bytes_total, 0);
-    const speed = counted.filter((m) => m.state === 'downloading').reduce((sum, m) => sum + m.speed_bps, 0);
-    return {
-        ...status,
-        models,
-        overall: {
-            bytes_done: done,
-            bytes_total: total,
-            speed_bps: speed,
-            eta_s: speed > 0 ? Math.round((total - done) / speed) : null,
-            percent: total ? Math.floor((done * 100) / total) : null,
-            failed: counted.filter((m) => m.state === 'failed').length,
-        },
-    };
-}
+export { isMoving, scopedStatus };
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
