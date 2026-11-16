@@ -1,7 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 #
-# Builds desktop installers (NSIS .exe, DMG, DEB, AppImage) on release tags
+# Builds desktop installers (NSIS .exe, DMG, DEB, AppImage, Flatpak) on release tags
 # and uploads them to the GitHub Release.
 #
 # Trigger: tag push (v*), manual workflow_dispatch, or reusable workflow_call
@@ -183,7 +183,9 @@ jobs:
     name: Build ${{ matrix.platform }} installer
     needs: core
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    # The Flatpak is bundled twice (once by electron-builder, once to record
+    # its runtime repo), about four minutes each.
+    timeout-minutes: 40
     # Build job is strictly read-only — it produces workflow-run artifacts
     # that callers (publish.yml) download and re-upload. The opt-in
     # GitHub Release upload step elevates with a per-step token (see the
@@ -227,6 +229,7 @@ jobs:
             artifacts: |
               src/gaia/apps/webui/dist-app/*.deb
               src/gaia/apps/webui/dist-app/*.AppImage
+              src/gaia/apps/webui/dist-app/*.flatpak
               src/gaia/apps/webui/dist-app/*.blockmap
               src/gaia/apps/webui/dist-app/latest-linux.yml
 
@@ -331,6 +334,23 @@ jobs:
         shell: bash
         run: npm run build
 
+      # ─── Flatpak build tools (Linux) ────────────────────────────────
+      # electron-builder's flatpak target shells out to flatpak-builder and
+      # needs the runtime, SDK and base app that electron-builder.yml names.
+      - name: Install the Flatpak build tools
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak flatpak-builder ostree elfutils
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          PY="$(command -v python || command -v python3)"
+          refs=$("$PY" installer/scripts/flatpak_refs.py src/gaia/apps/webui/electron-builder.yml)
+          echo "Installing: ${refs}"
+          # shellcheck disable=SC2086
+          flatpak install --user -y --noninteractive flathub ${refs}
+
       # ─── Code signing config (opt-in by secret presence) ─────────────
       - name: Detect Windows code signing
         if: matrix.platform == 'windows' && env.SIGNPATH_API_TOKEN != ''
@@ -402,7 +422,7 @@ jobs:
             echo "=== Artifact sizes ==="
             find dist-app -maxdepth 1 -type f \
               \( -name "*.exe" -o -name "*.dmg" -o -name "*.deb" \
-                 -o -name "*.AppImage" -o -name "*.blockmap" \
+                 -o -name "*.AppImage" -o -name "*.flatpak" -o -name "*.blockmap" \
                  -o -name "*.yml" \) \
               -exec ls -lh {} \; || true
           else
@@ -662,6 +682,18 @@ jobs:
                 FAIL=1
               fi
             fi
+            FLATPAK=$(find "${LINUX_DIR}" -maxdepth 1 -name "*.flatpak" | head -n1)
+            if [ -z "${FLATPAK}" ]; then
+              echo "::error::Linux: no .flatpak found"
+              FAIL=1
+            else
+              SIZE=$(stat -c%s "${FLATPAK}" 2>/dev/null || stat -f%z "${FLATPAK}")
+              echo "Flatpak: $(basename "${FLATPAK}") (${SIZE} bytes)"
+              if [ "${SIZE}" -lt 52428800 ]; then
+                echo "::error::Linux .flatpak smaller than 50MB"
+                FAIL=1
+              fi
+            fi
             if [ ! -f "${LINUX_DIR}/latest-linux.yml" ]; then
               echo "::error::Linux: missing latest-linux.yml"
               FAIL=1
@@ -760,6 +792,52 @@ jobs:
         env:
           GAIA_APPIMAGE: ${{ steps.locate.outputs.appimage }}
         run: node --test tests/electron/appimage-smoke.test.mjs
+
+  # ─── Flatpak install smoke ──────────────────────────────────────────
+  # Installs the built .flatpak the way a user's software centre does, then
+  # runs the frozen core and the bundled model server's library check inside
+  # the sandbox. Both link against the Flatpak runtime rather than the host,
+  # so this is the check that the runtime carries what they need.
+  # MUST be present in build-complete `needs:` below.
+  flatpak-install-smoke:
+    name: Flatpak install smoke
+    needs: build
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download Linux installer artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_prefix }}linux-installer
+          path: ${{ runner.temp }}/linux-installer
+
+      # No Flathub remote is added here on purpose: a PC that has never used
+      # Flathub is the state this must install from.
+      - name: Install Flatpak
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq flatpak
+          echo "remotes: [$(flatpak remotes | tr '\n' ' ')]"
+
+      # The bundle records Flathub as its runtime repo, so Flatpak adds the
+      # remote and fetches the runtime itself, as it does on a user's PC.
+      - name: Install the built Flatpak
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE=$(ls "${RUNNER_TEMP}/linux-installer"/*.flatpak | head -n1)
+          echo "Installing ${BUNDLE}"
+          flatpak install --user -y --noninteractive "${BUNDLE}"
+
+      - name: Check the sandbox and run the frozen core inside it
+        shell: bash
+        run: bash installer/linux/flatpak-smoke.sh
 
   # ─── DMG structural smoke (issue #941) ──────────────────────────────
   # Mirrors appimage-structural-smoke for the macOS DMG: the frozen gaia core
@@ -1274,7 +1352,8 @@ jobs:
   # publish.yml (or any caller) should wait on.
   #
   # The smoke jobs (appimage-structural-smoke, appimage-distro-matrix,
-  # appimage-userns-restricted) are issue #782 regression guards. The
+  # appimage-userns-restricted) are issue #782 regression guards.
+  # flatpak-install-smoke is the same guard for the Flatpak. The
   # custom-agent MCP harness is issue #993's installed-runtime guard.
   # validate-artifacts is issue #990's pre-release artifact gate. A
   # broken AppImage that still builds but does not launch would slip past
@@ -1289,6 +1368,7 @@ jobs:
       - appimage-structural-smoke
       - appimage-distro-matrix
       - appimage-userns-restricted
+      - flatpak-install-smoke
       - custom-agent-mcp-harness
       - dmg-structural-smoke
     if: always()
@@ -1301,6 +1381,7 @@ jobs:
           structural_result="${{ needs.appimage-structural-smoke.result }}"
           distro_result="${{ needs.appimage-distro-matrix.result }}"
           userns_result="${{ needs.appimage-userns-restricted.result }}"
+          flatpak_result="${{ needs.flatpak-install-smoke.result }}"
           mcp_harness_result="${{ needs.custom-agent-mcp-harness.result }}"
           dmg_result="${{ needs.dmg-structural-smoke.result }}"
           echo "build:                       $build_result"
@@ -1308,6 +1389,7 @@ jobs:
           echo "appimage-structural-smoke:   $structural_result"
           echo "appimage-distro-matrix:      $distro_result"
           echo "appimage-userns-restricted:  $userns_result"
+          echo "flatpak-install-smoke:       $flatpak_result"
           echo "custom-agent-mcp-harness:    $mcp_harness_result"
           echo "dmg-structural-smoke:        $dmg_result"
           fail=0
@@ -1315,7 +1397,7 @@ jobs:
             echo "::error::One or more platform installer builds failed"
             fail=1
           fi
-          for r in "$validate_result" "$structural_result" "$distro_result" "$userns_result" "$mcp_harness_result" "$dmg_result"; do
+          for r in "$validate_result" "$structural_result" "$distro_result" "$userns_result" "$flatpak_result" "$mcp_harness_result" "$dmg_result"; do
             if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
               echo "::error::Installer smoke job failed (status: $r)"
               fail=1

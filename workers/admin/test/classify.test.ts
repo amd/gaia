@@ -23,6 +23,7 @@ describe("classifyAsset", () => {
     ["gaia-agent-ui-0.25.1-x64-setup.exe", "Windows", "Agent UI"],
     ["gaia-agent-ui-0.25.1-amd64.deb", "Linux", "Agent UI"],
     ["gaia-agent-ui-0.25.1-x86_64.AppImage", "Linux", "Agent UI"],
+    ["gaia-agent-ui-0.26.0-x86_64.flatpak", "Linux", "Agent UI"],
     ["gaia-agent-ui-0.25.1-arm64.dmg", "macOS", "Agent UI"],
     ["gaia-windows-setup.exe", "Windows", "Installer"],
     ["gaia-linux-setup.deb", "Linux", "Installer"],

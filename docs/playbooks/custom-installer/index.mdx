@@ -143,7 +143,7 @@ Pick your target platform. Each command builds the full GAIA Agent UI installer 
   </Tab>
   <Tab title="Ubuntu">
     ```bash
-    npm run package:linux
+    npx electron-builder --linux deb --config electron-builder.yml
     ```
 
     Output:
@@ -151,6 +151,8 @@ Pick your target platform. Each command builds the full GAIA Agent UI installer 
     ```
     dist-app/gaia-agent-ui-<version>-amd64.deb
     ```
+
+    `npm run package:linux` builds the AppImage and the Flatpak as well; the Flatpak needs extra build tools, listed in [`installer/README.md`](https://github.com/amd/gaia/blob/main/installer/README.md).
   </Tab>
 </Tabs>
 

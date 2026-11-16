@@ -9,9 +9,12 @@
  * `org.kde.StatusNotifierWatcher` name on the session bus. Stock GNOME has
  * none (its AppIndicator extension adds one), so hiding the window there
  * would leave GAIA running with no way back to it; GAIA minimizes instead.
+ * The Flatpak on GNOME 44 or newer is the exception: GNOME lists it under
+ * Background Apps.
  */
 
 const { execFile } = require("child_process");
+const { BACKGROUND_MONITOR, isGnomeFlatpak } = require("./flatpak.cjs");
 
 const WATCHER = "org.kde.StatusNotifierWatcher";
 const PROBE_TIMEOUT_MS = 2000;
@@ -20,19 +23,19 @@ const PROBE_TIMEOUT_MS = 2000;
 const PROBES = [
   {
     cmd: "gdbus",
-    args: [
+    args: (name) => [
       "call", "--session",
       "--dest", "org.freedesktop.DBus",
       "--object-path", "/org/freedesktop/DBus",
-      "--method", "org.freedesktop.DBus.NameHasOwner", WATCHER,
+      "--method", "org.freedesktop.DBus.NameHasOwner", name,
     ],
     parse: (out) => /\(\s*true\s*,?\s*\)/.test(out) ? true : /\(\s*false\s*,?\s*\)/.test(out) ? false : null,
   },
   {
     cmd: "dbus-send",
-    args: [
+    args: (name) => [
       "--session", "--print-reply", "--dest=org.freedesktop.DBus",
-      "/org/freedesktop/DBus", "org.freedesktop.DBus.NameHasOwner", `string:${WATCHER}`,
+      "/org/freedesktop/DBus", "org.freedesktop.DBus.NameHasOwner", `string:${name}`,
     ],
     parse: (out) => /boolean\s+true/.test(out) ? true : /boolean\s+false/.test(out) ? false : null,
   },
@@ -52,33 +55,50 @@ function runCommand(cmd, args) {
 }
 
 /**
- * @typedef {{available: boolean, reason: null | "no-host" | "check-failed", detail?: string}} TrayHost
+ * @typedef {{available: boolean, reason: null | "no-host" | "check-failed", detail?: string,
+ *   via?: "background-apps"}} TrayHost
+ * `via: "background-apps"`: no tray, but GNOME's Background Apps lists the hidden app.
  * `no-host`: the bus answered and nothing hosts tray icons.
  * `check-failed`: the bus couldn't be asked; treated as no tray, so closing never strands the app.
  */
 
 /**
- * @param {{platform?: string, run?: (cmd: string, args: string[]) => Promise<string>}} [deps]
+ * @param {{platform?: string, run?: (cmd: string, args: string[]) => Promise<string>,
+ *   env?: NodeJS.ProcessEnv}} [deps]
  * @returns {Promise<TrayHost>}
  */
-async function probeTrayHost({ platform = process.platform, run = runCommand } = {}) {
+async function probeTrayHost({ platform = process.platform, run = runCommand, env = process.env } = {}) {
   if (platform !== "linux") return { available: true, reason: null };
+  const tray = await nameHasOwner(WATCHER, run);
+  if (tray.owned === true) return { available: true, reason: null };
+  // Only an answered "yes" counts: a hidden window with no list to quit it from is stranded.
+  if (isGnomeFlatpak(env) && (await nameHasOwner(BACKGROUND_MONITOR, run)).owned === true) {
+    return { available: true, reason: null, via: "background-apps" };
+  }
+  if (tray.owned === false) return { available: false, reason: "no-host", detail: `nothing owns ${WATCHER}` };
+  return { available: false, reason: "check-failed", detail: tray.failures.join("; ") };
+}
+
+/**
+ * Ask the session bus whether anything owns `name`.
+ * @returns {Promise<{owned: boolean | null, failures: string[]}>} `owned` is null when no client could ask.
+ */
+async function nameHasOwner(name, run) {
   const failures = [];
   for (const probe of PROBES) {
     let out;
     try {
-      out = await run(probe.cmd, probe.args);
+      out = await run(probe.cmd, probe.args(name));
     } catch (err) {
       const why = err.code === "ENOENT" ? "not installed" : (err.stderr || err.message || String(err)).trim();
       failures.push(`${probe.cmd}: ${why}`);
       continue;
     }
     const owned = probe.parse(out);
-    if (owned === true) return { available: true, reason: null };
-    if (owned === false) return { available: false, reason: "no-host", detail: `nothing owns ${WATCHER}` };
+    if (owned !== null) return { owned, failures };
     failures.push(`${probe.cmd}: unexpected reply ${JSON.stringify(out.trim())}`);
   }
-  return { available: false, reason: "check-failed", detail: failures.join("; ") };
+  return { owned: null, failures };
 }
 
 module.exports = { probeTrayHost, WATCHER, PROBE_TIMEOUT_MS };

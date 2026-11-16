@@ -61,6 +61,7 @@ const fs = require("fs");
 const os = require("os");
 const crypto = require("crypto");
 const zlib = require("zlib");
+const { isFlatpak } = require("./flatpak.cjs");
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -356,6 +357,8 @@ const state = {
   lastCheckError: null,
   // The update has downloaded and its backend is being fetched before the restart.
   preparing: false,
+  // Why status is "disabled": "env" (GAIA_DISABLE_UPDATE=1) or "flatpak".
+  disabledReason: null,
   // This build can't install updates itself (macOS, #7061): an update is offered
   // as a download from `downloadUrl` instead.
   manualInstall: !_selfInstalls(),
@@ -839,8 +842,24 @@ function getState() {
 // ── Env gate ─────────────────────────────────────────────────────────────────
 
 function isDisabled() {
-  return process.env.GAIA_DISABLE_UPDATE === "1";
+  return disabledReason() !== null;
 }
+
+/**
+ * Why this install never updates itself, or null when it does. A Flatpak is
+ * read-only to the app inside it; a newer one is installed over it from outside.
+ * @returns {null | "env" | "flatpak"}
+ */
+function disabledReason() {
+  if (process.env.GAIA_DISABLE_UPDATE === "1") return "env";
+  if (isFlatpak()) return "flatpak";
+  return null;
+}
+
+const DISABLED_LOG = {
+  env: "GAIA_DISABLE_UPDATE=1",
+  flatpak: "this is a Flatpak, which is updated by installing a newer one",
+};
 
 // ── listReleases ──────────────────────────────────────────────────────────────
 
@@ -1491,8 +1510,8 @@ async function restartToInstall() {
  */
 async function checkForUpdates({ background = false } = {}) {
   if (isDisabled()) {
-    setState({ status: STATES.DISABLED });
-    log("info", "Update check skipped — GAIA_DISABLE_UPDATE=1");
+    setState({ status: STATES.DISABLED, disabledReason: disabledReason() });
+    log("info", `Update check skipped — ${DISABLED_LOG[disabledReason()]}`);
     return;
   }
   if (!autoUpdaterRef) {
@@ -1755,8 +1774,8 @@ function init(mainWindow, options = {}) {
   // throws on access in plain Node tests.
   if (isDisabled()) {
     _initDisabled();
-    setState({ status: STATES.DISABLED });
-    log("info", "Auto-updater disabled via GAIA_DISABLE_UPDATE=1");
+    setState({ status: STATES.DISABLED, disabledReason: disabledReason() });
+    log("info", `Auto-updater disabled — ${DISABLED_LOG[disabledReason()]}`);
     return;
   }
 

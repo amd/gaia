@@ -492,6 +492,7 @@ describe('Downloads.astro with the one Windows setup', () => {
 const FULL_FILES = [
   ...Object.values(SETUP_DESKTOP_FILES),
   'gaia-agent-ui-0.25.0-amd64.deb',
+  'gaia-agent-ui-0.25.0-x86_64.flatpak',
   ...Object.values(SETUP_RELEASE_FILES),
   'gaia-0.25.0-darwin-x64.pkg',
   'gaia-0.25.0.x86_64.rpm',
@@ -552,12 +553,16 @@ describe('Downloads.astro card buttons', () => {
     expect(setup).toEqual([]);
   });
 
-  it('gives Linux x64 the AppImage and the terminal .deb, the rest folded', async () => {
+  it('gives Linux x64 the AppImage and the terminal .deb, the rest (Flatpak included) folded', async () => {
     const { desktop, tui } = await landing(fakeNav(UA.linux, 'x86'));
     expect(desktop.map(hrefsIn)).toEqual([[fullUrl('gaia-agent-ui-0.25.0-x86_64.AppImage')]]);
     expect(tui.map(hrefsIn)).toEqual([[fullUrl('gaia_0.25.0_amd64.deb')]]);
     expect(hrefsIn(theList())).toEqual(
-      expect.arrayContaining([fullUrl('gaia-agent-ui-0.25.0-amd64.deb'), fullUrl('gaia-0.25.0.x86_64.rpm')]),
+      expect.arrayContaining([
+        fullUrl('gaia-agent-ui-0.25.0-amd64.deb'),
+        fullUrl('gaia-agent-ui-0.25.0-x86_64.flatpak'),
+        fullUrl('gaia-0.25.0.x86_64.rpm'),
+      ]),
     );
   });
 

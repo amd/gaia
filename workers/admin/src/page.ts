@@ -365,7 +365,7 @@ export const INFO_COMMON = String.raw`
 
 const USERS_JS = String.raw`
 var INFO={` + INFO_COMMON + String.raw`
-'installs':['Installs to date','Downloads of installer and app files (.exe, .msi, .deb, .AppImage, .rpm, .dmg, .pkg, .whl and similar) attached to GitHub releases, across every release and release candidate. Read from the GitHub Releases API. GitHub counts every download, including automation and repeat downloads, so this is an upper bound on people.'],
+'installs':['Installs to date','Downloads of installer and app files (.exe, .msi, .deb, .AppImage, .flatpak, .rpm, .dmg, .pkg, .whl and similar) attached to GitHub releases, across every release and release candidate. Read from the GitHub Releases API. GitHub counts every download, including automation and repeat downloads, so this is an upper bound on people.'],
 'polls':['Not counted as installs','Files that are not installs: update feeds (latest*.yml), .blockmap update data, checksums and signatures. Most are update checks: desktop apps v0.17 to v0.22 download latest.yml from GitHub every time they start, so this number is mostly old installs still in use.'],
 'stars':['Stars added','Stars added in the selected days, against the same number of days just before. Green: at least 90% of the earlier pace. Amber: 60 to 90%. Red: below 60%. The total is GitHub’s own count.'],
 'pkg':['Package downloads','PyPI (pypistats.org, mirrors excluded) plus npm, over the selected days up to the newest day PyPI has published, against the same number of days just before. Includes CI and automated installs, so treat it as reach rather than users. Green: flat or up, or down less than 10%. Amber: down 10 to 30%. Red: down more than 30%.'],

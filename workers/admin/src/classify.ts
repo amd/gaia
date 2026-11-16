@@ -50,7 +50,7 @@ function osOf(name: string): Os {
   if (/\.exe$/i.test(name) || /windows|win32|win-x64/i.test(name) || /^Gaia(Hybrid)?Installer/i.test(name)) {
     return "Windows";
   }
-  if (/\.(deb|appimage|rpm)$/i.test(name) || /linux/i.test(name)) return "Linux";
+  if (/\.(deb|appimage|rpm|flatpak)$/i.test(name) || /linux/i.test(name)) return "Linux";
   if (/\.(dmg|pkg)$/i.test(name) || /darwin|mac/i.test(name)) return "macOS";
   return "Unclassified";
 }

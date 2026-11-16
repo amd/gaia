@@ -175,6 +175,7 @@ describe('pickReleaseCandidate', () => {
       asset('gaia-agent-ui-0.25.0-rc.1-arm64.dmg.blockmap'),
       asset('gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage'),
       asset('gaia-agent-ui-0.25.0-rc.1-amd64.deb'),
+      asset('gaia-agent-ui-0.25.0-rc.1-x86_64.flatpak'),
       asset('amd_gaia-0.25.0rc1-py3-none-any.whl'),
       asset('gaia-linux-amd64'),
     ],
@@ -206,7 +207,9 @@ describe('pickReleaseCandidate', () => {
       'gaia-agent-ui-0.25.0-rc.1-arm64.dmg',
       'gaia-agent-ui-0.25.0-rc.1-x86_64.AppImage',
       'gaia-agent-ui-0.25.0-rc.1-amd64.deb',
+      'gaia-agent-ui-0.25.0-rc.1-x86_64.flatpak',
     ]);
+    expect(rc!.downloads.at(-1)!.label).toBe('Fedora / other distros — desktop app (.flatpak)');
   });
 
   // Every asset on the real v0.25.1-rc5 release, in GitHub's order.

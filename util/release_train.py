@@ -686,7 +686,12 @@ def catalog(
             ),
             (
                 f"{p}-linux-installer",
-                [f"{ui}-amd64.deb", f"{ui}-x86_64.AppImage", "latest-linux.yml"],
+                [
+                    f"{ui}-amd64.deb",
+                    f"{ui}-x86_64.AppImage",
+                    f"{ui}-x86_64.flatpak",
+                    "latest-linux.yml",
+                ],
             ),
         ):
             for n in names:

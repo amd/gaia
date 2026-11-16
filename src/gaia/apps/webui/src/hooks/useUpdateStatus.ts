@@ -41,6 +41,8 @@ export interface UpdateState {
     /** The last install didn't land: what it tried, and what is still running. */
     installFailed?: { target: string; from: string } | null;
     lastCheckError?: string | null;
+    /** Why status is 'disabled': the env switch, or a Flatpak (updated by installing a newer one). */
+    disabledReason?: 'env' | 'flatpak' | null;
     /** Downloaded, and fetching the new backend before the restart is offered. */
     preparing?: boolean;
     /** The older version a bad update can go back to, or null. */

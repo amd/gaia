@@ -32,7 +32,7 @@ RELEASE_MARKER = "util/github_release_retry.py"
 DESKTOP_DOWNLOADS = (
     "Download Desktop Installer (Windows NSIS)",
     "Download Desktop Installer (macOS DMG)",
-    "Download Desktop Installer (Linux DEB + AppImage)",
+    "Download Desktop Installer (Linux DEB + AppImage + Flatpak)",
 )
 VERSION = "0.26.0-rc.1"
 # The names electron-builder produced for the last releases (e.g. v0.25.3).
@@ -48,6 +48,7 @@ PROMISED = [
     f"gaia-agent-ui-{VERSION}-amd64.deb",
     f"gaia-agent-ui-{VERSION}-x86_64.AppImage",
     "latest-linux.yml",
+    f"gaia-agent-ui-{VERSION}-x86_64.flatpak",
 ]
 
 

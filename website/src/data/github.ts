@@ -128,6 +128,7 @@ const RC_DOWNLOADS: { label: string; match: RegExp }[] = [
   { label: 'macOS (Intel) — terminal app (.pkg)', match: /^gaia-\d[^/]*-darwin-x64\.pkg$/ },
   { label: 'Linux — desktop app (.AppImage)', match: /^gaia-agent-ui-.+-x86_64\.AppImage$/ },
   { label: 'Debian / Ubuntu — desktop app (.deb)', match: /^gaia-agent-ui-.+-amd64\.deb$/ },
+  { label: 'Fedora / other distros — desktop app (.flatpak)', match: /^gaia-agent-ui-.+-x86_64\.flatpak$/ },
   { label: 'Debian / Ubuntu — terminal app (.deb)', match: /^gaia_\d[^/]*_amd64\.deb$/ },
   { label: 'Fedora / RHEL / SUSE — terminal app (.rpm)', match: /^gaia-\d[^/]*\.x86_64\.rpm$/ },
 ];
