@@ -55,5 +55,14 @@
     },
     "final": { "fields": ["answer", "usage"] },
     "error": { "fields": ["detail", "status", "source"], "not_sent_over_stdio": ["source"] }
+  },
+  "session_index": {
+    "_doc": "Opt-in listing the agent writes beside --history-file (<id>.sqlite3): <id>.json is replaced atomically on every status change, <id>.jsonl gains one line per finished turn, and <id>.lock is held for the life of the process. Read by tui/internal/sessionstore.",
+    "argv": ["--history-file", "--session-kind"],
+    "version": 1,
+    "default_kind": "chat",
+    "statuses": ["running", "waiting", "done", "failed"],
+    "meta_fields": ["version", "id", "title", "kind", "status", "created_at", "updated_at", "pid", "turns"],
+    "transcript_fields": ["user", "answer", "error"]
   }
 }

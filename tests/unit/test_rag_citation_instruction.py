@@ -6,6 +6,8 @@ The search tools told the model to cite "page X" for every file, so answers from
 a markdown or text file opened with a note explaining there was no page.
 """
 
+import pytest
+
 from gaia.agents.tools.rag_tools import (
     _answers_in_question_language,
     _chunks_have_pages,
@@ -20,18 +22,20 @@ def test_a_chunk_with_a_page_counts_as_paged():
     assert not _chunks_have_pages([{"content": "a"}, {"content": "b"}])
 
 
-def test_paged_file_instruction_is_unchanged():
+def test_paged_file_instruction():
     assert _file_instruction("report.pdf", 4, has_pages=True) == (
         "Use these chunks from report.pdf to answer the question. Read through ALL 4 "
         "chunks completely before answering.\n\nCRITICAL CITATION REQUIREMENT:\n"
-        "Your answer MUST start with: 'According to report.pdf, page X:' where X is "
-        "the page number from the chunk's 'page' field.\n\nExample: If chunk has "
+        "Your answer MUST start by citing report.pdf and the page, worded in the "
+        "language of your answer: 'According to report.pdf, page X:' in English, "
+        "'وفق report.pdf، الصفحة X:' in Arabic, where X is the page number from "
+        "the chunk's 'page' field.\n\nExample in English: if chunk has "
         "'page': 2, say 'According to report.pdf, page 2:'\nIf info from multiple "
         "pages, say 'According to report.pdf, pages 2 and 5:'"
     )
 
 
-def test_paged_documents_instruction_is_unchanged():
+def test_paged_documents_instruction():
     assert _documents_instruction(has_pages=True) == (
         "Use the provided document chunks to answer the user's question.\n\n"
         "CRITICAL CITATION REQUIREMENT:\n"
@@ -39,9 +43,12 @@ def test_paged_documents_instruction_is_unchanged():
         "from the 'source_file' field of each chunk. This allows the user to click "
         "and open the file directly.\n\n"
         "Format: 'According to <absolute_path> (page X):'\n"
-        "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
+        "Example in English: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
         "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf "
-        "(pages 2, 5):'\n\n"
+        "(pages 2, 5):'\n"
+        "Write these words in the language of your answer (Arabic: "
+        "'وفق <absolute_path> (الصفحة X):'); only the path and page "
+        "numbers stay as given.\n\n"
         "IMPORTANT: Always use the full path exactly as given in source_file. "
         "Do NOT shorten it to just the filename."
     )
@@ -89,9 +96,32 @@ def test_a_bilingual_chunk_counts_as_another_language():
     )
 
 
-def test_a_question_in_the_chunks_language_adds_nothing():
-    assert not _question_language_note(
+def test_an_arabic_question_over_arabic_chunks_is_restated():
+    question = "متى تعطى الجرعة الثانية؟"
+    note = _question_language_note(
+        question, [{"content": "تعطى الجرعة الثانية بعد شهر"}]
+    )
+    assert question in note
+    assert "language of that question" in note
+
+
+def test_a_question_in_the_chunks_language_is_still_restated():
+    note = _question_language_note(
         "When is it given?", [{"content": "It is given after a month."}]
+    )
+    assert "When is it given?" in note
+
+
+@pytest.mark.parametrize("has_pages", [True, False])
+def test_citations_are_worded_in_the_answer_language(has_pages):
+    for text in (
+        _file_instruction("report.pdf", 4, has_pages=has_pages),
+        _documents_instruction(has_pages=has_pages),
+    ):
+        assert "in the language of your answer" in text
+        assert "وفق" in text
+    assert "MUST start with: 'According to" not in _file_instruction(
+        "report.pdf", 4, has_pages=has_pages
     )
 
 
@@ -133,5 +163,7 @@ def test_a_successful_search_ends_with_the_question():
     assert "When is it given?" in instruction
 
 
-def test_chunks_with_no_letters_add_nothing():
-    assert not _question_language_note("When is it given?", [{"content": "2024 | 35"}])
+def test_chunks_with_no_letters_still_restate_the_question():
+    assert "When is it given?" in _question_language_note(
+        "When is it given?", [{"content": "2024 | 35"}]
+    )

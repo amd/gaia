@@ -70,6 +70,16 @@ async def add_folder(
     return await _describe(db, session)
 
 
+@router.post("/api/environment/folders/check")
+async def check_folder(body: FolderRequest) -> dict:
+    """Why a chat can't be given a folder, or None: the add step's own rule."""
+    try:
+        await asyncio.to_thread(env.check_folder, body.path)
+    except env.EnvironmentChangeError as e:
+        return {"refusal": str(e)}
+    return {"refusal": None}
+
+
 @router.post("/api/sessions/{session_id}/environment/folders/remove")
 async def remove_folder(
     session_id: str, body: FolderRequest, db: ChatDatabase = Depends(get_db)

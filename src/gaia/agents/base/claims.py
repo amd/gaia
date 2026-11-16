@@ -207,7 +207,7 @@ _PERFECT = (
 #: the code", "read `dates.py`" — not "I read your question".
 _READ_OBJECT = (
     r"\s+(?:(?:the|your|this|that|its|each|every|all|both)\s+)?"
-    r"(?:`|[\w./\-]+\.[A-Za-z]\w{0,4}\b|(?:[\w-]+\s+)?(?:files?|code|source|"
+    r"(?:`|[\w./\\:~\-]+\.[A-Za-z]\w{0,4}\b|(?:[\w-]+\s+)?(?:files?|code|source|"
     r"modules?|scripts?|functions?|class(?:es)?|readme|repo(?:sitory)?|"
     r"director(?:y|ies)|folders?|logs?|tests?|diff|config)\b)"
 )
@@ -321,8 +321,9 @@ _CONDITIONAL_LEAD = re.compile(
 
 
 #: Clause breaks for action claims, where negation is per clause: "I haven't
-#: read the README, but I ran the tests" still reports a run.
-_ACTION_CLAUSE = re.compile(r"[,;:()]|\s[—–-]\s|\bbut\b", re.IGNORECASE)
+#: read the README, but I ran the tests" still reports a run. The colon of a
+#: drive letter ("C:/data/x.csv") is part of a path, not a break.
+_ACTION_CLAUSE = re.compile(r"[,;()]|:(?![\\/])|\s[—–-]\s|\bbut\b", re.IGNORECASE)
 
 
 def _reported(clause: str, start: int) -> bool:

@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 
 from gaia.daemon.sidecars import fetch as fetchmod
-from gaia.daemon.sidecars.errors import IntegrityError, PlatformError
+from gaia.daemon.sidecars.errors import (
+    BinaryNotFoundError,
+    IntegrityError,
+    PlatformError,
+)
 
 REAL_BYTES = b"fake-binary-payload"
 REAL_SHA = hashlib.sha256(REAL_BYTES).hexdigest()
@@ -317,3 +321,171 @@ def test_flagship_default_lock_is_its_own_not_the_email_agents(tmp_path, monkeyp
     assert expected.sha256 in str(exc_info.value)
     assert sess.calls == [fetchmod._join_url(lock.base_url, expected.filename)]
     assert "/agents/gaia/" in sess.calls[0]
+
+
+# ---------------------------------------------------------------------------
+# Installer-placed flagship (#7187): install.sh / install.ps1 leave gaia-agent
+# in GAIA's bin dir with gaia-agent.install.json beside it, and no hub sentinel.
+# ---------------------------------------------------------------------------
+
+AGENT_BYTES = b"installer-placed-flagship"
+AGENT_SHA = hashlib.sha256(AGENT_BYTES).hexdigest()
+
+
+@pytest.fixture
+def gaia_home(tmp_path, monkeypatch):
+    """A fresh GAIA home with no lock: what an installed (frozen) gaia sees."""
+    from gaia.daemon.sidecars import platform as plat
+
+    home = tmp_path / "home" / ".gaia"
+    monkeypatch.setenv("GAIA_HOME", str(home))
+    monkeypatch.setattr(
+        plat, "default_lock_path", lambda agent_id="email": tmp_path / "no.lock"
+    )
+    monkeypatch.setattr("gaia.frozen.is_frozen", lambda: False)
+    return home
+
+
+def _installer_place(bin_dir: Path, data=AGENT_BYTES, record=None) -> Path:
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    agent = bin_dir / fetchmod.flagship_executable_name()
+    agent.write_bytes(data)
+    agent.chmod(0o755)
+    if record is not False:
+        body = record or {"id": "gaia", "version": "0.3.9", "sha256": AGENT_SHA}
+        (bin_dir / "gaia-agent.install.json").write_text(
+            body if isinstance(body, str) else json.dumps(body), encoding="utf-8"
+        )
+    return agent
+
+
+def _fetch_flagship():
+    return fetchmod.fetch_binary(agent_dir_name="gaia", session=_FakeSession(b"no"))
+
+
+def test_installer_placed_agent_is_started_with_its_recorded_version(gaia_home):
+    agent = _installer_place(gaia_home / "bin")
+
+    res = _fetch_flagship()
+
+    assert Path(res.binary_path) == agent
+    assert res.version == "0.3.9"
+    assert res.sha256 == AGENT_SHA
+
+
+def test_installer_record_from_windows_powershell_with_a_bom_is_read(gaia_home):
+    body = json.dumps({"id": "gaia", "version": "0.3.9", "sha256": AGENT_SHA.upper()})
+    agent = _installer_place(gaia_home / "bin", record="\ufeff" + body)
+
+    assert Path(_fetch_flagship().binary_path) == agent
+
+
+def test_installer_placed_agent_without_a_record_is_not_started(gaia_home):
+    _installer_place(gaia_home / "bin", record=False)
+
+    with pytest.raises(BinaryNotFoundError) as exc_info:
+        _fetch_flagship()
+    msg = str(exc_info.value)
+    assert "gaia init" in msg
+    # The lock is a source-checkout file; an installed GAIA must not lead with it.
+    assert "binaries.lock.json" not in msg
+    assert "no.lock" not in msg
+
+
+def test_a_replaced_installer_agent_is_refused(gaia_home):
+    agent = _installer_place(gaia_home / "bin")
+    agent.write_bytes(b"swapped-after-install")
+
+    with pytest.raises(IntegrityError, match="does not match the SHA-256") as e:
+        _fetch_flagship()
+    assert "Re-run the GAIA installer" in str(e.value)
+
+
+def test_a_truncated_installer_agent_is_refused(gaia_home):
+    agent = _installer_place(gaia_home / "bin")
+    agent.write_bytes(AGENT_BYTES[:5])
+
+    with pytest.raises(IntegrityError):
+        _fetch_flagship()
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "{not json",
+        "[]",
+        json.dumps({"id": "gaia", "version": "0.3.9"}),
+        json.dumps({"id": "gaia", "sha256": AGENT_SHA}),
+        json.dumps({"id": "gaia", "version": "", "sha256": AGENT_SHA}),
+        json.dumps({"id": "gaia", "version": "0.3.9", "sha256": "PENDING"}),
+        json.dumps({"id": "gaia", "version": "0.3.9", "sha256": AGENT_SHA + "00"}),
+        json.dumps({"id": "gaia", "version": 3, "sha256": AGENT_SHA}),
+    ],
+)
+def test_an_unusable_install_record_is_refused_not_trusted(gaia_home, record):
+    _installer_place(gaia_home / "bin", record=record)
+
+    with pytest.raises(IntegrityError, match="install record"):
+        _fetch_flagship()
+
+
+def test_a_record_with_no_agent_beside_it_vouches_for_nothing(gaia_home):
+    bin_dir = gaia_home / "bin"
+    _installer_place(bin_dir).unlink()
+
+    with pytest.raises(BinaryNotFoundError):
+        _fetch_flagship()
+
+
+def test_a_directory_named_like_the_agent_is_not_the_agent(gaia_home):
+    bin_dir = gaia_home / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / fetchmod.flagship_executable_name()).mkdir()
+    (bin_dir / "gaia-agent.install.json").write_text(
+        json.dumps({"id": "gaia", "version": "0.3.9", "sha256": AGENT_SHA})
+    )
+
+    with pytest.raises(BinaryNotFoundError):
+        _fetch_flagship()
+
+
+def test_the_hub_install_wins_over_the_installer_copy(gaia_home):
+    """`gaia init` may have installed a newer flagship since the installer ran."""
+    _installer_place(gaia_home / "bin")
+    hub_bytes = b"hub-installed-flagship"
+    hub = _hub_install(
+        gaia_home / "agents" / "gaia",
+        data=hub_bytes,
+        id="gaia",
+        executable=fetchmod.flagship_executable_name(),
+    )
+
+    assert Path(_fetch_flagship().binary_path) == hub
+
+
+def test_only_the_flagship_uses_the_installer_copy(gaia_home):
+    _installer_place(gaia_home / "bin")
+
+    assert fetchmod.installer_verified_binary("email") is None
+
+
+def test_a_recorded_agent_on_a_pip_installs_path_is_not_trusted(
+    gaia_home, tmp_path, monkeypatch
+):
+    """Only a frozen gaia trusts PATH; a pip install's PATH is not an installer's."""
+    path_dir = tmp_path / "path"
+    _installer_place(path_dir)
+    monkeypatch.setenv("PATH", str(path_dir))
+
+    assert fetchmod.installer_verified_binary("gaia") is None
+
+
+def test_an_installer_agent_beside_the_frozen_gaia_is_verified(
+    gaia_home, tmp_path, monkeypatch
+):
+    install_dir = tmp_path / "Programs" / "GAIA"
+    agent = _installer_place(install_dir)
+    monkeypatch.setattr("gaia.frozen.is_frozen", lambda: True)
+    monkeypatch.setattr(fetchmod.sys, "executable", str(install_dir / "gaia.exe"))
+
+    assert Path(_fetch_flagship().binary_path) == agent

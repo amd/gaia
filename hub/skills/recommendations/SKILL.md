@@ -2,7 +2,7 @@
 name: recommendations
 description: Recommend films, books, games, restaurants, or gear using what the user has already said they like and dislike, plus a web search for current options. Use when the user asks what to watch, read, play, buy, or try next.
 license: MIT
-version: 1.0.0
+version: 1.1.0
 metadata:
   gaia:
     security_tier: community
@@ -35,7 +35,8 @@ is what keeps it current.
    exists now, not from a stale training-set memory of "recent" releases. Use
    `fetch_page(url)` on a promising list or review to get real detail.
 4. **Rank by predicted fit**, not popularity. For each of 3–5 picks, give:
-   - the pick,
+   - the pick, linked to the page you found it on
+     (`[Title](https://...)`), so the user can go straight to it,
    - **one sentence on why it fits *them*** — naming the specific prior taste it
      connects to,
    - one honest caveat ("slow first hour", "the sequel is weaker").

@@ -642,7 +642,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 
 | Script | Entry Point | Purpose |
 |--------|-------------|---------|
-| `gaia` / `gaia-cli` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
+| `gaia` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge binary |
 
 `gaia` and `gaia-mcp` are the only console scripts the core wheel ships.
@@ -875,7 +875,8 @@ Two rules are important enough to restate here:
 
 Automated PR-review *policy* — severity tiers, the nit cap, skip rules, length caps —
 lives in [`REVIEW.md`](REVIEW.md), which is the single source of truth for review
-scoring. Don't fork it into another file.
+scoring. Don't fork it into another file. Vetting a PR or issue that integrates an outside
+company's product lives there too, under "Third-party integrations".
 
 ## Claude Agents
 

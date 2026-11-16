@@ -1248,8 +1248,10 @@ def _scan_or_reason(source_key: str, scanner) -> Tuple[List[Dict], Optional[str]
         ``(items, message)``. `message` is a user-facing line to stream when the
         source cannot run or failed, and is None when the scan succeeded.
     """
-    from gaia.agents.base.discovery import unsupported_reason
+    from gaia.agents.base.discovery import covered_by_twin, unsupported_reason
 
+    if covered_by_twin(source_key):
+        return [], None
     reason = unsupported_reason(source_key)
     if reason:
         return [], f"  {reason}"
@@ -1292,6 +1294,7 @@ def stream_discovery():
         try:
             from gaia.agents.base.discovery import (
                 SystemDiscovery,
+                covered_by_twin,
                 unsupported_reason,
             )
 
@@ -1317,6 +1320,8 @@ def stream_discovery():
 
             total = 0
             for source_key in _DISCOVERY_SOURCES:
+                if covered_by_twin(source_key):
+                    continue
                 label = _DISCOVERY_SOURCE_LABELS.get(source_key, source_key)
                 yield _sse({"type": "log", "message": f"Scanning {label}..."})
                 reason = unsupported_reason(source_key)
@@ -1400,6 +1405,7 @@ def stream_inference(include_browser: bool = Query(False)):
             from gaia.llm import create_client
             from gaia.llm.lemonade_client import (
                 LemonadeClientError,
+                resolve_chat_model,
                 resolve_default_chat_model,
             )
             from gaia.ui._chat_helpers import _runs_on_this_pc
@@ -1540,10 +1546,28 @@ def stream_inference(include_browser: bool = Query(False)):
             prompt_sections = "\n\n".join(sections)
             prompt = _INFER_PROMPT.format(sections=prompt_sections)
 
-            # The machine's default chat model, so no second model loads. Never
-            # the UI's custom_model: that may be cloud, and this data stays local.
+            # The local model chat runs, so no second model loads; the machine's
+            # default when that pick is a cloud one, since this data stays local.
             model = resolve_default_chat_model()
             try:
+                from gaia.llm.hybrid import HybridConfigError, start_model
+
+                try:
+                    picked = start_model(resolve_chat_model())
+                except HybridConfigError as e:
+                    # The default stays local and on disk; say why the pick wasn't used.
+                    logger.warning(
+                        "Profile inference uses %s: the hybrid setting can't be read (%s)",
+                        model,
+                        e,
+                    )
+                    picked = model
+                if (
+                    picked != model
+                    and _runs_on_this_pc(picked)
+                    and _downloaded_on_this_pc(picked)
+                ):
+                    model = picked
                 local = _runs_on_this_pc(model)
                 # Lemonade downloads a missing model on first use, unasked.
                 downloaded = local and _downloaded_on_this_pc(model)
@@ -1568,7 +1592,7 @@ def stream_inference(include_browser: bool = Query(False)):
                         "type": "error",
                         "message": (
                             f"Profile inference runs only on a local model, but "
-                            f"the default model '{model}' isn't one this PC runs. "
+                            f"the chat model '{model}' isn't one this PC runs. "
                             "Open Settings > Setup, press Run setup again and "
                             "choose a local chat model, then try again."
                         ),

@@ -366,3 +366,71 @@ def _catalog_ids() -> tuple[str, ...]:
     from gaia.connectors.registry import REGISTRY
 
     return tuple(spec.id for spec in REGISTRY.all())
+
+
+#: Plain-language noun per domain, for an explicit ``<domain>:none``.
+_DOMAIN_NOUNS: dict[str, str] = {
+    "filesystem": "your files",
+    "network": "the internet",
+    "shell": "the command line",
+    "mcp": "your connectors",
+    "env": "environment variables",
+    "database": "databases",
+    "desktop": "your screen, mouse and keyboard",
+    "program": "other programs",
+    "scratch": "a temporary folder",
+}
+
+
+def describe_permission(permission: Permission) -> str:
+    """One plain sentence saying what *permission* lets a skill do.
+
+    Shown wherever a user is asked to agree to a skill, next to the raw grant,
+    so the choice is made on what the skill can reach rather than on grammar.
+    """
+    domain, level, scope = permission.domain, permission.level, permission.scope
+    if permission.grants_nothing:
+        return f"Declares it uses nothing from {_DOMAIN_NOUNS[domain]}"
+    if domain == "network":
+        where = f"sites matching {scope}" if scope else "any website or web service"
+        if level == "read":
+            return f"Read pages and data from {where}"
+        return f"Send your data to {where}, which can carry it off this PC"
+    if domain == "mcp":
+        if scope:
+            return f"Use your '{scope}' connector and what it can reach"
+        return "Use any of your connectors"
+    if domain == "shell":
+        if not scope:
+            return "Run any command on this PC"
+        policy = BINARY_POLICIES.get(scope)
+        if policy is None:
+            return f"Run the '{scope}' command on this PC"
+        return f"Run the '{scope}' command: {policy.summary}"
+    if domain == "program":
+        return f"Start the program '{scope}' on this PC"
+    if domain == "scratch":
+        return "Write files in a temporary folder that is emptied after each use"
+    if domain == "filesystem":
+        where = f"under {scope}" if scope else "anywhere on this PC"
+        if level == "read":
+            return f"Read your files {where}"
+        return f"Change or delete your files {where}"
+    if domain == "env":
+        return "Read environment variables, which can hold passwords and keys"
+    if domain == "database":
+        what = f"the '{scope}' database" if scope else "databases"
+        if level == "read":
+            return f"Read {what}"
+        return f"Change or delete data in {what}"
+    if domain == "desktop":
+        return "Control your screen, mouse and keyboard"
+    raise ValueError(
+        f"No plain-language text for permission {permission}. Add one to "
+        "describe_permission in gaia/skills/permissions.py."
+    )
+
+
+def describe_permissions(permissions: Iterable[Permission]) -> list[dict[str, str]]:
+    """``[{"grant": "network:read", "text": "Read pages …"}, …]`` in declared order."""
+    return [{"grant": str(p), "text": describe_permission(p)} for p in permissions]
