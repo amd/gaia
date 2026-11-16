@@ -351,6 +351,9 @@ class _WritingAgent:
         self.conversation_history = []
         self._cancel_event = None
         self._followup_queue = None
+        # The sidecar syncs attached documents against these every turn.
+        self.indexed_files: set = set()
+        self.rag = None
 
     def process_query(self, query, max_steps=None):
         approved = self.console.confirm_tool_execution(
