@@ -1492,7 +1492,7 @@ class TestDuckDuckGoFailuresAreNotEmptyResults:
         [
             (500, "may be down"),
             (502, "may be down"),
-            (404, "Check the query"),
+            (404, "rejected the request"),
             (204, "Try again later"),
             (302, "Try again later"),
         ],

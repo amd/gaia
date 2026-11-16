@@ -643,7 +643,7 @@ class SearchStatusError(RuntimeError):
         if status >= 500:
             hint = "It may be down for a moment; try again later."
         elif status >= 400:
-            hint = "Check the query and try again."
+            hint = "It rejected the request; check the query or URL and try again."
         else:
             hint = "Try again later."
         super().__init__(

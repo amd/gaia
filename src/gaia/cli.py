@@ -7589,11 +7589,33 @@ def handle_knowledge_command(args):
     except (TavilyConfigError, SearchUnavailableError, SearchStatusError) as e:
         print(f"❌ {e}")
         sys.exit(1)
-    except requests.exceptions.RequestException as e:
+    except (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        requests.exceptions.ChunkedEncodingError,  # dropped mid-response
+    ) as e:
         service = "Tavily" if client.configured else "DuckDuckGo"
         print(
             f"❌ Web {action} failed: {service} could not be reached ({e}). "
             "Check your internet connection or proxy settings and try again."
+        )
+        sys.exit(1)
+    except requests.exceptions.HTTPError as e:
+        # The service answered with an error, so the user's network is fine.
+        service = "Tavily" if client.configured else "DuckDuckGo"
+        status = getattr(e.response, "status_code", None) or "an error"
+        hint = (
+            "It rejected the request; check the query or URL and try again."
+            if isinstance(status, int) and status < 500
+            else "It may be down for a moment; try again later."
+        )
+        print(f"❌ Web {action} failed: {service} answered with {status}. {hint}")
+        sys.exit(1)
+    except requests.exceptions.RequestException as e:
+        # Redirect loops, a malformed URL and the like: still an error, not a crash.
+        service = "Tavily" if client.configured else "DuckDuckGo"
+        print(
+            f"❌ Web {action} failed: the {service} request could not complete ({e})."
         )
         sys.exit(1)
     finally:
