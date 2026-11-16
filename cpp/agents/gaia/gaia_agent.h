@@ -139,6 +139,10 @@ public:
     /// A CSV was totalled by file_read and the answer reports a bare 0 for something.
     static std::optional<std::string> zeroForAbsentNote(const std::string& answer, const std::vector<CallSeen>& calls);
 
+    /// The request asks what an order comes to and every figure in the answer is copied from a file.
+    static std::optional<std::string> unitPriceOnlyNote(const std::string& request, const std::string& answer,
+                                                        const std::vector<CallSeen>& calls);
+
     /// Where a bare-named new file belongs when the request says "next to" a file in a folder; empty otherwise.
     static std::string besidePath(const std::string& request, const std::string& writtenPath);
 

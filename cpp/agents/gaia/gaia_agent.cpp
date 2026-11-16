@@ -959,6 +959,46 @@ std::optional<std::string> GaiaAgent::zeroForAbsentNote(const std::string& answe
            "really records zero.";
 }
 
+std::optional<std::string> GaiaAgent::unitPriceOnlyNote(const std::string& request, const std::string& answer,
+                                                         const std::vector<CallSeen>& calls) {
+    static const std::regex asksTotal(R"(\b(?:comes? to|adds? up to|altogether|in total|total (?:cost|price|amount))\b)",
+                                      std::regex::icase);
+    if (!std::regex_search(request, asksTotal)) return std::nullopt;
+    static const std::regex quantity(R"(\b([2-9]|\d{2,5})\s*[xX\u00d7]\s+[A-Za-z][\w-]*)");
+    static const std::regex figure(R"(\d[\d,]*(?:\.\d+)?)");
+    const auto value = [](std::string n) {
+        n.erase(std::remove(n.begin(), n.end(), ','), n.end());
+        if (n.find('.') != std::string::npos) {
+            while (n.back() == '0') n.pop_back();
+            if (n.back() == '.') n.pop_back();
+        }
+        return n;
+    };
+    std::set<std::string> seen;
+    std::string example;
+    for (const auto& c : calls) {
+        const std::string text = c.args.dump() + " " + c.output;
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), figure); it != std::sregex_iterator(); ++it) {
+            seen.insert(value(it->str()));
+        }
+        std::smatch q;
+        if (example.empty() && readsContents(c.name) && std::regex_search(c.output, q, quantity)) example = q.str();
+    }
+    if (example.empty()) return std::nullopt;
+    bool any = false;
+    for (auto it = std::sregex_iterator(answer.begin(), answer.end(), figure); it != std::sregex_iterator(); ++it) {
+        const std::string v = value(it->str());
+        if (v.size() < 3) continue;  // line numbers, quantities
+        any = true;
+        if (!seen.count(v)) return std::nullopt;  // a figure of the answer's own
+    }
+    if (!any) return std::nullopt;
+    return "The request asks what something comes to, and a file gives quantities (\"" + example +
+           "\"), but every figure in your answer is copied from a file: nothing was multiplied. Work out quantity "
+           "times unit price, and give your whole answer again with that total and the sum shown. If a file "
+           "already states the total, say where.";
+}
+
 std::string GaiaAgent::besidePath(const std::string& request, const std::string& writtenPath) {
     static const std::regex beside(R"(\b(?:next to|beside|alongside|in the same (?:folder|directory) as)\b)",
                                    std::regex::icase);
@@ -1676,6 +1716,7 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
         if (auto note = skippedQuestionsNote(turnRequest(), answer)) notes.push_back(*note);
         if (auto note = failedScriptNote(answer, seen)) notes.push_back(*note);
         if (auto note = zeroForAbsentNote(answer, seen)) notes.push_back(*note);
+        if (auto note = unitPriceOnlyNote(turnRequest(), answer, seen)) notes.push_back(*note);
         if (auto note = uncomputedFiguresNote(answer, seen)) notes.push_back(*note);
         if (missing.empty() && comparable && !savedText.empty()) {
             if (auto note = unsavedFiguresNote(answer, turnRequest(), savedText)) notes.push_back(*note);

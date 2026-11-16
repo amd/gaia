@@ -814,6 +814,21 @@ TEST(GaiaAgentTest, AZeroForSomethingTheTableLacksIsSentBack) {
     EXPECT_FALSE(GaiaAgent::zeroForAbsentNote("East revenue is 0.", {}));
 }
 
+TEST(GaiaAgentTest, AUnitPriceForAnOrderLineIsSentBack) {
+    const std::string request = "What does the hydrophone line on Northwick's purchase request come to at list price?";
+    const std::vector<GaiaAgent::CallSeen> read = {
+        {"file_read", {{"path", "docs/purchase_request.txt"}}, "  - 30 x TL-400 tide loggers\n  - 4 x HM-3 hydrophones"},
+        {"file_read", {{"path", "docs/price_list_2026.csv"}}, "HM-3,Hydrophone,instrument,3120.00,1000 m rated"}};
+    const auto note = GaiaAgent::unitPriceOnlyNote(
+        request, "The list price for the HM-3 hydrophone is **$3,120.00** (`docs/price_list_2026.csv`, line 5).", read);
+    ASSERT_TRUE(note);
+    EXPECT_NE(note->find("30 x TL-400"), std::string::npos);
+    EXPECT_FALSE(GaiaAgent::unitPriceOnlyNote(request, "4 x $3,120.00 = **$12,480.00**.", read));
+    EXPECT_FALSE(GaiaAgent::unitPriceOnlyNote("What is the list price of the HM-3?", "It is $3,120.00.", read));
+    EXPECT_FALSE(GaiaAgent::unitPriceOnlyNote(request, "It is $3,120.00.", {read[1]})) << "no quantities read";
+    EXPECT_FALSE(GaiaAgent::unitPriceOnlyNote(request, "The request does not list hydrophones.", read));
+}
+
 TEST(GaiaAgentTest, AFileAskedForNextToAnotherIsWrittenThere) {
     const std::string request = "Make a copy of config/app_config.ini next to it, called app_config.local.ini.";
     EXPECT_EQ(GaiaAgent::besidePath(request, "app_config.local.ini"), "config/app_config.local.ini");
