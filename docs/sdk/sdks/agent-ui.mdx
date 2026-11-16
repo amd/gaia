@@ -453,6 +453,62 @@ class AttachDocumentRequest(BaseModel):
     document_id: str
 ```
 
+### Paired devices
+
+```python
+class DevicePairingOffer(BaseModel):
+    """POST /api/devices/pairing: what the PC's QR code carries, as compact JSON."""
+    v: int              # format version, 1
+    name: str           # the PC's name, to show on the device
+    pc_id: str          # stays the same for this PC, across resets
+    origins: List[str]  # https://<home-network IPv4>:<port>, one per address
+    pin: str            # SHA-256 of the listener's certificate (DER), hex
+    invite: str         # the single-use invitation
+    exp: int            # when the invitation dies, Unix seconds
+
+class DevicePairRequest(BaseModel):
+    """POST /api/devices/pair"""
+    invitation: str
+    device_name: str    # control and bidi characters removed, 64 at most
+    platform: Literal["ios", "ipados", "android"]
+
+class DevicePairResponse(BaseModel):
+    device_id: str
+    token: str          # returned here only; GAIA keeps its SHA-256
+    pc_name: str
+    pc_id: str
+    status: Literal["pending", "allowed"]
+    expires_at: str     # when a pending device stops working
+
+class PairedDevice(BaseModel):
+    id: str
+    name: str
+    platform: Literal["ios", "ipados", "android"]
+    status: Literal["pending", "allowed"]
+    created_at: str
+    last_seen_at: Optional[str] = None
+    expires_at: Optional[str] = None  # while pending
+
+class PairedDeviceList(BaseModel):
+    devices: List[PairedDevice]
+
+class FailedRedemption(BaseModel):
+    at: str
+    address: str        # the device's home-network IPv4 address
+    reason: Literal["expired", "used", "wrong", "closed", "rate_limited"]
+
+class DeviceAccessStatus(BaseModel):
+    listening: bool
+    port: int
+    error_code: Optional[Literal["port_in_use", "unsafe_folder", "certificate", "start_failed"]] = None
+    error_detail: Optional[str] = None
+    pairing_open: bool
+    pairing_expires_at: Optional[str] = None
+    idle_expiry_days: int
+    pending_expiry_minutes: int
+    failed_redemptions: List[FailedRedemption]  # the last 20
+```
+
 ---
 
 ## REST API Endpoints
@@ -1729,6 +1785,127 @@ Used to reach the UI from a phone.
     this OS's install commands (empty where none is known); `error` still
     carries the same instructions as text. Both `start` and `status` return
     this shape.
+  </Accordion>
+</AccordionGroup>
+
+### Paired devices
+
+A phone or tablet can pair with the PC once and then reach GAIA's API on the
+home network, over TLS with GAIA's own certificate, which the device pins. It is
+still in development: every route here answers **403** while `device_pairing`
+is off in `~/.gaia/config.json`, and nothing listens until the PC turns the
+listener on. No response is cached (`Cache-Control: no-store`). The invitation
+appears only in the response that opens a pairing window, and a token only in
+the response that pairs a device; neither the device list nor the status ever
+carries one.
+
+How a device pairs:
+
+1. The PC turns the listener on and opens a pairing window. It shows the
+   window's `DevicePairingOffer` as a QR code, in compact JSON. The window
+   closes after 10 minutes, or at the first pairing.
+2. The device connects to one of `origins` and, during the TLS handshake and
+   before it sends anything, checks that the SHA-256 of the certificate it was
+   served equals `pin`. Nothing else is checked: no CA, hostname or date. A
+   mismatch fails hard, and redirects are refused.
+3. The device redeems `invite` with `POST /api/devices/pair` and keeps the
+   token in the Keychain (a `…ThisDeviceOnly` item) or the Android Keystore,
+   out of backups.
+4. The device is pending: every request is a **403** (`code: device_pending`)
+   until someone allows it on the PC. One not allowed within 10 minutes stops
+   working, and an allowed device unused for 90 days is unpaired.
+
+On the listener a device sends `Authorization: Bearer <token>` with every
+request and `X-Gaia-UI: 1` with every write. Nothing else authenticates there:
+not a cookie, a query parameter or the mobile access token. Only home-network
+IPv4 addresses are answered, paths outside `/api/` and `/v1/` are a **404**, a
+request body over 8 MB is a **413** (uploads keep their own limits), an unknown
+or unpaired token is a **401** (`code: device_unknown`), and a device token sent
+over plain http to the main server is a **401** too. What a device may call is
+in [What a paired device may call](#what-a-paired-device-may-call).
+
+Two events reach the PC's own windows on `GET /api/sessions/events`, and no one
+else's:
+
+- `{"type": "device_paired", "device": PairedDevice, "actions": ["review", "deny"]}`
+  when a device pairs. Review opens the device in the list; Deny unpairs it.
+  Allowing happens only in the list.
+- `{"type": "security_alert", "kind": "pairing_locked_out", "address", "at"}`
+  when an address fails to pair 5 times in a minute and is locked out for 5
+  minutes.
+
+<AccordionGroup>
+  <Accordion title="GET /api/devices/status">
+    `DeviceAccessStatus`: whether GAIA is listening and on which port, why it
+    isn't when it failed (`error_code` `port_in_use`, `unsafe_folder`,
+    `certificate` or `start_failed`, with `error_detail`), whether a pairing
+    window is open and when it closes, the expiry settings, and the last 20
+    failed redemptions with their `reason`: `expired` (the code timed out),
+    `used` (it was already redeemed, or the window closed after the first
+    pairing), `wrong` (it matches no open window), `closed` (no window is
+    open) or `rate_limited`. PC-only.
+  </Accordion>
+
+  <Accordion title="GET /api/devices">
+    `PairedDeviceList`: every paired device, pending ones with `expires_at`.
+    PC-only.
+  </Accordion>
+
+  <Accordion title="POST /api/devices/listener">
+    Start listening for devices, making the key and certificate the first time.
+    GAIA listens on IPv4 on port 4243 unless `GAIA_DEVICE_PORT` names another,
+    and starts listening again after a restart until the PC turns it off.
+    Returns the status. **409** with `detail` `{"code", "message"}` when it
+    can't: `port_in_use` (on macOS also when another program holds the port on
+    just one of the PC's addresses), `unsafe_folder` (someone else can reach
+    `~/.gaia/devices`; use Reset pairing), `certificate` or `start_failed`.
+    PC-only.
+  </Accordion>
+
+  <Accordion title="DELETE /api/devices/listener">
+    Stop listening, and stay off after a restart. Pairing closes. PC-only.
+  </Accordion>
+
+  <Accordion title="POST /api/devices/pairing">
+    Open the pairing window: a `DevicePairingOffer` with a new invitation,
+    replacing any open one. **409** with `code` `listener_off` while the
+    listener is off, or `no_home_network` when the PC has no home-network
+    address. PC-only.
+  </Accordion>
+
+  <Accordion title="DELETE /api/devices/pairing">
+    Close the pairing window; its invitation stops working. Returns the status.
+    PC-only.
+  </Accordion>
+
+  <Accordion title="POST /api/devices/pairing/reset">
+    Reset pairing: a new key and so a new pin, and every device unpaired, which
+    must pair again. The PC keeps its `pc_id`. It works when the listener
+    refuses an unsafe folder, since it is the remedy, and leaves the listener on
+    or off as it was. PC-only.
+  </Accordion>
+
+  <Accordion title="POST /api/devices/pair">
+    Redeem an invitation: `DevicePairRequest` in, `DevicePairResponse` out, with
+    the device pending. Served only on the device listener (**404** anywhere
+    else) and the one route there without a token. Every bad invitation gets
+    the same **403**; only the PC sees why. **429** with `Retry-After` while the
+    address is locked out; **422** for a name with nothing printable left.
+  </Accordion>
+
+  <Accordion title="DELETE /api/devices/me">
+    A device unpairs itself with its own token, pending or allowed: **204**.
+  </Accordion>
+
+  <Accordion title="POST /api/devices/{device_id}/allow">
+    Let a pending device in; returns its `PairedDevice` and records who allowed
+    it in the audit log. **404** for an unknown id, or a pending device whose 10
+    minutes ran out. PC-only.
+  </Accordion>
+
+  <Accordion title="DELETE /api/devices/{device_id}">
+    Unpair a device: **204**. Its next request is a **401** and its open
+    streams end. **404** for an unknown id. PC-only.
   </Accordion>
 </AccordionGroup>
 
@@ -3345,6 +3522,32 @@ those.
 `GAIA_UI_ALLOWED_ORIGINS` and `GAIA_UI_ALLOWED_HOSTS` (comma-separated) opt a
 reverse-proxied or named-host deployment in; neither is populated by
 default.
+
+### What a paired device may call
+
+Each request is from one of three callers, decided by the listener it reached:
+
+- **`pc`**: on the main listener, a loopback peer with no `X-Forwarded-*` header.
+- **`device:<id>`**: on the listener paired devices reach, the device its token names.
+- **`tunnel`**: any other caller.
+
+The device listener refuses every route it doesn't list, so a new route stays on
+the PC until it is opened to devices on purpose. The list is `DEVICE_ROUTES` in
+`gaia/ui/devices/routes.py`, and every route's class is pinned by
+`tests/unit/chat/ui/test_route_access.py`:
+
+| Class | A paired device | Routes |
+|---|---|---|
+| Allowed | Allowed | `GET /api/health`, `GET /api/system/status`; `GET`/`POST /api/sessions`, `GET /api/sessions/{session_id}` and its `/messages`; `POST /api/chat/send`, `GET /api/chat/active`, `GET /api/chat/attach`, `POST /api/chat/cancel`, `POST /api/chat/confirm-tool`, `POST /api/chat/user-input`; `GET /api/schedules`, `GET /api/schedules/{name}` and its `/results`; `GET /api/goals`, `GET /api/goals/{goal_id}` |
+| Pairing | Only with no token | `POST /api/devices/pair` |
+| Unpairing itself | Pending or allowed | `DELETE /api/devices/me` |
+| PC-only | Refused | Routes that answer only the PC, including every [paired devices](#paired-devices) route that manages devices |
+| Stays on the PC | Refused | Everything else: settings, providers and keys, mobile access, connectors, memory, documents and files, skills and agents, logs, changes and the rest |
+
+A request matching both a listed route and an unlisted one, such as
+`GET /api/sessions/search` next to `GET /api/sessions/{session_id}`, is
+refused. A refused request is a **403** with `code: pc_only` that says to do it
+on the PC.
 
 ### Flagship only
 

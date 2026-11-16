@@ -5,8 +5,9 @@
 A paired phone reaches the device listener, which refuses some routes. The app
 reads the committed ``routeAccess.gen.ts`` to show "change this on your PC"
 instead of a control that can only fail. Classes come from each route's guard
-dependencies (``gaia.ui.security``); a check made inside a handler is not seen
-and stays ``remote``.
+dependencies (``gaia.ui.security``), and a route with none is ``remote`` only
+when ``gaia.ui.devices.routes.DEVICE_ROUTES`` lists it; the listener refuses
+every other one. A check made inside a handler is not seen.
 
 Usage::
 
@@ -24,7 +25,7 @@ import sys
 from pathlib import Path
 from typing import Dict
 
-from fastapi.routing import APIRoute
+from gaia.ui.devices.routes import DEVICE_ROUTES, iter_api_routes
 
 ARTIFACT_PATH = (
     Path(__file__).resolve().parents[1]
@@ -50,24 +51,6 @@ def _guard_classes():
     )
 
 
-def _api_routes(routes):
-    """Every ``APIRoute``, through the app's lazily included routers."""
-    for route in routes:
-        lazy = False
-        for name in ("effective_candidates", "effective_low_priority_routes"):
-            method = getattr(route, name, None)
-            if callable(method):
-                yield from _api_routes(method())
-                lazy = True
-        if lazy:
-            continue
-        original = getattr(route, "original_route", route)
-        if isinstance(original, APIRoute):
-            yield original
-        elif hasattr(route, "routes"):
-            yield from _api_routes(route.routes)
-
-
 def build_access() -> Dict[str, str]:
     """``{"METHOD /path": class}`` for every ``/api/`` and ``/v1/`` route."""
     from gaia.ui.server import create_app
@@ -75,13 +58,19 @@ def build_access() -> Dict[str, str]:
     app = create_app(db_path=":memory:")
     guards = _guard_classes()
     access: Dict[str, str] = {}
-    for route in _api_routes(app.routes):
+    for route in iter_api_routes(app.routes):
         if not route.path.startswith(("/api/", "/v1/")):
             continue
         calls = {d.call for d in route.dependant.dependencies}
-        cls = next((name for guard, name in guards if guard in calls), "remote")
+        guarded = next((name for guard, name in guards if guard in calls), None)
         for method in route.methods:
-            access[f"{method} {route.path}"] = cls
+            key = f"{method} {route.path}"
+            if guarded is not None:
+                access[key] = guarded
+            elif key in DEVICE_ROUTES:
+                access[key] = "remote"
+            else:
+                access[key] = "not_on_listener"
     return dict(sorted(access.items()))
 
 
@@ -130,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
 
+    ARTIFACT_PATH.parent.mkdir(parents=True, exist_ok=True)
     ARTIFACT_PATH.write_text(rendered, encoding="utf-8", newline="\n")
     print(f"Wrote {ARTIFACT_PATH}")
     return 0

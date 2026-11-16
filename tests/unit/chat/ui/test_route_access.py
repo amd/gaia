@@ -8,8 +8,8 @@ fails for a route nobody has decided about:
 
 * ``pc``: the PC running GAIA only (``require_local_pc``).
 * ``not_on_listener``: stays on the PC; never a paired device
-  (``refuse_on_device_listener``).
-* ``remote``: the PC and allowed devices.
+  (``refuse_on_device_listener``, or not listed in ``DEVICE_ROUTES``).
+* ``remote``: the PC and allowed devices; only what ``DEVICE_ROUTES`` lists.
 * ``web``: the web UI and the API docs, which the device listener never serves.
 * ``pair``: the pairing redemption, only on the device listener, with no token.
 * ``device_self``: a paired device unpairing itself, pending or allowed.
@@ -30,6 +30,7 @@ from gaia.config import GaiaConfig
 from gaia.ui import security
 from gaia.ui.devices.access import DeviceAccess
 from gaia.ui.devices.listener import DeviceGate
+from gaia.ui.devices.routes import DEVICE_ROUTES
 from gaia.ui.security import (
     DEVICE_SCOPE_KEY,
     LAN_LISTENER,
@@ -128,10 +129,31 @@ WEB = {
     "HEAD /redoc",
 }
 
-# Some check inside the handler: ``network_policy`` in ``PUT /api/settings`` on
-# the PC, and on the device listener ``POST /api/providers/{provider}/connect``
-# takes no fields.
+#: What an allowed device may call: ``DEVICE_ROUTES`` in
+#: ``gaia.ui.devices.routes``, less its own unpairing (``DEVICE_SELF``).
 REMOTE = {
+    "GET /api/chat/active",
+    "GET /api/chat/attach",
+    "GET /api/goals",
+    "GET /api/goals/{goal_id}",
+    "GET /api/health",
+    "GET /api/schedules",
+    "GET /api/schedules/{name:path}",
+    "GET /api/schedules/{name:path}/results",
+    "GET /api/sessions",
+    "GET /api/sessions/{session_id}",
+    "GET /api/sessions/{session_id}/messages",
+    "GET /api/system/status",
+    "POST /api/chat/cancel",
+    "POST /api/chat/confirm-tool",
+    "POST /api/chat/send",
+    "POST /api/chat/user-input",
+    "POST /api/sessions",
+}
+
+#: Routes with no guard of their own that the device listener still refuses,
+#: because ``DEVICE_ROUTES`` doesn't list them. The PC keeps every one.
+UNLISTED = {
     "DELETE /api/chat/permissions/{session_id}/grants",
     "DELETE /api/connectors/_flows/{flow_id}",
     "DELETE /api/connectors/{connector_id}",
@@ -153,8 +175,6 @@ REMOTE = {
     "GET /api/agents",
     "GET /api/agents/catalog",
     "GET /api/agents/{agent_id}/install-status",
-    "GET /api/chat/active",
-    "GET /api/chat/attach",
     "GET /api/chat/context/{session_id}",
     "GET /api/chat/followup/{session_id}",
     "GET /api/chat/performance/{session_id}",
@@ -173,13 +193,10 @@ REMOTE = {
     "GET /api/files/image",
     "GET /api/files/preview",
     "GET /api/files/search",
-    "GET /api/goals",
     "GET /api/goals/health",
     "GET /api/goals/pending-approval",
     "GET /api/goals/stats",
-    "GET /api/goals/{goal_id}",
     "GET /api/gpu-memory",
-    "GET /api/health",
     "GET /api/lemonade/detect",
     "GET /api/lemonade/target",
     "GET /api/mcp/servers",
@@ -205,13 +222,8 @@ REMOTE = {
     "GET /api/providers/local/context",
     "GET /api/providers/local/status",
     "GET /api/providers/{provider}/models",
-    "GET /api/schedules",
-    "GET /api/schedules/{name:path}",
-    "GET /api/schedules/{name:path}/results",
-    "GET /api/sessions",
     "GET /api/sessions/events",
     "GET /api/sessions/search",
-    "GET /api/sessions/{session_id}",
     "GET /api/sessions/{session_id}/capabilities",
     "GET /api/sessions/{session_id}/changes",
     "GET /api/sessions/{session_id}/changes/git",
@@ -219,7 +231,6 @@ REMOTE = {
     "GET /api/sessions/{session_id}/changes/{turn_id}/diff",
     "GET /api/sessions/{session_id}/environment",
     "GET /api/sessions/{session_id}/export",
-    "GET /api/sessions/{session_id}/messages",
     "GET /api/sessions/{session_id}/outputs",
     "GET /api/settings",
     "GET /api/settings/undo",
@@ -238,7 +249,6 @@ REMOTE = {
     "GET /api/spending/prices/{provider}",
     "GET /api/system/model-server",
     "GET /api/system/resources",
-    "GET /api/system/status",
     "GET /api/system/warm-up",
     "GET /api/system/work-in-progress",
     "GET /v1/connections",
@@ -250,13 +260,9 @@ REMOTE = {
     "GET /v1/email/version",
     "MOUNT /api/files/uploads",
     "PATCH /api/sessions/{session_id}/private",
-    "POST /api/chat/cancel",
-    "POST /api/chat/confirm-tool",
     "POST /api/chat/followup",
     "POST /api/chat/retry-with",
     "POST /api/chat/retry-with/choose",
-    "POST /api/chat/send",
-    "POST /api/chat/user-input",
     "POST /api/connectors/{connector_id}/disable",
     "POST /api/documents/upload",
     "POST /api/documents/{doc_id}/cancel",
@@ -283,7 +289,6 @@ REMOTE = {
     "POST /api/schedules",
     "POST /api/schedules/parse",
     "POST /api/schedules/{name:path}/run",
-    "POST /api/sessions",
     "POST /api/sessions/{session_id}/activate",
     "POST /api/sessions/{session_id}/changes/git/commit",
     "POST /api/sessions/{session_id}/changes/git/pr",
@@ -351,6 +356,7 @@ EXPECTED = {
     **{r: "device_self" for r in DEVICE_SELF},
     **{r: "web" for r in WEB},
     **{r: "remote" for r in REMOTE},
+    **{r: "not_on_listener" for r in UNLISTED},
 }
 
 #: Who each class lets in.
@@ -409,7 +415,7 @@ def _guards(route):
 
 def _access_class(key, route):
     if key.startswith("MOUNT "):
-        return "remote"
+        return "not_on_listener"
     if not key.split(" ", 1)[1].startswith(("/api/", "/v1/")):
         return "web"
     guards = _guards(route)
@@ -421,7 +427,7 @@ def _access_class(key, route):
         return "pair"
     if security.require_device in guards:
         return "device_self"
-    return "remote"
+    return "remote" if key in DEVICE_ROUTES else "not_on_listener"
 
 
 def _request_for(caller, device):
@@ -520,6 +526,32 @@ def test_every_route_is_classified(setup):
                 wrong.append(f"{key}: {caller} got {status}")
     assert not wrong, "\n".join(wrong)
     assert sent > 400 and guarded > 40, (sent, guarded)
+
+
+def test_device_routes_name_real_routes(setup):
+    """A listed route that doesn't exist would open nothing and hide a typo."""
+    app, _, _ = setup
+    routes = _routes(app)
+    assert DEVICE_ROUTES <= set(routes), sorted(DEVICE_ROUTES - set(routes))
+    assert DEVICE_ROUTES == REMOTE | DEVICE_SELF
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/sessions/search", "/api/goals/stats", "/api/goals/health"]
+)
+def test_a_listed_template_opens_no_unlisted_route(setup, path):
+    """``GET /api/sessions/{session_id}`` mustn't let a device reach a sibling."""
+    _, clients, _ = setup
+    response = clients["device"].get(path)
+    assert response.status_code == 403
+    assert response.json()["code"] == "pc_only"
+
+
+def test_an_unlisted_route_is_refused_before_the_app_runs(setup):
+    _, clients, _ = setup
+    response = clients["device"].delete("/api/memory/all")
+    assert response.status_code == 403
+    assert response.json()["code"] == "pc_only"
 
 
 def test_a_paired_device_reconnects_a_provider_only_as_the_pc_saved_it(

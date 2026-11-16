@@ -6,6 +6,7 @@
 A second uvicorn server serves the same app through :class:`DeviceGate`, which
 answers the home network only, serves the API only, caps request bodies, and
 lets nothing through without a live device token except the pairing route.
+An allowed device reaches only the routes listed in :mod:`.routes`.
 Revoking a device ends the requests it still has open.
 """
 
@@ -21,7 +22,7 @@ import socket
 import ssl
 import sys
 import threading
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from starlette.datastructures import Headers
 from starlette.exceptions import HTTPException
@@ -48,6 +49,7 @@ from . import (
     SELF_ROUTE,
     ListenerErrorCode,
 )
+from .routes import DEVICE_ROUTES, DeviceRouteTable
 
 logger = get_logger(__name__)
 
@@ -127,9 +129,17 @@ class DeviceGate:
     parameters and the mobile access token mean nothing on this listener.
     """
 
-    def __init__(self, app: ASGIApp, access, *, allow_loopback: bool) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        access,
+        *,
+        allow_loopback: bool,
+        routes: FrozenSet[str] = DEVICE_ROUTES,
+    ) -> None:
         self.app = app
         self._access = access
+        self._routes = DeviceRouteTable(app, routes)
         # Only a loopback-bound listener, which no other machine can reach.
         self._allow_loopback = allow_loopback
 
@@ -200,6 +210,16 @@ class DeviceGate:
                 403,
                 "This device is waiting for someone to allow it on the PC.",
                 code="device_pending",
+            )
+            return
+        if not self._routes.allows(scope.get("method", "WEBSOCKET"), path):
+            await _refuse(
+                send,
+                scope,
+                403,
+                "Do this on the PC running GAIA. It isn't allowed from a "
+                "paired device.",
+                code="pc_only",
             )
             return
         scope[DEVICE_SCOPE_KEY] = DevicePrincipal(device.id, device.allowed)

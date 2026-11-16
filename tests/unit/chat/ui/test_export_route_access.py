@@ -10,7 +10,7 @@ import pytest
 
 from gaia.ui import export_route_access
 
-from .test_route_access import EXPECTED, NOT_ON_LISTENER, PC_ONLY
+from .test_route_access import EXPECTED, NOT_ON_LISTENER, PC_ONLY, UNLISTED
 
 pytestmark = pytest.mark.allow_network  # in-process app only
 
@@ -36,7 +36,8 @@ def test_check_fails_on_a_stale_file(tmp_path, monkeypatch, capsys):
 
 
 def test_classes_match_the_route_access_table(access):
-    for name, routes in (("pc", PC_ONLY), ("not_on_listener", NOT_ON_LISTENER)):
+    refused = NOT_ON_LISTENER | {r for r in UNLISTED if not r.startswith("MOUNT ")}
+    for name, routes in (("pc", PC_ONLY), ("not_on_listener", refused)):
         exported = {key for key, cls in access.items() if cls == name}
         assert exported == routes, name
     api_routes = {
