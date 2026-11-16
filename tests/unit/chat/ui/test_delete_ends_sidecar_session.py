@@ -144,3 +144,119 @@ def test_running_handle_skips_a_stopped_sidecar(monkeypatch):
         lambda *a: pytest.fail("a stopped sidecar must not be started"),
     )
     assert daemon_client.running_handle("gaia") is None
+
+
+def _daemon(monkeypatch, agents=None, get_raises=None):
+    inst = SimpleNamespace(base_url="http://127.0.0.1:1", token="t", api_version="1.4")
+    monkeypatch.setattr(daemon_client, "attach", lambda: inst)
+
+    def get(*a, **k):
+        if get_raises is not None:
+            raise get_raises
+        return SimpleNamespace(status_code=200, json=lambda: {"agents": agents})
+
+    monkeypatch.setattr(daemon_client.requests, "get", get)
+    ensured = []
+    monkeypatch.setattr(
+        daemon_client, "_ensure", lambda inst, agent_id: ensured.append(agent_id)
+    )
+    return ensured
+
+
+def test_running_handle_ignores_another_running_agent(monkeypatch):
+    ensured = _daemon(
+        monkeypatch,
+        agents=[
+            {"agent_id": "email", "state": "running"},
+            {"agent_id": "gaia-other", "state": "running"},
+        ],
+    )
+    assert daemon_client.running_handle("gaia") is None
+    assert ensured == []
+
+
+def test_running_handle_attaches_only_to_the_running_agent(monkeypatch):
+    ensured = _daemon(monkeypatch, agents=[{"agent_id": "gaia", "state": "running"}])
+    daemon_client.running_handle("gaia")
+    assert ensured == ["gaia"]
+
+
+def test_running_handle_raises_a_sidecar_error_when_the_daemon_drops(monkeypatch):
+    import requests
+
+    _daemon(monkeypatch, get_raises=requests.exceptions.ConnectionError("refused"))
+    with pytest.raises(SidecarError, match="could not reach the daemon"):
+        daemon_client.running_handle("gaia")
+
+
+def test_end_session_targets_only_this_chat():
+    from gaia.ui.email_sidecar.proxy import SidecarProxy
+
+    seen = []
+
+    class _Session:
+        def delete(self, url, timeout):
+            seen.append(url)
+            return SimpleNamespace(
+                status_code=200, json=lambda: {"session_id": "c", "deleted": True}
+            )
+
+    SidecarProxy(
+        "http://127.0.0.1:1/", agent_id="gaia", session=_Session()
+    ).end_session("chat-a")
+    assert seen == ["http://127.0.0.1:1/v1/gaia/sessions/chat-a"]
+
+
+def _relayed_app(monkeypatch):
+    monkeypatch.setattr(session_environment, "relayed", lambda session: True)
+    client = TestClient(create_app(db_path=":memory:"))
+    sid = client.post("/api/sessions", json={"title": "t", "agent_type": "gaia"})
+    return client, sid.json()["id"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        SidecarError("could not reach the daemon"),
+        SidecarHTTPError(409, "running a turn"),
+        SidecarHTTPError(500, "boom"),
+    ],
+)
+def test_a_sidecar_failure_never_fails_the_chat_delete(monkeypatch, caplog, error):
+    def running_handle(agent_id):
+        raise error
+
+    monkeypatch.setattr(daemon_client, "running_handle", running_handle)
+    client, sid = _relayed_app(monkeypatch)
+
+    r = client.delete(f"/api/sessions/{sid}")
+
+    assert r.status_code == 200, r.text
+    assert client.get(f"/api/sessions/{sid}").status_code == 404
+    assert f"Could not end deleted chat {sid}" in caplog.text
+
+
+def test_the_sidecar_is_asked_only_after_the_chat_is_gone(monkeypatch):
+    seen = []
+
+    def end(sid, agent_type):
+        seen.append(client.get(f"/api/sessions/{sid}").status_code)
+
+    monkeypatch.setattr(sessions_router, "_end_sidecar_session", end)
+    client, sid = _relayed_app(monkeypatch)
+
+    assert client.delete(f"/api/sessions/{sid}").status_code == 200
+    assert seen == [404]
+
+
+def test_deleting_one_chat_never_ends_another(monkeypatch):
+    proxy = _Proxy()
+    monkeypatch.setattr(daemon_client, "running_handle", lambda a: _handle(proxy))
+    client, keep = _relayed_app(monkeypatch)
+    gone = client.post("/api/sessions", json={"title": "u", "agent_type": "gaia"})
+    gone = gone.json()["id"]
+
+    assert client.delete(f"/api/sessions/{gone}").status_code == 200
+
+    assert proxy.ended == [gone]
+    assert client.get(f"/api/sessions/{keep}").status_code == 200
