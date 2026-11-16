@@ -119,13 +119,14 @@ export function AdvancedSettings() {
             if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);
             justSavedTimerRef.current = setTimeout(() => setJustSaved(false), 2200);
         } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
             log.system.error('Failed to save custom_model', err);
-            setSaveError(msg);
+            // The backend's 422 is pydantic's English; say it in the UI's language.
+            const refused = err instanceof api.ApiError && err.httpStatus === 422 && err.fields.includes('custom_model');
+            setSaveError(refused ? t('settings.advanced.customModelInvalid') : err instanceof Error ? err.message : String(err));
         } finally {
             setSavingModel(false);
         }
-    }, [customModel]);
+    }, [customModel, t]);
 
     const toggleDynamicTools = useCallback(async () => {
         if (dynamicToolsLocked || savingDynamicTools) return;

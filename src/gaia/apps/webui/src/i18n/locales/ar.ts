@@ -2400,6 +2400,7 @@ const messages: Messages = {
     'settings.advanced.notInstalledHint': 'يحتاجه GAIA لكل محادثة، بما فيها محادثات السحابة. يثبّته الإعداد نيابة عنك.',
     'settings.advanced.notRunningHint': 'تنتظر المحادثات حتى يعود، بما فيها محادثات السحابة. يبدأ عادة من جديد من تلقاء نفسه.',
     'settings.advanced.queryFailed': 'تعذّر الاستعلام عنه: {reason}',
+    'settings.advanced.customModelInvalid': 'معرّف النموذج سطر واحد لا يتجاوز 256 حرفًا.',
     'settings.advanced.noneLoaded': 'لا يوجد نموذج محمّل',
     'settings.advanced.loadsFirst': 'لم يُحمَّل بعد — يُحمَّل مع أول رسالة.',
     'settings.advanced.loadsWhenBack': 'يُحمَّل عند عودة خادم النماذج.',
