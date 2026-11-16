@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/amd/gaia/tui/internal/event"
 )
 
 func TestAudioToolNarration(t *testing.T) {
@@ -42,11 +40,4 @@ func TestAudioToolNarration(t *testing.T) {
 			t.Errorf("got %d cols: %.60q", displayWidth(got), got)
 		}
 	})
-}
-
-func audioResult(card string, extra string) event.CanonicalToolResultEvent {
-	return event.CanonicalToolResultEvent{
-		Preview: "Saved music_1.wav (12.0 s) · 95321ms",
-		Data:    []byte(`{"summary":"Saved music_1.wav (12.0 s)","success":true,"status":"success"` + extra + `,"generated_audio":` + card + `}`),
-	}
 }
