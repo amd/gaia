@@ -617,8 +617,8 @@ def _event_window(event: Mapping[str, Any]) -> Optional[Tuple[datetime, datetime
 
     Accepts both timed events (``start.dateTime``) and all-day events
     (``start.date``). Returns ``None`` when the event has no usable
-    start/end or the timestamps don't parse — a malformed event is skipped,
-    never counted as a spurious conflict.
+    start/end or the timestamps don't parse — the caller reports it as
+    unreadable, never as a spurious conflict.
     """
     start_obj = event.get("start") or {}
     end_obj = event.get("end") or {}
