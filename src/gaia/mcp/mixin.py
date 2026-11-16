@@ -8,10 +8,27 @@ from typing import Dict, List, Optional
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.logger import get_logger
 from gaia.mcp.client.config import MCPConfig
-from gaia.mcp.client.mcp_client import MCPClient, mcp_tool_error
+from gaia.mcp.client.mcp_client import (  # noqa: F401  # pylint: disable=unused-import
+    MCP_DEDUP_KEY_META,
+    MCPClient,
+    MCPToolDeclarationError,
+    mcp_tool_error,
+)
 from gaia.mcp.client.mcp_client_manager import MCPClientManager
 
 logger = get_logger(__name__)
+
+#: Longest server error the load summary shows; the full text is logged.
+_SUMMARY_ERROR_CHARS = 300
+
+
+def _summary_error(error: str) -> str:
+    """First line of ``error``, cut to fit one summary line."""
+    lines = error.strip().splitlines()
+    first = lines[0] if lines else "failed to connect"
+    if len(first) > _SUMMARY_ERROR_CHARS:
+        return first[: _SUMMARY_ERROR_CHARS - 1] + "…"
+    return first
 
 
 class MCPClientMixin:
@@ -164,8 +181,8 @@ class MCPClientMixin:
             client = self._mcp_manager.add_server(name, config)
 
             if client.is_connected():
-                # Register tools
-                self._register_mcp_tools(client)
+                if not self._register_mcp_server(name, client):
+                    return False
 
                 # Update system prompt with new tools
                 if hasattr(self, "rebuild_system_prompt"):
@@ -237,7 +254,8 @@ class MCPClientMixin:
                     n = len(tools)
                     lines.append(f"  ✓ {name} ({n} tool{'s' if n != 1 else ''})")
                 else:
-                    lines.append(f"  ✗ {name} (failed to connect)")
+                    error = self._mcp_manager.failure(name) or "failed to connect"
+                    lines.append(f"  ✗ {name} ({_summary_error(error)})")
         else:
             lines.append("No servers configured")
 
@@ -261,15 +279,14 @@ class MCPClientMixin:
         # Load servers from config (quiet — summary printed after)
         self._mcp_manager.load_from_config()
 
-        # Print config source + per-server connection results
-        self._print_mcp_load_summary()
-
         # Register tools from all loaded servers
         server_count = 0
         for server_name in self._mcp_manager.list_servers():
-            client = self._mcp_manager.get_client(server_name)
-            self._register_mcp_tools(client)
-            server_count += 1
+            if self._register_mcp_server(server_name):
+                server_count += 1
+
+        # After registration, so a refused server shows as failed
+        self._print_mcp_load_summary()
 
         # Update system prompt with all newly registered tools
         if server_count > 0 and hasattr(self, "rebuild_system_prompt"):
@@ -325,7 +342,74 @@ class MCPClientMixin:
         """
         return self._mcp_manager.get_client(name)
 
-    def _register_mcp_tools(self, client: MCPClient) -> None:
+    def _admit_mcp_server(
+        self, name: str, client: Optional[MCPClient] = None
+    ) -> Optional[List[tuple]]:
+        """Convert a connected server's tools, refusing the server if any
+        declaration is bad.
+
+        Args:
+            name: Server name.
+            client: Its client; looked up by ``name`` when omitted.
+
+        Returns:
+            The converted tools for :meth:`_register_mcp_tools`, or ``None``
+            when the server is not connected or was refused.
+        """
+        if client is None:
+            client = self._mcp_manager.get_client(name)
+        if client is None:
+            return None
+        try:
+            return self._convert_mcp_tools(client)
+        except MCPToolDeclarationError as e:
+            self._mcp_manager.refuse_server(name, str(e))
+            self._console_print("print_error", str(e))
+            return None
+
+    def _register_mcp_server(
+        self, name: str, client: Optional[MCPClient] = None
+    ) -> bool:
+        """Register a connected server's tools, or refuse the server.
+
+        Args:
+            name: Server name.
+            client: Its client; looked up by ``name`` when omitted.
+
+        Returns:
+            True when its tools were registered, False when it was refused
+            or is not connected.
+        """
+        if client is None:
+            client = self._mcp_manager.get_client(name)
+        converted = self._admit_mcp_server(name, client)
+        if converted is None:
+            return False
+        self._register_mcp_tools(client, converted)
+        return True
+
+    def _convert_mcp_tools(self, client: MCPClient) -> List[tuple]:
+        """Convert a server's tools to registry entries without registering them.
+
+        Raises:
+            MCPToolDeclarationError: A tool declares a bad dedup key.
+        """
+        # Use the sanitised ``prefix`` so the registered name matches what
+        # every other consumer (unregister, prompt fragments, error
+        # suggestions) will see. ``client.name`` (raw) is passed alongside so
+        # the ``_mcp_server`` metadata still round-trips to the config.
+        converted = []
+        for tool in client.list_tools():
+            gaia_tool = tool.to_gaia_format(client.prefix, client.name)
+            dedup_key = tool.declared_dedup_key(client.name)
+            if dedup_key is not None:
+                gaia_tool["dedup_key"] = dedup_key
+            converted.append((tool, gaia_tool))
+        return converted
+
+    def _register_mcp_tools(
+        self, client: MCPClient, converted: Optional[List[tuple]] = None
+    ) -> None:
         """Register all tools from an MCP server into _TOOL_REGISTRY.
 
         MCP tool responses are wrapped in GAIA-style format with
@@ -334,17 +418,16 @@ class MCPClientMixin:
 
         Args:
             client: MCPClient instance
+            converted: Output of :meth:`_convert_mcp_tools`, when already run.
+
+        Raises:
+            MCPToolDeclarationError: A tool declares a bad dedup key; no tool
+                from this server is registered.
         """
-        tools = client.list_tools()
+        if converted is None:
+            converted = self._convert_mcp_tools(client)
 
-        for tool in tools:
-            # Convert to GAIA format. Use the sanitised ``prefix`` so the
-            # registered name matches what every other consumer
-            # (unregister, prompt fragments, error suggestions) will
-            # see. ``client.name`` (raw) is passed alongside so the
-            # ``_mcp_server`` metadata still round-trips to the config.
-            gaia_tool = tool.to_gaia_format(client.prefix, client.name)
-
+        for tool, gaia_tool in converted:
             # Create base wrapper function
             base_wrapper = client.create_tool_wrapper(tool)
             tool_name = tool.name

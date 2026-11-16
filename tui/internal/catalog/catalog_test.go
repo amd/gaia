@@ -58,15 +58,6 @@ func TestSetStatusNonexistent(t *testing.T) {
 	}
 }
 
-func TestIsLaunchable(t *testing.T) {
-	if !StatusInstalled.IsLaunchable() {
-		t.Error("installed is not launchable")
-	}
-	if StatusAvailable.IsLaunchable() {
-		t.Error("available is launchable; it is not on disk yet")
-	}
-}
-
 func TestStatusString(t *testing.T) {
 	for status, want := range map[AgentStatus]string{
 		StatusInstalled: "installed",

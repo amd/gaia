@@ -18,7 +18,7 @@ Exception → HTTP mapping:
 - ``ConnectionRevokedError``                       → 401
 - ``ConnectionBusyError``                          → 503 + Retry-After
 - ``ScopeMismatchError``                           → 403
-- ``ConfigurationError``                           → 503
+- ``ConfigurationError``                           → 503 ``not_configured``
 - ``FlowInProgressError``                          → 409
 - ``FlowTimeoutError``                             → 408
 - ``ConsentDeniedError``                           → 400
@@ -47,7 +47,11 @@ from pydantic import BaseModel, Field
 
 import gaia.connectors as connections
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-from gaia.connectors.activations import list_agent_activations
+from gaia.connectors.activations import (
+    ActivationsLedgerCorrupt,
+    list_agent_activations,
+    load_activations,
+)
 from gaia.connectors.api import activate as activate_connector_for_agent
 from gaia.connectors.api import deactivate as deactivate_connector_for_agent
 from gaia.connectors.api import resolve_declared_scopes
@@ -87,7 +91,11 @@ from gaia.connectors.mcp_server import (
 )
 from gaia.connectors.registry import REGISTRY
 from gaia.connectors.spec import ConfigField
-from gaia.connectors.store import peek_connection, peek_provider_credentials
+from gaia.connectors.store import (
+    peek_connection,
+    peek_provider_credentials,
+    retry_keyring,
+)
 
 from ..security import require_ui_header as _require_ui_header
 
@@ -269,7 +277,11 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
             headers={"Retry-After": "1"},
         )
     if isinstance(exc, ConfigurationError):
-        return HTTPException(status_code=503, detail=str(exc))
+        # Tagged, so a client can tell "set up this provider" from other 503s.
+        return HTTPException(
+            status_code=503,
+            detail={"error": "not_configured", "message": str(exc)},
+        )
     if isinstance(exc, InvalidConfigValueError):
         return HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, ScopeNotAllowedError):
@@ -383,22 +395,44 @@ def _resolve_grant_scopes(
         ) from e
 
 
-def _widen_empty_scopes(
-    scopes: List[str], grant_map: Dict[str, List[str]]
+def _signin_scopes(
+    connector_id: str, scopes: List[str], grant_map: Dict[str, List[str]]
 ) -> List[str]:
-    """Same contract as the CLI's bare ``connect`` (#2730 D0/AC-8): an empty
-    ``scopes`` body must not silently reach ``start_authorization`` narrower
-    than what the request's own ``grant_agents`` already declare. When the
-    caller supplied scopes explicitly, or resolved no grant map at all,
-    return unchanged — ``start_authorization``'s own D0 guard decides the
-    genuinely-empty case (raise on an existing connection, fall back to
-    ``default_scopes`` on a real first connect)."""
-    if scopes or not grant_map:
+    """What a sign-in that grants agents asks for, as the CLI's ``connect
+    --grant-agent`` does: the scopes sent (or, when none, what the agents
+    declare) plus the provider's identity and refresh scopes, without which
+    the account has no address and Microsoft returns no refresh token. With
+    no grant map the request goes through unchanged, and
+    ``start_authorization``'s own D0 guard decides the empty case."""
+    if not grant_map:
         return scopes
-    union: set = set()
-    for agent_scopes in grant_map.values():
-        union.update(agent_scopes)
-    return sorted(union)
+    requested = set(scopes)
+    if not requested:
+        for agent_scopes in grant_map.values():
+            requested.update(agent_scopes)
+    try:
+        identity = REGISTRY.get(connector_id).default_scopes
+    except KeyError:
+        # Unknown connector: start_authorization names it.
+        return sorted(requested)
+    return sorted(requested | set(identity))
+
+
+# Providers whose missing OAuth client was logged; the list is polled.
+_unconfigured_logged: set = set()
+
+
+def _log_unconfigured(provider_ref: str, error: Exception) -> None:
+    """One INFO line per provider per run; the full setup text goes to DEBUG."""
+    if provider_ref in _unconfigured_logged:
+        return
+    _unconfigured_logged.add(provider_ref)
+    logger.info(
+        "connectors: provider %s has no OAuth client set up, so it cannot "
+        "connect until one is",
+        provider_ref,
+    )
+    logger.debug("connectors: provider %s not configured: %s", provider_ref, error)
 
 
 def _connector_summary(connector_id: str) -> Dict[str, Any]:
@@ -444,7 +478,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
             get_provider(provider_ref)
         except ConfigurationError as e:
             configurable = False
-            logger.info("connectors: provider %s not configured: %s", provider_ref, e)
+            _log_unconfigured(provider_ref, e)
             _pref = provider_ref.upper()
             config_error = (
                 f"OAuth credentials for {provider_ref!r} are not configured. "
@@ -574,6 +608,16 @@ def _field_summary(f: ConfigField) -> Dict[str, Any]:
 async def list_connectors() -> Dict[str, Any]:
     """Return catalog specs merged with live state for all connectors."""
     specs = REGISTRY.all()
+    # Every summary reads the same ledger; a corrupt one is fixed by deleting it, so name it.
+    ledger_cause: Dict[str, Any] = {}
+    try:
+        load_activations()
+    except ActivationsLedgerCorrupt as exc:
+        logger.warning("connectors-list: %s", exc)
+        ledger_cause = {"reason": "activations_unreadable", "path": str(exc.path)}
+    except ConnectorsError as exc:
+        # Unreadable but not corrupt (e.g. permissions): deleting it is the wrong advice.
+        logger.warning("connectors-list: %s", exc)
     summaries: List[Dict[str, Any]] = []
     for s in specs:
         try:
@@ -583,7 +627,12 @@ async def list_connectors() -> Dict[str, Any]:
                 "connectors-list: summary failed for %s (%s)", s.id, type(exc).__name__
             )
             summaries.append(
-                {"id": s.id, "display_name": s.display_name, "error": "unavailable"}
+                {
+                    "id": s.id,
+                    "display_name": s.display_name,
+                    "error": "unavailable",
+                    **ledger_cause,
+                }
             )
     return {"connectors": summaries}
 
@@ -815,11 +864,16 @@ async def configure_connector(
     the mailbox is granted to those agents when the flow completes (#2117) — the
     same behaviour as the plain ``authorize`` path.
     """
+    # Connecting needs the key store, so it may ask the OS to unlock it again.
+    retry_keyring()
     config = dict(body.config)
     raw_grant_agents = config.get("grant_agents")
     if raw_grant_agents:
         config["grant_agents"] = _resolve_grant_scopes(
             request, connector_id, list(raw_grant_agents)
+        )
+        config["scopes"] = _signin_scopes(
+            connector_id, list(config.get("scopes") or []), config["grant_agents"]
         )
     try:
         result = await configure(connector_id, config)
@@ -840,6 +894,7 @@ async def configure_connector(
 @router.post("/{connector_id}/test", dependencies=[Depends(_require_ui_header)])
 async def test_connector(connector_id: str) -> Dict[str, Any]:
     """Run the health check for a connector."""
+    retry_keyring()
     try:
         result = await health_check(connector_id)
     except KeyError:
@@ -958,11 +1013,12 @@ async def authorize(
     in the same flow (#2117). Scope resolution happens up front so an unknown
     or non-declaring agent fails the request before any browser step.
     """
+    retry_keyring()
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
         return await connections.start_authorization(
             connector_id,
-            scopes=_widen_empty_scopes(body.scopes, grant_map),
+            scopes=_signin_scopes(connector_id, body.scopes, grant_map),
             grant_agents=grant_map or None,
         )
     except ConnectorsError as e:
@@ -993,10 +1049,11 @@ async def authorize_device(
     The ``device_code`` is intentionally NOT returned — it is a bearer-equivalent
     for polling and the server owns the poll loop.
     """
+    retry_keyring()
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
         info = await connections.start_device_flow(
-            connector_id, scopes=_widen_empty_scopes(body.scopes, grant_map)
+            connector_id, scopes=_signin_scopes(connector_id, body.scopes, grant_map)
         )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e

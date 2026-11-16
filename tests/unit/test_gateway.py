@@ -27,6 +27,7 @@ from gaia.llm.gateway import (
     GatewayState,
 )
 from gaia.llm.lemonade_client import LemonadeClientError
+from gaia.llm.surface_hints import TUI_GATEWAY_INSTALL_HINT, surface_wording
 from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION
 
 
@@ -229,6 +230,9 @@ class TestAuth:
             "tool_calling_models",
             "no_tool_calling_models",
             "tool_calling_probe_failures",
+            "reasoning_models",
+            "no_reasoning_models",
+            "reasoning_probe_failures",
             "unavailable_models",
         }
 
@@ -320,6 +324,69 @@ class TestErrors:
         ):
             with pytest.raises(GatewayError, match="oldest version GAIA supports"):
                 manager.clear_token()
+
+    def test_404_for_an_uninstalled_cloud_provider_points_at_gateway_install(
+        self, manager
+    ):
+        """A fresh Lemonade has the cloud API but no provider registered yet, and
+        says so in the body. Calling that server too old sends the user to
+        `gaia daemon restart`, which cannot register anything."""
+        body = {
+            "error": {
+                "message": "Cloud provider 'amd' is not installed. Call POST "
+                "/v1/install with backend=cloud, provider, and base_url first.",
+                "type": "invalid_request",
+            }
+        }
+        with patch(
+            "gaia.llm.gateway.requests.request",
+            return_value=_response(status_code=404, body=body),
+        ):
+            with pytest.raises(GatewayError) as excinfo:
+                manager.clear_token()
+        message = str(excinfo.value)
+        assert TUI_GATEWAY_INSTALL_HINT in message
+        assert "older than" not in message
+        assert "daemon restart" not in message
+        # The Agent UI relays this text, so the command appears only after the
+        # CLI surface swap, never in the raw message.
+        assert "gaia gateway install" not in message
+        assert "`gaia gateway install`" in surface_wording(message, "cli")
+
+    def test_404_for_a_missing_cloud_endpoint_keeps_the_version_requirement(
+        self, manager
+    ):
+        body = {
+            "error": {
+                "message": "The requested endpoint does not exist",
+                "type": "not_found",
+            }
+        }
+        with patch(
+            "gaia.llm.gateway.requests.request",
+            return_value=_response(status_code=404, body=body),
+        ):
+            with pytest.raises(GatewayError, match="oldest version GAIA supports"):
+                manager.clear_token()
+
+    def test_404_with_an_unexpected_cloud_body_keeps_lemonades_detail(self, manager):
+        body = {
+            "error": {
+                "message": "the routing table is empty",
+                "type": "invalid_request",
+            }
+        }
+        with patch(
+            "gaia.llm.gateway.requests.request",
+            return_value=_response(status_code=404, body=body),
+        ):
+            with pytest.raises(
+                GatewayError, match="HTTP 404: the routing table is empty"
+            ) as excinfo:
+                manager.clear_token()
+        message = str(excinfo.value)
+        assert "`gaia gateway install`" not in message
+        assert "older than" not in message
 
     @pytest.mark.parametrize("status", [401, 403, 301, 302, 303, 307, 308])
     def test_probe_treats_auth_required_as_reachable(self, manager, status):
@@ -1370,7 +1437,7 @@ def _lemonade_without_a_key(sent, gateway_url=AMD_GATEWAY):
 @pytest.mark.parametrize("env_var", [GATEWAY_ENV_VAR, "GAIA_GATEWAY_TOKEN"])
 def test_lemonade_gets_the_token_the_claude_route_sends(manager, monkeypatch, env_var):
     """Replaying only the stored token left Claude on GAIA's env token."""
-    from gaia.llm.gateway import resolve_gateway_token
+    from gaia.llm.gateway import resolve_gateway_token_with_source
 
     monkeypatch.setenv(env_var, "env-token")
     stored = MagicMock(return_value="stored-token")
@@ -1380,7 +1447,7 @@ def test_lemonade_gets_the_token_the_claude_route_sends(manager, monkeypatch, en
     ):
         assert manager.ensure_authenticated(recall=stored) is True
 
-    assert sent[0]["api_key"] == "env-token" == resolve_gateway_token()
+    assert sent[0]["api_key"] == "env-token" == resolve_gateway_token_with_source()[0]
     stored.assert_not_called()
 
 
@@ -1549,9 +1616,9 @@ def _run_auth(monkeypatch, *, token, no_remember=False, stored=None):
 def test_auth_leaves_both_routes_on_the_new_token(monkeypatch, capsys):
     store = _run_auth(monkeypatch, token="new-token", stored="old-token")
     assert store["token"] == "new-token"
-    from gaia.llm.gateway import resolve_gateway_token
+    from gaia.llm.gateway import resolve_gateway_token_with_source
 
-    assert resolve_gateway_token() == "new-token"
+    assert resolve_gateway_token_with_source()[0] == "new-token"
     assert "Claude gateway models" not in capsys.readouterr().err
 
 
@@ -1582,3 +1649,29 @@ def test_auth_no_remember_keeps_a_matching_stored_token(monkeypatch):
         monkeypatch, token="same-token", no_remember=True, stored="same-token"
     )
     assert store == {"token": "same-token"}
+
+
+def test_gateway_token_prompt_without_a_terminal_exits_1_and_names_the_alternatives(
+    monkeypatch, capsys
+):
+    """No terminal to type into (a script, a CI step): getpass raises EOFError."""
+    import getpass
+
+    import gaia.cli as cli
+
+    def no_terminal(_prompt):
+        raise EOFError
+
+    monkeypatch.delenv("GAIA_GATEWAY_TOKEN", raising=False)
+    monkeypatch.setattr(getpass, "getpass", no_terminal)
+    args = SimpleNamespace(token_stdin=False, token=None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli._resolve_gateway_token(args, prompt="Gateway API token (input hidden): ")
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "needs a terminal" in captured.err
+    assert "--token-stdin" in captured.err
+    assert "GAIA_GATEWAY_TOKEN" in captured.err

@@ -1071,11 +1071,13 @@ class BrowserUseToolsMixin:
             # Registering tools whose backend can never work would spend prompt
             # tokens on an unusable capability and give the model something to
             # fail with. Say why, once, and register nothing.
+            from gaia.browser.errors import browser_install_hint
+
             logger.info(
                 "Browser-use tools not registered: this chat is not open in GAIA "
                 "desktop's browser pane, and Playwright is not installed. Open the "
-                "chat in GAIA desktop, or install with: pip install "
-                "'amd-gaia[browser]' && python -m playwright install chromium"
+                "chat in GAIA desktop, or %s",
+                browser_install_hint(),
             )
             return
 

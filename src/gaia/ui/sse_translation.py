@@ -75,6 +75,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.base.call_risk import (
     EXACT_TEXT_ARG,
+    NEEDS_PERSON_ARG,
     RISK_NOTE_ARG,
     plain_risk_note,
 )
@@ -82,6 +83,7 @@ from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     PROJECT_TRUST_PROMPT_TOOL,
+    RESOLVED_PATH_ARG,
     SCRATCH_ARG,
     SITE_ARG,
 )
@@ -119,6 +121,14 @@ SUMMARY_VIEW_KEYS = (
     "success",
     # The tool's own outcome word, e.g. "skipped" when a private chat saves nothing.
     "status",
+    # A model the call needed and didn't find ("vision"), so the UI offers it.
+    "needs_model",
+    # Set on a "denied" call nobody answered, so it isn't shown as the user's no.
+    "timed_out",
+    # "agent" on a "denied" call GAIA turned down itself, with no prompt shown.
+    "declined_by",
+    # False on a call refused before it ran, so a relayed refusal contacted nothing.
+    "executed",
     "summary_truncated",
     "command_output",
     "latency_ms",
@@ -380,6 +390,9 @@ class CanonicalTranslator:
             out = [{"type": "status", "message": message, "retracts_answer": True}]
         else:
             out = self._user_status(message)
+        if out and event.get("status") == "warning":
+            # The one sub-field kept: a client shows a warning, not just a live line.
+            out[0]["level"] = "warning"
         phase = event.get("phase")
         if out and isinstance(phase, str) and phase:
             out[0]["phase"] = phase
@@ -667,6 +680,14 @@ class CanonicalTranslator:
         # control channel, not this event stream.
         return []
 
+    def _on_context_usage(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Pass a live measurement through unchanged (contract 2.28).
+
+        Its shape is the same ``context_usage`` an in-process turn streams, so
+        the composer updates during the turn instead of waiting for ``final``.
+        """
+        return [dict(event)]
+
     # -- confirmation summary ----------------------------------------------
 
     def _render_args_summary(self, tool: str, args: Dict[str, Any]) -> str:
@@ -692,7 +713,10 @@ class CanonicalTranslator:
         if tool == PROJECT_TRUST_PROMPT_TOOL and isinstance(args.get("folder"), str):
             return _project_trust_question(args)
         label = self._action_labels.get(tool, f"Run {tool!r}")
-        detail = render_invocation(args)
+        # The call's own arguments; the risk note follows as its own line.
+        detail = render_invocation(
+            {k: v for k, v in args.items() if k not in PROMPT_ONLY_ARGS}
+        )
         if not detail:
             return f"{label}?"
         inline, newline, blocks = detail.partition("\n")
@@ -719,6 +743,7 @@ class CanonicalTranslator:
         "tool_confirm_denied": _on_tool_confirm_denied,
         "agent_created": _on_agent_created,
         "skill_use": _on_skill_use,
+        "context_usage": _on_context_usage,
         # tool_args is handled before dispatch (merges into the pending tool_call).
     }
 
@@ -815,9 +840,7 @@ def render_labelled_summary(
 
 #: Tools whose confirmation shows a command or code, rendered by
 #: :func:`render_command_summary` instead of as a ``key="value"`` clause.
-COMMAND_SUMMARY_TOOLS = frozenset(
-    {"run_shell_command", "run_cli_command", "wait_for_condition"}
-)
+COMMAND_SUMMARY_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 CODE_SUMMARY_TOOLS = frozenset({"run_python", "execute_python_file"})
 #: The bundled calendar skill's writes, as they register once it loads.
 CALENDAR_WRITE_TOOLS = frozenset(
@@ -844,7 +867,16 @@ PROMPT_ARG_VALUE_CHARS = 64_000
 
 
 #: Keys GAIA writes into a prompt's arguments; the agent refuses them from a model.
-PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG, EXACT_TEXT_ARG, SITE_ARG})
+PROMPT_ONLY_ARGS = frozenset(
+    {
+        RISK_NOTE_ARG,
+        SCRATCH_ARG,
+        EXACT_TEXT_ARG,
+        RESOLVED_PATH_ARG,
+        NEEDS_PERSON_ARG,
+        SITE_ARG,
+    }
+)
 
 
 def _model_call_args(event: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:

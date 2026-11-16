@@ -1114,8 +1114,13 @@ def test_pushed_history_too_big_beside_the_prompt_is_refit(app_client, monkeypat
     assert resp.status_code == 200
     seen = fake.seen_history
     assert 0 < len(seen) < len(context)
-    assert seen == context[-len(seen) :]
-    assert seen[0]["role"] == "user"
+    # The oldest turn the model still reads says earlier ones were left out.
+    as_sent = context[-len(seen) :]
+    assert seen[1:] == as_sent[1:]
+    assert seen[0] == {
+        "role": "user",
+        "content": f"{history.HIDDEN_TURNS_NOTE}\n\n{as_sent[0]['content']}",
+    }
     warnings = [e for e in _parse_sse(resp.text) if "out of the model's view" in str(e)]
     assert len(warnings) == 1
 

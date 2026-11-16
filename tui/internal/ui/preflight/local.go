@@ -19,6 +19,7 @@ import (
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/textutil"
 	"github.com/amd/gaia/tui/internal/ui/status"
 	"github.com/amd/gaia/tui/internal/update"
 )
@@ -337,7 +338,7 @@ func (l localRunner) checkBinary(_ context.Context, cfg Config) Row {
 		// The URL rides in the action, not in Command: that field renders under
 		// `run:` and means "type this", and a URL is not a command.
 		Action: "Re-run the GAIA installer — it ships " + program +
-			" alongside gaia-tui: " + catalog.InstallerURL,
+			" alongside gaia-cli: " + catalog.InstallerURL,
 		Where: catalog.AgentDocsURL,
 	}
 	// No one-key fix: a TUI quietly fetching a ~90 MB binary over a path
@@ -654,6 +655,9 @@ var listedCloudModels = func(ctx context.Context, provider string) ([]lemonade.M
 // another one — the system server, before setup installed GAIA's own — is unknown
 // here, and the first turn would fail.
 func checkCloudModel(ctx context.Context, chosen string, row Row) (Row, bool) {
+	if lemonade.IsHybridID(chosen) {
+		return checkHybridModels(ctx, row)
+	}
 	provider, _, _ := strings.Cut(chosen, ".")
 	listed, err := cloudModelListed(ctx, provider, chosen)
 	var (
@@ -697,6 +701,48 @@ func checkCloudModel(ctx context.Context, chosen string, row Row) (Row, bool) {
 			" key: " + replayErr.Error()
 	}
 	return row, false
+}
+
+// readHybridModels is hybrid's concrete models. A var so tests need no config.
+var readHybridModels = lemonade.ReadHybridModels
+
+// checkHybridModels confirms every concrete model hybrid routes to can answer;
+// `hybrid` itself is never downloaded or loaded.
+func checkHybridModels(ctx context.Context, row Row) (Row, bool) {
+	models, err := readHybridModels()
+	if err != nil {
+		row.State = StateFailed
+		row.Disposition = status.DispositionHalt
+		row.Line = "hybrid's models can't be read"
+		row.Detail = err.Error()
+		row.Raw = err.Error()
+		row.Fix = FixNone
+		row.Remedy = Remedy{Action: "Fix the hybrid_* keys in GAIA's config.json, then press r to check again."}
+		return row, false
+	}
+	for _, r := range models.Roles() {
+		var (
+			got Row
+			ok  bool
+		)
+		if lemonade.IsCloudID(r.Model) {
+			got, ok = checkCloudModel(ctx, r.Model, row)
+		} else {
+			got = checkLocalModelDownloaded(ctx, r.Model, row)
+			ok = got.State == StateOK
+		}
+		if ok {
+			continue
+		}
+		got.Line = "hybrid's " + r.Role + " model: " + got.Line
+		if got.State == StateFailed {
+			got.Remedy.Action = strings.TrimSpace(got.Remedy.Action + " Or choose another " + r.Role +
+				" model with `gaia config set " + r.Key + " <id>` — `gaia gateway models` lists the gateway's.")
+			got.Remedy.Command = "gaia config set " + r.Key + " <id>"
+		}
+		return got, false
+	}
+	return row, true
 }
 
 func cloudModelListed(ctx context.Context, provider, chosen string) (bool, error) {
@@ -856,15 +902,24 @@ func (l localRunner) verifyModelsRow(ctx context.Context) (Row, string, string, 
 		// Installed and not answering is a fault, not a step still to do.
 		row.State = StateFailed
 		row.Disposition = status.DispositionHalt
-		row.Line = "model server not answering"
 		row.Detail = strings.Join(st.Reasons, "\n")
+		row.Raw = row.Detail
+		if st.ModelListUnread {
+			row.Line = "model server's model list can't be read"
+			row.Remedy = Remedy{
+				Action: "The model server answers, but not with a list of models. Check that GAIA " +
+					"points at Lemonade Server, then press r to check again.",
+				Where: installDocs,
+			}
+			return row, "", "", st
+		}
+		row.Line = "model server not answering"
 		row.Fix = FixRunSetup
 		row.Remedy = Remedy{
 			Action:  "Press f and setup starts it again, then checks the models.",
 			Command: gaiainit.RunCommand(l.skipChatModel()),
 			Where:   installDocs,
 		}
-		row.Raw = row.Detail
 		return row, "", "", st
 	}
 
@@ -1042,14 +1097,7 @@ func downloadSize(models []gaiainit.Model) string {
 	if len(models) == 0 {
 		return ""
 	}
-	return formatGB(total)
-}
-
-func formatGB(gb float64) string {
-	if gb < 1 {
-		return fmt.Sprintf("%.0f MB", gb*1000)
-	}
-	return fmt.Sprintf("%.1f GB", gb)
+	return textutil.FormatGB(total)
 }
 
 // describeChat names a local chat model for the hand-off line.
@@ -1057,14 +1105,14 @@ func describeChat(m gaiainit.Model) string {
 	if m.SizeGB == nil {
 		return m.ID + " (on this machine)"
 	}
-	return fmt.Sprintf("%s (%s, on this machine)", m.ID, formatGB(*m.SizeGB))
+	return fmt.Sprintf("%s (%s, on this machine)", m.ID, textutil.FormatGB(*m.SizeGB))
 }
 
 func sizeSuffix(gb *float64) string {
 	if gb == nil {
 		return ""
 	}
-	return " (" + formatGB(*gb) + ")"
+	return " (" + textutil.FormatGB(*gb) + ")"
 }
 
 func modelSummaries(st gaiainit.Status) []string {

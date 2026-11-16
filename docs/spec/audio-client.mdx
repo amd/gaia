@@ -113,21 +113,10 @@ class AudioClient:
 
         Example:
             >>> async def process_message(text: str):
-            ...     await audio.process_voice_input(text)
+            ...     reply = audio.llm_client.generate(text)
+            ...     print(reply)
+            ...     await audio.speak_text(reply)
             >>> await audio.start_voice_chat(process_message)
-        """
-        pass
-
-    async def process_voice_input(self, text: str, get_stats_callback=None):
-        """
-        Process transcribed voice input and get AI response.
-
-        Capture stays paused until streamed playback has fully finished;
-        transcriptions queued meanwhile are discarded before capture resumes.
-
-        Args:
-            text: Transcribed text to process
-            get_stats_callback: Optional callback for performance stats
         """
         pass
 
@@ -312,7 +301,9 @@ async def main():
     )
 
     async def process_message(text):
-        await audio.process_voice_input(text)
+        reply = audio.llm_client.generate(text)
+        print(reply)
+        await audio.speak_text(reply)
 
     await audio.start_voice_chat(process_message)
 

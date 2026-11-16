@@ -131,27 +131,36 @@ target() {
   fi
 }
 
+# The Terminal UI the row installed. A release from before the binary became
+# gaia-cli (the one a PR tests, and the one the upgrade row starts from) has
+# gaia-tui there instead.
 tui_bin() {
+  local dir
   case "${KIND}" in
-    tui-pkg) echo /usr/local/bin/gaia-tui ;;
-    install-sh) echo "${HOME}/.gaia/bin/gaia-tui" ;;
-    *) echo /usr/bin/gaia-tui ;;
+    tui-pkg) dir=/usr/local/bin ;;
+    install-sh) dir="${HOME}/.gaia/bin" ;;
+    *) dir=/usr/bin ;;
   esac
+  if ! target test -x "${dir}/gaia-cli" && target test -x "${dir}/gaia-tui"; then
+    echo "${dir}/gaia-tui"
+  else
+    echo "${dir}/gaia-cli"
+  fi
 }
 
-# A release stamps gaia-tui in two spellings today: the raw binaries say the
+# A release stamps gaia-cli in two spellings today: the raw binaries say the
 # tag (v0.25.1-rc2), the installers' copies the package version (0.25.1-rc.2).
 check_tui_version() {  # check_tui_version <expected substring>...
   local out want
-  out="$(target "$(tui_bin)" version 2>&1)" || die "gaia-tui version exited non-zero: ${out}"
-  echo "gaia-tui version -> ${out}"
+  out="$(target "$(tui_bin)" version 2>&1)" || die "gaia-cli version exited non-zero: ${out}"
+  echo "gaia-cli version -> ${out}"
   for want in "$@"; do
     case "${out}" in *"${want}"*) return 0 ;; esac
   done
-  die "gaia-tui reports '${out}', expected one of: $*"
+  die "gaia-cli reports '${out}', expected one of: $*"
 }
 
-# One real non-interactive turn: gaia-tui spawns the installed gaia-agent, which
+# One real non-interactive turn: gaia-cli spawns the installed gaia-agent, which
 # talks to the fake model server. Exit 0 and the server's answer on stdout is a
 # pass; anything else fails with both streams and the request log printed.
 one_shot() {
@@ -348,7 +357,7 @@ assert_gone() { for p in "$@"; do [ ! -e "${p}" ] || die "left behind: ${p}"; do
 
 no_gaia_processes() {
   local left
-  left="$(pgrep -fl 'gaia-desktop|gaia-tui|gaia-agent|\.gaia/venv/bin/|\.gaia/core/|\.gaia/app-core/|resources/core/gaia|-m gaia\.daemon' || true)"
+  left="$(pgrep -fl 'gaia-desktop|gaia-cli|gaia-tui|gaia-agent|\.gaia/venv/bin/|\.gaia/core/|\.gaia/app-core/|resources/core/gaia|-m gaia\.daemon' || true)"
   [ -z "${left}" ] || die "still running after uninstall: ${left}"
 }
 
@@ -413,9 +422,9 @@ download)
 install)
   case "${KIND}" in
     tui-pkg)
-      test ! -e /usr/local/bin/gaia-tui || die "gaia-tui is already installed: the runner is not clean"
+      for b in gaia-cli gaia-tui; do test ! -e "/usr/local/bin/${b}" || die "${b} is already installed: the runner is not clean"; done
       sudo installer -pkg "$(package_file "tui-pkg-${TUI_PLATFORM}")" -target /
-      for b in gaia-tui gaia-agent; do [ -x "/usr/local/bin/${b}" ] || die "${b} did not land in /usr/local/bin"; done
+      for b in "$(tui_bin)" /usr/local/bin/gaia-agent; do [ -x "${b}" ] || die "${b} did not land"; done
       ;;
     agent-ui-dmg)
       dmg="${WORK}/dl/$(asset_name agent-ui-dmg)"
@@ -462,9 +471,10 @@ install)
       else
         deb="$(package_file tui-deb)"
       fi
+      test ! -e /usr/bin/gaia-cli || die "gaia-cli is already installed: the runner is not clean"
       test ! -e /usr/bin/gaia-tui || die "gaia-tui is already installed: the runner is not clean"
       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${deb}"
-      for b in gaia-tui gaia-agent; do [ -x "/usr/bin/${b}" ] || die "${b} did not land in /usr/bin"; done
+      for b in "$(tui_bin)" /usr/bin/gaia-agent; do [ -x "${b}" ] || die "${b} did not land"; done
       if [ "${KIND}" = "tui-deb-upgrade" ]; then
         check_tui_version "$(rel "d['prev_tui_version']")" "$(rel "d['prev_version']")"
         mkdir -p "${GAIA_HOME}"
@@ -476,9 +486,9 @@ install)
       rpm="$(package_file tui-rpm)"
       # The container sees only WORK (as /work); a rebuilt package lives outside it.
       case "${rpm}" in "${WORK}/dl/"*) ;; *) cp "${rpm}" "${WORK}/dl/" ;; esac
-      docker exec gaia-fedora test ! -e /usr/bin/gaia-tui || die "gaia-tui is already in the container"
+      for b in gaia-cli gaia-tui; do docker exec gaia-fedora test ! -e "/usr/bin/${b}" || die "${b} is already in the container"; done
       docker exec gaia-fedora dnf install -y "/work/dl/$(basename "${rpm}")"
-      for b in gaia-tui gaia-agent; do docker exec gaia-fedora test -x "/usr/bin/${b}" || die "${b} did not land in /usr/bin"; done
+      for b in "$(tui_bin)" /usr/bin/gaia-agent; do docker exec gaia-fedora test -x "${b}" || die "${b} did not land"; done
       ;;
     install-sh)
       [ ! -e "${GAIA_HOME}" ] || die "${GAIA_HOME} exists before install: the sandbox is not fresh"
@@ -490,7 +500,7 @@ install)
       fi
       # Exactly the documented `curl ... | sh`, with the script from this checkout.
       sh <"${REPO}/installer/scripts/install.sh"
-      for f in "${GAIA_HOME}/core/gaia" "${GAIA_HOME}/bin/gaia" "${GAIA_HOME}/bin/gaia-mcp" "${GAIA_HOME}/bin/gaia-tui" "${GAIA_HOME}/bin/gaia-agent"; do
+      for f in "${GAIA_HOME}/core/gaia" "${GAIA_HOME}/bin/gaia" "${GAIA_HOME}/bin/gaia-mcp" "${GAIA_HOME}/bin/gaia-cli" "${GAIA_HOME}/bin/gaia-agent"; do
         [ -x "${f}" ] || die "install.sh finished but ${f} is not there"
       done
       # It installs the frozen gaia: no venv, so no Python of GAIA's on any PATH.
@@ -503,6 +513,10 @@ install)
 upgrade)
   [ "${KIND}" = "tui-deb-upgrade" ] || die "no upgrade for ${KIND}"
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "$(package_file tui-deb)"
+  # Only a release that ships gaia-cli can be held to having removed gaia-tui.
+  if [ -x /usr/bin/gaia-cli ]; then
+    test ! -e /usr/bin/gaia-tui || die "the upgrade left the old /usr/bin/gaia-tui behind"
+  fi
   check_tui_version "${TUI_VERSION}" "${VERSION}"
   cmp -s "${WORK}/marker.expected" "${GAIA_HOME}/headless-upgrade-marker" \
     || die "the upgrade lost or changed ${GAIA_HOME}/headless-upgrade-marker"
@@ -560,8 +574,8 @@ uninstall)
     tui-pkg)
       # A .pkg ships no uninstaller (macOS convention); this is the documented
       # removal from installer/tui/macos/README.md.
-      sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
-      sudo rm -rf /usr/local/share/doc/gaia-tui
+      sudo rm -f /usr/local/bin/gaia-cli /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
+      sudo rm -rf /usr/local/share/doc/gaia-cli /usr/local/share/doc/gaia-tui
       for id in $(pkgutil --pkgs | grep '^ai\.amd\.gaia\.' || true); do sudo pkgutil --forget "${id}"; done
       ;;
     agent-ui-dmg) rm -rf "$(cat "${WORK}/app.bundle")" ;;
@@ -577,7 +591,7 @@ uninstall)
 leftovers)
   case "${KIND}" in
     tui-pkg)
-      assert_gone /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/share/doc/gaia-tui
+      assert_gone /usr/local/bin/gaia-cli /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/share/doc/gaia-cli /usr/local/share/doc/gaia-tui
       [ -z "$(pkgutil --pkgs | grep '^ai\.amd\.gaia\.' || true)" ] || die "package receipts remain: $(pkgutil --pkgs | grep '^ai\.amd\.gaia\.')"
       ;;
     agent-ui-dmg)
@@ -597,10 +611,10 @@ leftovers)
       [ -z "${entries}" ] || echo "::warning::the AppImage left desktop entries: ${entries}"
       ;;
     tui-deb|tui-deb-upgrade)
-      assert_gone /usr/bin/gaia-tui /usr/bin/gaia-agent /usr/share/applications/gaia-tui.desktop
+      assert_gone /usr/bin/gaia-cli /usr/bin/gaia-tui /usr/bin/gaia-agent /usr/share/applications/gaia-tui.desktop
       ;;
     tui-rpm)
-      for p in /usr/bin/gaia-tui /usr/bin/gaia-agent /usr/share/applications/gaia-tui.desktop; do
+      for p in /usr/bin/gaia-cli /usr/bin/gaia-tui /usr/bin/gaia-agent /usr/share/applications/gaia-tui.desktop; do
         docker exec gaia-fedora test ! -e "${p}" || die "left behind in the container: ${p}"
       done
       ;;

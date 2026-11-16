@@ -118,6 +118,70 @@ describe('SetupScreen', () => {
         expect(screen.queryByRole('button', { name: 'Start chatting' })).toBeNull();
     });
 
+    it('setup run again for a cloud user continues on that provider, not a local download', async () => {
+        useModelStore.setState({
+            active: { provider: 'amd', model: 'amd.some-model', label: 'some-model · AMD LLM Gateway', remote: true, is_default: false },
+        });
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+        const amd = await screen.findByRole('radio', { name: /AMD LLM Gateway/ });
+        expect(amd).toHaveAttribute('aria-checked', 'true');
+        expect(screen.queryByRole('button', { name: /Download and start/ })).toBeNull();
+    });
+
+    it('setup run again for a cloud user keeps the model in use picked, even past the top rows', async () => {
+        useModelStore.setState({
+            active: { provider: 'fireworks', model: 'fireworks.glm', label: 'glm · Fireworks AI', remote: true, is_default: false },
+        });
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: ['m1', 'm2', 'm3', 'glm'].map((m, i) => ({ model: `fireworks.${m}`, name: m, rank: i + 1, note: null, price: null })),
+        } as unknown as Awaited<ReturnType<typeof api.getCloudPrices>>);
+        mockedApi.connectProviderWaitingForOs.mockResolvedValue(undefined as never);
+        mockedApi.listProviderModels.mockResolvedValue({
+            provider: 'fireworks',
+            models: ['m1', 'glm'].map((m, i) => ({ id: `fireworks.${m}`, context_length: null, downloaded: true, labels: [], rank: i + 1, note: null, evidence: null })),
+        } as unknown as Awaited<ReturnType<typeof api.listProviderModels>>);
+        mockedApi.selectModel.mockResolvedValue({ provider: 'fireworks', model: 'fireworks.glm', label: 'glm', remote: true, is_default: false } as never);
+        mockedApi.startSetup.mockImplementation(() => new Promise(() => {}));
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+        expect(await screen.findByRole('radio', { name: /^glm/ })).toBeChecked();
+        expect(screen.getByRole('radio', { name: /^m1/ })).not.toBeChecked();
+        fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.glm'));
+    });
+
+    it('Back from the provider screen of a cloud user keeps the cloud choice selected', async () => {
+        useModelStore.setState({
+            active: { provider: 'fireworks', model: 'fireworks.glm', label: 'glm · Fireworks AI', remote: true, is_default: false },
+        });
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+        await screen.findByRole('heading', { name: 'Connect a cloud provider' });
+        fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+        expect(await screen.findByRole('radio', { name: 'Use a cloud model' })).toBeChecked();
+        expect(screen.queryByRole('button', { name: /Download and start/ })).toBeNull();
+        expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument();
+    });
+
+    it('setup run again for a local user still recommends the local download', async () => {
+        useModelStore.setState({
+            active: { provider: 'local', model: QWEN.id, label: QWEN.id, remote: false, is_default: true },
+        });
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        expect(await pastChecks()).toBeInTheDocument();
+    });
+
+    it('setup run again on a cloud model with no provider tab does not jump to a key screen', async () => {
+        // A model learned from Lemonade's list (e.g. opencode) is remote but has no GAIA tab.
+        useModelStore.setState({
+            active: { provider: 'local', model: 'opencode.big-model', label: 'big-model · opencode', remote: true, is_default: false },
+        });
+        render(<SetupScreen onReady={vi.fn()} onClose={vi.fn()} />);
+        expect(await pastChecks()).toBeInTheDocument();
+    });
+
     it('a failed setup-again run (download step) still offers a way back', async () => {
         // Run again, start, run fails before any model: no Not now anywhere.
         mockedApi.startSetup.mockResolvedValue({ ...runStatus([], { state: 'failed', error: 'boom' }) });

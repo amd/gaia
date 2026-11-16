@@ -34,9 +34,12 @@ import './ConnectorRetryBanner.css';
 export function referencedProviderConnected(
     content: string,
     connectors: ConnectorListEntry[],
+    providers: string[] = [],
 ): boolean {
     const isConfigured = (id: string) =>
         connectors.some((c) => c.id === id && !('error' in c) && c.configured);
+    // A Connect card names its connectors outright; no wording to read.
+    if (providers.length > 0) return providers.some(isConfigured);
     const provider = detectProvider(content);
     if (provider === 'google') return isConfigured('google');
     if (provider === 'microsoft') return isConfigured('microsoft');
@@ -50,9 +53,18 @@ export function referencedProviderConnected(
  * Google, then Microsoft, then Microsoft 365 (the connectors' canonical
  * display order).
  */
-export function connectedProviderLabel(content: string, connectors: ConnectorListEntry[]): string {
+export function connectedProviderLabel(
+    content: string,
+    connectors: ConnectorListEntry[],
+    providers: string[] = [],
+): string {
     const isConfigured = (id: string) =>
         connectors.some((c) => c.id === id && !('error' in c) && c.configured);
+    const named = providers.find(isConfigured);
+    if (named) {
+        const row = connectors.find((c) => c.id === named && !('error' in c));
+        return row && !('error' in row) ? row.display_name : named;
+    }
     const provider = detectProvider(content);
     if (provider === 'google') return 'Google';
     if (provider === 'microsoft') return 'Microsoft';
@@ -67,10 +79,13 @@ const POLL_MS = 4000;
 
 export function ConnectorRetryBanner({
     content,
+    providers = [],
     onRetry,
 }: {
     /** The last assistant message content (the connector-error reply). */
     content: string;
+    /** The connectors that reply's Connect card offered, when it had one. */
+    providers?: string[];
     /** Re-run the previous question. */
     onRetry: () => void;
 }) {
@@ -83,7 +98,7 @@ export function ConnectorRetryBanner({
             .catch((err) => log.ui.warn('ConnectorRetryBanner: connector fetch failed', err));
     }, []);
 
-    const connected = referencedProviderConnected(content, connectors);
+    const connected = referencedProviderConnected(content, connectors, providers);
 
     // Re-check on mount, on window focus (returning from OAuth), and poll until
     // connected. Stop the poll once connected to avoid needless traffic.
@@ -102,7 +117,7 @@ export function ConnectorRetryBanner({
 
     if (!connected || dismissed) return null;
 
-    const label = connectedProviderLabel(content, connectors);
+    const label = connectedProviderLabel(content, connectors, providers);
 
     return (
         <div className="connector-retry-banner" role="status">

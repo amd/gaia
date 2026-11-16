@@ -223,6 +223,12 @@ def is_mcp_server_configured(connector_id: str) -> bool:
     return connector_id in _read_mcp_servers_json()
 
 
+def is_mcp_server_enabled(connector_id: str) -> bool:
+    """False only when ``connector_id`` is configured and switched off."""
+    entry = _read_mcp_servers_json().get(connector_id)
+    return not (entry or {}).get("disabled", False)
+
+
 class McpServerHandler:
     """
     Handles ``type="mcp_server"`` connectors.

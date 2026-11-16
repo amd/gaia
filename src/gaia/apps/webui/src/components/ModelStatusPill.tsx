@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Cloud, Cpu, HelpCircle, Loader2, RotateCw, Settings } from 'lucide-react';
+import { Cloud, Cpu, HelpCircle, Loader2, RotateCw, ScrollText, Settings } from 'lucide-react';
 import { Popover } from './Popover';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
+import { useLogsStore } from '../stores/logsStore';
 import { useModelStore, useInferencePlace, displayModelName, sameModelId, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
 import { ctxLabel } from './modelMeta';
+import { LocalStatusError } from './LocalStatusError';
 import { useT, type Translate } from '../i18n/useT';
 import { ref, type MessageKey } from '../i18n/registry';
 import './ModelPicker.css';
@@ -32,6 +34,7 @@ const PILL_ARIA: Record<Dot, MessageKey> = {
 };
 
 // Sizes go in as string params, so an rtl line keeps each one whole and left to right.
+// The no-break space keeps the dot with the part after it when the line wraps.
 function memoryText(s: LocalModelStatus, t: Translate): string | null {
     const m = s.memory;
     if (!m) return s.memory_error;
@@ -39,7 +42,7 @@ function memoryText(s: LocalModelStatus, t: Translate): string | null {
     return t.compose((say) => [
         m.model_gb ? say('modelStatus.memoryUsed', { size: `~${m.model_gb} GB` }) : null,
         m.free_gb != null ? say('modelStatus.memoryFree', { size: `${m.free_gb} GB` }) : null,
-    ].filter(Boolean).join(' · '));
+    ].filter(Boolean).join(' ·\u00A0'));
 }
 
 function placementLabel(p: ModelPlacement, t: Translate): string | null {
@@ -55,6 +58,7 @@ export function ModelStatusPill() {
     const place = useInferencePlace();
     const systemStatus = useChatStore((s) => s.systemStatus);
     const openSettings = useChatStore((s) => s.openSettings);
+    const showServerLog = useLogsStore((s) => s.show);
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const [status, setStatus] = useState<LocalModelStatus | null>(null);
@@ -159,7 +163,7 @@ export function ModelStatusPill() {
                             </dl>
                             {s.placement?.warning && <span className="model-status-warning" role="alert">{s.placement.warning}</span>}
                             {s.error && (
-                                <span className="settings-error" role="alert" title={s.error_detail ?? undefined}>{s.error}</span>
+                                <span className="settings-error" role="alert" title={s.error_detail ?? undefined}><LocalStatusError status={s} /></span>
                             )}
                             {s.restart_error && <span className="settings-error" role="alert">{s.restart_error}</span>}
                         </>
@@ -184,6 +188,15 @@ export function ModelStatusPill() {
                         >
                             <Settings size={13} aria-hidden="true" /> {t('modelStatus.settings')}
                         </button>
+                        {!s?.active_remote && (
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => { setOpen(false); showServerLog('model_server'); }}
+                            >
+                                <ScrollText size={13} aria-hidden="true" /> {t('logs.serverLog')}
+                            </button>
+                        )}
                         {canRestart && <button
                             type="button"
                             className="btn-secondary"

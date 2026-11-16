@@ -12,7 +12,7 @@ the error was stored into memory as a "known error" to avoid. These tests pin:
 * one process-wide pacer, so parallel searches do not burst;
 * the tool tells the model search is temporarily unavailable, flagged so the
   loop waits instead of counting a failure, until a streak shows it is dead;
-* a configured Tavily connector answers when DDG will not;
+* a configured search connector answers when DDG will not;
 * a rate limit is never stored as memory knowledge.
 
 No test touches the network: every HTTP response is a stub.
@@ -366,8 +366,9 @@ class TestSearchToolResult:
         assert "rate_limited" not in last and last["retryable"] is False
         assert "stop calling search_web" in last["error"]
         assert _is_tool_failure(last)
-        # With no backup provider, the user is told how to add one.
-        assert "gaia connectors configure mcp-tavily" in last["hint"]
+        # With no backup provider, the user is told where to add one.
+        assert "search connector" in last["hint"]
+        assert "Settings > Connectors" in last["hint"]
 
     def test_stop_during_a_search_wait_ends_the_search(self, no_tavily):
         web = MagicMock()
@@ -412,7 +413,8 @@ class TestSearchToolResult:
         assert "1. T" in search_web("q")
 
         web.search_duckduckgo.side_effect = _unavailable()
-        assert search_web("q")["rate_limited"] is True
+        # A new query: "q" itself is now answered from the session cache.
+        assert search_web("q2")["rate_limited"] is True
 
     def test_configured_tavily_answers_when_ddg_refuses(self, monkeypatch):
         monkeypatch.setattr(
@@ -472,13 +474,17 @@ class TestSearchToolResult:
         assert "Tavily connector also failed: credit cap reached" in result["error"]
         for _ in range(SEARCH_UNAVAILABLE_STREAK_LIMIT - 1):
             last = search_web("q")
-        # Tavily is set up, so the user is not told to set it up.
-        assert "configure mcp-tavily" not in last["hint"]
+        # Tavily is set up, so the user is not told to set one up.
+        assert "No backup search provider" not in last["hint"]
 
     def test_no_tavily_means_no_tavily_client(self, no_tavily, monkeypatch):
         built = MagicMock()
         monkeypatch.setattr("gaia.web.tavily.TavilyClient", built)
-        assert browser_tools._tavily_fallback("q", 5) == (None, None)
+        assert browser_tools._connector_fallback(MagicMock(), "q", 5) == (
+            None,
+            None,
+            [],
+        )
         built.assert_not_called()
 
 

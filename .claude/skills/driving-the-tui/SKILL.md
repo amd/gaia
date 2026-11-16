@@ -44,7 +44,7 @@ export GAIA_TUI_HOME=/tmp/gaia-drive/tui         # own control.json + token
 export GAIA_MEMORY_DB=/tmp/gaia-drive/memory.db  # see above
 ```
 
-With those set, `ps aux | grep gaia-tui` before and after should show the user's
+With those set, `ps aux | grep gaia-cli` before and after should show the user's
 processes untouched. The readiness gate still needs `gaia-agent` on `PATH`; a
 one-line shim that execs `python -m gaia_agent.server` from the checkout under
 test is enough, and is how you pin *which* source the drive exercises.
@@ -110,7 +110,7 @@ degraded — relaunch under `wt.exe`.
 | `POST resize` | Set the terminal size (do this FIRST) |
 
 `view` is one of `splash` · `preflight` · `chat` · `unknown` — there is no hub
-screen to navigate, since `gaia-tui` boots straight into one agent's chat behind
+screen to navigate, since `gaia-cli` boots straight into one agent's chat behind
 a readiness gate. On `preflight`, `blocker` names the row refusing the launch
 (`binary`, `lemonade`, `model`, `daemon`, `sidecar`, `mailbox`); wait on
 `{"state": {"view": "chat"}}` rather than a screen substring. `esc` quits on
@@ -334,7 +334,7 @@ older than source (2.4 vs 2.6). When testing an agent from a checkout, set the
 same mode on the TUI launch so its ensure request agrees with the sidecar:
 
 ```bash
-GAIA_EMAIL_AGENT_MODE=dev /path/to/gaia-tui --control-port 8815
+GAIA_EMAIL_AGENT_MODE=dev /path/to/gaia-cli --control-port 8815
 ```
 
 Use `GAIA_GAIA_AGENT_MODE=dev` for the flagship `gaia` agent. The TUI resolves

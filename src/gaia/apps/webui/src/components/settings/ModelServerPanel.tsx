@@ -1,12 +1,14 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { RadioGroup } from '../RadioGroup';
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, ScrollText } from 'lucide-react';
 import * as api from '../../services/api';
 import type { MessageKey } from '../../i18n/registry';
 import { useT, type Translate } from '../../i18n/useT';
 import { useChatStore } from '../../stores/chatStore';
+import { useLogsStore } from '../../stores/logsStore';
 import { displayModelName } from '../../stores/modelStore';
 import { ErrorNotice } from './ErrorNotice';
 import type { LoadedModelInfo, ModelServerInfo } from '../../types/api.gen';
@@ -83,6 +85,7 @@ function Row({ label, value, title }: { label: string; value: string; title?: st
 export function ModelServerPanel() {
     const t = useT();
     const openSettings = useChatStore((s) => s.openSettings);
+    const showServerLog = useLogsStore((s) => s.show);
     const [info, setInfo] = useState<ModelServerInfo | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [saving, setSaving] = useState<string | null>(null);
@@ -128,6 +131,11 @@ export function ModelServerPanel() {
             {t('settings.server.changeModel')}
         </button>
     );
+    const viewLog = (
+        <button type="button" className="btn-secondary" onClick={() => showServerLog('model_server')}>
+            <ScrollText size={13} aria-hidden="true" /> {t('logs.serverLog')}
+        </button>
+    );
 
     if (loadError) {
         return (
@@ -150,7 +158,10 @@ export function ModelServerPanel() {
             <section className="settings-section" aria-label={t('settings.advanced.modelServer')}>
                 <h4>{t('settings.advanced.modelServer')}</h4>
                 <ErrorNotice message={info.error ?? t('settings.errors.serverDownTitle')} />
-                {changeModel}
+                <div className="settings-row">
+                    {changeModel}
+                    {viewLog}
+                </div>
             </section>
         );
     }
@@ -207,7 +218,7 @@ export function ModelServerPanel() {
                     </span>
                 ) : (
                     <>
-                        <div className="segmented" role="radiogroup" aria-label={t('settings.server.backendShort')}>
+                        <RadioGroup className="segmented" aria-label={t('settings.server.backendShort')}>
                             {choices.map((name) => (
                                 <button
                                     key={name}
@@ -222,7 +233,7 @@ export function ModelServerPanel() {
                                     {backendLabel(name)}
                                 </button>
                             ))}
-                        </div>
+                        </RadioGroup>
                         <span className="settings-hint">
                             {t('settings.server.backendHint')}
                             {installable.length > 0 && ` ${t('settings.server.installable', { names: installable.join(', ') })}`}
@@ -235,6 +246,7 @@ export function ModelServerPanel() {
 
             <div className="settings-row">
                 {changeModel}
+                {viewLog}
                 {chatIsLocalLlamacpp && (
                     <button type="button" className="btn-secondary" onClick={() => void reload()} disabled={reloading}>
                         {reloading ? <Loader2 size={13} className="spin" /> : null}

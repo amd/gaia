@@ -4,7 +4,7 @@
 /**
  * Dev QA mode: run an unpackaged build against a backend binary named by
  * GAIA_BIN without touching the user's installed GAIA. In this mode main
- * skips the installer, its state file, the gaia:// registration, the pidfile
+ * skips the installer, its state file, the pidfile
  * and the orphan cleanup that would stop the installed app's backend.
  * A packaged build never enters it.
  */

@@ -23,14 +23,20 @@ from __future__ import annotations
 
 import builtins
 import importlib.util
+import io
 import os
 import runpy
+import stat
 import sys
 import traceback
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 #: Internal argv selector; never a user-facing flag.
 RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
+
+#: Folders a script may not open files in, joined with ``os.pathsep``. The
+#: tools set it to the credential folders the file tools refuse.
+GUARDED_FOLDERS_ENV = "GAIA_GUARDED_FOLDERS"
 
 #: Install name -> import name of what the frozen binary bundles for scripts.
 #: The run_python / execute_python_file descriptions name the same set.
@@ -61,6 +67,18 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+# From source the script still starts through run_python_file, so the guard
+# below is in place before its first line runs. The package folder is on
+# sys.path only for that import; the script's own path is set as CPython would.
+_SOURCE_LAUNCHER = (
+    "import sys; "
+    f"sys.path[0] = {os.path.dirname(os.path.dirname(os.path.abspath(__file__)))!r}; "
+    "from gaia_agent.python_runner import run_python_file; "
+    "sys.path.pop(0); "
+    "sys.exit(run_python_file(sys.argv[1:]))"
+)
+
+
 def python_command(script: os.PathLike | str, args: Sequence[str] = ()) -> List[str]:
     """The argv that runs *script* with *args* as ``python script args`` would.
 
@@ -70,7 +88,7 @@ def python_command(script: os.PathLike | str, args: Sequence[str] = ()) -> List[
     """
     if is_frozen():
         return [sys.executable, RUN_PYTHON_FILE_FLAG, str(script), *args]
-    return [sys.executable, str(script), *args]
+    return [sys.executable, "-c", _SOURCE_LAUNCHER, str(script), *args]
 
 
 def requests_run_python_file(argv: Sequence[str]) -> bool:
@@ -141,6 +159,34 @@ def _prepend_import_paths(first: str) -> None:
         while entry in sys.path:
             sys.path.remove(entry)
         sys.path.insert(0, entry)
+
+
+def _apply_utf8_mode() -> None:
+    """Text files default to UTF-8 when ``PYTHONUTF8=1`` asks for it.
+
+    A frozen interpreter ignores ``PYTHONUTF8``, so a script's bare
+    ``open(path, "w")`` wrote the locale codec (cp1252 on Windows). Covers
+    ``open``/``io.open`` and what ``pathlib`` resolves through
+    ``io.text_encoding``; ``locale.getpreferredencoding()``, ``subprocess``
+    text mode and a bare ``io.TextIOWrapper`` stay on the locale codec.
+    """
+    if sys.flags.utf8_mode or os.environ.get("PYTHONUTF8") != "1":
+        return
+    real_open = io.open
+    real_text_encoding = io.text_encoding
+
+    def open_utf8(file, mode="r", buffering=-1, encoding=None, *args, **kwargs):
+        if encoding is None and "b" not in mode:
+            encoding = "utf-8"
+        return real_open(file, mode, buffering, encoding, *args, **kwargs)
+
+    def text_encoding(encoding, stacklevel=2):
+        if encoding is None:
+            return "utf-8"
+        return real_text_encoding(encoding, stacklevel + 1)
+
+    builtins.open = io.open = open_utf8
+    io.text_encoding = text_encoding
 
 
 def _set_output_encoding(encoding: Optional[str]) -> None:
@@ -218,6 +264,130 @@ def _run_code(code: str, args: Sequence[str]) -> int:
     )
 
 
+def _within(path: str, folder: str) -> bool:
+    path, folder = os.path.normcase(path), os.path.normcase(folder)
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def _file_ids(folders: Sequence[str]) -> set:
+    """``(device, inode)`` of every file in *folders*."""
+    ids = set()
+    for folder in folders:
+        for current, _dirs, files in os.walk(folder):
+            for name in files:
+                try:
+                    st = os.stat(os.path.join(current, name))
+                except OSError:
+                    continue  # removed or locked mid-walk
+                ids.add((st.st_dev, st.st_ino))
+    return ids
+
+
+def guarded_open_refusal(
+    path: object, folders: Sequence[str], ids: Optional[set] = None
+) -> Optional[str]:
+    """Why opening *path* is refused: it is in, or a hard link into, *folders*.
+
+    *ids* are the folders' :func:`_file_ids`, read once by the caller.
+    """
+    if isinstance(path, int) or path is None:
+        return None
+    try:
+        real = os.path.realpath(os.fsdecode(path))
+    except (TypeError, ValueError):
+        return None
+    for folder in folders:
+        if _within(real, folder):
+            return f"{real} is inside {folder}, which holds credentials"
+    try:
+        st = os.stat(real)
+    except OSError:
+        return None
+    if stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+        if (st.st_dev, st.st_ino) in (_file_ids(folders) if ids is None else ids):
+            return f"{real} is the same file as one in a folder that holds credentials"
+    return None
+
+
+#: Audit events that copy, move, link, empty or delete files, with how many of their
+#: leading args are paths. Windows copies through CopyFile2, which raises no
+#: "open" event.
+_MOVE_EVENTS: Dict[str, int] = {
+    "os.rename": 2,
+    "os.link": 2,
+    "os.symlink": 2,
+    "shutil.copyfile": 2,
+    "shutil.copytree": 2,
+    "_winapi.CopyFile2": 2,
+    "os.remove": 1,
+    "os.rmdir": 1,
+    "shutil.rmtree": 1,
+    "os.truncate": 1,
+}
+
+
+def guarded_move_refusal(path: object, folders: Sequence[str]) -> Optional[str]:
+    """Why changing *path* is refused: it is in, or holds, one of *folders*."""
+    if isinstance(path, int) or path is None:
+        return None
+    try:
+        real = os.path.realpath(os.path.abspath(os.fsdecode(path)))
+    except (TypeError, ValueError):
+        return None
+    for folder in folders:
+        if _within(real, folder) or _within(folder, real):
+            return f"{real} is in or holds {folder}, which holds credentials"
+    return None
+
+
+def guard_folders(folders: Sequence[str]) -> None:
+    """Refuse every file open in *folders* for the rest of this process.
+
+    Checked when the file is opened, so a path the script builds at run time
+    is caught as well as one written in its code. An audit hook can't be
+    removed once added.
+    """
+    folders = [os.path.realpath(f) for f in folders if f]
+    if not folders:
+        return
+    # A link made later shares an inode already listed here.
+    ids = _file_ids(folders)
+
+    def hook(event: str, args: tuple) -> None:
+        if not args:
+            return
+        paths = _MOVE_EVENTS.get(event)
+        if paths:
+            # Copied or moved out, a file would open under a name the folder
+            # check misses; moved in or deleted, the folder itself changes.
+            why = guarded_open_refusal(args[0], folders, ids) or next(
+                filter(None, (guarded_move_refusal(p, folders) for p in args[:paths])),
+                None,
+            )
+            if why:
+                raise PermissionError(
+                    "GAIA does not let scripts copy, move, link or delete this "
+                    f"file: {why}. Do it yourself if you need to."
+                )
+            return
+        if event != "open":
+            return
+        why = guarded_open_refusal(args[0], folders, ids)
+        if why:
+            raise PermissionError(
+                f"GAIA does not let scripts open this file: {why}. "
+                "Open it yourself if you need its contents."
+            )
+
+    sys.addaudithook(hook)
+
+
+def guard_folders_from_env() -> None:
+    """Apply :func:`guard_folders` to the folders the tools named, if any."""
+    named = os.environ.get(GUARDED_FOLDERS_ENV, "")
+    guard_folders([f for f in named.split(os.pathsep) if f])
+
+
 def run_python_file(argv: Optional[Sequence[str]] = None) -> int:
     """Run ``argv[0]`` as ``__main__`` with ``argv[1:]`` as its arguments.
 
@@ -229,16 +399,20 @@ def run_python_file(argv: Optional[Sequence[str]] = None) -> int:
     if not argv:
         print(f"usage: {RUN_PYTHON_FILE_FLAG} <script.py> [args ...]", file=sys.stderr)
         return 2
+    guard_folders_from_env()
     if is_frozen():
         # A frozen interpreter ignores PYTHONIOENCODING, and the tools read UTF-8.
         _set_output_encoding("utf-8")
+        _apply_utf8_mode()
     return _run_file(argv[0], argv[1:])
 
 
 def run_interpreter(kind: str, target: str, args: Sequence[str]) -> int:
     """Run one :func:`interpreter_request` the way ``python`` would."""
+    guard_folders_from_env()
     if is_frozen():
         _set_output_encoding(os.environ.get("PYTHONIOENCODING"))
+        _apply_utf8_mode()
     if kind == "module":
         return _run_module(target, args)
     if kind == "code":

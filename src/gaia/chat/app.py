@@ -401,32 +401,5 @@ Demo Types:
     print("\nFor more examples, run: python app.py examples")
 
 
-# Keep the original main function for backward compatibility with CLI
-def cli_main(
-    message: str = None,
-    model: str = None,
-    max_tokens: int = 512,
-    system_prompt: str = None,
-    interactive: bool = False,
-) -> str:
-    """Main function to run the Chat app (backward compatibility)."""
-    if interactive:
-        print("Interactive mode not available in demo app.")
-        print("Use: python app.py basic")
-        return None
-    elif message:
-        # Use SimpleChat for backward compatibility
-        config = AgentConfig(
-            model=model or DEFAULT_MODEL_NAME,
-            max_tokens=max_tokens,
-            system_prompt=system_prompt,
-        )
-        chat = AgentSDK(config)
-        response = chat.send(message)
-        return response.text
-    else:
-        raise ValueError("Either message or interactive mode is required")
-
-
 if __name__ == "__main__":
     asyncio.run(main())

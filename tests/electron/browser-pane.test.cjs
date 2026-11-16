@@ -566,10 +566,9 @@ describe("dev QA mode", () => {
     );
   });
 
-  test("main.cjs skips the installer, protocol registration, pidfile and orphan cleanup in it", () => {
+  test("main.cjs skips the installer, pidfile and orphan cleanup in it", () => {
     const main = fs.readFileSync(path.join(WEBUI, "main.cjs"), "utf8");
     expect(main).toContain("const devQa = resolveDevQaMode({ isPackaged: app.isPackaged, env: process.env });");
-    expect(main).toContain("if (!devQa) registerProtocolHandler();");
     expect(main).toContain("if (!devQa) showingInstallScreen = !backendInstaller.isBackendCurrent();");
     expect(main).toContain("const gaiaCmd = devQa ? devQa.gaiaBin : backendInstaller.findGaiaBin();");
     expect(main).toContain("if (!devQa) await cleanupOrphanedBackend();");

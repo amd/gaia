@@ -73,6 +73,7 @@ describe('useAppOverlayOpen', () => {
  */
 const NOT_OVER_THE_PANE: Record<string, string> = {
     'components/PermissionPrompt.tsx': 'drawn inline above the composer, which the pane never covers',
+    'components/MessageBubble.tsx': 'its drop-later confirm sits inline under the message, in the chat column',
     'components/InfoBubble.tsx': 'only opens inside the model menu, a Popover',
     'components/browser-pane/PageDialogBar.tsx': "a bar in the pane's own toolbar area, above the page, never over it",
     'components/settings/LocalModelsSections.tsx': 'portals its downloads list into a slot inside the settings dialog, which joins the registry',

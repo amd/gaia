@@ -530,6 +530,34 @@ class TestCatalog:
                 ), f"Spec '{spec.id}' has mcp_env_keys but no config_schema"
 
 
+class TestIsMcpServerEnabled:
+    """``gaia connectors list --json`` reports a switched-off server."""
+
+    def _write(self, tmp_path, servers):
+        import json
+
+        path = tmp_path / ".gaia" / "mcp_servers.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"mcpServers": servers}))
+
+    def test_disabled_entry_is_not_enabled(self, tmp_path):
+        from gaia.connectors.mcp_server import is_mcp_server_enabled
+
+        self._write(tmp_path, {"mcp-notion": {"command": "x", "disabled": True}})
+        assert is_mcp_server_enabled("mcp-notion") is False
+
+    def test_entry_without_flag_is_enabled(self, tmp_path):
+        from gaia.connectors.mcp_server import is_mcp_server_enabled
+
+        self._write(tmp_path, {"mcp-notion": {"command": "x"}})
+        assert is_mcp_server_enabled("mcp-notion") is True
+
+    def test_unconfigured_server_is_not_reported_disabled(self, tmp_path):
+        from gaia.connectors.mcp_server import is_mcp_server_enabled
+
+        assert is_mcp_server_enabled("mcp-notion") is True
+
+
 class TestIsMcpServerConfigured:
     """``is_mcp_server_configured`` is the source-of-truth lookup for
     the catalog UI's "configured" tile state — must reflect whatever is

@@ -79,7 +79,7 @@ Two harnesses, one CI pipeline.
 | Headroom / saturation check | ❌ | ❌ |
 | Train / held-out split | ❌ | n/a (no fix loop) |
 | One change per round, keep only if both splits improve | ❌ free-form edits, 3 rounds, stop at 90% judged pass | n/a |
-| Stall → root-cause analysis | Judge writes `root_cause` per scenario; no cross-scenario grouping in the loop | `analyze_failures.py` exists for traces |
+| Stall → root-cause analysis | Judge writes `root_cause` per scenario; no cross-scenario grouping in the loop | n/a |
 | Failure content kept out of the tuned artifact | ❌ not stated in `fixer.md` | n/a |
 
 ---

@@ -24,7 +24,7 @@
     gap: 6px;
 }
 
-/* Typing drops the composer to the bottom, where the chat will continue. */
+/* Sending drops the composer to the bottom, where the chat will continue. */
 .new-chat.is-docked {
     align-items: flex-end;
     padding-bottom: 16px;
@@ -90,11 +90,17 @@
     text-wrap: balance;
 }
 
+/* The serif has no Arabic, so the Arabic line renders small and the default gloss would out-size it. */
+.new-chat-greeting .i18n-gloss.i18n-gloss {
+    display: block;
+    font-size: 0.55em;
+}
+
 /* Holds its height before the folder arrives, so nothing below jumps. */
 .new-chat-meta {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 10px;
     min-height: 28px;
     margin-top: 8px;
 }
@@ -122,8 +128,22 @@
 }
 
 .new-chat-folder.is-on {
-    border-color: var(--accent);
+    padding-block: 3px;
+    padding-inline: 9px 3px;
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-full);
     background: var(--accent-dim);
+    color: var(--text-primary);
+}
+
+.new-chat-folder-clear {
+    display: inline-flex;
+    padding: 2px;
+    border-radius: var(--radius-full);
+    color: var(--text-muted);
+}
+
+.new-chat-folder-clear:hover:not(:disabled) {
     color: var(--text-primary);
 }
 
@@ -181,6 +201,19 @@
     margin: 0;
     padding: 0;
     list-style: none;
+}
+
+/* Opened in full, the list scrolls in its own box so the composer stays on screen. */
+.new-chat-doc-list.is-expanded {
+    max-height: min(30vh, 220px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.new-chat-doc-toggle {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
 }
 
 .new-chat-doc {

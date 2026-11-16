@@ -75,7 +75,6 @@ KNOWN_KINDS = frozenset({KIND_REPLACE_SECTION, KIND_REPLACE_SNIPPET, KIND_DROP_S
 STATUS_STAGED = "staged"
 STATUS_ACTIVE = "active"
 STATUS_ARCHIVED = "archived"
-STATUS_ORPHANED = "orphaned"
 
 #: Ceiling on how much bigger a resolved skill may be than its authored base,
 #: in estimated tokens. Deliberately small: substitutive learning should trend
@@ -203,10 +202,6 @@ class ResolvedSkill:
     def token_delta(self) -> int:
         """Resident cost of the overlay. Negative when learning made it cheaper."""
         return self.resolved_tokens - self.base_tokens
-
-    @property
-    def is_overlaid(self) -> bool:
-        return bool(self.applied)
 
 
 def _sort_key(delta: SkillDelta) -> tuple:

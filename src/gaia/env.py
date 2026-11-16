@@ -152,16 +152,6 @@ def credential(name: str) -> Optional[str]:
     return os.environ.get(name) or _working_dir_credentials.get(name)
 
 
-def working_dir_credential_file(name: str) -> Optional[str]:
-    """The working-directory ``.env`` that supplied *name*, when it was one.
-
-    None when the environment holds *name*, since that value is the one used.
-    """
-    if os.environ.get(name):
-        return None
-    return _working_dir_credential_files.get(name)
-
-
 def working_dir_credential(name: str) -> Optional[str]:
     """*name* as a working-directory ``.env`` supplied it, else None."""
     return _working_dir_credentials.get(name)
@@ -199,6 +189,31 @@ def is_internal_secret(name: str) -> bool:
 def _configured_deny() -> set:
     raw = os.environ.get(CHILD_ENV_DENY_ENV_VAR, "")
     return {part.upper() for part in re.split(r"[,\s]+", raw) if part}
+
+
+def expose_shipped_gaia(env: Dict[str, str]) -> Dict[str, str]:
+    """Put the frozen ``gaia`` this process runs from at the front of *env*'s PATH.
+
+    The desktop app ships ``gaia`` in its own folder and puts nothing on the
+    user's PATH on Windows, so an agent it starts could not run the ``gaia``
+    command its skills need (automations). Changes and returns *env*; a no-op
+    unless frozen with a ``gaia`` executable beside ``sys.executable``.
+    """
+    if not getattr(sys, "frozen", False):
+        return env
+    folder = Path(sys.executable).parent
+    name = "gaia.exe" if sys.platform == "win32" else "gaia"
+    if not (folder / name).is_file():
+        return env
+    # Windows keeps one PATH under any spelling; reuse the one *env* has.
+    key = next((k for k in env if k.upper() == "PATH"), "PATH")
+    entries = [e for e in env.get(key, "").split(os.pathsep) if e]
+    same = os.path.normcase(os.path.normpath(str(folder)))
+    if entries and os.path.normcase(os.path.normpath(entries[0])) == same:
+        return env
+    rest = [e for e in entries if os.path.normcase(os.path.normpath(e)) != same]
+    env[key] = os.pathsep.join([str(folder), *rest])
+    return env
 
 
 def unfreeze_loader_paths(env: Dict[str, str]) -> Dict[str, str]:

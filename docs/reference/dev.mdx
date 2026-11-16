@@ -232,8 +232,7 @@ cd src/gaia/apps/webui && npm run dev
 
 **Dev QA mode.** To run the built desktop app against this checkout's backend
 without touching an installed GAIA, set `GAIA_BIN` to a `gaia` executable in an
-unpackaged build. The app then skips the installer, the pidfile and the
-`gaia://` registration, and writes the browser pane's discovery file under its
+unpackaged build. The app then skips the installer and the pidfile, and writes the browser pane's discovery file under its
 own user data dir instead of `~/.gaia/run/`. The QA kit does this for you with a
 throwaway user data dir, and serves the browser pane fixture site:
 

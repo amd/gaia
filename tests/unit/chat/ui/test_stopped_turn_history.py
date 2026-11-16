@@ -27,6 +27,7 @@ from gaia.ui.restart_recovery import (
 )
 from gaia.ui.routers import chat
 from gaia.ui.run_manager import RunManager
+from gaia.ui.scheduler import RUN_STOPPED_SCHEDULE_DELETED, RUN_STOPPED_SCHEDULE_PAUSED
 
 STOPPED = helpers._STOPPED_REPLY_FOR_MODEL
 CUT_OFF = helpers._CUT_OFF_REPLY_FOR_MODEL
@@ -133,7 +134,10 @@ def test_relayed_sidecar_history_carries_the_withdrawn_reply(db, monkeypatch):
 
     pairs = helpers._build_history_pairs(helpers.model_context_messages(db, sid))
 
-    assert helpers._relayed_history(pairs, "M-GGUF", "next", None, None) == [
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    handler = SSEOutputHandler()
+    assert helpers._relayed_history(pairs, "M-GGUF", "next", handler, None) == [
         {"role": "user", "content": "Write an 800-word essay."},
         {"role": "assistant", "content": STOPPED},
     ]
@@ -267,6 +271,8 @@ async def test_turn_stopped_mid_answer_without_a_recorded_turn_keeps_the_stop_no
         INTERRUPTED_TURN_NOTICE,
         CANCELLED_TURN_NOTICE,
         ENDED_WITHOUT_REPLY_NOTICE,
+        RUN_STOPPED_SCHEDULE_DELETED,
+        RUN_STOPPED_SCHEDULE_PAUSED,
     ],
 )
 def test_the_ui_matches_the_same_cut_off_text(text):

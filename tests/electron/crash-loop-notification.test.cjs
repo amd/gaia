@@ -92,7 +92,7 @@ describe("agent crash loop -> notification -> tray", () => {
     const win = new electronMock.BrowserWindow();
     win.isMinimized = jest.fn(() => false);
     win.restore = jest.fn();
-    manager = new AgentProcessManager(win);
+    manager = new AgentProcessManager();
     tray = new TrayManager(win, { reopenWindow: () => win });
     tray.create();
     service = new NotificationService(win, manager, tray);

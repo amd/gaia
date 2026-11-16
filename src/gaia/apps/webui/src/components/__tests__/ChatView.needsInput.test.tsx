@@ -101,6 +101,8 @@ beforeEach(() => {
         isLoadingMessages: false,
         pendingPrompt: null,
         systemStatus: null,
+        liveQuestions: {},
+        questionAnswers: {},
     });
 
     useNotificationStore.setState({

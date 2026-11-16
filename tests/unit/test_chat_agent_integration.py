@@ -413,7 +413,7 @@ class TestChatAgentScratchDirectory:
             assert agent.path_validator.is_path_allowed(
                 str(scratch / "run_tests.py"), prompt_user=False
             )
-            assert str(scratch) in agent._get_system_prompt()
+            assert str(scratch) in agent.get_session_folders_system_prompt()
             assert scratch == agent.path_validator.scratch_dir
         finally:
             agent.__del__()
@@ -428,14 +428,14 @@ class TestChatAgentScratchDirectory:
                 assert "write_file" not in agent._tools_registry
                 assert agent.scratch_dir is None
                 assert agent.path_validator.scratch_dir is None
-                assert "Scratch directory" not in agent._get_system_prompt()
+                assert "Scratch directory" not in agent._prompt_text()
             finally:
                 agent.__del__()
 
     def test_cached_prompt_includes_the_scratch_line(self):
         agent = _build_agent()
         try:
-            assert str(agent.scratch_dir) in agent.system_prompt
+            assert str(agent.scratch_dir) in agent._prompt_text()
         finally:
             agent.__del__()
 

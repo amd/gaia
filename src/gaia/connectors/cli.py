@@ -266,7 +266,11 @@ def handle(args: argparse.Namespace) -> int:
 
 def _handle_list(args: argparse.Namespace) -> int:
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    from gaia.connectors.mcp_server import is_mcp_server_configured
+    from gaia.connectors.activations import load_activations
+    from gaia.connectors.mcp_server import (
+        is_mcp_server_configured,
+        is_mcp_server_enabled,
+    )
     from gaia.connectors.registry import REGISTRY
     from gaia.connectors.store import peek_connection
 
@@ -286,11 +290,17 @@ def _handle_list(args: argparse.Namespace) -> int:
     # so this list-call collapses to one polymorphic call. The same
     # if/elif lives in routers/connectors.py:_connector_summary; the
     # two should refactor together.
+
+    # Which agents may use each MCP server's tools, so a front-end can show
+    # (and offer to revoke) a standing activation. A corrupt ledger raises.
+    ledger = load_activations() if any(s.type == "mcp_server" for s in specs) else {}
     rows = []
     for spec in specs:
         configured = False
+        enabled = True
         account_id = None
         scopes: list = []
+        activations: dict = {}
         if spec.type == "oauth_pkce":
             blob = peek_connection(spec.oauth_provider_ref or spec.id)
             if blob is not None:
@@ -299,6 +309,8 @@ def _handle_list(args: argparse.Namespace) -> int:
                 scopes = list(blob.get("scopes", []))
         elif spec.type == "mcp_server":
             configured = is_mcp_server_configured(spec.id)
+            enabled = is_mcp_server_enabled(spec.id)
+            activations = dict(ledger.get(spec.id, {}))
 
         rows.append(
             {
@@ -308,8 +320,10 @@ def _handle_list(args: argparse.Namespace) -> int:
                 "category": spec.category,
                 "tier": spec.tier,
                 "configured": configured,
+                "enabled": enabled,
                 "account_id": account_id,
                 "scopes": scopes,
+                "activations": activations,
             }
         )
 
@@ -337,6 +351,24 @@ def _handle_connect(args: argparse.Namespace) -> int:
         resolve_declared_scopes,
         start_authorization,
     )
+    from gaia.connectors.registry import REGISTRY
+
+    # Say so up front, before any scope work, rather than let the provider
+    # lookup's KeyError escape as a traceback.
+    oauth_ids = sorted(s.id for s in REGISTRY.all() if s.type == "oauth_pkce")
+    if args.connector_id not in oauth_ids:
+        if args.connector_id in REGISTRY:
+            sys.stderr.write(
+                f"{args.connector_id!r} is not an OAuth connector, so it cannot be "
+                f"connected with this command. OAuth connectors: "
+                f"{', '.join(oauth_ids)}.\n"
+            )
+        else:
+            sys.stderr.write(
+                f"Unknown connector {args.connector_id!r}. "
+                f"Known: {', '.join(oauth_ids)}.\n"
+            )
+        return 1
 
     grant_agent = getattr(args, "grant_agent", None)
     explicit_scopes = args.scopes or []
@@ -378,7 +410,6 @@ def _handle_connect(args: argparse.Namespace) -> int:
         granted_agent_ids = sorted(list_agent_grants(args.connector_id).keys())
         if granted_agent_ids:
             from gaia.agents.registry import AgentRegistry
-            from gaia.connectors.registry import REGISTRY
             from gaia.hub.installer import register_installed_sidecars
 
             registry = AgentRegistry()
@@ -391,9 +422,8 @@ def _handle_connect(args: argparse.Namespace) -> int:
             for agent_scopes in resolved.values():
                 declared.update(agent_scopes)
             # The catalog spec's default_scopes (not the raw OAuthProvider's)
-            # — the same source connector_routes._build_scope_union and the
-            # TUI's connectScopes union against, so a bare connect matches
-            # what every other surface would request for the same account.
+            # — the same source the TUI's connectScopes unions against, so a
+            # bare connect matches what the TUI requests for the same account.
             catalog_defaults = REGISTRY.get(args.connector_id).default_scopes
             scopes = sorted(declared | set(catalog_defaults))
         else:

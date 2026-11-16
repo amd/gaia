@@ -120,6 +120,20 @@ describe("TrayManager without a tray host", () => {
     expect(cfg.host).toEqual({ available: false, reason: "no-host" });
   });
 
+  test.each([
+    [{ available: true, reason: null }, "Tray icon host available"],
+    [{ available: false, reason: "no-host", detail: "nothing owns it" }, "No tray icon host (no-host: nothing owns it)"],
+  ])("the main log records the host either way: %j", (host, line) => {
+    setPlatform("linux");
+    const log = jest.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      newTray().setHost(host);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(line));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test("Windows has a host from the start, and Settings is told so", async () => {
     setPlatform("win32");
     const mgr = newTray();

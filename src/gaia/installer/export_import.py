@@ -29,6 +29,7 @@ from typing import List
 from gaia.config import gaia_agents_dir
 from gaia.logger import get_logger
 from gaia.utils.archive import ArchiveError, ArchiveSizeError, safe_extract
+from gaia.utils.paths import WINDOWS_DEVICE_NAMES
 from gaia.version import __version__
 
 log = get_logger(__name__)
@@ -54,16 +55,6 @@ _EXPORT_EXCLUDED_NAMES = frozenset({".DS_Store"})
 # Lowercase letters/digits/hyphens, 1-52 chars, must start and end with
 # alphanumeric.
 _AGENT_ID_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$")
-
-# Reserved Windows device names (case-insensitive).
-_RESERVED_WINDOWS_NAMES = {
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    *(f"COM{i}" for i in range(1, 10)),
-    *(f"LPT{i}" for i in range(1, 10)),
-}
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +129,7 @@ def _validate_agent_id(agent_id: str) -> None:
         raise ValueError("Agent ID cannot be empty")
     if "/" in agent_id or "\\" in agent_id or ".." in agent_id:
         raise ValueError(f"Agent ID '{agent_id}' contains path separators")
-    if agent_id.upper() in _RESERVED_WINDOWS_NAMES:
+    if agent_id.lower() in WINDOWS_DEVICE_NAMES:
         raise ValueError(f"Agent ID '{agent_id}' is a reserved Windows device name")
     if not _AGENT_ID_RE.match(agent_id):
         raise ValueError(

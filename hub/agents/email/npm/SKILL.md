@@ -122,7 +122,7 @@ The interface:
 | `unarchive(req)` | A connected mailbox | Restores within the undo window (120 s by default; ungated — pass `batch_id`); expired/unknown → 409. |
 | `quarantine(req)` | `confirm` token + a connected **Gmail** mailbox | Applies `GAIA_PHISHING_QUARANTINE` + archives a phishing message. Refuses `is_phishing:false` → 400; Gmail-only (Outlook → 400). |
 | `unquarantine(req)` | A connected mailbox | Restores prior labels within the undo window (120 s by default; ungated — pass `action_id`); expired/unknown → 409. |
-| `listCalendarEvents(opts?)` | Connected mailbox + calendar scope | Read-only view of the primary calendar. Optional `timeMin`/`timeMax` — omitting both defaults to a forward window (now → +30 days); `provider` only when >1 account. Missing scope → 403 + reconnect CTA. |
+| `listCalendarEvents(opts?)` | Connected mailbox + calendar scope | Read-only view of the primary calendar. Optional `timeMin`/`timeMax` — omitting both defaults to a forward window (now → +30 days); `provider` only when >1 account. Missing scope → 403 + reconnect CTA. When `truncated` is `true` the list is only part of the window: say so before showing it, never present it as the whole calendar. |
 | `previewCalendarEvent(req)` | Nothing external | Mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
 | `createCalendarEvent(req)` | Preview token + connected calendar | Token gate fires first: no/invalid token → 403, then the calendar checks. |
 | `respondToCalendarEvent(req)` | Connected calendar | RSVP `accepted`/`declined`/`tentative` to an existing invite. |
@@ -179,7 +179,7 @@ The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, 
 exactly one `final` or `error`. This is the one loop every v2 front-door relays to. The **host
 mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
 stays stateless. A slice too big for the model's window beside the agent's prompt
-keeps only its newest whole turns, announced in a `status` event (`{ message, phase?, queue? }`; `phase: "model_queue"` reports the queue position and holder while the model is busy). A single turn too large for the whole budget is retained with its longest messages truncated and a note saying how much, so its answer stays in view. The typed client wraps it (#2097): `query()` returns an async
+keeps only its newest whole turns, announced in a `status` event (`{ message, level?, phase?, queue? }`; `phase: "model_queue"` reports the queue position and holder while the model is busy). A single turn too large for the whole budget is retained with its longest messages truncated and a note saying how much, so its answer stays in view. The typed client wraps it (#2097): `query()` returns an async
 iterator of typed `QueryEvent`s; `cancelQuery(runId)` stops the run between steps:
 
 ```ts

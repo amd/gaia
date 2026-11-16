@@ -42,6 +42,67 @@ function isInside(dir, root) {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+/** A Desktop Entry string value with its escapes (\s \n \t \r \\) undone. */
+function unescapeString(value) {
+  const map = { s: " ", n: "\n", t: "\t", r: "\r", "\\": "\\" };
+  return value.replace(/\\([sntr\\])/g, (_m, c) => map[c]);
+}
+
+/** The program an Exec= value runs: its first argument, unquoted. */
+function execProgram(value) {
+  const exec = unescapeString(value).trim();
+  if (!exec.startsWith('"')) return exec.split(/\s+/)[0].replace(/%%/g, "%");
+  let out = "";
+  for (let i = 1; i < exec.length; i += 1) {
+    if (exec[i] === "\\" && i + 1 < exec.length) out += exec[(i += 1)];
+    else if (exec[i] === '"') break;
+    else out += exec[i];
+  }
+  return out.replace(/%%/g, "%");
+}
+
+/** Errors that mean a path can't be followed or read, not that GAIA can't write. */
+const UNREADABLE = new Set(["EACCES", "EPERM", "ELOOP"]);
+
+function samePath(a, b) {
+  if (path.resolve(a) === path.resolve(b)) return true;
+  try {
+    return fs.realpathSync(a) === fs.realpathSync(b);
+  } catch (err) {
+    if (err.code === "ENOENT" || err.code === "ENOTDIR" || UNREADABLE.has(err.code)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Another entry in `dir` that launches this AppImage, written by an AppImage
+ * integration tool or by hand. GAIA's own `DESKTOP_FILE` is not counted.
+ */
+function otherLauncherFor(dir, appImage) {
+  if (!fs.existsSync(dir)) return null;
+  for (const name of fs.readdirSync(dir).sort()) {
+    if (!name.endsWith(".desktop") || name === DESKTOP_FILE) continue;
+    const file = path.join(dir, name);
+    let lines;
+    try {
+      if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) continue;
+      lines = fs.readFileSync(file, "utf8").split("\n");
+    } catch (err) {
+      // Another app's entry GAIA can't read can't be a launcher for this AppImage.
+      if (UNREADABLE.has(err.code)) continue;
+      throw err;
+    }
+    if (lines.includes(OWNED)) continue;
+    const targets = [];
+    for (const line of lines) {
+      if (line.startsWith("Exec=")) targets.push(execProgram(line.slice(5)));
+      else if (line.startsWith("TryExec=")) targets.push(unescapeString(line.slice(8)).trim());
+    }
+    if (targets.some((target) => target && samePath(target, appImage))) return file;
+  }
+  return null;
+}
+
 function launcherPaths(env, home) {
   const dataHome = env.XDG_DATA_HOME || path.join(home, ".local", "share");
   return {
@@ -96,6 +157,12 @@ function installAppImageLauncher({
   try {
     const current = fs.existsSync(entry) ? fs.readFileSync(entry, "utf8") : null;
     if (current !== null && !current.split("\n").includes(OWNED)) return { status: "kept-existing", entry };
+    // A second entry for the same AppImage shows GAIA twice in the app grid.
+    const other = otherLauncherFor(path.dirname(entry), appImage);
+    if (other) {
+      if (current !== null) fs.rmSync(entry);
+      return { status: "kept-existing", entry: other };
+    }
     const image = fs.readFileSync(iconSource);
     const iconCurrent = fs.existsSync(icon) && fs.readFileSync(icon).equals(image);
     if (current === wanted && iconCurrent) return { status: "current", entry };

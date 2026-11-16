@@ -36,6 +36,11 @@ def test_a_default_with_vision_reads_images(config):
     assert lc.resolve_default_vision_model() == lc.LARGE_DEFAULT_MODEL_NAME
 
 
+def test_an_opt_in_default_with_vision_reads_images(config):
+    config(lc.MUSE_GLIMMER_MODEL_NAME)
+    assert lc.resolve_default_vision_model() == lc.MUSE_GLIMMER_MODEL_NAME
+
+
 def test_a_default_without_vision_hands_images_to_gemma(config):
     config(NON_VISION)
     assert lc.resolve_default_vision_model() == lc.DEFAULT_MODEL_NAME

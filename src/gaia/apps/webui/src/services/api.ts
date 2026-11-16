@@ -3,10 +3,9 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
-import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
+import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
+import type { LogReadResponse, LogSourcesResponse, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
-import type { AgentCapabilities, SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import type { PageElementWire } from '../../services/browser-pane/contract';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
@@ -106,14 +105,13 @@ function hasUsefulServerDetail(detail: string): boolean {
 export function getFriendlyError(status: number, detail: string): string {
     switch (status) {
         case 403: return detail || 'Access denied.';
-        // Prefer the backend's detail for 404s — the previous canned string
-        // ("The file or folder may have been moved or deleted.") was misleading
-        // for upload/indexing flows where the real cause was a malformed
-        // filepath, not a missing file. See issue #728.
+        // The backend's detail first: a canned "moved or deleted" hid a malformed path (#728).
         case 404: return detail || 'The requested item was not found.';
         case 413: return detail || 'File too large to process.';
         case 500: return hasUsefulServerDetail(detail) ? detail : 'Server error. Please try again.';
-        case 502: return 'Service unavailable. Is the backend running?';
+        // GAIA's own 502 says what the model server did; a proxy's carries no sentence.
+        case 502: return hasUsefulServerDetail(detail) && !/^(502\s+)?bad gateway\.?$/i.test(detail.trim())
+            ? detail : 'Service unavailable. Is the backend running?';
         case 503: return detail || 'Service unavailable.';
         default: return detail || `Request failed (HTTP ${status})`;
     }
@@ -325,6 +323,20 @@ export async function getLemonadeTarget(): Promise<LemonadeTarget> {
     return apiFetch('GET', '/lemonade/target');
 }
 
+/** Each log group (model server, GAIA, background service, agent, desktop app, other) and its files. */
+export async function getLogSources(): Promise<LogSourcesResponse> {
+    return apiFetch('GET', '/logs');
+}
+
+/** A log's last lines, redacted; with `after` (a cursor it returned), only the lines since. */
+export async function getLog(source: string, { file, after }: { file?: string | null; after?: string | null } = {}): Promise<LogReadResponse> {
+    const query = new URLSearchParams();
+    if (file) query.set('file', file);
+    if (after) query.set('after', after);
+    const qs = query.toString();
+    return apiFetch('GET', `/logs/${encodeURIComponent(source)}${qs ? `?${qs}` : ''}`);
+}
+
 /** A Lemonade the user already runs on this PC, or null. */
 /** `unchecked` lists URLs that accepted a connection but didn't answer in time. */
 export async function detectLemonade(): Promise<{ found: LemonadeFound | null; unchecked?: string[] }> {
@@ -387,6 +399,11 @@ export async function connectProviderWaitingForOs(
             await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_MS));
         }
     }
+}
+
+/** After the user closed the OS key store's unlock prompt: let GAIA ask once more. */
+export async function retryKeyStore(): Promise<{ retrying: boolean }> {
+    return apiFetch('POST', '/providers/key-store/retry');
 }
 
 export async function forgetProviderKey(provider: string): Promise<{ removed: boolean }> {
@@ -466,6 +483,18 @@ export async function allowSpendingThisMonth(): Promise<SpendingReport> {
 
 export async function listSkills(): Promise<{ skills: SkillInfo[]; invalid: Record<string, string> }> {
     return apiFetch('GET', '/skills');
+}
+
+export async function listFeaturedSkillLibraries(): Promise<{ libraries: FeaturedLibrary[] }> {
+    return apiFetch('GET', '/skills/featured');
+}
+
+export async function previewSkillLink(url: string): Promise<LinkPreview> {
+    return apiFetch('POST', '/skills/link/preview', { url });
+}
+
+export async function addSkillsFromLink(url: string, names: string[], allowCode: boolean, pin: string): Promise<LinkAddResult> {
+    return apiFetch('POST', '/skills/link/add', { url, names, allow_code: allowCode, pin });
 }
 
 // -- Connections (issue #915): see connectorsApi.ts ----------------------------
@@ -980,6 +1009,11 @@ export async function uploadDocumentByPath(filepath: string): Promise<Document> 
     return apiFetch('POST', '/documents/upload-path', { filepath });
 }
 
+function uploadError(status: number, errorText: string): ApiError {
+    const detail = parseErrorDetail(errorText);
+    return new ApiError(getFriendlyError(status, detail), status, detail, parseErrorStatus(errorText), [], parseErrorBody(errorText));
+}
+
 /**
  * Upload a document as a multipart blob for indexing.
  *
@@ -1011,8 +1045,7 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+        throw uploadError(res.status, errorText);
     }
 
     const data = await res.json();
@@ -1026,7 +1059,8 @@ export async function deleteDocument(id: string): Promise<void> {
 
 /** How far a running index has got: PDF pages read, then chunks embedded. */
 export interface IndexProgress {
-    phase: 'reading' | 'embedding';
+    /** `starting`: waiting for GAIA's model server to start, at launch. */
+    phase: 'starting' | 'reading' | 'embedding';
     done: number;
     /** Null when the count isn't known upfront (e.g. pages of a non-PDF). */
     total: number | null;
@@ -1122,8 +1156,7 @@ export async function uploadFile(file: File): Promise<{
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+        throw uploadError(res.status, errorText);
     }
 
     const data = await res.json();
@@ -1153,7 +1186,7 @@ export function uploadMedia(file: File, onProgress: (percent: number) => void, s
             }
             log.api.error(`POST ${url} - HTTP ${request.status}`, { errorText: request.responseText });
             const detail = parseErrorDetail(request.responseText);
-            reject(new ApiError(getFriendlyError(request.status, detail), request.status, detail, parseErrorStatus(request.responseText)));
+            reject(new ApiError(getFriendlyError(request.status, detail), request.status, detail, parseErrorStatus(request.responseText), [], parseErrorBody(request.responseText)));
         };
         request.send(file);
     });
@@ -1210,7 +1243,7 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
 
 // MCP server configuration moved to the connectors framework (#927):
 //   - Catalog tiles  → POST /api/connectors/{id}/configure
-//   - Custom servers → CLI `gaia connectors mcp add` today; UI in #977
+//   - Custom servers → an entry in ~/.gaia/mcp_servers.json; CLI and UI in #977
 //   - Catalog list   → GET /api/connectors/catalog (filter by type='mcp_server')
 // Only read-only runtime endpoints remain:
 
@@ -1276,51 +1309,6 @@ export async function updateUndoSettings(retentionDays: number, maxMb: number): 
     return apiFetch('PUT', '/settings/undo', { retention_days: retentionDays, max_mb: maxMb });
 }
 
-// -- Session panel: Environment, Outputs, Changes (#5279) --------------------
+// -- Session panel: Environment, Outputs, Changes (#5279): see sessionPanelApi.ts
 
-const sessionPath = (sessionId: string) => `/sessions/${encodeURIComponent(sessionId)}`;
-
-export async function getEnvironment(sessionId: string): Promise<SessionEnvironment> {
-    return apiFetch('GET', `${sessionPath(sessionId)}/environment`);
-}
-
-export async function addEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
-    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders`, { path });
-}
-
-export async function removeEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
-    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders/remove`, { path });
-}
-
-export async function setInternet(sessionId: string, on: boolean): Promise<SessionEnvironment> {
-    return apiFetch('PUT', `${sessionPath(sessionId)}/environment/internet`, { on });
-}
-
-export async function getOutputs(sessionId: string): Promise<SessionOutputs> {
-    return apiFetch('GET', `${sessionPath(sessionId)}/outputs`);
-}
-
-/** The tools the chat's agent has; a 409 when it isn't running yet. */
-export async function getCapabilities(sessionId: string): Promise<AgentCapabilities> {
-    return apiFetch('GET', `${sessionPath(sessionId)}/capabilities`);
-}
-
-export async function getSessionChanges(sessionId: string): Promise<SessionChanges> {
-    return apiFetch('GET', `${sessionPath(sessionId)}/changes/total`);
-}
-
-export async function undoAllChanges(sessionId: string, force = false): Promise<UndoAllResult> {
-    return apiFetch('POST', `${sessionPath(sessionId)}/changes/undo`, { force });
-}
-
-export async function getSessionGit(sessionId: string): Promise<SessionGit> {
-    return apiFetch('GET', `${sessionPath(sessionId)}/changes/git`);
-}
-
-export async function commitChanges(sessionId: string, root: string, message: string): Promise<{ root: string; commit: string; files: string[]; ignored: string[] }> {
-    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/commit`, { root, message, confirmed: true });
-}
-
-export async function createPullRequest(sessionId: string, root: string, title: string, body: string): Promise<{ root: string; url: string }> {
-    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/pr`, { root, title, body, confirmed: true });
-}
+export * from './sessionPanelApi';

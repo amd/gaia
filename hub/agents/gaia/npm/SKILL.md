@@ -6,12 +6,16 @@ description: Use when integrating the @amd-gaia/gaia npm package — running GAI
 # Integrating `@amd-gaia/gaia`
 
 `@amd-gaia/gaia` delivers **two binaries** and owns their process lifecycle: the
-frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-tui`).
+frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-cli`).
 It ships no agent logic of its own, and it **builds neither binary at install
 time** — both are published artifacts it downloads and verifies. The terminal UI
 is the published `terminal-hub` component, the same binary a full GAIA install
-runs as `gaia-tui`, so its behaviour cannot differ from that one. Everything runs on the local machine against
-a local model server — nothing you type or index leaves it.
+runs as `gaia-cli`, so its behaviour cannot differ from that one. By default everything
+runs on the local machine against a local model server, and nothing you type or index
+leaves it. If you pick a cloud provider (Fireworks AI, the AMD LLM Gateway or Claude
+in the terminal UI, or `provider: "claude"` on `/query`), the conversation is sent to
+that provider. The web search and page-fetch tools reach the internet with any model:
+they send their queries and URLs to the sites they look up.
 
 Two ways in:
 
@@ -263,7 +267,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.27**; the stream is
+package: call it with plain `fetch`. Contract version **2.29**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -274,7 +278,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `run_id` | yes | **You mint it**, and it must be a UUID (non-UUID → 422). It is the cancel handle, valid from the instant the request is sent. |
 | `context` | yes | Transcript slice, pushed in the body — may be `[]`, never absent. Each item `{ role, content }`; `role` ∈ `user` / `assistant` / `system` / `tool`. If it doesn't fit beside the agent's prompt and tools in the model's window, the agent keeps the newest whole turns that do and says so in a `status` event; one turn bigger than that is kept with its longest messages cut. |
 | `session_id` | no | Contract ≥ 2.12. **Pass it.** The agent persists its indexed-document set per session — without it, it forgets a document between the turn that indexed it and the next question. 1–128 characters from `A-Z a-z 0-9 . _ -` (a UUID works); anything else is a **400**. |
-| `documents` | no | Contract ≥ 2.16. Absolute paths of the files the user attached to this conversation — send the whole set **every turn**. The agent indexes any it has not read yet before the turn runs, granting each exact file and not its folder. A relative path is a **422**. A missing file, a folder, or a refused secret is named as not indexed in the turn's `index_documents` step, and the turn still runs. |
+| `documents` | no | Contract ≥ 2.16. Absolute paths of the files the user attached to this conversation — send the whole set **every turn**, an empty list when none are left. The agent indexes any it has not read yet before the turn runs, up to 100 documents or 10,000 passages (the rest are granted, named as not loaded in `index_documents`, and load when asked about by name), and stops searching any an earlier turn sent that this one leaves out, granting each exact file and not its folder. A relative path is a **422**. A missing file, a folder, or a refused secret is named as not indexed in the turn's `index_documents` step, and the turn still runs. |
 | `allowed_paths` | no | Contract ≥ 2.18. Absolute folder or file paths the conversation may read — the scope your UI shows. A new session gets exactly this scope; a retained session adds any entry it lacks and never drops one until the session ends. `GAIA_ALLOWED_PATHS` still narrows it. A relative path is a **422**. Omit it for the agent's default scope. |
 | `working_directory` | no | Contract ≥ 2.24. Absolute chat workspace used to resolve relative file paths for reads, writes, edits and approval prompts. It is separate from `allowed_paths`; a relative path is a **422**. Send the same folder the UI shows. |
 | `memory` | no | Contract ≥ 2.18. `"on"`, `"private"` or `"off"`. Under `"private"` or `"off"` the turn saves nothing to memory, including errors and lessons the agent saves on its own. A retained session keeps the last value: send it every turn. |
@@ -286,7 +290,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
-| `max_steps` | no | ≥ 1. Defaults to **150** (`FLAGSHIP_MAX_STEPS`); a value here, or `GAIA_AGENT_MAX_STEPS`, still wins. |
+| `max_steps` | no | ≥ 1. Defaults to **1000** (`FLAGSHIP_MAX_STEPS`); a value here, or `GAIA_AGENT_MAX_STEPS`, still wins. |
 
 ```ts
 import { randomUUID } from "node:crypto";
@@ -341,14 +345,15 @@ The canonical event shapes, as emitted:
 
 | Event | Shape |
 |---|---|
-| `status` | `{ type, message, phase?, words?, chars?, queue?, retracts_answer? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`, `reconnecting`, `model_restart`, `answer_restart`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck. `reconnecting` is sent once while GAIA's own Lemonade Server restarts; the turn retries when it is back. `model_restart` is the live line while the daemon restarts a server that stopped mid-turn, including under a tool's own model calls. During `extract_document_items`, `reading` names the page ("Reading page 4 of 12…"). `answer_restart` carries `retracts_answer: true`: the reply was cut off and starts over, so drop the `token` text since the last `tool_call` and show `message` in its place |
+| `status` | `{ type, message, level?, phase?, words?, chars?, queue?, retracts_answer? }` — progress and reasoning narration. `level: "warning"` marks a warning for the user (for example, configured MCP servers that were dropped); show it, don't only put it on the live line. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`, `reconnecting`, `model_restart`, `answer_restart`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck. `reconnecting` is sent once while GAIA's own Lemonade Server restarts; the turn retries when it is back. `model_restart` is the live line while the daemon restarts a server that stopped mid-turn, including under a tool's own model calls. During `extract_document_items`, `reading` names the page ("Reading page 4 of 12…"). `answer_restart` carries `retracts_answer: true`: the reply was cut off and starts over, so drop the `token` text since the last `tool_call` and show `message` in its place |
 | `token` | `{ type, delta }` — answer text to append |
 | `reasoning` | `{ type, delta, retracts_answer? }` — the model's reasoning, only when the request set `reasoning: true` (contract ≥ 2.22); join the deltas as they come and keep them apart from the answer. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning: drop it from the answer |
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
 | `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`); `render` names the card to draw — `guide` for the bundled `guides` skill's tools, `calculator` for the `calculators` skill's — and a host without a renderer for a key draws its generic result card |
+| `context_usage` | `{ type, window, used, turns_in_view, turns_hidden, ... }`: the context meter, not terminal. A request that sent `turns` gets it before the answer (contract ≥ 2.28), so the meter fills during a long turn; `final.context` follows with the loaded model's own count |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
-| `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
+| `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages?, route? }` — terminal. `route` (contract ≥ 2.29, `hybrid` sessions only): the turn's routing decision; `route.model` is the model it ran on, so bill and label by it. `failed: true`: the turn did not complete (a model call broke, or a gated tool was refused on a run nobody can answer) and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
 
 Rules a client must respect:
@@ -367,6 +372,9 @@ Rules a client must respect:
 - **Cancel with `POST /v1/gaia/query/{run_id}/cancel`.** It returns
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
+  When the cancel stops the turn's attached documents from loading, the reply
+  also has `documents_left`: how many were not loaded. Show it, since a stream
+  you closed never delivers that step's result.
   Dropping the HTTP connection also cancels the run. A run stopped mid-answer
   ends with an empty `final`, and no `token` follows the cancel, so keep the
   text the `token` events already delivered. Text not yet sent when the
@@ -537,10 +545,11 @@ still run unasked. A run nobody can answer refuses it, as below.
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it
 immediately with a terminal `final` saying it stopped before running the action,
-and cancels the run:
+and cancels the run. The `final` carries `failed: true`, since the request was
+not done, and the `usage` the turn spent before it stopped:
 
 ```
-data: {"type":"final","answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
+data: {"type":"final","failed":true,"usage":{"steps":1,"input_tokens":5120,"tokens":48},"answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
 ```
 
 That is deny-by-default, not an oversight: parking a batch run on a prompt
@@ -574,8 +583,10 @@ those from your own code.
 
 The agent also gets its own scratch directory for throwaway scripts and
 intermediate files, so they stay out of the user's project. It is created per
-agent under the system temp dir, deleted when the agent closes, and is the only
-part of the temp dir the agent may use.
+agent under the system temp dir, deleted when the agent closes or its process
+exits, and is the only part of the temp dir the agent may use. Scratch
+directories no run has written to for a day are removed when the next agent
+starts.
 
 **To narrow it for a run, set `GAIA_ALLOWED_PATHS`** in the environment the
 sidecar starts in — absolute folders joined with `;` on Windows and `:` elsewhere.
@@ -656,7 +667,8 @@ a default. Beyond
 ## 11. The project map — two things it costs you
 
 When the agent's working directory is a code repository, every task starts with
-a **project map** in the system prompt: the root, the directory shape, the
+a **project map** in the session context at the start of the first user
+message: the root, the directory shape, the
 likely entry points, which commands are installed, and the three platform
 differences that change command syntax. It exists so the agent stops burning
 round trips on "no such file" and "command not found".
@@ -733,7 +745,8 @@ There is no silent null.
   agent adds that one line when a check failed or was blocked, or a change was
   never checked. Show it to the user; do not read it as an error, and do not
   strip it from the `context` you replay. A turn that was confirmed, or needed no
-  check, has no such line.
+  check, has no such line, and neither has an answer that itself reports failed
+  tests and claims no success.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
   The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
@@ -761,7 +774,7 @@ There is no silent null.
   comes up. It must also be **0.26.0+**: an older core's daemon starts fine but
   cannot run this agent, which reads as a UI with a dead agent rather than as
   a version problem.
-- **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
+- **The TUI is installed as `gaia-cli`, never `gaia`** — the terminal-hub artifact
   *is* called `gaia-<platform>`, and a file named `gaia` in a cache directory would
   shadow the npm bin shim. The lock's `filename` and `executable` differ for that
   reason. Don't rename it back.
@@ -789,7 +802,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.5"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.29","agentVersion":"0.3.5"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
@@ -811,7 +824,8 @@ loop on `/v1/gaia/init` — it will report ready. Wait for a running turn to
 finish (or close an idle session) and retry the same `/query`. A 503 whose
 `detail` says the model server or GAIA's AI engine couldn't start is not
 a busy slot: show the user that `detail`, which names the fix, instead of
-retrying.
+retrying. Neither is a 503 whose `detail` says there is no model by that name:
+it never succeeds on retry, so pick another model.
 
 **Three more refusals are yours to avoid**, each naming its fix in `detail`
 (SPEC §5.2 has the reasoning):
@@ -841,9 +855,16 @@ Keys are entered in a masked field and sent directly to local Lemonade's runtime
 auth API, never as agent queries. `/model` lists supported discovered cloud and
 downloaded local models, marking the configured default with `(default)`;
 `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
-when available. Cloud chat sends conversation history to the selected provider;
+when available. A session started on `hybrid` runs each turn on a cheap or
+strong model picked for that turn, until `/model` names one. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.
+
+`/skills add <link>` previews the skills behind a GitHub, skills.sh or `.zip` link
+with what each skill is allowed to do and a security warning, and
+`/skills add <link> confirm` adds exactly what was shown (`--allow-code`
+to include skills that ship scripts). Like `/model`, it is a stdio command, not an
+HTTP query.
 
 ## Developer engineering mode
 

@@ -29,7 +29,6 @@ function sourceSize(filePath) {
 }
 
 const CHAT_APP_PATH = path.join(__dirname, '../../src/gaia/apps/webui');
-const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
 const BACKEND_PATH = path.join(__dirname, '../../src/gaia/ui');
 
 describe('Chat App Installer Readiness', () => {
@@ -119,7 +118,7 @@ describe('Chat App Installer Readiness', () => {
       });
     });
 
-    it('should have app.config.json for framework loader', () => {
+    it('should have app.config.json', () => {
       const configPath = path.join(CHAT_APP_PATH, 'app.config.json');
       expect(fs.existsSync(configPath)).toBe(true);
 

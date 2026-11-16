@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import sqlite3
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Set
@@ -240,23 +241,44 @@ class DocumentMonitor:
         try:
             chunk_count = await self._index_fn(Path(filepath))
             if chunk_count == 0:
-                self._db.update_document_status(doc_id, "failed")
+                self._db.update_document_status(
+                    doc_id,
+                    "failed",
+                    last_error="Re-indexing the edited file produced no text.",
+                )
                 logger.warning(
                     "Re-indexing returned 0 chunks for %s (doc_id=%s)",
                     filepath,
                     doc_id,
                 )
             else:
-                self._db.reindex_document(doc_id, new_hash, mtime, chunk_count, size)
-                self._reindex_count += 1
-                logger.info(
-                    "Re-indexed %s: %d chunks (doc_id=%s)",
-                    filepath,
-                    chunk_count,
-                    doc_id,
-                )
-        except Exception:
-            self._db.update_document_status(doc_id, "failed")
+                self._save_reindex(doc, new_hash, mtime, chunk_count, size)
+        except Exception as e:
+            self._db.update_document_status(
+                doc_id, "failed", last_error=f"Re-indexing the edited file failed: {e}"
+            )
             logger.exception("Re-indexing failed for %s", filepath)
         finally:
             self._reindexing.discard(doc_id)
+
+    def _save_reindex(
+        self, doc: Dict[str, Any], new_hash: str, mtime: float, chunks: int, size: int
+    ) -> None:
+        doc_id, filepath = doc["id"], doc["filepath"]
+        try:
+            self._db.reindex_document(doc_id, new_hash, mtime, chunks, size)
+        except sqlite3.IntegrityError:
+            other = self._db.get_document_by_hash(new_hash)
+            if other is None:
+                raise
+            # Same content as another library document; the hash is unique.
+            reason = (
+                f"{doc['filename']} now has the same content as "
+                f"{other['filename']} ({other['filepath']}), which is already "
+                "in the library. Remove one of them."
+            )
+            self._db.update_document_status(doc_id, "failed", last_error=reason)
+            logger.warning("Re-indexing %s not saved: %s", filepath, reason)
+            return
+        self._reindex_count += 1
+        logger.info("Re-indexed %s: %d chunks (doc_id=%s)", filepath, chunks, doc_id)
