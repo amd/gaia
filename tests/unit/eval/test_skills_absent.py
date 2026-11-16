@@ -7,6 +7,7 @@ earlier attempt of the same scenario) installed would leak into the next. The
 runner removes the listed skills from the eval home before every attempt.
 """
 
+import os
 import shutil
 from pathlib import Path
 
@@ -165,3 +166,59 @@ def test_a_setup_error_skips_the_driver(eval_home, tmp_path, monkeypatch):
     assert result["status"] == "SETUP_ERROR"
     assert "real home" in result["error"]
     assert launched == []
+
+
+def _link_dir(link: Path, target: Path) -> None:
+    """Point *link* at *target*: a junction on Windows, a symlink elsewhere."""
+    if os.name == "nt":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+@pytest.mark.parametrize("into", ["skills", "subdir"])
+def test_a_skills_root_linked_into_the_real_home_is_refused(eval_home, into):
+    real = Path.home() / ".gaia"
+    target = _install(real)
+    link_target = real / "skills" if into == "skills" else real / "skills" / "nested"
+    link_target.mkdir(parents=True, exist_ok=True)
+    _link_dir(eval_home / "skills", link_target)
+
+    error = runner._apply_skills_absent(_scenario(["unit-convert"]))
+
+    assert error and "real home" in error
+    assert target.is_dir()
+    assert "unit-convert" in SkillLock.load(real / "skills")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="UNC admin shares are Windows-only")
+def test_a_unc_spelling_of_the_real_home_is_refused(eval_home, monkeypatch):
+    real = Path.home() / ".gaia"
+    target = _install(real)
+    drive, rest = str(real.resolve()).split(":", 1)
+    unc = Path(f"//localhost/{drive}$" + rest.replace("\\", "/"))
+    if not unc.exists():
+        pytest.skip("the localhost admin share is not reachable here")
+    monkeypatch.setenv("GAIA_HOME", str(unc))
+
+    error = runner._apply_skills_absent(_scenario(["unit-convert"]))
+
+    assert error and "real home" in error
+    assert target.is_dir()
+
+
+def test_a_path_that_cannot_be_checked_counts_as_the_real_home(eval_home, monkeypatch):
+    (Path.home() / ".gaia").mkdir()
+    target = _install(eval_home)
+
+    def unreadable(a, b):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(runner.os.path, "samefile", unreadable)
+
+    error = runner._apply_skills_absent(_scenario(["unit-convert"]))
+
+    assert error and "real home" in error
+    assert target.is_dir()

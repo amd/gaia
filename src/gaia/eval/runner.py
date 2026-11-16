@@ -1884,6 +1884,28 @@ def _skills_absent_error(names) -> Optional[str]:
     return None
 
 
+def _reaches_real_home(path: Path, real_home: Path) -> bool:
+    """True if *path* is, or sits inside, *real_home* through any alias.
+
+    Path equality misses links and second spellings (a junction, a UNC admin
+    share), so each existing ancestor is also compared by file identity.
+    A path that cannot be checked counts as reaching the real home.
+    """
+    target = path.resolve()
+    real = real_home.resolve()
+    if target == real or real in target.parents:
+        return True
+    if not real.exists():
+        return False
+    for candidate in (target, *target.parents):
+        try:
+            if candidate.exists() and os.path.samefile(candidate, real):
+                return True
+        except OSError:
+            return True
+    return False
+
+
 def _apply_skills_absent(scenario_data: dict) -> Optional[str]:
     """Remove the scenario's ``setup.skills_absent`` skills from the eval home.
 
@@ -1904,14 +1926,18 @@ def _apply_skills_absent(scenario_data: dict) -> Optional[str]:
     if malformed:
         return malformed
     home = gaia_home()
-    if home.resolve() == default_gaia_home().resolve():
+    skills_root = home / "skills"
+    if _reaches_real_home(home, default_gaia_home()) or _reaches_real_home(
+        skills_root, default_gaia_home()
+    ):
         return (
-            f"setup.skills_absent deletes installed skills, but GAIA_HOME is the "
-            f"real home ({home}). Run the category under an eval home, e.g. "
+            f"setup.skills_absent deletes installed skills, but the eval home's "
+            f"skills ({skills_root}) lead into the real home "
+            f"({default_gaia_home()}). Run the category under an eval home, e.g. "
             "`python util/run_eval_lane.py --category "
             f"{scenario_data.get('category', '<category>')}`."
         )
-    manager = SkillManager(user_skills_root=home / "skills")
+    manager = SkillManager(user_skills_root=skills_root)
     for name in names:
         try:
             removed = remove_skill(name, manager=manager)
