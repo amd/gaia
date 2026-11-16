@@ -31,6 +31,15 @@ import type { ScopeEntry, ScopeSource } from '../../types/sessionPanel';
 import type { MessageKey } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
 
+const MODEL_STATE: Record<Exclude<LocalModelStatus['state'], 'loaded'>, MessageKey> = {
+    warming: 'modelStatus.state.warming',
+    idle: 'modelStatus.state.idle',
+    stopped: 'modelStatus.state.stopped',
+};
+
+/** A warming model settles without a turn ending, so it is re-read until it does. */
+const WARMING_POLL_MS = 3000;
+
 const SOURCE_LABEL: Record<ScopeSource, MessageKey> = {
     added: 'env.source.added',
     gaia_documents: 'env.source.gaia_documents',
@@ -105,6 +114,12 @@ function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     }, [remote]);
     useEffect(load, [load]);
     useTurnEnd(busy, load);
+    const warming = status?.state === 'warming';
+    useEffect(() => {
+        if (!warming) return undefined;
+        const timer = setInterval(load, WARMING_POLL_MS);
+        return () => clearInterval(timer);
+    }, [warming, load]);
 
     if (remote) {
         return (
@@ -125,7 +140,12 @@ function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
             <span className="sp-place"><Monitor size={13} aria-hidden="true" /> {t('env.thisPc')}{!other && status?.placement?.label ? ` · ${status.placement.label}` : ''}</span>
             {other
                 ? <span className="sp-meta">{t('env.notLoaded', { model: displayModelName(chatModel!) })}</span>
-                : status?.display_name && <span className="sp-meta" dir="ltr">{status.display_name}{status.state !== 'loaded' ? ` · ${status.state}` : ''}</span>}
+                : status?.display_name && (
+                    <span className="sp-meta">
+                        <bdi dir="ltr">{status.display_name}</bdi>
+                        {status.state !== 'loaded' ? ` · ${t(MODEL_STATE[status.state])}` : ''}
+                    </span>
+                )}
             {memory && (
                 <span className="sp-meta">
                     {memory.model_gb != null ? t('env.inUse', { gb: memory.model_gb.toFixed(1) }) : t('env.inUseUnknown')}

@@ -61,6 +61,28 @@ describe('Runs on', () => {
         expect(mocked.getLocalModelStatus).not.toHaveBeenCalled();
     });
 
+    it('says a warming model is warming up, and reads it again until it loads', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            const loaded = await mocked.getLocalModelStatus();
+            mocked.getLocalModelStatus.mockReset();
+            mocked.getLocalModelStatus
+                .mockResolvedValueOnce({ ...(loaded as object), state: 'warming' } as never)
+                .mockResolvedValue(loaded as never);
+            render(<EnvironmentSection sessionId={SID} busy={false} />);
+            const modelLine = (pattern: RegExp) => (_: string, el: Element | null) =>
+                !!el?.classList.contains('sp-meta') && pattern.test(stripIsolates(el.textContent ?? ''));
+            expect(await screen.findByText(modelLine(/^Gemma 4 E4B · Warming up$/))).toBeInTheDocument();
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+            await waitFor(() => expect(screen.queryByText(modelLine(/Warming up/))).not.toBeInTheDocument());
+            expect(screen.getByText('Gemma 4 E4B')).toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('re-reads where it runs when a reply ends, not before', async () => {
         const { rerender } = render(<EnvironmentSection sessionId={SID} busy={false} />);
         await waitFor(() => expect(mocked.getLocalModelStatus).toHaveBeenCalledTimes(1));
