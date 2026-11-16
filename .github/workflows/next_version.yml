@@ -1,0 +1,99 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# After a final vX.Y.Z publishes, open the PR that moves main past it
+# (util/next_version.py): the docs navbar names vX.Y.Z, src/gaia/version.py
+# moves to X.(Y+1).0 if main isn't already ahead, and a notes stub for that
+# version waits for its release PR. A patch final also needs a bump PR on its
+# release/vX.Y branch; those branches arrive in Phase 6 of #5172, so for now the
+# script only reports that there is no branch.
+#
+# Nothing pushes to main directly: the PR goes through the merge queue. Re-runs
+# are safe: no PR when main already follows the release, never a second PR.
+
+name: Next Version PR
+
+on:
+  workflow_run:
+    workflows: ["Publish Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The final release main should move past (vX.Y.Z).'
+        required: true
+        type: string
+      dry_run:
+        description: 'Print the changes the PR would carry; push nothing.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: next-version
+  cancel-in-progress: false
+
+jobs:
+  next-version:
+    name: Open the next-version PR
+    # A tag push's run reports the tag as its head branch.
+    if: >-
+      github.repository == 'amd/gaia' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.conclusion == 'success'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # push the next-version/vX.Y.Z branch
+      pull-requests: write   # open the PR
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Resolve the release
+        id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$RUN_TAG"
+          fi
+          CLASSIFIED="$(python3 util/release_tag.py classify "$TAG")"
+          echo "$CLASSIFIED"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "$CLASSIFIED" | grep '^IS_RC=' >> "$GITHUB_OUTPUT"
+
+      # An RC moves nothing: main follows finals only. A dispatch with an RC
+      # still reaches the script, which refuses it by name.
+      - name: Skip a release candidate
+        if: github.event_name == 'workflow_run' && steps.tag.outputs.IS_RC == 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: echo "::notice::${TAG} is a release candidate; the next-version PR follows a final only."
+
+      - name: Open (or refresh) the next-version PR
+        if: github.event_name == 'workflow_dispatch' || steps.tag.outputs.IS_RC != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
+          RUN_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force origin
+          # shellcheck disable=SC2086  # DRY_RUN is empty or one flag
+          python3 util/next_version.py --tag "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --run-url "$RUN_URL" $DRY_RUN

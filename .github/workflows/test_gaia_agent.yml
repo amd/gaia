@@ -26,6 +26,9 @@ on:
       # test_flagship_ci.py checks this filter with the CI path guard's matcher.
       - 'util/check_ci_path_coverage.py'
       - 'hub/agents/gaia/python/**'
+      # packaging/stamp_version.py --check runs util/release_versions.py.
+      - 'util/release_versions.py'
+      - 'util/release_tag.py'
       - 'hub/agents/gaia/CAPABILITY_MATRIX.md'
       # ChatAgent's tests, moved here in #6099, reuse its characterization harness.
       - 'tests/unit/test_profilespec_characterization.py'
@@ -96,6 +99,9 @@ on:
       # test_flagship_ci.py checks this filter with the CI path guard's matcher.
       - 'util/check_ci_path_coverage.py'
       - 'hub/agents/gaia/python/**'
+      # packaging/stamp_version.py --check runs util/release_versions.py.
+      - 'util/release_versions.py'
+      - 'util/release_tag.py'
       - 'hub/agents/gaia/CAPABILITY_MATRIX.md'
       # ChatAgent's tests, moved here in #6099, reuse its characterization harness.
       - 'tests/unit/test_profilespec_characterization.py'

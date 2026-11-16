@@ -61,8 +61,8 @@ _SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 _VERSION_RE = re.compile(r"(?m)^version:\s*['\"]?([^'\"\s#]+)")
 
 HOW_TO_FIX = (
-    "To release the flagship from this commit: bump it with "
-    "hub/agents/gaia/python/packaging/stamp_version.py (plus its CHANGELOG), "
+    "The flagship ships at core's version, so there is nothing to bump. To "
+    "release it from this commit: "
     "dispatch release_components.yml if the terminal-hub version the lock "
     f"pins is not on the hub yet, tag {TAG_PREFIX}<version> on the release "
     "commit, approve "

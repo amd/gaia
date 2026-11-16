@@ -36,6 +36,13 @@ def validate_release_notes(file_path: str, tag: str | None = None) -> list[str]:
 
     content = path.read_text(encoding="utf-8")
 
+    # util/next_version.py opens each release's notes as a marked stub.
+    if "release-notes-stub" in content:
+        errors.append(
+            "Still the next-version stub: write the release notes and remove the "
+            "release-notes-stub comment"
+        )
+
     # Check for frontmatter
     if not content.startswith("---"):
         errors.append("Missing frontmatter (must start with ---)")

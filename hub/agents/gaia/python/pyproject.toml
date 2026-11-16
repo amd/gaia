@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaia-agent-gaia"
-version = "0.3.5"
+version = "0.26.0"
 description = "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 authors = [{ name = "AMD" }]
 license = "MIT"
@@ -18,8 +18,9 @@ requires-python = ">=3.10"
 #   with an indexed document (#6165), and 0.25.4 is the first core to ship it.
 #   (0.25.1 added gaia.agents.tools.reasoning_tools; 0.25.0 added
 #   gaia.agents.tools.path_access, #4656; 0.24.1 was the first core whose
-#   daemon can supervise this sidecar, #2932.) Raise it in step with
-#   min_gaia_version, never ahead of a real release.
+#   daemon can supervise this sidecar, #2932.) It and min_gaia_version are
+#   stamped to core's version, the release this agent ships with
+#   (util/release_versions.py).
 #
 # ChatAgent lives in this package (#6099).
 #
