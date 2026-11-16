@@ -373,6 +373,33 @@ def test_an_in_process_run_whose_model_failed_is_a_failed_run(monkeypatch, db):
     assert len(closed) == 1
 
 
+def test_a_failed_close_does_not_replace_the_runs_own_error(monkeypatch, db):
+    registry = SimpleNamespace(
+        get=lambda _id: SimpleNamespace(is_sidecar=False),
+        get_load_error=lambda _id: None,
+    )
+    monkeypatch.setattr(chat_helpers_module, "_agent_registry", registry)
+
+    class _Agent:
+        def __init__(self, config):
+            self.config = config
+
+        def process_query(self, prompt):
+            raise ValueError("the run's own failure")
+
+        def close(self):
+            raise OSError("server already gone")
+
+    fake_mod = types.ModuleType("gaia_agent.agent")
+    fake_mod.GaiaAgent = _Agent
+    fake_mod.GaiaAgentConfig = SimpleNamespace
+    monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
+    monkeypatch.setitem(sys.modules, "gaia_agent.agent", fake_mod)
+
+    with pytest.raises(ValueError, match="the run's own failure"):
+        server._run_scheduled_prompt(db, "hi")
+
+
 # ── A missing flagship ──────────────────────────────────────────────────────
 
 

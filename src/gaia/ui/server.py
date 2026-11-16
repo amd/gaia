@@ -365,7 +365,10 @@ def _run_scheduled_prompt(
 
         # Save the run's memories now: a queued save would keep the agent alive.
         drain_memory_extraction(agent)
-        agent.close()
+        try:
+            agent.close()
+        except Exception as exc:  # noqa: BLE001 — logged; the run's own result stands
+            logger.warning("Scheduled run: closing its agent failed: %s", exc)
     if isinstance(result, dict):
         val = result.get("result")
         answer = val if val is not None else result.get("answer", "")

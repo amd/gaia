@@ -561,7 +561,7 @@ class GaiaAgent(
         names = super()._always_on_skill_names
         return names | {ENGINEERING_SKILL} if self.config.developer_mode else names
 
-    def close(self) -> None:
+    def close(self, *, wait_for_mcp: bool = True) -> None:
         """Release this agent's watchers, HTTP session and SQLite handles now.
 
         ``ChatAgent`` puts that teardown in ``__del__``, which for an instance
@@ -569,10 +569,12 @@ class GaiaAgent(
         collector gets to it — far too late for a sidecar that builds an agent
         per one-shot request. Every step is individually guarded and idempotent,
         so the later ``__del__`` is harmless. MCP servers are stopped here and
-        waited for, so they are gone when ``close()`` returns.
+        waited for, so they are gone when ``close()`` returns; with
+        ``wait_for_mcp=False`` they stop on a background thread instead, for a
+        caller that something else is waiting on.
         """
         manager = getattr(self, "_mcp_manager", None)
-        if manager is not None:
+        if manager is not None and wait_for_mcp:
             try:
                 manager.disconnect_all()
             except Exception as e:  # noqa: BLE001 — logged; the rest still runs

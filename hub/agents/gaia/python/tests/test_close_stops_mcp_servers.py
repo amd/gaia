@@ -71,6 +71,24 @@ def test_the_finalizer_stops_servers_without_blocking_its_thread():
     assert stopped.wait(5)  # but the servers are still stopped
 
 
+def test_close_without_waiting_returns_before_slow_servers_exit():
+    released = threading.Event()
+    stopped = threading.Event()
+
+    def _slow_stop():
+        released.wait(5)
+        stopped.set()
+
+    manager = _manager(stop=_slow_stop)
+    agent = _agent(GaiaAgent, manager)
+    started = time.monotonic()
+    agent.close(wait_for_mcp=False)
+    assert time.monotonic() - started < 1
+    released.set()
+    assert stopped.wait(5)
+    manager.disconnect_all.assert_called_once_with()
+
+
 def test_after_close_the_finalizer_has_nothing_left_to_stop():
     manager = _manager()
     agent = _agent(GaiaAgent, manager)
