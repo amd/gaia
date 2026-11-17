@@ -183,6 +183,96 @@ class TestStdioTransport:
         # Should not use shell=True when using args list
         assert call_args[1]["shell"] is False
 
+    @pytest.mark.parametrize(
+        "command,runtime,url",
+        [
+            ("npx", "Node.js", "nodejs.org"),
+            ("node", "Node.js", "nodejs.org"),
+            ("npx.cmd", "Node.js", "nodejs.org"),
+            ("uvx", "uv", "docs.astral.sh/uv"),
+            ("uv", "uv", "docs.astral.sh/uv"),
+        ],
+    )
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_missing_runtime_launcher_names_the_runtime(
+        self, mock_popen, _, command, runtime, url
+    ):
+        """A missing npx/uvx says which runtime to install instead of failing blind."""
+        transport = StdioTransport(command, args=["some-server"], name="mcp-memory")
+
+        with pytest.raises(ValueError) as excinfo:
+            transport.connect()
+
+        message = str(excinfo.value)
+        assert "mcp-memory" in message
+        assert f"needs {runtime}" in message
+        assert url in message
+        mock_popen.assert_not_called()
+
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_missing_unknown_program_still_attempts_launch(self, mock_popen, _):
+        """Only known runtime launchers are refused up front; others go to Popen."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        assert StdioTransport("my-server", args=["--x"]).connect() is True
+        assert mock_popen.call_args[0][0] == ["my-server", "--x"]
+
+    @pytest.mark.parametrize("path_key", ["PATH", "Path"])
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_launcher_on_server_env_path_is_not_refused(self, mock_popen, path_key):
+        """A launcher only on the server's own env PATH still launches."""
+        node_dir = os.path.join(os.sep, "opt", "node", "bin")
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        def which(cmd, path=None):
+            return os.path.join(node_dir, cmd) if path == node_dir else None
+
+        transport = StdioTransport(
+            "npx", args=["-y", "srv"], env={path_key: node_dir}, name="mcp-memory"
+        )
+        with (
+            patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=which),
+            patch.object(transport, "_take_install_lock"),
+        ):
+            assert transport.connect() is True
+        assert mock_popen.call_args[0][0] == ["npx", "-y", "srv"]
+
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
+    def test_launcher_missing_from_server_env_path_is_still_refused(self, _):
+        """An env PATH that lacks the launcher doesn't hide the missing runtime."""
+        transport = StdioTransport("uvx", args=["srv"], env={"PATH": "/nowhere"})
+        with pytest.raises(ValueError, match="needs uv"):
+            transport.connect()
+
+    @patch("gaia.mcp.client.transports.stdio.time.sleep")
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    @patch(
+        "gaia.mcp.client.transports.stdio.shutil.which",
+        side_effect=lambda cmd, path=None: f"/usr/bin/{cmd}",
+    )
+    def test_present_runtime_server_crash_surfaces_real_error(self, _, mock_popen, __):
+        """With the runtime installed, a crashing server reports its own error."""
+        mock_process = Mock()
+        mock_process.poll.return_value = 1
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+        mock_process.stderr = StringIO("ModuleNotFoundError: no module named srv\n")
+        mock_popen.return_value = mock_process
+
+        with pytest.raises(RuntimeError) as excinfo:
+            StdioTransport("uvx", args=["srv"], name="mcp-x").connect()
+
+        message = str(excinfo.value)
+        assert "process died" in message
+        assert "needs uv" not in message
+        assert "not found on PATH" not in message
+
     @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
     def test_stdio_transport_builds_command_from_args(self, mock_popen, _):
@@ -197,12 +287,13 @@ class TestStdioTransport:
         call_args = mock_popen.call_args
         assert call_args[0][0] == ["python", "-m", "mcp_server", "--debug"]
 
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
     @patch(
         "gaia.mcp.client.transports.stdio.os.environ",
         {"PATH": "/usr/bin", "HOME": "/home/user"},
     )
-    def test_stdio_transport_passes_env_to_popen(self, mock_popen):
+    def test_stdio_transport_passes_env_to_popen(self, mock_popen, _):
         """Test that env vars are passed to subprocess."""
         mock_process = Mock()
         mock_process.poll.return_value = None
@@ -220,12 +311,13 @@ class TestStdioTransport:
         assert passed_env["GITHUB_TOKEN"] == "ghp_xxx"
         assert passed_env["DEBUG"] == "true"
 
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
     @patch(
         "gaia.mcp.client.transports.stdio.os.environ",
         {"PATH": "/usr/bin", "HOME": "/home/user"},
     )
-    def test_stdio_transport_merges_env_with_system(self, mock_popen):
+    def test_stdio_transport_merges_env_with_system(self, mock_popen, _):
         """Test that config env merges with system environment."""
         mock_process = Mock()
         mock_process.poll.return_value = None

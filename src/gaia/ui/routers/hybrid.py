@@ -78,9 +78,10 @@ def _unprocessable(message: str) -> HTTPException:
 
 def _price(model_id: str) -> Dict[str, Any]:
     from gaia.llm.gateway_prices import GatewayPriceError
+    from gaia.llm.pricing import model_price
 
     try:
-        card = spending.model_price(model_id) or {}
+        card = model_price(model_id) or {}
     except GatewayPriceError:
         # An unreadable price list is reported once, as prices_error.
         card = {}

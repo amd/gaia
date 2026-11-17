@@ -65,6 +65,7 @@ def claude_pricing(model: str) -> dict:
         raise ValueError(
             f"No price for Claude model {model!r}, so its eval cost can't be "
             "reported. Add its list price (https://www.anthropic.com/pricing) to "
-            "ANTHROPIC_PRICES in src/gaia/llm/pricing.py."
+            "ANTHROPIC_PRICES in src/gaia/llm/pricing.py, which MODEL_PRICING "
+            "reads."
         )
     return pricing

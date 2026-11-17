@@ -625,6 +625,16 @@ unknown session is a `404`: the route never builds an agent just to answer,
 since that agent would not be the one the session talks to. **Ask only a peer
 at contract ≥ 2.27**; an older one 404s the path itself.
 
+### 5.5 Ending a session (schema 2.30, flagship)
+
+**`DELETE /v1/gaia/sessions/{session_id}`** → `{session_id, deleted: true}`.
+
+Ends the session and closes its agent, which stops the MCP servers it started.
+A host calls it when the user deletes the conversation; otherwise the session
+and its servers live until it idles out. An unknown session is a `404`; one
+running a turn is a `409` (cancel the run, then delete again). **Call it only on
+a peer at contract ≥ 2.30**; an older one has no such route.
+
 ---
 
 ## 6. Translation map — in-process handler → canonical contract

@@ -67,6 +67,25 @@ _NPX_INSTALL_WAIT_S = 300.0
 
 _NPX_PROGRAMS = frozenset({"npx", "npx.cmd", "npx.exe", "npx.ps1"})
 
+# Launchers most MCP servers start through, and where to get the runtime that
+# provides each one.
+_NODE = ("Node.js", "https://nodejs.org")
+_UV = ("uv", "https://docs.astral.sh/uv/getting-started/installation/")
+_RUNTIME_LAUNCHERS = {
+    "npx": _NODE,
+    "npm": _NODE,
+    "node": _NODE,
+    "uvx": _UV,
+    "uv": _UV,
+}
+
+
+def _launcher_name(program: str) -> str:
+    """The bare launcher name of *program*: no directory, Windows suffix or case."""
+    name = os.path.basename(program.rstrip("/\\")).lower()
+    stem, ext = os.path.splitext(name)
+    return stem if ext in (".cmd", ".exe", ".bat", ".ps1") else name
+
 
 def npx_package(argv: List[str]) -> Optional[str]:
     """The package an ``npx`` launch runs, or None for any other program."""
@@ -399,7 +418,8 @@ class StdioTransport(MCPTransport):
             List[str]: Program path (resolved via PATH when possible) plus args.
 
         Raises:
-            ValueError: If a single-string command cannot be tokenized safely.
+            ValueError: If a single-string command cannot be tokenized safely, or
+                its launcher (``npx``, ``uvx``, ...) is not installed.
         """
         if self.args:
             program, extra = self.command, list(self.args)
@@ -410,6 +430,23 @@ class StdioTransport(MCPTransport):
         # Resolve via PATH (handles Windows .cmd/.bat extensions). Keep this —
         # Popen needs the .cmd suffix to launch npx-style shims with shell=False.
         resolved = shutil.which(program)
+        if resolved is None:
+            launcher = _launcher_name(program)
+            runtime = _RUNTIME_LAUNCHERS.get(launcher)
+            # A PATH in the server's own env counts: POSIX Popen searches it.
+            server_path = next(
+                (v for k, v in (self.env or {}).items() if k.upper() == "PATH"),
+                None,
+            )
+            if runtime is not None and not (
+                server_path and shutil.which(program, path=server_path)
+            ):
+                name, url = runtime
+                raise ValueError(
+                    f"MCP server '{self.name or launcher}' needs {name} to start, "
+                    f"but '{launcher}' was not found on PATH. Install {name} from "
+                    f"{url}, then restart GAIA and try again."
+                )
         return [resolved or program] + extra
 
     def connect(self) -> bool:
