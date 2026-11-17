@@ -177,6 +177,8 @@ def failure_kind(exc: BaseException) -> str:
         or any("Load" in n for n in names)
     ):
         return "load_failure"
+    if "StreamStalledError" in names:
+        return "timeout"
     if (
         isinstance(exc, LemonadeStreamCutOffError)
         or "failed to start" in text
@@ -188,9 +190,7 @@ def failure_kind(exc: BaseException) -> str:
         return "backend_crash"
     if "ConnectTimeout" in names:
         return "network"
-    if "StreamStalledError" in names or any(
-        isinstance(e, (TimeoutError, LemonadeUpstreamTimeoutError)) for e in chain
-    ):
+    if any(isinstance(e, (TimeoutError, LemonadeUpstreamTimeoutError)) for e in chain):
         return "timeout"
     if any(
         isinstance(e, (ConnectionError, LemonadeNetworkError)) for e in chain
