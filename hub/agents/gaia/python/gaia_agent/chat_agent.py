@@ -464,9 +464,6 @@ def _shell_runs_any_python(agent: Any) -> bool:
     return bool(full_access and full_access())
 
 
-n
-
-
 def _stopped_run_result(agent: Any, job: Any, timeout: int) -> Dict[str, Any]:
     """A killed job's result; one the time limit cut short is not told to ask for longer."""
     result = stopped_job_result(job, timeout)
