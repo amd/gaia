@@ -3071,3 +3071,15 @@ def test_providers_list_with_broken_custom_hybrid_rules(client, lemonade, keys):
     resp = client.get("/api/providers")
     assert resp.status_code == 200, resp.text
     assert resp.json()["active"]["model"] == DEFAULT_MODEL_NAME
+
+
+def test_a_hybrid_of_direct_claude_models_is_cloud_not_local(
+    client, lemonade, keys, db, monkeypatch
+):
+    monkeypatch.setattr(
+        "gaia.ui._chat_helpers.candidate_models",
+        lambda m: ("claude-haiku-5-5", "claude-opus-5-5"),
+    )
+    db.set_setting("custom_model", "hybrid")
+    body = client.get("/api/providers/active").json()
+    assert body["remote"] is True and body["provider_name"] == "Anthropic"

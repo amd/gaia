@@ -1133,3 +1133,25 @@ def test_the_daemon_opens_the_chat_database_once(tmp_path):
         assert opener() is opener()
     finally:
         opener.close()
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        {"hybrid_classifier_model": 5},
+        {"hybrid_cheap_model": ["amd.X"]},
+        {"hybrid_strong_model": {"id": "amd.X"}},
+        {"hybrid_policy": ["quality"]},
+        {"hybrid_classifier_timeout": "15"},
+        {"hybrid_policy": "custom", "hybrid_rules": "not a table"},
+    ],
+)
+def test_a_wrongly_typed_hybrid_value_is_reported_not_a_500(client, gateway, doc):
+    _write_config(doc)
+    resp = client.get("/api/hybrid/settings")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["config_error"]
+    assert isinstance(body["cheap_model"], str)
+    assert isinstance(body["classifier_model"], str)
+    assert isinstance(body["classifier_timeout"], int)

@@ -1478,7 +1478,10 @@ def _ui_cloud_provider(model_id: str) -> str | None:
     from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
 
     if is_hybrid_model(model_id):
-        providers = (_ui_cloud_provider(m) for m in candidate_models(model_id))
+        providers = (
+            "anthropic" if m and m.startswith("claude-") else _ui_cloud_provider(m)
+            for m in candidate_models(model_id)
+        )
         return next(filter(None, providers), None)
     metadata = {"recipe": "cloud"} if is_cloud_model(model_id) else None
     return cloud_model_provider(model_id, metadata)

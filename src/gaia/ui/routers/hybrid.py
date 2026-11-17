@@ -229,6 +229,11 @@ def _raw_doc() -> Dict[str, Any]:
         ) from e
 
 
+def _text(value: Any) -> Optional[str]:
+    """*value* if it is non-empty text, else None."""
+    return value.strip() or None if isinstance(value, str) else None
+
+
 def _settings_from(doc: Dict[str, Any]) -> HybridSettings:
     """The hybrid settings in a raw config document; HybridConfigError says what's wrong."""
     cheap = doc.get("hybrid_cheap_model") or DEFAULT_CHEAP_MODEL
@@ -280,15 +285,18 @@ def _view(db: ChatDatabase) -> Dict[str, Any]:
         saved = (
             {k: getattr(cfg, k) for k in FIELDS.values()} if cfg is not None else doc
         )
-        cheap = saved.get("hybrid_cheap_model") or DEFAULT_CHEAP_MODEL
-        policy = saved.get("hybrid_policy") or DEFAULT_POLICY
+        # A value of the wrong type can't be shown; config_error names it.
+        cheap = _text(saved.get("hybrid_cheap_model")) or DEFAULT_CHEAP_MODEL
+        policy = _text(saved.get("hybrid_policy")) or DEFAULT_POLICY
+        timeout = saved.get("hybrid_classifier_timeout", DEFAULT_CLASSIFIER_TIMEOUT_S)
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            timeout = DEFAULT_CLASSIFIER_TIMEOUT_S
         values = {
             "cheap_model": cheap,
-            "strong_model": saved.get("hybrid_strong_model") or DEFAULT_STRONG_MODEL,
-            "classifier_model": saved.get("hybrid_classifier_model") or cheap,
-            "classifier_timeout": saved.get(
-                "hybrid_classifier_timeout", DEFAULT_CLASSIFIER_TIMEOUT_S
-            ),
+            "strong_model": _text(saved.get("hybrid_strong_model"))
+            or DEFAULT_STRONG_MODEL,
+            "classifier_model": _text(saved.get("hybrid_classifier_model")) or cheap,
+            "classifier_timeout": timeout,
             "policy": policy,
             "rules": (
                 preset_rules(policy) if policy in PRESETS else saved.get("hybrid_rules")
