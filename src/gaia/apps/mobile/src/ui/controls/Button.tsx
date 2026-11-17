@@ -84,7 +84,7 @@ export function Button({
                         ) : null}
                         {wrap || largeText ? (
                             <View style={{ flexShrink: 1, paddingVertical: 10 }}>
-                                <Text role={size === 'sm' ? 'caption' : 'ui'} weight="medium" tone={v.tone} align="center">
+                                <Text role={size === 'sm' ? 'caption' : 'ui'} weight="medium" tone={v.tone} align="center" glossInline>
                                     {label}
                                 </Text>
                             </View>

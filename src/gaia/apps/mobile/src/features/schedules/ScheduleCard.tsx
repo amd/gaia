@@ -13,7 +13,7 @@ import { Disclosure, Icon, Notice, Row, Stack, Surface, Text, useTheme } from '@
 import { Clock, MessageSquare } from '@/ui/icons';
 
 import { ChipButton } from './ChipButton';
-import { composeDateLocale, describeSchedule, formatNextRun, formatTime } from './scheduleText';
+import { composeDateLocale, describeSchedule, formatNextClock, formatTime } from './scheduleText';
 
 const STATUS: Record<Schedule['status'], { label: MessageKey; tone: 'success' | 'warning' | 'muted' }> = {
     active: { label: 'schedules.status.active', tone: 'success' },
@@ -62,6 +62,8 @@ export function ScheduleCard({ schedule, now, onOpenChat }: ScheduleCardProps) {
     const when = (fmt: (say: Say, locale: string | undefined) => string) =>
         t.compose((say, code) => fmt(say, composeDateLocale(code, t)));
 
+    const nextClock = schedule.status === 'paused' ? null : formatNextClock(schedule.next_run_at, now, composeDateLocale(t.locale, t));
+
     return (
         <Surface tone="secondary" radius="sm" border padding="md">
             <Stack gap="sm">
@@ -99,10 +101,15 @@ export function ScheduleCard({ schedule, now, onOpenChat }: ScheduleCardProps) {
                     <Text role="label" tone="muted">
                         {when((say, locale) =>
                             say('schedules.card.next', {
-                                when: schedule.status === 'paused' ? say('schedules.status.paused') : formatNextRun(schedule.next_run_at, say, now, locale),
+                                when: schedule.status === 'paused' ? say('schedules.status.paused') : formatTime(schedule.next_run_at, say, now, locale),
                             }),
                         )}
                     </Text>
+                    {nextClock ? (
+                        <Text role="label" tone="muted">
+                            {nextClock}
+                        </Text>
+                    ) : null}
                 </Row>
                 {schedule.last_error && !historyShowsFailure ? (
                     <ErrorStrip>

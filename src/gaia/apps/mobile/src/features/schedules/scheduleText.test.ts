@@ -3,7 +3,7 @@
 
 import { tEn, translator } from '@webui/i18n/translator';
 
-import { composeDateLocale, describeSchedule, formatNextRun, formatTime, isCountdownRange } from './scheduleText';
+import { composeDateLocale, describeSchedule, formatNextClock, formatTime, isCountdownRange } from './scheduleText';
 
 const NOW = new Date('2026-11-14T12:00:00Z');
 const at = (seconds: number) => new Date(NOW.getTime() + seconds * 1000).toISOString();
@@ -28,10 +28,11 @@ describe('formatTime', () => {
     });
 });
 
-describe('formatNextRun', () => {
-    it('adds the clock time to a future run only', () => {
-        expect(formatNextRun(at(600), tEn.bare, NOW)).toMatch(/\(in 10m\)$/);
-        expect(formatNextRun(at(-600), tEn.bare, NOW)).toBe('10m ago');
+describe('formatNextClock', () => {
+    it('gives the clock time of a future run only', () => {
+        expect(formatNextClock(at(600), NOW, 'en')).toMatch(/\d/);
+        expect(formatNextClock(at(-600), NOW, 'en')).toBeNull();
+        expect(formatNextClock(null, NOW, 'en')).toBeNull();
     });
 });
 

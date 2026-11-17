@@ -35,14 +35,12 @@ export function formatTime(iso: string | null, say: Say, now: Date, locale?: str
     return d.toLocaleDateString(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-/** Next run as the local clock time, plus how far away it is. */
-export function formatNextRun(iso: string | null, say: Say, now: Date, locale?: string): string {
-    if (!iso) return say('schedules.time.never');
-    const relative = formatTime(iso, say, now, locale);
+/** The local clock time of a future run, in its own text so the "Next:" line carries one gloss and no bracket inside it; null when the run is due. */
+export function formatNextClock(iso: string | null, now: Date, locale?: string): string | null {
+    if (!iso) return null;
     const d = new Date(iso);
-    if (d.getTime() <= now.getTime()) return relative;
-    const clock = d.toLocaleString(locale, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-    return say('schedules.time.clockIn', { clock, relative });
+    if (d.getTime() <= now.getTime()) return null;
+    return d.toLocaleString(locale, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 }
 
 /** True while the next run is under a minute away, when the card counts down by the second. */
