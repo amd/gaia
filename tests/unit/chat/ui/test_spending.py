@@ -70,10 +70,10 @@ def test_prices_before_connecting(client):
     assert "list price" in body["source"]
 
 
-def test_gateway_prices_are_unknown_and_say_why(client):
+def test_gateway_prices_before_connecting_say_where_they_come_from(client):
     body = client.get("/api/spending/prices/amd").json()
     assert body["models"] == []
-    assert "organization" in body["note"]
+    assert "from it once it is connected" in body["note"]
 
 
 def test_unknown_provider_is_404(client):
@@ -502,3 +502,221 @@ def test_non_streaming_cloud_turns_are_recorded(db, monkeypatch, result, priced)
         )
     else:
         assert report["unreported_turns"] == 1
+
+
+# ── AMD LLM Gateway prices ──────────────────────────────────────────────────
+
+GATEWAY_MODEL = "amd.DeepSeek-V4.1-Flash"
+GATEWAY_PAYLOAD = {
+    "data": [
+        {
+            "id": "DeepSeek-V4.1-Flash",
+            "pricing": {
+                "source": "Enterprise",
+                "input_per_million": 0.255,
+                "output_per_million": 1.02,
+                "cache_read_input_per_million": 0.00544,
+            },
+        },
+        {
+            "id": "No-Cache-Rate",
+            "pricing": {"input_per_million": 1.0, "output_per_million": 2.0},
+        },
+    ]
+}
+
+
+@pytest.fixture
+def gateway_prices_read():
+    from gaia.llm import gateway_prices
+
+    gateway_prices.record(GATEWAY_PAYLOAD, "https://gw.example/v1")
+
+
+def test_a_gateway_model_is_priced_from_the_gateways_list(gateway_prices_read):
+    card = spending.price_card(GATEWAY_MODEL)
+    assert (
+        card["input_per_million"],
+        card["cached_input_per_million"],
+        card["output_per_million"],
+    ) == (0.255, 0.00544, 1.02)
+    assert "AMD LLM Gateway" in card["source"]
+    assert spending.turn_cost(
+        GATEWAY_MODEL, 1_000_000, 100_000, 400_000
+    ) == pytest.approx((600_000 * 0.255 + 400_000 * 0.00544 + 100_000 * 1.02) / 1e6)
+
+
+def test_a_gateway_turn_counts_toward_the_monthly_limit(db, gateway_prices_read):
+    spending.set_limit(db, 0.10)
+    _turn(db, model=GATEWAY_MODEL, inp=1_000_000, out=100_000)
+    report = spending.month_report(db)
+    assert report["total_usd"] == pytest.approx(0.357, abs=1e-6)
+    assert report["state"] == "reached" and report["unpriced_turns"] == 0
+    refusal = spending.limit_refusal(db, GATEWAY_MODEL)
+    assert "the AMD LLM Gateway" in refusal
+    # A hybrid turn is checked against the same total.
+    assert spending.limit_refusal(db, "hybrid") is not None
+
+
+def test_a_gateway_model_without_a_price_stays_unpriced(db, gateway_prices_read):
+    _turn(db, model="amd.Not-Priced")
+    report = spending.month_report(db)
+    assert report["total_usd"] == 0 and report["unpriced_turns"] == 1
+
+
+def test_cached_input_without_a_cached_rate_is_unknown(gateway_prices_read):
+    assert spending.turn_cost("amd.No-Cache-Rate", 1000, 100, 0) == pytest.approx(
+        (1000 * 1.0 + 100 * 2.0) / 1e6
+    )
+    assert spending.turn_cost("amd.No-Cache-Rate", 1000, 100, 500) is None
+
+
+def test_an_unreadable_gateway_price_list_leaves_prices_unknown(db):
+    from gaia.llm import gateway_prices
+
+    gateway_prices.prices_file().write_text("{broken", encoding="utf-8")
+    assert spending.price_card(GATEWAY_MODEL) is None
+    # Recording a turn still works; the turn counts as unpriced.
+    _turn(db, model=GATEWAY_MODEL)
+    assert spending.month_report(db)["unpriced_turns"] == 1
+
+
+def test_the_gateway_model_list_carries_its_prices(gateway_prices_read):
+    from gaia.ui.routers import providers
+
+    assert spending.price_card(GATEWAY_MODEL) is not None
+    assert providers.provider_of(GATEWAY_MODEL) == "amd"
+
+
+# ── Direct Claude ─────────────────────────────────────────────────────────
+
+CLAUDE_MODEL = "claude-opus-5-5"
+
+
+def test_a_direct_claude_turn_is_recorded_at_anthropic_list_price(db):
+    _turn(db, model=CLAUDE_MODEL, inp=1_000_000, out=100_000)
+    report = spending.month_report(db)
+    assert report["turns"] == 1 and report["unpriced_turns"] == 0
+    assert report["total_usd"] == pytest.approx(4.00 + 0.1 * 20.00, abs=1e-6)
+    assert report["by_model"][0]["provider"] == spending.ANTHROPIC
+
+
+def test_a_direct_claude_model_without_a_price_counts_as_unpriced_never_zero(db):
+    _turn(db, model="claude-not-a-real-model")
+    report = spending.month_report(db)
+    assert report["turns"] == 1
+    assert report["unpriced_turns"] == 1 and report["total_usd"] == 0
+
+
+def test_a_direct_claude_turn_is_refused_once_the_limit_is_reached(db):
+    spending.set_limit(db, 0.01)
+    _turn(db, model=CLAUDE_MODEL, inp=1_000_000, out=100_000)
+    refusal = spending.limit_refusal(db, CLAUDE_MODEL)
+    assert "stopped before sending this to Anthropic" in refusal
+    # An unpriced direct Claude model is still a cloud turn the limit covers.
+    assert spending.limit_refusal(db, "claude-not-a-real-model") is not None
+
+
+def test_hybrid_falling_back_to_direct_claude_is_refused_over_the_limit(
+    db, monkeypatch
+):
+    from gaia.llm import hybrid
+
+    monkeypatch.setattr(
+        hybrid,
+        "candidate_models",
+        lambda model_id: ("Gemma-4-E4B-it-GGUF", CLAUDE_MODEL),
+    )
+    spending.set_limit(db, 0.01)
+    _turn(db, model=CLAUDE_MODEL, inp=1_000_000, out=100_000)
+    assert "Anthropic" in spending.limit_refusal(db, "hybrid")
+
+
+def test_the_month_names_where_its_prices_came_from(db, gateway_prices_read):
+    _turn(db, model=GATEWAY_MODEL)
+    report = spending.month_report(db)
+    assert "AMD LLM Gateway" in report["price_source"]
+    assert "Fireworks" not in report["price_source"]
+    assert "AMD LLM Gateway" in report["by_model"][0]["price_source"]
+
+
+def test_a_month_with_no_priced_turns_names_no_single_provider(db):
+    assert spending.month_report(db)["price_source"] == spending.ANY_PRICE_SOURCE
+
+
+# ── The hybrid classifier's own calls ─────────────────────────────────────
+
+
+def _route(classifier, usage, classified=True):
+    return {
+        "model": "Gemma-4-E4B-it-GGUF",
+        "classified": classified,
+        "classifier_model": classifier,
+        "classifier_usage": usage,
+    }
+
+
+def test_a_cloud_classifier_call_counts_toward_the_month(db, gateway_prices_read):
+    usage = {"input_tokens": 1_000_000, "output_tokens": 100_000}
+    spending.record_turn(
+        db,
+        "Gemma-4-E4B-it-GGUF",
+        {"input_tokens": 10, "output_tokens": 10},
+        route=_route(GATEWAY_MODEL, usage),
+    )
+    report = spending.month_report(db)
+    assert report["turns"] == 1 and report["by_model"][0]["model"] == GATEWAY_MODEL
+    assert report["total_usd"] == pytest.approx(0.357, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    "classifier,usage",
+    [
+        ("Gemma-4-E4B-it-GGUF", {"input_tokens": 5, "output_tokens": 5}),
+        (GATEWAY_MODEL, None),
+    ],
+    ids=["local classifier", "failed call"],
+)
+def test_a_local_or_failed_classifier_call_adds_nothing(db, classifier, usage):
+    spending.record_turn(
+        db, "Gemma-4-E4B-it-GGUF", {}, route=_route(classifier, usage, False)
+    )
+    assert spending.month_report(db)["turns"] == 0
+
+
+def test_the_limit_stops_a_local_pair_with_a_gateway_classifier(db, monkeypatch):
+    monkeypatch.setattr(
+        "gaia.llm.hybrid.candidate_models",
+        lambda m: ("Gemma-4-E4B-it-GGUF", "Qwen3.6-35B-A3B-GGUF", GATEWAY_MODEL),
+    )
+    spending.set_limit(db, 0.01)
+    _turn(db, model=CLAUDE_MODEL, inp=1_000_000, out=100_000)
+    assert "AMD LLM Gateway" in spending.limit_refusal(db, "hybrid")
+
+
+def test_runtime_pricing_never_imports_the_eval_package():
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; from gaia.ui import spending; "
+        "spending.turn_cost('fireworks.glm-5p3-flash', 10, 10); "
+        "spending.price_card('claude-opus-5-5'); "
+        "print(any(m.startswith('gaia.eval') for m in sys.modules))"
+    )
+    import os
+    from pathlib import Path
+
+    import gaia
+
+    # The child must import this checkout's gaia, as the parent does.
+    src = str(Path(gaia.__file__).resolve().parents[1])
+    env = {**os.environ, "PYTHONPATH": src}
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert out.stdout.strip() == "False", out.stderr

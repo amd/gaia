@@ -8,6 +8,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A `hybrid` route says which side it went to.** `final.route` now carries
+  `tier` (`cheap` or `strong`), so a host can count a session's cheap and
+  strong turns without comparing model ids against the settings, which may
+  have changed since. With the core's new `custom` policy, `route.policy` can
+  also read `custom`. A route's `fix` and degraded `notice` now point app users
+  at Settings › Models › Hybrid instead of `config.json`.
+- **`hybrid` can pair models from any provider.** The cheap, strong and
+  classifier models may each be a model on this PC, a gateway model, a
+  Fireworks AI model, or an Anthropic `claude-*` model; a direct Claude
+  classifier is asked in plain text. With every model on this PC, hybrid runs
+  under Local only.
+- **A direct Claude cheap model runs on Anthropic.** With `claude-*` as the
+  cheap model (the `claude-direct` template), a `hybrid` session is built on
+  Claude instead of asking the local model server for a model it doesn't
+  serve. `final.route` also carries `classifier_model` and
+  `classifier_usage`, so a host can bill the classifier's call.
 - **Deleting a conversation can stop its MCP servers (contract 2.30).**
   `DELETE /v1/gaia/sessions/{session_id}` ends a session and closes its agent,
   which stops the servers it started. Until now a session's servers ran until it

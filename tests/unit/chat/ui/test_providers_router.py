@@ -3035,3 +3035,51 @@ def test_a_malformed_model_list_ends_a_switch_or_restore_with_one_full_stop(
     assert resp.status_code == 409, resp.text
     assert resp.json()["detail"].endswith("points at Lemonade.")
     assert ".." not in restore["message"] + resp.json()["detail"]
+
+
+def test_restoring_hybrid_waits_for_a_starting_server(client, lemonade, keys, db):
+    """The TUI saves ``hybrid`` as the last model; a cold start must not 500."""
+    _write_config({"last_model": "hybrid"})
+    lemonade.down = True
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {"status": "pending", "message": None}
+    assert db.get_setting("custom_model") is None
+
+
+def test_restoring_hybrid_waits_when_lemonade_answers_with_a_5xx(
+    client, lemonade, keys, db
+):
+    _write_config({"last_model": "hybrid"})
+    lemonade.answers[("GET", "system-info")] = (500, {})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {"status": "pending", "message": None}
+
+
+def test_selecting_hybrid_while_the_server_is_starting_is_503(
+    client, lemonade, keys, db
+):
+    lemonade.down = True
+    resp = client.post("/api/providers/select", json={"model": "hybrid"})
+    assert resp.status_code == 503
+    assert db.get_setting("custom_model") is None
+
+
+def test_providers_list_with_broken_custom_hybrid_rules(client, lemonade, keys):
+    """A hand-broken hybrid table must not take the model list down with it."""
+    _write_config({"hybrid_policy": "custom", "hybrid_rules": {"other": {}}})
+    lemonade.models = [{"id": DEFAULT_MODEL_NAME, "downloaded": True, "labels": []}]
+    resp = client.get("/api/providers")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["active"]["model"] == DEFAULT_MODEL_NAME
+
+
+def test_a_hybrid_of_direct_claude_models_is_cloud_not_local(
+    client, lemonade, keys, db, monkeypatch
+):
+    monkeypatch.setattr(
+        "gaia.ui._chat_helpers.candidate_models",
+        lambda m: ("claude-haiku-5-5", "claude-opus-5-5"),
+    )
+    db.set_setting("custom_model", "hybrid")
+    body = client.get("/api/providers/active").json()
+    assert body["remote"] is True and body["provider_name"] == "Anthropic"

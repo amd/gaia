@@ -215,7 +215,7 @@ def test_routed_model_refusal_names_its_setting(monkeypatch):
     assert message.startswith(
         f"hybrid routed this turn to {CHEAP} (hybrid_cheap_model)"
     )
-    assert "set hybrid_cheap_model to a model the gateway offers" in message
+    assert "choose a cheap model the gateway offers" in message
 
 
 def test_refusal_without_routing_is_unchanged(monkeypatch):
@@ -252,7 +252,7 @@ def test_a_degraded_classifier_warns_in_the_turn(monkeypatch):
         result = agent.process_query("Write a note.")
     assert result["route"]["degraded"] is True
     (warning,) = agent.warnings
-    assert warning == result["route"]["notice"] and "hybrid_classifier_model" in warning
+    assert warning == result["route"]["notice"] and "classifier model" in warning
 
 
 def test_a_single_classifier_failure_does_not_warn_in_the_turn(monkeypatch):
@@ -351,3 +351,51 @@ def test_an_undecidable_turn_drops_the_previous_route(monkeypatch):
     with pytest.raises(hybrid.HybridConfigError):
         agent.process_query("And again.")
     assert agent.last_route is None
+
+
+def test_agent_built_on_hybrid_with_a_direct_claude_cheap_model_uses_anthropic(
+    monkeypatch,
+):
+    seen = {}
+
+    def fake_init(self, config=None):
+        seen.update(
+            use_claude=config.use_claude,
+            claude_model=config.claude_model,
+            model_id=config.model_id,
+        )
+        self.config = config
+
+    monkeypatch.setattr(ChatAgent, "__init__", fake_init)
+    monkeypatch.setattr(
+        "gaia_agent.agent.HybridRouter",
+        lambda: SimpleNamespace(
+            settings=SimpleNamespace(
+                cheap_model="claude-haiku-5-5", strong_model="claude-opus-5-5"
+            )
+        ),
+    )
+    from gaia_agent.agent import GaiaAgentConfig
+
+    GaiaAgent(GaiaAgentConfig(model_id="hybrid"))
+    assert seen == {
+        "use_claude": True,
+        "claude_model": "claude-haiku-5-5",
+        "model_id": None,
+    }
+
+
+def test_a_cheap_turn_on_direct_claude_runs_without_a_switch(monkeypatch):
+    agent, _, steps, switches = _agent(
+        monkeypatch, [_label("answer_question", 1, "low")]
+    )
+    agent.hybrid_router.settings = HybridSettings(
+        cheap_model="claude-haiku-5-5",
+        strong_model="claude-opus-5-5",
+        classifier_model=CHEAP,
+    )
+    # A Claude-built agent's model_id is its claude_model.
+    agent.model_id = "claude-haiku-5-5"
+    result = agent.process_query("What is 2+2?")
+    assert result["route"]["model"] == "claude-haiku-5-5"
+    assert switches == [] and steps == ["claude-haiku-5-5"]

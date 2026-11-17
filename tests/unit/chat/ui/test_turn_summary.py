@@ -445,3 +445,29 @@ def test_the_turn_summary_survives_a_reload():
     assert restored.cost.kind == "unreported"
     others = [r for i, r in responses.items() if i != msg_id]
     assert others[0].turn_summary is None
+
+
+def test_a_gateway_turn_is_priced_once_the_gateways_prices_are_read():
+    from gaia.llm import gateway_prices
+
+    gateway_prices.record(
+        {
+            "data": [
+                {
+                    "id": "some-model",
+                    "pricing": {
+                        "input_per_million": 1.0,
+                        "output_per_million": 2.0,
+                        "cache_read_input_per_million": 0.5,
+                    },
+                }
+            ]
+        },
+        "https://gw.example/v1",
+    )
+    summary = TurnLedger().summary(
+        location=GATEWAY,
+        usage={"input_tokens": 1_000_000, "cached_tokens": 0, "tokens": 1_000_000},
+    )
+    assert summary["cost"] == {"kind": "estimate", "usd": 3.0}
+    assert TurnLedger().summary(location=GATEWAY)["cost"] == {"kind": "unreported"}

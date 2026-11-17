@@ -3187,7 +3187,120 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     now; **503** while the local model server is still starting. A successful
     pick clears this run's restore notice. Picking a local model also starts a
     fresh warm-up (see `POST /api/system/warm-up`), so the model loads before
-    the next message; follow it with `GET /api/system/warm-up`.
+    the next message; follow it with `GET /api/system/warm-up`. Picking
+    `hybrid` checks that its cheap, strong and classifier models can all run,
+    saves `last_provider` as `hybrid` (as the TUI does), and loads nothing.
+  </Accordion>
+</AccordionGroup>
+
+### Hybrid model
+
+The settings behind the `hybrid` model (see
+[Hybrid model](/guides/llm-gateway#hybrid-model)). They are the `hybrid_*` keys
+in `~/.gaia/config.json`, shared with `gaia config` and the TUI, and validated
+the same way.
+
+<AccordionGroup>
+  <Accordion title="GET /api/hybrid/settings">
+    `cheap_model`, `strong_model`, `classifier_model`, `classifier_timeout`,
+    `policy` (`quality`, `balanced` or `custom`), and `rules`: the table the
+    policy applies, one `{cheap_max_difficulty, allow_high_stakes}` rule per
+    kind. Also `presets` (the `quality` and `balanced` tables), `kinds` (all
+    8, in display order), and `models`: every model a provider set up here
+    offers — downloaded local models that can run on this PC, the AMD LLM
+    Gateway's models, Fireworks AI's when it has a key, and Anthropic's
+    `claude-*` models when `ANTHROPIC_API_KEY` is set — plus any configured
+    model none offers. Each has `provider` (`local`, `amd`, `fireworks` or
+    `claude`; listed in that order), `display_name`, `available` with a
+    `reason` when not, and prices `input_per_million` / `output_per_million` /
+    `cache_read_per_million` with their `price_source`, `null` when unknown,
+    never $0. Gateway prices are the gateway's own, read from its `/models`
+    when it is registered and again once they are a day old
+    (`prices_fetched_at`, and `prices_error` when the last read failed; the
+    last prices read are still used); Fireworks and Anthropic prices are their
+    list prices. `models_error` says why the list couldn't be read. Also
+    `measured` (the pairing is the one the shipped policies were tuned on),
+    `measured_note` when it isn't, `classifier_note` when the classifier runs
+    on this PC, `entry` (as `GET /api/hybrid/entry`), and `is_active` (a new
+    chat starts on `hybrid`; `null` while config.json is invalid). When the
+    saved settings can't be used, including a hand-edited config.json that
+    fails to load, `config_error` says what's wrong and how to fix it and the
+    values are shown as saved, so a `PUT` can repair them. A broken `hybrid_*`
+    value never stops config.json from loading for the rest of GAIA; only
+    `hybrid` itself refuses it. Only a config.json that isn't JSON at all is a
+    **500**.
+  </Accordion>
+
+  <Accordion title="PUT /api/hybrid/settings">
+    Change any subset of `cheap_model`, `strong_model`, `classifier_model`
+    (`null` restores a model's default), `classifier_timeout` (whole seconds,
+    1-120), `policy`, and `rules`. `rules` must cover all 8 kinds, each with
+    exactly `cheap_max_difficulty` (0-5; 0 never runs cheap) and
+    `allow_high_stakes` (true or false); `custom` needs rules, saved or sent in
+    the same request. Switching to a preset keeps saved rules for later, and
+    works even when they are broken: a preset never reads them, and going back
+    to `custom` without new rules names what's wrong. A model must be one a provider set up here offers. Returns the `GET`
+    shape. **422**, with what to change and which providers were checked, for
+    an unknown field, a wrong type or range, a model no provider offers, a
+    self-routing `hybrid` model, the same cheap and strong model, or `custom`
+    without rules; nothing is saved then. **503** when the model server can't
+    say which models are offered.
+  </Accordion>
+
+  <Accordion title="GET /api/hybrid/templates">
+    The built-in pairings, resolved on this PC: `id`, `name`, `description`,
+    `cheap_model`, `strong_model`, `classifier_model`, `policy`,
+    `providers_needed`, `available` with a `reason` when not (such as
+    "Download Qwen3.6-35B-A3B-GGUF in Settings › Models" or "Add a Fireworks
+    key in Settings › Models"), `measured` with `measured_note`, and
+    `classifier_note`. The ids are stable: `gateway-deepseek-opus` (the
+    default, and the only measured one), `gateway-deepseek-sonnet`,
+    `gateway-balanced`, `local-plus-cloud`, `all-local` (works under Local
+    only), `fireworks` and `claude-direct`.
+  </Accordion>
+
+  <Accordion title="POST /api/hybrid/templates/{template_id}/apply">
+    Set the models and policy a template names (saved custom rules are kept).
+    Returns the settings `GET` shape. **404** for an unknown id; **409** with
+    the reason when it can't run here, including a cloud model under Local
+    only.
+  </Accordion>
+
+  <Accordion title="GET /api/hybrid/entry">
+    The `hybrid` choice for a model picker, its own entry rather than one
+    under a provider: `display_name` built from the configured pair ("Hybrid
+    (DeepSeek + Opus)"), `remote` (any member is a cloud model), `available`
+    with a `reason`, and `shown`, true when the configured pair or any
+    template can run here.
+  </Accordion>
+
+  <Accordion title="POST /api/hybrid/preview">
+    Where a request would run as a new chat's first turn. Body: `{"text"}` (at
+    most 100,000 characters). Runs the real classifier and policy and nothing
+    else: no turn, no tools, no chat becomes sticky, and failures don't count
+    toward the degraded notice. Returns `model`, `tier` (`cheap` or `strong`),
+    `kind`, `difficulty`, `stakes`, `reason`, `classified`, `seconds`,
+    `policy`, and `fix`. A classifier failure answers like a turn: the strong
+    model, `classified: false`, and `reason` / `fix` saying why. **409** when
+    the settings can't be used, or Local only is on and a hybrid model is in
+    the cloud (nothing is sent).
+  </Accordion>
+
+  <Accordion title="GET /api/hybrid/stats">
+    How every hybrid answer still in the chat database routed: `turns`,
+    `cheap_turns`, `strong_turns`, `failed_closed` (turns the classifier
+    couldn't judge), and `since`, when the oldest was answered (`null` with
+    none; deleting a chat removes its turns). `cost` is those turns at the
+    prices above on the models they ran on (cached input at the cache-read
+    rate), `cost_if_all_strong` the same tokens at the strong model's price,
+    and `saving_pct` the difference. A turn whose price is unknown — a model
+    with no price, cached input with no cache-read rate, or a turn that
+    reported no token counts — makes `cost` and `cost_if_all_strong` `null`,
+    never $0; `unpriced_turns` counts them. Also carries `prices_fetched_at`
+    and `prices_error`, plus `scope` and `scope_label`. `scope` is
+    `agent_ui_chats` (only Agent UI chats record their turns here; hybrid
+    turns in the terminal UI or `gaia -p` are not counted) or `all`;
+    `scope_label` says the same in plain words for the apps to show as is.
   </Accordion>
 </AccordionGroup>
 
@@ -3195,17 +3308,22 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
 
 What cloud models cost before one is picked, what this month's cloud chats
 cost, and an optional monthly limit. Prices are list prices per million
-tokens from GAIA's one rate card, the same one a turn's cost estimate uses. A
-model with no known price reads as unknown, never $0. Cloud models from
-`GET /api/providers/{provider}/models` also carry `price`.
+tokens, the same ones a turn's cost estimate uses: GAIA's rate card for
+Fireworks AI, the gateway's own price list for AMD LLM Gateway models (read
+from the gateway, as the [Hybrid settings](#hybrid-model) describe), and
+Anthropic's list price for direct `claude-*` models. A model with no known
+price reads as unknown, never $0, and a turn on it adds nothing to the month's
+total. Cloud models from `GET /api/providers/{provider}/models` also carry
+`price`; listing the gateway's models reads its price list again once it is a
+day old.
 
 <AccordionGroup>
   <Accordion title="GET /api/spending/prices/{provider}">
     List prices for a provider's models before it is connected: `models`
     (`model`, `name`, `rank`, `note`, `price` with `input_per_million`,
     `cached_input_per_million`, `output_per_million`), recommended first, and
-    their `source`. `amd` returns no models and a `note`: the gateway's prices
-    are set by the organization that runs it. **404** for another provider.
+    their `source`. `amd` returns no models and a `note`: its prices are read
+    from the gateway once it is connected. **404** for another provider.
   </Accordion>
 
   <Accordion title="GET /api/spending">
@@ -3214,7 +3332,7 @@ model with no known price reads as unknown, never $0. Cloud models from
     so the total can read lower than the bill as well as higher: `total_usd`, `turns` (every counted turn, the next two kinds included), `unpriced_turns` (turns on a model with no
     known price, counted apart), `unreported_turns` (turns on a priced model that
     sent no usage, such as a stopped answer, also counted apart), `by_model` (each
-    entry carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`
+    entry's `provider` is `fireworks`, `amd` or `anthropic`, and it carries its own `unpriced_turns`, `unreported_turns` and `price_source`), `price_source` (every source this month's prices came from), `limit_usd`, and `state`
     (`no_limit`, `ok`, `near` at 80% of the limit, `reached`, or
     `allowed_over`). **500** when the saved limit is unreadable.
   </Accordion>
@@ -3239,8 +3357,9 @@ model with no known price reads as unknown, never $0. Cloud models from
   <Accordion title="PUT /api/spending/limit">
     Set the monthly limit: `{"limit_usd": 10}`, or `null` for none. **422**
     for a limit of $0 or less. Once `total_usd` reaches it, a chat turn on a
-    cloud model is refused before anything is sent, with how to go on; models
-    on this PC are never stopped.
+    cloud model (Fireworks AI, the AMD LLM Gateway, or a direct `claude-*`
+    model, or `hybrid` when either of its models is one) is refused before
+    anything is sent, with how to go on; models on this PC are never stopped.
   </Accordion>
 
   <Accordion title="POST /api/spending/allow-month">

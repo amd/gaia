@@ -57,6 +57,8 @@ LOCAL = "local"
 FIREWORKS = "fireworks"
 AMD = "amd"
 PROVIDER_IDS = (LOCAL, FIREWORKS, AMD)
+#: ``last_provider`` for a ``hybrid`` pick, as the TUI's HybridProvider.
+HYBRID_PROVIDER = "hybrid"
 
 _NAMES = {LOCAL: "Local", FIREWORKS: "Fireworks AI", AMD: "AMD LLM Gateway"}
 
@@ -65,19 +67,6 @@ _PRIVACY = {
     LOCAL: "Runs on this PC. Nothing leaves your machine.",
     FIREWORKS: "Chat history is sent to Fireworks AI. Usage may incur charges.",
     AMD: "Chat history is sent to your configured AMD gateway.",
-}
-
-#: Model labels that are not chat models (the TUI's set, plus speech-to-text).
-_NON_CHAT_LABELS = {
-    "embeddings",
-    "embedding",
-    "image",
-    "reranker",
-    "audio",
-    "tts",
-    "stt",
-    "transcription",
-    "realtime-transcription",
 }
 
 _TIMEOUT = 60
@@ -93,6 +82,10 @@ class ProviderError(Exception):
 
 class _ModelListFailed(ProviderError):
     """The model server answered ``/models`` with a 5xx: its own state, no verdict on a model."""
+
+
+#: Public name for other routers.
+ModelListFailed = _ModelListFailed
 
 
 # ── Lemonade access ────────────────────────────────────────────────────────
@@ -171,6 +164,13 @@ def _lemonade(
     except ValueError:
         body = {}
     return resp.status_code, body if isinstance(body, dict) else {"data": body}
+
+
+def lemonade_request(
+    method: str, path: str, payload: Optional[Dict[str, Any]] = None
+) -> Tuple[int, Dict[str, Any]]:
+    """``(status, body)`` for a request to the model server; ProviderError if unreachable."""
+    return _lemonade(method, path, payload)
 
 
 def _cloud_error(
@@ -477,12 +477,9 @@ def _with_network(view: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _is_chat_model(model: Dict[str, Any]) -> bool:
-    labels = {str(label).lower() for label in model.get("labels") or []}
-    if "single-turn" in labels:
-        # FLM builds that answer one message at a time cannot hold a conversation.
-        return False
-    # ``chat`` wins: FLM omni models are labeled both ``chat`` and ``audio``.
-    return "chat" in labels or not labels & _NON_CHAT_LABELS
+    from gaia.llm.hybrid_templates import is_chat_entry
+
+    return is_chat_entry(model)
 
 
 def _suggested_local_models() -> set:
@@ -665,6 +662,11 @@ def _rank_gateway_models(models: List[Dict[str, Any]]) -> None:
         m["note"] = "recommended"
 
 
+def _loads_here(model_id: str) -> bool:
+    """True for a local model; ``hybrid`` loads nothing by its own name."""
+    return provider_of(model_id) == LOCAL and not is_hybrid_model(model_id)
+
+
 def provider_of(model_id: str) -> str:
     """The provider a model id belongs to; its prefix wins, as in the TUI."""
     prefix = model_id.split(".", 1)[0] if "." in model_id else ""
@@ -682,6 +684,8 @@ def cloud_provider_name(model_id: str) -> Optional[str]:
     if provider != LOCAL:
         return _NAMES[provider]
     cloud = _ui_cloud_provider(model_id)
+    if cloud == "anthropic":
+        return "Anthropic"
     return _NAMES.get(cloud, cloud) if cloud else None
 
 
@@ -863,6 +867,8 @@ def _check_model_available(model_id: str) -> Optional[str]:
     """
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
+    if is_hybrid_model(model_id):
+        return _check_hybrid_available()
     provider = provider_of(model_id)
     if provider != LOCAL and cloud_blocked():
         return "Local only is on, so cloud models can't run"
@@ -909,6 +915,32 @@ def _check_model_available(model_id: str) -> Optional[str]:
         return str(e)
     except requests.RequestException as e:
         return str(e)
+
+
+def _check_hybrid_available() -> Optional[str]:
+    """None when every model ``hybrid`` routes to can run now, else why not.
+
+    Raises :class:`_ServerNotReady` while the local model server is still
+    starting, as :func:`_check_model_available` does for other models.
+    """
+    from gaia.llm.hybrid import HybridSettings
+    from gaia.llm.hybrid_templates import availability
+
+    from .hybrid import inventory
+
+    try:
+        settings = HybridSettings.load()
+    except HybridConfigError as e:
+        return surface_wording(str(e), "agent_ui").rstrip(".")
+    try:
+        inv = inventory()
+    except ProviderError as e:
+        if e.status == 503 or isinstance(e, _ModelListFailed):
+            raise _ServerNotReady(str(e)) from e
+        return surface_wording(str(e), "agent_ui").rstrip(".")
+    members = (settings.classifier_model, settings.cheap_model, settings.strong_model)
+    reason = availability(members, inv)
+    return surface_wording(reason, "agent_ui").rstrip(".") if reason else None
 
 
 def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
@@ -961,7 +993,7 @@ def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
                 # Picked elsewhere (the TUI): it is the pick, not a Custom model ID.
                 db.set_setting(PICKED_MODEL_SETTING, last)
             db.set_setting("custom_model", last)
-            if load and not unchanged and provider_of(last) == LOCAL:
+            if load and not unchanged and _loads_here(last):
                 from gaia.ui import warmup
 
                 # Start-up may have loaded the model this replaces.
@@ -978,7 +1010,7 @@ def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
                     f"Couldn't restore your last model, {model_label(last)}: {reason}. "
                     "Pick a model to continue."
                 ),
-                "retry": provider_of(last) != LOCAL and not cloud_blocked(),
+                "retry": not _loads_here(last) and not cloud_blocked(),
             }
         return _restore_result
 
@@ -1451,12 +1483,30 @@ def provider_models(
             "blocked_reason": "Local only is on; turn it off in Settings to use cloud models.",
         }
     try:
+        if provider == AMD:
+            _refresh_gateway_prices()
         models = _list_models(provider)
         if provider != LOCAL:
             return {"provider": provider, "models": models, "blocked": False}
         return {"provider": provider, **_local_report(models, db)}
     except ProviderError as e:
         _raise(e)
+
+
+def _refresh_gateway_prices() -> None:
+    """Read the gateway's price list when it is a day old, so its models show prices.
+
+    A failed read leaves the last prices (or none); the Hybrid settings say why.
+    """
+    from gaia.llm.gateway_prices import GatewayPriceError, ensure_fresh
+
+    try:
+        entry = _cloud_entry(AMD)
+        if not entry or not (entry.get("env_var_set") or entry.get("runtime_key_set")):
+            return
+        ensure_fresh()
+    except (ProviderError, GatewayPriceError) as e:
+        logger.warning("Gateway models listed without fresh prices: %s", e)
 
 
 def _read_system_info() -> Dict[str, Any]:
@@ -1599,7 +1649,13 @@ def select_model(
     )
     from gaia.connectors.store import retry_keyring
 
-    if provider_of(model_id) != LOCAL:
+    hybrid = is_hybrid_model(model_id)
+    if hybrid:
+        from gaia.llm.hybrid import HYBRID_MODEL_ID
+
+        # Saved as the TUI saves it, so either client restores it.
+        model_id = HYBRID_MODEL_ID
+    if hybrid or provider_of(model_id) != LOCAL:
         # Picking a cloud model needs its key, so it may ask the OS again.
         retry_keyring()
     try:
@@ -1619,13 +1675,16 @@ def select_model(
         )
     try:
         _write_config_keys(
-            {"last_provider": provider_of(model_id), "last_model": model_id}
+            {
+                "last_provider": HYBRID_PROVIDER if hybrid else provider_of(model_id),
+                "last_model": model_id,
+            }
         )
     except ProviderError as e:
         _raise(e)
     db.set_setting("custom_model", model_id)
     db.set_setting(PICKED_MODEL_SETTING, model_id)
-    if provider_of(model_id) == LOCAL:
+    if _loads_here(model_id):
         from gaia.ui import warmup
 
         # Load it now: nothing else would until the next message is sent.

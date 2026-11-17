@@ -44,7 +44,7 @@ class KnownModelsError(RuntimeError):
 
 def offered_models() -> List[str]:
     """Bare Fireworks names GAIA prices and still offers."""
-    from gaia.eval.bench.metering import RATES
+    from gaia.llm.pricing import RATES
     from gaia.llm.recommended_models import rank
 
     # A dated snapshot priced only for old comparisons is no longer offered.

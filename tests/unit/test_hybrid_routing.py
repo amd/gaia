@@ -122,8 +122,8 @@ def test_policy_table(policy, kind, difficulty, stakes):
     )
 
 
-def test_policies_are_exactly_quality_and_balanced():
-    assert POLICIES == ("quality", "balanced") and DEFAULT_POLICY == "quality"
+def test_policies_are_the_two_presets_and_custom():
+    assert POLICIES == ("quality", "balanced", "custom") and DEFAULT_POLICY == "quality"
 
 
 @pytest.mark.parametrize(
@@ -592,6 +592,9 @@ def test_route_record_has_every_field():
         "degraded": False,
         "notice": "",
         "classifier_format": "json_object",
+        "tier": "cheap",
+        "classifier_model": CLASSIFIER,
+        "classifier_usage": None,
     }
     assert isinstance(record["seconds"], float)
 
@@ -709,11 +712,12 @@ def test_policy_config_key_validates_on_set():
         {"hybrid_policy": ["balanced"]},
     ],
 )
-def test_config_file_with_bad_hybrid_values_fails_to_load(tmp_path, doc):
+def test_config_file_with_bad_hybrid_values_loads_but_hybrid_refuses_it(tmp_path, doc):
     path = tmp_path / "config.json"
     path.write_text(json.dumps(doc), encoding="utf-8")
-    with pytest.raises(GaiaConfigError):
-        GaiaConfig.load(path)
+    cfg = GaiaConfig.load(path)
+    with pytest.raises(HybridConfigError):
+        HybridSettings.load(cfg)
 
 
 def test_config_file_policy_loads(tmp_path):
@@ -816,6 +820,9 @@ def test_p_hybrid_records_the_route_and_runs_on_its_model(print_mode_doubles, ca
         "degraded",
         "notice",
         "classifier_format",
+        "tier",
+        "classifier_model",
+        "classifier_usage",
     }
     assert record["route"]["policy"] == "quality"
     assert "hybrid runs this turn on amd.Claude-Strong" in err
@@ -957,19 +964,19 @@ def _cloud_error(status):
     [
         (
             _cloud_error(404),
-            "set hybrid_classifier_model to a model the gateway offers",
+            "choose a classifier model the gateway offers in Settings › Models › Hybrid",
             "`gaia gateway models`",
         ),
         (
             _http_error(404),
-            "hybrid_classifier_model",
+            "classifier model",
             "`gaia config set hybrid_classifier_model <model id>`",
         ),
         (_lemonade_error(401), "AMD LLM gateway key", "`gaia gateway auth`"),
         (_http_error(403), "AMD LLM gateway key", "`gaia gateway auth`"),
         (
             ClassifierError("the classifier did not answer within 5s"),
-            "raise hybrid_classifier_timeout",
+            "raise the classifier timeout",
             "`gaia config set hybrid_classifier_timeout <seconds>`",
         ),
         (
@@ -1001,7 +1008,7 @@ def test_a_bad_label_names_the_classifier_setting():
     router, _, _ = _router("not json")
     route = router.decide("Write a short reply to Sam.")
     assert "did not return a valid label" in route.fix
-    assert "hybrid_classifier_model" in route.fix
+    assert "choose another classifier model in Settings › Models › Hybrid" in route.fix
 
 
 def test_repeated_failures_across_sessions_degrade_loudly(caplog):
@@ -1017,7 +1024,7 @@ def test_repeated_failures_across_sessions_degrade_loudly(caplog):
     notice = routes[-1].notice
     assert CLASSIFIER in notice and STRONG in notice
     assert f"failed {hybrid.DEGRADED_AFTER + 1} turns in a row" in notice
-    assert "hybrid_classifier_model" in notice and "`gaia " not in notice
+    assert "classifier model" in notice and "`gaia " not in notice
     assert "gaia config set hybrid_classifier_model" in surface_wording(notice, "cli")
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     # The first failure and the turn it became degraded, not every turn.
@@ -1370,7 +1377,7 @@ def test_a_config_error_names_the_file_and_the_cli_its_command(kwargs, cli_fix):
     with pytest.raises(HybridConfigError) as excinfo:
         HybridSettings(**{"cheap_model": CHEAP, "strong_model": STRONG, **kwargs})
     message = str(excinfo.value)
-    assert "config.json in your GAIA folder" in message and "`gaia " not in message
+    assert "Settings › Models › Hybrid" in message and "`gaia " not in message
     assert cli_fix in surface_wording(message, "cli")
     # The service surface is a headless host: it gets the command too.
     assert cli_fix in surface_wording(message, "service")
@@ -1395,4 +1402,41 @@ def test_p_prints_the_cli_command_for_a_failed_classification(
     record = json.loads(out.strip().splitlines()[-1])
     command = "`gaia config set hybrid_classifier_model <model id>`"
     assert command in record["route"]["fix"] and command in err
-    assert "config.json in your GAIA folder" not in err
+    assert "Settings › Models › Hybrid" not in err
+
+
+class _UsageClient(FakeClient):
+    def get_last_usage(self):
+        return {"prompt_tokens": 900, "completion_tokens": 40, "cached_tokens": 800}
+
+
+def test_the_route_carries_what_the_classifier_call_used():
+    client = _UsageClient(_label("answer_question", 1, "low"))
+    router = HybridRouter(
+        HybridSettings(
+            cheap_model=CHEAP, strong_model=STRONG, classifier_model=CLASSIFIER
+        ),
+        client_factory=lambda model, base_url: client,
+    )
+    route = router.decide("What is 2+2?")
+    assert route.classifier_model == CLASSIFIER
+    assert route.classifier_usage == {
+        "input_tokens": 900,
+        "output_tokens": 40,
+        "cached_tokens": 800,
+    }
+
+
+def test_the_classifier_is_a_candidate_model(monkeypatch):
+    monkeypatch.setattr(
+        hybrid.HybridSettings,
+        "load",
+        classmethod(
+            lambda cls, config=None: HybridSettings(
+                cheap_model="Gemma-4-E4B-it-GGUF",
+                strong_model="Qwen3.6-35B-A3B-GGUF",
+                classifier_model="amd.DeepSeek-V4.1-Flash",
+            )
+        ),
+    )
+    assert "amd.DeepSeek-V4.1-Flash" in hybrid.candidate_models("hybrid")

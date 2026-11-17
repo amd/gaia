@@ -3,12 +3,10 @@
 
 """What cloud models cost, what this month's cloud chats spent, and the limit.
 
-Prices are list prices from the one rate card GAIA keeps
-(:mod:`gaia.eval.bench.metering`), cached input at its cached rate, so the price
-shown before a model is picked, the cost recorded after a turn, and the turn's
-own estimate all agree. A model
-with no card has an unknown price: it is shown as unknown and counted apart,
-never as $0. A priced turn whose usage never came back (a stopped answer) is
+Prices are list prices from :mod:`gaia.llm.pricing`, cached input at its
+cached rate, so the price shown before a model is picked, the cost recorded
+after a turn, and the turn's own estimate all agree. A model with no card has
+an unknown price: it is shown as unknown and counted apart, never as $0. A priced turn whose usage never came back (a stopped answer) is
 counted apart the same way, as unreported rather than unpriced.
 
 The limit applies to Agent UI chats. Once this month's known spending reaches
@@ -21,6 +19,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Dict, List, Optional
 
+from gaia.llm.pricing import FIREWORKS_PRICE_SOURCE, price_card, turn_cost
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -30,8 +29,13 @@ LIMIT_SETTING = "cloud_spend_limit_usd"
 ALLOWED_MONTH_SETTING = "cloud_spend_allowed_month"
 #: Share of the limit at which the UI warns.
 WARN_FRACTION = 0.8
-#: Where the prices come from, shown next to them.
-PRICE_SOURCE = "Fireworks AI list price, checked 2026-09-19"
+#: Where the Fireworks prices come from, shown next to them.
+PRICE_SOURCE = FIREWORKS_PRICE_SOURCE
+#: Where prices come from when no priced model is named.
+ANY_PRICE_SOURCE = (
+    "each model's list price: Fireworks AI's, the AMD LLM Gateway's own price "
+    "list, or Anthropic's"
+)
 
 
 def current_month(now: Optional[dt.datetime] = None) -> str:
@@ -48,34 +52,15 @@ def cloud_provider(model_id: Optional[str]) -> Optional[str]:
     return _ui_cloud_provider(model_id)
 
 
-def price_card(model_id: str) -> Optional[Dict[str, Any]]:
-    """List price per million tokens for *model_id*, or None when unknown."""
-    if cloud_provider(model_id) != "fireworks":
-        # The gateway's prices are set by the organization that runs it.
-        return None
-    from gaia.eval.bench.metering import rate_card
-
-    card = rate_card(model_id)
-    if card is None:
-        return None
-    uncached, cached, output = card
-    return {
-        "input_per_million": uncached,
-        "cached_input_per_million": cached,
-        "output_per_million": output,
-        "source": PRICE_SOURCE,
-    }
+#: The provider a direct ``claude-*`` turn is billed by.
+ANTHROPIC = "anthropic"
 
 
-def turn_cost(
-    model_id: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0
-) -> Optional[float]:
-    """List-price dollars for one turn, cached input at the cached rate; None if unknown."""
-    if price_card(model_id) is None:
-        return None
-    from gaia.eval.bench.metering import price
-
-    return price(model_id, input_tokens, cached_tokens, output_tokens)
+def billed_provider(model_id: Optional[str]) -> Optional[str]:
+    """Who bills a turn on *model_id*: a cloud provider, ``anthropic``, or None (local)."""
+    if model_id and model_id.startswith("claude-"):
+        return ANTHROPIC
+    return cloud_provider(model_id)
 
 
 #: The saved cost of a cloud turn no reply came from: not a stopped answer.
@@ -104,12 +89,16 @@ def record_turn(
     model_id: Optional[str],
     stats: Optional[Dict[str, Any]],
     failed: bool = False,
+    route: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Add a finished cloud turn to this month's spending.
 
     A *failed* turn that reported no tokens never got a reply, so it is left out.
+    A hybrid turn's *route* adds its cloud classifier's call as well.
     """
-    provider = cloud_provider(model_id)
+    if route:
+        record_classifier(db, route)
+    provider = billed_provider(model_id)
     if provider is None:
         return
     stats = stats or {}
@@ -137,6 +126,29 @@ def record_turn(
         inp if isinstance(inp, int) else None,
         out if isinstance(out, int) else None,
         usd,
+    )
+
+
+def record_classifier(db, route: Dict[str, Any]) -> None:
+    """Add a hybrid classifier call on a cloud model to this month's spending.
+
+    A call that reported no tokens got no answer (it failed), so it is left out.
+    """
+    model = route.get("classifier_model")
+    usage = route.get("classifier_usage")
+    if not isinstance(model, str) or billed_provider(model) is None:
+        return
+    counts = _token_counts(usage) if isinstance(usage, dict) else None
+    if counts is None:
+        return
+    inp, out, cached = counts
+    db.add_cloud_spend(
+        current_month(),
+        model,
+        billed_provider(model),
+        inp,
+        out,
+        turn_cost(model, inp, out, cached),
     )
 
 
@@ -181,6 +193,7 @@ def month_report(db, month: Optional[str] = None) -> Dict[str, Any]:
                 "usd": 0.0,
                 "unpriced_turns": 0,
                 "unreported_turns": 0,
+                "price_source": _source(r["model"]),
             },
         )
         entry["turns"] += 1
@@ -212,8 +225,19 @@ def month_report(db, month: Optional[str] = None) -> Dict[str, Any]:
         "limit_usd": limit,
         "state": state,
         "by_model": sorted(by_model.values(), key=lambda e: -e["usd"]),
-        "price_source": PRICE_SOURCE,
+        "price_source": _sources(e["price_source"] for e in by_model.values()),
     }
+
+
+def _source(model_id: str) -> Optional[str]:
+    card = price_card(model_id)
+    return card["source"] if card else None
+
+
+def _sources(sources) -> str:
+    """The distinct price sources named, or :data:`ANY_PRICE_SOURCE` for none."""
+    named = sorted({s for s in sources if s})
+    return "; ".join(named) if named else ANY_PRICE_SOURCE
 
 
 def _parse_instant(text: str) -> dt.datetime:
@@ -311,7 +335,7 @@ def chat_spend(
             "chats": len({a["session_id"] for a in answered_today}),
             "since": start_utc.isoformat(),
         },
-        "price_source": PRICE_SOURCE,
+        "price_source": _sources([_source(model_id)] if model_id else []),
     }
 
 
@@ -320,14 +344,17 @@ def limit_refusal(db, model_id: Optional[str]) -> Optional[str]:
     from gaia.llm.hybrid import candidate_models
 
     provider = next(
-        filter(None, (cloud_provider(m) for m in candidate_models(model_id))), None
+        filter(None, (billed_provider(m) for m in candidate_models(model_id))), None
     )
     if provider is None:
         return None
     report = month_report(db)
     if report["state"] != "reached":
         return None
-    name = "Fireworks AI" if provider == "fireworks" else "the AMD LLM Gateway"
+    name = {
+        "fireworks": "Fireworks AI",
+        ANTHROPIC: "Anthropic",
+    }.get(provider, "the AMD LLM Gateway")
     return (
         f"This month's cloud chats have cost about ${report['total_usd']:.2f} at "
         f"list price, which reaches your ${report['limit_usd']:.2f} monthly limit, "
@@ -359,3 +386,112 @@ def price_list(provider: str) -> List[Dict[str, Any]]:
         )
     out.sort(key=lambda m: (m["rank"] is None, m["rank"] or 0, m["name"]))
     return out
+
+
+def _token_counts(stats: Dict[str, Any]) -> Optional[tuple]:
+    """(input, output, cached) a turn reported, or None when it reported none."""
+    inp, out = stats.get("input_tokens"), stats.get("output_tokens")
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in (inp, out)):
+        return None
+    cached = stats.get("cached_tokens")
+    if (
+        isinstance(cached, bool)
+        or not isinstance(cached, int)
+        or not 0 <= cached <= inp
+    ):
+        cached = 0
+    return inp, out, cached
+
+
+def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:
+    """Dollars for *counts* on *model* at its price; a local model costs nothing.
+
+    Usage records no cache writes, so none are charged.
+    """
+    if billed_provider(model) is None:
+        return 0.0
+    if not counts:
+        return None
+    inp, out, cached = counts
+    return turn_cost(model, inp, out, cached)
+
+
+def _classifier_cost(route: Dict[str, Any]) -> Optional[float]:
+    """What the route's classifier call cost; 0 for none or a local one, None if unknown."""
+    model = route.get("classifier_model")
+    if not isinstance(model, str) or billed_provider(model) is None:
+        return 0.0
+    usage = route.get("classifier_usage")
+    if not isinstance(usage, dict):
+        # Asked but reported nothing: a failed call is not billed.
+        return 0.0 if not route.get("classified") else None
+    return _list_cost(model, _token_counts(usage))
+
+
+#: What :func:`hybrid_stats` covers: answers in the Agent UI's chat database.
+STATS_SCOPE = "agent_ui_chats"
+#: Shown verbatim by the apps next to the numbers.
+STATS_SCOPE_LABEL = (
+    "Agent UI chats only; turns from the terminal UI and one-off command-line "
+    "prompts aren't counted yet"
+)
+
+
+def hybrid_stats(db, settings) -> Dict[str, Any]:
+    """How every recorded ``hybrid`` turn routed, and what it cost against all-strong.
+
+    Covers every hybrid answer still in the chat database (deleting a chat
+    removes its turns); ``since`` is when the oldest was answered. Costs are
+    the models' prices (:func:`model_price`): ``cost`` is what the turns cost on
+    the models they ran on, ``cost_if_all_strong`` the same tokens at the strong
+    model's price (the one *settings* name now). Either is None, never $0, when
+    any turn's price is unknown; ``unpriced_turns`` counts those turns. ``cost``
+    includes each turn's classifier call, which an all-strong session wouldn't make.
+    """
+    turns = cheap = failed = unpriced = 0
+    cost: Optional[float] = 0.0
+    all_strong: Optional[float] = 0.0
+    since = None
+    for row in db.hybrid_turns():
+        route = row["stats"]["route"]
+        model = route.get("model")
+        if not isinstance(model, str) or not model:
+            continue
+        turns += 1
+        since = since or _parse_instant(row["created_at"]).isoformat()
+        # Records from before ``tier`` existed are told apart by today's cheap model.
+        tier = route.get("tier") or (
+            "cheap" if model == settings.cheap_model else "strong"
+        )
+        cheap += tier == "cheap"
+        # Only a failed classification carries a fix; an empty request does not.
+        if not route.get("classified") and route.get("fix"):
+            failed += 1
+        counts = _token_counts(row["stats"])
+        ran = _list_cost(model, counts)
+        strong = _list_cost(settings.strong_model, counts)
+        classifier = _classifier_cost(route)
+        ran = None if ran is None or classifier is None else ran + classifier
+        if ran is None or strong is None:
+            unpriced += 1
+        cost = None if cost is None or ran is None else cost + ran
+        all_strong = (
+            None if all_strong is None or strong is None else all_strong + strong
+        )
+    saving = None
+    if cost is not None and all_strong:
+        saving = round(100 * (1 - cost / all_strong), 1)
+    return {
+        "since": since,
+        "turns": turns,
+        "cheap_turns": cheap,
+        "strong_turns": turns - cheap,
+        "failed_closed": failed,
+        "cost": None if cost is None else round(cost, 6),
+        "cost_if_all_strong": None if all_strong is None else round(all_strong, 6),
+        "saving_pct": saving,
+        "unpriced_turns": unpriced,
+        # Only Agent UI chats record their turns here; the TUI and gaia -p don't.
+        "scope": STATS_SCOPE,
+        "scope_label": STATS_SCOPE_LABEL,
+    }

@@ -207,7 +207,7 @@ def classifier(monkeypatch):
     asked = []
     answer = {"label": ("write_prose", 1, "low")}
 
-    def classify(_router, text, base_url=None):
+    def classify(_router, text, base_url=None, *, record=True):
         asked.append(text)
         label = answer["label"]
         if isinstance(label, BaseException):
@@ -337,3 +337,23 @@ def test_a_broken_hybrid_config_fails_the_scheduled_run(
     with pytest.raises(HybridConfigError, match="nothing to route between"):
         _fire()
     assert fake_sdk.configs == []
+
+
+def test_a_scheduled_run_on_direct_claude_hybrid_runs_on_anthropic(
+    tmp_path, fake_sdk, catalog, classifier, monkeypatch
+):
+    """claude-direct: nothing for Lemonade to load, and the SDK uses Claude."""
+    _write_config(
+        tmp_path,
+        monkeypatch,
+        last_model="hybrid",
+        hybrid_cheap_model="claude-haiku-5-5",
+        hybrid_strong_model="claude-opus-5-5",
+        hybrid_classifier_model=CHEAP,
+    )
+    catalog.downloaded = False
+
+    _fire()
+
+    config = fake_sdk.configs[0]
+    assert config.use_claude is True and config.claude_model == "claude-haiku-5-5"

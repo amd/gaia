@@ -372,14 +372,14 @@ def _cost(
         return {"kind": spending.NO_REPLY_COST_KIND, "usd": None}
     if where is None:
         return {"kind": "unknown", "usd": None}
-    from gaia.eval.bench.metering import price, rate_card
+    from .spending import price_card, turn_cost
 
     if tokens_in is None or tokens_out is None:
         # A stopped stream ends before the provider reports its usage.
-        kind = "unreported" if rate_card(model_id) else "unknown"
+        kind = "unreported" if price_card(model_id) else "unknown"
         return {"kind": kind, "usd": None}
 
-    usd = price(model_id, int(tokens_in), int(cached or 0), int(tokens_out))
+    usd = turn_cost(model_id, int(tokens_in), int(tokens_out), int(cached or 0))
     if usd is None:
         return {"kind": "unknown", "usd": None}
     return {"kind": "estimate", "usd": round(usd, 6)}

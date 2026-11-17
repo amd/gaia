@@ -136,6 +136,22 @@ HYBRID_MODEL_KEYS = (
     "hybrid_strong_model",
     "hybrid_classifier_model",
 )
+_warned: set = set()
+
+
+def _warn_once(message: str) -> None:
+    """Log *message* the first time it comes up in this process."""
+    if message not in _warned:
+        _warned.add(message)
+        log.warning("%s", message)
+
+
+#: Every ``hybrid`` setting; HybridSettings refuses a bad one where it is used.
+HYBRID_KEYS = HYBRID_MODEL_KEYS + (
+    "hybrid_classifier_timeout",
+    "hybrid_policy",
+    "hybrid_rules",
+)
 
 
 @dataclass
@@ -229,8 +245,12 @@ class GaiaConfig:
         hybrid_classifier_timeout: Seconds ``hybrid`` waits for the label
             (1-120) before running the turn on the strong model.
         hybrid_policy: How readily ``hybrid`` uses the cheap model:
-            ``quality`` (default) or ``balanced``, which also sends
-            medium-difficulty code changes to it.
+            ``quality`` (default), ``balanced``, which also sends
+            medium-difficulty code changes to it, or ``custom``, which
+            applies ``hybrid_rules``.
+        hybrid_rules: The ``custom`` policy's table: for each of the 8 kinds,
+            ``{"cheap_max_difficulty": 0-5, "allow_high_stakes": bool}``.
+            Required while ``hybrid_policy`` is ``custom``.
     """
 
     profile: str = "chat"
@@ -261,6 +281,7 @@ class GaiaConfig:
     hybrid_classifier_model: Optional[str] = None
     hybrid_classifier_timeout: int = 15
     hybrid_policy: str = "quality"
+    hybrid_rules: Optional[Dict[str, Dict[str, Any]]] = None
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -319,6 +340,8 @@ class GaiaConfig:
             )
         if key == "hybrid_policy":
             return cls._check_hybrid_policy(value, "gaia config")
+        if key == "hybrid_rules":
+            return cls._check_hybrid_rules(value, "gaia config")
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -486,6 +509,65 @@ class GaiaConfig:
         return word
 
     @staticmethod
+    def _check_hybrid_rules(value: Any, where: str) -> Optional[Dict[str, Any]]:
+        """A complete rules table; JSON text is parsed, empty clears it."""
+        from gaia.llm.hybrid import HybridConfigError, parse_rules, validate_rules
+
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        try:
+            if isinstance(value, str):
+                return parse_rules(value)
+            return validate_rules(value)
+        except HybridConfigError as e:
+            raise GaiaConfigError(
+                f"{where}: {e} Run `gaia config set hybrid_rules '<json>'` with a "
+                "rule for every kind; see the Hybrid model section of the LLM "
+                "gateway guide."
+            ) from e
+
+    @classmethod
+    def _checked_hybrid(cls, kwargs: Dict[str, Any], where: str) -> Dict[str, Any]:
+        """The ``hybrid_*`` values in *kwargs*, normalized; GaiaConfigError if one is bad."""
+        out: Dict[str, Any] = {}
+        for key in HYBRID_MODEL_KEYS:
+            if key in kwargs:
+                out[key] = cls._check_hybrid_model(key, kwargs[key], where)
+        if "hybrid_classifier_timeout" in kwargs:
+            timeout = kwargs["hybrid_classifier_timeout"]
+            if isinstance(timeout, bool) or not isinstance(timeout, int):
+                raise GaiaConfigError(
+                    f"{where}: 'hybrid_classifier_timeout' must be a whole number "
+                    f"of seconds (unquoted), but it is {timeout!r}. Run `gaia "
+                    "config set hybrid_classifier_timeout 15` for the default."
+                )
+            out["hybrid_classifier_timeout"] = cls._check_hybrid_timeout(timeout, where)
+        if "hybrid_policy" in kwargs:
+            out["hybrid_policy"] = cls._check_hybrid_policy(
+                kwargs["hybrid_policy"], where
+            )
+        policy = out.get("hybrid_policy", kwargs.get("hybrid_policy"))
+        # Rules are read only by the custom policy; a preset leaves them as saved.
+        if "hybrid_rules" in kwargs and policy == "custom":
+            if isinstance(kwargs["hybrid_rules"], str):
+                raise GaiaConfigError(
+                    f"{where}: 'hybrid_rules' must be a JSON object, not text. "
+                    "Fix it by hand, or delete the key."
+                )
+            out["hybrid_rules"] = cls._check_hybrid_rules(kwargs["hybrid_rules"], where)
+        cls._check_custom_has_rules(policy, kwargs.get("hybrid_rules"), where)
+        return out
+
+    @staticmethod
+    def _check_custom_has_rules(policy: Optional[str], rules: Any, where: str) -> None:
+        if policy == "custom" and rules is None:
+            raise GaiaConfigError(
+                f"{where}: 'hybrid_policy' is custom, which needs 'hybrid_rules'. "
+                "Run `gaia config set hybrid_rules '<json>'` first, or "
+                "`gaia config set hybrid_policy quality`."
+            )
+
+    @staticmethod
     def _check_context_sizes(value: Any, config_file: Path) -> None:
         if not isinstance(value, dict) or not all(
             isinstance(k, str)
@@ -549,6 +631,26 @@ class GaiaConfig:
         except FileLockError as e:
             raise GaiaConfigError(str(e)) from e
 
+    @classmethod
+    def read_doc(cls, config_file: Path) -> dict:
+        """*config_file* as saved, unvalidated; {} when absent.
+
+        Raises:
+            GaiaConfigError: it can't be read or isn't a JSON object.
+        """
+        text = cls._read_text(config_file)
+        return {} if text is None else cls._parse_doc(text, config_file)
+
+    @classmethod
+    def validate_doc(cls, data: dict, config_file: Path) -> "GaiaConfig":
+        """*data* as a config, checked as :meth:`load` checks *config_file*."""
+        return cls._from_doc(data, config_file)
+
+    @classmethod
+    def check_hybrid_model(cls, key: str, value: Any, where: str) -> Optional[str]:
+        """A ``hybrid_*`` model id trimmed, None for the default; GaiaConfigError if invalid."""
+        return cls._check_hybrid_model(key, value, where)
+
     @staticmethod
     def _read_text(config_file: Path) -> Optional[str]:
         """The file's text, or None when it does not exist. Caller holds the lock."""
@@ -593,7 +695,7 @@ class GaiaConfig:
                         f"false (unquoted), but it is {value!r}. Fix it by hand, "
                         f"or delete the key to go back to the default."
                     )
-            if key in known and cls._is_int_field(key):
+            if key in known and cls._is_int_field(key) and key not in HYBRID_KEYS:
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                     raise GaiaConfigError(
                         f"GAIA config at {config_file}: '{key}' must be a whole "
@@ -634,16 +736,14 @@ class GaiaConfig:
                 kwargs["cloud_reasoning_effort"], f"GAIA config at {config_file}"
             )
         where = f"GAIA config at {config_file}"
-        for key in HYBRID_MODEL_KEYS:
-            if key in kwargs:
-                kwargs[key] = cls._check_hybrid_model(key, kwargs[key], where)
-        if "hybrid_classifier_timeout" in kwargs:
-            kwargs["hybrid_classifier_timeout"] = cls._check_hybrid_timeout(
-                kwargs["hybrid_classifier_timeout"], where
-            )
-        if "hybrid_policy" in kwargs:
-            kwargs["hybrid_policy"] = cls._check_hybrid_policy(
-                kwargs["hybrid_policy"], where
+        try:
+            kwargs.update(cls._checked_hybrid(kwargs, where))
+        except GaiaConfigError as e:
+            # Kept as saved, so the rest of GAIA runs and Settings can repair
+            # them; HybridSettings.load refuses them wherever hybrid is used.
+            _warn_once(
+                f"{e} Until then the hybrid model can't run; fix it in the Agent "
+                "UI under Settings › Models › Hybrid, or with `gaia config set`."
             )
         if "project_context" in kwargs:
             kwargs["project_context"] = cls._check_project_context(
@@ -805,7 +905,12 @@ class GaiaConfig:
                 "context_sizes is set per model: choose a context size in the "
                 "Agent UI under Settings › Model, or edit config.json by hand."
             )
-        setattr(self, key, self._coerce(key, value))
+        coerced = self._coerce(key, value)
+        if key == "hybrid_policy":
+            self._check_custom_has_rules(coerced, self.hybrid_rules, "gaia config")
+        if key == "hybrid_rules":
+            self._check_custom_has_rules(self.hybrid_policy, coerced, "gaia config")
+        setattr(self, key, coerced)
 
     def resolve_model(
         self, cli_value: Optional[str], builtin_default: Optional[str]

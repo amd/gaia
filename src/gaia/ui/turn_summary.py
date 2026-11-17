@@ -437,6 +437,17 @@ class TurnLedger:
         return out
 
 
+def _priced_id(location: InferenceLocation) -> Optional[str]:
+    """The id prices are kept under: a relayed model arrives without its provider prefix."""
+    model = location.model
+    if not model or model.startswith("claude-"):
+        return model
+    prefix = f"{location.provider}."
+    if location.provider in ("fireworks", "amd") and not model.startswith(prefix):
+        return prefix + model
+    return model
+
+
 def _cost(
     location: Optional[InferenceLocation], usage: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -445,20 +456,19 @@ def _cost(
         return {"kind": "unknown"}
     if not location.remote:
         return {"kind": "local"}
-    # Only Fireworks publishes a rate card GAIA carries.
-    if location.provider != "fireworks":
-        return {"kind": "unknown"}
-    # Lazy: the rate card lives with the benchmark's metering code.
-    from gaia.eval.bench.metering import price, rate_card
+    from .spending import price_card, turn_cost
 
+    model = _priced_id(location)
+    if not model or price_card(model) is None:
+        return {"kind": "unknown"}
     input_tokens = usage.get("input_tokens")
     output_tokens = usage.get("tokens")
     if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
         # A stopped stream ends before the provider reports its usage.
-        return {"kind": "unreported" if rate_card(location.model) else "unknown"}
+        return {"kind": "unreported"}
     cached = usage.get("cached_tokens")
     cached = cached if isinstance(cached, int) else 0
-    usd = price(location.model, input_tokens, cached, output_tokens)
+    usd = turn_cost(model, input_tokens, output_tokens, cached)
     if usd is None:
         return {"kind": "unknown"}
     return {"kind": "estimate", "usd": round(usd, 6)}

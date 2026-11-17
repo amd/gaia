@@ -7,6 +7,8 @@ Evaluation framework configuration.
 This module contains shared configuration constants used across the evaluation framework.
 """
 
+from gaia.llm.pricing import ANTHROPIC_PRICES
+
 # Default Claude model for evaluation tasks (the JUDGE, not the model under test).
 #
 # NOTE ON BASELINES: eval scorecards are scored BY this model, so changing it changes
@@ -23,59 +25,10 @@ DEFAULT_AGENT_TYPE = "gaia"
 # Per-million-token pricing for cloud models. An absent model costs 0.0 (local), so
 # every reachable cloud model must be listed or its spend reads as free.
 # ``cached_per_mtok`` absent = cached input bills at the input rate; 0 = free.
-# Claude: https://www.anthropic.com/pricing (read 2026-11-09)
 # Fireworks: https://docs.fireworks.ai/serverless/pricing (read 2026-09-13)
 MODEL_PRICING = {
-    # Claude 5 family
-    "claude-opus-5-5": {
-        "input_per_mtok": 4.00,
-        "output_per_mtok": 20.00,
-        "cached_per_mtok": 0.20,
-    },
-    "claude-sonnet-5-5": {
-        "input_per_mtok": 2.00,
-        "output_per_mtok": 10.00,
-        "cached_per_mtok": 0.10,
-    },
-    # Prompts over 100K tokens bill at $0.50 / $2.50.
-    "claude-haiku-5-5": {
-        "input_per_mtok": 0.10,
-        "output_per_mtok": 0.50,
-        "cached_per_mtok": 0.01,
-    },
-    "claude-fable-5-1": {
-        "input_per_mtok": 10.00,
-        "output_per_mtok": 50.00,
-        "cached_per_mtok": 0.25,
-    },
-    "claude-opus-5": {"input_per_mtok": 5.00, "output_per_mtok": 25.00},
-    "claude-sonnet-5": {"input_per_mtok": 2.00, "output_per_mtok": 10.00},
-    "claude-fable-5": {"input_per_mtok": 10.00, "output_per_mtok": 50.00},
-    # Claude 4.x family
-    "claude-opus-4-8": {"input_per_mtok": 5.00, "output_per_mtok": 25.00},
-    "claude-opus-4-7": {"input_per_mtok": 5.00, "output_per_mtok": 25.00},
-    "claude-opus-4-6": {"input_per_mtok": 5.00, "output_per_mtok": 25.00},
-    "claude-opus-4.1": {"input_per_mtok": 15.00, "output_per_mtok": 75.00},
-    "claude-opus-4": {"input_per_mtok": 15.00, "output_per_mtok": 75.00},
-    "claude-haiku-4-5": {"input_per_mtok": 1.00, "output_per_mtok": 5.00},
-    "claude-haiku-4-5-20251001": {"input_per_mtok": 1.00, "output_per_mtok": 5.00},
-    "claude-sonnet-4-6": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-sonnet-4.5": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-sonnet-4-5-20250929": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-sonnet-4": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-sonnet-4-20250514": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    # Claude 3.x family
-    "claude-3-7-sonnet-20250219": {"input_per_mtok": 3.00, "output_per_mtok": 15.00},
-    "claude-3-5-sonnet-20241022": {
-        "input_per_mtok": 3.00,
-        "output_per_mtok": 15.00,
-    },  # deprecated
-    "claude-3-5-haiku-20241022": {"input_per_mtok": 0.80, "output_per_mtok": 4.00},
-    "claude-3-opus-20240229": {
-        "input_per_mtok": 15.00,
-        "output_per_mtok": 75.00,
-    },  # deprecated
-    "claude-3-haiku-20240307": {"input_per_mtok": 0.25, "output_per_mtok": 1.25},
+    # Claude list prices: the runtime's table (gaia.llm.pricing).
+    **ANTHROPIC_PRICES,
     # Fireworks serverless via Lemonade cloud routing. 5.3 cached input costs ~2x 5.2's.
     "fireworks.glm-5p2": {
         "input_per_mtok": 1.40,
@@ -112,6 +65,7 @@ def claude_pricing(model: str) -> dict:
         raise ValueError(
             f"No price for Claude model {model!r}, so its eval cost can't be "
             "reported. Add its list price (https://www.anthropic.com/pricing) to "
-            "MODEL_PRICING in src/gaia/eval/config.py."
+            "ANTHROPIC_PRICES in src/gaia/llm/pricing.py, which MODEL_PRICING "
+            "reads."
         )
     return pricing

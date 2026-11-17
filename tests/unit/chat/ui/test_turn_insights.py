@@ -127,15 +127,15 @@ def test_a_load_inside_a_request_is_listed_but_not_counted_twice():
 
 
 def test_cloud_usage_is_priced_from_the_rate_card(monkeypatch):
-    from gaia.eval.bench import metering
+    from gaia.ui import spending
 
     seen = {}
 
-    def price(model, tokens_in, cached, tokens_out):
+    def turn_cost(model, tokens_in, tokens_out, cached):
         seen.update(model=model, args=(tokens_in, cached, tokens_out))
         return 0.0123
 
-    monkeypatch.setattr(metering, "price", price)
+    monkeypatch.setattr(spending, "turn_cost", turn_cost)
     result = {
         "timing_summary": {"llm_seconds": 2.0, "tool_seconds": 0.0},
         "conversation": [
@@ -170,9 +170,9 @@ def test_a_failed_cloud_turn_that_never_answered_is_not_priced():
 
 
 def test_a_failed_cloud_turn_that_reported_usage_is_still_priced(monkeypatch):
-    from gaia.eval.bench import metering
+    from gaia.llm import pricing
 
-    monkeypatch.setattr(metering, "price", lambda *a: 0.0123)
+    monkeypatch.setattr(pricing, "price", lambda *a: 0.0123)
     result = {
         "timing_summary": {"llm_seconds": 2.0, "tool_seconds": 0.0},
         "conversation": [
