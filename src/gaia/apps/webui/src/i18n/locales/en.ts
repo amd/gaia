@@ -2529,6 +2529,8 @@ export const enMessages = {
     'settings.connectors.setupRequired': 'Setup required',
     'settings.connectors.paused': 'Paused',
     'settings.connectors.notWorking': 'Not working',
+    'settings.connectors.turnedOn': 'Turned on',
+    'settings.connectors.checkingShort': 'Checking…',
     'settings.connectors.disconnected': 'Disconnected',
     'settings.connectors.deviceFailed': 'Device sign-in failed.',
     'settings.connectors.required': 'Required: {fields}',
@@ -2619,6 +2621,7 @@ export const enMessages = {
 
     // The connection banner
     'banner.serverStopped': "The model server isn't answering.",
+    'server.otherServerStart': "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
     'banner.restartHint': 'If it stays this way, restart it:',
     'banner.startHint': 'To start it by hand, run',
     'banner.finishSetup': 'Set up models on this PC, or choose a cloud model in Settings.',
@@ -3494,6 +3497,7 @@ export const enMessages = {
     'resources.toggle': 'Resource usage',
     'resources.show': 'Show resource usage',
     'resources.hide': 'Hide resource usage',
+    'resources.hiddenNote': 'Resource usage is now hidden in every chat. The pulse icon at the top of a chat brings it back, and so does Settings › General.',
     'resources.cpu': 'CPU',
     'resources.memory': 'Memory',
     'resources.gpu': 'GPU',

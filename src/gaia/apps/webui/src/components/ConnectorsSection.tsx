@@ -505,6 +505,14 @@ function ConnectorTile({
         if (check?.state === 'failed' && !check.slow) {
             return <span className="connector-status failed" role="status">{t('settings.connectors.notWorking')}</span>;
         }
+        // An MCP server is only known to work once a check has started it.
+        if (connector.type === 'mcp_server' && check?.state !== 'ok') {
+            return (
+                <span className="connector-status idle" role="status">
+                    {t(check?.state === 'checking' ? 'settings.connectors.checkingShort' : 'settings.connectors.turnedOn')}
+                </span>
+            );
+        }
         return (
             <span className="connector-status ok">
                 <CheckCircle2 size={12} />
