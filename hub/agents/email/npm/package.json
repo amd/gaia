@@ -67,9 +67,9 @@
     "demo": "node examples/demo.mjs"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
-    "esbuild": "^0.28.1",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "@types/node": "^25.9.9",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
   }
 }
