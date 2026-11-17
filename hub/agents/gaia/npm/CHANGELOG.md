@@ -12,6 +12,10 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 - A reply that goes quiet partway through is requested again, up to twice,
   instead of ending the turn; the work done so far is kept either way.
+- `run_python` no longer drops long output without saying so. Output past
+  8,000 characters used to be cut silently, so a scan's later hits never
+  reached the agent. It now gets the start and end, is told how much was left
+  out, and can read the rest, as it already could for a script run from a file.
 
 ## [0.3.6]
 
