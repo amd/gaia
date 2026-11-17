@@ -3493,6 +3493,7 @@ const messages: Messages = {
     'resources.toggle': 'استخدام الموارد',
     'resources.show': 'إظهار استخدام الموارد',
     'resources.hide': 'إخفاء استخدام الموارد',
+    'resources.hiddenNote': 'استخدام الموارد مخفي الآن في كل المحادثات. تعيده أيقونة النبض أعلى المحادثة، وكذلك الإعدادات › عام.',
     'resources.cpu': 'CPU',
     'resources.memory': 'الذاكرة',
     'resources.gpu': 'GPU',

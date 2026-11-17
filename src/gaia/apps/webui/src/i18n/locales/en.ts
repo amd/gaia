@@ -3494,6 +3494,7 @@ export const enMessages = {
     'resources.toggle': 'Resource usage',
     'resources.show': 'Show resource usage',
     'resources.hide': 'Hide resource usage',
+    'resources.hiddenNote': 'Resource usage is now hidden in every chat. The pulse icon at the top of a chat brings it back, and so does Settings › General.',
     'resources.cpu': 'CPU',
     'resources.memory': 'Memory',
     'resources.gpu': 'GPU',
