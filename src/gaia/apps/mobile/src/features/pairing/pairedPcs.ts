@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 
 import { normalizeBaseUrl } from '@/api/http';
 import { useConnectionStore } from '@/state/connection';
@@ -11,8 +11,10 @@ import type { PairedPc } from './service';
 
 const PCS_KEY = ['pairing', 'pcs'] as const;
 
+/** Read again whenever the PC in use changes: pairing another PC adds one, and the screen stays mounted in the drawer. */
 export function usePairedPcs() {
-    return useQuery({ queryKey: PCS_KEY, queryFn: () => getPairingService().list() });
+    const baseUrl = useConnectionStore((s) => s.connection?.baseUrl) ?? null;
+    return useQuery({ queryKey: [...PCS_KEY, baseUrl], queryFn: () => getPairingService().list(), placeholderData: keepPreviousData });
 }
 
 /** Whether the app is talking to this PC now. */
