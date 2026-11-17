@@ -433,7 +433,14 @@ class StdioTransport(MCPTransport):
         if resolved is None:
             launcher = _launcher_name(program)
             runtime = _RUNTIME_LAUNCHERS.get(launcher)
-            if runtime is not None:
+            # A PATH in the server's own env counts: POSIX Popen searches it.
+            server_path = next(
+                (v for k, v in (self.env or {}).items() if k.upper() == "PATH"),
+                None,
+            )
+            if runtime is not None and not (
+                server_path and shutil.which(program, path=server_path)
+            ):
                 name, url = runtime
                 raise ValueError(
                     f"MCP server '{self.name or launcher}' needs {name} to start, "

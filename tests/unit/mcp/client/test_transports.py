@@ -221,6 +221,58 @@ class TestStdioTransport:
         assert StdioTransport("my-server", args=["--x"]).connect() is True
         assert mock_popen.call_args[0][0] == ["my-server", "--x"]
 
+    @pytest.mark.parametrize("path_key", ["PATH", "Path"])
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_launcher_on_server_env_path_is_not_refused(self, mock_popen, path_key):
+        """A launcher only on the server's own env PATH still launches."""
+        node_dir = os.path.join(os.sep, "opt", "node", "bin")
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        def which(cmd, path=None):
+            return os.path.join(node_dir, cmd) if path == node_dir else None
+
+        transport = StdioTransport(
+            "npx", args=["-y", "srv"], env={path_key: node_dir}, name="mcp-memory"
+        )
+        with (
+            patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=which),
+            patch.object(transport, "_take_install_lock"),
+        ):
+            assert transport.connect() is True
+        assert mock_popen.call_args[0][0] == ["npx", "-y", "srv"]
+
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
+    def test_launcher_missing_from_server_env_path_is_still_refused(self, _):
+        """An env PATH that lacks the launcher doesn't hide the missing runtime."""
+        transport = StdioTransport("uvx", args=["srv"], env={"PATH": "/nowhere"})
+        with pytest.raises(ValueError, match="needs uv"):
+            transport.connect()
+
+    @patch("gaia.mcp.client.transports.stdio.time.sleep")
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    @patch(
+        "gaia.mcp.client.transports.stdio.shutil.which",
+        side_effect=lambda cmd, path=None: f"/usr/bin/{cmd}",
+    )
+    def test_present_runtime_server_crash_surfaces_real_error(self, _, mock_popen, __):
+        """With the runtime installed, a crashing server reports its own error."""
+        mock_process = Mock()
+        mock_process.poll.return_value = 1
+        mock_process.returncode = 1
+        mock_process.pid = 12345
+        mock_process.stderr = StringIO("ModuleNotFoundError: no module named srv\n")
+        mock_popen.return_value = mock_process
+
+        with pytest.raises(RuntimeError) as excinfo:
+            StdioTransport("uvx", args=["srv"], name="mcp-x").connect()
+
+        message = str(excinfo.value)
+        assert "process died" in message
+        assert "needs uv" not in message
+        assert "not found on PATH" not in message
+
     @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
     def test_stdio_transport_builds_command_from_args(self, mock_popen, _):
