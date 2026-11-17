@@ -214,5 +214,30 @@ def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
         assert session.agent.model_id == NPU
         assert session.agent.conversation_history == old.conversation_history
         session.run_lock.release()
+
+        # What the user set in the chat survives the next move too.
+        session, _ = registry.checkout("chat-1", **kwargs)
+        agent = session.agent
+        granted = tmp_path / "granted"
+        granted.mkdir()
+        agent.internet_off = True
+        agent._incognito, agent._incognito_reason = True, "private"
+        agent.path_validator.add_allowed_path(str(granted))
+        path.write_text(
+            json.dumps(
+                {
+                    **json.loads(path.read_text(encoding="utf-8")),
+                    "embedding_device": "npu",
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert session.follow_embedder(allowed_paths=kwargs["allowed_paths"])
+        moved = session.agent
+        assert moved is not agent and moved._embedding_model == NPU_EMBEDDER
+        assert moved.internet_off is True
+        assert (moved._incognito, moved._incognito_reason) == (True, "private")
+        assert moved.path_validator.is_path_allowed(str(granted), prompt_user=False)
+        session.run_lock.release()
     finally:
         registry.clear()

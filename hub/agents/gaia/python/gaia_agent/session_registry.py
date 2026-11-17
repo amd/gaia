@@ -81,6 +81,42 @@ class SessionCapacityError(RuntimeError):
     """
 
 
+def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
+    """Give a rebuilt agent what its chat set on the old one.
+
+    A retained session keeps these until the caller changes them, so a
+    rebuild that dropped them would quietly put an offline chat back online,
+    or a private one back into memory: the conversation, loaded skills, the
+    internet switch, the memory mode, granted folders and documents, and the
+    working folder.
+    """
+    new.conversation_history = list(getattr(old, "conversation_history", None) or [])
+    if hasattr(old, "internet_off"):
+        new.internet_off = old.internet_off
+    if getattr(old, "_incognito", False) and hasattr(new, "_incognito"):
+        new._incognito = True
+        new._incognito_reason = getattr(old, "_incognito_reason", None)
+    old_paths = getattr(getattr(old, "path_validator", None), "allowed_paths", None)
+    new_validator = getattr(new, "path_validator", None)
+    if old_paths and new_validator is not None:
+        for path in sorted(old_paths - new_validator.allowed_paths):
+            new_validator.add_allowed_path(str(path))
+    old_dir = getattr(getattr(old, "config", None), "working_directory", None)
+    if old_dir is not None and getattr(new, "config", None) is not None:
+        new.config.working_directory = old_dir
+    for name in list(getattr(old, "loaded_skills", None) or {}):
+        try:
+            new.load_skill(name)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "session %s: skill %r was not loaded again after its agent was "
+                "rebuilt for changed settings (%s); the user can load it again",
+                session_id,
+                name,
+                exc,
+            )
+
+
 class _AgentSession:
     """A retained agent instance plus its per-session state.
 
@@ -155,9 +191,9 @@ class _AgentSession:
     def follow_embedder(self, **config_kwargs: Any) -> bool:
         """Rebuild the agent when the PC's embedder moved since it was built.
 
-        Keeps this session's model, conversation and loaded skills; the old
-        agent's pending memory work finishes before it closes. Must be called
-        with ``run_lock`` held. Returns True when it rebuilt.
+        Keeps this session's model and what :func:`_carry_session_state`
+        lists; the old agent's pending memory work finishes before it closes.
+        Must be called with ``run_lock`` held. Returns True when it rebuilt.
         """
         from gaia.agents.registry import machine_embedding_model
 
@@ -177,20 +213,7 @@ class _AgentSession:
             kwargs["model_id"] = self.model_id
         old = self.agent
         new = build_session_agent(**kwargs)
-        new.conversation_history = list(
-            getattr(old, "conversation_history", None) or []
-        )
-        for name in list(getattr(old, "loaded_skills", None) or {}):
-            try:
-                new.load_skill(name)
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.warning(
-                    "session %s: skill %r was not loaded again after the "
-                    "embedder moved (%s); the user can load it again",
-                    self.session_id,
-                    name,
-                    exc,
-                )
+        _carry_session_state(old, new, self.session_id)
         self.agent = new
         close_agent(old)
         return True
