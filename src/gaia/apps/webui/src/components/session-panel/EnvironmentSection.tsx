@@ -31,6 +31,15 @@ import type { ScopeEntry, ScopeSource } from '../../types/sessionPanel';
 import type { MessageKey } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
 
+const MODEL_STATE: Record<Exclude<LocalModelStatus['state'], 'loaded'>, MessageKey> = {
+    warming: 'modelStatus.state.warming',
+    idle: 'modelStatus.state.idle',
+    stopped: 'modelStatus.state.stopped',
+};
+
+/** A warming model settles without a turn ending, so it is re-read until it does. */
+const WARMING_POLL_MS = 3000;
+
 const SOURCE_LABEL: Record<ScopeSource, MessageKey> = {
     added: 'env.source.added',
     gaia_documents: 'env.source.gaia_documents',
@@ -105,6 +114,12 @@ function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     }, [remote]);
     useEffect(load, [load]);
     useTurnEnd(busy, load);
+    const warming = status?.state === 'warming';
+    useEffect(() => {
+        if (!warming) return undefined;
+        const timer = setInterval(load, WARMING_POLL_MS);
+        return () => clearInterval(timer);
+    }, [warming, load]);
 
     if (remote) {
         return (
@@ -120,18 +135,26 @@ function RunsOn({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     // The server may have another chat's model loaded; only describe it when it is this chat's.
     const other = !!(status?.model && chatModel && !sameModel(status.model, chatModel));
     const memory = other ? null : status?.memory;
+    // With nothing loaded the server names no model, so name this chat's.
+    const modelName = status?.display_name
+        ?? (status && status.state !== 'loaded' && chatModel ? displayModelName(chatModel) : null);
+    const inUse = memory?.model_gb != null
+        ? t('env.inUse', { gb: memory.model_gb.toFixed(1) })
+        : status?.state === 'loaded' || status?.state === 'warming' ? t('env.inUseUnknown') : null;
+    const free = memory?.free_gb != null ? t('env.free', { gb: memory.free_gb.toFixed(1) }) : null;
+    const memoryText = [inUse, free].filter(Boolean).join(' · ');
     return (
         <Row label={t('env.runsOn')}>
             <span className="sp-place"><Monitor size={13} aria-hidden="true" /> {t('env.thisPc')}{!other && status?.placement?.label ? ` · ${status.placement.label}` : ''}</span>
             {other
                 ? <span className="sp-meta">{t('env.notLoaded', { model: displayModelName(chatModel!) })}</span>
-                : status?.display_name && <span className="sp-meta" dir="ltr">{status.display_name}{status.state !== 'loaded' ? ` · ${status.state}` : ''}</span>}
-            {memory && (
-                <span className="sp-meta">
-                    {memory.model_gb != null ? t('env.inUse', { gb: memory.model_gb.toFixed(1) }) : t('env.inUseUnknown')}
-                    {memory.free_gb != null ? ` · ${t('env.free', { gb: memory.free_gb.toFixed(1) })}` : ''}
-                </span>
-            )}
+                : status && modelName && (
+                    <span className="sp-meta">
+                        <bdi dir="ltr">{modelName}</bdi>
+                        {status.state !== 'loaded' ? ` · ${t(MODEL_STATE[status.state])}` : ''}
+                    </span>
+                )}
+            {memory && memoryText && <span className="sp-meta">{memoryText}</span>}
             {error
                 ? <span className="sp-error">{error}</span>
                 : status?.error && <span className="sp-error"><LocalStatusError status={status} /></span>}
@@ -179,7 +202,11 @@ function Folders({ sessionId }: { sessionId: string }) {
                 : <File size={13} className="sp-item-icon" aria-hidden="true" />}
             <div className="sp-item-text">
                 <span className="sp-item-name" dir="ltr" title={entry.path}>{entry.name || baseName(entry.path)}</span>
-                <span className="sp-meta" title={entry.path}>{t(SOURCE_LABEL[entry.source])} · <span className="sp-item-path" dir="ltr">{entry.path}</span></span>
+                {/* A folder's path matters; a file's shows on hover. */}
+                <span className="sp-meta" title={entry.path}>
+                    {t(SOURCE_LABEL[entry.source])}
+                    {entry.kind === 'folder' && <> · <span className="sp-item-path" dir="ltr">{entry.path}</span></>}
+                </span>
             </div>
             {entry.removable && !locked && (
                 <button

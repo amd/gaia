@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import unquote, urlparse
 
+from gaia.agents.base.text_task import instruction_part
 from gaia.agents.base.tool_outcome import tool_result_dict
 from gaia.home import gaia_home
 
@@ -521,7 +522,8 @@ def _source_paths(text: str) -> set[str]:
 
 def _instructions(query: str):
     """(verb, text after it) for each non-negated storage instruction."""
-    for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", query)):
+    asked = _FENCES.sub("", instruction_part(query))
+    for sentence in re.split(r"(?<=[.!?])\s+|\n", asked):
         sentence = sentence.strip()
         for action in _SAVE_REQUEST.finditer(sentence):
             if not _NOT_REQUEST.search(sentence[: action.end()]):
@@ -707,7 +709,8 @@ class CompletionEvidence:
         # Downloads that ran and failed: key -> the URL's file name when the
         # call named only a folder, else None.
         self.failed_downloads: dict[str, str | None] = {}
-        self.query = query if isinstance(query, str) else ""
+        # A sentence handed over to translate names no file this turn owes.
+        self.query = instruction_part(query) if isinstance(query, str) else ""
         # Folders the request gives in full, and their parents: "in C:\w\project\
         # ... write project\stats.csv" means C:\w\project\stats.csv.
         self.anchors = list(
@@ -721,16 +724,16 @@ class CompletionEvidence:
         )
         # The subset of refused reasons that were prompts nobody answered.
         self.unconfirmed: set[str] = set()
-        self.requested, self.save_requested = save_obligations(query)
+        self.requested, self.save_requested = save_obligations(self.query)
         # Wider than ``requested``: every file the request asks to produce.
-        self.outputs = named_outputs(query)
-        self.instructed = save_instructed(query)
+        self.outputs = named_outputs(self.query)
+        self.instructed = save_instructed(self.query)
         # The paths the request names and their folders: where a bare output
         # ("also make tables.xlsx") lands.
         self.named_folders = list(
             dict.fromkeys(
                 folder
-                for path in mentioned_paths(query)
+                for path in mentioned_paths(self.query)
                 if ntpath.basename(path) != path
                 for folder in (self.key(path), os.path.dirname(self.key(path)))
             )

@@ -271,6 +271,17 @@
         "title": "Active",
         "type": "boolean"
       },
+      "autoDeclined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Autodeclined"
+      },
       "commandOutput": {
         "anyOf": [
           {
@@ -347,6 +358,17 @@
       "id": {
         "title": "Id",
         "type": "integer"
+      },
+      "kept": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Kept"
       },
       "label": {
         "title": "Label",
@@ -4751,6 +4773,7 @@
       "custom_model": {
         "anyOf": [
           {
+            "maxLength": 256,
             "type": "string"
           },
           {

@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 
 from gaia.ui.server import create_app
 from gaia.ui.utils import uploads_dir
+from tests.fixtures.legacy_text import LEGACY_SAMPLES, UNDECODABLE
 
 logger = logging.getLogger(__name__)
 
@@ -178,8 +179,8 @@ class TestFileUpload:
         assert data["content_type"] == "text/plain"
         assert data["is_image"] is False
         assert data["url"].startswith("/api/files/uploads/")
-        # A random ID, then the name the user knows the file by.
-        assert re.fullmatch(r"[0-9a-f]{12}_test\.txt", data["filename"])
+        # The name the user knows the file by, with an id only on a clash.
+        assert re.fullmatch(r"(?:[0-9a-f]{12}_)?test\.txt", data["filename"])
         logger.info("Upload text file response: %s", data)
 
     def test_upload_image_file(self, client, sample_png_bytes):
@@ -308,9 +309,9 @@ class TestFileUpload:
             assert data["filename"].endswith(
                 ext
             ), f"Extension not preserved: expected {ext}, got {data['filename']}"
-            # Verify the ID prefix and the kept name
+            # The kept name, with an id only when that name is already taken
             assert re.fullmatch(
-                rf"[0-9a-f]{{12}}_myfile{re.escape(ext)}", data["filename"]
+                rf"(?:[0-9a-f]{{12}}_)?myfile{re.escape(ext)}", data["filename"]
             )
 
     def test_upload_is_stored_under_gaia_home(self, client):
@@ -925,10 +926,9 @@ class TestFilePreview:
         assert data["is_text"] is True
         assert data["encoding"] == "utf-8"
 
-    def test_preview_latin1_fallback(self, client, home_tmp_dir):
-        """Verify latin-1 fallback for non-UTF-8 encoded files."""
+    def test_preview_windows_western_text(self, client, home_tmp_dir):
+        """Western text that is not UTF-8 reads as Windows-1252."""
         latin1_file = home_tmp_dir / "latin1.txt"
-        # Write bytes that are valid latin-1 but not valid utf-8
         latin1_file.write_bytes(b"caf\xe9\nni\xf1o\n")
 
         resp = client.get(
@@ -939,7 +939,31 @@ class TestFilePreview:
 
         data = resp.json()
         assert data["is_text"] is True
-        assert data["encoding"] == "latin-1"
+        assert data["encoding"] == "cp1252"
+        assert data["preview_lines"] == ["café", "niño"]
+
+    @pytest.mark.parametrize(**LEGACY_SAMPLES)
+    def test_preview_legacy_encoding(self, client, home_tmp_dir, text, encoding):
+        """Arabic, Japanese, Chinese and Cyrillic files preview as their text (#8040)."""
+        f = home_tmp_dir / "legacy.csv"
+        f.write_bytes(text.encode(encoding))
+
+        data = client.get("/api/files/preview", params={"path": str(f)}).json()
+
+        assert data["is_text"] is True
+        assert data["preview_lines"] == text.splitlines()
+        assert data["columns"] == text.splitlines()[0].split(",")
+        assert data["row_count"] == len(text.splitlines()) - 1
+
+    def test_preview_undecodable_text_file_is_not_shown(self, client, home_tmp_dir):
+        """Bytes no encoding fits give no preview rather than mojibake."""
+        f = home_tmp_dir / "scrambled.txt"
+        f.write_bytes(UNDECODABLE)
+
+        data = client.get("/api/files/preview", params={"path": str(f)}).json()
+
+        assert data["is_text"] is False
+        assert data["preview_lines"] == []
 
     def test_preview_python_file(self, client, sample_py_file):
         """Preview a .py file to confirm code files work."""
@@ -1355,7 +1379,7 @@ class TestSecurityEdgeCases:
         data = resp.json()
         assert data["original_name"] == "my file (copy) [2].txt"
         # No special characters leak into the stored name
-        assert re.fullmatch(r"[0-9a-f]{12}_my_file_copy_2\.txt", data["filename"])
+        assert re.fullmatch(r"(?:[0-9a-f]{12}_)?my_file_copy_2\.txt", data["filename"])
 
 
 # ── TestBrowseEdgeCases ──────────────────────────────────────────────────────

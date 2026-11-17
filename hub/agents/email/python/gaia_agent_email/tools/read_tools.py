@@ -2257,6 +2257,7 @@ def pre_scan_inbox_impl(
     include_informational: bool = False,
     action_db: Any = None,
     debug: bool = False,
+    keep_preference_tags: bool = False,
 ) -> Dict[str, Any]:
     """Pre-scan the inbox for the chat surface.
 
@@ -2272,7 +2273,8 @@ def pre_scan_inbox_impl(
     classification. The caller is expected to set ``kind`` in the
     rendered output to ``email_pre_scan``
     so the chat surface can detect and render the structured card
-    component.
+    component. ``keep_preference_tags`` leaves that tag on the items so
+    ``merge_pre_scan_backends`` can re-sort across mailboxes (#3623).
 
     ``session_preferences`` flow through to ``triage_inbox_impl`` so
     sender overrides shape the underlying classification, and category
@@ -2548,17 +2550,19 @@ def pre_scan_inbox_impl(
         bulk_count = len(informational) + len(suggested_archives)
         bulk_view = {"count": bulk_count, "filter_tests": sorted(filter_test_ids)}
 
+        # ``internal_date`` is a needs_you-only working field (#2743) and
+        # ``preference_applied`` is the sort-key tag consumed by
+        # _preference_sort_key — neither is part of the public PreScanItem
+        # shape (extra="forbid").
+        working_fields = (
+            ("internal_date",)
+            if keep_preference_tags
+            else ("internal_date", "preference_applied")
+        )
+
         def _drop_working_fields(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            # ``internal_date`` is a needs_you-only working field (#2743) and
-            # ``preference_applied`` is the sort-key tag consumed by
-            # _preference_sort_key — neither is part of the public
-            # PreScanItem shape (extra="forbid").
             return [
-                {
-                    k: v
-                    for k, v in item.items()
-                    if k not in ("internal_date", "preference_applied")
-                }
+                {k: v for k, v in item.items() if k not in working_fields}
                 for item in items
             ]
 
@@ -2726,6 +2730,7 @@ def merge_pre_scan_backends(
                 debug=debug,
                 slm_classifier=slm_classifier,
                 slm_phishing_classifier=slm_phishing_classifier,
+                keep_preference_tags=True,
             )
         except ConnectorsError as exc:
             msg = format_connector_error(exc)
@@ -2812,15 +2817,29 @@ def merge_pre_scan_backends(
                 seen_message_ids.add(mid)
             needs_you_total += 1
 
+    # Same per-section order pre_scan_inbox_impl applies, now across every
+    # mailbox, so the caps below drop the right rows (#3623).
+    for section in (urgent, actionable, informational, needs_review):
+        section.sort(key=_preference_sort_key)
+    suggested_archives.sort(key=_preference_sort_key, reverse=True)
+
+    def _untag(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {k: v for k, v in item.items() if k != "preference_applied"}
+            for item in items
+        ]
+
     result = {
         "kind": "email_pre_scan",
-        "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
-        "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
+        "urgent": _untag(urgent[: max(0, PRE_SCAN_URGENT_CAP)]),
+        "actionable": _untag(actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)]),
         "informational_count": informational_count,
-        "informational": informational,
-        "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
+        "informational": _untag(informational),
+        "suggested_archives": _untag(
+            suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)]
+        ),
         "suggested_drafts": [],
-        "needs_review": needs_review[: max(0, PRE_SCAN_NEEDS_REVIEW_CAP)],
+        "needs_review": _untag(needs_review[: max(0, PRE_SCAN_NEEDS_REVIEW_CAP)]),
         "preferences_applied": merged_prefs_applied,
         "totals": {
             "urgent": len(urgent),
@@ -2840,7 +2859,7 @@ def merge_pre_scan_backends(
         # left uncapped like informational): each backend already capped its
         # own contribution to PRE_SCAN_SUSPICIOUS_CAP, so an uncapped merge
         # here could still return up to N-backends x that cap.
-        "suspicious": suspicious[: max(0, PRE_SCAN_SUSPICIOUS_CAP)],
+        "suspicious": _untag(suspicious[: max(0, PRE_SCAN_SUSPICIOUS_CAP)]),
         "suspicious_total": suspicious_total,
     }
     if mailbox_errors and len(mailbox_errors) == len(backends):

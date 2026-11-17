@@ -3531,7 +3531,7 @@ afterwards (or `swebench <run_dir>` does, later).
 
     mcp_tui_parser = mcp_subparsers.add_parser(
         "tui",
-        help="Start TUI control MCP server (drives a running `gaia-tui --control`)",
+        help="Start TUI control MCP server (drives a running `gaia-cli --control`)",
     )
     mcp_tui_parser.add_argument(
         "--host", default="localhost", help="Host to bind to (default: localhost)"
@@ -4953,6 +4953,7 @@ def _handle_schedule(args):
                 f"{s.name}  [{state}]  {when}  sink={s.sink}"
                 + (f"  next={nxt}" if nxt else "")
                 + (f"  missed={s.missed_count}" if s.missed_count else "")
+                + (f"  failing={s.failed_runs}" if s.failed_runs else "")
             )
         return
 
@@ -4979,6 +4980,8 @@ def _handle_schedule(args):
         print(f"created_at: {_local(s.created_at) if s.created_at else ''}")
         if s.one_shot and s.last_run:
             print(f"ran_at:     {_local(s.last_run)}")
+        elif s.last_run:
+            print(f"last_run:   {_local(s.last_run)}")
         nxt = (
             schedule_daemon.next_fire(s)
             if s.one_shot
@@ -4994,6 +4997,13 @@ def _handle_schedule(args):
                 f"missed:     {count} {runs} in all while the PC was off or "
                 "asleep, or the schedule daemon wasn't running "
                 f"(latest due {_local(s.last_missed)})"
+            )
+        if s.failed_runs:
+            runs = "run" if s.failed_runs == 1 else "runs"
+            when = f" (latest {_local(s.last_failed)})" if s.last_failed else ""
+            print(
+                f"failing:    {s.failed_runs} {runs} in a row failed since the "
+                f"last successful one{when}: {s.last_error or 'no error recorded'}"
             )
         return
 
@@ -7548,6 +7558,9 @@ def handle_knowledge_command(args):
         print("Run 'gaia knowledge --help' for more information")
         return
 
+    import requests
+
+    from gaia.web.client import SearchStatusError, SearchUnavailableError
     from gaia.web.tavily import (
         BudgetConfig,
         TavilyBudgetExceeded,
@@ -7583,8 +7596,37 @@ def handle_knowledge_command(args):
     except TavilyBudgetExceeded as e:
         print(f"🛑 {e}")
         sys.exit(1)
-    except TavilyConfigError as e:
+    except (TavilyConfigError, SearchUnavailableError, SearchStatusError) as e:
         print(f"❌ {e}")
+        sys.exit(1)
+    except (
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        requests.exceptions.ChunkedEncodingError,  # dropped mid-response
+    ) as e:
+        service = "Tavily" if client.configured else "DuckDuckGo"
+        print(
+            f"❌ Web {action} failed: {service} could not be reached ({e}). "
+            "Check your internet connection or proxy settings and try again."
+        )
+        sys.exit(1)
+    except requests.exceptions.HTTPError as e:
+        # The service answered with an error, so the user's network is fine.
+        service = "Tavily" if client.configured else "DuckDuckGo"
+        status = getattr(e.response, "status_code", None) or "an error"
+        hint = (
+            "It rejected the request; check the query or URL and try again."
+            if isinstance(status, int) and status < 500
+            else "It may be down for a moment; try again later."
+        )
+        print(f"❌ Web {action} failed: {service} answered with {status}. {hint}")
+        sys.exit(1)
+    except requests.exceptions.RequestException as e:
+        # Redirect loops, a malformed URL and the like: still an error, not a crash.
+        service = "Tavily" if client.configured else "DuckDuckGo"
+        print(
+            f"❌ Web {action} failed: the {service} request could not complete ({e})."
+        )
         sys.exit(1)
     finally:
         client.close()
@@ -11899,7 +11941,7 @@ def handle_mcp_serve(args):
 
 
 def handle_mcp_tui(args):
-    """Start the TUI control MCP server (drives a running `gaia-tui --control`)."""
+    """Start the TUI control MCP server (drives a running `gaia-cli --control`)."""
     log = get_logger(__name__)
 
     try:
@@ -11919,7 +11961,7 @@ def handle_mcp_tui(args):
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
-            print("   Target  : the running `gaia-tui --control` session")
+            print("   Target  : the running `gaia-cli --control` session")
             print(f"   MCP     : http://{args.host}:{args.port}/mcp")
             try:
                 tool_count = len(

@@ -74,3 +74,6 @@ LEASE_WAIT_LIMIT_ENV_VAR = "GAIA_MODEL_LEASE_WAIT_S"
 # allowed; core never imports a hub wheel).
 DAEMON_SUPERVISION_ENV_VAR = "GAIA_DAEMON_SUPERVISED"
 DAEMON_SUPERVISION_ENABLED_VALUE = "1"
+# The spawning daemon's pid, so a sidecar exits when its daemon dies uncleanly
+# instead of running until the next daemon reaps it (gaia.sidecar.parent_watch).
+DAEMON_PID_ENV_VAR = "GAIA_DAEMON_PID"

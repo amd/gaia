@@ -61,6 +61,46 @@ describe('Runs on', () => {
         expect(mocked.getLocalModelStatus).not.toHaveBeenCalled();
     });
 
+    it('says a warming model is warming up, and reads it again until it loads', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            const loaded = await mocked.getLocalModelStatus();
+            mocked.getLocalModelStatus.mockReset();
+            mocked.getLocalModelStatus
+                .mockResolvedValueOnce({ ...(loaded as object), state: 'warming' } as never)
+                .mockResolvedValue(loaded as never);
+            render(<EnvironmentSection sessionId={SID} busy={false} />);
+            const modelLine = (pattern: RegExp) => (_: string, el: Element | null) =>
+                !!el?.classList.contains('sp-meta') && pattern.test(stripIsolates(el.textContent ?? ''));
+            expect(await screen.findByText(modelLine(/^Gemma 4 E4B · Warming up$/))).toBeInTheDocument();
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+            await waitFor(() => expect(screen.queryByText(modelLine(/Warming up/))).not.toBeInTheDocument());
+            expect(screen.getByText('Gemma 4 E4B')).toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("names this chat's model when nothing is loaded, without guessing at its memory", async () => {
+        useChatStore.setState({
+            sessions: [{ ...useChatStore.getState().sessions[0], effective_model: 'Gemma-4-E4B-it-GGUF' }],
+        });
+        const loaded = await mocked.getLocalModelStatus();
+        mocked.getLocalModelStatus.mockReset();
+        mocked.getLocalModelStatus.mockResolvedValue({
+            ...(loaded as object), state: 'idle', model: null, display_name: null, placement: null,
+            memory: { source: 'AMD iGPU', total_gb: 96, free_gb: 96, model_gb: null },
+        } as never);
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const line = (pattern: RegExp) => (_: string, el: Element | null) =>
+            !!el?.classList.contains('sp-meta') && pattern.test(stripIsolates(el.textContent ?? ''));
+        expect(await screen.findByText(line(/^Gemma.?4.?E4B\S* · Not loaded — it loads with your next message$/))).toBeInTheDocument();
+        expect(screen.getByText(line(/^96\.0 GB free$/))).toBeInTheDocument();
+        expect(screen.queryByText(/in use unknown/)).not.toBeInTheDocument();
+    });
+
     it('re-reads where it runs when a reply ends, not before', async () => {
         const { rerender } = render(<EnvironmentSection sessionId={SID} busy={false} />);
         await waitFor(() => expect(mocked.getLocalModelStatus).toHaveBeenCalledTimes(1));
@@ -253,7 +293,7 @@ describe('Can read and write', () => {
         // Not a boundary: say so rather than listing folders as if they were the limit.
         expect(await screen.findByText('Files GAIA can reach')).toBeInTheDocument();
         expect(screen.queryByText(/its own process/)).not.toBeInTheDocument();
-        expect(screen.getByText(/never the whole user folder at once/)).toBeInTheDocument();
+        expect(screen.getByText(/one at a time, never all of it at once/)).toBeInTheDocument();
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
