@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Deleting a conversation can stop its MCP servers (contract 2.30).**
+  `DELETE /v1/gaia/sessions/{session_id}` ends a session and closes its agent,
+  which stops the servers it started. Until now a session's servers ran until it
+  idled out, up to 4 hours, so a host that deleted chats kept every chat's
+  servers running. An unknown session is a `404`; one running a turn is a `409`.
 - **Closing an agent stops the MCP servers it started.** Each server is a
   process tree (`uvx`, `uv`, the server), and it used to outlive the agent:
   an agent built for one request left its servers running for good.
@@ -97,6 +102,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `documents` and this turn leaves out (the user detached it, or deleted it from
   the library) is dropped from the session's index, so answers stop quoting it.
   An empty `documents` list drops them all.
+- **A detached document can no longer be read either.** The agent dropped it
+  from the index but kept its permission to read the file, so asking about it
+  by name indexed it again from disk. The permission now goes with it, and a
+  copy kept in GAIA's own documents folder is refused until it is attached
+  again. A folder the caller granted still covers the files inside it.
 - **A turn the output limit keeps cutting off says what to do next.** It told
   the user to "retry with a higher output-token limit (max_tokens)", a setting
   the apps don't have, dropped what the turn had done, and sent no token counts,

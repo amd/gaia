@@ -12,9 +12,14 @@ import type { ChatSpending } from '../types';
 import './ContextMeter.css';
 import './SpendMeter.css';
 
-/** "$0.04"; a share of a cent keeps four places so it never reads as "$0.00". */
-export function formatUsd(usd: number): string {
-    return `$${usd > 0 && usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}`;
+/** Four places when any amount is a share of a cent, so none reads as "$0.00"; else two. */
+export function usdDigits(...amounts: number[]): number {
+    return amounts.some((usd) => usd > 0 && usd < 0.01) ? 4 : 2;
+}
+
+/** "$0.04"; pass `digits` so amounts shown side by side keep the same precision. */
+export function formatUsd(usd: number, digits: number = usdDigits(usd)): string {
+    return `$${usd.toFixed(digits)}`;
 }
 
 /** The start of the viewer's local day, as the instant the backend compares against. */
@@ -73,9 +78,10 @@ export function SpendMeter({ sessionId, busy }: SpendMeterProps) {
 
     if (!spend?.paid || spend.model !== (model ?? null)) return null;
     const { chat, today } = spend;
+    const digits = usdDigits(chat.usd, today.usd);
     // A stopped answer sends no token count, so a total missing one is a floor.
     const floor = (s: { usd: number; unpriced_answers: number }) =>
-        `${s.unpriced_answers > 0 ? '≥ ' : ''}${formatUsd(s.usd)}`;
+        `${s.unpriced_answers > 0 ? '≥ ' : ''}${formatUsd(s.usd, digits)}`;
     const excluded = chat.unpriced_answers + today.unpriced_answers > 0;
     const answers = [...chat.items].reverse();
     const at = (iso: string) => new Date(iso).toLocaleTimeString(dateLocale(t), { hour: 'numeric', minute: '2-digit' });

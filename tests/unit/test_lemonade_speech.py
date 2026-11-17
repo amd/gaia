@@ -540,7 +540,11 @@ class TestKokoroPlayer:
     def test_playback_without_sounddevice_names_the_talk_extra(self):
         from gaia.audio.kokoro_tts import KokoroTTS
 
-        with patch("gaia.audio.kokoro_tts.sd", None):
+        # An editable checkout is told `-e <checkout>[talk]`; pin the wheel wording.
+        with (
+            patch("gaia.audio.kokoro_tts.sd", None),
+            patch("gaia.agents.install_hints.editable_gaia_root", return_value=None),
+        ):
             tts = KokoroTTS(client=MagicMock())  # file output needs no device
             with pytest.raises(ImportError, match=r"amd-gaia\[talk\]"):
                 tts.generate_speech_streaming(queue.Queue())
