@@ -61,6 +61,8 @@ _RESULT_SIZES = (
 )
 
 MAX_HELPERS_ENV = "GAIA_MAX_HELPERS"
+#: The status phase a UI shows on the running delegate_task row.
+HELPER_PROGRESS_PHASE = "helpers"
 
 #: Why a local model runs one helper at a time in this process.
 LOCAL_SERIAL_NOTE = (
@@ -518,6 +520,14 @@ class DelegateToolsMixin:
 
     def _parse_helper_tasks(self, tasks: Any) -> Any:
         """The tasks, or the refusal they earn before anything runs."""
+        if isinstance(tasks, str):
+            # Small models often send the list as its JSON text.
+            try:
+                decoded = json.loads(tasks)
+            except ValueError:
+                decoded = None
+            if isinstance(decoded, list):
+                tasks = decoded
         if not isinstance(tasks, list):
             return _refuse(
                 'Nothing ran. delegate_task takes "tasks": a list of '
@@ -700,13 +710,17 @@ class DelegateToolsMixin:
                 pool.submit(self._run_helper, i + 1, task, parent_stopped): i
                 for i, task in enumerate(parsed)
             }
+            failed_so_far = 0
+            noun = "helper" if len(parsed) == 1 else "helpers"
             for done, future in enumerate(as_completed(futures), 1):
                 index = futures[future]
                 outcomes[index] = future.result()
-                self.console.print_info(
-                    f"Helper {done} of {len(parsed)} finished "
-                    f"({outcomes[index][0]['status']})"
-                )
+                failed_so_far += outcomes[index][0]["status"] == "failed"
+                progress = f"{done} of {len(parsed)} {noun} done"
+                if failed_so_far:
+                    progress += f", {failed_so_far} failed"
+                # A phase puts the line on the running tool's row in the UI.
+                self.console.report_phase(HELPER_PROGRESS_PHASE, progress)
         wall = time.monotonic() - began
 
         records = []
@@ -730,15 +744,24 @@ class DelegateToolsMixin:
             self._helper_totals = totals
 
         n, ok, partial, failed = len(records), *counts.values()
-        summary = f"{ok} of {n} helpers finished"
+        # summary is what a person reads; advice is for the model.
+        summary = f"{ok} of {n} {'helper' if n == 1 else 'helpers'} finished"
         if partial:
-            summary += f"; {partial} stopped short with a partial answer"
+            summary += f", {partial} stopped short"
         if failed:
-            summary += (
-                f"; {failed} FAILED and returned nothing usable. Do that work "
-                "yourself or tell the user it is missing"
-            )
+            summary += f", {failed} failed"
         summary += "."
+        advice = []
+        if failed:
+            advice.append(
+                "A FAILED helper returned nothing usable: do that work yourself "
+                "or tell the user it is missing."
+            )
+        if partial:
+            advice.append(
+                "A helper that stopped short gave a partial answer: check what "
+                "it left out."
+            )
         out: Dict[str, Any] = {
             "status": (
                 "success" if ok == n else "partial" if ok + partial else "error"
@@ -751,8 +774,10 @@ class DelegateToolsMixin:
         }
         if note:
             out["width_note"] = f"Ran one helper at a time: {note}"
+        if advice:
+            out["advice"] = " ".join(advice)
         if ok + partial == 0:
-            out["error"] = summary
+            out["error"] = f"{summary} {out['advice']}"
         self._fit_conclusions(out, parsed, [answer for _, _, answer in outcomes])
         return out
 

@@ -314,11 +314,8 @@ def test_a_failed_helper_is_reported_as_failed_never_as_success(work):
     )
 
     assert result["status"] == "partial", result
-    assert result["summary"].startswith("1 of 3 helpers finished")
-    assert (
-        "2 FAILED and returned nothing usable. Do that work yourself or tell the "
-        "user it is missing" in result["summary"]
-    )
+    assert result["summary"] == "1 of 3 helpers finished, 2 failed."
+    assert "do that work yourself or tell the user it is missing" in result["advice"]
     ok, boom, empty = result["helpers"]
     assert ok["status"] == "ok"
     for failed in (boom, empty):
@@ -788,3 +785,82 @@ def test_a_bad_env_setting_fails_loudly(monkeypatch, raw):
 def test_a_bad_max_helpers_fails_loudly(work, value):
     with pytest.raises(ValueError, match="max_helpers"):
         _parent(work, max_helpers=value)
+
+
+# ---------------------------------------------------------------------------
+# Adversarial inputs and stress
+# ---------------------------------------------------------------------------
+
+
+def test_a_task_list_sent_as_json_text_is_read(work):
+    parent = _parent(work)
+    result = _delegate(
+        parent, _Model(_echo()), {"tasks": json.dumps(_tasks("one", "two")["tasks"])}
+    )
+    assert result["status"] == "success"
+    assert len(result["helpers"]) == 2
+
+
+def test_dot_dot_and_links_do_not_lead_out_of_the_parents_folders(work, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("TOP-SECRET-42")
+    parent = _parent(work)
+    model = _Model(_echo())
+    result = _delegate(
+        parent,
+        model,
+        {"tasks": [{"task": "read it", "paths": ["../outside/secret.txt"]}]},
+    )
+    assert result["status"] == "error"
+    assert model.sdks == 0
+
+    helper = _helper(parent)
+    for path in (str(work / ".." / "outside" / "secret.txt"), "../outside/secret.txt"):
+        read = helper._execute_tool("read_file", {"file_path": path})
+        assert "TOP-SECRET-42" not in json.dumps(read, default=str)
+    try:
+        (work / "link").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        return  # this account may not create links
+    read = helper._execute_tool("read_file", {"file_path": str(work / "link" / "secret.txt")})
+    assert "TOP-SECRET-42" not in json.dumps(read, default=str)
+    found = helper._execute_tool(
+        "search_file_content", {"pattern": "SECRET", "directory": str(work)}
+    )
+    assert "TOP-SECRET-42" not in json.dumps(found, default=str)
+
+
+def test_mixed_failures_at_full_width_repeated(work):
+    parent = _parent(work, max_helpers=8)
+    counter = {"n": 0}
+    lock = threading.Lock()
+
+    def responder(_messages, _system, _kwargs):
+        with lock:
+            counter["n"] += 1
+            k = counter["n"]
+        if k % 5 == 0:
+            raise RuntimeError("model server went away")
+        if k % 7 == 0:
+            return _answer("")
+        return _answer("done")
+
+    briefs = [f"task {i}" for i in range(16)]
+    for _ in range(15):
+        model = _Model(responder)
+        result = _delegate(parent, model, _tasks(*briefs))
+        assert len(result["helpers"]) == 16
+        assert model.peak <= 8
+        ok = 0
+        for helper in result["helpers"]:
+            assert helper["status"] in ("ok", "partial", "failed")
+            if helper["status"] == "ok":
+                ok += 1
+                assert helper["conclusion"]
+            if helper["status"] == "failed":
+                assert "conclusion" not in helper
+                assert helper["reason"]
+        assert (result["status"] == "success") == (ok == 16)
+    alive = [t.name for t in threading.enumerate() if t.name.startswith("gaia-helper")]
+    assert not alive, alive
