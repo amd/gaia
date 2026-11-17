@@ -371,3 +371,57 @@ def test_the_limit_is_measured_per_turn(agent, clock):
 
     assert result["time_limit_reached"] is False
     assert _notices(chat) == []
+
+
+_OPENING = "This turn has 100 seconds in all."
+
+
+def test_the_model_is_told_the_limit_with_its_request(agent, clock):
+    """Hearing of the limit only at 70% leaves the deliverable for the end."""
+    agent.time_limit_s = 100
+    chat = _stub_chat(agent, clock, [_lookup(1), _answer("Fine.")], 10)
+
+    agent.process_query(_REQUEST)
+
+    first = chat.sent[0][-1]
+    assert first["role"] == "user"
+    assert first["content"].startswith(_REQUEST)
+    assert _OPENING in first["content"]
+    assert "write a first working version early" in first["content"]
+    # One user message, not two in a row: some chat templates refuse that.
+    assert [m["role"] for m in chat.sent[0]].count("user") == 1
+
+
+def test_the_saved_history_keeps_the_users_own_words(agent, clock):
+    agent.time_limit_s = 100
+    _stub_chat(agent, clock, [_answer("Fine.")], 10)
+    result = agent.process_query(_REQUEST)
+
+    asked = [m for m in result["conversation"] if m.get("role") == "user"]
+    assert asked[0]["content"] == _REQUEST
+
+    agent.time_limit_s = None
+    chat = _stub_chat(agent, clock, [_answer("Second.")], 10)
+    agent.process_query("And the writer?")
+
+    assert all(_OPENING not in str(m.get("content")) for m in chat.sent[0])
+
+
+@pytest.mark.parametrize("limit", [0, -5, None])
+def test_no_limit_adds_nothing_to_the_request(agent, clock, limit):
+    agent.time_limit_s = limit
+    chat = _stub_chat(agent, clock, [_answer("Fine.")], 10)
+
+    agent.process_query(_REQUEST)
+
+    assert chat.sent[0][-1]["content"] == _REQUEST
+
+
+def test_notices_off_adds_nothing_to_the_request(agent, clock, monkeypatch):
+    monkeypatch.setenv("GAIA_AGENT_BUDGET_NOTICES", "0")
+    agent.time_limit_s = 100
+    chat = _stub_chat(agent, clock, [_answer("Fine.")], 10)
+
+    agent.process_query(_REQUEST)
+
+    assert chat.sent[0][-1]["content"] == _REQUEST
