@@ -53,6 +53,14 @@ _CANCEL_TIMEOUT = 10.0
 # sidecar must not stall the toggle (and every later flip) for the general timeout.
 _SWITCH_TIMEOUT = 10.0
 
+# End-session DELETE timeout: it runs inside a chat delete, which a hung sidecar
+# must not stall; the session still idles out on its own.
+_END_SESSION_TIMEOUT = 10.0
+
+
+class SidecarTimeoutError(SidecarError):
+    """The sidecar did not answer within a short best-effort call's timeout."""
+
 
 def _extract_detail(resp) -> str:
     """Pull the sidecar's actionable message from a non-2xx response.
@@ -289,14 +297,33 @@ class SidecarProxy:
 
         path = f"{self.prefix}/sessions/{session_id}"
         try:
-            resp = self._session.delete(f"{self.base_url}{path}", timeout=self.timeout)
+            resp = self._session.delete(
+                f"{self.base_url}{path}", timeout=_END_SESSION_TIMEOUT
+            )
+        except requests.exceptions.Timeout as exc:
+            raise SidecarTimeoutError(
+                f"the {self.agent_id} sidecar did not answer the end-session "
+                f"request within {_END_SESSION_TIMEOUT:g} s: {exc}"
+            ) from exc
         except requests.exceptions.RequestException as exc:
             raise SidecarError(
                 f"could not reach the {self.agent_id} sidecar to end the "
                 f"session: {exc}"
             ) from exc
         self._raise_for_status(resp, path)
-        return resp.json()
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise SidecarError(
+                f"the {self.agent_id} sidecar answered the end-session request "
+                f"(HTTP {resp.status_code}) with a reply that is not JSON: {exc}"
+            ) from exc
+        if not isinstance(body, dict):
+            raise SidecarError(
+                f"the {self.agent_id} sidecar answered the end-session request "
+                f"with a {type(body).__name__}, not a JSON object"
+            )
+        return body
 
     def set_bypass(self, session_id: str, enabled: bool) -> dict:
         """Turn the sidecar session's unattended tool approval on or off.
@@ -576,4 +603,4 @@ class EmailSidecarProxy(SidecarProxy):
         return resp.status_code, media_type, _chunks()
 
 
-__all__ = ["SidecarProxy", "EmailSidecarProxy"]
+__all__ = ["SidecarProxy", "EmailSidecarProxy", "SidecarTimeoutError"]
