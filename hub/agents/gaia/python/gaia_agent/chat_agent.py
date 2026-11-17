@@ -2886,13 +2886,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             def run_python(code: str, timeout: int = DEFAULT_PYTHON_TIMEOUT) -> dict:
                 """Run a Python snippet and return what it prints.
 
-                Compute or check something without a file. Runs
-                from the project root; with no project it may run in your
-                scratch directory, so use absolute paths for user files.
+                Compute or check something without a file. Runs from the
+                project root, or your scratch directory with no project, so
+                use absolute paths for user files.
                 Report numbers from its output.
 
                 No access to your tools: `from gaia import <tool>` fails;
-                call it as a tool.
+                call it directly as a tool.
 
                 {script_libraries}
 
