@@ -47,7 +47,14 @@ function SkillDescription({ text }: { text: string }) {
 
     return (
         <>
-            <span ref={ref} className={`skill-row-desc${open ? ' is-open' : ''}`} dir="auto"><bdi>{text}</bdi></span>
+            <span
+                ref={ref}
+                className={`skill-row-desc${open ? ' is-open' : ''}${cut || open ? ' is-toggle' : ''}`}
+                dir="auto"
+                onClick={cut || open ? () => setOpen(!open) : undefined}
+            >
+                <bdi>{text}</bdi>
+            </span>
             {(cut || open) && (
                 <button type="button" className="skill-row-more" aria-expanded={open} onClick={() => setOpen(!open)}>
                     {t(open ? 'settings.skills.less' : 'settings.skills.more')}
