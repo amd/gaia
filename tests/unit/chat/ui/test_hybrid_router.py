@@ -1098,3 +1098,38 @@ def test_stats_say_what_they_cover(client):
     body = client.get("/api/hybrid/stats").json()
     assert body["scope"] == "agent_ui_chats"
     assert body["scope_label"].startswith("Agent UI chats only")
+
+
+# ── the same routes on the daemon (for the TUI) ─────────────────────────────
+
+DAEMON_TOKEN = "daemon-client-token"
+
+
+@pytest.fixture
+def daemon(db):
+    from gaia.daemon.app import create_app
+    from gaia.ui.dependencies import get_db
+
+    app = create_app(token=DAEMON_TOKEN, port=0, pid=1, started_at=0.0)
+    app.dependency_overrides[get_db] = lambda: db
+    return TestClient(app)
+
+
+def test_the_daemon_serves_hybrid_behind_its_token(daemon, gateway):
+    assert daemon.get("/api/hybrid/settings").status_code == 401
+    auth = {"Authorization": f"Bearer {DAEMON_TOKEN}"}
+    body = daemon.get("/api/hybrid/settings", headers=auth).json()
+    assert body["cheap_model"] == DEFAULT_CHEAP_MODEL
+    assert body["rules"] == preset_rules("quality")
+    stats = daemon.get("/api/hybrid/stats", headers=auth).json()
+    assert stats["turns"] == 0 and stats["scope"] == "agent_ui_chats"
+
+
+def test_the_daemon_opens_the_chat_database_once(tmp_path):
+    from gaia.daemon.hybrid_routes import ChatDatabaseOpener
+
+    opener = ChatDatabaseOpener(str(tmp_path / "chat.db"))
+    try:
+        assert opener() is opener()
+    finally:
+        opener.close()
