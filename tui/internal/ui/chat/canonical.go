@@ -335,8 +335,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 				ToolsUsed:     usage.ToolsUsed,
 				Tokens:        usage.Tokens,
 				Metrics:       usage.Metrics,
+				Route:         routeLine(event.CanonicalRouteOf(e)),
 			})
 		}
+		m.noteHybridDegraded(event.CanonicalRouteOf(e))
 		// One ledger entry per turn, from what the backend reported. A turn
 		// with no token counts still counts as a turn — see sessionCost.
 		m.cost.add(turnCost{

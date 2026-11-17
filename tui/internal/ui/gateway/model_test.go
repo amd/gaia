@@ -21,6 +21,7 @@ func sized(t *testing.T, m GatewayModel, w, h int) (GatewayModel, []string) {
 // terminal kept only its tail, and the cursor row at the top was not on screen.
 func TestGatewayModelListFitsTheWindowAndKeepsTheCursorVisible(t *testing.T) {
 	t.Setenv("GAIA_GATEWAY_FILE", filepath.Join(t.TempDir(), "gateway.json"))
+	t.Setenv("GAIA_CONFIG_FILE", filepath.Join(t.TempDir(), "config.json"))
 	m := New(&Client{}, nil)
 	m.haveInit = true
 	m.stage = stageModels
@@ -28,7 +29,7 @@ func TestGatewayModelListFitsTheWindowAndKeepsTheCursorVisible(t *testing.T) {
 		m.models = append(m.models, Model{ID: fmt.Sprintf("amd.model-%02d", i), Labels: []string{"tool-calling"}, CtxSize: 131072})
 	}
 	for _, cursor := range []int{0, 40, 75} {
-		m.cursor = cursor
+		m.cursor = cursor + 1 // row 0 is hybrid
 		for _, h := range []int{15, 24, 40} {
 			_, lines := sized(t, m, 80, h)
 			if len(lines) > h {

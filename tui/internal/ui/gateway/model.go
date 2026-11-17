@@ -9,6 +9,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/hybridapi"
+	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -95,6 +97,14 @@ type GatewayModel struct {
 	// availability warns that the active model last answered "not found".
 	availability string
 
+	// defaultModel is config.json's default_model, which says whether hybrid
+	// is the one in use.
+	defaultModel string
+	defaultErr   error
+	// hybrid is the backend's entry for the hybrid row; nil until it answers.
+	hybrid    *hybridapi.Entry
+	hybridErr error
+
 	// pendingPersist saves the token once the gateway has accepted it. It is a
 	// closure over the token, never the token itself.
 	pendingPersist tea.Cmd
@@ -121,15 +131,19 @@ func New(client *Client, clientErr error) GatewayModel {
 	if stateErr != nil && clientErr == nil {
 		clientErr = stateErr
 	}
+	// Unreadable, it only costs the hybrid row its "(active)"; that row says why.
+	defaultModel, defaultErr := readDefaultModel()
 	url.SetValue(state.BaseURL)
 
 	return GatewayModel{
-		client:     client,
-		state:      state,
-		stage:      stageURL,
-		urlInput:   url,
-		tokenInput: token,
-		initErr:    clientErr,
+		client:       client,
+		state:        state,
+		stage:        stageURL,
+		urlInput:     url,
+		tokenInput:   token,
+		initErr:      clientErr,
+		defaultModel: defaultModel,
+		defaultErr:   defaultErr,
 	}
 }
 
@@ -137,7 +151,7 @@ func (m GatewayModel) Init() tea.Cmd {
 	if m.client == nil {
 		return nil
 	}
-	return m.fetchStatus()
+	return tea.Batch(m.fetchStatus(), fetchHybridEntry())
 }
 
 // -- commands ---------------------------------------------------------------
@@ -214,6 +228,14 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		return m, nil
+
+	case hybridEntryMsg:
+		m.hybrid, m.hybridErr = nil, msg.err
+		if msg.err == nil {
+			e := msg.entry
+			m.hybrid = &e
+		}
 		return m, nil
 
 	case statusMsg:
@@ -332,9 +354,14 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.errMsg = ""
+		first := len(m.models) == 0
 		m.models = msg.models
-		if m.cursor >= len(m.models) {
+		if m.cursor >= len(m.rows()) {
 			m.cursor = 0
+		}
+		// Open on the best gateway model, with hybrid one row up.
+		if first && len(m.models) > 0 {
+			m.cursor = 1
 		}
 		// Land on a working model rather than an empty selection. Discovery
 		// returns 76 models and a new user has no way to know which of them
@@ -342,7 +369,8 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// their next agent turn fails on whatever the old default was.
 		// An existing choice is never overridden, and a model the gateway last
 		// answered 404 for is never picked on the user's behalf.
-		if m.state.ActiveModel == "" && len(m.models) > 0 {
+		// Hybrid in use is a choice too, so it is never replaced either.
+		if m.state.ActiveModel == "" && len(m.models) > 0 && !lemonade.IsHybridID(m.defaultModel) {
 			chosen := m.firstAvailable() // preference-ranked: the default model first
 			if chosen == "" {
 				m.errMsg = "Every discovered model last answered \"not found\". " +
@@ -359,6 +387,7 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.notice = chosen + " selected as the default. Press enter on another to change it."
+			m.defaultModel = chosen
 		}
 		m.availability = m.activeAvailability()
 		return m, nil
@@ -462,7 +491,7 @@ func (m GatewayModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "down", "j":
-			if m.cursor < len(m.models)-1 {
+			if m.cursor < len(m.rows())-1 {
 				m.cursor++
 			}
 			return m, nil
@@ -470,7 +499,11 @@ func (m GatewayModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(m.models) == 0 {
 				return m, nil
 			}
-			m.state = m.state.Toggle(m.models[m.cursor].ID)
+			if lemonade.IsHybridID(m.rows()[m.cursor].ID) {
+				m.notice = "Hybrid routes between gateway models; enter makes it the default."
+				return m, nil
+			}
+			m.state = m.state.Toggle(m.rows()[m.cursor].ID)
 			if err := m.state.Save(); err != nil {
 				m.errMsg = err.Error()
 				return m, nil
@@ -481,7 +514,10 @@ func (m GatewayModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(m.models) == 0 {
 				return m, nil
 			}
-			id := m.models[m.cursor].ID
+			id := m.rows()[m.cursor].ID
+			if lemonade.IsHybridID(id) {
+				return m.useHybrid(), nil
+			}
 			m.state = m.state.SetActive(id)
 			if err := m.state.Save(); err != nil {
 				m.errMsg = err.Error()
@@ -493,6 +529,7 @@ func (m GatewayModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.notice = id + " is now the default model for GAIA."
+			m.defaultModel = id
 			m.availability = m.activeAvailability()
 			return m, nil
 		case "r":
@@ -629,19 +666,24 @@ func (m GatewayModel) renderModels(budget int) string {
 
 	b.WriteString(labelStyle.Render(fmt.Sprintf("%d gateway model(s)", len(m.models))))
 	b.WriteString("\n\n")
-	blocks := make([]string, len(m.models))
-	for i, model := range m.models {
+	rows := m.rows()
+	blocks := make([]string, len(rows))
+	for i, model := range rows {
 		var row strings.Builder
 		cursor := "  "
 		if i == m.cursor {
 			cursor = selectedStyle.Render("> ")
+		}
+		if lemonade.IsHybridID(model.ID) {
+			blocks[i] = cursor + m.hybridRow()
+			continue
 		}
 		mark := "[ ]"
 		if m.state.IsEnabled(model.ID) {
 			mark = "[x]"
 		}
 		name := model.ID
-		if model.ID == m.state.ActiveModel {
+		if model.ID == m.state.ActiveModel && !lemonade.IsHybridID(m.defaultModel) {
 			name = activeStyle.Render(model.ID + " (active)")
 		}
 		if _, down := m.state.Unavailable(model.ID); down {

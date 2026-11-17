@@ -297,6 +297,29 @@ In a running chat, `/model hybrid` turns routing on and `/model <id>` turns it
 off. The terminal UI checks the cheap, strong and classifier models before it
 starts, and names the `hybrid_*` setting to change if one is unavailable.
 
+In the terminal UI, `/provider` lists hybrid as its own entry, named by its two
+models (**Hybrid (DeepSeek + Opus)**) and marked `(cloud)` or `(local)` by where
+they run; `/gateway` and `/model` offer it too. As with any model, picking it
+in `/provider` or `/model` switches the running chat and is remembered as your
+last model once a turn completes on it; `/gateway`, like `gaia gateway use
+hybrid`, also makes it GAIA's `default_model` for every app.
+
+`/hybrid` opens its settings: templates at the top (DeepSeek + Opus is the one GAIA's policies were measured
+on; the rest say "not yet measured", and one that needs a model or key you
+don't have says which), then the cheap, strong and classifier models from every
+provider set up on this PC (local, AMD LLM Gateway, Fireworks, direct Claude),
+the classifier's time limit, the policy, and for **Custom** a rules table you
+can start from Quality or Balanced. GAIA's background service supplies all of
+it and checks every change before saving it to `~/.gaia/config.json`, so a
+model no provider offers is refused with the reason, the same as in the Agent
+UI. It also notes when the classifier is a small local model, which may route
+less accurately. **Try a request** runs the real classifier (billed like a
+turn's classifier call) to show where a prompt would run, and the
+routing stats say how past hybrid turns were routed and what they cost; the
+stats cover Agent UI chats only for now, not the terminal's. If the background
+service can't be reached, the screen says so and changes nothing. Each hybrid answer
+ends with where it ran, such as `→ DeepSeek (writing, d1)`.
+
 Before each turn, the cheap model labels your request: what kind of work it is,
 how hard it is (1-5), and whether a wrong answer would be acted on directly
 (`stakes`). The turn runs on the cheap model only when stakes are low and the

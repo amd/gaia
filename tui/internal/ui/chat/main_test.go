@@ -12,9 +12,12 @@ import (
 	"testing"
 
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/hybridapi"
+	"github.com/amd/gaia/tui/internal/hybridapi/hybridapitest"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/setupapi"
 	"github.com/amd/gaia/tui/internal/setupapi/setupapitest"
+	"github.com/amd/gaia/tui/internal/ui/hybrid"
 )
 
 // TestMain keeps the package off the developer's own GAIA home: a fake
@@ -42,6 +45,9 @@ func TestMain(m *testing.M) {
 		return &setupapitest.Fake{PlanErr: errors.New("test: no daemon"), GPUErr: errors.New("test: no daemon")}
 	}
 	newGPUProbeAPI = newChatSetupAPI
+	// Nor reach a daemon for hybrid's palette row or the /hybrid screen.
+	newHybridEntryAPI = func() hybridapi.API { return &hybridapitest.Fake{EntryErr: errors.New("test: no daemon")} }
+	hybrid.NewAPI = func() hybridapi.API { return &hybridapitest.Fake{SettingsErr: errors.New("test: no daemon")} }
 	code := m.Run()
 	os.RemoveAll(home)
 	os.Exit(code)
