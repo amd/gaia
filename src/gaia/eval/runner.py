@@ -34,7 +34,11 @@ from typing import Optional
 import requests
 import yaml
 
-from gaia.eval.claude_credential import announce, resolve_claude_credential
+from gaia.eval.claude_credential import (
+    announce,
+    claude_code_route,
+    resolve_claude_credential,
+)
 from gaia.eval.claude_outage import (
     CREDENTIAL,
     HEADLINES,
@@ -2349,6 +2353,11 @@ def run_scenario_subprocess(
 
     bare_flags, driver_env = _driver_auth()
     model = resolve_claude_credential().cli_model(model, role="Claude eval driver")
+    assert_claude_cli_allowed(
+        model,
+        os.environ if driver_env is None else driver_env,
+        what="The eval driver (Claude Code)",
+    )
     cmd = [claude_bin, "-p", *bare_flags]
     cmd.extend(
         [
@@ -2923,10 +2932,14 @@ def run_fix_iteration(scorecard, run_dir, iteration):
     )
 
     claude_cmd = shutil.which("claude") or "claude"
-    cmd = [claude_cmd, "-p", prompt, "--dangerously-skip-permissions"]
-
     assert_provider_permitted("the Claude Code CLI")
-    assert_claude_cli_allowed(None, what="The eval fixer (Claude Code)")
+    flags, fixer_env, fixer_model = claude_code_route(
+        DEFAULT_MODEL, "The eval fixer (Claude Code)"
+    )
+    cmd = [claude_cmd, "-p", prompt, "--dangerously-skip-permissions", *flags]
+    if flags:
+        # The gateway serves exact ids only, so the CLI's default can't be used.
+        cmd += ["--model", fixer_model]
     print(f"[FIX] Invoking Claude Code fixer (iteration {iteration})...")
     try:
         proc = subprocess.run(
@@ -2937,6 +2950,7 @@ def run_fix_iteration(scorecard, run_dir, iteration):
             errors="replace",
             timeout=600,
             cwd=str(REPO_ROOT),
+            env=fixer_env,
             check=False,
         )
         output = (proc.stdout or "") + (proc.stderr or "")

@@ -529,7 +529,7 @@ gaia eval agent --corpus-dir ~/my-project/eval-corpus
 </Warning>
 
 <Note>
-  **Runners on AMD's network.** There GAIA sends Claude only through the AMD LLM Gateway, so the driver and judge need a gateway key, not an Anthropic credential. GAIA's own workflows run `.github/actions/amd-network` after installing GAIA: it reports whether the runner is on AMD's network, fails with an error naming the `LEMONADE_AMD_API_KEY` repository secret when it is and no key is available, and then the eval steps get the key as `GAIA_GATEWAY_TOKEN` and skip the Anthropic account probe. GitHub-hosted runners read as off the network and run unchanged. Keep the gateway key out of the agent-under-test's environment too.
+  **Runners on AMD's network.** There GAIA sends Claude only through the AMD LLM Gateway, so the driver and judge need a gateway key, not an Anthropic credential. GAIA's own workflows run `.github/actions/amd-network` after installing GAIA: it reports whether the runner is on AMD's network, fails with an error naming the `LEMONADE_AMD_API_KEY` repository secret when it is and no key is available, and then the eval steps get the key as `GAIA_GATEWAY_TOKEN` and skip the Anthropic account probe. GAIA's own lab jobs pin `GAIA_AMD_NETWORK=1` so a missed probe can't send them to Anthropic, and pass Anthropic credentials only when the runner is off AMD's network. GitHub-hosted runners read as off the network and run unchanged. Keep the gateway key out of the agent-under-test's environment too.
 </Note>
 
 <Warning>

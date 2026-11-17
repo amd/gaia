@@ -282,7 +282,8 @@ def build_inventory(
             )
     from gaia.llm.amd_network import gateway_only_reason, on_amd_network
 
-    inv.amd_network = on_amd_network()
+    # Probed only when direct Claude could be used; otherwise no AMD host is contacted.
+    inv.amd_network = on_amd_network(probe=anthropic_key)
     amd_block = gateway_only_reason(CLAUDE_STRONG) if inv.amd_network else None
     if anthropic_key or amd_block:
         for model_id in CLAUDE_MODELS:

@@ -486,6 +486,13 @@ web server and hub, and a fake `gh` that must be first on PATH because their too
 calls are auto-approved. `python util/run_eval_lane.py --lane <lane>` (or
 `--category <name>`) reproduces a CI lane's setup on this machine.
 
+**On AMD's network the eval's Claude goes through the AMD LLM Gateway.** The
+driver and judge use the gateway key (`LEMONADE_AMD_API_KEY`, `GAIA_GATEWAY_TOKEN`
+or `gaia gateway auth`), never a Claude Code login or `ANTHROPIC_API_KEY`, and
+the run prints `Claude judge: amd.Claude-… via AMD LLM Gateway`. The baselines
+were judged by Anthropic directly; re-check a lone regression against a
+gateway-judged run. See `docs/guides/llm-gateway.mdx`.
+
 **Interpreting regressions:** if a category drops, fix the prompt in the same session and re-run before you commit. If the regression is intentional (e.g. you deliberately removed a capability), call it out explicitly in the PR description and replace that category's `scorecard_<category>.json` from the next RC's run on the Strix Halo pool — never from a local `--save-baseline` run, which writes elsewhere and measures a different machine. The reviewer needs to see the diff between baselines, not just the new score.
 
 Report what you compared: name the baseline run, list scenarios that went PASS→FAIL (regressions) and FAIL→PASS (progress toward 80%) separately, and re-run any lone flip before trusting it.

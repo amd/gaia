@@ -119,6 +119,9 @@ jobs:
   refresh:
     name: Re-run gaia eval, refresh-or-reject scorecard
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    env:
+      # AMD's lab pool: on AMD's network whatever a probe says.
+      GAIA_AMD_NETWORK: '1'
     defaults:
       run:
         shell: powershell
@@ -307,7 +310,7 @@ jobs:
       - name: Run the gaia eval categories serially (real eval)
         timeout-minutes: 1980
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ steps.amd_net.outputs.on != 'true' && secrets.ANTHROPIC_API_KEY || '' }}
           GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
           # An empty Claude config, so a login left on this runner can't win
           # over the key (the eval tries the subscription first).

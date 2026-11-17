@@ -45,6 +45,7 @@ from gaia.eval.claude_credential import (  # noqa: F401  # pylint: disable=unuse
 )
 from gaia.eval.claude_usage import TOKEN_FIELDS, usage_from_cli
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, claude_pricing
+from gaia.llm.amd_network import assert_claude_cli_allowed
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
@@ -180,6 +181,10 @@ class ClaudeCliClient:
 
     def _complete(self, prompt: str) -> tuple[str, dict]:
         assert_provider_permitted("the Claude Code CLI")
+        # The CLI prefers an inherited API key to the subscription.
+        child_env = {k: v for k, v in os.environ.items() if k != API_KEY_VAR}
+        # Per call: a VPN that connects mid-run moves this machine onto AMD's network.
+        assert_claude_cli_allowed(self.model, child_env, what="The Claude judge")
         # The prompt goes over stdin, not argv: a judge prompt carries a whole
         # case inbox and would blow the Windows command-line length limit.
         try:
@@ -192,8 +197,7 @@ class ClaudeCliClient:
                 errors="replace",
                 timeout=self.timeout,
                 cwd=self._workdir.name,
-                # The CLI prefers an inherited API key to the subscription.
-                env={k: v for k, v in os.environ.items() if k != API_KEY_VAR},
+                env=child_env,
                 check=False,
             )
         except subprocess.TimeoutExpired as e:

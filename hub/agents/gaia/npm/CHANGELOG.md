@@ -13,7 +13,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   model, `--use-claude`) now fails with an error naming the gateway model to
   use instead (`amd.Claude-*`). Off AMD's network nothing changes. `/model`
   lists those ids as unavailable, and the model-state `status` ping carries
-  them as `claude_unavailable` so the terminal UI's picker does too.
+  them as `claude_unavailable` so the terminal UI's picker does too. A
+  `claude-*` hybrid member or Telegram/Slack default saved earlier errors on
+  its next turn with the same remedy. Each request is checked, so a VPN that
+  connects mid-session stops direct Claude from the next turn on.
 - **A `hybrid` route says which side it went to.** `final.route` now carries
   `tier` (`cheap` or `strong`), so a host can count a session's cheap and
   strong turns without comparing model ids against the settings, which may

@@ -65,6 +65,7 @@ from gaia.eval.bench.gateway import Gateway
 from gaia.eval.bench.leaks import Scrubber
 from gaia.eval.claude_credential import announce, resolve_claude_credential
 from gaia.eval.task_setups import SETUPS, remove_leftovers
+from gaia.llm.amd_network import assert_claude_cli_allowed
 from gaia.llm.lemonade_client import (
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
@@ -1783,6 +1784,8 @@ def judge_batch(
     cmd = judge_command(model, env)
     credential = resolve_claude_credential(env)
     announce(credential)
+    judge_env = credential.cli_env(env)
+    assert_claude_cli_allowed(model, judge_env, what="The task judge (Claude Code)")
     # An empty working directory: the repo's CLAUDE.md is not the judge's brief.
     with tempfile.TemporaryDirectory(prefix="gaia-judge-") as cwd:
         proc = subprocess.run(
@@ -1794,7 +1797,7 @@ def judge_batch(
             errors="replace",
             timeout=JUDGE_TIMEOUT_S,
             cwd=cwd,
-            env=credential.cli_env(env),
+            env=judge_env,
             check=False,
         )
     if proc.returncode != 0 and not proc.stdout.strip():

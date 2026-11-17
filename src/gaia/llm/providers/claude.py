@@ -580,6 +580,20 @@ class ClaudeProvider(LLMClient):
     def provider_name(self) -> str:
         return "Claude"
 
+    def _permit_request(self) -> None:
+        """Local only, then the AMD-network check, on every request.
+
+        The client outlives the network it was built on: a VPN that connects
+        later must stop the next request, not only the next client.
+        """
+        assert_provider_permitted(self._DESTINATION)
+        base_url = getattr(self._client, "base_url", None)
+        assert_direct_anthropic_allowed(
+            self._model,
+            str(base_url) if base_url is not None else None,
+            what="The Claude backend",
+        )
+
     # ── request shaping ─────────────────────────────────────────────────
 
     def _resolve_model(self, model: Optional[str]) -> str:
@@ -1111,7 +1125,7 @@ class ClaudeProvider(LLMClient):
         if stream:
             return self._stream_chat(params, name_map, prefix_digest)
 
-        assert_provider_permitted(self._DESTINATION)
+        self._permit_request()
         start = time.monotonic()
         try:
             response = self._client.messages.create(**params)
@@ -1178,7 +1192,7 @@ class ClaudeProvider(LLMClient):
     def _stream_chat(
         self, params: dict, name_map: Dict[str, str], prefix_digest: str
     ) -> Iterator[str]:
-        assert_provider_permitted(self._DESTINATION)
+        self._permit_request()
         start = time.monotonic()
         try:
             events = self._client.messages.create(**params, stream=True)

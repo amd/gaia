@@ -26,7 +26,7 @@ import shutil
 import subprocess
 from typing import Optional
 
-from gaia.llm.amd_network import assert_claude_cli_allowed
+from gaia.eval.claude_credential import claude_code_route
 from gaia.llm.local_only import assert_provider_permitted
 
 # Sonnet is enough for labelling and summarising tables, and keeps a
@@ -68,11 +68,12 @@ def run_claude(
     """
 
     assert_provider_permitted("the Claude Code CLI")
-    assert_claude_cli_allowed(model, what="Session analysis (Claude Code)")
+    flags, env, model = claude_code_route(model, "Session analysis (Claude Code)")
     exe = resolve_claude(binary)
     argv = [
         exe,
         "-p",
+        *flags,
         "--output-format",
         "text",
         # No filesystem or shell access — the prompt is the whole input.
@@ -88,6 +89,7 @@ def run_claude(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
             check=False,  # the returncode is inspected below, with the output
         )
     except subprocess.TimeoutExpired as e:

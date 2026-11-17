@@ -427,6 +427,7 @@ def _off_amd_network(monkeypatch):
     from gaia.llm import amd_network
 
     amd_network.forget()
+    monkeypatch.delenv(amd_network.PIN_ENV_VAR, raising=False)
     monkeypatch.setattr(amd_network, "_gateway_configured", lambda: None)
     monkeypatch.setattr(amd_network, "_gateway_answers", lambda *_a, **_k: False)
     yield

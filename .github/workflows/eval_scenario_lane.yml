@@ -170,6 +170,8 @@ jobs:
     timeout-minutes: ${{ inputs.job-timeout-minutes }}
     env:
       VENV_PY: ${{ github.workspace }}\.venv\Scripts\python.exe
+      # Self-hosted pools are AMD's lab machines: on AMD's network whatever a probe says.
+      GAIA_AMD_NETWORK: ${{ contains(inputs.runs-on, 'self-hosted') && '1' || '' }}
       VENV_GAIA: ${{ github.workspace }}\.venv\Scripts\gaia.exe
       EVAL_CATEGORIES: ${{ inputs.categories }}
       EVAL_LANE: ${{ inputs.lane }}
@@ -322,10 +324,10 @@ jobs:
       - name: Preflight - judge credential, baselines, Lemonade, models
         timeout-minutes: 30
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.amd_net.outputs.on != 'true' && (steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) || '' }}
           # Only without a subscription token. The token would win anyway, and the
           # key then never reaches the job.
-          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ steps.amd_net.outputs.on != 'true' && (steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '') || '' }}
           AMD_NETWORK: ${{ steps.amd_net.outputs.on }}
           GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
         run: |
@@ -462,11 +464,11 @@ jobs:
         # collect, gate, compare and upload steps still run.
         timeout-minutes: ${{ inputs.eval-timeout-minutes }}
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.amd_net.outputs.on != 'true' && (steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) || '' }}
+          ANTHROPIC_API_KEY: ${{ steps.amd_net.outputs.on != 'true' && (steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '') || '' }}
           # The other account. The eval moves to it once if the first runs out of
           # quota mid-run, and stops with a partial scorecard if both are out.
-          CLAUDE_CODE_OAUTH_TOKEN_BACKUP: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN || (steps.claude_account.outputs.account == 'primary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || '') }}
+          CLAUDE_CODE_OAUTH_TOKEN_BACKUP: ${{ steps.amd_net.outputs.on != 'true' && (steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN || (steps.claude_account.outputs.account == 'primary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || '')) || '' }}
           GAIA_CLAUDE_ACCOUNT: ${{ steps.claude_account.outputs.account }}
           GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
         run: |

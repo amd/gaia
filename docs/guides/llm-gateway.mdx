@@ -214,16 +214,34 @@ error naming the gateway model to use instead, for example
 judge is the one exception: it moves to the gateway itself and says so (see
 [Which Claude account pays](/guides/eval#which-claude-account-pays)).
 
-GAIA counts this machine as on AMD's network when the gateway is set up here — a
-non-blank `LEMONADE_AMD_API_KEY` or `GAIA_GATEWAY_TOKEN` in GAIA's environment,
-a gateway key in the OS credential store, or a `~/.gaia/gateway.json` naming
-AMD's gateway — or when `llm-api.amd.com` accepts a connection within 2 seconds.
-A set-up gateway decides it on its own, so a DNS failure can't make GAIA think
-it is off the network. Off AMD's network nothing changes.
+What changes on AMD's network:
 
-A client pointed at the gateway's own host (`https://llm-api.amd.com`, for example
-through `ANTHROPIC_BASE_URL`) is allowed; any other base URL is refused, because
-GAIA can't tell where a proxy forwards.
+- **Saved choices that name a direct Claude model fail with the fix.** A
+  `claude-*` hybrid member, a `claude-*` default for Telegram or Slack, or a
+  remembered `/model claude-*` now errors on the next turn, naming the gateway
+  model to switch to. They are listed as unavailable in the Agent UI and the TUI.
+- **`gaia eval` judges and drives through the gateway.** Your Claude Code login,
+  subscription token and `ANTHROPIC_API_KEY` are not used; the gateway key is.
+  `gaia eval agent --fix` and Claude-backed session analysis go the same way.
+  Flagship baselines were judged by Anthropic directly, so re-check a regression
+  against a gateway-judged run.
+- **Long-running processes notice.** Every request is checked, so a VPN that
+  connects after GAIA started stops direct Claude from the next request on.
+
+GAIA counts this machine as on AMD's network when `GAIA_AMD_NETWORK=1` is set
+(GAIA's CI sets it on AMD's lab runners; no value turns it off), when the
+gateway is set up here — a non-blank `LEMONADE_AMD_API_KEY` or
+`GAIA_GATEWAY_TOKEN` in GAIA's environment, a gateway key in the OS credential
+store, or a `~/.gaia/gateway.json` naming AMD's gateway — or when
+`llm-api.amd.com` accepts a connection within 2 seconds, directly or through
+`HTTPS_PROXY`. A set-up gateway decides it on its own, so a DNS failure can't
+make GAIA think it is off the network. Listing models never contacts an AMD
+host unless an Anthropic key is set. Off AMD's network nothing changes.
+
+Only the gateway's own address (`https://llm-api.amd.com/...`, written plainly)
+is allowed as a Claude endpoint, for example through `ANTHROPIC_BASE_URL` or
+`GAIA_GATEWAY_ANTHROPIC_BASE_URL`; any other base URL is refused, because GAIA
+can't tell where a proxy forwards.
 
 ### Models that cannot stream
 

@@ -540,11 +540,23 @@ def claude_unavailable() -> Dict[str, Dict[str, str]]:
     Empty off AMD's network. On it, GAIA sends Claude only through the AMD LLM
     Gateway, so every direct id is refused when chosen.
     """
-    from gaia.llm.amd_network import blocked_reason, gateway_suggestion
+    from gaia.env import credential
 
+    try:
+        from gaia.llm.amd_network import blocked_reason, gateway_suggestion
+    except ImportError:
+        # A core without the AMD-network guard refuses no Claude id, so none is listed.
+        logger.debug(
+            "gaia.llm.amd_network is not in this core; no Claude id is refused"
+        )
+        return {}
+
+    # Probed only when an Anthropic key could send direct Claude; otherwise no
+    # AMD host is contacted and only a set-up gateway marks the ids.
+    probe = bool(credential("ANTHROPIC_API_KEY"))
     out = {}
     for model_id in CLAUDE_MODELS:
-        reason = blocked_reason(model_id)
+        reason = blocked_reason(model_id, probe=probe)
         if reason:
             out[model_id] = {"reason": reason, "use": gateway_suggestion(model_id)}
     return out

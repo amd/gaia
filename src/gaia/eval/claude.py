@@ -25,7 +25,12 @@ from gaia.eval.claude_credential import (
     gateway_judge_model,
 )
 from gaia.eval.config import DEFAULT_CLAUDE_MODEL, claude_pricing
-from gaia.llm.amd_network import anthropic_client, on_amd_network
+from gaia.llm.amd_network import (
+    anthropic_client,
+    assert_direct_anthropic_allowed,
+    is_gateway_url,
+    on_amd_network,
+)
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
@@ -181,6 +186,20 @@ class ClaudeClient:
             f"max_retries: {max_retries}"
         )
 
+    def _permit(self):
+        """Local only, then the AMD-network check, before every request.
+
+        A client built off AMD's network must not keep reaching Anthropic once
+        a VPN connects.
+        """
+        base_url = str(self.client.base_url)
+        assert_provider_permitted(
+            "the AMD LLM Gateway" if is_gateway_url(base_url) else "Anthropic Claude"
+        )
+        assert_direct_anthropic_allowed(
+            self.model, base_url, what="The eval's Claude client"
+        )
+
     def _sampling_kwargs(self):
         """Sampling kwargs for a completion call: ``temperature`` only if pinned.
 
@@ -226,7 +245,7 @@ class ClaudeClient:
         if self.log.isEnabledFor(logging.DEBUG):
             self.log.debug(f"Prompt token count: {self.count_tokens(prompt)}")
         try:
-            assert_provider_permitted("Anthropic Claude")
+            self._permit()
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -250,7 +269,7 @@ class ClaudeClient:
         """
         self.log.info("Getting completion with usage tracking from Claude")
         try:
-            assert_provider_permitted("Anthropic Claude")
+            self._permit()
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -292,7 +311,7 @@ class ClaudeClient:
             raise
 
     def count_tokens(self, prompt):
-        assert_provider_permitted("Anthropic Claude")
+        self._permit()
         return self.client.messages.count_tokens(
             model=self.model, messages=[{"role": "user", "content": prompt}]
         )
@@ -355,7 +374,7 @@ class ClaudeClient:
                 text_content = self._convert_html_to_text(
                     file_path, save_text, output_dir
                 )
-                assert_provider_permitted("Anthropic Claude")
+                self._permit()
                 message = self.client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,
@@ -388,7 +407,7 @@ class ClaudeClient:
                 self.log.debug(f"File encoded, size: {len(file_content)} bytes")
 
             self.log.info("Sending file for analysis")
-            assert_provider_permitted("Anthropic Claude")
+            self._permit()
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -455,7 +474,7 @@ class ClaudeClient:
                     self.log.debug(
                         f"Read text file, length: {len(text_content)} characters"
                     )
-                assert_provider_permitted("Anthropic Claude")
+                self._permit()
                 message = self.client.messages.create(
                     model=self.model,
                     max_tokens=self.max_tokens,
@@ -504,7 +523,7 @@ class ClaudeClient:
                 self.log.debug(f"File encoded, size: {len(file_content)} bytes")
 
             self.log.info("Sending file for analysis")
-            assert_provider_permitted("Anthropic Claude")
+            self._permit()
             message = self.client.messages.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -613,7 +632,7 @@ class ClaudeClient:
             if prompt:
                 message_content.append({"type": "text", "text": prompt})
 
-            assert_provider_permitted("Anthropic Claude")
+            self._permit()
             token_count = self.client.messages.count_tokens(
                 model=self.model,
                 messages=[{"role": "user", "content": message_content}],

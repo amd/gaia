@@ -212,6 +212,9 @@ jobs:
       !contains(github.event.pull_request.labels.*.name, 'skip-gaia-eval'))
     # `Windows` is load-bearing: every step is PowerShell + LemonadeServer.exe.
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    env:
+      # AMD's lab pool: on AMD's network whatever a probe says.
+      GAIA_AMD_NETWORK: '1'
     defaults:
       run:
         # Pinned to Windows PowerShell 5.1 — everything below is written to
@@ -411,13 +414,13 @@ jobs:
         # derivation on the job.
         timeout-minutes: ${{ github.event_name == 'pull_request' && 300 || 1980 }}
         env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.amd_net.outputs.on != 'true' && (steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN) || '' }}
           # Only without a subscription token. The token would win anyway, and the
           # key then never reaches the job.
-          ANTHROPIC_API_KEY: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ steps.amd_net.outputs.on != 'true' && (steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '') || '' }}
           # The other account. The eval moves to it once if the first runs out of
           # quota mid-run, and stops with a partial scorecard if both are out.
-          CLAUDE_CODE_OAUTH_TOKEN_BACKUP: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN || (steps.claude_account.outputs.account == 'primary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || '') }}
+          CLAUDE_CODE_OAUTH_TOKEN_BACKUP: ${{ steps.amd_net.outputs.on != 'true' && (steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN || (steps.claude_account.outputs.account == 'primary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || '')) || '' }}
           GAIA_CLAUDE_ACCOUNT: ${{ steps.claude_account.outputs.account }}
           GAIA_GATEWAY_TOKEN: ${{ steps.amd_net.outputs.on == 'true' && secrets.LEMONADE_AMD_API_KEY || '' }}
         run: |

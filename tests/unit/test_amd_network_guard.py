@@ -183,9 +183,20 @@ def test_a_negative_verdict_is_rechecked_after_the_ttl(monkeypatch, no_gateway_e
     assert not amd_network.on_amd_network()
     assert not amd_network.on_amd_network()
     assert calls == [1]
-    # The VPN connects later; the next check after the TTL sees it.
-    _probe(monkeypatch, True)
+    # The VPN connects later; the check after the TTL starts a refresh that sees it.
+    refreshed = threading.Event()
+
+    def answers(*_a, **_k):
+        refreshed.set()
+        return True
+
+    monkeypatch.setattr(amd_network, "_gateway_answers", answers)
     now[0] += amd_network.NEGATIVE_TTL + 1
+    amd_network.on_amd_network()
+    assert refreshed.wait(5)
+    deadline = time.perf_counter() + 5
+    while not amd_network.on_amd_network() and time.perf_counter() < deadline:
+        threading.Event().wait(0.02)
     assert amd_network.on_amd_network()
 
 
@@ -208,6 +219,15 @@ def test_off_the_network_direct_anthropic_is_unchanged(monkeypatch):
         "https://llm-api.amd.com.evil.example/Anthropic",
         "https://evil.example/?u=https://llm-api.amd.com",
         "not a url",
+        "https://api.anthropic.com\\@llm-api.amd.com",
+        "https://api.anthropic.com\\@llm-api.amd.com/Anthropic",
+        "https://llm-api.amd.com@api.anthropic.com/",
+        "https://llm-api.amd.com%2f@api.anthropic.com",
+        "https://llm-api.amd.com /Anthropic",
+        " https://llm-api.amd.com/Anthropic",
+        "https://llm-api.amd.com:8443/Anthropic",
+        "https://llm-api.amd.com/Anthropic?x=@api.anthropic.com",
+        "https://llm-api.amd.com/Anthropic#@api.anthropic.com",
     ],
 )
 def test_on_the_network_anything_but_the_gateway_is_refused(
@@ -301,17 +321,119 @@ def test_the_client_factory_builds_a_gateway_client_on_the_network(on_network):
     assert built[0][1]["base_url"] == GATEWAY_BASE
 
 
+SCANNED_ROOTS = ("src", "hub", "util", "scripts", "eval")
+#: Anthropic SDK names that build a client.
+_CLIENT_NAMES = {"Anthropic", "AsyncAnthropic", "Client", "AsyncClient"}
+
+
+def _anthropic_client_refs(tree):
+    """Places a module reaches an Anthropic client class, however it is spelled."""
+    import ast
+
+    module_aliases = {"anthropic"}
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == "anthropic":
+                    module_aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith(
+            "anthropic"
+        ):
+            hits += [
+                f"from-import {a.name}" for a in node.names if a.name in _CLIENT_NAMES
+            ]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in _CLIENT_NAMES:
+            base = node.value
+            if isinstance(base, ast.Name) and base.id in module_aliases:
+                hits.append(f"{base.id}.{node.attr}")
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in module_aliases
+        ):
+            hits.append(f"getattr({node.args[0].id}, ...)")
+    return hits
+
+
+def _python_sources():
+    for root in SCANNED_ROOTS:
+        base = REPO / root
+        if not base.exists():
+            continue
+        for path in base.rglob("*.py"):
+            parts = set(path.parts)
+            if (
+                "tests" in parts
+                or "node_modules" in parts
+                or path.name.startswith("test_")
+            ):
+                continue
+            yield path
+
+
 def test_no_anthropic_client_is_built_outside_the_guard():
     """Every SDK client goes through anthropic_client; a new direct one fails here."""
+    import ast
+
     offenders = []
-    for root in (SRC, HUB):
-        for path in root.rglob("*.py"):
-            if path.name == "amd_network.py" or "tests" in path.parts:
-                continue
-            text = path.read_text(encoding="utf-8", errors="replace")
-            for needle in ("Anthropic(", "AsyncAnthropic", ".Anthropic\n"):
-                if needle in text:
-                    offenders.append(f"{path}: {needle}")
+    for path in _python_sources():
+        if path.name == "amd_network.py":
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        offenders += [f"{path}: {hit}" for hit in _anthropic_client_refs(tree)]
+    assert offenders == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from anthropic import Anthropic as C\nC()",
+        "import anthropic as a\na.Client()",
+        "import anthropic\ngetattr(anthropic, 'Anthropic')()",
+        "from anthropic import AsyncAnthropic",
+        "import anthropic.lib as x\nimport anthropic\nanthropic.AsyncClient()",
+    ],
+)
+def test_the_scan_catches_aliased_constructions(source):
+    import ast
+
+    assert _anthropic_client_refs(ast.parse(source))
+
+
+#: Modules that start a `claude` process, and the guard each one goes through.
+_CLI_GUARDS = (
+    "claude_code_route",
+    "assert_claude_cli_allowed",
+    "assert_direct_anthropic_allowed",
+)
+#: Starts `claude` without a guard, and why that is safe.
+_CLI_EXEMPT = {
+    # `claude auth status` reads local state only.
+    "claude_credential.py",
+    # Stdlib-only CI probe; workflows skip it on AMD's network (amd-network).
+    "select_claude_account.py",
+}
+
+
+def test_every_claude_cli_launch_goes_through_the_guard():
+    import re
+
+    launches = re.compile(r"""(which|_which)\(\s*["']claude["']|def resolve_claude\(""")
+    offenders = []
+    for path in _python_sources():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if not launches.search(text) or path.name in _CLI_EXEMPT:
+            continue
+        if not any(guard in text for guard in _CLI_GUARDS):
+            offenders.append(str(path))
     assert offenders == []
 
 
@@ -381,14 +503,44 @@ def test_a_claude_cli_run_aimed_at_anthropic_is_refused(on_network):
     )
 
 
-def test_session_analysis_is_refused_before_the_cli_runs(monkeypatch, on_network):
+def _capture_run(monkeypatch, module):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    return calls
+
+
+def test_session_analysis_goes_through_the_gateway(monkeypatch, judge_env):
     from gaia.factory.harvest import claude_cli
 
-    monkeypatch.setattr(
-        claude_cli, "resolve_claude", lambda *_a: pytest.fail("CLI was resolved")
-    )
-    with pytest.raises(DirectAnthropicBlockedError):
-        claude_cli.run_claude("hi")
+    monkeypatch.setattr(claude_cli, "resolve_claude", lambda *_a: "claude")
+    calls = _capture_run(monkeypatch, claude_cli)
+    assert claude_cli.run_claude("hi") == "ok"
+    argv, kwargs = calls[0]
+    env = kwargs["env"]
+    assert env["ANTHROPIC_BASE_URL"] == GATEWAY_BASE
+    assert env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+    assert not [k for k in env if k.upper().startswith("CLAUDE_CODE_OAUTH_TOKEN")]
+    assert "ANTHROPIC_API_KEY" not in env
+    assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+    assert "--setting-sources" in argv
+
+
+def test_session_analysis_off_the_network_is_unchanged(monkeypatch):
+    from gaia.factory.harvest import claude_cli
+
+    monkeypatch.setattr(claude_cli, "resolve_claude", lambda *_a: "claude")
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    calls = _capture_run(monkeypatch, claude_cli)
+    claude_cli.run_claude("hi")
+    argv, kwargs = calls[0]
+    assert argv[argv.index("--model") + 1] == "sonnet"
+    assert "--setting-sources" not in argv
+    assert "ANTHROPIC_BASE_URL" not in kwargs["env"]
 
 
 @pytest.mark.parametrize("model", ["claude-opus-5", "opus", "sonnet"])
@@ -419,7 +571,7 @@ def test_the_judge_credential_is_the_gateway_on_the_network(judge_env, claude_lo
     cred = claude_credential.resolve_claude_credential()
     assert cred.is_gateway and not cred.is_subscription
     assert "AMD LLM Gateway" in cred.label and GATEWAY_TOKEN not in cred.label
-    assert cred.cli_flags() == []
+    assert cred.cli_flags() == list(claude_credential.GATEWAY_CLI_FLAGS)
     env = cred.cli_env(
         {"PATH": "p", "ANTHROPIC_API_KEY": "sk", "anthropic_api_key": "x"}
     )
@@ -558,13 +710,27 @@ def test_the_flagship_judge_command_uses_the_gateway(
         flagship_tasks.judge_command("claude-opus-4-7", {})
 
 
-def test_the_eval_fixer_is_refused_on_the_network(monkeypatch, on_network, tmp_path):
+def test_the_eval_fixer_goes_through_the_gateway(monkeypatch, judge_env, tmp_path):
     from gaia.eval import runner
 
-    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: pytest.fail("ran"))
+    calls = _capture_run(monkeypatch, runner)
     scorecard = {"scenarios": [{"scenario_id": "s", "status": "FAIL"}]}
-    with pytest.raises(DirectAnthropicBlockedError):
-        runner.run_fix_iteration(scorecard, tmp_path, 1)
+    runner.run_fix_iteration(scorecard, tmp_path, 1)
+    argv, kwargs = calls[0]
+    assert kwargs["env"]["ANTHROPIC_BASE_URL"] == GATEWAY_BASE
+    assert "must-not-leave" not in "".join(kwargs["env"].values())
+    assert argv[argv.index("--model") + 1] == "claude-opus-5"
+
+
+def test_the_eval_fixer_off_the_network_is_unchanged(monkeypatch, tmp_path):
+    from gaia.eval import runner
+
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    calls = _capture_run(monkeypatch, runner)
+    scorecard = {"scenarios": [{"scenario_id": "s", "status": "FAIL"}]}
+    runner.run_fix_iteration(scorecard, tmp_path, 1)
+    argv, kwargs = calls[0]
+    assert "--model" not in argv and "ANTHROPIC_BASE_URL" not in kwargs["env"]
 
 
 # ── CI: eval jobs on AMD's network use the gateway ──────────────────────────
@@ -726,3 +892,264 @@ def test_the_baseline_judge_model_has_a_gateway_equivalent():
         model = json.loads(meta.read_text(encoding="utf-8")).get("eval_model")
         if model:
             assert amd_network.gateway_equivalent(model), f"{meta}: {model}"
+
+
+# ── Hardening: route override, per-request checks, pin, proxy, no-probe ────
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "https://api.anthropic.com",
+        "https://proxy.example.com/Anthropic",
+        "https://api.anthropic.com\\@llm-api.amd.com",
+    ],
+)
+def test_a_gateway_route_override_off_the_gateway_is_refused(
+    monkeypatch, judge_env, route
+):
+    from gaia.eval import claude_credential
+
+    monkeypatch.setenv("GAIA_GATEWAY_ANTHROPIC_BASE_URL", route)
+    with pytest.raises(RuntimeError, match="only to the AMD LLM Gateway"):
+        claude_credential.resolve_claude_credential()
+
+
+def test_the_driver_checks_its_environment_before_running(monkeypatch, judge_env):
+    from gaia.eval import runner
+
+    monkeypatch.setattr(
+        runner,
+        "_driver_auth",
+        lambda: ([], {"ANTHROPIC_BASE_URL": "https://x.example"}),
+    )
+    monkeypatch.setattr(runner, "_run_driver", lambda *a, **k: pytest.fail("ran"))
+    with pytest.raises(DirectAnthropicBlockedError):
+        runner.run_scenario_subprocess(
+            None, {"id": "s"}, Path("."), "http://127.0.0.1:1", "claude-opus-5", "1", 5
+        )
+
+
+def _vpn_connects(monkeypatch):
+    """Off the network until now; the next check sees the gateway set up."""
+    monkeypatch.setattr(amd_network, "_gateway_configured", lambda: "vpn up")
+
+
+def test_a_claude_backend_built_off_the_network_stops_once_it_is_on(
+    monkeypatch, fake_sdk
+):
+    from gaia.llm.providers.claude import ClaudeProvider
+
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-x")
+    provider = ClaudeProvider(model="claude-opus-5-5")
+    provider._client = SimpleNamespace(
+        messages=SimpleNamespace(create=lambda **k: pytest.fail("request sent"))
+    )
+    _vpn_connects(monkeypatch)
+    with pytest.raises(DirectAnthropicBlockedError):
+        provider.chat([{"role": "user", "content": "hi"}], stream=False)
+    with pytest.raises(DirectAnthropicBlockedError):
+        list(provider.chat([{"role": "user", "content": "hi"}], stream=True))
+
+
+def test_the_eval_client_built_off_the_network_stops_once_it_is_on(monkeypatch):
+    pytest.importorskip("anthropic")
+    pytest.importorskip("bs4")
+    from gaia.eval.claude import ClaudeClient
+
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-x")
+    client = ClaudeClient(model="claude-opus-5")
+    client.client.messages.create = lambda **k: pytest.fail("request sent")
+    _vpn_connects(monkeypatch)
+    with pytest.raises(DirectAnthropicBlockedError):
+        client.get_completion("hi")
+
+
+def test_the_cli_judge_built_off_the_network_stops_once_it_is_on(
+    monkeypatch, claude_login
+):
+    from gaia.eval import judge_client
+
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    client = judge_client.ClaudeCliClient(model="claude-opus-5")
+    monkeypatch.setattr(
+        judge_client.subprocess, "run", lambda *a, **k: pytest.fail("ran")
+    )
+    _vpn_connects(monkeypatch)
+    with pytest.raises(DirectAnthropicBlockedError):
+        client.get_completion("hi")
+
+
+def test_the_pin_forces_on_without_probing(monkeypatch, no_gateway_env):
+    monkeypatch.setenv("GAIA_AMD_NETWORK", "1")
+    calls = _probe(monkeypatch, False)
+    assert amd_network.on_amd_network() and calls == []
+
+
+@pytest.mark.parametrize("value", ["0", "false", "off", "yes", "2"])
+def test_the_pin_has_no_off_value(monkeypatch, no_gateway_env, value):
+    monkeypatch.setenv("GAIA_AMD_NETWORK", value)
+    monkeypatch.setenv("GAIA_GATEWAY_TOKEN", "key")
+    with pytest.raises(ValueError, match="only accepted value is 1"):
+        amd_network.current()
+
+
+def _fake_proxy(reply):
+    """A one-shot local proxy that answers CONNECT with *reply*."""
+    import socketserver
+
+    seen = []
+
+    class Handler(socketserver.BaseRequestHandler):
+        def handle(self):
+            seen.append(self.request.recv(256))
+            self.request.sendall(reply)
+
+    server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.handle_request, daemon=True).start()
+    return server, seen
+
+
+@pytest.mark.allow_network  # a local fake proxy only
+def test_a_proxy_that_connects_to_the_gateway_means_on_the_network():
+    server, seen = _fake_proxy(b"HTTP/1.1 200 Connection established\r\n\r\n")
+    with server:
+        assert amd_network._connect_via_proxy(server.server_address, 2.0)
+    assert seen[0].startswith(b"CONNECT llm-api.amd.com:443 ")
+
+
+@pytest.mark.allow_network  # a local fake proxy only
+def test_a_proxy_that_refuses_the_gateway_is_not_evidence():
+    server, _ = _fake_proxy(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+    with server:
+        assert not amd_network._connect_via_proxy(server.server_address, 2.0)
+
+
+def test_the_probe_uses_https_proxy_unless_bypassed(monkeypatch):
+    for var in ("HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:8080")
+    assert amd_network._https_proxy() == ("proxy.corp", 8080)
+    monkeypatch.setenv("NO_PROXY", ".amd.com")
+    assert amd_network._https_proxy() is None
+
+
+def test_a_stale_negative_is_refreshed_without_blocking(monkeypatch, no_gateway_env):
+    now = [1000.0]
+    monkeypatch.setattr(amd_network.time, "monotonic", lambda: now[0])
+    _probe(monkeypatch, False)
+    assert not amd_network.on_amd_network()
+    release = threading.Event()
+    done = threading.Event()
+
+    def slow(*_a, **_k):
+        release.wait(5)
+        done.set()
+        return True
+
+    monkeypatch.setattr(amd_network, "_gateway_answers", slow)
+    now[0] += amd_network.NEGATIVE_TTL + 1
+    start = time.perf_counter()
+    assert not amd_network.on_amd_network()
+    assert time.perf_counter() - start < 0.5
+    release.set()
+    assert done.wait(5)
+    deadline = time.perf_counter() + 5
+    while not amd_network.on_amd_network() and time.perf_counter() < deadline:
+        threading.Event().wait(0.02)
+    assert amd_network.on_amd_network()
+
+
+def test_listing_without_an_anthropic_key_never_probes(monkeypatch, no_gateway_env):
+    from gaia.llm.hybrid_templates import build_inventory
+
+    monkeypatch.setattr(
+        amd_network, "_gateway_answers", lambda *a, **k: pytest.fail("probed")
+    )
+    inv = build_inventory(
+        {"data": []},
+        {"cloud": {"providers": []}},
+        anthropic_key=False,
+        local_only=False,
+    )
+    assert not inv.amd_network
+
+
+def test_the_flagship_ping_without_an_anthropic_key_never_probes(
+    monkeypatch, no_gateway_env
+):
+    stdio = pytest.importorskip("gaia_agent.stdio")
+    monkeypatch.setattr("gaia.env.credential", lambda name: None)
+    monkeypatch.setattr(
+        amd_network, "_gateway_answers", lambda *a, **k: pytest.fail("probed")
+    )
+    assert stdio.claude_unavailable() == {}
+
+
+def _claude_steps(job):
+    for step in job.get("steps", []) or []:
+        uses, run = str(step.get("uses", "")), str(step.get("run", ""))
+        if (
+            "claude-code-action" in uses
+            or "claude-credential" in uses
+            or "gaia eval agent" in run
+            or "judge_client" in run
+            or "eval tasks judge" in run
+            or "eval_drafting_report" in run
+        ):
+            yield step
+
+
+def test_every_self_hosted_job_that_runs_claude_checks_for_amds_network():
+    import yaml
+
+    offenders = []
+    for path in sorted(WORKFLOWS.glob("*.yml")):
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for name, job in (doc.get("jobs") or {}).items():
+            runs_on = str(job.get("runs-on", ""))
+            if "self-hosted" not in runs_on and "inputs.runs-on" not in runs_on:
+                continue
+            if not list(_claude_steps(job)):
+                continue
+            steps = job.get("steps", [])
+            if not any(s.get("uses") == "./.github/actions/amd-network" for s in steps):
+                offenders.append(f"{path.name}:{name}")
+            if "1" not in str((job.get("env") or {}).get("GAIA_AMD_NETWORK", "")):
+                offenders.append(f"{path.name}:{name} (no GAIA_AMD_NETWORK pin)")
+    assert offenders == []
+
+
+def test_no_anthropic_credential_reaches_a_step_on_amds_network():
+    import re
+
+    pattern = re.compile(
+        r"^\s+(CLAUDE_CODE_OAUTH_TOKEN(?:_BACKUP)?|ANTHROPIC_API_KEY): (.+)$", re.M
+    )
+    offenders = []
+    for name in EVAL_WORKFLOWS:
+        text = (WORKFLOWS / name).read_text(encoding="utf-8")
+        for match in pattern.finditer(text):
+            value = match.group(2)
+            if "steps.claude_account" in value and (
+                "amd_net.outputs.on != 'true'" not in value
+            ):
+                offenders.append(f"{name}: {match.group(0).strip()[:80]}")
+    assert offenders == []
+
+
+def test_the_doc_walkthrough_uses_the_gateway_on_amds_network():
+    import yaml
+
+    doc = yaml.safe_load(
+        (WORKFLOWS / "claude-weekly-doc-walkthrough.yml").read_text(encoding="utf-8")
+    )
+    steps = {s.get("id"): s for s in doc["jobs"]["walkthrough"]["steps"]}
+    for step_id in ("executor", "judge"):
+        step = steps[step_id]
+        assert "amd_net.outputs.on == 'true'" in step["env"]["ANTHROPIC_BASE_URL"]
+        assert "llm-api.amd.com/Anthropic" in step["env"]["ANTHROPIC_BASE_URL"]
+        assert "LEMONADE_AMD_API_KEY" in step["env"]["ANTHROPIC_CUSTOM_HEADERS"]
+        assert "amd_net.outputs.on != 'true'" in step["with"]["claude_code_oauth_token"]

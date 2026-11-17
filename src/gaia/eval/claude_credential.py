@@ -124,8 +124,14 @@ class ClaudeCredential:
         return self.source == GATEWAY
 
     def cli_flags(self) -> list:
-        """Flags for ``claude -p``: ``--bare`` restricts auth to the API key."""
-        return [] if self.is_subscription or self.is_gateway else ["--bare"]
+        """Flags for ``claude -p``: ``--bare`` restricts auth to the API key.
+
+        On the gateway no settings file is read, so none can override the
+        environment that points the CLI at the gateway.
+        """
+        if self.is_gateway:
+            return list(GATEWAY_CLI_FLAGS)
+        return [] if self.is_subscription else ["--bare"]
 
     def cli_model(self, model: str, role: str = "Claude judge") -> str:
         """The ``--model`` for ``claude -p``: *model*, or its gateway route id.
@@ -157,14 +163,27 @@ class ClaudeCredential:
         return env
 
 
+#: ``claude -p`` flags on the gateway: read no settings file.
+GATEWAY_CLI_FLAGS = ("--setting-sources", "")
+
+#: Variables that would send the CLI somewhere other than ANTHROPIC_BASE_URL,
+#: or authenticate it with an Anthropic credential.
+_ROUTE_OVERRIDES = (
+    API_KEY_VAR,
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+)
+
+
 def _gateway_cli_env(env: Dict[str, str], cred: "ClaudeCredential") -> Dict[str, str]:
     from gaia.llm.gateway import DEFAULT_AUTH_HEADER_NAME, DEFAULT_AUTH_HEADER_PREFIX
 
     for name in list(env):
         upper = name.upper()
-        if upper in (API_KEY_VAR, "ANTHROPIC_AUTH_TOKEN") or upper.startswith(
-            OAUTH_TOKEN_VAR
-        ):
+        if upper in _ROUTE_OVERRIDES or upper.startswith(OAUTH_TOKEN_VAR):
             del env[name]
     env.update(
         {
@@ -189,6 +208,8 @@ def gateway_credential() -> ClaudeCredential:
     """
     from gaia.llm import gateway
 
+    from gaia.llm.amd_network import AMD_GATEWAY_ANTHROPIC_BASE_URL, is_gateway_url
+
     try:
         token, source = gateway.resolve_gateway_token_with_source()
         base_url = gateway.gateway_anthropic_base_url()
@@ -197,9 +218,53 @@ def gateway_credential() -> ClaudeCredential:
             "On the AMD network the eval's Claude calls go through the AMD LLM "
             f"Gateway, never to Anthropic directly, and that failed: {e}"
         ) from e
+    if not is_gateway_url(base_url):
+        raise RuntimeError(
+            f"On the AMD network the eval's Claude calls go only to the AMD LLM "
+            f"Gateway, but its Anthropic route is set to {base_url!r} (from "
+            f"{gateway.GATEWAY_ANTHROPIC_ENV_VAR}). Unset it, or set it to "
+            f"{AMD_GATEWAY_ANTHROPIC_BASE_URL}."
+        )
     return ClaudeCredential(
         GATEWAY, api_key=token, base_url=base_url, key_source=source
     )
+
+
+#: Claude Code's model aliases, pinned for a run that goes through the gateway,
+#: which serves exact ids only. Not used for the judge, whose model is explicit.
+CLI_ALIASES = {
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-5-5",
+}
+
+
+def claude_code_route(
+    model: Optional[str], role: str, base: Optional[Mapping[str, str]] = None
+) -> tuple:
+    """``(flags, env, model)`` for a Claude Code run that is not the eval judge.
+
+    Off AMD's network: no flags, *base* (or this process's environment) as is,
+    and *model* unchanged. On it: the gateway's flags, environment and model
+    id, so the run never reaches Anthropic. Checked before returning either way.
+
+    Raises:
+        RuntimeError: on AMD's network with no usable gateway key or route.
+        ValueError: on AMD's network, *model* has no gateway equivalent.
+        DirectAnthropicBlockedError: the environment would still reach Anthropic.
+    """
+    from gaia.llm.amd_network import assert_claude_cli_allowed, on_amd_network
+
+    env = dict(os.environ if base is None else base)
+    flags: list = []
+    if on_amd_network():
+        cred = gateway_credential()
+        target = model or "sonnet"
+        model = cred.cli_model(CLI_ALIASES.get(target, target), role)
+        env = cred.cli_env(env)
+        flags = cred.cli_flags()
+    assert_claude_cli_allowed(model, env, what=role)
+    return flags, env, model
 
 
 def gateway_judge_model(model: str, role: str = "Claude judge") -> str:
