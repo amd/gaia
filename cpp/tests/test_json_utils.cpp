@@ -372,6 +372,21 @@ TEST(JsonUtilsTest, FurtherTagCallsInOneReplyAreCountedNotLost) {
     EXPECT_EQ(single.droppedToolCalls, 0u);
 }
 
+TEST(JsonUtilsTest, TagTextInsideADroppedCallsArgumentsIsNotCountedAsACall) {
+    auto asJson = parseLlmResponse(
+        "<tool_call>{\"name\": \"write\", \"arguments\": {\"path\": \"a.md\", \"content\": \"one\"}}</tool_call>\n"
+        "<tool_call>{\"name\": \"write\", \"arguments\": {\"path\": \"b.md\", \"content\": "
+        "\"<tool_call>{\\\"name\\\":\\\"x\\\"}</tool_call>\"}}</tool_call>");
+    EXPECT_EQ(asJson.toolName.value_or(""), "write");
+    EXPECT_EQ(asJson.droppedToolCalls, 1u);
+
+    auto asTags = parseLlmResponse(
+        "<function=write>\n<parameter=content>one</parameter>\n</function>"
+        "<function=write>\n<parameter=content>call <function=x><parameter= like this</parameter>\n</function>");
+    EXPECT_EQ(asTags.toolName.value_or(""), "write");
+    EXPECT_EQ(asTags.droppedToolCalls, 1u);
+}
+
 TEST(JsonUtilsTest, AVeryLongReplyIsParsedWithoutThrowing) {
     const std::string filler(200000, 'a');
     for (const std::string& text : {

@@ -452,6 +452,8 @@ void LemonadeClient::ensureModelLoaded(const std::string& modelName, int ctxSize
     }
 
     LemonadeHealth h = healthCheck();
+    // A server busy with another load can miss one health check.
+    for (int attempt = 1; attempt < 3 && !h.error.empty(); ++attempt) h = healthCheck();
     // A load request waits minutes for a model; a server that cannot answer /health gets none.
     if (!h.error.empty()) {
         throw std::runtime_error("Could not load model " + effectiveModel + ": the model server at " + baseUrl_ +

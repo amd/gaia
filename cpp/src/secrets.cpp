@@ -46,8 +46,10 @@ const std::vector<Pattern>& credentialPatterns() {
             // Group 1 stands in for a lookbehind: `_` may precede the word (DB_PASSWORD), a letter may not.
             {R"((?:^|[^A-Za-z0-9])((?:password|passphrase|api[_ -]?key|secret(?:[_ -]?(?:access[_ -]?)?key)?|access[_ -]?token|auth[_ -]?token|credential)s?\b\s*(?:is(?!\s+(?:in|on|at|with|not|stored|kept|saved|the|a|an)\b)|:|=)\s*\S+))",
              false, 1},
-            // An environment-style name: GITHUB_TOKEN=..., AWS_SECRET_ACCESS_KEY: ...
-            {R"((?:^|[^A-Za-z0-9_])((?:[A-Z0-9]+_)*(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|(?:API|ACCESS|PRIVATE|SECRET)_KEY)(?:_[A-Z0-9]+)*\s*[=:]\s*\S+))",
+            // An environment-style name with a value that is not a number, a boolean or a short setting.
+            {R"((?:^|[^A-Za-z0-9_])((?:[A-Z0-9]+_)*(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|(?:API|ACCESS|PRIVATE|SECRET)_KEY))"
+             R"((?:\s*[=:]\s*(?!(?:[0-9]+|[Tt]rue|TRUE|[Ff]alse|FALSE)[,;]?(?:\s|$))\S+|)"
+             R"((?:_[A-Z0-9]+)+\s*[=:]\s*(?!(?:[0-9]+|[Tt]rue|TRUE|[Ff]alse|FALSE)[,;]?(?:\s|$))\S{8,})))",
              false, 1, true},
             {R"(\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})", false},
             {R"(\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b)", false},

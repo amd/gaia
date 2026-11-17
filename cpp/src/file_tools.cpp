@@ -185,6 +185,71 @@ bool readWholeFile(const std::string& path, std::string& out) {
     return true;
 }
 
+struct LineBreaks {
+    size_t crlf = 0;
+    size_t loneLf = 0;
+    char previous = 0;
+
+    void add(char c) {
+        if (c == '\n') ++(previous == '\r' ? crlf : loneLf);
+        previous = c;
+    }
+    void add(const char* data, size_t len) {
+        for (size_t i = 0; i < len; ++i) add(data[i]);
+    }
+    bool crlfFile() const { return crlf > loneLf; }
+    bool mixed() const { return crlf > 0 && loneLf > 0; }
+};
+
+LineBreaks lineBreaksOf(const std::string& text) {
+    LineBreaks breaks;
+    breaks.add(text.data(), text.size());
+    return breaks;
+}
+
+/// False when the file cannot be read to the end.
+bool lineBreaksOfFile(const std::string& path, LineBreaks& breaks) {
+    std::ifstream file(fs::u8path(path), std::ios::binary);
+    if (!file.is_open()) return false;
+    std::array<char, 64 * 1024> buffer{};
+    while (file.good()) {
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize got = file.gcount();
+        if (got <= 0) break;
+        breaks.add(buffer.data(), static_cast<size_t>(got));
+    }
+    return !file.bad();
+}
+
+std::string crlfToLf(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') continue;
+        out.push_back(text[i]);
+    }
+    return out;
+}
+
+std::string lfToCrlf(const std::string& text) {
+    std::string out;
+    out.reserve(text.size() + text.size() / 16);
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r')) out.push_back('\r');
+        out.push_back(text[i]);
+    }
+    return out;
+}
+
+/// Where byte `lfOffset` of crlfToLf(raw) sits in `raw`; a "\n" that was "\r\n" maps to its "\r".
+size_t rawOffset(const std::string& raw, size_t lfOffset) {
+    size_t at = 0;
+    for (size_t seen = 0; seen < lfOffset && at < raw.size(); ++seen) {
+        at += (raw[at] == '\r' && at + 1 < raw.size() && raw[at + 1] == '\n') ? 2 : 1;
+    }
+    return at;
+}
+
 /// "" when `path` can be opened as a file; else why not. A device name is
 /// refused by its spelling: asking Windows about CON or COM1 can itself block.
 std::string notAFileReason(const std::string& path) {
@@ -218,15 +283,27 @@ std::string notAFileReason(const std::string& path) {
 /// Replace the file at `path` with `content` through a temporary file beside
 /// it, so a write that fails leaves the original intact. "" on success, else
 /// what went wrong.
+std::string writeInPlace(const fs::path& target, const std::string& path, const std::string& content) {
+    std::ofstream out(target, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) return "Cannot open file for writing: " + path;
+    out.write(content.data(), static_cast<std::streamsize>(content.size()));
+    out.close();
+    if (out.fail()) return "Write failed for: " + path + " (the disk may be full).";
+    return "";
+}
+
 std::string replaceFileContents(const std::string& path, const std::string& content) {
     fs::path target = fs::u8path(path);
     std::error_code ec;
     if (fs::is_symlink(target, ec)) {
         // Written through the link, as opening it would: renaming over it would replace the link itself.
-        target = fs::canonical(target, ec);
-        if (ec) return "Cannot open file for writing: " + path + " (" + ec.message() + ")";
+        const fs::path resolved = fs::canonical(target, ec);
+        if (ec) return writeInPlace(target, path, content);  // a link to a file not there yet
+        target = resolved;
     }
     const bool existed = fs::exists(target, ec);
+    // A rename would detach the other names of a hard-linked file.
+    if (existed && fs::hard_link_count(target, ec) > 1 && !ec) return writeInPlace(target, path, content);
     if (existed) {
         // A rename would replace a file this process may not write to.
         std::ofstream probe(target, std::ios::binary | std::ios::app);
@@ -243,7 +320,8 @@ std::string replaceFileContents(const std::string& path, const std::string& cont
     };
     {
         std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-        if (!out.is_open()) return "Cannot open file for writing: " + path;
+        // No new file can be made beside it (a folder that only lets this file be written).
+        if (!out.is_open()) return writeInPlace(target, path, content);
         out.write(content.data(), static_cast<std::streamsize>(content.size()));
         out.close();
         if (out.fail()) {
@@ -263,9 +341,9 @@ std::string replaceFileContents(const std::string& path, const std::string& cont
     }
     fs::rename(temp, target, ec);
     if (ec) {
-        const std::string why = ec.message();
+        // Another program holds the file open, or it is a mount point: it can still be written.
         discard();
-        return "Write failed for: " + path + " (" + why + "). The file is unchanged.";
+        return writeInPlace(target, path, content);
     }
     return "";
 }
@@ -925,10 +1003,8 @@ json FileIOTools::doFileRead(const json& args) {
         const std::string notAFile = notAFileReason(path);
         if (!notAFile.empty()) return json{{"error", notAFile}};
 
-        // Binary, so what the model is shown is byte-for-byte what file_edit
-        // will search: a CRLF file must not read back as LF and then fail to
-        // match. One pass, so the hash anchors exactly the bytes returned —
-        // a second read could hash a version the model never saw.
+        // One pass, so the hash anchors exactly the bytes on disk that were
+        // shown — a second read could hash a version the model never saw.
         std::ifstream file(fs::u8path(path), std::ios::binary);
         if (!file.is_open()) {
             const std::string near = nearNamedFile(path);
@@ -952,6 +1028,8 @@ json FileIOTools::doFileRead(const json& args) {
         bool lineOpen = false;     // a line's first in-range byte was seen
         bool truncated = false;
         bool lastByteWasNewline = false;
+        bool shownEndsWithCrlfBreak = false;
+        LineBreaks breaks;
         std::uint64_t totalBytes = 0;
 
         while (file.good()) {
@@ -965,6 +1043,8 @@ json FileIOTools::doFileRead(const json& args) {
 
             for (std::streamsize i = 0; i < got; ++i) {
                 const char c = buffer[static_cast<size_t>(i)];
+                const bool afterCr = breaks.previous == '\r';
+                breaks.add(c);
                 lastByteWasNewline = (c == '\n');
 
                 const bool inRange =
@@ -977,7 +1057,9 @@ json FileIOTools::doFileRead(const json& args) {
                         if (emittedLines > 0) content.push_back('\n');
                         ++emittedLines;
                         lineOpen = true;
+                        shownEndsWithCrlfBreak = false;
                     }
+                    if (c == '\n') shownEndsWithCrlfBreak = afterCr;
                     if (c != '\n') {
                         if (content.size() < kMaxReadBytes) {
                             content.push_back(c);
@@ -1001,6 +1083,12 @@ json FileIOTools::doFileRead(const json& args) {
         // Trailing '\n' handling: "a\nb\n" is 2 lines, "a\nb" is also 2.
         int totalLines = lineNumber - 1;
         if (totalBytes > 0 && !lastByteWasNewline) ++totalLines;
+
+        const bool crlfFile = breaks.crlfFile();
+        if (crlfFile) {
+            if (shownEndsWithCrlfBreak && !content.empty() && content.back() == '\r') content.pop_back();
+            content = crlfToLf(content);
+        }
 
         if (truncated) {
             content += "\n... [output truncated at 32 KB]";
@@ -1100,6 +1188,7 @@ json FileIOTools::doFileRead(const json& args) {
             {"truncated", truncated},
             {"content_hash", shortHash(hash)},
         };
+        if (crlfFile && !decodedUtf16) out["line_endings"] = "crlf";
         if (decodedUtf16) {
             out["note"] = "This file is UTF-16; the content shown is decoded. A program that opens it must name "
                           "the encoding (Python: encoding='utf-16'), and file_edit cannot change it.";
@@ -1358,18 +1447,26 @@ json FileIOTools::doFileWrite(const json& args) {
         if (!args.contains("content") || !args["content"].is_string()) {
             return json{{"error", "content is required and must be a string"}};
         }
-        const std::string& content = args["content"].get_ref<const std::string&>();
+        const std::string& given = args["content"].get_ref<const std::string&>();
 
         const std::string notAFile = notAFileReason(path);
         if (!notAFile.empty()) return json{{"error", notAFile}};
 
         FileStateTracker& tracker = FileStateTracker::instance();
         bool recreated = false;
+        bool keepCrlf = false;
         std::error_code existsEc;
         if (fs::exists(fs::u8path(path), existsEc) && !existsEc) {
             const auto divergence = tracker.checkFile(path);
             if (divergence.diverged) {
                 return staleRejection(path, "file_write", divergence);
+            }
+            if (given.find('\n') != std::string::npos && given.find('\r') == std::string::npos) {
+                LineBreaks existing;
+                if (!lineBreaksOfFile(path, existing)) {
+                    return json{{"error", "Cannot read " + path + " to keep its line endings. Nothing was written."}};
+                }
+                keepCrlf = existing.crlfFile();
             }
         } else if (tracker.hasRecord(path)) {
             // Read, then deleted, now written again. There is no content to
@@ -1390,6 +1487,9 @@ json FileIOTools::doFileWrite(const json& args) {
             }
         }
 
+        const std::string converted = keepCrlf ? lfToCrlf(given) : std::string();
+        const std::string& content = keepCrlf ? converted : given;
+
         const std::string writeError = replaceFileContents(path, content);
         if (!writeError.empty()) return json{{"error", writeError}};
 
@@ -1401,6 +1501,7 @@ json FileIOTools::doFileWrite(const json& args) {
             {"bytes_written", static_cast<int>(content.size())},
             {"content_hash", shortHash(FileStateTracker::hashContent(content))},
         };
+        if (keepCrlf) result["line_endings"] = "crlf";
         if (recreated) result["recreated"] = true;
         return result;
     } catch (const std::exception& e) {
@@ -1456,11 +1557,18 @@ json FileIOTools::doFileEdit(const json& args) {
             return json{{"error", "Cannot open file: " + path}};
         }
 
+        const LineBreaks breaks = lineBreaksOf(content);
+        const bool crlfFile = breaks.crlfFile();
+        const std::string contentLf = breaks.crlf > 0 ? crlfToLf(content) : std::string();
+        const std::string& shown = crlfFile ? contentLf : content;
+        const std::string oldLf = crlfToLf(oldStr);
+        const std::string newLf = crlfToLf(newStr);
+
         FileStateTracker& tracker = FileStateTracker::instance();
         const auto divergence = tracker.check(path, content);
         if (divergence.diverged) {
             json rejection = staleRejection(path, "file_edit", divergence);
-            rejection.update(excerptAround(content, anchorLineFor(content, oldStr)));
+            rejection.update(excerptAround(shown, anchorLineFor(shown, oldLf)));
             // Handing the content back is a read, so re-anchor — otherwise the
             // ledger keeps the superseded hash and the corrected retry is
             // rejected as stale too. file_write stays strict: it names no
@@ -1472,13 +1580,21 @@ json FileIOTools::doFileEdit(const json& args) {
         // old_string must identify exactly one place. Replacing the first of
         // several edits the wrong region; replacing all of them edits regions
         // the model never named. Both report success, so ambiguity is an error.
-        const auto offsets = matchOffsets(content, oldStr);
+        // Mixed endings: the bytes as given first, so an exact edit touches nothing else.
+        bool matchedLf = breaks.crlf > 0 && !breaks.mixed();
+        auto offsets = matchedLf ? matchOffsets(contentLf, oldLf)
+                                 : matchOffsets(content, breaks.mixed() ? oldStr : oldLf);
+        if (offsets.empty() && breaks.mixed()) {
+            offsets = matchOffsets(contentLf, oldLf);
+            matchedLf = !offsets.empty();
+        }
+        const std::string& searched = matchedLf ? contentLf : content;
 
         if (offsets.empty()) {
             // A silent no-op is the failure mode this tool exists to avoid:
             // say what did not match and what to do about it.
             std::string hint;
-            if (collapseWhitespace(content).find(collapseWhitespace(oldStr)) !=
+            if (collapseWhitespace(content).find(collapseWhitespace(oldLf)) !=
                 std::string::npos) {
                 hint = " A whitespace-insensitive match does exist, so the "
                        "indentation, tabs-vs-spaces, or line endings in "
@@ -1494,7 +1610,7 @@ json FileIOTools::doFileEdit(const json& args) {
                 {"path", path},
                 {"replacements", 0},
             };
-            result.update(excerptAround(content, anchorLineFor(content, oldStr)));
+            result.update(excerptAround(shown, anchorLineFor(shown, oldLf)));
             return result;
         }
 
@@ -1502,7 +1618,7 @@ json FileIOTools::doFileEdit(const json& args) {
             std::string lineList;
             json matchLines = json::array();
             for (const auto offset : offsets) {
-                const int lineNo = lineOfOffset(content, offset);
+                const int lineNo = lineOfOffset(searched, offset);
                 matchLines.push_back(lineNo);
                 if (!lineList.empty()) lineList += ", ";
                 lineList += std::to_string(lineNo);
@@ -1520,11 +1636,19 @@ json FileIOTools::doFileEdit(const json& args) {
                 {"replacements", 0},
                 {"match_lines", matchLines},
             };
-            result.update(excerptAround(content, lineOfOffset(content, offsets[0])));
+            result.update(excerptAround(shown, lineOfOffset(searched, offsets[0])));
             return result;
         }
 
-        content.replace(offsets[0], oldStr.size(), newStr);
+        if (matchedLf) {
+            const size_t from = rawOffset(content, offsets[0]);
+            const size_t to = rawOffset(content, offsets[0] + oldLf.size());
+            content.replace(from, to - from, crlfFile ? lfToCrlf(newLf) : newLf);
+        } else if (breaks.mixed()) {
+            content.replace(offsets[0], oldStr.size(), newStr);
+        } else {
+            content.replace(offsets[0], oldLf.size(), newLf);
+        }
         const int replacements = 1;
 
         const std::string writeError = replaceFileContents(path, content);
@@ -1532,12 +1656,14 @@ json FileIOTools::doFileEdit(const json& args) {
 
         tracker.recordWrite(path, content);
 
-        return json{
+        json result{
             {"success", true},
             {"path", path},
             {"replacements", replacements},
             {"content_hash", shortHash(FileStateTracker::hashContent(content))},
         };
+        if (crlfFile) result["line_endings"] = "crlf";
+        return result;
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_edit failed: ") + e.what()}};
     }

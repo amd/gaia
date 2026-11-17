@@ -7,9 +7,12 @@
 
 #include <gaia/agent.h>
 #include <gaia/api_server.h>
+#include <gaia/session.h>
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <future>
 #include <memory>
 #include <string>
@@ -609,6 +612,37 @@ TEST(ApiServerTest, StopEndsRun) {
     std::thread([&] { h->server->stop(); }).join();
     EXPECT_TRUE(waitFor([&] { return !h->server->isRunning(); }));
     EXPECT_TRUE(h->runError.empty()) << h->runError;
+}
+
+TEST(ApiServerTest, SessionListNamesTheProblemOfAnUnreadableSessionFile) {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "gaia_api_test_unreadable_sessions";
+    fs::remove_all(dir);
+    auto store = std::make_shared<SessionStore>(dir.string());
+    Message hello;
+    hello.role = MessageRole::USER;
+    hello.content = "hello there";
+    store->save("good-one", {hello});
+    { std::ofstream(dir / "bad-one.json") << "{ not json"; }
+    {
+        Harness h;
+        h.server->setSessionStore(store);
+        auto res = h.client().Get("/sessions");
+        ASSERT_TRUE(res);
+        ASSERT_EQ(res->status, 200) << res->body;
+        const json list = json::parse(res->body);
+        ASSERT_EQ(list.size(), 2u) << res->body;
+        for (const auto& item : list) {
+            if (item["id"] == "bad-one") {
+                EXPECT_FALSE(item.value("problem", "").empty()) << item.dump();
+                EXPECT_EQ(item["message_count"], 0);
+            } else {
+                EXPECT_EQ(item["id"], "good-one");
+                EXPECT_FALSE(item.contains("problem")) << item.dump();
+            }
+        }
+    }
+    fs::remove_all(dir);
 }
 
 TEST(ApiServerTest, HostThatOnlyStartsWith127IsRejected) {

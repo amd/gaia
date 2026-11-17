@@ -947,22 +947,117 @@ TEST_F(FileToolsHardeningTest, FileSearch_PathPatternsAndCharacterClasses) {
 
 // --- Regressions found in review --------------------------------------------
 
-TEST_F(FileToolsHardeningTest, FileRead_ReturnsRawBytesSoEditsMatch) {
-    // A CRLF file must read back with its CRLFs intact: the model copies
-    // old_string out of what file_read showed it, and file_edit searches the
-    // bytes on disk. If the two disagree the edit can never match.
-    std::string path = writeFile("crlf.txt", "alpha\r\nbeta\r\n");
+TEST_F(FileToolsHardeningTest, CrlfFile_ReadShowsLfAndAnLfEditKeepsCrlf) {
+    const std::string original = "[server]\r\nhost = local\r\nport = 8080\r\n";
+    std::string path = writeFile("crlf.ini", original);
+
+    json read = FileIOTools::fileRead().callback({{"path", path}});
+    ASSERT_FALSE(read.contains("error")) << read.dump();
+    EXPECT_EQ(read.value("content", ""), "[server]\nhost = local\nport = 8080");
+    EXPECT_EQ(read.value("line_endings", ""), "crlf");
+    EXPECT_EQ(read["lines"], 3);
+    EXPECT_EQ(read["content_hash"], FileStateTracker::hashContent(original).substr(0, 12));
+
+    json ranged = FileIOTools::fileRead().callback({{"path", path}, {"start_line", 2}, {"end_line", 2}});
+    EXPECT_EQ(ranged.value("content", ""), "host = local") << ranged.dump();
+
+    json edit = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "host = local\nport = 8080"}, {"new_string", "host = remote\nport = 9090\ntls = on"}});
+    ASSERT_FALSE(edit.contains("error")) << edit.dump();
+    EXPECT_EQ(edit.value("line_endings", ""), "crlf");
+    const std::string after = readFile(path);
+    EXPECT_EQ(after, "[server]\r\nhost = remote\r\nport = 9090\r\ntls = on\r\n");
+    EXPECT_EQ(after.find("\r\r"), std::string::npos);
+    EXPECT_EQ(edit["content_hash"], FileStateTracker::hashContent(after).substr(0, 12));
+
+    json again = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "tls = on"}, {"new_string", "tls = off"}});
+    ASSERT_FALSE(again.contains("error")) << "an edit after an edit is not stale: " << again.dump();
+    EXPECT_EQ(readFile(path), "[server]\r\nhost = remote\r\nport = 9090\r\ntls = off\r\n");
+}
+
+TEST_F(FileToolsHardeningTest, CrlfFile_AnEditGivenInCrlfWritesTheSameBytes) {
+    const std::string original = "alpha\r\nbeta\r\ngamma";
+    std::string lfPath = writeFile("lf_args.txt", original);
+    std::string crlfPath = writeFile("crlf_args.txt", original);
+
+    json lf = FileIOTools::fileEdit().callback(
+        {{"path", lfPath}, {"old_string", "alpha\nbeta"}, {"new_string", "one\ntwo"}});
+    json crlf = FileIOTools::fileEdit().callback(
+        {{"path", crlfPath}, {"old_string", "alpha\r\nbeta"}, {"new_string", "one\r\ntwo"}});
+    ASSERT_FALSE(lf.contains("error")) << lf.dump();
+    ASSERT_FALSE(crlf.contains("error")) << crlf.dump();
+    EXPECT_EQ(readFile(lfPath), "one\r\ntwo\r\ngamma") << "no final newline before, none after";
+    EXPECT_EQ(readFile(crlfPath), readFile(lfPath));
+}
+
+TEST_F(FileToolsHardeningTest, CrlfFile_EditErrorsShowLfText) {
+    std::string path = writeFile("hints.txt", "one\r\ntwo\r\none\r\n");
+
+    json missing = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "three"}, {"new_string", "x"}});
+    ASSERT_TRUE(missing.contains("error"));
+    EXPECT_EQ(missing.value("current_content", ""), "one\ntwo\none") << missing.dump();
+
+    json ambiguous = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "one\n"}, {"new_string", "x\n"}});
+    ASSERT_TRUE(ambiguous.value("ambiguous", false)) << ambiguous.dump();
+    EXPECT_EQ(ambiguous["match_lines"], (json::array({1, 3})));
+    EXPECT_EQ(ambiguous.value("current_content", ""), "one\ntwo\none");
+    EXPECT_EQ(readFile(path), "one\r\ntwo\r\none\r\n");
+}
+
+TEST_F(FileToolsHardeningTest, CrlfFile_WriteKeepsCrlfAndNeverDoublesIt) {
+    std::string path = writeFile("notes.txt", "old\r\ntext\r\n");
+
+    json lf = FileIOTools::fileWrite().callback({{"path", path}, {"content", "new\ntext\nhere\n"}});
+    ASSERT_FALSE(lf.contains("error")) << lf.dump();
+    EXPECT_EQ(lf.value("line_endings", ""), "crlf");
+    std::string after = readFile(path);
+    EXPECT_EQ(after, "new\r\ntext\r\nhere\r\n");
+    EXPECT_EQ(lf["bytes_written"], static_cast<int>(after.size()));
+    EXPECT_EQ(lf["content_hash"], FileStateTracker::hashContent(after).substr(0, 12));
+
+    const std::string given = "a\r\nb\r\nno newline at the end";
+    json crlf = FileIOTools::fileWrite().callback({{"path", path}, {"content", given}});
+    ASSERT_FALSE(crlf.contains("error")) << "a write after a write is not stale: " << crlf.dump();
+    EXPECT_FALSE(crlf.contains("line_endings"));
+    after = readFile(path);
+    EXPECT_EQ(after, given);
+    EXPECT_EQ(after.find("\r\r\n"), std::string::npos);
+
+    std::string fresh = (tempDir_ / "fresh.txt").string();
+    ASSERT_FALSE(FileIOTools::fileWrite().callback({{"path", fresh}, {"content", "a\nb\n"}}).contains("error"));
+    EXPECT_EQ(readFile(fresh), "a\nb\n");
+}
+
+TEST_F(FileToolsHardeningTest, LfFile_IsLeftByteForByteAlone) {
+    std::string path = writeFile("unix.txt", "alpha\nbeta\ngamma\n");
 
     json read = FileIOTools::fileRead().callback({{"path", path}});
     ASSERT_FALSE(read.contains("error"));
-    const std::string shown = read["content"].get<std::string>();
-    EXPECT_NE(shown.find("alpha\r"), std::string::npos);
-    EXPECT_EQ(read["lines"], 2);
+    EXPECT_EQ(read.value("content", ""), "alpha\nbeta\ngamma");
+    EXPECT_FALSE(read.contains("line_endings"));
 
     json edit = FileIOTools::fileEdit().callback(
         {{"path", path}, {"old_string", "alpha\r\nbeta"}, {"new_string", "one\r\ntwo"}});
     ASSERT_FALSE(edit.contains("error")) << edit.dump();
-    EXPECT_EQ(readFile(path), "one\r\ntwo\r\n");
+    EXPECT_FALSE(edit.contains("line_endings"));
+    EXPECT_EQ(readFile(path), "one\ntwo\ngamma\n");
+
+    json write = FileIOTools::fileWrite().callback({{"path", path}, {"content", "x\ny\n"}});
+    ASSERT_FALSE(write.contains("error")) << write.dump();
+    EXPECT_FALSE(write.contains("line_endings"));
+    EXPECT_EQ(readFile(path), "x\ny\n");
+}
+
+TEST_F(FileToolsHardeningTest, MixedEndings_AnExactEditTouchesNothingElse) {
+    std::string path = writeFile("mixed.txt", "one\r\ntwo\nthree\r\nfour\rfive\n");
+
+    json edit = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "two\nthree\r\n"}, {"new_string", "2\n3\r\n"}});
+    ASSERT_FALSE(edit.contains("error")) << edit.dump();
+    EXPECT_EQ(readFile(path), "one\r\n2\n3\r\nfour\rfive\n");
+
+    json word = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "one"}, {"new_string", "uno"}});
+    ASSERT_FALSE(word.contains("error")) << word.dump();
+    EXPECT_EQ(readFile(path), "uno\r\n2\n3\r\nfour\rfive\n");
 }
 
 TEST_F(FileToolsHardeningTest, FileRead_HashAnchorsTheBytesItShowed) {

@@ -1799,7 +1799,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         cfg = config_;
     }
 
-    // No tokenizer yields fewer than one token per 16 bytes of text; sending it would only time out.
+    // The server may serve a larger window than the configured one, so only what none can hold.
     size_t requestBytes = 0;
     for (const auto& m : userMessages) {
         requestBytes += m.content.size();
@@ -1809,11 +1809,12 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             }
         }
     }
-    if (cfg.contextSize > 0 && requestBytes / 16 > static_cast<size_t>(cfg.contextSize)) {
+    constexpr size_t kLargestWindowTokens = 1048576;
+    const size_t windowTokens = std::max(kLargestWindowTokens, static_cast<size_t>(std::max(cfg.contextSize, 0)));
+    if (requestBytes / 8 > windowTokens) {
         throw std::invalid_argument("The request is " + std::to_string(requestBytes) +
-                                    " bytes of text, more than the model's " + std::to_string(cfg.contextSize) +
-                                    "-token context window can hold. Save long material to a file and ask about "
-                                    "the file, or load the model with a larger window (--ctx-size).");
+                                    " bytes of text, more than any model's context window can hold. Save long "
+                                    "material to a file and ask about the file.");
     }
 
     // Settled once so the prompt and every request of the turn agree.
@@ -2295,6 +2296,22 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
         // Parse response
         ParsedResponse parsed = parseLlmResponse(response);
+
+        // Tool-call text the user wrote out and asked to have repeated is their text, not a call.
+        if (parsed.toolName.has_value()) {
+            const auto squash = [](const std::string& text) {
+                std::string out;
+                for (const char c : text) {
+                    if (!std::isspace(static_cast<unsigned char>(c))) out.push_back(c);
+                }
+                return out;
+            };
+            const std::string said = squash(response);
+            if (said.size() >= 20 && squash(turnRequest_).find(said) != std::string::npos) {
+                parsed = ParsedResponse{};
+                parsed.answer = response;
+            }
+        }
 
         // Display reasoning.
         // Skip when streaming — the raw tokens were already printed during callLlm().

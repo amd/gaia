@@ -1013,6 +1013,39 @@ TEST_F(GaiacppSidecar, RunIdEqualToAChatsIdDoesNotTakeOverThatChat) {
     EXPECT_EQ(still->status, 200) << "the chat was dropped with the one-off turn: " << still->body;
 }
 
+TEST_F(GaiacppSidecar, ATurnWithoutASessionIsAddressedByItsRunIdWhileItRuns) {
+    Hold& held = hold();
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-solo", "think"));
+    ASSERT_TRUE(waitUntil([&] { return mock().requestCount() >= 1; }, seconds(30))) << t.describe();
+
+    auto internet = send("POST", "/v1/gaia/sessions/run-solo/internet", bearer(), R"({"internet_off":true})");
+    ASSERT_TRUE(internet);
+    ASSERT_EQ(internet->status, 200) << internet->body;
+    EXPECT_EQ(json::parse(internet->body)["session_id"], "run-solo");
+    auto bypass = send("POST", "/v1/gaia/sessions/run-solo/bypass", bearer(), R"({"enabled":true})");
+    ASSERT_TRUE(bypass);
+    EXPECT_EQ(bypass->status, 200) << bypass->body;
+    auto grants = send("GET", "/v1/gaia/sessions/run-solo/grants", bearer());
+    ASSERT_TRUE(grants);
+    ASSERT_EQ(grants->status, 200) << grants->body;
+    EXPECT_EQ(json::parse(grants->body)["session_id"], "run-solo");
+    auto other = send("GET", "/v1/gaia/sessions/run-other/grants", bearer());
+    ASSERT_TRUE(other);
+    EXPECT_EQ(other->status, 404) << "an id that is neither a chat nor a running turn: " << other->body;
+    auto tilde = send("GET", "/v1/gaia/sessions/~run-solo/grants", bearer());
+    ASSERT_TRUE(tilde);
+    EXPECT_EQ(tilde->status, 400) << "the temporary key is not an id a caller may send: " << tilde->body;
+
+    held.release();
+    ASSERT_TRUE(t.waitDone()) << t.describe();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(t.events(), "final")) << t.describe();
+    auto gone = send("GET", "/v1/gaia/sessions/run-solo/grants", bearer());
+    ASSERT_TRUE(gone);
+    EXPECT_EQ(gone->status, 404) << "a one-turn session ends with its turn: " << gone->body;
+}
+
 TEST_F(GaiacppSidecar, TurnsBeyondTheQueueBoundGet503AndApprovalsStillGetThrough) {
     hold();  // the first turn to run never finishes, so every accepted turn stays open
     ASSERT_NO_FATAL_FAILURE(startSidecar());
@@ -1029,7 +1062,18 @@ TEST_F(GaiacppSidecar, TurnsBeyondTheQueueBoundGet503AndApprovalsStillGetThrough
     };
     ASSERT_TRUE(waitUntil([&] { return refused() >= kSent - kAccepted; }, seconds(60)))
         << refused() << " of " << kSent << " turns were refused";
-    std::this_thread::sleep_for(milliseconds(300));
+    auto stillOpen = [&] {
+        int n = 0;
+        for (int i = 0; i < kSent; ++i) {
+            if (turns[i]->status() != 0) continue;
+            auto probe = send("POST", "/v1/gaia/query/run-q-" + std::to_string(i) + "/followup", bearer(),
+                              R"({"text":"x"})");
+            n += probe && probe->status == 409 ? 1 : 0;
+        }
+        return n;
+    };
+    EXPECT_TRUE(waitUntil([&] { return refused() + stillOpen() >= kSent; }, seconds(5)))
+        << "not every turn was accepted or refused";
     EXPECT_EQ(refused(), kSent - kAccepted) << "exactly the turns over the bound are refused";
     std::string openRun;
     for (int i = 0; i < kSent; ++i) {

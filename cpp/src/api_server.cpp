@@ -912,10 +912,12 @@ struct ApiServer::Impl {
         json arr = json::array();
         if (sessionStore) {
             for (const auto& s : sessionStore->list()) {
-                arr.push_back({{"id", s.id},
-                               {"timestamp", s.timestamp},
-                               {"preview", s.preview},
-                               {"message_count", s.messageCount}});
+                json item = {{"id", s.id},
+                             {"timestamp", s.timestamp},
+                             {"preview", s.preview},
+                             {"message_count", s.messageCount}};
+                if (!s.problem.empty()) item["problem"] = s.problem;
+                arr.push_back(std::move(item));
             }
         }
         res.set_content(arr.dump(-1, ' ', false, json::error_handler_t::replace), "application/json");

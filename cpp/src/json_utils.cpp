@@ -362,6 +362,29 @@ void parseJsonToolCall(const std::string& text, size_t at, TagToolCall& call) {
     call.args = std::move(args);
 }
 
+// One past the tag tool call whose body starts at `body`, or npos when it runs to the end of the text.
+size_t tagToolCallEnd(const std::string& text, size_t body) {
+    if (text[body] == '{') {
+        const size_t length = extractFirstJsonObject(text.substr(body)).size();
+        if (length != 0) return body + length;
+        const size_t close = text.find("</tool_call>", body);
+        return close == std::string::npos ? close : close + 12;
+    }
+    const size_t nameEnd = text.find('>', body);
+    if (nameEnd == std::string::npos) return nameEnd;
+    for (size_t pos = skipSpace(text, nameEnd + 1);; pos = skipSpace(text, pos)) {
+        if (startsWithAt(text, pos, "</function>")) return pos + 11;
+        if (startsWithAt(text, pos, "</tool_call>")) return pos + 12;
+        if (!startsWithAt(text, pos, "<parameter=")) {
+            const size_t close = text.find("</function>", pos);
+            return close == std::string::npos ? close : close + 11;
+        }
+        const size_t close = text.find("</parameter>", pos);
+        if (close == std::string::npos) return close;
+        pos = close + 12;
+    }
+}
+
 // A tool call a model wrote as tags instead of sending it as one. "<tool_call>"
 // followed by words is prose about the format, and so is anything in a code fence.
 std::optional<TagToolCall> tagToolCall(const std::string& reply) {
@@ -382,19 +405,17 @@ std::optional<TagToolCall> tagToolCall(const std::string& reply) {
         if (body == std::string::npos || insideCodeFence(reply, at)) continue;
         if (first) {
             ++first->dropped;
-            at = body;
-            continue;
+        } else {
+            TagToolCall call;
+            call.prose = trimmedCopy(reply.substr(0, at));
+            if (reply[body] == '{') parseJsonToolCall(reply, body, call);
+            else parseFunctionTags(reply, body, call);
+            first = std::move(call);
         }
-        TagToolCall call;
-        call.prose = trimmedCopy(reply.substr(0, at));
-        if (reply[body] == '{') parseJsonToolCall(reply, body, call);
-        else parseFunctionTags(reply, body, call);
-        first = std::move(call);
         // Resume past this call, so its own contents are not counted as another one.
-        const size_t end = reply[body] == '{' ? body + extractFirstJsonObject(reply.substr(body)).size()
-                                              : reply.find("</function>", body);
+        const size_t end = tagToolCallEnd(reply, body);
         if (end == std::string::npos) break;
-        at = std::max(end, body);
+        at = end - 1;
     }
     return first;
 }

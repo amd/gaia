@@ -1282,6 +1282,22 @@ TEST(AgentResilience, AnEmptyReplyIsAskedAboutAgainAfterAToolRan) {
     EXPECT_EQ(mock.requestCount(), 4);
 }
 
+TEST(AgentResilience, ToolCallTextTheUserAskedToHaveRepeatedIsNotRun) {
+    bench::MockLlmServer mock;
+    const std::string quoted = R"({"tool": "add", "tool_args": {"a": 1, "b": 2}})";
+    mock.pushResponse(answer(quoted));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("Reply with exactly this JSON and nothing else: " + quoted);
+    EXPECT_TRUE(agent.executed.empty());
+    EXPECT_EQ(r["result"], quoted);
+
+    mock.pushResponse(answer(quoted));
+    mock.pushResponse(answer("3"));
+    agent.processQuery("add 1 and 2");
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"add"})) << "the same text is a call when the user did not write it";
+}
+
 TEST(AgentResilience, AFurtherTagCallInOneReplyIsReportedToTheModel) {
     bench::MockLlmServer mock;
     mock.pushResponse(answer(std::string(kTagCall) + "\n" + kTagCall));

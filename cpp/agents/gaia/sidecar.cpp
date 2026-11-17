@@ -552,15 +552,21 @@ private:
             sendDetail(res, 400, "Invalid session id");
             return nullptr;
         }
-        auto s = findSession(sid);
+        auto s = findSessionOrRun(sid);
         if (!s) sendDetail(res, 404, "No session " + sid);
         return s;
     }
 
-    json grantsBody(Session& s) {
+    // A turn sent without a session id is addressed by its run id while it runs.
+    std::shared_ptr<Session> findSessionOrRun(const std::string& id) {
+        if (auto s = findSession(id)) return s;
+        return findRun(id) ? findSession("~" + id) : nullptr;
+    }
+
+    json grantsBody(Session& s, const std::string& sid) {
         json list = json::array();
         for (const auto& key : s.grants->allAllowed()) list.push_back({{"key", key}, {"label", grantLabel(key)}});
-        return {{"session_id", s.id}, {"grants", list}};
+        return {{"session_id", sid}, {"grants", list}};
     }
 
     // ---- routes ----
@@ -674,33 +680,35 @@ private:
                 return sendDetail(res, 422, "enabled must be true or false");
             }
             const bool on = body["enabled"].get<bool>();
-            std::lock_guard<std::mutex> lock(sessionsMu_);
-            auto it = sessions_.find(sid);
+            auto s = findSessionOrRun(sid);
             // The UI sends it again once the session's first turn has started.
-            if (it == sessions_.end()) return sendDetail(res, 404, "No session " + sid);
-            it->second->bypass = on;
+            if (!s) return sendDetail(res, 404, "No session " + sid);
+            s->bypass = on;
             sendJson(res, 200, {{"session_id", sid}, {"enabled", on}});
         });
         server_.Post(R"(/v1/gaia/sessions/([^/]+)/internet)", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
-            auto s = sessionFor(req.matches[1], res);
+            const std::string sid = req.matches[1];
+            auto s = sessionFor(sid, res);
             if (!s) return;
             json body = json::parse(req.body, nullptr, false);
             if (!body.is_object() || !body.contains("internet_off") || !body["internet_off"].is_boolean()) {
                 return sendDetail(res, 422, "internet_off must be true or false");
             }
             s->internetOff->store(body["internet_off"].get<bool>());
-            sendJson(res, 200, {{"session_id", s->id}, {"internet_off", s->internetOff->load()}});
+            sendJson(res, 200, {{"session_id", sid}, {"internet_off", s->internetOff->load()}});
         });
         server_.Get(R"(/v1/gaia/sessions/([^/]+)/grants)", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
-            auto s = sessionFor(req.matches[1], res);
+            const std::string sid = req.matches[1];
+            auto s = sessionFor(sid, res);
             if (!s) return;
-            sendJson(res, 200, grantsBody(*s));
+            sendJson(res, 200, grantsBody(*s, sid));
         });
         server_.Delete(R"(/v1/gaia/sessions/([^/]+)/grants)", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
-            auto s = sessionFor(req.matches[1], res);
+            const std::string sid = req.matches[1];
+            auto s = sessionFor(sid, res);
             if (!s) return;
             if (req.has_param("key")) {
                 const std::string key = req.get_param_value("key");
@@ -709,21 +717,22 @@ private:
             } else {
                 s->grants->clearAll();
             }
-            sendJson(res, 200, grantsBody(*s));
+            sendJson(res, 200, grantsBody(*s, sid));
         });
         server_.Get(R"(/v1/gaia/sessions/([^/]+)/tools)", [this](const httplib::Request& req, httplib::Response& res) {
             if (!admit(req, res, true)) return;
-            auto s = sessionFor(req.matches[1], res);
+            const std::string sid = req.matches[1];
+            auto s = sessionFor(sid, res);
             if (!s) return;
             json tools = json::array();
             {
                 std::lock_guard<std::mutex> lock(s->agentMu);
-                if (!s->agent) return sendDetail(res, 404, "Session " + s->id + " has no agent yet");
+                if (!s->agent) return sendDetail(res, 404, "Session " + sid + " has no agent yet");
                 for (const auto& [name, info] : s->agent->tools().allTools()) {
                     tools.push_back({{"name", name}, {"description", info.description}, {"category", toolCategory(info)}});
                 }
             }
-            sendJson(res, 200, {{"session_id", s->id}, {"tools", tools}});
+            sendJson(res, 200, {{"session_id", sid}, {"tools", tools}});
         });
     }
 

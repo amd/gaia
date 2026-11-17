@@ -189,10 +189,10 @@ TEST(AgentVlmTest, ARequestFarLargerThanTheWindowIsRefusedBeforeItIsSent) {
     Bare agent(cfg);
 
     try {
-        agent.processQuery(std::string(4096 * 16 + 64, 'x'), 1);
+        agent.processQuery(std::string(9 * 1024 * 1024, 'x'), 1);
         FAIL() << "an oversized request must be refused";
     } catch (const std::invalid_argument& e) {
-        EXPECT_NE(std::string(e.what()).find("4096-token context window"), std::string::npos) << e.what();
+        EXPECT_NE(std::string(e.what()).find("more than any model's context window"), std::string::npos) << e.what();
     }
     EXPECT_TRUE(mock.receivedBodies().empty());
     EXPECT_EQ(mock.loadRequestCount(), 0);

@@ -244,17 +244,25 @@ Cli parseArgs(int argc, char** argv) {
         if (i + 1 >= argc) usageError(flag + " needs a value");
         return argv[++i];
     };
+    std::string modeFlag;
+    auto setMode = [&](Cli::Mode mode, const std::string& flag) {
+        if (cli.mode != Cli::Mode::Interactive && cli.mode != mode) {
+            usageError(modeFlag + " and " + flag + " are different ways to run gaiacpp: pick one");
+        }
+        cli.mode = mode;
+        modeFlag = flag;
+    };
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "-h" || a == "--help") { printUsage(); std::exit(0); }
         else if (a == "-v" || a == "--version") { std::cout << "gaiacpp " GAIACPP_VERSION "\n"; std::exit(0); }
-        else if (a == "serve" && i == 1) cli.mode = Cli::Mode::Serve;
+        else if (a == "serve" && i == 1) setMode(Cli::Mode::Serve, a);
         else if (a == "-p" || a == "--print") {
-            cli.mode = Cli::Mode::Print;
+            setMode(Cli::Mode::Print, a);
             if (i + 1 < argc && argv[i + 1][0] != '-') cli.prompt = argv[++i];
         }
-        else if (a == "--mcp") cli.mode = Cli::Mode::Mcp;
-        else if (a == "--stdio") cli.mode = Cli::Mode::Stdio;
+        else if (a == "--mcp") setMode(Cli::Mode::Mcp, a);
+        else if (a == "--stdio") setMode(Cli::Mode::Stdio, a);
         else if (a == "--accept-edits") cli.acceptEdits = true;
         else if (a == "--dev") cli.dev = true;
         else if (a == "--use-claude" || a == "--claude-model") {
@@ -289,7 +297,11 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--full-access") cli.fullAccess = true;
         else if (a == "--dangerously-skip-permissions") cli.skipPermissions = true;
         else if (a == "--host") cli.host = need(i, a);
-        else if (a == "--port") cli.port = toInt(a, need(i, a));
+        else if (a == "--port") {
+            const std::string v = need(i, a);
+            cli.port = toInt(a, v);
+            if (cli.port < 0 || cli.port > 65535) usageError("--port needs a number from 0 to 65535, got '" + v + "'");
+        }
         else if (a == "--server-key-env") cli.serveKeyEnv = need(i, a);
         else if (a == "--allow-origin") cli.allowedOrigins.push_back(need(i, a));
         else if (a == "--expose-tool-routes") cli.exposeToolRoutes = true;

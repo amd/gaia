@@ -1407,6 +1407,11 @@ TEST(GaiaAgentTest, ATotalAScriptWorkedOutIsNotTreatedAsCopiedFromAFile) {
         {"bash_execute", {{"command", "python -c \"print(4 * 3120)\""}}, "12480"}};
     EXPECT_FALSE(GaiaAgent::unitPriceOnlyNote(request, "The hydrophone line comes to $12,480.", turn));
     EXPECT_TRUE(GaiaAgent::unitPriceOnlyNote(request, "The list price is $3,120.00.", turn));
+    const std::vector<GaiaAgent::CallSeen> shown = {
+        {"bash_execute", {{"command", "cat docs/purchase_request.txt"}}, "  - 4 x HM-3 hydrophones"},
+        {"bash_execute", {{"command", "head -20 docs/price_list.csv"}}, "HM-3,Hydrophone,instrument,3120.00"}};
+    EXPECT_TRUE(GaiaAgent::unitPriceOnlyNote(request, "The list price is $3,120.00.", shown))
+        << "a file shown with cat is a file read";
 }
 
 TEST(GaiaAgentTest, AQuantityWrittenWithAMultiplicationSignIsRecognised) {

@@ -128,6 +128,42 @@ TEST(DocumentIndexTest, FolderToolSkipsDependencyAndIgnoredFolders) {
               std::string::npos);
 }
 
+TEST(DocumentIndexTest, FolderToolSaysWhatItSkippedAndFailsWhenThatIsEverything) {
+    TempDir d;
+    d.write(".gitignore", "drafts/\nsecret.txt\n");
+    fs::create_directories(d.path / "build");
+    fs::create_directories(d.path / "drafts");
+    d.write("build/notes.txt", "Quarterly notes kept in a folder named build.");
+    d.write("drafts/a.txt", "An ignored draft.");
+    d.write("drafts/b.md", "Another ignored draft.");
+    d.write("secret.txt", "An ignored file.");
+    d.write("big.txt", std::string((1u << 20) + 1, 'a'));
+    DocumentIndex idx;
+    ToolRegistry reg;
+    idx.registerTools(reg, nullptr);
+
+    json none = reg.executeTool("index_document", json{{"path", d.path.string()}});
+    ASSERT_EQ(none["status"], "error") << none.dump();
+    EXPECT_EQ(none["skipped_files"], 5) << none.dump();
+    EXPECT_EQ(none["skipped"]["ignored_by_gitignore"], 3) << none.dump();
+    EXPECT_EQ(none["skipped"]["in_skipped_folder"], 1) << none.dump();
+    EXPECT_EQ(none["skipped"]["too_large"], 1) << none.dump();
+    const std::string error = none["error"].get<std::string>();
+    for (const char* reason : {"3 ignored by .gitignore", "1 in a skipped folder (build)", "1 too large"}) {
+        EXPECT_NE(error.find(reason), std::string::npos) << error;
+    }
+
+    d.write("policy.txt", "Remote work requires manager approval.");
+    json some = reg.executeTool("index_document", json{{"path", d.path.string()}});
+    ASSERT_EQ(some["status"], "success") << some.dump();
+    EXPECT_EQ(some["indexed"].size(), 1u) << some.dump();
+    EXPECT_EQ(some["skipped_files"], 5) << some.dump();
+    EXPECT_FALSE(some.contains("error")) << some.dump();
+
+    json byPath = reg.executeTool("index_document", json{{"path", (d.path / "build" / "notes.txt").string()}});
+    EXPECT_EQ(byPath["status"], "success") << byPath.dump();
+}
+
 TEST(DocumentIndexTest, HybridUsesTheEmbedderForQueriesToo) {
     TempDir d;
     d.write("a.txt", "zzzz zzzz zzzz");

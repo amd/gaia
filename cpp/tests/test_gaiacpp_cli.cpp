@@ -307,6 +307,11 @@ TEST_F(GaiacppCli, BadNumericFlagsAndVariablesAreUsageErrors) {
     refused(" --temperature 0.5c", {}, "--temperature", "0.5c");
     refused("", {{"GAIA_MAX_STEPS", "0"}}, "GAIA_MAX_STEPS", "0");
     refused("", {{"GAIA_CONTEXT_SIZE", "-4"}}, "GAIA_CONTEXT_SIZE", "-4");
+    refused(" --port 99999", {}, "--port", "99999");
+    refused(" --port -1", {}, "--port", "-1");
+    const gaia::ProcessResult twoModes = run(mock, "", " --mcp");
+    EXPECT_EQ(twoModes.exitCode, 2) << twoModes.stderr_output;
+    EXPECT_NE(twoModes.stderr_output.find("pick one"), std::string::npos) << twoModes.stderr_output;
     EXPECT_EQ(mock.requestCount(), 0);
 }
 
@@ -401,7 +406,8 @@ TEST_F(GaiacppCli, ServeOnAPortInUseFailsWithoutWaiting) {
     EXPECT_NE(r.exitCode, 0);
     EXPECT_NE(r.stderr_output.find("failed to bind"), std::string::npos) << r.stderr_output;
     EXPECT_EQ(r.stdout_output.find("\"ready\""), std::string::npos) << r.stdout_output;
-    EXPECT_LT(elapsed, std::chrono::seconds(6)) << "the bind error waited for the ready announcement";
+    // The wait this guards against is 10 s on top of a cold process start.
+    EXPECT_LT(elapsed, std::chrono::seconds(9)) << "the bind error waited for the ready announcement";
 }
 
 }  // namespace

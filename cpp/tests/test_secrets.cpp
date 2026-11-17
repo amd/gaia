@@ -165,6 +165,20 @@ TEST(SecretsTest, FlagsAssignmentsToUnderscoreJoinedNames) {
     }
 }
 
+TEST(SecretsTest, SettingsNamedAfterASecretAreNotCredentials) {
+    for (const std::string s : {"PASSWORD_MIN_LENGTH=12", "TOKEN_LIMIT: 4096", "MAX_TOKEN=4096",
+                                "SECRET_ROTATION_ENABLED=true", "API_KEY_REQUIRED: false",
+                                "TOKEN_TTL=3600s", "set PASSWORD_MIN_LENGTH=12 and TOKEN_LIMIT: 4096, then retry"}) {
+        EXPECT_FALSE(looksLikeCredential(s)) << s;
+        EXPECT_EQ(maskCredentials(s), s);
+    }
+    for (const std::string s : {"DB_PASSWORD=hunter2xyz", "aws_secret_access_key = wJalrXUtnFEMIbPxRfiCYzEXAMPLE",
+                                "GITHUB_TOKEN=abc123def456ghi789", "GITHUB_TOKEN_PROD=abc123def456ghi789",
+                                "API_KEY_BACKUP: 1234567890abcdef"}) {
+        EXPECT_TRUE(looksLikeCredential(s)) << s;
+    }
+}
+
 TEST(SecretsTest, FlagsJwtsAndPrivateKeyBlocks) {
     EXPECT_TRUE(looksLikeCredential(
         "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV"));

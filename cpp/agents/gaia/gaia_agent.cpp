@@ -978,15 +978,21 @@ std::optional<std::string> GaiaAgent::unitPriceOnlyNote(const std::string& reque
     std::set<std::string> seen;
     std::string example;
     for (const auto& c : calls) {
-        // A figure a command printed may be one it worked out, so only what was read from a file counts as copied.
-        const std::string text = readsContents(c.name) && c.name != "bash_execute"
+        // A figure a command printed may be one it worked out; one that only shows files copied it.
+        static const std::regex onlyShows(R"(^\s*(?:cat|type|head|tail|more|less|nl|Get-Content|gc)\b[^|;&`$<>()*]*$)",
+                                          std::regex::icase);
+        const bool copies = c.name != "bash_execute" ||
+                            std::regex_search(c.args.value("command", std::string()), onlyShows);
+        const std::string text = readsContents(c.name) && copies
                                      ? c.args.dump(-1, ' ', false, json::error_handler_t::replace) + " " + c.output
                                      : std::string();
         for (auto it = std::sregex_iterator(text.begin(), text.end(), figure); it != std::sregex_iterator(); ++it) {
             seen.insert(value(it->str()));
         }
         std::smatch q;
-        if (example.empty() && readsContents(c.name) && std::regex_search(c.output, q, quantity)) example = q.str();
+        if (example.empty() && readsContents(c.name) && copies && std::regex_search(c.output, q, quantity)) {
+            example = q.str();
+        }
     }
     if (example.empty()) return std::nullopt;
     bool any = false;

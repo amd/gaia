@@ -41,6 +41,17 @@ std::atomic<Agent*> g_activeAgent{nullptr};
 /// Previous SIGINT handler, restored when run() exits.
 void (*g_previousSigintHandler)(int) = SIG_DFL;
 
+/// Why the saved session `id` cannot be opened, or "" when its file is readable or absent.
+std::string unreadableSessionMessage(const SessionStore& store, const std::string& id) {
+    for (const auto& info : store.list()) {
+        if (info.id == id && !info.problem.empty()) {
+            return "Can't resume session " + id + ": its file is unreadable (" + info.problem +
+                   "). Fix or delete " + id + ".json in the sessions folder. Starting a new session.";
+        }
+    }
+    return "";
+}
+
 /// SIGINT handler that cancels the active agent instead of terminating.
 void sigintHandler(int /*sig*/) {
     Agent* agent = g_activeAgent.load();
@@ -130,6 +141,10 @@ void ReplRunner::cmdHistory(const std::string& /*args*/, Agent& /*agent*/) {
 
     std::string out = "Saved sessions:";
     for (const auto& info : sessions) {
+        if (!info.problem.empty()) {
+            out += "\n  " + info.id + "  (unreadable: " + info.problem + ")";
+            continue;
+        }
         out += "\n  " + info.id + "  (" + std::to_string(info.messageCount) + " messages";
         if (!info.preview.empty()) {
             out += ", \"" + info.preview + "\"";
@@ -313,10 +328,15 @@ void ReplRunner::runTui() {
 
         if (!resumeId_.empty() && sessionStore_) {
             try {
-                auto history = sessionStore_->load(resumeId_);
-                agent_.setHistory(std::move(history));
-                sessionId_ = resumeId_;
-                app.transcript().addSystemLine("[ok] resumed session: " + resumeId_);
+                const std::string unreadable = unreadableSessionMessage(*sessionStore_, resumeId_);
+                if (!unreadable.empty()) {
+                    app.transcript().printError(unreadable);
+                } else {
+                    auto history = sessionStore_->load(resumeId_);
+                    agent_.setHistory(std::move(history));
+                    sessionId_ = resumeId_;
+                    app.transcript().addSystemLine("[ok] resumed session: " + resumeId_);
+                }
             } catch (const std::exception& e) {
                 app.transcript().printError(std::string("failed to resume session: ") + e.what() +
                                             " - run with --list-sessions to see valid ids");
@@ -367,10 +387,15 @@ void ReplRunner::runPlain() {
     // Resume session if requested
     if (!resumeId_.empty() && sessionStore_) {
         try {
-            auto history = sessionStore_->load(resumeId_);
-            agent_.setHistory(std::move(history));
-            sessionId_ = resumeId_;
-            std::cout << "Resumed session: " << resumeId_ << std::endl;
+            const std::string unreadable = unreadableSessionMessage(*sessionStore_, resumeId_);
+            if (!unreadable.empty()) {
+                std::cout << unreadable << std::endl;
+            } else {
+                auto history = sessionStore_->load(resumeId_);
+                agent_.setHistory(std::move(history));
+                sessionId_ = resumeId_;
+                std::cout << "Resumed session: " << resumeId_ << std::endl;
+            }
         } catch (const std::exception& e) {
             std::cout << "Failed to resume session: " << e.what() << std::endl;
         }

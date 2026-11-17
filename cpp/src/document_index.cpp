@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <regex>
@@ -89,8 +90,61 @@ std::string docxText(const std::string& path) {
     return decodeXmlEntities(out);
 }
 
+constexpr std::uintmax_t kMaxTextBytes = std::uintmax_t{1} << 20;
+
+struct SkippedFiles {
+    size_t ignored = 0;
+    size_t inSkippedFolder = 0;
+    size_t tooLarge = 0;
+    std::set<std::string> folders;
+
+    size_t total() const { return ignored + inSkippedFolder + tooLarge; }
+
+    std::string summary() const {
+        std::vector<std::string> parts;
+        if (ignored) parts.push_back(std::to_string(ignored) + " ignored by .gitignore");
+        if (inSkippedFolder) {
+            std::string names;
+            for (const auto& f : folders) names += (names.empty() ? "" : ", ") + f;
+            parts.push_back(std::to_string(inSkippedFolder) + " in a skipped folder (" + names + ")");
+        }
+        if (tooLarge) {
+            parts.push_back(std::to_string(tooLarge) + " too large (text over 1 MB, PDF or Word over " +
+                            std::to_string(kMaxExtractBytes >> 20) + " MB)");
+        }
+        std::string out;
+        for (const auto& part : parts) out += (out.empty() ? "" : ", ") + part;
+        return out;
+    }
+
+    json toJson() const {
+        json folderNames = json::array();
+        for (const auto& f : folders) folderNames.push_back(f);
+        return {{"ignored_by_gitignore", ignored}, {"in_skipped_folder", inSkippedFolder},
+                {"too_large", tooLarge}, {"skipped_folders", folderNames}};
+    }
+};
+
+bool indexableExtension(const fs::path& p, bool withDocuments, bool* document = nullptr) {
+    const std::string ext = lowerExt(p.string());
+    const bool doc = withDocuments && (ext == ".pdf" || ext == ".docx");
+    if (document) *document = doc;
+    return doc || isSupportedExtension(ext);
+}
+
+size_t countIndexableUnder(const fs::path& dir, bool withDocuments) {
+    std::error_code ec;
+    size_t n = 0;
+    fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
+    for (; it != end && !ec; it.increment(ec)) {
+        if (it->is_regular_file(ec) && indexableExtension(it->path(), withDocuments)) ++n;
+    }
+    return n;
+}
+
 // Files worth indexing under root: skips VCS/build folders, ignored paths and unreadable folders.
-std::vector<std::string> indexableFiles(const std::string& root, bool withDocuments) {
+std::vector<std::string> indexableFiles(const std::string& root, bool withDocuments,
+                                        SkippedFiles* skipped = nullptr) {
     static const std::set<std::string> skipDirs = {
         ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__", "build", "dist",
         "target", ".tox", ".mypy_cache", ".pytest_cache", ".next", ".gradle", "out"};
@@ -101,16 +155,27 @@ std::vector<std::string> indexableFiles(const std::string& root, bool withDocume
     for (; it != end && !ec; it.increment(ec)) {
         const fs::path& p = it->path();
         const bool dir = it->is_directory(ec);
-        if (dir && (skipDirs.count(p.filename().string()) || ignore.isIgnored(p.u8string(), true))) {
+        const bool skipDir = dir && skipDirs.count(p.filename().string()) != 0;
+        if (skipDir || (dir && ignore.isIgnored(p.u8string(), true))) {
             it.disable_recursion_pending();
+            if (skipped) {
+                const size_t n = countIndexableUnder(p, withDocuments);
+                (skipDir ? skipped->inSkippedFolder : skipped->ignored) += n;
+                if (skipDir && n != 0) skipped->folders.insert(p.filename().string());
+            }
             continue;
         }
         if (dir || !it->is_regular_file(ec)) continue;
-        if (ignore.isIgnored(p.u8string(), false)) continue;
-        const std::string ext = lowerExt(p.string());
-        const bool document = withDocuments && (ext == ".pdf" || ext == ".docx");
-        if (!document && !isSupportedExtension(ext)) continue;
-        if (it->file_size(ec) > (document ? kMaxExtractBytes : (size_t{1} << 20))) continue;
+        bool document = false;
+        if (!indexableExtension(p, withDocuments, &document)) continue;
+        if (ignore.isIgnored(p.u8string(), false)) {
+            if (skipped) ++skipped->ignored;
+            continue;
+        }
+        if (it->file_size(ec) > (document ? std::uintmax_t{kMaxExtractBytes} : kMaxTextBytes)) {
+            if (skipped) ++skipped->tooLarge;
+            continue;
+        }
         files.push_back(p.string());
     }
     return files;
@@ -364,8 +429,9 @@ void DocumentIndex::registerTools(ToolRegistry& registry,
         }
         std::error_code ec;
         std::vector<std::string> targets;
+        SkippedFiles skipped;
         if (fs::is_directory(path, ec)) {
-            targets = indexableFiles(path, true);
+            targets = indexableFiles(path, true, &skipped);
         } else {
             targets.push_back(path);
         }
@@ -383,8 +449,19 @@ void DocumentIndex::registerTools(ToolRegistry& registry,
         json out = {{"status", done.empty() ? "error" : "success"}, {"indexed", done},
                     {"chunks", total}, {"retrieval", mode}};
         if (!failed.empty()) out["failed"] = failed;
-        if (done.empty()) out["error"] = targets.empty() ? "No supported files at " + path
-                                                         : "Nothing could be indexed (see failed).";
+        if (skipped.total() != 0) {
+            out["skipped_files"] = skipped.total();
+            out["skipped"] = skipped.toJson();
+        }
+        if (done.empty()) {
+            std::string error = targets.empty() ? "No supported files were indexed at " + path
+                                                : "Nothing could be indexed (see failed)";
+            if (skipped.total() != 0) {
+                error += ": " + std::to_string(skipped.total()) + " skipped - " + skipped.summary() +
+                         ". To index one of them, call index_document with that file's own path";
+            }
+            out["error"] = error + ".";
+        }
         return out;
     };
     registry.registerTool(std::move(index));
