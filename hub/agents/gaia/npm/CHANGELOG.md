@@ -102,6 +102,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `documents` and this turn leaves out (the user detached it, or deleted it from
   the library) is dropped from the session's index, so answers stop quoting it.
   An empty `documents` list drops them all.
+- **A detached document can no longer be read either.** The agent dropped it
+  from the index but kept its permission to read the file, so asking about it
+  by name indexed it again from disk. The permission now goes with it, and a
+  copy kept in GAIA's own documents folder is refused until it is attached
+  again. A folder the caller granted still covers the files inside it.
 - **A turn the output limit keeps cutting off says what to do next.** It told
   the user to "retry with a higher output-token limit (max_tokens)", a setting
   the apps don't have, dropped what the turn had done, and sent no token counts,
