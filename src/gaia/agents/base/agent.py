@@ -21,6 +21,7 @@ import math
 import os
 import queue
 import re
+import statistics
 import subprocess
 import threading
 import time
@@ -938,10 +939,19 @@ _STEP_CAP_ANSWER_PROMPT = (
 # The time-limit counterparts: one notice, then a stop that leaves room for
 # the write-only step and the closing answer before the caller's hard limit.
 _TIME_LIMIT_ANSWER_PROMPT = (
-    "The {seconds}-second time limit for this request is nearly up and no more "
-    "tools can run. Give the user your final answer now, using only what the "
-    "tool results above show: what you found, what you couldn't finish and "
-    "why, and what they can do next."
+    "The {seconds}-second time limit for this request is nearly up. If a "
+    "requested file or other output is still missing, make one last tool call "
+    "to write it now; it will run, and then you give your answer. Otherwise "
+    "give the user your final answer now, using only what the tool results "
+    "above show: what you found, what you couldn't finish and why, and what "
+    "they can do next."
+)
+# Sent after the time-limit closing step's one tool call has run.
+_AFTER_CLOSING_CALL_NOTE = (
+    "That call ran; its result is above. No more tools can run. Give the user "
+    "your final answer now as plain text, using only what the tool results "
+    "above show: what you found, what you couldn't finish and why, and what "
+    "they can do next."
 )
 _TIME_NOTICE = (
     "Time budget: {used} of {total} seconds used. Stop gathering context. If "
@@ -951,7 +961,16 @@ _TIME_NOTICE = (
     "and anything not already written is lost."
 )
 _TIME_NOTICE_AT = 0.7
-_TIME_STOP_AT = 0.9
+# The stop keeps back the closing step's tool call and answer (plus the
+# write-only step while a requested file is missing), each costed at the
+# turn's typical step, never less than this share of the limit.
+_TIME_RESERVE_MIN = 0.05
+_TIME_RESERVE_RECENT_STEPS = 5
+# A model call under a time limit may write no more than the time left allows
+# at the turn's measured decode rate, with this margin, and never less than
+# the floor.
+_TIME_TOKEN_MARGIN = 0.8
+_TIME_MIN_OUTPUT_TOKENS = 256
 
 # How much of the step budget must be gone before each notice is sent, and
 # what it says. Until these existed the only thing the model ever heard about
@@ -1083,6 +1102,9 @@ class _NotAnAnswer(ValueError):
 
     #: The trimmed history it was asked with, so the retry doesn't trim again.
     sent: Optional[List[Dict[str, Any]]] = None
+    #: The parsed reply and its raw text when it was a tool call.
+    parsed: Optional[Dict[str, Any]] = None
+    response: str = ""
 
 
 class _ClosingOverflow(RuntimeError):
@@ -3600,7 +3622,8 @@ Do NOT wrap conversational replies in JSON.
         self.time_limit_s: Optional[float] = None
         self._turn_started_at: Optional[float] = None
         self._last_boundary_at = 0.0
-        self._slowest_step_s = 0.0
+        self._step_durations: List[float] = []
+        self._turn_conversation: Optional[List[Dict[str, Any]]] = None
         self._time_notice_sent = False
         self._budget_notices_on = budget_notices_enabled()
         # Post-edit verification bookkeeping; reset per turn below.
@@ -3886,7 +3909,11 @@ Do NOT wrap conversational replies in JSON.
 
     def _max_output_tokens(self) -> int:
         """Output-token cap for the next LLM call, re-read per call so a model
-        switch mid-session takes effect."""
+        switch mid-session takes effect, and lowered to what fits the time
+        left under a time limit."""
+        return self._time_capped_output_tokens(self._output_token_cap())
+
+    def _output_token_cap(self) -> int:
         if self.max_output_tokens is not None:
             return self.max_output_tokens
         from gaia.agents.base.history import context_window
@@ -9302,12 +9329,16 @@ Do NOT wrap conversational replies in JSON.
         conversation: List[Dict[str, Any]],
         instruction: str,
         step: int,
+        run_one_call: bool = False,
     ) -> Optional[str]:
-        """Ask for the final answer on the way out of the loop, no tool calls.
+        """Ask for the final answer on the way out of the loop.
 
         Same model path and tools as the loop (streaming or not), plus
         ``tool_choice="none"``. A model that ignores that and calls a tool, or
         replies with nothing, is asked once more with no tools offered at all.
+        With *run_one_call* the model may call a tool instead: the first call
+        it makes, native or written as text, runs, then the answer is asked
+        for with no tools offered.
         Returns the answer, or ``None`` when the user pressed Stop. Raises when
         the call fails or neither reply is an answer; the caller says why.
         """
@@ -9315,21 +9346,32 @@ Do NOT wrap conversational replies in JSON.
         self._record_unrecorded_step(conversation)
         try:
             return self._closing_answer_recovering_overflow(
-                messages, conversation, instruction, step
+                messages, conversation, instruction, step, run_one_call=run_one_call
             )
         except _NotAnAnswer as first:
-            logger.info(
-                "Closing reply was not an answer (%s); retrying without tools", first
-            )
+            sent = first.sent if first.sent is not None else messages
+            retry = f"{instruction}\n\n{_NO_TOOLS_RETRY_NOTE}"
+            ran_call = run_one_call and first.parsed is not None
+            if ran_call:
+                self._run_closing_tool_call(
+                    [messages] if sent is messages else [messages, sent],
+                    conversation,
+                    first.parsed,
+                    first.response,
+                )
+                retry = self._with_unwritten_note(_AFTER_CLOSING_CALL_NOTE)
+            else:
+                logger.info(
+                    "Closing reply was not an answer (%s); retrying without tools",
+                    first,
+                )
             try:
                 return self._closing_answer_recovering_overflow(
-                    first.sent if first.sent is not None else messages,
-                    conversation,
-                    f"{instruction}\n\n{_NO_TOOLS_RETRY_NOTE}",
-                    step,
-                    offer_tools=False,
+                    sent, conversation, retry, step, offer_tools=False
                 )
-            except _NotAnAnswer:
+            except _NotAnAnswer as second:
+                if ran_call:
+                    raise second from None
                 raise first from None
             except Exception as second:  # noqa: BLE001 - report the first reason
                 if isinstance(second, _ClosingOverflow):
@@ -9347,6 +9389,7 @@ Do NOT wrap conversational replies in JSON.
         instruction: str,
         step: int,
         offer_tools: bool = True,
+        run_one_call: bool = False,
     ) -> Optional[str]:
         """One closing request, with the loop's own overflow recovery.
 
@@ -9360,7 +9403,7 @@ Do NOT wrap conversational replies in JSON.
         """
         try:
             return self._closing_answer_once(
-                messages, conversation, instruction, step, offer_tools
+                messages, conversation, instruction, step, offer_tools, run_one_call
             )
         except _NotAnAnswer:
             raise
@@ -9397,7 +9440,7 @@ Do NOT wrap conversational replies in JSON.
             # with the turn record and the saved history.
             try:
                 return self._closing_answer_once(
-                    shrunk, conversation, instruction, step, offer_tools
+                    shrunk, conversation, instruction, step, offer_tools, run_one_call
                 )
             except _NotAnAnswer as not_answer:
                 not_answer.sent = shrunk
@@ -9422,6 +9465,7 @@ Do NOT wrap conversational replies in JSON.
         instruction: str,
         step: int,
         offer_tools: bool = True,
+        run_one_call: bool = False,
     ) -> Optional[str]:
         """One closing request; see :meth:`_closing_answer`."""
         cancel_event = getattr(self, "_cancel_event", None)
@@ -9437,7 +9481,8 @@ Do NOT wrap conversational replies in JSON.
         )
         # Tool history needs the tools on some providers; the model may not call one.
         tools = self._openai_tools if offer_tools else None
-        no_calls = {"tool_choice": "none"} if tools else {}
+        no_calls = {"tool_choice": "none"} if tools and not run_one_call else {}
+        no_calls["max_tokens"] = self._max_output_tokens()
         # The same effort as the loop: a change rewrites the prompt's start.
         no_calls.update(self._conversation_request_kwargs())
         no_calls.update(self._reasoning_request_kwargs())
@@ -9501,15 +9546,66 @@ Do NOT wrap conversational replies in JSON.
         if not requested and parsed.get("tool"):
             requested = [parsed["tool"]]
         if requested or _unfinished_answer_kind(answer) == "tool_markup":
-            raise _NotAnAnswer(
+            not_answer = _NotAnAnswer(
                 f"the model asked to run {', '.join(requested) or 'another tool'} "
                 "instead of answering"
             )
+            if requested:
+                not_answer.parsed, not_answer.response = parsed, response
+            raise not_answer
         if not answer.strip():
             raise _NotAnAnswer("the model's reply had no answer in it")
         self._mark_errors_recovered()
         conversation.append({"role": "assistant", "content": parsed})
         return answer
+
+    def _run_closing_tool_call(
+        self,
+        histories: List[List[Dict[str, Any]]],
+        conversation: List[Dict[str, Any]],
+        parsed: Dict[str, Any],
+        response: str,
+    ) -> None:
+        """Run the first tool call of a closing reply; any others are not run.
+
+        Through the loop's own execution path, so its permission checks apply.
+        The call and its result go into every history in *histories*.
+        """
+        conversation.append({"role": "assistant", "content": parsed})
+        assistant = self._build_assistant_message(response, parsed, None)
+        for history in histories:
+            history.append(assistant)
+        native = bool(parsed.get("tool_calls"))
+        calls = parsed.get("tool_calls") or [
+            {"id": None, "name": parsed["tool"], "tool_args": parsed.get("tool_args")}
+        ]
+        for index, call in enumerate(calls):
+            name = call.get("name")
+            args = (
+                call.get("tool_args") if isinstance(call.get("tool_args"), dict) else {}
+            )
+            self.console.print_tool_usage(name)
+            self.console.pretty_print_json(args, "Arguments")
+            if index == 0:
+                self.console.start_progress(f"Executing {name}")
+                try:
+                    result = self._execute_tool_timed(name, args)
+                finally:
+                    self.console.stop_progress()
+            else:
+                result = {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": _UNRUN_TOOL_CALL_NOTE,
+                }
+            shown = self._handle_large_tool_result(name, result, conversation, args)
+            self.console.pretty_print_json(result, "Result")
+            self.console.print_tool_complete()
+            tool_message = self._create_tool_message(
+                name, shown, tool_call_id=call.get("id") if native else None
+            )
+            for history in histories:
+                history.append(tool_message)
 
     def _write_json_to_file(self, data: Dict[str, Any], filename: str = None) -> str:
         """
@@ -12026,41 +12122,58 @@ Do NOT wrap conversational replies in JSON.
             return notice
         return None
 
-    def _time_limit_passed(self) -> bool:
-        """True once the turn is past its time limit's stop point.
-
-        The stop point leaves room for the write-only step and the closing
-        answer: a tenth of the limit, or two of the turn's slowest steps so
-        far when that is more. It is also why a stop the caller's own timer
-        forces at the limit counts as reaching it.
-        """
+    def _time_left_s(self) -> Optional[float]:
+        """Seconds left of the caller's time limit this turn, or None without one."""
         limit = getattr(self, "time_limit_s", None)
         started = getattr(self, "_turn_started_at", None)
         if not limit or limit <= 0 or started is None:
+            return None
+        return limit - (time.monotonic() - started)
+
+    def _typical_step_s(self) -> float:
+        """Median of the turn's recent steps; one slow step doesn't set the pace."""
+        recent = getattr(self, "_step_durations", [])[-_TIME_RESERVE_RECENT_STEPS:]
+        return statistics.median(recent) if recent else 0.0
+
+    def _time_limit_passed(self) -> bool:
+        """True once the turn is past its time limit's stop point.
+
+        The stop point keeps back what the wrap-up costs: the closing step's
+        one tool call and its answer, plus the write-only step while a
+        requested file is missing, each at the turn's typical step time. It
+        is also why a stop the caller's own timer forces at the limit counts
+        as reaching it.
+        """
+        left = self._time_left_s()
+        if left is None:
             return False
-        reserve = max(limit * (1 - _TIME_STOP_AT), 2 * self._slowest_step_s)
-        return time.monotonic() - started >= limit - reserve
+        steps = 3 if self._pending_deliverables() else 2
+        reserve = max(
+            self.time_limit_s * _TIME_RESERVE_MIN, steps * self._typical_step_s()
+        )
+        return left <= reserve
 
     def _time_is_up(self, messages: List[Dict], conversation: List[Dict]) -> bool:
-        """Warn once near the turn's time limit; True once it is time to stop.
+        """Warn near the turn's time limit; True once it is time to stop.
 
         Only a limit the caller set counts (``time_limit_s``); nothing here
-        guesses one. Called at each step boundary, which is also where the
-        slowest step is measured.
+        guesses one. Called at each step boundary, which is also where step
+        times are measured. The notice goes out at the first boundary past
+        its threshold, and always before a stop, however long the step that
+        crossed it ran.
         """
         limit = getattr(self, "time_limit_s", None)
         started = getattr(self, "_turn_started_at", None)
         if not limit or limit <= 0 or started is None:
             return False
         now = time.monotonic()
-        self._slowest_step_s = max(self._slowest_step_s, now - self._last_boundary_at)
+        if now > self._last_boundary_at:
+            self._step_durations.append(now - self._last_boundary_at)
         self._last_boundary_at = now
         used = now - started
-        if self._time_limit_passed():
-            logger.warning("Stopping the turn at %.0fs of its %ss limit", used, limit)
-            return True
+        stop = self._time_limit_passed()
         if (
-            used >= limit * _TIME_NOTICE_AT
+            (stop or used >= limit * _TIME_NOTICE_AT)
             and not self._time_notice_sent
             and getattr(self, "_budget_notices_on", False)
         ):
@@ -12074,7 +12187,60 @@ Do NOT wrap conversational replies in JSON.
             transient = getattr(messages, "append_transient", messages.append)
             transient({"role": "user", "content": notice})
             conversation.append({"role": "user", "content": notice})
-        return False
+        if stop:
+            logger.warning("Stopping the turn at %.0fs of its %ss limit", used, limit)
+        return stop
+
+    def _time_capped_output_tokens(self, cap: int) -> int:
+        """*cap*, lowered so the call can finish in the time the turn has left.
+
+        Uses the decode rate the backend measured this turn, less the latest
+        call's time to first token. Unchanged with no limit or no rate yet.
+        """
+        left = self._time_left_s()
+        conversation = getattr(self, "_turn_conversation", None)
+        if left is None or not conversation:
+            return cap
+        rate = _query_tok_per_s(conversation)
+        if not rate:
+            return cap
+        prefill = 0.0
+        for entry in reversed(conversation):
+            content = entry.get("content") if entry.get("role") == "system" else None
+            if isinstance(content, dict) and content.get("type") == "stats":
+                stats = content.get("performance_stats") or {}
+                ttft = stats.get("time_to_first_token")
+                if isinstance(ttft, (int, float)) and not isinstance(ttft, bool):
+                    prefill = max(float(ttft), 0.0)
+                break
+        fits = int((left - prefill) * rate * _TIME_TOKEN_MARGIN)
+        return min(cap, max(fits, _TIME_MIN_OUTPUT_TOKENS))
+
+    def time_limit_abandoned_result(self, message: str) -> Dict[str, Any]:
+        """The result of a turn its caller gave up on, mid-call, at the time limit.
+
+        Built from another thread while the turn is still running, from what
+        the turn had recorded so far.
+        """
+        conversation = list(getattr(self, "_turn_conversation", None) or [])
+        latest = self._latest_findings(conversation)
+        if latest:
+            message += f"\n\nWhat I had found so far:\n{latest}"
+        spent_in, spent_out = _sum_conversation_tokens(
+            conversation, list(getattr(self, "_tool_reported_usage", None) or [])
+        )
+        return {
+            "status": "incomplete",
+            "result": message,
+            "conversation": conversation,
+            "steps_taken": getattr(self, "_open_step", None) or 0,
+            "time_limit_reached": True,
+            "max_steps_reached": False,
+            "input_tokens": spent_in,
+            "output_tokens": spent_out,
+            "error_count": len(self._turn_errors()),
+            "error_history": self._turn_errors(),
+        }
 
     def _drain_followups(self, messages: List[Dict], conversation: List[Dict]) -> int:
         """Fold any queued mid-turn follow-ups into this turn's context.
@@ -12360,7 +12526,9 @@ Do NOT wrap conversational replies in JSON.
         self._budget_notices_on = budget_notices_enabled()
         self._turn_started_at = time.monotonic()
         self._last_boundary_at = self._turn_started_at
-        self._slowest_step_s = 0.0
+        self._step_durations = []
+        # Read by `gaia -p` when the hard limit abandons the turn mid-call.
+        self._turn_conversation = conversation
         self._time_notice_sent = False
         time_limit_reached = False
         # Per-turn too: a previous turn's edits are not this turn's to repair.
@@ -15201,6 +15369,7 @@ Do NOT wrap conversational replies in JSON.
                         else _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit)
                     ),
                     steps_taken,
+                    run_one_call=time_limit_reached,
                 )
             except Exception as e:  # noqa: BLE001 - the reason goes in the answer
                 logger.warning("Could not write the closing summary: %s", e)
