@@ -21,6 +21,7 @@ func TestCheckSkipsAReleaseWithNothingForThisMachine(t *testing.T) {
 		sums: map[string]string{
 			"v0.26.0/" + installerSums: sumsOf("gaia-agent-ui-0.26.0-x64-setup.exe"),
 			"v0.25.1/" + installerSums: sumsOf("gaia-0.25.1-win-x64-setup.exe"),
+			"v0.25.1/" + tuiSums:       sumsOf("gaia-cli-linux-amd64"),
 			"v0.25.0/" + installerSums: sumsOf("gaia_0.25.0_amd64.deb"),
 			"v0.25.0/" + tuiSums:       sumsOf("gaia-windows-amd64.exe"),
 		},
