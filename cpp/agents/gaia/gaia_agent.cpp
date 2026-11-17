@@ -1762,6 +1762,9 @@ std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bo
     if (notes.empty()) return std::nullopt;
     std::string out;
     for (const auto& n : notes) out += (out.empty() ? "" : " ") + n;
+    // Small models answer a note with an apology and only the part it named.
+    out += " Your next reply replaces this one and is all the user will see: give everything they asked for "
+           "again, and do not apologise or mention this note.";
     return out;
 }
 
