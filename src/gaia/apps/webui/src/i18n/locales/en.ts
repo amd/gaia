@@ -3501,7 +3501,7 @@ export const enMessages = {
     'resources.ethernet': 'Ethernet',
     'resources.wifi': 'Wi-Fi',
     'resources.network': 'Network',
-    'resources.sendRecv': 'S: {send} R: {recv}',
+    'resources.sendRecv': 'S: {send} R: {recv} {unit}',
     'resources.send': 'Send {rate}',
     'resources.receive': 'Receive {rate}',
     'resources.unavailable': 'Unavailable',
