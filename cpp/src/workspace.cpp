@@ -224,7 +224,7 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
         // The program being run: a virtual environment's python is a link to the real one.
         const size_t wordAt = end == std::string::npos ? command.size() - word.size() : end - word.size();
         const size_t before = wordAt == 0 ? std::string::npos : command.find_last_not_of(" \t'\"", wordAt - 1);
-        if (before == std::string::npos || std::string(";|&(\n`").find(command[before]) != std::string::npos) continue;
+        if (before == std::string::npos || std::string(";|&\n").find(command[before]) != std::string::npos) continue;
         const fs::path rel = fs::u8path(fromShellPath(word));
         if (rel.has_root_directory() || rel.has_root_name()) continue;
         ++checked;

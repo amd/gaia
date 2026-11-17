@@ -258,6 +258,7 @@ TEST(WorkspaceTest, ACommandNamingALinkOutOfTheFolderIsRefused) {
 #endif
     EXPECT_NE(ws.checkCommand("cat linked/private.txt"), "");
     EXPECT_NE(ws.checkCommand("cd linked && ls"), "");
+    EXPECT_NE(ws.checkCommand("python -c \"print(open('linked/private.txt').read())\""), "");
     EXPECT_EQ(ws.checkCommand("ls sub && cat notes.txt"), "");
     EXPECT_EQ(ws.checkCommand("linked/python -m pytest && linked/pip list"), "") << "a linked program may be run";
     fs::remove("linked");

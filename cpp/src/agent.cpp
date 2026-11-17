@@ -2298,17 +2298,28 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // Parse response
         ParsedResponse parsed = parseLlmResponse(response);
 
-        // Tool-call text the user wrote out and asked to have repeated is their text, not a call.
+        // Tool-call text repeated from the request or from a file read this turn is a quote, not a call.
         if (parsed.toolName.has_value()) {
             const auto squash = [](const std::string& text) {
                 std::string out;
                 for (const char c : text) {
-                    if (!std::isspace(static_cast<unsigned char>(c))) out.push_back(c);
+                    if (!std::isspace(static_cast<unsigned char>(c)) && c != '`') out.push_back(c);
                 }
                 return out;
             };
             const std::string said = squash(response);
-            if (said.size() >= 20 && squash(turnRequest_).find(said) != std::string::npos) {
+            bool quoted = said.size() >= 20 && squash(turnRequest_).find(said) != std::string::npos;
+            for (size_t i = turnStart; !quoted && said.size() >= 20 && i + 1 < messages.size(); ++i) {
+                const Message& m = messages[i];
+                if (m.role != MessageRole::TOOL && m.role != MessageRole::USER) continue;
+                const json result = json::parse(m.content, nullptr, false);
+                const bool hasText = result.is_object() && result.contains("content") && result["content"].is_string();
+                const std::string shown = squash(hasText ? result["content"].get<std::string>() : m.content);
+                // Either way round: the reply is part of what was read, or repeats all of it.
+                quoted = shown.size() >= 20 && (shown.find(said) != std::string::npos ||
+                                                said.find(shown) != std::string::npos);
+            }
+            if (quoted) {
                 parsed = ParsedResponse{};
                 parsed.answer = response;
             }

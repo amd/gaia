@@ -52,6 +52,13 @@ protected:
             },
             {});
         toolRegistry().registerTool(
+            "shows_call", "Return a file's text that holds tool-call text",
+            [this](const json&) -> json {
+                executed.push_back("shows_call");
+                return json{{"content", R"(From the docs: {"tool": "add", "tool_args": {"a": 1, "b": 2}})"}};
+            },
+            {});
+        toolRegistry().registerTool(
             "soft_fail", "Fail with ok:false",
             [this](const json&) -> json {
                 executed.push_back("soft_fail");
@@ -1311,6 +1318,18 @@ TEST(AgentResilience, ToolCallTextTheUserAskedToHaveRepeatedIsNotRun) {
     mock.pushResponse(answer("3"));
     agent.processQuery("add 1 and 2");
     EXPECT_EQ(agent.executed, (std::vector<std::string>{"add"})) << "the same text is a call when the user did not write it";
+}
+
+TEST(AgentResilience, ToolCallTextRepeatedFromAToolResultIsNotRun) {
+    bench::MockLlmServer mock;
+    const std::string shown = R"(From the docs: {"tool": "add", "tool_args": {"a": 1, "b": 2}})";
+    mock.pushResponse(call("c1", "shows_call", "{}"));
+    mock.pushResponse(answer(shown));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("print what the tool returns, exactly");
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"shows_call"})) << "only the real call ran";
+    EXPECT_EQ(r["result"], shown);
 }
 
 TEST(AgentResilience, AFurtherTagCallInOneReplyIsReportedToTheModel) {
