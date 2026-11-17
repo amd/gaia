@@ -51,6 +51,7 @@ from ..lemonade_client import (
     runs_on_npu,
 )
 from ..lemonade_launcher import describe_client_hint
+from ..retry import StreamStalledError
 from ..surface_hints import (
     APP_WEDGED_SERVER_HINT,
     TUI_MODEL_SWITCH_HINT,
@@ -430,6 +431,21 @@ class LemonadeStreamCutOffError(LemonadeError):
         "before the model finished. Send the message again. If it keeps "
         "happening, check the model server or gateway log for dropped streams."
     )
+
+
+class LemonadeReplyStalledError(LemonadeStreamCutOffError):
+    """A streamed reply went quiet partway through: a fragment, like any cut-off."""
+
+
+def _stalls_as_cut_offs(stream):
+    """Yield *stream*, turning a stall after the reply began into a cut-off."""
+    try:
+        yield from stream
+    except LemonadeClientError as e:
+        stall = e.__cause__
+        if isinstance(stall, StreamStalledError) and not stall.before_output:
+            raise LemonadeReplyStalledError(str(e)) from e
+        raise
 
 
 class LemonadeOutputCorruptedError(LemonadeError):
@@ -1540,7 +1556,7 @@ class LemonadeProvider(LLMClient):
             in_thinking, thought = False, ""
             return out
 
-        for chunk in response:
+        for chunk in _stalls_as_cut_offs(response):
             # The usage chunk arrives last and carries no choices. It is the
             # only token accounting a streamed turn gets — see the
             # stream_options request in lemonade_client.

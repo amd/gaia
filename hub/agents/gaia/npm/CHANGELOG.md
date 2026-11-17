@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
+### Fixed
+
+- A reply that goes quiet partway through is requested again, up to twice,
+  instead of ending the turn; the work done so far is kept either way.
+
 ## [0.3.6]
 
 Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
