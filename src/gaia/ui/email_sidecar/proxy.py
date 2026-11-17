@@ -279,6 +279,25 @@ class SidecarProxy:
                 f"tools: {exc}"
             ) from exc
 
+    def end_session(self, session_id: str) -> dict:
+        """End the sidecar session and close its agent (flagship, contract >= 2.30).
+
+        A 404 (no such session) or 409 (running a turn) raises; the caller
+        decides what it means.
+        """
+        import requests
+
+        path = f"{self.prefix}/sessions/{session_id}"
+        try:
+            resp = self._session.delete(f"{self.base_url}{path}", timeout=self.timeout)
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to end the "
+                f"session: {exc}"
+            ) from exc
+        self._raise_for_status(resp, path)
+        return resp.json()
+
     def set_bypass(self, session_id: str, enabled: bool) -> dict:
         """Turn the sidecar session's unattended tool approval on or off.
 
