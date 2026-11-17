@@ -1286,3 +1286,14 @@ def test_tui_wording_names_its_screens_never_a_command():
     assert tui_text("choose another strong model in Settings › Models › Hybrid") == (
         "choose another strong model in /hybrid"
     )
+
+
+def test_daemon_errors_carry_tui_wording_too(daemon, gateway):
+    resp = daemon.put(
+        "/api/hybrid/settings",
+        json={"strong_model": "fireworks.kimi-k3"},
+        headers={"Authorization": f"Bearer {DAEMON_TOKEN}"},
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "/provider" in detail and "Settings ›" not in detail

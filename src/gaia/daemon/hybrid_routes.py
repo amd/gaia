@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 import threading
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse, Response
+from fastapi.routing import APIRoute
 
 from gaia.logger import get_logger
 
@@ -26,13 +27,20 @@ def build_hybrid_router(token: str) -> APIRouter:
     from gaia.daemon.app import build_require_token
     from gaia.ui.routers import hybrid
 
-    router = APIRouter(dependencies=[Depends(build_require_token(token))])
-    router.include_router(hybrid.router)
+    router = APIRouter(
+        dependencies=[Depends(build_require_token(token))],
+        route_class=TuiWordingRoute,
+    )
+    for route in hybrid.router.routes:
+        if isinstance(route, APIRoute):
+            router.add_api_route(
+                route.path,
+                route.endpoint,
+                methods=list(route.methods),
+                name=route.name,
+                status_code=route.status_code,
+            )
     return router
-
-
-#: The paths whose answers the TUI shows as sent.
-HYBRID_PREFIX = "/api/hybrid"
 
 
 def _tui_words(value: Any) -> Any:
@@ -47,20 +55,37 @@ def _tui_words(value: Any) -> Any:
     return value
 
 
-async def tui_wording(request: Request, call_next):
-    """The hybrid routes' advice in the TUI's words: its screens, not Settings."""
-    response = await call_next(request)
-    if not request.url.path.startswith(HYBRID_PREFIX):
-        return response
-    if response.headers.get("content-type", "").split(";")[0] != "application/json":
-        return response
-    body = b"".join([chunk async for chunk in response.body_iterator])
-    headers = {
-        k: v for k, v in response.headers.items() if k.lower() != "content-length"
-    }
-    return JSONResponse(
-        _tui_words(json.loads(body)), status_code=response.status_code, headers=headers
-    )
+class TuiWordingRoute(APIRoute):
+    """A hybrid route whose answers and errors carry the TUI's advice, not Settings'."""
+
+    def get_route_handler(self) -> Callable:
+        original = super().get_route_handler()
+
+        async def handler(request: Request) -> Response:
+            try:
+                response = await original(request)
+            except HTTPException as e:
+                raise HTTPException(
+                    status_code=e.status_code,
+                    detail=_tui_words(e.detail),
+                    headers=e.headers,
+                ) from e
+            content_type = response.headers.get("content-type", "")
+            if not content_type.startswith("application/json"):
+                return response
+            headers = {
+                k: v
+                for k, v in response.headers.items()
+                if k.lower() not in ("content-length", "content-type")
+            }
+            return JSONResponse(
+                _tui_words(json.loads(response.body)),
+                status_code=response.status_code,
+                headers=headers,
+                background=response.background,
+            )
+
+        return handler
 
 
 class ChatDatabaseOpener:
