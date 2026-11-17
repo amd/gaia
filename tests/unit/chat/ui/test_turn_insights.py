@@ -152,6 +152,61 @@ def test_cloud_usage_is_priced_from_the_rate_card(monkeypatch):
     assert seen == {"model": model, "args": (5000, 4000, 50)}
 
 
+def test_a_failed_cloud_turn_that_never_answered_is_not_priced():
+    """The Context panel's cost agrees with the side rail: no reply, nothing billed."""
+    result = {
+        "timing_summary": {"llm_seconds": 0.2, "tool_seconds": 0.0},
+        "conversation": [],
+    }
+    model = "fireworks.accounts/fireworks/models/kimi-k2p6"
+    perf = turn_insights.summarize_turn(
+        result,
+        wall_seconds=0.3,
+        model_id=model,
+        failed=True,
+        stats={"input_tokens": 0, "output_tokens": 0},
+    )
+    assert perf["cost"] == {"kind": "no_reply", "usd": None}
+
+
+def test_a_failed_cloud_turn_that_reported_usage_is_still_priced(monkeypatch):
+    from gaia.eval.bench import metering
+
+    monkeypatch.setattr(metering, "price", lambda *a: 0.0123)
+    result = {
+        "timing_summary": {"llm_seconds": 2.0, "tool_seconds": 0.0},
+        "conversation": [
+            _stats(
+                1,
+                {"prompt_tokens": 5000, "cached_tokens": 4000, "completion_tokens": 50},
+            )
+        ],
+    }
+    model = "fireworks.accounts/fireworks/models/kimi-k2p6"
+    perf = turn_insights.summarize_turn(
+        result,
+        wall_seconds=2.5,
+        model_id=model,
+        failed=True,
+        stats={"input_tokens": 1000, "output_tokens": 0},
+    )
+    assert perf["cost"] == {"kind": "estimate", "usd": 0.0123}
+
+
+def test_a_failed_local_turn_stays_free_and_local():
+    perf = turn_insights.summarize_turn(
+        {
+            "timing_summary": {"llm_seconds": 0.1, "tool_seconds": 0.0},
+            "conversation": [],
+        },
+        wall_seconds=0.2,
+        model_id="Gemma-4-E4B-it-GGUF",
+        failed=True,
+        stats={},
+    )
+    assert perf["cost"] == {"kind": "local", "usd": 0.0}
+
+
 def test_chat_totals_count_unpriced_turns_apart():
     turns = [
         turn_insights.summarize_turn(

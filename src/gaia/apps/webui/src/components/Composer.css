@@ -321,7 +321,7 @@
 
 /* A long memory-switch label is cut before it squeezes the model name; its eye icon carries the state. */
 .composer-chip-memory .composer-chip-label {
-    max-width: 11rem;
+    max-width: 14rem;
 }
 
 /* Too long to sit beside the other chips on a phone; the eye icon carries the state. */

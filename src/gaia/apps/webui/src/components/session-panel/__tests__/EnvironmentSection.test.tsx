@@ -253,7 +253,7 @@ describe('Can read and write', () => {
         // Not a boundary: say so rather than listing folders as if they were the limit.
         expect(await screen.findByText('Files GAIA can reach')).toBeInTheDocument();
         expect(screen.queryByText(/its own process/)).not.toBeInTheDocument();
-        expect(screen.getByText(/never the whole user folder at once/)).toBeInTheDocument();
+        expect(screen.getByText(/one at a time, never all of it at once/)).toBeInTheDocument();
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();

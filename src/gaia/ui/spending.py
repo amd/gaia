@@ -120,6 +120,11 @@ def turn_cost(
 
     Cached input on a model whose cached rate is unknown makes the cost unknown.
     """
+    if cloud_provider(model_id) == "fireworks":
+        from gaia.eval.bench.metering import price
+
+        # The one rate card the benchmark meters with.
+        return price(model_id, input_tokens, cached_tokens, output_tokens)
     card = price_card(model_id)
     if card is None:
         return None
