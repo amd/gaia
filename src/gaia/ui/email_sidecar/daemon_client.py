@@ -130,6 +130,47 @@ def acquire_handle(agent_id: str = "email") -> SidecarHandle:
     except DaemonError as e:
         raise _wrap_daemon_error(e) from e
     _check_agents_floor(inst)
+    return _ensure(inst, agent_id)
+
+
+def running_handle(agent_id: str) -> Optional[SidecarHandle]:
+    """A handle on *agent_id*'s sidecar if a live daemon has it running, else None.
+
+    Attach-only: never starts a daemon or a sidecar, for work that only matters
+    to one already running (ending one of its sessions). Blocking.
+    """
+    try:
+        inst = attach()
+    except DaemonError as e:
+        raise _wrap_daemon_error(e) from e
+    if inst is None:
+        return None
+    _check_agents_floor(inst)
+    try:
+        r = requests.get(
+            f"{inst.base_url}/daemon/v1/agents",
+            headers={"Authorization": f"Bearer {inst.token}"},
+            timeout=_STOP_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as e:
+        raise SidecarError(
+            f"could not reach the daemon at {inst.base_url} to list its agents: "
+            f"{e}. {APP_RESTART_HINT} The daemon log is at {paths.log_path()}.",
+            kind=KIND_SERVICE_UNREACHABLE,
+        ) from e
+    if r.status_code != 200:
+        raise SidecarError(
+            f"the daemon could not list its agents: {_error_detail(r)}",
+            kind=r.headers.get(ERROR_KIND_HEADER, ""),
+        )
+    running = any(
+        a.get("agent_id") == agent_id and a.get("state") == "running"
+        for a in r.json().get("agents") or []
+    )
+    return _ensure(inst, agent_id) if running else None
+
+
+def _ensure(inst: DaemonInstance, agent_id: str) -> SidecarHandle:
     url = f"{inst.base_url}/daemon/v1/agents/{agent_id}/ensure"
     mode = resolve_caller_mode(agent_id)
     payload = {"mode": mode}

@@ -1930,7 +1930,7 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | `vision_model` | _(unset)_ | Model that reads scans and images, when you chose one in setup. Unset uses the chat model if it reads images, otherwise Gemma 4 E4B; when that one isn't downloaded, a tested image-reading model that is |
 | `skipped_models` | _(empty)_ | Models you chose not to download; `gaia init` and first-run setup leave them out. Comma-separated with `gaia config set`; also set by `gaia init --skip-model` and the setup screens. See [Choosing models](#choosing-models) |
 | `full_access` | `false` | Launch `gaia-cli` with confirmation prompts off — see [Full access](#full-access) |
-| `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, the one GAIA has tested, or `auto` to let Lemonade choose. A value saved before this (`rocm`, `metal`, `cpu`) still loads but can't be set again. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
+| `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, the one GAIA has tested, or `auto` to let Lemonade choose. A value saved before this (`rocm`, `metal`, `cpu`) still loads but can't be set again. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui/settings#which-server-and-which-gpu-backend) |
 | `hybrid_cheap_model` | `amd.DeepSeek-V4.1-Flash` | Model the `hybrid` model id runs routine turns on. `""` restores the default. See [Hybrid model](/guides/llm-gateway#hybrid-model) |
 | `hybrid_strong_model` | `amd.Claude-Opus-5-5` | Model `hybrid` runs every other turn on. Must differ from the cheap model |
 | `hybrid_classifier_model` | _(the cheap model)_ | Model that labels each turn for `hybrid` |
@@ -1943,10 +1943,10 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
 | `lemonade_env_url_ignored` | _(unset)_ | The `LEMONADE_BASE_URL` value GAIA's own server was chosen over in the Agent UI's setup. GAIA ignores that variable (and `LEMONADE_API_KEY`) while it still holds this value. `gaia config set lemonade_env_url_ignored ""` lets it apply again |
-| `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
+| `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui/documents#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
 | `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't), after you trust the folder when asked. `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |
-| `read_aloud_voice` | _(unset = `af_bella`)_ | The Kokoro voice the Agent UI and the TUI read replies in, such as `bm_george`; any other value is refused — see [Read aloud](/guides/agent-ui#settings) |
+| `read_aloud_voice` | _(unset = `af_bella`)_ | The Kokoro voice the Agent UI and the TUI read replies in, such as `bm_george`; any other value is refused — see [Read aloud](/guides/agent-ui/chat#read-aloud) |
 | `read_aloud_speed` | `100` | Read-aloud speed, as a percentage of normal (50–200) |
 | `read_aloud_auto` | `false` | Read each finished reply aloud without being asked |
 | `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model — see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
@@ -2266,9 +2266,9 @@ gaia lemonade embedded stop
 gaia lemonade embedded uninstall  # remove the runtime and downloaded backends
 ```
 
-The API key changes on every start, and requests without it get a 401. The port
-stays the same from one start to the next unless another program has taken it,
-in which case a free one is picked and remembered instead. `start` writes them to a file you source rather than printing the key,
+Requests without the API key get a 401. The port and the key stay the same
+from one start to the next unless another program has taken the port, in which
+case a free one is picked and remembered, and the key changes with it. `start` writes them to a file you source rather than printing the key,
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
@@ -2375,6 +2375,7 @@ Everything lives under `~/.gaia/lemonade` (or `$GAIA_HOME/lemonade`):
 | `config/config.json` | Server configuration |
 | `state.json` | The running instance: pid, port, API key, owning daemon (owner-only) |
 | `last_port.json` | The port the last start used; the next start reuses it while it is free |
+| `last_key` | The API key the last start used; reused only on the same port (owner-only) |
 | `env.sh` / `env.ps1` | Sourceable credentials, removed on `stop` (owner-only) |
 | `lemond.log` | Server output — read this first when `start` fails |
 
