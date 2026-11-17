@@ -787,7 +787,8 @@
 .skill-row-desc {
     display: -webkit-box;
     -webkit-line-clamp: 1;
-    animation: fade-cut-block both;
+    /* One line: a fade down the block would dim the whole line, so fade its end. */
+    animation: fade-cut-inline both;
     animation-timeline: scroll(self block);
     -webkit-box-orient: vertical;
     overflow: hidden;

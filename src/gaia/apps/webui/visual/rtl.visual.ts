@@ -124,6 +124,10 @@ const audit = async (page: Page): Promise<string[]> => {
                 // Aligned to its end, the last line's "…" lands past the edge and is clipped: "preparation a."
                 const toEnd = style.textAlign === 'end' || style.textAlign === (style.direction === 'rtl' ? 'left' : 'right');
                 if (toEnd) problems.push(`clamped text aligned to its end hides its "…": ${label(el)}`);
+                // A fade down the block is taller than one line, so a one-line clamp would dim all of it.
+                const mask = style.maskImage || style.getPropertyValue('-webkit-mask-image');
+                const oneLine = el.clientHeight < 2 * (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2);
+                if (oneLine && mask !== 'none' && !/to (left|right)/.test(mask)) problems.push(`one-line clamp faded top to bottom: ${label(el)}`);
             }
 
             const text = el.textContent?.trim() ?? '';
@@ -3656,6 +3660,8 @@ test.describe('clamped English in Arabic ends with its own "…"', () => {
         await shot(page, 'clamped-skill-ar');
         expect(await clampedBlocks(page)).toContain('skill-row-desc ltr');
         expect(await audit(page)).toEqual([]);
+        // English in the Arabic UI fades at its own end, the right.
+        expect(await page.locator('.skill-row-desc').first().evaluate((el) => getComputedStyle(el).maskImage)).toContain('to right');
     });
 
     test('a schedule prompt', async ({ page }) => {
