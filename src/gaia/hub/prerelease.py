@@ -37,6 +37,8 @@ RELEASES_DOWNLOAD_URL = "https://github.com/amd/gaia/releases/download"
 RELEASE_MANIFEST_NAME = "gaia-agent-release.json"
 AGENT_YAML_ASSET_NAME = "gaia-agent.yaml"
 SCHEMA_VERSION = 1
+#: The download server a final build's flagship comes from.
+HUB_ORIGIN = "hub.amd-gaia.ai"
 #: Overrides ``RELEASES_DOWNLOAD_URL/<tag>``: the directory holding the assets.
 ASSETS_URL_ENV = "GAIA_RC_FLAGSHIP_URL"
 
@@ -84,6 +86,19 @@ def release_candidate_tag(core_version: str) -> Optional[str]:
     if not m:
         return None
     return f"v{m.group('base')}-rc{m.group('rc')}"
+
+
+def flagship_origin(core_version: Optional[str] = None) -> str:
+    """Where this build's flagship downloads from, as a person reads it after
+    "From": the hub for a final or dev build, the pre-release (or the override
+    in ``GAIA_RC_FLAGSHIP_URL``) for a release candidate. Reads no network."""
+    tag = release_candidate_tag(core_version or CORE_VERSION)
+    if tag is None:
+        return HUB_ORIGIN
+    override = os.environ.get(ASSETS_URL_ENV, "").strip().rstrip("/")
+    if override:
+        return override.removeprefix("https://")
+    return f"github.com/amd/gaia/releases/tag/{tag}"
 
 
 def flagship_source(

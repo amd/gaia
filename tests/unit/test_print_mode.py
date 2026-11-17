@@ -593,7 +593,7 @@ def test_agent_config_is_headless(stub_env):
     print_mode.run("q", model="m1", max_steps=5)
     cfg = _agent().config
     assert cfg.silent_mode is True
-    assert cfg.streaming is False
+    assert cfg.streaming is True
     assert cfg.max_steps == 5
     assert cfg.model_id == "m1"
     assert cfg.base_url == "http://detected:13305/api/v1"
@@ -1277,3 +1277,15 @@ def test_time_limit_with_attempts_is_a_usage_error_before_anything_runs(
     assert print_mode.run("q", attempts=2, time_limit=60) == 2
     started.assert_not_called()
     assert "--time-limit can't be combined with --attempts" in capsys.readouterr().err
+
+
+def test_streamed_text_never_reaches_stdout(capsys):
+    """-p streams its model calls; the console it runs with must swallow them."""
+    from gaia.agents.base.console import SilentConsole
+
+    console = SilentConsole()
+    console.print_streaming_text("partial answer")
+    console.print_streaming_text("", end_of_stream=True)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""

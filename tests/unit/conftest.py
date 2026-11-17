@@ -643,6 +643,22 @@ def _forbid_real_lemonade_all_session(tmp_path_factory):
         )
 
 
+@pytest.fixture(autouse=True)
+def _dead_lemonade_address_is_not_a_stopped_server(monkeypatch):
+    """A dead Lemonade address in a unit test stands in for a model server the
+    test fakes at a higher layer, so the Agent UI must not fail a turn over it.
+    A test of that check puts the real probe back itself."""
+    import importlib.util
+
+    if importlib.util.find_spec("fastapi") is None:
+        yield
+        return
+    from gaia.ui import _chat_helpers
+
+    monkeypatch.setattr(_chat_helpers, "_stopped_users_server", lambda: None)
+    yield
+
+
 _LEMONADE_ENV_VARS = ("LEMONADE_BASE_URL", "LEMONADE_HOST", "LEMONADE_PORT")
 # The caller's values, for the tests that opt in to keeping them.
 _CALLER_LEMONADE_ENV: dict = {}

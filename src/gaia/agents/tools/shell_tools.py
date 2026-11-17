@@ -48,7 +48,14 @@ from gaia.agents.base.denied_effects import (
 )
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
-from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
+from gaia.agents.base.verification import (
+    EXECUTED_KEY,
+    NOT_EXECUTED,
+    OUT_OF_TIME,
+    TIME_LIMIT_CUT_RUN,
+    cut_by_time_limit,
+    time_capped,
+)
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
     TIMEOUT_CLASSES,
@@ -1560,6 +1567,35 @@ _WAIT_TOOL = "wait_for_condition"
 
 #: Output past this many characters is cut before it reaches the model.
 MAX_OUTPUT_CHARS = 10_000
+
+
+# Fields of a shell result the model reads only when they say something.
+_ONLY_ON_TIMEOUT = ("timeout", "timeout_class")
+_ONLY_WHEN_SET = ("stderr", "has_errors", "output_truncated", "check_result")
+
+
+def lean_shell_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """The copy of a ``run_shell_command`` result the model reads.
+
+    The model wrote the command, so echoing it back (twice, with ``steps``) is
+    context spent on nothing; so are empty fields and the timeout it left at
+    its default. A line of several steps keeps ``steps``: each has its own
+    exit code.
+    """
+    lean = {k: v for k, v in result.items() if k not in ("command", "shell")}
+    steps = lean.get("steps")
+    if isinstance(steps, list) and len(steps) <= 1:
+        del lean["steps"]
+    if not lean.get("timed_out"):
+        for key in _ONLY_ON_TIMEOUT:
+            lean.pop(key, None)
+    for key in _ONLY_WHEN_SET:
+        if not lean.get(key):
+            lean.pop(key, None)
+    duration = lean.get("duration_seconds")
+    if isinstance(duration, float):
+        lean["duration_seconds"] = round(duration, 1)
+    return lean
 
 
 def _truncate(text: Optional[str], stream: str) -> str:
@@ -3723,6 +3759,9 @@ def _bulk_read_credential(
     ``_BULK_TOO_LARGE`` and ``_BULK_UNKNOWN``, *path* is the folder that
     could not be checked.
     """
+    from gaia import security
+
+    linked = None  # listed on the first folder-wide read, not for every command
     for number, words in enumerate(_command_word_lists(argv)):
         for spec, includes, excludes, tree, links_only in _bulk_read_roots(
             words, rewritten and number == 0
@@ -3741,9 +3780,11 @@ def _bulk_read_credential(
             except (OSError, ValueError) as exc:
                 logger.debug("Cannot list %r for the credential check: %s", spec, exc)
                 continue
+            if linked is None:
+                linked = security.linked_secret_files()
             if tree:
                 found, complete = _tree_credential(
-                    folder, pattern, includes, excludes, links_only
+                    folder, pattern, includes, excludes, links_only, linked
                 )
                 if not complete:
                     return str(folder), _BULK_TOO_LARGE
@@ -3757,7 +3798,7 @@ def _bulk_read_credential(
                 continue
             for entry in entries:
                 if _bulk_entry_is_credential(
-                    entry, pattern, includes, excludes, links_only
+                    entry, pattern, includes, excludes, links_only, linked
                 ):
                     return entry.path, _BULK_READ
     return None
@@ -3769,6 +3810,7 @@ def _tree_credential(
     includes: list,
     excludes: list,
     links_only: bool,
+    linked: Optional[dict] = None,
 ) -> Tuple[Optional[str], bool]:
     """``(credential, complete)`` for a recursive search of *folder*.
 
@@ -3802,14 +3844,18 @@ def _tree_credential(
                 logger.debug("Cannot stat %r for the credential check: %s", entry, exc)
                 continue
             if hit and _searched_file_is_credential(
-                entry, usable_includes, excludes, links_only
+                entry, usable_includes, excludes, links_only, linked
             ):
                 return entry.path, True
     return None, True
 
 
 def _searched_file_is_credential(
-    entry: os.DirEntry, includes: list, excludes: list, links_only: bool
+    entry: os.DirEntry,
+    includes: list,
+    excludes: list,
+    links_only: bool,
+    linked: Optional[dict] = None,
 ) -> bool:
     """Whether a search that reaches *entry* reads a credential file there.
 
@@ -3831,7 +3877,9 @@ def _searched_file_is_credential(
     except OSError as exc:
         logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
         return False
-    disguised = bool(target) and _credential_file_name(target)
+    disguised = (bool(target) and _credential_file_name(target)) or _shares_secret(
+        entry, linked
+    )
     if links_only:
         return disguised and not _credential_file_name(name)
     return disguised or _credential_file_name(name)
@@ -3843,6 +3891,7 @@ def _bulk_entry_is_credential(
     includes: list,
     excludes: list,
     links_only: bool = False,
+    linked: Optional[dict] = None,
 ) -> bool:
     """Whether a folder-wide read of *entry*'s folder reads it as a credential.
 
@@ -3863,11 +3912,34 @@ def _bulk_entry_is_credential(
     except OSError as exc:
         logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
         return False
+    disguised = _credential_file_name(os.path.basename(real)) or _shares_secret(
+        entry, linked
+    )
     if links_only:
-        return not _credential_file_name(name) and _credential_file_name(
-            os.path.basename(real)
-        )
-    return _credential_file_name(name) or _credential_file_name(os.path.basename(real))
+        return not _credential_file_name(name) and disguised
+    return _credential_file_name(name) or disguised
+
+
+def _shares_secret(entry: os.DirEntry, linked: Optional[dict]) -> bool:
+    """Whether *entry* is a hard link to a file in a credential folder.
+
+    *linked* is :func:`gaia.security.linked_secret_files` for this search. A
+    second name has the same size, and the listing already knows the size, so
+    only a file of a matching size is looked up.
+    """
+    if not linked:
+        return False
+    try:
+        size = entry.stat().st_size  # a symlink's target is what gets read
+    except OSError as exc:
+        logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
+        return False
+    if size not in {secret_size for _folder, secret_size in linked.values()}:
+        return False
+    from gaia import security
+
+    identity = security.file_identity(entry.path)
+    return identity is not None and identity in linked
 
 
 def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]:
@@ -7356,6 +7428,8 @@ class ShellToolsMixin:
         class default usually blows a larger one too. A build or download is
         pointed at a background run instead.
         """
+        if cut_by_time_limit(self):
+            return TIME_LIMIT_CUT_RUN
         cls = TIMEOUT_CLASSES[timeout_class]
         hint = (
             f"It ran as a '{timeout_class}' command ({cls.summary}, "
@@ -8095,6 +8169,7 @@ class ShellToolsMixin:
             # build would be abandoned by the loop while the subprocess is still
             # inside its own (correct) timeout.
             timeout=MAX_COMMAND_TIMEOUT + 60,
+            model_view=lean_shell_result,
         )
         # The class table leads the docstring because the prompt renders a tool
         # by its FIRST LINE; anything below is seen only by models using native
@@ -8125,9 +8200,9 @@ class ShellToolsMixin:
                     ceiling it is refused, not clamped.
 
             Returns:
-                status, output, the last exit code, 'steps' (each with its own
-                code), the applied 'timeout' and 'timeout_class'; one killed at
-                the limit carries 'timed_out'.
+                status, output, the last exit code; several steps add
+                'steps' (each with its code); a kill at the limit adds
+                'timed_out', 'timeout' and 'timeout_class'.
             """
             working_directory = _expand_home(working_directory)
             try:
@@ -8142,7 +8217,6 @@ class ShellToolsMixin:
                         "command": command,
                         "has_errors": True,
                     }
-
                 # Check rate limits first to prevent DOS
                 allowed, reason, wait_time, waited = (
                     (True, "", 0.0, 0.0) if bypass else self._pace_rate_limit()
@@ -8157,6 +8231,10 @@ class ShellToolsMixin:
                         "wait_time_seconds": wait_time,
                         "hint": "Rate limiting prevents excessive command execution",
                     }
+                # After the pacing wait, which is time the turn has also spent.
+                timeout = time_capped(self, timeout)
+                if not timeout:
+                    return {**OUT_OF_TIME, "command": command}
 
                 # Validate an explicit directory after resolving it from the
                 # chat workspace; keep the original argument for approval keys.
@@ -8664,6 +8742,10 @@ class ShellToolsMixin:
                     ),
                     "has_errors": True,
                 }
+
+            timeout = time_capped(self, timeout)
+            if not timeout:
+                return dict(OUT_OF_TIME)
 
             # The wait is charged as one command up front; its probes are then
             # exempt (see _check_rate_limit) rather than each tripping the limit.

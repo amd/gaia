@@ -26,6 +26,8 @@ three; never leave it open.
   calls is worth flagging.
 - `truncated: true` on a conflict check means the window was only partially
   scanned — report the slot as unverified, not free.
+- A non-empty `unreadable` list names meetings whose times couldn't be read —
+  say those couldn't be checked; never call the slot free on their account.
 - Free and relevant → recommend accepting. Conflicting → offer at most three
   genuinely free alternatives. Not the user's concern → recommend declining with
   a one-line reason.

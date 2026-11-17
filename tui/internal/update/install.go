@@ -221,15 +221,32 @@ func installerAsset(r Release, kind Kind) (Asset, error) {
 		return Asset{}, err
 	}
 	for _, a := range r.Assets {
-		if re.MatchString(a.Name) {
-			return a, nil
+		if !re.MatchString(a.Name) {
+			continue
 		}
+		// An older setup or pkg writes gaia-tui and leaves this gaia-cli on PATH beside it.
+		if kind == KindWindowsSetup || kind == KindMacPkg {
+			if !namesGaiaCli(r) {
+				return Asset{}, fmt.Errorf("GAIA %s names the terminal gaia-tui, so its %s would leave this gaia-cli installed beside it — uninstall GAIA first, then install %s from %s", r.Tag, kind.label(), r.Tag, ReleasesPage)
+			}
+		}
+		return a, nil
 	}
 	// Releases before the installers existed (v0.25.3 and older) publish none.
 	if _, ok := r.Asset(installerSums); !ok {
 		return Asset{}, fmt.Errorf("GAIA %s came out before GAIA had a %s installer, so this install can't switch to it — pick a newer release at %s", r.Tag, kind.label(), ReleasesPage)
 	}
 	return Asset{}, fmt.Errorf("GAIA %s has no %s installer for this machine — pick another release at %s", r.Tag, kind.label(), ReleasesPage)
+}
+
+// namesGaiaCli reports whether r ships the terminal as gaia-cli.
+func namesGaiaCli(r Release) bool {
+	for _, a := range r.Assets {
+		if strings.HasPrefix(a.Name, "gaia-cli-") {
+			return true
+		}
+	}
+	return false
 }
 
 // label names kind the way a person would.

@@ -1,0 +1,245 @@
+---
+title: "Models, control and privacy"
+sidebarTitle: "Models and control"
+description: "Choose the model, see where your chat goes, and decide what GAIA may do"
+icon: "shield-halved"
+---
+
+You choose which model answers, the app tells you where each chat goes, and GAIA asks before it changes anything.
+
+## Choose a model
+
+Open **Settings → Model** (or the model chip in the message box):
+
+| Provider | What it needs | Where your chat goes |
+|---|---|---|
+| **Local** | Nothing | Stays on this PC |
+| **Fireworks AI** | An API key | Sent to Fireworks AI (usage may be charged) |
+| **AMD LLM Gateway** | A gateway key (and URL, if not the default) | Sent to your gateway |
+
+On this PC, GAIA offers the two ways to run a model it has tested: the GPU, and the NPU on a Ryzen AI PC. See [NPU Acceleration](/guides/npu) for the NPU.
+
+### The model in use
+
+**Settings → Model** opens on the **Model in use** card: the model, what it runs
+on, **Switch model** for the models ready to use, and **Context size**. Below
+it, models sit in groups you can open and close: **Downloaded**, **Available to
+download** and **Not available on this PC**, with the reason. A search opens
+every group it matches.
+
+Each row shows chips for the device (GPU or NPU), whether it's loaded and
+whether it fits this PC. **Details** has where it runs, such as "GPU · Vulkan"
+or "NPU · FLM", and the speed measured here. You don't pick the device: each
+model is built for one. A loaded model shows the device Lemonade reports for
+it, and says so plainly if that isn't the expected one (a GPU model that fell
+back to the CPU runs slowly). **Context size** goes up to the
+largest window that fits; **Automatic** is GAIA's choice, and a size you pick
+is kept for that model. For a model GAIA has no memory figures for, you can
+pick from 32K up to the window it was trained for. GAIA can't check those fit
+first, so a size too large fails to load and says so.
+
+### Switching models
+
+The model chip in the composer opens the same list. While GAIA is answering,
+a model you pick there applies to your next message. On most PCs, a local
+model you pick starts loading right away, and a banner counts the seconds; you
+can type meanwhile, and a message waits for the load. On a PC with under 24 GB
+of RAM, or when the GAIA agent runs as a Hub install, it loads with your first
+message instead. If the model can't load, for
+example because other apps hold the memory it needs, the banner says why and
+offers **Try again**. The model pill
+at the bottom of the sidebar shows whether the model is loaded, warming up or
+stopped, where it runs, memory in use and free, and its context window, with a
+**Restart** button. On a Lemonade you run yourself, GAIA asks before Restart
+reloads its model and never starts that server for you.
+
+### Cloud providers and keys
+
+[Choose an AI provider](/guides/ai-providers) explains the providers in depth.
+
+- With [Local only](/reference/cli#local-only) on, connecting Fireworks AI or the gateway
+  and selecting a cloud model are refused, with the providers shown as blocked. Turn it
+  on or off in **Settings → Privacy → Local only**; the CLI equivalent is
+  `gaia config set network_policy local_ai_only` (or `cloud_allowed`). A saved cloud
+  model isn't restored.
+- Keys are masked, go only to GAIA's local model server and your OS credential
+  store, and are refused over mobile access. A saved key shows as a read-only row with
+  its last four characters and whether it's connected. **Replace** swaps it, and
+  the trash button removes it here and for future sessions. A key set in the
+  environment shows where it's set and can only be changed there.
+- On macOS, the first read of a saved key after reinstalling GAIA opens a
+  Keychain dialog. Until you answer it, the model list says macOS is asking for
+  keychain access instead of offering to add a key. Click **Always Allow** and
+  the list fills in on its own.
+- If you close the OS key store's unlock or "new keyring" prompt without
+  unlocking it, GAIA doesn't ask again for five minutes. The model list and
+  **Settings → Model** say the key store is locked and offer **Try again**,
+  which asks the OS once more.
+  Connecting a provider, picking a cloud model, or connecting or testing a
+  connector also asks again.
+- In **Settings → Model**, the AMD LLM Gateway is greyed out when its host
+  can't be reached from this network. It reads "No network
+  available — can't reach llm-api.amd.com (needs AMD's network or VPN)". Connect
+  to AMD's network or VPN, then press **Check again**. First-run setup leaves
+  the gateway off its list instead, unless you chose it before; open setup
+  again once you are on AMD's network to see it. When Lemonade runs on
+  another machine, or a proxy carries this PC's traffic, the check is skipped and
+  the gateway stays choosable.
+- In **Settings → Model**, recommended Fireworks models appear by default. Choose
+  **Show all models** to reveal the rest; searching also finds unranked models.
+  Each recommendation includes the benchmark result behind the pick.
+- The model you choose is remembered across restarts (shared with the TUI). If
+  it can't be restored, a one-line notice says why and asks you to pick one.
+- Switching from a local model to a cloud one shows the privacy note first.
+
+If you chose a cloud provider during setup and this PC has no model server yet,
+the banner, **Settings → Model** and **Settings → Advanced** offer **Set up local
+models**. It reopens setup on **On this PC**, and **Back to GAIA** leaves it with
+nothing changed. Finishing it switches GAIA to the model it installed.
+
+## Where your chat goes
+
+With a cloud model selected, the model chip and the sidebar's location line name
+the provider (for example **Fireworks AI**) instead of **Local**. They say
+**Local** only when GAIA confirms the chat is answered on this PC, and make no
+claim when it can't tell. Hover either for what is sent: the whole conversation,
+including anything read out of files, documents or memory, which themselves stay
+stored on your machine.
+
+For Fireworks, AMD gateway, and catalog-discovered cloud models, history admission uses a conservative 64K
+input budget, independent of local device settings and `GAIA_CTX_SIZE`; this is not
+a claim about the remote model’s actual context capacity. The answer is written into
+the provider's own window, so it takes nothing from those 64K. Claude uses its provider
+budget.
+
+## Cloud cost and limits
+
+Before you pick a cloud model, setup and **Settings → Model** show what it
+costs per million tokens at the provider's list price; a model with no
+published price says "price unknown". In setup the listed models are a
+choice: the provider's top pick is marked **Default** and picked, and the
+model you pick is the one chat uses. Once the key works, setup says so and
+names that model. The AMD LLM Gateway is listed only on a network that can
+reach it, unless you picked it before. **Settings → Model** also shows what
+this month's cloud chats (background goal runs included) have cost and lets
+you set a monthly limit; once it is reached, goals wait instead of running. GAIA warns
+when you're close, and once you reach it, it stops before sending a chat to the
+cloud and tells you how to go on: raise the limit, allow more for this month,
+or use a model on this PC. The total is an estimate at list price, with cached
+input at its cached rate; it leaves out turns stopped before any reply, and
+turns that fail before any reply with no usage reported (an answer stopped
+partway still counts, since the provider may bill it), so your provider's bill
+is the final word.
+
+While a chat runs on a priced cloud model, the composer shows what it has cost
+so far and what all your chats have cost today, such as "$0.04 · today $0.31".
+Click it for each answer's cost, newest first, and a link to this month's total
+and limit. The chat's amount adds up the cost each answer's details show, priced
+the same way as the monthly total. "Today"
+is your own calendar day and counts every cloud turn billed in it, as the
+monthly total does, including answers you later edited, retried or deleted;
+its count of chats covers only the chats you still have. A stopped answer
+sends no token count, so its cost is unknown: it shows "Not reported", the
+total it belongs to reads as a floor, such as "≥ $0.04", and the breakdown says
+how many were left out, since the provider may still bill them. A message that
+failed before any reply came is not one of these and is not counted, here or
+in the month's total. On a model on
+this PC, or a cloud model with no known price, nothing is shown.
+
+## Watch your PC's resources
+
+A strip under the chat's title shows this PC's CPU, memory, GPU, NPU and
+network use, each with a graph of the last minute, so you can see the model
+working while it answers. The numbers match Windows Task Manager: CPU with its
+clock speed, memory in use out of the total, for a GPU or NPU the load of its
+busiest engine and the memory it holds, and for each connected network adapter
+what it sends (S, the dashed line) and receives (R). A PC with several GPUs
+numbers them from 0. Virtual adapters, such as Hyper-V, WSL and VPN ones, are
+left out, as Task Manager leaves them out.
+
+The strip is on in every chat. Close it with **✕**, and bring it back with the
+pulse button in the chat's header or **Settings › General › Show resource
+usage in chats**. GAIA remembers the choice. While the strip is closed or the
+window is hidden, GAIA stops measuring about 15 seconds later.
+
+On Linux the GPU tile appears for AMD GPUs, and macOS shows CPU, memory and
+network only. When usage can't be read, the strip says so and dims the last readings
+until it can read them again. If only the GPU or network can't be read, as in
+a virtual machine or over Remote Desktop, CPU and memory keep showing and that
+tile says **Unavailable**, with the reason when you point at it.
+
+## Permissions
+
+GAIA asks before it changes files, runs commands or uses tools that act for you.
+The question appears above the message box with three answers:
+
+- **Allow once**
+- **Always allow** the same kind of action in this chat. For a host-resolved
+  file write or edit, this covers changes to files in that folder: writing,
+  editing, and a plain rename that keeps the file in the folder. Unresolved or
+  safety-sensitive paths stay exact and continue to prompt (e.g. *writing
+  notes.md*), and so do a subfolder, a file whose real location is outside the
+  folder, and a move out of it
+- **Deny**
+
+When the same question comes back after you allowed it once, the prompt says
+so and highlights **Always allow**. It never answers for you, and a different
+tool or a riskier call gets no hint.
+
+Pick **Full access** from the shield to stop most of these questions in a chat
+(you confirm once). It does not open the shell: a gated `run_shell_command` — a
+delete, `git add` — still asks, and runs only when you allow it.
+**Settings → Permissions** lists every chat with full access or "always allow"
+answers and lets you revoke them. Grants end when GAIA restarts.
+
+The same pane has **Start new chats in full access**, off by default. Turning
+it on asks you to confirm a plain warning first; turning it off takes one
+click. It sets the same `full_access` option as the TUI's `/full-access always`.
+The next new chat follows it right away, unless you already picked a mode on
+the message box's shield for that chat. Chats already open keep their mode. It
+can only be changed on the PC running GAIA, not from a phone over mobile access.
+
+A Hub-installed GAIA, which runs as its own process, follows the chat's mode
+too, from agent contract 2.14. It stops asking, but its shell guardrails stay
+on, so those commands still reach you as a confirmation. If the mode can't be
+passed on when a turn starts, that turn stops with an error, so it never runs
+with full access you turned off.
+
+From agent contract 2.26 it offers **Always allow** as well. Its grants are
+listed and revoked with the chat's own, and one the chat doesn't list (say,
+from before the Agent UI restarted) is revoked before the next reply runs.
+
+### Answering from the keyboard
+
+When GAIA asks permission, the prompt takes focus and `Enter` does nothing, so a message you were typing can't approve it. `Escape` denies (it takes priority over stopping the reply); `Tab` to **Allow once** or **Always allow** and press `Enter` or `Space` to approve. The prompt counts down the time the agent will wait, and GAIA denies when it runs out.
+
+## Notifications
+
+**Settings → Notifications** picks, for each event (needs your approval, has a
+question, finished), a **Banner**, a **Badge** only, or **Off**, plus a sound
+and a taskbar flash when GAIA isn't focused. Alerts fire whether or not the
+notification panel is open, and never for the chat you're looking at. In the
+desktop app it also keeps the PC from idle-sleeping while a chat is working; on
+battery it lets the PC sleep below the level you choose (20% by default).
+
+Scheduled tasks raise notifications too; see [Scheduled tasks](/guides/agent-ui/extend#scheduled-tasks).
+
+## Policy alerts and receipts
+
+When a governance-enabled agent blocks a tool call, the Agent UI shows a
+non-actionable policy alert instead of an approval prompt. Policy blocks appear
+as inline **Policy Shield** activity cards, critical notifications, and a toast
+with a **View receipt** link when a receipt ID is available.
+
+Policy alerts are durable session history. If you reload the UI or reconnect
+after a blocked request with no assistant text, the block reason, rule IDs,
+policy version, and receipt ID remain attached to the assistant message.
+
+## Privacy
+
+- **Local only.** **Settings → Privacy → Local only** refuses every cloud provider, so no chat can leave this PC. See [Cloud providers and keys](#cloud-providers-and-keys).
+- **Where your data is kept.** **Settings → Privacy** shows the folder, with **Open folder**. Chats, documents, memory and settings live under `~/.gaia` on this PC; see [Where things live](/guides/install#where-things-live).
+- **Private chats** aren't saved to memory; see [Private chat](/guides/agent-ui/chat#private-chat).
+- **Deleting chats.** **Settings → Privacy → Delete all chats** removes every chat; see [Delete a chat](/guides/agent-ui/documents#delete-a-chat) for what goes with them.
+- **Undo history.** **Settings → Privacy → Undo history** sets how long the copies behind [Undo](/guides/agent-ui/documents#undo-a-turn) are kept.
+- **Logs you share.** Secrets are removed from saved logs, but a log can quote your chats; see [Logs](/guides/agent-ui/settings#logs).
