@@ -4,6 +4,7 @@
 Chat Agent - Interactive chat with RAG and file search capabilities.
 """
 
+import ast
 import dataclasses
 import errno
 import functools
@@ -17,7 +18,17 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Set
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Collection,
+    Dict,
+    FrozenSet,
+    List,
+    Optional,
+    Set,
+)
 
 from gaia.config import gaia_home
 from gaia.logger import get_logger
@@ -46,12 +57,18 @@ from gaia_agent.python_jobs import (
     stopped_job_result,
     watch_folders,
 )
-from gaia_agent.python_runner import BUNDLED_LIBRARIES, is_frozen, python_command
+from gaia_agent.python_runner import (
+    BUNDLED_LIBRARIES,
+    GUARDED_FOLDERS_ENV,
+    is_frozen,
+    python_command,
+)
 from gaia_agent.session import SessionManager
 from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, _withheld_skill_tools, default_max_steps
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, READ, call_risk
 from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.base.context_eviction import (
@@ -60,7 +77,14 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import before_change, note_untracked
+from gaia.agents.base.file_snapshots import (
+    SnapshotError,
+    before_change,
+    note_folder_changes,
+    note_untracked,
+    watch_script_folders,
+)
+from gaia.agents.base.goal_store import GOAL_OUTCOMES
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
     FEATURE_TOOLS,
@@ -101,8 +125,11 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import (
+    _forget_evicted,
+    attached_not_loaded,
     documents_failed_indexing,
     documents_still_indexing,
+    not_loaded_note,
 )
 from gaia.agents.tools.workspace_paths import (
     _resolve_target,
@@ -143,6 +170,35 @@ _UNSET = object()
 #: Longest request_user_input waits for an answer, in seconds.
 USER_INPUT_MAX_WAIT_S = 600
 
+#: request_user_input's answer where nobody can reply mid-run (a Discord DM, a
+#: one-shot run): no choice was made, so the question goes in the reply.
+NO_QUESTION_CHANNEL = (
+    "__NO_RESPONSE__ The user cannot answer a question mid-run here, so nothing "
+    "was chosen; do not act on a default. End your turn by asking the question "
+    "in your reply, with what they need to decide (such as the list); their "
+    "next message is the answer."
+)
+
+
+def _no_answer_result(timeout_seconds: int, default: Optional[str]) -> str:
+    """What request_user_input returns when nobody answered: never an answer."""
+    text = (
+        f"__NO_RESPONSE__ The user did not answer within {timeout_seconds} "
+        "seconds, so you have no answer from them. "
+    )
+    if default:
+        text += (
+            f'Your default was "{default}". You may go on with it only for steps '
+            "that change nothing, and your reply must say you assumed it because "
+            "they did not answer. "
+        )
+    return text + (
+        "Do not create, change, move or delete anything on that assumption: any "
+        "such step now needs the user's approval, even with Full access on. If "
+        "the work needs their choice, stop and end your reply with the question."
+    )
+
+
 #: ``search_tools``: searches a turn before it must get on with the job, longest
 #: query embedded, tools and skills returned, and tools returned with full docs.
 MAX_TOOL_SEARCHES = 3
@@ -180,20 +236,88 @@ NOTIFY_DESKTOP_PS_SCRIPT = (
     f"[string]$env:{NOTIFY_TITLE_ENV_VAR})"
 )
 
-# ``run_python`` puts the project root on PYTHONPATH, so ``import gaia``
-# resolves far enough to fail on the symbol instead of the package — and the
-# raw ImportError reads as a typo worth retrying rather than the wrong path.
-_GAIA_TOOL_IMPORT_PATTERN = re.compile(
-    r"^[ \t]*(?:from[ \t]+gaia(?:\.[\w.]+)?[ \t]+import[ \t]+.*"
-    r"|import[ \t]+gaia(?:\.[\w.]+)?(?![\w.]).*)$",
-    re.MULTILINE,
-)
+
+def _imports_gaia_tools(code: str, tool_names: Collection[str]) -> Optional[str]:
+    """The line that reaches for one of the agent's tools through ``gaia``.
+
+    Tools are bound to the running agent, never attributes of the ``gaia``
+    package, so ``from gaia import write_file`` cannot work in a subprocess and
+    its bare ImportError reads as a typo worth retrying. Importing a project's
+    own modules -- ``from gaia.agents.base import claims`` in a GAIA checkout --
+    is ordinary Python and is not refused.
+    """
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return None  # Python reports it, with the line.
+    lines = (code or "").splitlines()
+    package_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0:
+            if node.module == "gaia" and any(
+                alias.name in tool_names for alias in node.names
+            ):
+                return lines[node.lineno - 1].strip()
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "gaia" or (
+                    alias.name.startswith("gaia.") and alias.asname is None
+                ):
+                    package_names.add(alias.asname or "gaia")
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in package_names
+            and node.attr in tool_names
+        ):
+            return lines[node.lineno - 1].strip()
+    return None
 
 
-def _imports_gaia_tools(code: str) -> Optional[str]:
-    """The offending line when a snippet tries to import GAIA itself."""
-    match = _GAIA_TOOL_IMPORT_PATTERN.search(code or "")
-    return match.group(0).strip() if match else None
+_MISSING_IMPORT = re.compile(r"cannot import name '(\w+)' from '(gaia(?:\.[\w.]+)?)'")
+
+
+def _tool_import_hint(stderr: str, tool_names: Collection[str]) -> Optional[str]:
+    """What to do when a run failed importing a tool's name from ``gaia``."""
+    match = _MISSING_IMPORT.search(stderr or "")
+    if not match or match.group(1) not in tool_names:
+        return None
+    return (
+        f"`{match.group(1)}` is one of your tools, not part of `{match.group(2)}`: "
+        "call it directly as a tool instead of importing it."
+    )
+
+
+def _project_import_paths(project: os.PathLike | str) -> List[str]:
+    """What a snippet run in *project* needs on ``PYTHONPATH`` to import it.
+
+    The root for a flat layout, and ``src/`` too when it holds a package, so a
+    ``src/``-layout checkout imports its own code rather than an installed copy.
+    """
+    root = Path(project)
+    paths = [str(root)]
+    src = root / "src"
+    if not src.is_dir():
+        return paths
+    try:
+        children = list(src.iterdir())
+    except OSError as e:
+        # Running anyway would import an installed copy in place of the project.
+        raise OSError(
+            f"Could not list {src} to put the project's src/ layout on the import "
+            f"path: {e}. Check the folder's permissions."
+        ) from e
+    if any((child / "__init__.py").is_file() for child in children):
+        paths.append(str(src))
+    return paths
+
+
+def _with_project_paths(env: Dict[str, str], project: os.PathLike | str) -> None:
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = os.pathsep.join(
+        _project_import_paths(project) + ([existing] if existing else [])
+    )
 
 
 #: The line in a Python tool's docstring that :func:`_lists_script_libraries` fills.
@@ -322,33 +446,50 @@ def _python_run_result(
     return result
 
 
+def _guarded_folders() -> str:
+    """The credential folders a script may not open files in, for its environment."""
+    from gaia.security import SECRET_DIRECTORIES
+
+    return os.pathsep.join(sorted(SECRET_DIRECTORIES))
+
+
+def _record_folder_changes(watch) -> Optional[str]:
+    """Record what a script added to the folders it names; a note if that failed."""
+    try:
+        note_folder_changes(watch)
+    except SnapshotError as e:
+        logger.error("Could not record the files a script added: %s", e)
+        return f"Undo won't remove the files this added: {e}"
+    return None
+
+
 def _python_script_run_context(
     script: Path, project_dir: os.PathLike | str | None
 ) -> tuple[Path, Dict[str, str]]:
     """Working directory and environment for running *script* as a subprocess.
 
-    A script under *project_dir* runs from it with it on ``PYTHONPATH``, so
-    ``tests/test_x.py`` can import the project's packages. Anything else — and
-    every run with no project at all, where *project_dir* is ``None`` — runs
-    from its own folder with the environment unchanged.
-
-    Only flat-layout projects become importable this way: a ``src/`` layout
-    needs ``src/`` on the path, which this does not add.
+    A script under *project_dir* runs from it with it -- and its ``src/``, for
+    a ``src/`` layout -- on ``PYTHONPATH``, so ``tests/test_x.py`` can import
+    the project's packages. Anything else, and every run with no project at
+    all (*project_dir* is ``None``), runs from its own folder with the
+    environment unchanged.
     """
     script = Path(script).resolve()
     # A frozen build relaunches itself: reuse its unpacked bundle (~2 s, not ~25 s).
     env = child_env(relaunch_self=True)
     # The tools decode the output as UTF-8; the locale codec can't print a ✓.
     env["PYTHONIOENCODING"] = "utf-8"
+    env[GUARDED_FOLDERS_ENV] = _guarded_folders()
+    # Files it writes with a bare open() are UTF-8, like the file tools write.
+    env["PYTHONUTF8"] = "1"
+    # A timed-out run still returns what it printed before the kill.
+    env.setdefault("PYTHONUNBUFFERED", "1")
     if project_dir is None:
         return script.parent, env
     project = Path(project_dir).resolve()
     if not script.is_relative_to(project):
         return script.parent, env
-    existing = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = (
-        os.pathsep.join([str(project), existing]) if existing else str(project)
-    )
+    _with_project_paths(env, project)
     return project, env
 
 
@@ -537,6 +678,9 @@ class ChatAgentConfig:
     namespaced_agent_id: Optional[str] = None
 
 
+# Names listed of the attached documents the index does not hold; the rest are counted.
+_NOT_LOADED_SHOWN = 30
+
 # Added to the per-turn document list only when a document is not in Latin script.
 _CROSS_LANGUAGE_NOTE = (
     "[Documents marked with a script such as [Arabic] are written in it. When the "
@@ -546,6 +690,25 @@ _CROSS_LANGUAGE_NOTE = (
     "the user's latest message, even when earlier turns or the document are in "
     "another, and cite every fact with its document and page.]"
 )
+
+
+def _where_mcp_servers_are_set_up(names: List[str], config_path: Path) -> str:
+    """Where the user fixes each of *names*: Settings for a connector, else the file."""
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    connectors = [REGISTRY.get(n).display_name for n in names if n in REGISTRY]
+    hand_added = [n for n in names if n not in REGISTRY]
+    where = []
+    if connectors:
+        where.append(f"Check {', '.join(connectors)} in Settings > Connectors.")
+    if hand_added:
+        verb = "is" if len(hand_added) == 1 else "are"
+        where.append(
+            f"{', '.join(hand_added)} {verb} set up in {config_path}: check the "
+            "command and settings there."
+        )
+    return " ".join(where)
 
 
 class ChatAgent(
@@ -589,6 +752,11 @@ class ChatAgent(
     # Dynamic MCP loader — registry exposes this for the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = True
 
+    # This session's folders and scratch directory differ per session.
+    VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = Agent.VOLATILE_PROMPT_FRAGMENTS | {
+        "get_session_folders_system_prompt"
+    }
+
     # Tool-list bookkeeping for the session; reset by ``_on_task_start`` when the
     # conversation is empty.
     _tool_notice_due: bool = False
@@ -600,6 +768,9 @@ class ChatAgent(
     _mcp_unavailable_error: Optional[str] = None
     _mcp_dropped_notice: Optional[str] = None
     _mcp_dropped_notice_shown: Optional[str] = None
+
+    # This turn's last request_user_input question, while it went unanswered.
+    _unanswered_question: Optional[str] = None
 
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """
@@ -716,6 +887,8 @@ class ChatAgent(
         self.observers = []
         self.file_handlers = []  # Track FileChangeHandler instances for telemetry
         self.indexed_files = set()
+        # Every document attached to the chat, held in the index or not.
+        self.attached_documents: List[str] = []
 
         # Initialize file system index service (optional)
         self._fs_index = None
@@ -897,6 +1070,8 @@ class ChatAgent(
             if loaded:
                 self.current_session = loaded
                 for doc_path in loaded.indexed_documents:
+                    if self.rag.is_full():
+                        break
                     if doc_path not in self.indexed_files and os.path.exists(doc_path):
                         try:
                             real = os.path.realpath(doc_path)
@@ -905,6 +1080,9 @@ class ChatAgent(
                             ) or self._is_path_allowed(real):
                                 result = self.rag.index_document(real)
                                 if result.get("success"):
+                                    _forget_evicted(
+                                        self.indexed_files, result.get("evicted", [])
+                                    )
                                     self.indexed_files.add(doc_path)
                                     logger.info(
                                         "Restored indexed doc from prior turn: %s",
@@ -955,6 +1133,14 @@ class ChatAgent(
             lines.append(f"[Indexed documents: {', '.join(entries)}]")
             if any(s and s != ["Latin"] for s in scripts.values()):
                 lines.append(_CROSS_LANGUAGE_NOTE)
+        not_loaded = attached_not_loaded(self, self.rag)
+        if not_loaded:
+            shown = ", ".join(Path(fp).name for fp in not_loaded[:_NOT_LOADED_SHOWN])
+            more = len(not_loaded) - _NOT_LOADED_SHOWN
+            lines.append(
+                f"[{not_loaded_note(len(not_loaded), self.rag)} Not searched: "
+                f"{shown}{f', and {more} more' if more > 0 else ''}]"
+            )
         pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
         if pending:
             lines.append(
@@ -983,10 +1169,57 @@ class ChatAgent(
 
     def get_memory_dynamic_context(self) -> str:
         """Per-turn context, plus which documents are indexed right now."""
-        parts = (super().get_memory_dynamic_context(), self._indexed_documents_line())
+        parts = (
+            super().get_memory_dynamic_context(),
+            self._indexed_documents_line(),
+            self._mcp_dropped_line(),
+        )
         return "\n".join(part for part in parts if part)
 
+    def _mcp_dropped_line(self) -> str:
+        """The MCP notice the user saw, so the model doesn't say a server isn't set up."""
+        notice = getattr(self, "_mcp_dropped_notice", None)
+        if not notice:
+            return ""
+        return (
+            "MCP servers the user set up that have no tools this session "
+            f"(the user was shown this): {notice}"
+        )
+
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
+
+    def follow_model_switch(self) -> None:
+        """Point what was chosen for the model this agent was built on at the
+        one it runs now: image reading, and the model documents are summarized with.
+        """
+        model = self.model_id
+        if "vlm_model" in vars(self):
+            vision = resolve_default_vision_model(model)
+            if vision != self.vlm_model:
+                from gaia.llm.vlm_client import VLMClient
+
+                self.vlm_model = vision
+                self.vlm_client = (
+                    None
+                    if vision is None
+                    else VLMClient(vlm_model=vision, base_url=self.vlm_base_url)
+                )
+        # vars(): tests build agents without running __init__.
+        if (
+            getattr(self, "_use_claude", False)
+            or not model
+            or "_rag_config_kwargs" not in vars(self)
+        ):
+            return
+        self._rag_config_kwargs["model"] = model
+        rag_config = self._rag_config
+        if rag_config is not _UNSET and rag_config is not None:
+            rag_config.model = model
+            rag_config.vlm_model = resolve_default_vision_model(model)
+        rag = self._rag
+        if rag is not _UNSET and rag is not None:
+            # Its own chat client names the model per call.
+            rag.chat.config.model = model
 
     @property
     def rag(self) -> Optional[RAGSDK]:
@@ -1789,7 +2022,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.config, "enable_filesystem", False
         ):
             filesystem_section = """
-**FILE SYSTEM TOOLS:** browse_directory (list folder), tree (visual hierarchy), file_info (metadata), find_files (search by name/content/size/date/type), read_file (text/CSV/JSON/PDF), bookmark (save locations).
+**FILE SYSTEM TOOLS:** no approval; use over shell. browse_directory (list folder, sort_by=size), tree (hierarchy), file_info (metadata), find_files (by name/content/size/date/type), read_file (text/CSV/JSON/PDF), bookmark.
 
 **FILE SEARCH AND AUTO-INDEX WORKFLOW:**
 - Use 1-2 distinctive keywords, not full phrases. WRONG: find_files("Acme Corp API reference"). RIGHT: find_files("api").
@@ -1837,7 +2070,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 1. **FACTUAL ACCURACY RULE — always retrieve before answering.** Any factual question about indexed documents (numbers, dates, names, policies, sections) → call `query_specific_file` or `query_documents` first, then answer from the retrieved chunks. Don't answer from training knowledge, even if you "know" the topic. This applies on every turn — "indexed" means stored in the RAG index, NOT in your context window.
 
-2. **Never invent content.** Quote numbers / dates / section refs verbatim from the chunks. Don't round, don't extrapolate, don't cite a section number no chunk shows. If no chunk answers it, search once more in other words; if that misses too, say "That's not in the document" and STOP — never supplement with "but approximately X" or "typically Y".
+2. **Never invent content.** Quote numbers / dates / section refs verbatim from the chunks. Don't round, don't extrapolate, don't cite a section number no chunk shows. If no chunk answers it, search the document again, reworded (not the web); still missing → say "That's not in <document>", never "approximately X". Only then offer the web, labeled as such.
 
 3. **Multi-fact requests → one query per fact.** If asked for 3 things, issue at least 3 targeted queries. Don't combine into one fuzzy query.
 
@@ -1936,18 +2169,22 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             "load_tools_menu": load_tools_menu,
         }
         prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
-        if not spec.early_return:
-            prompt += self._session_folders_line()
         if self._offers_scheduling():
             prompt += _AGENT_UI_SCHEDULE_LINE
+        return prompt
+
+    def get_session_folders_system_prompt(self) -> str:
+        """This session's folders and scratch directory, in ``session_context``."""
+        spec = get_profile_spec(getattr(self.config, "prompt_profile", "full"))
+        text = "" if spec.early_return else self._session_folders_line()
         scratch_dir = getattr(self, "scratch_dir", None)
         if scratch_dir is not None:
-            prompt += (
+            text += (
                 f"\nScratch directory for temporary files: {scratch_dir} — put "
                 "throwaway scripts and intermediate files here, never in the "
                 "user's project.\n"
             )
-        return prompt
+        return text.strip()
 
     def _session_folders_line(self) -> str:
         """One prompt line naming the folders this session can work in.
@@ -2264,22 +2501,26 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             return
         if self._mcp_manager is None:
             if self._mcp_unavailable_error:
+                # The error is already a sentence; wrapping it doubled its brackets.
                 self._set_mcp_dropped_notice(
-                    "Your MCP servers are unavailable this session: GAIA's MCP "
-                    f"client could not start ({self._mcp_unavailable_error})."
+                    "Your MCP servers are unavailable this session. "
+                    f"{self._mcp_unavailable_error.rstrip()}"
                 )
             return
         try:
             self._mcp_manager.load_from_config()
-            self._print_mcp_load_summary()
             # Servers activated for this agent (#1005); every connected one
             # for an agent with no registry identity.
             active = self._active_mcp_servers(self._mcp_manager)
-            tool_counts = {
-                srv: len(client.list_tools())
+            # Refuse bad servers before the count, so their tools don't count.
+            admitted = {
+                srv: converted
                 for srv in active
-                if (client := self._mcp_manager.get_client(srv)) is not None
+                if (converted := self._admit_mcp_server(srv)) is not None
             }
+            # After admission, so a refused server shows as failed.
+            self._print_mcp_load_summary()
+            tool_counts = {srv: len(converted) for srv, converted in admitted.items()}
             total = sum(tool_counts.values())
             limit = self.config.mcp_tool_limit
             if total > limit:
@@ -2295,13 +2536,21 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 )
                 return
             before = len(_TOOL_REGISTRY)
-            for srv in active:
-                client = self._mcp_manager.get_client(srv)
-                if client:
-                    self._register_mcp_tools(client)
+            for srv, converted in admitted.items():
+                self._register_mcp_tools(self._mcp_manager.get_client(srv), converted)
             added = len(_TOOL_REGISTRY) - before
             if added > 0:
                 logger.info("Loaded %d MCP tool(s)", added)
+            failed = self._mcp_manager.failed_servers_for_agent(
+                self._namespaced_agent_id()
+            )
+            if failed:
+                reasons = "; ".join(f"{srv} ({err})" for srv, err in failed.items())
+                self._set_mcp_dropped_notice(
+                    f"MCP servers that could not start: {reasons}. "
+                    f"{_where_mcp_servers_are_set_up(list(failed), _mcp_config_path)}"
+                )
+                return
             self._set_mcp_dropped_notice(None)
         except Exception as e:  # pylint: disable=broad-except
             # A broken MCP setup must not stop the agent; the user is told.
@@ -2340,7 +2589,24 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def process_query(self, user_input, *args, **kwargs):
         """Run a turn, first telling the user about any dropped MCP servers."""
         self.report_mcp_dropped()
+        self._unanswered_question = None
         return super().process_query(user_input, *args, **kwargs)
+
+    def confirmation_args_for_call(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Also mark a gated call after an unanswered question for a person.
+
+        Pre-approval (Full access) must not turn the model's guess at an
+        answer into a change nobody agreed to. Only a call known to be a read
+        is exempt; the marker matters only on a call that already asks.
+        """
+        shown = super().confirmation_args_for_call(tool_name, tool_args)
+        if self._unanswered_question is None or not isinstance(shown, dict):
+            return shown
+        if call_risk(tool_name, tool_args) == READ:
+            return shown
+        return {**shown, NEEDS_PERSON_ARG: True}
 
     def _register_tools(self) -> None:
         """Register chat agent tools from mixins based on prompt_profile."""
@@ -2513,6 +2779,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         note_untracked("execute_python_file", str(p))
                     # The script's own output folders first: the search is bounded.
                     watch = watch_folders(*folders_named_in(source), run_dir, project)
+                    named = None
+                    if writes:
+                        try:
+                            # A file the script moves or renames can be put back.
+                            named = watch_script_folders(
+                                folders_named_in(source), "execute_python_file"
+                            )
+                        except SnapshotError as e:
+                            return {
+                                "status": "error",
+                                "error": f"Not run: {e}",
+                                "has_errors": True,
+                                "executed": False,
+                            }
                     started = time.time()
                     try:
                         job = run_python_job(
@@ -2527,7 +2807,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("execute_python_file", str(p))
+                        _record_folder_changes(named)
                         raise
+                    undo_note = _record_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2550,7 +2832,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             retain_excerpt(self, r.stdout, 8000),
                             retain_excerpt(self, r.stderr, 2000),
                             time.monotonic() - start,
-                            finished_job_note(job),
+                            " ".join(
+                                n for n in (finished_job_note(job), undo_note) if n
+                            )
+                            or None,
                         ),
                         check_from_python_run(
                             " ".join([file_path, args]).strip(),
@@ -2598,7 +2883,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
 
-                offending = _imports_gaia_tools(code)
+                tool_names = set(_TOOL_REGISTRY) | set(
+                    getattr(self, "_tools_registry", None) or ()
+                )
+                offending = _imports_gaia_tools(code, tool_names)
                 if offending:
                     return {
                         "status": "error",
@@ -2689,11 +2977,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 env = child_env(relaunch_self=True)
                 env["PYTHONIOENCODING"] = "utf-8"
+                env[GUARDED_FOLDERS_ENV] = _guarded_folders()
+                env["PYTHONUTF8"] = "1"
+                env.setdefault("PYTHONUNBUFFERED", "1")
                 if project:
-                    existing = env.get("PYTHONPATH")
-                    env["PYTHONPATH"] = (
-                        os.pathsep.join([project, existing]) if existing else project
-                    )
+                    _with_project_paths(env, project)
 
                 # Temp keeps the snippet out of the workspace. Its own folder,
                 # because a script's folder comes first on sys.path and any
@@ -2710,6 +2998,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 started = time.time()
                 start = time.monotonic()
                 try:
+                    named = None
+                    if writes:
+                        try:
+                            # A file the snippet moves or renames can be put back.
+                            named = watch_script_folders(
+                                folders_named_in(code), "run_python"
+                            )
+                        except SnapshotError as e:
+                            return {
+                                "status": "error",
+                                "error": f"Not run: {e}",
+                                "has_errors": True,
+                                "executed": False,
+                            }
                     try:
                         job = run_python_job(
                             cmd,
@@ -2723,7 +3025,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("run_python", detail)
+                        _record_folder_changes(named)
                         raise
+                    undo_note = _record_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2749,7 +3053,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         logger.warning(
                             "run_python: could not remove %s: %s", snippet_dir, e
                         )
-                notes = [finished_job_note(job)]
+                notes = [finished_job_note(job), undo_note]
                 if moved_from is not None:
                     notes.append(
                         f"The working folder {moved_from} no longer exists, so "
@@ -2763,6 +3067,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "resolve there, so use absolute paths for the user's "
                         "files."
                     )
+                notes.append(_tool_import_hint(r.stderr, tool_names))
                 result = _python_run_result(
                     r,
                     r.stdout[:8000],
@@ -2787,7 +3092,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             # getattr: tools can register from super().__init__(), before
             # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                model=resolve_default_vision_model(),
+                model=resolve_default_vision_model(getattr(self, "model_id", None)),
                 base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
             )
             logger.debug(
@@ -3492,6 +3797,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             state: str,
             reason: str = "",
             wake_in_seconds: int = 0,
+            goal_outcome: str = "",
         ) -> str:
             """Signal the autonomous loop what to do next.
 
@@ -3505,11 +3811,19 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 reason: Human-readable explanation (shown in activity log).
                 wake_in_seconds: Seconds until next wakeup (only for "scheduled").
                     Minimum: 30. Maximum: 86400 (24 hours).
+                goal_outcome: "done" if the goal is achieved, "failed" if it
+                    can't be (say why in reason), "" if unfinished. Unfinished
+                    uses one of 3 tries unless state is "scheduled".
             """
             valid_states = {"idle", "scheduled", "paused"}
             if state not in valid_states:
                 return (
                     f"Invalid state '{state}'. Must be one of: {sorted(valid_states)}"
+                )
+            if goal_outcome not in GOAL_OUTCOMES:
+                return (
+                    f"Invalid goal_outcome '{goal_outcome}'. Must be one of: "
+                    f"{sorted(GOAL_OUTCOMES)}"
                 )
 
             # Clamp wake_in_seconds for "scheduled" state
@@ -3521,9 +3835,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     "directive": state,
                     "reason": reason,
                     "wake_in_seconds": wake_in_seconds,
+                    "goal_outcome": goal_outcome,
                 }
 
             msg = f"Loop state set to '{state}'."
+            if goal_outcome:
+                msg += f" Goal marked {goal_outcome}."
             if reason:
                 msg += f" Reason: {reason}"
             if state == "scheduled":
@@ -3545,39 +3862,44 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             Args:
                 message: The question to present to the user.
                 choices: Optional list of choices (renders as buttons in the UI).
-                default_if_no_response: Value to use if no response received before
-                    timeout. If not set and continue_if_no_response=True, returns
-                    "__NO_RESPONSE__". Always check the return value.
+                default_if_no_response: The choice you would pick if nobody
+                    answers. It is never returned as the user's answer: on a
+                    timeout you get "__NO_RESPONSE__" with this default named.
                 timeout_seconds: How long to wait (10 to 600, default 300).
                 continue_if_no_response: If True, continue after timeout.
                     If False, the loop pauses until user re-engages.
 
             Returns:
-                User's response, chosen option, or "__NO_RESPONSE__" on timeout.
-                ALWAYS check for "__NO_RESPONSE__" before proceeding.
+                The user's response or chosen option, or text starting with
+                "__NO_RESPONSE__" when they did not answer. Silence is not an
+                answer: then change nothing on an assumption, and say in your
+                reply that you are waiting on them or what you assumed.
             """
             timeout_seconds = min(int(timeout_seconds), USER_INPUT_MAX_WAIT_S)
             console = _agent.console
+            if not getattr(console, "answers_questions", True):
+                # The default would read as the user's choice ("cancel").
+                _agent._unanswered_question = message
+                return NO_QUESTION_CHANNEL
             if hasattr(console, "request_user_input_blocking"):
-                return console.request_user_input_blocking(
+                reply = console.request_user_input_blocking(
                     message=message,
                     choices=choices,
-                    default_if_no_response=default_if_no_response,
+                    default_if_no_response=None,
                     timeout_seconds=timeout_seconds,
                     continue_if_no_response=continue_if_no_response,
                 )
-            # Fallback for non-SSE consoles (interactive sessions)
-            try:
-                return (
-                    input(f"\n[Agent asking]: {message}\n> ").strip()
-                    or "__NO_RESPONSE__"
-                )
-            except (EOFError, OSError):
-                return (
-                    default_if_no_response
-                    if default_if_no_response is not None
-                    else "__NO_RESPONSE__"
-                )
+            else:
+                # Non-SSE consoles (interactive sessions)
+                try:
+                    reply = input(f"\n[Agent asking]: {message}\n> ").strip()
+                except (EOFError, OSError):
+                    reply = ""
+            if reply and reply != "__NO_RESPONSE__":
+                _agent._unanswered_question = None
+                return reply
+            _agent._unanswered_question = message
+            return _no_answer_result(timeout_seconds, default_if_no_response)
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools
@@ -3661,7 +3983,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         )
 
     def _index_documents(self, documents: List[str]) -> List[str]:
-        """Index initial documents and return any user-facing failure messages."""
+        """Index the chat's attached documents; return user-facing failure messages.
+
+        Stops loading once the index is full rather than push out documents it
+        just loaded: the rest stay attached, are named to the model as not
+        searched, and load one at a time through ``query_specific_file``.
+        """
+        self.attached_documents = list(documents)
         failures = []
         for doc in documents:
             doc_name = os.path.basename(doc)
@@ -3670,10 +3998,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     # Naming a file to index is the grant to read it; a folder is never granted.
                     if os.path.isfile(doc):
                         self.path_validator.add_allowed_path(doc)
+                    if self.rag.is_full():
+                        continue
                     logger.info(f"Indexing document: {doc}")
                     result = self.rag.index_document(doc)
 
                     if result.get("success"):
+                        _forget_evicted(self.indexed_files, result.get("evicted", []))
                         self.indexed_files.add(doc)
                         logger.info(
                             f"Successfully indexed: {doc} ({result.get('num_chunks', 0)} chunks)"
@@ -3941,6 +4272,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.cleanup_browser_use()
         except Exception as e:
             logger.error(f"Error closing browser during cleanup: {e}")
+        try:
+            # Each MCP server is a process tree (uvx, uv, the server) that outlives
+            # us. The collector may run this on the event loop, and stopping a
+            # server waits for it, so the stop happens on its own thread here;
+            # close() stops them synchronously first, leaving nothing to do.
+            manager = getattr(self, "_mcp_manager", None)
+            if manager is not None and getattr(manager, "_clients", None):
+                threading.Thread(
+                    target=manager.disconnect_all, name="gaia-mcp-stop", daemon=True
+                ).start()
+        except Exception as e:
+            logger.error(f"Error stopping MCP servers during cleanup: {e}")
         try:
             if self._fs_index:
                 self._fs_index.close_db()
