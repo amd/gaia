@@ -438,6 +438,42 @@ async def update_session(
     return await _session_response(db, session)
 
 
+def _end_sidecar_session(session_id: str, agent_type: str) -> None:
+    """End the chat's session in its running sidecar, stopping its MCP servers.
+
+    Never starts a sidecar to do it. The chat is already gone, so a failure is
+    logged, not raised: the sidecar still closes the session once it idles out.
+    """
+    from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
+
+    from ..email_sidecar import daemon_client
+    from ..email_sidecar.profiles import end_session_supported
+
+    profile = profile_for(agent_type)
+    if profile is None or profile.min_end_session_api_version is None:
+        return
+    try:
+        handle = daemon_client.running_handle(profile.agent_id)
+        if handle is None or not end_session_supported(profile, handle.api_version):
+            return
+        handle.proxy().end_session(session_id)
+    except SidecarHTTPError as e:
+        if e.status_code != 404:  # 404: the sidecar never had this chat
+            _log_unended(session_id, profile.display_name, e)
+    except SidecarError as e:
+        _log_unended(session_id, profile.display_name, e)
+
+
+def _log_unended(session_id: str, agent_name: str, error: Exception) -> None:
+    logger.error(
+        "Could not end deleted chat %s in the %s agent; its MCP servers run "
+        "until the session idles out: %s",
+        session_id,
+        agent_name,
+        error,
+    )
+
+
 @router.delete("/api/sessions/{session_id}")
 async def delete_session(
     session_id: str,
@@ -450,7 +486,8 @@ async def delete_session(
     for it to finish: the turn is still using the session's agent and will
     persist its answer to the session row.
     """
-    if db.get_session(session_id) is None:
+    session = db.get_session(session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     run_manager.cancel(session_id)
     session_locks = http_request.app.state.session_locks
@@ -478,6 +515,10 @@ async def delete_session(
         followups.forget(session_id)
         answer_retry.forget(session_id)
         session_environment.forget_session(session_id)
+        if session_environment.relayed(session):
+            await asyncio.to_thread(
+                _end_sidecar_session, session_id, session.get("agent_type")
+            )
     try:
         await asyncio.to_thread(file_snapshots.delete_session, session_id)
     except OSError as e:

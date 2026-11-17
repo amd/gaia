@@ -771,7 +771,8 @@ class TestSidecarHTTPErrorDetail:
         )
         assert "gaia " not in agent_errors[0]["content"]
 
-    def test_a_detail_that_names_the_setup_repair_gains_no_hint(self):
+    def test_a_server_that_could_not_start_gets_the_outage_wording(self):
+        """Its raw reason goes to the log; the daemon starts it again on resend."""
         from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
 
         handler = _FakeHandler()
@@ -779,7 +780,15 @@ class TestSidecarHTTPErrorDetail:
             "GAIA's AI engine couldn't start: lemond timed out. Sending the "
             f"message again won't help until it is repaired. {AGENT_UI_SETUP_HINT}"
         )
-        self._assert_left_alone(detail)
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(
+                SidecarHTTPError(503, detail, path="/v1/gaia/query")
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert agent_errors[0]["content"] == relay.ENGINE_START_FAILED_MESSAGE
+        assert "lemond" not in agent_errors[0]["content"]
 
     def test_a_detail_that_already_says_to_resend_gains_no_hint(self):
         self._assert_left_alone(
@@ -787,19 +796,26 @@ class TestSidecarHTTPErrorDetail:
             "refused). Start the model server, then send the message again."
         )
 
-    def test_a_server_the_user_runs_gets_its_start_instruction(self, monkeypatch):
+    def test_a_server_the_user_runs_is_theirs_to_start_with_no_command(
+        self, monkeypatch
+    ):
         from gaia.llm import lemonade_launcher
+        from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT
 
-        start = "Start the Lemonade app from Applications, then retry."
         monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
         monkeypatch.setattr(
             lemonade_launcher,
             "describe_start_hint",
-            lambda ctx_size=None: lemonade_launcher.StartHint(instruction=start),
+            lambda ctx_size=None: lemonade_launcher.StartHint(
+                instruction="Lemonade Server is not installed. Run `gaia init`."
+            ),
         )
         detail = "local LLM triage failed: connection refused"
         content = relay._augment_error_detail(detail)
-        assert content == f"{detail}{relay.LEMONADE_CONNECTION_HINT} {start}"
+        assert content == (
+            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {APP_OTHER_SERVER_DOWN_HINT}"
+        )
+        assert "gaia init" not in content
 
     def _assert_left_alone(self, detail):
         handler = _FakeHandler()

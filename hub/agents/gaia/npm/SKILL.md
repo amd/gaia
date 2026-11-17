@@ -6,11 +6,11 @@ description: Use when integrating the @amd-gaia/gaia npm package — running GAI
 # Integrating `@amd-gaia/gaia`
 
 `@amd-gaia/gaia` delivers **two binaries** and owns their process lifecycle: the
-frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-tui`).
+frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-cli`).
 It ships no agent logic of its own, and it **builds neither binary at install
 time** — both are published artifacts it downloads and verifies. The terminal UI
 is the published `terminal-hub` component, the same binary a full GAIA install
-runs as `gaia-tui`, so its behaviour cannot differ from that one. By default everything
+runs as `gaia-cli`, so its behaviour cannot differ from that one. By default everything
 runs on the local machine against a local model server, and nothing you type or index
 leaves it. If you pick a cloud provider (Fireworks AI, the AMD LLM Gateway or Claude
 in the terminal UI, or `provider: "claude"` on `/query`), the conversation is sent to
@@ -267,7 +267,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package: call it with plain `fetch`. Contract version **2.29**; the stream is
+package: call it with plain `fetch`. Contract version **2.30**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -372,6 +372,9 @@ Rules a client must respect:
 - **Cancel with `POST /v1/gaia/query/{run_id}/cancel`.** It returns
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
+  When the cancel stops the turn's attached documents from loading, the reply
+  also has `documents_left`: how many were not loaded. Show it, since a stream
+  you closed never delivers that step's result.
   Dropping the HTTP connection also cancels the run. A run stopped mid-answer
   ends with an empty `final`, and no `token` follows the cancel, so keep the
   text the `token` events already delivered. Text not yet sent when the
@@ -518,6 +521,17 @@ It reads the session's own agent, so skills loaded in earlier turns are
 included. `category` is a tool-mixin name (`rag`, `file_io`, `shell`, ...),
 `mcp`, `skill`, or `agent` for a tool the agent defines itself. An unknown
 session is a **404**: send a query on it first.
+
+**Contract ≥ 2.30 ends a session** when your user deletes the conversation, so
+its agent and the MCP servers it started stop now instead of when the session
+idles out (hours later):
+
+```
+DELETE /v1/gaia/sessions/{session_id}   → { session_id, deleted: true }
+```
+
+An unknown session is a **404**. One running a turn is a **409**: cancel the
+run, then delete again.
 
 **That bypass stops the prompts; it does not open the shell.** The stdio
 transport's `--full-access` does both — it runs gated tools unasked *and*
@@ -735,7 +749,8 @@ There is no silent null.
   agent adds that one line when a check failed or was blocked, or a change was
   never checked. Show it to the user; do not read it as an error, and do not
   strip it from the `context` you replay. A turn that was confirmed, or needed no
-  check, has no such line.
+  check, has no such line, and neither has an answer that itself reports failed
+  tests and claims no success.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
   The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).
@@ -763,7 +778,7 @@ There is no silent null.
   comes up. It must also be **0.26.0+**: an older core's daemon starts fine but
   cannot run this agent, which reads as a UI with a dead agent rather than as
   a version problem.
-- **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
+- **The TUI is installed as `gaia-cli`, never `gaia`** — the terminal-hub artifact
   *is* called `gaia-<platform>`, and a file named `gaia` in a cache directory would
   shadow the npm bin shim. The lock's `filename` and `executable` differ for that
   reason. Don't rename it back.
@@ -791,7 +806,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.29","agentVersion":"0.3.5"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.30","agentVersion":"0.3.5"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
@@ -813,7 +828,8 @@ loop on `/v1/gaia/init` — it will report ready. Wait for a running turn to
 finish (or close an idle session) and retry the same `/query`. A 503 whose
 `detail` says the model server or GAIA's AI engine couldn't start is not
 a busy slot: show the user that `detail`, which names the fix, instead of
-retrying.
+retrying. Neither is a 503 whose `detail` says there is no model by that name:
+it never succeeds on retry, so pick another model.
 
 **Three more refusals are yours to avoid**, each naming its fix in `detail`
 (SPEC §5.2 has the reasoning):

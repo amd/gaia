@@ -51,6 +51,7 @@ describe('shortScope', () => {
     it.each([
         ['changing files in C:\\Users\\me\\OneDrive - AMD\\uxa', 'changing files in uxa'],
         ['changing files in /home/u/notes', 'changing files in notes'],
+        ['تغيير الملفات في \u2068C:\\Users\\me\\uxa\u2069', 'تغيير الملفات في \u2068uxa\u2069'],
         ['git status', 'git status'],
         ['pytest (runs the test code it finds)', 'pytest (runs the test code it finds)'],
         ['Python snippets', 'Python snippets'],

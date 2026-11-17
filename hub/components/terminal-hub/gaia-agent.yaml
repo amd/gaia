@@ -1,4 +1,4 @@
-# GAIA Terminal UI — `gaia-tui`, the Go/Bubble Tea terminal app. Published to
+# GAIA Terminal UI — `gaia-cli`, the Go/Bubble Tea terminal app. Published to
 # the Agent Hub R2 catalog as a component (not an agent): it hosts agents rather
 # than being one, so it has no tools, no models, and no agent loop.
 #

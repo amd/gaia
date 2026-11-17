@@ -279,6 +279,25 @@ class SidecarProxy:
                 f"tools: {exc}"
             ) from exc
 
+    def end_session(self, session_id: str) -> dict:
+        """End the sidecar session and close its agent (flagship, contract >= 2.30).
+
+        A 404 (no such session) or 409 (running a turn) raises; the caller
+        decides what it means.
+        """
+        import requests
+
+        path = f"{self.prefix}/sessions/{session_id}"
+        try:
+            resp = self._session.delete(f"{self.base_url}{path}", timeout=self.timeout)
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to end the "
+                f"session: {exc}"
+            ) from exc
+        self._raise_for_status(resp, path)
+        return resp.json()
+
     def set_bypass(self, session_id: str, enabled: bool) -> dict:
         """Turn the sidecar session's unattended tool approval on or off.
 
@@ -393,8 +412,11 @@ class SidecarProxy:
 
         return _events()
 
-    def cancel_query(self, run_id: str) -> None:
+    def cancel_query(self, run_id: str) -> Optional[int]:
         """Cancel an in-flight ``/query`` run.
+
+        Returns the sidecar's ``documents_left``: how many of the turn's
+        attached documents the cancel left unloaded, or None when it names none.
 
         Best-effort by design: the caller's forced response close has already
         unblocked the relay's reader, so this POST uses a short dedicated
@@ -421,15 +443,28 @@ class SidecarProxy:
                 run_id,
                 exc,
             )
-            return
+            return None
         if resp.status_code == 404:
             logger.info(
                 "%s sidecar: cancel for run_id=%s: no longer in flight (404)",
                 self.agent_id,
                 run_id,
             )
-            return
+            return None
         self._raise_for_status(resp, path)
+        try:
+            left = resp.json().get("documents_left")
+        except (ValueError, AttributeError) as exc:
+            # The run is cancelled either way; only the count is unknown.
+            logger.warning(
+                "%s sidecar: cancel for run_id=%s answered without a readable "
+                "body: %s",
+                self.agent_id,
+                run_id,
+                exc,
+            )
+            return None
+        return left if isinstance(left, int) and not isinstance(left, bool) else None
 
 
 class EmailSidecarProxy(SidecarProxy):

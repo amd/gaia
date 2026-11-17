@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 from gaia.daemon.constants import (
+    DAEMON_PID_ENV_VAR,
     DAEMON_SUPERVISION_ENABLED_VALUE,
     DAEMON_SUPERVISION_ENV_VAR,
     RESERVED_PORT,
@@ -608,6 +609,7 @@ class AgentSidecarManager:
         # parity). Must land BEFORE the idle reaper flips on, or a reaped sidecar
         # drops a clock the daemon isn't yet driving.
         spawn_env[DAEMON_SUPERVISION_ENV_VAR] = DAEMON_SUPERVISION_ENABLED_VALUE
+        spawn_env[DAEMON_PID_ENV_VAR] = str(os.getpid())
         log_handle = self._open_log(port)
         try:
             self._proc = subprocess.Popen(

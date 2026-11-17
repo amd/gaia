@@ -631,13 +631,16 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # renders the same answer. Never fatal: a banner losing its hint is far
     # better than the status endpoint failing.
     try:
-        from gaia.llm.lemonade_launcher import describe_start_hint
+        from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
 
-        # Resolve WITH the required ctx so the rendered command carries it;
-        # callers must print it verbatim, never append their own flag.
-        hint = describe_start_hint(_MIN_CONTEXT_SIZE)
-        status.start_instruction = hint.instruction
-        status.start_command = hint.command
+        # GAIA starts its own server by itself; the app has nothing to tell
+        # the user to run, so its own "it starts on its own" line shows.
+        if not gaia_runs_lemonade():
+            # Resolve WITH the required ctx so the rendered command carries it;
+            # callers must print it verbatim, never append their own flag.
+            hint = describe_start_hint(_MIN_CONTEXT_SIZE)
+            status.start_instruction = hint.instruction
+            status.start_command = hint.command
     except Exception as exc:  # noqa: BLE001
         logger.warning("system status: could not resolve the start hint: %s", exc)
 
@@ -1210,6 +1213,22 @@ async def get_settings(db: ChatDatabase = Depends(get_db)):
     )
 
 
+def _load_newly_selected_model(db: ChatDatabase) -> None:
+    """Load the model new turns now run; nothing else would until the next message."""
+    from gaia.config import GaiaConfigError
+
+    from .providers import LOCAL, provider_of
+
+    try:
+        model = (db.get_setting("custom_model") or "").strip() or _default_model_name()
+    except GaiaConfigError as e:
+        # The setting is saved; the next message reports the config and loads.
+        logger.warning("Not loading the newly selected model: %s", e)
+        return
+    if provider_of(model) == LOCAL:
+        warmup.request_warm_up("model setting", fresh=True, model=model)
+
+
 @router.put("/api/settings", response_model=SettingsResponse)
 async def update_settings(
     request: SettingsUpdateRequest,
@@ -1268,8 +1287,14 @@ async def update_settings(
                 status_code=500,
                 detail=f"The custom model was not saved: {e} Then save it again.",
             ) from e
+        previous = (db.get_setting("custom_model") or "").strip() or None
+        changed = (value is None) != (previous is None) or (
+            value is not None and not _model_ids_match(value, previous)
+        )
         db.set_setting("custom_model", value)
         clear_restore_notice()
+        if changed:
+            _load_newly_selected_model(db)
 
     # Only touch context_size when the field was explicitly included in the request.
     if "context_size" in request.model_fields_set:
@@ -1344,6 +1369,7 @@ async def update_settings(
                 _ui_cloud_provider(custom) or custom.lower().startswith("claude")
             ):
                 db.set_setting("custom_model", None)
+                _load_newly_selected_model(db)
         logger.info("Network policy set: %s", result["policy"].value)
 
     from .providers import custom_model_override

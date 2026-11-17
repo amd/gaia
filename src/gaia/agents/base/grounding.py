@@ -42,6 +42,7 @@ from gaia.agents.base.claims import (
     read_claims,
 )
 from gaia.agents.base.completion import WRITE_TOOLS, mentioned_paths
+from gaia.agents.base.text_task import instruction_part
 from gaia.agents.base.verification import is_check_execution, observed_text
 
 LOOK = "look"
@@ -1036,7 +1037,10 @@ def ungrounded(
     not look, or that its figures are unverified, has nothing left to correct
     about looking or figures — only a false report of work done still counts.
     """
-    findings = look_findings(answer, query, records, locate, history, plan_only)
+    # Files to read and commands to run come from the instruction; the figure
+    # check below reads the whole query, since figures may come from the text.
+    asked = instruction_part(query)
+    findings = look_findings(answer, asked, records, locate, history, plan_only)
     if admits_unverified(answer):
         findings = [f for f in findings if f.note == _ABSENT_NOTE]
     else:
@@ -1044,7 +1048,7 @@ def ungrounded(
     return (
         findings
         + action_findings(answer, records, may_act)
-        + request_findings(answer, query, records)
+        + request_findings(answer, asked, records)
     )
 
 

@@ -39,7 +39,7 @@ on:
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
       - '.github/workflows/windows_setup.yml'
-      # The frozen gaia core both installer jobs pack beside gaia-tui.
+      # The frozen gaia core both installer jobs pack beside gaia-cli.
       - '.github/workflows/build_core.yml'
       - 'installer/core/**'
       # build_core.yml builds the Agent UI into the core.
@@ -85,7 +85,7 @@ on:
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
       - '.github/workflows/windows_setup.yml'
-      # The frozen gaia core both installer jobs pack beside gaia-tui.
+      # The frozen gaia core both installer jobs pack beside gaia-cli.
       - '.github/workflows/build_core.yml'
       - 'installer/core/**'
       # build_core.yml builds the Agent UI into the core.
@@ -313,7 +313,7 @@ jobs:
           # the runner's absolute paths out of the binary.
           DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
           go build -trimpath -ldflags="-s -w -X ${PKG}.version=${{ github.ref_name }} -X ${PKG}.commit=${{ github.sha }} -X ${PKG}.date=${DATE}" \
-            -o ../bin/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
+            -o ../bin/gaia-cli-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             ./cmd/gaia
 
       # Reads the PE resource directory of the LINKED binary. Asserting the
@@ -324,12 +324,12 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           python util/check_pe_resources.py \
-            bin/gaia-${{ matrix.goos }}-${{ matrix.goarch }}.exe
+            bin/gaia-cli-${{ matrix.goos }}-${{ matrix.goarch }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: gaia-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: gaia-cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: bin/gaia-*
           retention-days: 14
 
@@ -341,11 +341,11 @@ jobs:
       - name: Download linux/amd64 artifact
         uses: actions/download-artifact@v8
         with:
-          name: gaia-linux-amd64
+          name: gaia-cli-linux-amd64
 
       - name: Check size
         run: |
-          SIZE=$(stat --printf="%s" gaia-linux-amd64)
+          SIZE=$(stat --printf="%s" gaia-cli-linux-amd64)
           SIZE_MB=$((SIZE / 1024 / 1024))
           echo "Binary size: ${SIZE_MB}MB (${SIZE} bytes)"
           if [ "$SIZE" -gt 15728640 ]; then

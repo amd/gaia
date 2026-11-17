@@ -151,6 +151,14 @@ describe('ContextPanel', () => {
         expect(screen.queryByText('In the model')).toBeNull();
     });
 
+    it('says a turn with no reply was not counted, matching the side rail', async () => {
+        mockedApi.getChatPerformance.mockResolvedValue(perf([{
+            ...TURN, cost: { kind: 'no_reply', usd: null },
+        }]));
+        render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
+        expect(await screen.findByText('Not counted: no reply came')).toBeInTheDocument();
+    });
+
     it('shows the chat totals on request', async () => {
         render(<ContextPanel sessionId="s1" busy={false} onClose={() => {}} />);
         await screen.findByText('In the model');

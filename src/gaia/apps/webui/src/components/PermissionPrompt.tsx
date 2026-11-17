@@ -65,9 +65,10 @@ export function splitCommandSummary(summary: string): { command: string; folder:
 
 /** A grant's folder by its name alone, for a button; the full path stays in its tooltip. */
 export function shortScope(scope: string): string {
-    return scope.replace(/(\s)((?:[A-Za-z]:)?[\\/][^]*)$/, (_, space: string, path: string) => {
+    // A translated scope wraps its path in direction isolates (U+2068 ... U+2069).
+    return scope.replace(/(\s\u2068?)((?:[A-Za-z]:)?[\\/][^\u2069]*)(\u2069?)$/, (_, lead: string, path: string, close: string) => {
         const name = path.split(/[\\/]/).filter(Boolean).pop();
-        return name ? `${space}${name}` : `${space}${path}`;
+        return `${lead}${name ?? path}${close}`;
     });
 }
 

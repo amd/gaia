@@ -76,7 +76,7 @@ async function advance(ms: number) {
 }
 
 const text = () => document.body.textContent ?? '';
-const NOTICE = "GAIA's model server isn't answering, so it can't reply yet. Your chats are still here.";
+const NOTICE = "The model server isn't answering, so GAIA can't reply yet. Your chats are still here.";
 
 describe('a set-up install whose model server is down at launch', () => {
     it('shows the chats and says the model server is not answering', async () => {
@@ -131,6 +131,42 @@ describe('a set-up install whose model server is down at launch', () => {
         expect(mocked.checkSetup.mock.calls.length).toBe(asked + 1);
         expect(text()).toContain(NOTICE);
         expect(text()).not.toContain('First-run setup');
+    });
+
+    it('shows the notice when the server stops answering while the app is open, with no reload', async () => {
+        mocked.checkSetup.mockResolvedValue(READY);
+        statusSays(true);
+        render(<App />);
+        await advance(0);
+        expect(text()).not.toContain(NOTICE);
+
+        mocked.checkSetup.mockResolvedValue(SERVER_DOWN);
+        act(() => {
+            useChatStore.getState().setSystemStatus({ lemonade_running: false, model_loaded: null, initialized: true } as never);
+        });
+        await advance(0);
+
+        expect(text()).toContain(NOTICE);
+        expect(screen.getByRole('button', { name: 'Check again' })).toBeInTheDocument();
+        expect(text()).toContain('Harbor plans');
+        expect(text()).not.toContain('First-run setup');
+    });
+
+    it('never opens setup over a chat because the poll saw the server down', async () => {
+        mocked.checkSetup.mockResolvedValue(READY);
+        statusSays(true);
+        render(<App />);
+        await advance(0);
+
+        mocked.checkSetup.mockResolvedValue({ ready: false, stage: 'models', initialized: true, steps: [] });
+        act(() => {
+            useChatStore.getState().setSystemStatus({ lemonade_running: false, model_loaded: null, initialized: true } as never);
+        });
+        await advance(0);
+
+        expect(text()).not.toContain('First-run setup');
+        expect(text()).not.toContain(NOTICE);
+        expect(text()).toContain('Harbor plans');
     });
 
     it('offers setup from the notice, for a server that will not come back', async () => {
