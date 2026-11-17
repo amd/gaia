@@ -971,6 +971,13 @@ _TIME_RESERVE_RECENT_STEPS = 5
 # the floor.
 _TIME_TOKEN_MARGIN = 0.8
 _TIME_MIN_OUTPUT_TOKENS = 256
+# Appended to the request of a turn that has a time limit, for the model only.
+_TIME_OPENING_NOTE = (
+    "\n\n[This turn has {total} seconds in all. If the task asks "
+    "for files or other deliverables, write a first working version early "
+    "and improve it in place: when the time is up no tool can run and "
+    "anything not already written is lost.]"
+)
 # Shortest run worth starting when a time limit cuts a tool's timeout.
 _MIN_CAPPED_RUN_S = 5
 
@@ -1501,6 +1508,31 @@ _CUT_OFF_CONTINUE_PROMPT = (
     "your reasoning brief and make the next tool call, or give the final "
     "answer if the task is complete."
 )
+# For a cut-off reply with no text at all: the limit went on thinking alone,
+# and thinking is not carried over, so "continue" would start it again.
+_CUT_OFF_ALL_THINKING_PROMPT = (
+    "Your last reply was cut off at the output-token limit with nothing in "
+    "it: the whole limit went on thinking, so there is no answer and no tool "
+    "call. Thinking it through the same way will end the same way. Do not "
+    "work the whole problem out in your head. In a few lines pick the next "
+    "small step and make one tool call now: run an experiment, or write a "
+    "rough first version to a file and improve it from there."
+)
+
+
+def _was_all_thinking(
+    response: str, reasoning: Optional[str], stats: Optional[Dict[str, Any]]
+) -> bool:
+    """True when a cut-off reply holds no text because thinking used the limit.
+
+    An empty reply alone is not enough: a full context window also ends a
+    reply empty at ``finish_reason=length``, with no thinking behind it.
+    """
+    if response.strip():
+        return False
+    return bool(reasoning or (stats or {}).get("reasoning_tokens"))
+
+
 _CUT_OFF_FAILURE_ANSWER = (
     "I couldn't finish this: my reply kept growing longer than the model can "
     "send at once, so it was cut off before I could carry out the next step."
@@ -10854,6 +10886,10 @@ Do NOT wrap conversational replies in JSON.
                 a fresh uuid is synthesised for backward compatibility
                 with embedded-JSON paths that don't carry an id.
         """
+        view = (self._tools_registry.get(tool_name) or {}).get("model_view")
+        if view is not None and isinstance(tool_output, dict):
+            tool_output = view(tool_output)
+
         if isinstance(tool_output, str) or tool_name == "read_tool_output":
             # A read_tool_output page is bounded by the store and must stay exact.
             text_content = tool_output
@@ -12173,6 +12209,20 @@ Do NOT wrap conversational replies in JSON.
             return notice
         return None
 
+    def _tell_time_budget(self, messages: List[Dict]) -> None:
+        """Tell the model, with its request, how long the turn has.
+
+        Without it the model first hears of the limit at the 70% notice, after
+        spending most of the turn exploring. Only the copy sent this turn is
+        changed; the saved history keeps the user's words.
+        """
+        limit = getattr(self, "time_limit_s", None)
+        if not limit or limit <= 0 or not getattr(self, "_budget_notices_on", False):
+            return
+        request = messages[-1]
+        if isinstance(request.get("content"), str):
+            request["content"] += _TIME_OPENING_NOTE.format(total=int(limit))
+
     def time_capped_run_seconds(self, seconds: int) -> int:
         """*seconds*, cut so a run a tool starts ends before the turn's stop point.
 
@@ -12644,6 +12694,7 @@ Do NOT wrap conversational replies in JSON.
         messages.append(
             {"role": "user", "content": self._with_long_message_file(user_input)}
         )
+        self._tell_time_budget(messages)
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps
@@ -13623,7 +13674,16 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if response:
                     messages.append({"role": "assistant", "content": response})
-                messages.append({"role": "user", "content": _CUT_OFF_CONTINUE_PROMPT})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            _CUT_OFF_ALL_THINKING_PROMPT
+                            if _was_all_thinking(response, reasoning, response_stats)
+                            else _CUT_OFF_CONTINUE_PROMPT
+                        ),
+                    }
+                )
                 continue
 
             # Parse the response. Small models (e.g. 4B) sometimes emit malformed

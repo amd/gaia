@@ -378,7 +378,8 @@ def _run_turn(
             model_id=model,
             max_steps=max_steps,
             silent_mode=True,
-            streaming=False,
+            # A long reply sent in one piece can fail at the gateway; a stream does not.
+            streaming=True,
             allowed_paths=[os.getcwd(), *(extra_paths or [])],
         )
     )
