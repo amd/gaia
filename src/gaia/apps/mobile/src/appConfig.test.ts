@@ -67,6 +67,32 @@ describe('app config', () => {
         expect(pluginOptions(prod, './plugins/withCleartextHosts').hosts).toEqual([]);
     });
 
+    it('trusts only system CAs on Android and turns off cloud backup', () => {
+        const { securityConfig } = require('../plugins/withCleartextHosts') as { securityConfig: (hosts: string[]) => string };
+        const release = securityConfig([]);
+        expect(release).toContain('<base-config cleartextTrafficPermitted="false">');
+        expect(release).toContain('<certificates src="system" />');
+        expect(release).not.toMatch(/src="user"|debug-overrides|cleartextTrafficPermitted="true"/);
+        expect(securityConfig(['10.0.2.2'])).toContain('<domain includeSubdomains="false">10.0.2.2</domain>');
+        expect(configFor('production').android?.allowBackup).toBe(false);
+        expect(configFor('development').android?.allowBackup).toBe(false);
+        expect(pluginOptions(configFor('production'), 'expo-secure-store').configureAndroidBackup).toBe(false);
+    });
+
+    it('keeps every storage domain out of cloud backup and device-to-device transfer', () => {
+        const { extractionRules } = require('../plugins/withBackupExclusions') as { extractionRules: () => string };
+        const rules = extractionRules();
+        expect(rules).not.toContain('<include');
+        for (const section of ['cloud-backup', 'device-transfer']) {
+            const body = new RegExp(`<${section}>([\\s\\S]*?)</${section}>`).exec(rules)?.[1] ?? '';
+            const domains = [...body.matchAll(/<exclude domain="(\w+)" path="\." \/>/g)].map((m) => m[1]);
+            expect(domains.sort()).toEqual(
+                ['database', 'device_database', 'device_file', 'device_root', 'device_sharedpref', 'external', 'file', 'root', 'sharedpref'],
+            );
+        }
+        expect(configFor('production').plugins).toContain('./plugins/withBackupExclusions');
+    });
+
     it('declares the web UI languages to iOS and Android', () => {
         expect(pluginOptions(configFor('development'), 'expo-localization').supportedLocales).toEqual(
             LOCALES.map((locale) => locale.meta.code),

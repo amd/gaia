@@ -12,7 +12,12 @@ function securityConfig(hosts) {
     const lines = [
         '<?xml version="1.0" encoding="utf-8"?>',
         '<network-security-config>',
-        '    <base-config cleartextTrafficPermitted="false" />',
+        // System CAs only: never user-added ones, and no debug-overrides. The paired PC is pinned natively and needs no CA.
+        '    <base-config cleartextTrafficPermitted="false">',
+        '        <trust-anchors>',
+        '            <certificates src="system" />',
+        '        </trust-anchors>',
+        '    </base-config>',
     ];
     if (hosts.length > 0) {
         lines.push('    <domain-config cleartextTrafficPermitted="true">');
@@ -24,7 +29,8 @@ function securityConfig(hosts) {
 }
 
 /**
- * Android's plain-HTTP policy, the same in every build variant: refused for every host except `hosts`.
+ * Android's plain-HTTP and trust policy, the same in every build variant: plain HTTP refused for every host except `hosts`,
+ * and only system CAs trusted.
  * It replaces the debug variant's blanket `usesCleartextTraffic`, which Android ignores once this file exists.
  */
 module.exports = function withCleartextHosts(config, { hosts } = {}) {
@@ -47,3 +53,5 @@ module.exports = function withCleartextHosts(config, { hosts } = {}) {
         return cfg;
     });
 };
+
+module.exports.securityConfig = securityConfig;

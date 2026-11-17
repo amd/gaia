@@ -64,17 +64,29 @@ export default function appConfig(): ExpoConfig {
                 NSLocalNetworkUsageDescription: LOCAL_NETWORK_USE,
             },
         },
-        android: { package: id },
+        android: {
+            package: id,
+            // No cloud backup. plugins/withBackupExclusions also keeps every app file out of device-to-device
+            // transfer, so a paired PC's records never reach another phone, where its Keystore key can't follow.
+            allowBackup: false,
+            // Android 14+ previews where back leads; React Native's BackHandler runs through OnBackPressedDispatcher.
+            predictiveBackGestureEnabled: true,
+        },
         plugins: [
             'expo-router',
             'expo-dev-client',
             ['expo-localization', { supportsRTL: true, supportedLocales: LOCALE_CODES }],
             ['expo-camera', { cameraPermission: CAMERA_USE, microphonePermission: false, barcodeScannerEnabled: true }],
             ['expo-audio', { microphonePermission: false, enableBackgroundPlayback: true, enableBackgroundRecording: false }],
-            ['expo-secure-store', { faceIDPermission: FACE_ID_USE }],
+            // Its Android backup rules would let secure-store files back up; plugins/withBackupExclusions excludes everything.
+            ['expo-secure-store', { faceIDPermission: FACE_ID_USE, configureAndroidBackup: false }],
             'expo-background-task',
+            // Without the system's contrast scrim, the transparent button bar takes the style GAIA's theme sets.
+            ['expo-navigation-bar', { enforceContrast: false }],
             ['./plugins/withCleartextHosts', { hosts: dev ? DEV_HTTP_HOSTS : [] }],
+            './plugins/withBackupExclusions',
             './plugins/withNinjaJobs',
+            './plugins/withWorkManagerKeep',
         ],
     };
 }

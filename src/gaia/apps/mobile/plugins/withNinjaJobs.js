@@ -5,6 +5,8 @@ const { withProjectBuildGradle } = require('expo/config-plugins');
 
 const BEGIN = '// @generated begin withNinjaJobs (plugins/withNinjaJobs.js)';
 const END = '// @generated end withNinjaJobs';
+// The block must run before this line: it evaluates :app, which finalizes :app's DSL.
+const ANCHOR = 'apply plugin: "expo-root-project"';
 
 // Ninja otherwise runs a compile per core in every C++ module Gradle builds at once.
 const BLOCK = `${BEGIN}
@@ -35,18 +37,32 @@ function withoutBlock(contents) {
     if (end === -1) {
         throw new Error(`withNinjaJobs: android/build.gradle has "${BEGIN}" but no "${END}"; run \`npx expo prebuild --clean\`.`);
     }
-    return contents.slice(0, start) + contents.slice(end + END.length);
+    return contents.slice(0, start) + contents.slice(end + END.length).replace(/^\n+/, '');
+}
+
+function withBlockBeforeRootProject(contents) {
+    const clean = withoutBlock(contents);
+    const at = clean.indexOf(ANCHOR);
+    if (at === -1) {
+        throw new Error(
+            `withNinjaJobs: android/build.gradle has no \`${ANCHOR}\` line to insert before; the block would run after :app's DSL is final. Check the React Native template or port plugins/withNinjaJobs.js.`,
+        );
+    }
+    return `${clean.slice(0, at)}${BLOCK}\n\n${clean.slice(at)}`;
 }
 
 /** Caps the parallel C++ compiles of an Android build at GAIA_BUILD_JOBS (default 4), read when Gradle runs. */
-module.exports = function withNinjaJobs(config) {
+function withNinjaJobs(config) {
     return withProjectBuildGradle(config, (cfg) => {
         if (cfg.modResults.language !== 'groovy') {
             throw new Error(
                 `withNinjaJobs: android/build.gradle is ${cfg.modResults.language}, not Groovy; port the block in plugins/withNinjaJobs.js to it.`,
             );
         }
-        cfg.modResults.contents = `${withoutBlock(cfg.modResults.contents).trimEnd()}\n\n${BLOCK}\n`;
+        cfg.modResults.contents = withBlockBeforeRootProject(cfg.modResults.contents);
         return cfg;
     });
-};
+}
+
+module.exports = withNinjaJobs;
+module.exports.withBlockBeforeRootProject = withBlockBeforeRootProject;
