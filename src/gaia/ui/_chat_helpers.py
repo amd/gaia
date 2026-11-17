@@ -3931,6 +3931,42 @@ def _restart_stopped_gaia_lemonade(model_id: str, sse_handler) -> bool:
     return True
 
 
+def _refuse_turn_on_stopped_users_server() -> None:
+    """Fail a turn at once when the model server the user chose refuses connections.
+
+    GAIA starts only its own server, so nothing this turn does can bring that
+    one back, and every probe of it on the way costs seconds.
+
+    Raises:
+        LemonadeServerDownError: nothing accepts a connection at its address.
+    """
+    from gaia.llm.lemonade_client import LemonadeServerDownError
+
+    if _eval_provider_kwargs():
+        return  # The turn runs on another provider; Lemonade is not in use.
+    endpoint = _stopped_users_server()
+    if endpoint:
+        raise LemonadeServerDownError(endpoint)
+
+
+def _stopped_users_server() -> Optional[str]:
+    """``host:port`` of the model server the user chose when it refuses
+    connections; None when it accepts them or GAIA runs its own."""
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        _endpoint_label,
+        configured_lemonade_url,
+    )
+
+    url = configured_lemonade_url()
+    if not url:
+        return None
+    client = LemonadeClient(base_url=url, verbose=False)
+    if client._server_accepts_connections():
+        return None
+    return _endpoint_label(client.base_url)
+
+
 def _preflight_load(
     model_id: str, sse_handler, stopped, loads: Optional[list] = None
 ) -> None:
@@ -4800,6 +4836,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             turn_box["recording"] = recording
             try:
                 t0 = _time.monotonic()
+                _refuse_turn_on_stopped_users_server()
 
                 # ── Agent cache check ─────────────────────────────────────────
                 # Reuse what a running warm-up is caching rather than read it twice.
