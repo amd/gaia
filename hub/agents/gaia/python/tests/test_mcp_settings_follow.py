@@ -225,3 +225,51 @@ def test_a_withheld_path_stays_refused_after_a_rebuild(chat, home, tmp_path):
     assert rebuilt
     assert agent.path_validator.is_path_allowed(str(folder), prompt_user=False)
     assert not agent.path_validator.is_path_allowed(str(removed), prompt_user=False)
+
+
+def test_the_sidecar_query_route_follows_a_connector_change(home, monkeypatch):
+    """End to end through /v1/gaia/query: two real turns on one session."""
+    import uuid
+
+    from fastapi.testclient import TestClient
+    from gaia_agent import caller_auth
+    from gaia_agent import server as server_mod
+    from gaia_agent import session_registry as sr
+
+    from gaia.connectors.activations import activate_agent
+
+    caller_auth.reset()
+    monkeypatch.delenv(caller_auth.TOKEN_FILE_ENV_VAR, raising=False)
+    monkeypatch.delenv(caller_auth.TOKEN_ENV_VAR, raising=False)
+    sr.registry.clear()
+    server_mod._registry = server_mod._RunRegistry()
+    home.set()
+    activate_agent("toy", FLAGSHIP)
+    client = TestClient(server_mod.build_app(), base_url="http://127.0.0.1:8141")
+    session_id = f"chat-{uuid.uuid4().hex[:8]}"
+
+    def turn(query):
+        resp = client.post(
+            "/v1/gaia/query",
+            json={
+                "query": query,
+                "run_id": str(uuid.uuid4()),
+                "session_id": session_id,
+                "allowed_paths": [home.work],
+                "context": [],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        return sr.registry.get(session_id).agent
+
+    try:
+        first = turn("hello")
+        assert _mcp_tools(first) == [TOOL]
+        home.set(enabled=False)  # Settings › Connectors, between messages
+        second = turn("and again")
+        assert second is not first
+        assert _mcp_tools(second) == []
+    finally:
+        sr.registry.clear()
+        server_mod._registry = server_mod._RunRegistry()
+        caller_auth.reset()
