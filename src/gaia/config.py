@@ -136,6 +136,16 @@ HYBRID_MODEL_KEYS = (
     "hybrid_strong_model",
     "hybrid_classifier_model",
 )
+_warned: set = set()
+
+
+def _warn_once(message: str) -> None:
+    """Log *message* the first time it comes up in this process."""
+    if message not in _warned:
+        _warned.add(message)
+        log.warning("%s", message)
+
+
 #: Every ``hybrid`` setting; HybridSettings refuses a bad one where it is used.
 HYBRID_KEYS = HYBRID_MODEL_KEYS + (
     "hybrid_classifier_timeout",
@@ -528,7 +538,8 @@ class GaiaConfig:
             if isinstance(timeout, bool) or not isinstance(timeout, int):
                 raise GaiaConfigError(
                     f"{where}: 'hybrid_classifier_timeout' must be a whole number "
-                    f"of seconds (unquoted), but it is {timeout!r}."
+                    f"of seconds (unquoted), but it is {timeout!r}. Run `gaia "
+                    "config set hybrid_classifier_timeout 15` for the default."
                 )
             out["hybrid_classifier_timeout"] = cls._check_hybrid_timeout(timeout, where)
         if "hybrid_policy" in kwargs:
@@ -710,7 +721,10 @@ class GaiaConfig:
         except GaiaConfigError as e:
             # Kept as saved, so the rest of GAIA runs and Settings can repair
             # them; HybridSettings.load refuses them wherever hybrid is used.
-            log.warning("%s", e)
+            _warn_once(
+                f"{e} Until then the hybrid model can't run; fix it in the Agent "
+                "UI under Settings › Models › Hybrid, or with `gaia config set`."
+            )
         if "project_context" in kwargs:
             kwargs["project_context"] = cls._check_project_context(
                 kwargs["project_context"],

@@ -1478,7 +1478,10 @@ def _ui_cloud_provider(model_id: str) -> str | None:
     from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
 
     if is_hybrid_model(model_id):
-        providers = (_ui_cloud_provider(m) for m in candidate_models(model_id))
+        providers = (
+            "anthropic" if m and m.startswith("claude-") else _ui_cloud_provider(m)
+            for m in candidate_models(model_id)
+        )
         return next(filter(None, providers), None)
     metadata = {"recipe": "cloud"} if is_cloud_model(model_id) else None
     return cloud_model_provider(model_id, metadata)
@@ -4502,11 +4505,13 @@ async def _get_chat_response(
             if isinstance(result, dict)
             else {}
         )
+        turn_route = _turn_route(result)
         spending.record_turn(
             db,
-            model_id,
+            _ran_on(model_id, turn_route, agent),
             counts,
             failed=isinstance(result, dict) and bool(result.get("model_failed")),
+            route=turn_route,
         )
         if isinstance(result, dict):
             if model_messages is not None:
@@ -5854,6 +5859,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 ran_on,
                 inference_stats,
                 failed=unanswered,
+                route=route,
             )
             # Fire-and-forget auto-titling, on the model this turn ran on.
             _spawn_after_turn_title(

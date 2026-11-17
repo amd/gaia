@@ -151,6 +151,8 @@ class Inventory:
     #: Local catalog models not downloaded yet -> why they can't be used.
     local_missing: Dict[str, str] = field(default_factory=dict)
     local_only: bool = False
+    #: Why the model server couldn't be asked; set, its providers can't be used.
+    server_down: Optional[str] = None
 
     def check(self, model_id: str) -> Optional[str]:
         """None when *model_id* can be used now, else why not."""
@@ -158,6 +160,9 @@ class Inventory:
         if offer is not None:
             return None if offer.available else offer.reason
         provider = provider_of(model_id)
+        # Local, gateway and Fireworks models all run through the model server.
+        if self.server_down and provider != CLAUDE:
+            return self.server_down
         if provider == LOCAL:
             from gaia.llm.lemonade_client import find_model_requirement
 
@@ -215,6 +220,32 @@ def _fits(model_id: str, entry: Dict[str, Any], capacity: Any) -> Optional[bool]
 
     size = model_choice.download_size_gb(model_id, entry.get("size"))
     return model_choice.memory_fit(model_id, size, capacity).get("fits")
+
+
+def offline_inventory(
+    server_down: str, *, anthropic_key: bool, local_only: bool
+) -> Inventory:
+    """What can be used while the model server isn't answering: direct Claude only."""
+    inv = Inventory(local_only=local_only, server_down=server_down)
+    if anthropic_key:
+        for model_id in CLAUDE_MODELS:
+            inv.offers[model_id] = Offer(
+                model_id,
+                CLAUDE,
+                not local_only,
+                (
+                    f"Local only is on, so {model_id} can't be used"
+                    if local_only
+                    else None
+                ),
+            )
+    inv.setup = {
+        LOCAL: None,
+        AMD: None,
+        FIREWORKS: None,
+        CLAUDE: None if anthropic_key else SETUP_HINTS[CLAUDE],
+    }
+    return inv
 
 
 def build_inventory(

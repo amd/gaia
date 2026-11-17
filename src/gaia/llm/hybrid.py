@@ -415,7 +415,12 @@ def candidate_models(model_id: Optional[str]) -> Tuple[Optional[str], ...]:
     if not is_hybrid_model(model_id):
         return (model_id,)
     settings = HybridSettings.load()
-    return (settings.cheap_model, settings.strong_model)
+    # The classifier is sent every request too, so it counts as one.
+    return tuple(
+        dict.fromkeys(
+            (settings.cheap_model, settings.strong_model, settings.classifier_model)
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -444,6 +449,11 @@ class RouteDecision:
     classifier_format: Optional[str] = None
     #: ``cheap`` or ``strong``: which of the two the turn was routed to.
     tier: str = "strong"
+    #: The model that classified the request; None when none was asked.
+    classifier_model: Optional[str] = None
+    #: ``input_tokens``/``output_tokens``/``cached_tokens`` the classifier
+    #: reported, so its spend is counted; None when it reported none.
+    classifier_usage: Optional[Dict[str, int]] = None
 
     def as_record(self) -> Dict[str, Any]:
         return asdict(self)
@@ -683,6 +693,22 @@ def _call_with_deadline(fn: Callable[[], Any], seconds: float) -> Any:
     return box["value"]
 
 
+def _usage_of(client: Any) -> Optional[Dict[str, int]]:
+    """The token counts *client*'s last call reported, or None."""
+    get = getattr(client, "get_last_usage", None)
+    usage = get() if callable(get) else None
+    if not isinstance(usage, dict):
+        return None
+    inp, out = usage.get("prompt_tokens"), usage.get("completion_tokens")
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in (inp, out)):
+        return None
+    counts = {"input_tokens": inp, "output_tokens": out}
+    cached = usage.get("cached_tokens")
+    if isinstance(cached, int) and not isinstance(cached, bool):
+        counts["cached_tokens"] = cached
+    return counts
+
+
 def _default_client_factory(model: str, base_url: Optional[str]) -> Any:
     from gaia.llm.factory import create_client
 
@@ -768,7 +794,7 @@ class HybridRouter:
                 **extra,
             )
 
-        def attempts() -> Tuple[Any, str]:
+        def attempts() -> Tuple[Any, str, Any]:
             client = self._client_factory(model, base_url)
             # Anthropic has no JSON mode, so a direct Claude is asked in plain text.
             request_format = (
@@ -777,7 +803,7 @@ class HybridRouter:
                 else _HEALTH.format_for(model)
             )
             try:
-                return ask(client, request_format), request_format
+                return ask(client, request_format), request_format, client
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 if request_format != FORMAT_JSON or _http_status(exc) != 400:
                     raise
@@ -786,15 +812,16 @@ class HybridRouter:
                     model,
                     exc,
                 )
-                return ask(client, FORMAT_PLAIN), FORMAT_PLAIN
+                return ask(client, FORMAT_PLAIN), FORMAT_PLAIN, client
 
-        reply, request_format = _call_with_deadline(
+        reply, request_format, client = _call_with_deadline(
             attempts, settings.classifier_timeout_s
         )
         label = parse_label(reply, request_format)
         if record:
             _HEALTH.succeeded(model, request_format)
         label["format"] = request_format
+        label["usage"] = _usage_of(client)
         return label
 
     def decide(self, text: str, base_url: Optional[str] = None) -> RouteDecision:
@@ -868,6 +895,8 @@ class HybridRouter:
             policy=settings.policy,
             classifier_format=label["format"],
             tier="cheap" if cheap else "strong",
+            classifier_model=settings.classifier_model,
+            classifier_usage=label.get("usage"),
         )
 
     @staticmethod

@@ -677,6 +677,7 @@ class AgentLoop:
                             _billed_model(),
                             result_holder["stats"],
                             failed=result_holder["error"] is not None,
+                            route=result_holder.get("route"),
                         )
                 finally:
                     sse_handler.signal_done()

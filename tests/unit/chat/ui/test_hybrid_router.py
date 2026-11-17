@@ -1098,3 +1098,151 @@ def test_stats_say_what_they_cover(client):
     body = client.get("/api/hybrid/stats").json()
     assert body["scope"] == "agent_ui_chats"
     assert body["scope_label"].startswith("Agent UI chats only")
+
+
+# ── the same routes on the daemon (for the TUI) ─────────────────────────────
+
+DAEMON_TOKEN = "daemon-client-token"
+
+
+@pytest.fixture
+def daemon(db):
+    from gaia.daemon.app import create_app
+    from gaia.ui.dependencies import get_db
+
+    app = create_app(token=DAEMON_TOKEN, port=0, pid=1, started_at=0.0)
+    app.dependency_overrides[get_db] = lambda: db
+    return TestClient(app)
+
+
+def test_the_daemon_serves_hybrid_behind_its_token(daemon, gateway):
+    assert daemon.get("/api/hybrid/settings").status_code == 401
+    auth = {"Authorization": f"Bearer {DAEMON_TOKEN}"}
+    body = daemon.get("/api/hybrid/settings", headers=auth).json()
+    assert body["cheap_model"] == DEFAULT_CHEAP_MODEL
+    assert body["rules"] == preset_rules("quality")
+    stats = daemon.get("/api/hybrid/stats", headers=auth).json()
+    assert stats["turns"] == 0 and stats["scope"] == "agent_ui_chats"
+
+
+def test_the_daemon_opens_the_chat_database_once(tmp_path):
+    from gaia.daemon.hybrid_routes import ChatDatabaseOpener
+
+    opener = ChatDatabaseOpener(str(tmp_path / "chat.db"))
+    try:
+        assert opener() is opener()
+    finally:
+        opener.close()
+
+
+@pytest.mark.parametrize(
+    "doc",
+    [
+        {"hybrid_classifier_model": 5},
+        {"hybrid_cheap_model": ["amd.X"]},
+        {"hybrid_strong_model": {"id": "amd.X"}},
+        {"hybrid_policy": ["quality"]},
+        {"hybrid_classifier_timeout": "15"},
+        {"hybrid_policy": "custom", "hybrid_rules": "not a table"},
+    ],
+)
+def test_a_wrongly_typed_hybrid_value_is_reported_not_a_500(client, gateway, doc):
+    _write_config(doc)
+    resp = client.get("/api/hybrid/settings")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["config_error"]
+    assert isinstance(body["cheap_model"], str)
+    assert isinstance(body["classifier_model"], str)
+    assert isinstance(body["classifier_timeout"], int)
+
+
+def test_stats_charge_each_turn_its_classifier_call(client, db, gateway_list):
+    gateway_list["body"] = GATEWAY_PAYLOAD
+    session = db.create_session(model="hybrid")["id"]
+    route = {
+        **_route(DEFAULT_STRONG_MODEL, "strong"),
+        "classifier_model": DEFAULT_CHEAP_MODEL,
+        "classifier_usage": {"input_tokens": 100_000, "output_tokens": 1_000},
+    }
+    _answer(db, session, route, (10_000, 1_000, 0))
+    body = client.get("/api/hybrid/stats").json()
+    strong = (10_000 * 4.0 + 1_000 * 20.0) / 1e6
+    classifier = (100_000 * 0.255 + 1_000 * 1.02) / 1e6
+    assert body["cost"] == pytest.approx(strong + classifier, abs=1e-6)
+    # An all-strong session asks no classifier.
+    assert body["cost_if_all_strong"] == pytest.approx(strong, abs=1e-6)
+    assert body["saving_pct"] < 0
+
+
+def test_a_preview_bills_its_cloud_classifier_call(client, db, gateway, monkeypatch):
+    from gaia.llm.hybrid import RouteDecision
+
+    monkeypatch.setattr(
+        hybrid.HybridRouter,
+        "preview",
+        lambda self, text, base_url=None: RouteDecision(
+            model=DEFAULT_CHEAP_MODEL,
+            classified=True,
+            classifier_model=DEFAULT_CHEAP_MODEL,
+            classifier_usage={"input_tokens": 900, "output_tokens": 20},
+        ),
+    )
+    assert client.post("/api/hybrid/preview", json={"text": "hi"}).status_code == 200
+    from gaia.ui import spending
+
+    rows = db.cloud_spend_for_month(spending.current_month())
+    assert [r["model"] for r in rows] == [DEFAULT_CHEAP_MODEL]
+
+
+@pytest.fixture
+def server_down(monkeypatch, gateway):
+    def down():
+        raise providers.ProviderError(
+            "The local model server is not reachable at http://127.0.0.1:1.",
+            status=503,
+        )
+
+    monkeypatch.setattr(hybrid_router, "_lemonade_payloads", down)
+    return gateway
+
+
+def test_entry_while_the_model_server_is_down_says_why_not_503(client, server_down):
+    resp = client.get("/api/hybrid/entry")
+    assert resp.status_code == 200, resp.text
+    entry = resp.json()
+    assert entry["available"] is False and "not reachable" in entry["reason"]
+    assert entry["shown"] is False
+
+
+def test_direct_claude_still_offered_while_the_model_server_is_down(
+    client, server_down
+):
+    server_down["anthropic"] = True
+    templates = _templates(client)
+    assert templates["claude-direct"]["available"] is True
+    assert "not reachable" in templates["gateway-deepseek-opus"]["reason"]
+    assert client.get("/api/hybrid/entry").json()["shown"] is True
+
+
+def test_put_checks_and_saves_the_trimmed_model_id(client, gateway):
+    resp = client.put(
+        "/api/hybrid/settings", json={"strong_model": "  amd.Gemma-4-31B  "}
+    )
+    assert resp.status_code == 200, resp.text
+    assert _config()["hybrid_strong_model"] == "amd.Gemma-4-31B"
+
+
+def test_a_broken_hybrid_key_is_logged_once_with_its_fix(tmp_path, caplog):
+    from gaia.config import GaiaConfig
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"hybrid_classifier_timeout": "15"}), encoding="utf-8")
+    with caplog.at_level("WARNING", logger="gaia.config"):
+        GaiaConfig.load(path)
+        GaiaConfig.load(path)
+    warned = [
+        r.getMessage() for r in caplog.records if "hybrid_classifier" in r.getMessage()
+    ]
+    assert len(warned) == 1
+    assert "gaia config set hybrid_classifier_timeout 15" in warned[0]

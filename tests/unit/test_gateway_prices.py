@@ -186,3 +186,33 @@ def test_registration_probe_without_a_key_keeps_nothing(monkeypatch):
     with patch("gaia.llm.gateway.requests.get", return_value=_response()):
         manager.check_reachable("https://gw.example/v1")
     assert gateway_prices.load() is None
+
+
+@pytest.mark.parametrize("epoch", ["yesterday", None, True, float("nan")])
+def test_a_price_file_without_a_readable_time_is_named(epoch):
+    path = gateway_prices.prices_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = {"models": {}, "fetched_at_epoch": epoch}
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(gateway_prices.GatewayPriceError, match="fetched_at_epoch"):
+        gateway_prices.load()
+
+
+def test_the_price_file_is_read_once_until_it_changes(monkeypatch):
+    path = gateway_prices.prices_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"models": {}, "fetched_at_epoch": 1.0}), encoding="utf-8"
+    )
+    reads = []
+    real = gateway_prices._read
+    monkeypatch.setattr(gateway_prices, "_read", lambda p: reads.append(p) or real(p))
+    for _ in range(5):
+        gateway_prices.gateway_price("amd.Anything")
+    assert len(reads) == 1
+    path.write_text(
+        json.dumps({"models": {"amd.X": {}}, "fetched_at_epoch": 2.0}),
+        encoding="utf-8",
+    )
+    gateway_prices.load()
+    assert len(reads) == 2

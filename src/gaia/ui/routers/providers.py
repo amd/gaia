@@ -673,6 +673,8 @@ def cloud_provider_name(model_id: str) -> Optional[str]:
     if provider != LOCAL:
         return _NAMES[provider]
     cloud = _ui_cloud_provider(model_id)
+    if cloud == "anthropic":
+        return "Anthropic"
     return _NAMES.get(cloud, cloud) if cloud else None
 
 
