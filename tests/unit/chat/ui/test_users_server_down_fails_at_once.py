@@ -95,6 +95,8 @@ async def test_a_streamed_turn_ends_at_once_with_the_server_named(monkeypatch):
     from gaia.ui.run_manager import RunManager
 
     monkeypatch.setattr(helpers, "_stopped_users_server", lambda: "127.0.0.1:59999")
+    # CI has no hub agents installed; the server check comes after this one.
+    monkeypatch.setattr(helpers, "_agent_type_unknown", lambda *a: False)
     built = []
     monkeypatch.setattr(
         helpers, "_get_cached_agent", lambda *a, **k: built.append(a) or None
