@@ -1666,10 +1666,13 @@ def _canonical_agent_type(agent_type: str) -> str:
 
 
 def _follow_model_settings(agent) -> None:
-    """Apply a vision model chosen in Settings since this cached agent last ran."""
+    """Apply a vision model, or skills, changed in Settings since this cached agent last ran."""
     follow = getattr(agent, "follow_model_switch", None)
     if callable(follow):
         follow()
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
 
 
 def _get_cached_agent(
@@ -1716,6 +1719,17 @@ def _get_cached_agent(
                 )
                 return None
             entry["document_ids"] = list(document_ids)
+        changed = getattr(entry["agent"], "built_settings_changed", None)
+        # ``is True``: a stand-in agent's mock answers truthy to anything.
+        if callable(changed) and changed() is True:
+            # Its model server and MCP tools were fixed as it was built.
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
+            logger.debug(
+                "Agent cache miss (settings changed) for session %s",
+                session_id[:8],
+            )
+            return None
         _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
@@ -2539,7 +2553,25 @@ def _withdrawn_reply(content: str) -> Optional[str]:
             if not kept:
                 return _CUT_OFF_REPLY_FOR_MODEL
             return f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+    # A relayed agent that crashed ends the reply with its own note and log folder.
+    kept, _, last = text.rpartition("\n\n")
+    if any(last.startswith(note) for note in _agent_crash_notes()):
+        kept = kept.rstrip()
+        return (
+            f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+            if kept
+            else _CUT_OFF_REPLY_FOR_MODEL
+        )
     return None
+
+
+def _agent_crash_notes() -> tuple:
+    """What each relayed agent's reply ends with when the agent crashed mid-answer."""
+    from .email_sidecar.profiles import relay_profiles
+
+    return tuple(
+        p.stream_ended_message for p in relay_profiles() if p.stream_ended_message
+    )
 
 
 def _with_final_reply(model_messages: Optional[list], reply: str) -> Optional[list]:

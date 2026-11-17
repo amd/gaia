@@ -1423,6 +1423,44 @@ def _write_if_wire_alive(event: Dict[str, Any], out) -> bool:
         return False
 
 
+def follow_settings(agent: Any, config_kwargs: Dict[str, Any]) -> Any:
+    """The agent to run the next turn on: a new one when Settings changed since.
+
+    Its model server and MCP tools are fixed as it is built. The new agent
+    runs the model this session is on, keeps its transcript, and gets what
+    the session set on the old one.
+    """
+    changed = getattr(agent, "built_settings_changed", None)
+    if not callable(changed) or changed() is not True:
+        return agent
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaia_agent.session_registry import _carry_session_state, close_agent
+
+    kwargs = {
+        k: v
+        for k, v in config_kwargs.items()
+        if k not in ("model_id", "claude_model", "use_claude")
+    }
+    if getattr(agent, "hybrid_router", None) is not None:
+        # model_id is the turn's routed model; the session runs on hybrid.
+        from gaia.llm.hybrid import HYBRID_MODEL_ID
+
+        kwargs["model_id"] = HYBRID_MODEL_ID
+    elif getattr(agent, "_use_claude", False):
+        kwargs["use_claude"] = True
+        kwargs["claude_model"] = agent.model_id
+    elif agent.model_id:
+        kwargs["model_id"] = agent.model_id
+    new = GaiaAgent(config=GaiaAgentConfig(**kwargs))
+    history = agent.conversation_history
+    _carry_session_state(agent, new, "terminal")
+    new.conversation_history = history
+    agent.conversation_history = []
+    close_agent(agent)
+    logger.info("rebuilt the agent for settings changed since it was built")
+    return new
+
+
 def _drain_memory(agent) -> None:
     """Let the last turns' memory extraction finish before ``os._exit`` drops it.
 
@@ -1833,6 +1871,10 @@ def run_turn(
         debug=dev,
     )
     result: Dict[str, Any] = {}
+    # Skills added or removed since the catalogue was built, e.g. in the Agent UI.
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
 
     def _run() -> None:
         try:
@@ -2304,6 +2346,7 @@ def main(argv: Optional[list] = None) -> int:
             logger.info("conversation history cleared by host /clear")
             continue
         try:
+            agent = follow_settings(agent, config_kwargs)
             dispatch_query(agent, query, out, dev=args.dev, state=state, index=index)
         except BrokenPipeError:
             # The wire is the parent. It being gone is not a turn to report.

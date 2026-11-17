@@ -991,7 +991,7 @@ async def _set_connector_enabled(connector_id: str, enabled: bool) -> Dict[str, 
 
 @router.post("/{connector_id}/enable", dependencies=[Depends(_require_ui_header)])
 async def enable_connector(connector_id: str) -> Dict[str, Any]:
-    """Enable a previously-disabled MCP connector. Tools materialize live."""
+    """Enable a previously-disabled MCP connector; open chats get it next message."""
     return await _set_connector_enabled(connector_id, True)
 
 
