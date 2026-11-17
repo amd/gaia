@@ -692,3 +692,31 @@ def test_the_limit_stops_a_local_pair_with_a_gateway_classifier(db, monkeypatch)
     spending.set_limit(db, 0.01)
     _turn(db, model=CLAUDE_MODEL, inp=1_000_000, out=100_000)
     assert "AMD LLM Gateway" in spending.limit_refusal(db, "hybrid")
+
+
+def test_runtime_pricing_never_imports_the_eval_package():
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; from gaia.ui import spending; "
+        "spending.turn_cost('fireworks.glm-5p3-flash', 10, 10); "
+        "spending.price_card('claude-opus-5-5'); "
+        "print(any(m.startswith('gaia.eval') for m in sys.modules))"
+    )
+    import os
+    from pathlib import Path
+
+    import gaia
+
+    # The child must import this checkout's gaia, as the parent does.
+    src = str(Path(gaia.__file__).resolve().parents[1])
+    env = {**os.environ, "PYTHONPATH": src}
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    )
+    assert out.stdout.strip() == "False", out.stderr

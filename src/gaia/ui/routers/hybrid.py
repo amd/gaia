@@ -116,14 +116,14 @@ def _gateway_prices() -> Dict[str, Any]:
 
 def _lemonade_payloads():
     """The model server's ``/models?show_all=true`` and ``/system-info`` answers."""
-    from .providers import ProviderError, _lemonade, _ModelListFailed
+    from .providers import ModelListFailed, ProviderError, lemonade_request
 
     answers = []
     for path in ("models?show_all=true", "system-info"):
-        status, body = _lemonade("GET", path)
+        status, body = lemonade_request("GET", path)
         if status >= 400:
             # A 5xx is the server's own state (still starting), not a verdict.
-            failed = _ModelListFailed if status >= 500 else ProviderError
+            failed = ModelListFailed if status >= 500 else ProviderError
             raise failed(f"The model server answered /{path} with HTTP {status}.")
         answers.append(body)
     return answers[0], answers[1]
@@ -131,19 +131,10 @@ def _lemonade_payloads():
 
 def inventory():
     """What every provider offers here; ProviderError when the model server can't say."""
-    from gaia.env import credential, load_env
-    from gaia.llm.hybrid_templates import build_inventory
-    from gaia.llm.local_only import cloud_blocked
+    from gaia.llm.hybrid_templates import current_inventory
 
-    load_env()
-    models, info = _lemonade_payloads()
     try:
-        return build_inventory(
-            models,
-            info,
-            anthropic_key=bool(credential("ANTHROPIC_API_KEY")),
-            local_only=cloud_blocked(),
-        )
+        return current_inventory(_lemonade_payloads)
     except HybridConfigError as e:
         from .providers import ProviderError
 
@@ -155,16 +146,14 @@ def _inventory_or_offline():
 
     So a picker still shows hybrid, with why it can't run yet, instead of an error.
     """
-    from gaia.env import credential, load_env
-    from gaia.llm.hybrid_templates import offline_inventory
-    from gaia.llm.local_only import cloud_blocked
+    from gaia.llm.hybrid_templates import current_offline_inventory
 
-    from .providers import ProviderError, _ModelListFailed
+    from .providers import ModelListFailed, ProviderError
 
     try:
         return inventory()
     except ProviderError as e:
-        if e.status != 503 and not isinstance(e, _ModelListFailed):
+        if e.status != 503 and not isinstance(e, ModelListFailed):
             raise HTTPException(
                 status_code=503,
                 detail=surface_wording(
@@ -173,11 +162,8 @@ def _inventory_or_offline():
                     "agent_ui",
                 ),
             ) from e
-        load_env()
-        return offline_inventory(
-            _app_message(e, "The model server isn't answering").rstrip("."),
-            anthropic_key=bool(credential("ANTHROPIC_API_KEY")),
-            local_only=cloud_blocked(),
+        return current_offline_inventory(
+            _app_message(e, "The model server isn't answering").rstrip(".")
         )
 
 
@@ -252,8 +238,7 @@ def _raw_doc() -> Dict[str, Any]:
 
     path = GaiaConfig.config_path()
     try:
-        text = GaiaConfig._read_text(path)
-        return {} if text is None else GaiaConfig._parse_doc(text, path)
+        return GaiaConfig.read_doc(path)
     except GaiaConfigError as e:
         raise HTTPException(
             status_code=500, detail=_app_message(e, "config.json is unreadable")
@@ -443,7 +428,7 @@ def put_hybrid_settings(
     for field in _MODEL_FIELDS:
         key = FIELDS[field]
         if key in values:
-            values[key] = GaiaConfig._check_hybrid_model(key, values[key], field)
+            values[key] = GaiaConfig.check_hybrid_model(key, values[key], field)
     doc = {**_raw_doc(), **values}
     if (doc.get("hybrid_policy") or DEFAULT_POLICY) == CUSTOM_POLICY and doc.get(
         "hybrid_rules"
@@ -454,28 +439,29 @@ def put_hybrid_settings(
         )
     try:
         _settings_from(doc)
-        GaiaConfig._from_doc(doc, GaiaConfig.config_path())
+        GaiaConfig.validate_doc(doc, GaiaConfig.config_path())
     except (GaiaConfigError, HybridConfigError) as e:
         raise _unprocessable(_app_message(e, "Invalid hybrid settings")) from e
     chosen = [f for f in _MODEL_FIELDS if values.get(FIELDS[f])]
     if chosen:
         inv = _inventory_or_503()
+        from gaia.llm.hybrid_templates import offered_problem
+
         for f in chosen:
-            reason = inv.check(values[FIELDS[f]])
-            if reason:
-                raise _unprocessable(f"{f}: {reason}. {inv.checked()}")
+            problem = offered_problem(inv, values[FIELDS[f]])
+            if problem:
+                raise _unprocessable(f"{f}: {problem}")
     _save(values)
     return _view(db)
 
 
 def _save(values: Dict[str, Any]) -> None:
     """Write *values* into config.json; the result is validated before it is."""
-    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.config import GaiaConfigError
+    from gaia.llm.hybrid_templates import save_settings
 
-    if not values:
-        return
     try:
-        GaiaConfig.edit_doc(lambda doc: doc.update(values))
+        save_settings(values)
     except GaiaConfigError as e:
         raise HTTPException(
             status_code=500, detail=_app_message(e, "Hybrid settings not saved")

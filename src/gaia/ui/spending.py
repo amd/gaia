@@ -3,12 +3,10 @@
 
 """What cloud models cost, what this month's cloud chats spent, and the limit.
 
-Prices are list prices from the one rate card GAIA keeps
-(:mod:`gaia.eval.bench.metering`), cached input at its cached rate, so the price
-shown before a model is picked, the cost recorded after a turn, and the turn's
-own estimate all agree. A model
-with no card has an unknown price: it is shown as unknown and counted apart,
-never as $0. A priced turn whose usage never came back (a stopped answer) is
+Prices are list prices from :mod:`gaia.llm.pricing`, cached input at its
+cached rate, so the price shown before a model is picked, the cost recorded
+after a turn, and the turn's own estimate all agree. A model with no card has
+an unknown price: it is shown as unknown and counted apart, never as $0. A priced turn whose usage never came back (a stopped answer) is
 counted apart the same way, as unreported rather than unpriced.
 
 The limit applies to Agent UI chats. Once this month's known spending reaches
@@ -21,6 +19,14 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Dict, List, Optional
 
+from gaia.llm.pricing import (  # noqa: F401 -- spending's callers read these here
+    ANTHROPIC_PRICE_SOURCE,
+    FIREWORKS_PRICE_SOURCE,
+    GATEWAY_PRICE_SOURCE,
+    model_price,
+    price_card,
+    turn_cost,
+)
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -30,8 +36,8 @@ LIMIT_SETTING = "cloud_spend_limit_usd"
 ALLOWED_MONTH_SETTING = "cloud_spend_allowed_month"
 #: Share of the limit at which the UI warns.
 WARN_FRACTION = 0.8
-#: Where the prices come from, shown next to them.
-PRICE_SOURCE = "Fireworks AI list price, checked 2026-09-19"
+#: Where the Fireworks prices come from, shown next to them.
+PRICE_SOURCE = FIREWORKS_PRICE_SOURCE
 #: Where prices come from when no priced model is named.
 ANY_PRICE_SOURCE = (
     "each model's list price: Fireworks AI's, the AMD LLM Gateway's own price "
@@ -62,81 +68,6 @@ def billed_provider(model_id: Optional[str]) -> Optional[str]:
     if model_id and model_id.startswith("claude-"):
         return ANTHROPIC
     return cloud_provider(model_id)
-
-
-def price_card(model_id: str) -> Optional[Dict[str, Any]]:
-    """Price per million tokens for *model_id*, or None when unknown.
-
-    Fireworks models use the shared rate card, AMD LLM Gateway models the
-    gateway's own price list (as last read; see :mod:`gaia.llm.gateway_prices`),
-    and direct ``claude-*`` models Anthropic's list price.
-    ``cached_input_per_million`` is None when only the cached rate is unknown.
-    """
-    if model_id.startswith("claude-"):
-        return _anthropic_price(model_id)
-    provider = cloud_provider(model_id)
-    if provider == "amd":
-        return _gateway_price(model_id)
-    if provider != "fireworks":
-        return None
-    from gaia.eval.bench.metering import rate_card
-
-    card = rate_card(model_id)
-    if card is None:
-        return None
-    uncached, cached, output = card
-    return {
-        "input_per_million": uncached,
-        "cached_input_per_million": cached,
-        "output_per_million": output,
-        "source": PRICE_SOURCE,
-    }
-
-
-def _gateway_price(model_id: str) -> Optional[Dict[str, Any]]:
-    from gaia.llm.gateway_prices import GatewayPriceError, gateway_price
-
-    try:
-        gateway = gateway_price(model_id)
-    except GatewayPriceError as e:
-        # Unknown, as with no price list; the hybrid settings report the fault.
-        log.warning("No gateway price for %s: %s", model_id, e)
-        return None
-    if gateway is None:
-        return None
-    tier = f" ({gateway['source']})" if gateway.get("source") else ""
-    return {
-        "input_per_million": gateway["input_per_million"],
-        "cached_input_per_million": gateway.get("cache_read_per_million"),
-        "output_per_million": gateway["output_per_million"],
-        "source": f"{GATEWAY_PRICE_SOURCE}{tier}",
-    }
-
-
-def turn_cost(
-    model_id: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0
-) -> Optional[float]:
-    """Dollars for one turn, cached input at the cached rate; None if unknown.
-
-    Cached input on a model whose cached rate is unknown makes the cost unknown.
-    """
-    if cloud_provider(model_id) == "fireworks":
-        from gaia.eval.bench.metering import price
-
-        # The one rate card the benchmark meters with.
-        return price(model_id, input_tokens, cached_tokens, output_tokens)
-    card = price_card(model_id)
-    if card is None:
-        return None
-    cached_rate = card["cached_input_per_million"]
-    if cached_tokens and cached_rate is None:
-        return None
-    uncached = max(0, input_tokens - cached_tokens)
-    return (
-        uncached * card["input_per_million"]
-        + cached_tokens * (cached_rate or 0.0)
-        + output_tokens * card["output_per_million"]
-    ) / 1e6
 
 
 #: The saved cost of a cloud turn no reply came from: not a stopped answer.
@@ -477,43 +408,6 @@ def _token_counts(stats: Dict[str, Any]) -> Optional[tuple]:
     ):
         cached = 0
     return inp, out, cached
-
-
-#: Where a gateway model's price comes from.
-GATEWAY_PRICE_SOURCE = "the AMD LLM Gateway's own price list"
-
-
-def model_price(model_id: str) -> Optional[Dict[str, Any]]:
-    """:func:`price_card` with the cached rate named ``cache_read_per_million``."""
-    card = price_card(model_id)
-    if card is None:
-        return None
-    return {
-        "input_per_million": card["input_per_million"],
-        "output_per_million": card["output_per_million"],
-        "cache_read_per_million": card["cached_input_per_million"],
-        "source": card["source"],
-    }
-
-
-def _anthropic_price(model_id: str) -> Optional[Dict[str, Any]]:
-    """Anthropic's list price for a direct ``claude-*`` model, or None."""
-    from gaia.eval.config import MODEL_PRICING
-
-    card = MODEL_PRICING.get(model_id)
-    if card is None:
-        return None
-    return {
-        "input_per_million": card["input_per_mtok"],
-        # Anthropic's table: no cached rate means cached input bills as input.
-        "cached_input_per_million": card.get("cached_per_mtok", card["input_per_mtok"]),
-        "output_per_million": card["output_per_mtok"],
-        "source": ANTHROPIC_PRICE_SOURCE,
-    }
-
-
-#: Where a direct Claude model's price comes from.
-ANTHROPIC_PRICE_SOURCE = "Anthropic list price (anthropic.com/pricing)"
 
 
 def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:

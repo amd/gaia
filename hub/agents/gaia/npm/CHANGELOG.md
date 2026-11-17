@@ -19,6 +19,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   Fireworks AI model, or an Anthropic `claude-*` model; a direct Claude
   classifier is asked in plain text. With every model on this PC, hybrid runs
   under Local only.
+- **A direct Claude cheap model runs on Anthropic.** With `claude-*` as the
+  cheap model (the `claude-direct` template), a `hybrid` session is built on
+  Claude instead of asking the local model server for a model it doesn't
+  serve. `final.route` also carries `classifier_model` and
+  `classifier_usage`, so a host can bill the classifier's call.
 - **Closing an agent stops the MCP servers it started.** Each server is a
   process tree (`uvx`, `uv`, the server), and it used to outlive the agent:
   an agent built for one request left its servers running for good.

@@ -144,6 +144,11 @@ the model resident on your NPU or GPU.
 Tool-calling support comes from what the gateway advertises per model, so an agent
 will not try native tool calls against a model that cannot do them.
 
+Gateway turns in the Agent UI count toward the monthly spending limit in
+**Settings › Model**, at the gateway's own per-model prices, the same as Fireworks
+AI and direct Claude turns. A model the gateway gives no price for is counted as
+unpriced, never as $0.
+
 ### Claude models and prompt caching
 
 Chat with a Claude model (`amd.Claude-*`) skips Lemonade and goes straight to the
@@ -369,7 +374,9 @@ hybrid turns have routed
 and what they cost next to running every turn on the strong model. Costs use
 the gateway's own per-model prices, which GAIA reads from the gateway when you
 register it and again once a day; a model the gateway gives no price for shows
-no cost rather than $0.
+no cost rather than $0. The classifier's own call on each turn is counted too,
+in the stats and toward the monthly spending limit. The daemon serves the same
+`/api/hybrid/*` routes, so the terminal UI needs no Agent UI server.
 
 - **One decision per turn.** Every step of the turn, and every `--attempts`
   attempt, runs on the model chosen at the start, so the tool format and the
@@ -401,11 +408,12 @@ classifier is told the full length. `gaia -p --output-format json` adds a
 `route` object naming the model, the label, the classifier's reason, whether it
 classified (`classified`), how long it took (`seconds`), whether the turn was
 `sticky`, the `policy` in effect, the `tier` it went to (`cheap` or `strong`), the request format the classifier answered in
-(`classifier_format`), and on a failed classification the `fix`, plus
+(`classifier_format`), the classifier's model and token counts
+(`classifier_model`, `classifier_usage`), and on a failed classification the `fix`, plus
 `degraded` and its `notice` once failures repeat. Each decision is also logged
 at INFO.
-A hybrid chat is labelled cloud when its cheap or strong model is a cloud
-model, and local when both run on this PC. In the Agent UI it keeps `hybrid`
+A hybrid chat is labelled cloud when its cheap, strong or classifier model is a cloud
+model, and local when all of them run on this PC. In the Agent UI it keeps `hybrid`
 when you switch device, and each answer's footer names the model the turn ran on, with
 the classifier's reason on hover; the degraded notice shows under the answer.
 

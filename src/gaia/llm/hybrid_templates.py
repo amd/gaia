@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.llm.hybrid import (
     DEFAULT_CHEAP_MODEL,
@@ -220,6 +220,58 @@ def _fits(model_id: str, entry: Dict[str, Any], capacity: Any) -> Optional[bool]
 
     size = model_choice.download_size_gb(model_id, entry.get("size"))
     return model_choice.memory_fit(model_id, size, capacity).get("fits")
+
+
+def anthropic_key_set() -> bool:
+    """Whether an Anthropic API key is set for direct Claude models."""
+    from gaia.env import credential, load_env
+
+    load_env()
+    return bool(credential("ANTHROPIC_API_KEY"))
+
+
+def current_inventory(payloads: Callable[[], Tuple[Any, Any]]) -> Inventory:
+    """What every provider offers here now; the one owner the apps and CLI share.
+
+    *payloads* returns the model server's ``/models?show_all=true`` and
+    ``/system-info`` answers; its errors reach the caller unchanged.
+
+    Raises:
+        HybridConfigError: an answer is not in the model server's format.
+    """
+    from gaia.llm.local_only import cloud_blocked
+
+    models, info = payloads()
+    return build_inventory(
+        models, info, anthropic_key=anthropic_key_set(), local_only=cloud_blocked()
+    )
+
+
+def current_offline_inventory(server_down: str) -> Inventory:
+    """:func:`current_inventory` while the model server can't be asked."""
+    from gaia.llm.local_only import cloud_blocked
+
+    return offline_inventory(
+        server_down, anthropic_key=anthropic_key_set(), local_only=cloud_blocked()
+    )
+
+
+def offered_problem(inv: Inventory, model_id: str) -> Optional[str]:
+    """None when a set-up provider offers *model_id*, else why not and what was checked."""
+    reason = inv.check(model_id)
+    return f"{reason}. {inv.checked()}" if reason else None
+
+
+def save_settings(values: Dict[str, Any]) -> None:
+    """Write already-validated ``hybrid_*`` *values* into config.json.
+
+    Raises:
+        GaiaConfigError: config.json can't be written, or the result is invalid.
+    """
+    from gaia.config import GaiaConfig
+
+    if values:
+        GaiaConfig.edit_doc(lambda doc: doc.update(values))
 
 
 def offline_inventory(

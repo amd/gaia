@@ -631,6 +631,26 @@ class GaiaConfig:
         except FileLockError as e:
             raise GaiaConfigError(str(e)) from e
 
+    @classmethod
+    def read_doc(cls, config_file: Path) -> dict:
+        """*config_file* as saved, unvalidated; {} when absent.
+
+        Raises:
+            GaiaConfigError: it can't be read or isn't a JSON object.
+        """
+        text = cls._read_text(config_file)
+        return {} if text is None else cls._parse_doc(text, config_file)
+
+    @classmethod
+    def validate_doc(cls, data: dict, config_file: Path) -> "GaiaConfig":
+        """*data* as a config, checked as :meth:`load` checks *config_file*."""
+        return cls._from_doc(data, config_file)
+
+    @classmethod
+    def check_hybrid_model(cls, key: str, value: Any, where: str) -> Optional[str]:
+        """A ``hybrid_*`` model id trimmed, None for the default; GaiaConfigError if invalid."""
+        return cls._check_hybrid_model(key, value, where)
+
     @staticmethod
     def _read_text(config_file: Path) -> Optional[str]:
         """The file's text, or None when it does not exist. Caller holds the lock."""
