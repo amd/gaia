@@ -8,7 +8,7 @@ import { useBackendStore } from '../stores/backendStore';
 import type { BackendLifecycle } from '../types/agent';
 import { useT } from '../i18n/useT';
 import { isMessageKey } from '../i18n/registry';
-import { namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
+import { namesSetupCommand, needsLocalSetup, SetUpLocalButton, startInstructionText } from './settings/ErrorNotice';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
 import { isStarting, modelServerHealth } from '../services/statusPoll';
@@ -425,7 +425,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                             <code dir="ltr">{startCommand}</code>
                         </span>
                     ) : startInstruction && (
-                        <span className="connection-banner__hint">{startInstruction}</span>
+                        <span className="connection-banner__hint">{startInstructionText(t, startInstruction)}</span>
                     )}
                 </div>
                 {setupNeeded && <SetUpLocalButton className="connection-banner__retry" />}
