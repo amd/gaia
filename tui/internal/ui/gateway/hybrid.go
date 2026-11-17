@@ -4,17 +4,35 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/amd/gaia/tui/internal/filelock"
+	"github.com/amd/gaia/tui/internal/hybridapi"
 	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
-// readHybridModels is a var so tests need no hybrid config.
-var readHybridModels = lemonade.ReadHybridModels
+// newHybridAPI is the backend that names hybrid and says whether it can run.
+// A var so tests reach no daemon.
+var newHybridAPI = func() hybridapi.API { return hybridapi.New() }
+
+// hybridEntryMsg is the backend's hybrid entry, or why there is none.
+type hybridEntryMsg struct {
+	entry hybridapi.Entry
+	err   error
+}
+
+func fetchHybridEntry() tea.Cmd {
+	return func() tea.Msg {
+		e, err := newHybridAPI().Entry(context.Background())
+		return hybridEntryMsg{entry: e, err: err}
+	}
+}
 
 // rows is the model list as shown: hybrid first, then the gateway's models.
 // Hybrid is offered only once the gateway lists something to route between.
@@ -27,11 +45,16 @@ func (m GatewayModel) rows() []Model {
 
 // hybridRow is hybrid's line in the list.
 func (m GatewayModel) hybridRow() string {
-	h, err := m.hybrid, m.hybridErr
-	if err != nil {
-		return "    Hybrid" + errorStyle.Render(" (settings can't be used: "+err.Error()+" — fix them in /hybrid)") + "\n"
+	switch {
+	case m.hybridErr != nil:
+		return "    Hybrid" + errorStyle.Render(" ("+m.hybridErr.Error()+")") + "\n"
+	case m.hybrid == nil:
+		return "    Hybrid" + dimStyle.Render(" (checking its settings…)") + "\n"
 	}
-	name := lemonade.HybridEntryLabel(h) + " " + lemonade.HybridWhere(h)
+	name := m.hybrid.Label()
+	if why := m.hybrid.Why(); why != "" {
+		name += errorStyle.Render(" (can't use: " + why + ")")
+	}
 	if m.defaultErr != nil {
 		name += errorStyle.Render(" (can't tell if it is active: " + m.defaultErr.Error() + ")")
 	}
@@ -42,32 +65,20 @@ func (m GatewayModel) hybridRow() string {
 		dimStyle.Render("routes each turn to the cheap or the strong model · /hybrid to change") + "\n"
 }
 
-// useHybrid is `gaia gateway use hybrid`: hybrid becomes the default model once
-// every gateway model it routes to is one the gateway lists.
+// useHybrid makes hybrid GAIA's default model once the backend says every
+// model it routes to can run.
 func (m GatewayModel) useHybrid() GatewayModel {
 	m.notice, m.errMsg = "", ""
-	// Read again: /hybrid may have changed them since the screen opened.
-	h, err := readHybridModels()
-	m.hybrid, m.hybridErr = h, err
-	if err != nil {
-		m.errMsg = err.Error()
+	switch {
+	case m.hybridErr != nil:
+		m.errMsg = m.hybridErr.Error()
+		return m
+	case m.hybrid == nil:
+		m.errMsg = "Still checking hybrid's settings; try again in a moment."
 		return m
 	}
-	var missing []string
-	seen := map[string]bool{}
-	for _, id := range []string{h.Cheap, h.Strong, h.Classifier} {
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		// A model from another provider is checked when a session switches to it.
-		if strings.HasPrefix(id, Provider+".") && !m.lists(id) {
-			missing = append(missing, id)
-		}
-	}
-	if len(missing) > 0 {
-		m.errMsg = fmt.Sprintf("Hybrid needs %s, which the gateway doesn't list. "+
-			"Choose models it does list in /hybrid, then try again.", strings.Join(missing, ", "))
+	if why := m.hybrid.Why(); why != "" {
+		m.errMsg = m.hybrid.Label() + " can't be used: " + why
 		return m
 	}
 	if err := setDefaultModel(lemonade.HybridModelID); err != nil {
@@ -75,18 +86,8 @@ func (m GatewayModel) useHybrid() GatewayModel {
 		return m
 	}
 	m.defaultModel = lemonade.HybridModelID
-	m.notice = fmt.Sprintf("Hybrid is now the default model: each turn runs on %s or %s, picked by %s.",
-		h.Cheap, h.Strong, h.Classifier)
+	m.notice = m.hybrid.Label() + " is now the default model; it routes each turn to the cheap or the strong model."
 	return m
-}
-
-func (m GatewayModel) lists(id string) bool {
-	for _, model := range m.models {
-		if strings.EqualFold(model.ID, id) {
-			return true
-		}
-	}
-	return false
 }
 
 // readDefaultModel is config.json's default_model, "" when unset.

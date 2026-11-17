@@ -8,21 +8,15 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/hybridapi"
+	"github.com/amd/gaia/tui/internal/hybridapi/hybridapitest"
 	"github.com/amd/gaia/tui/internal/lemonade"
-	"github.com/amd/gaia/tui/internal/ui/hybrid"
 )
-
-func stubHybrid(t *testing.T, h lemonade.HybridModels, readErr, localErr error) {
-	t.Helper()
-	origRead, origLocal := readHybridModels, hybridLocalRefuse
-	t.Cleanup(func() { readHybridModels, hybridLocalRefuse = origRead, origLocal })
-	readHybridModels = func() (lemonade.HybridModels, error) { return h, readErr }
-	hybridLocalRefuse = func() error { return localErr }
-}
 
 // joined is the screen with wrapped lines rejoined.
 func joined(m Model) string {
@@ -33,29 +27,30 @@ func joined(m Model) string {
 	return strings.Join(lines, " ")
 }
 
-func hybridPanel(t *testing.T) Model {
+// hybridPanel is the panel on the hybrid row, with the backend's entry read.
+func hybridPanel(t *testing.T, entry hybridapi.Entry, err error) Model {
 	t.Helper()
+	orig := newHybridAPI
+	t.Cleanup(func() { newHybridAPI = orig })
+	newHybridAPI = func() hybridapi.API { return &hybridapitest.Fake{EntryAnswer: entry, EntryErr: err} }
 	m := New("", 100, 40).WithCurrent(lemonade.HybridProvider)
 	if m.chosen() != lemonade.HybridProvider {
 		t.Fatalf("panel did not open on hybrid: %s", m.chosen())
 	}
-	return m
+	next, _ := m.Update(m.fetchEntry()())
+	return next.(Model)
 }
 
-func TestHybridIsItsOwnRowNamedByItsPair(t *testing.T) {
+func TestHybridIsItsOwnRowNamedByTheBackend(t *testing.T) {
+	remote, local := true, false
 	for _, tc := range []struct {
-		h    lemonade.HybridModels
-		want string
+		entry hybridapi.Entry
+		want  string
 	}{
-		{lemonade.HybridModels{Cheap: "amd.DeepSeek-V4.1-Flash", Strong: "amd.Claude-Opus-5-5", Classifier: "amd.DeepSeek-V4.1-Flash"},
-			"Hybrid (DeepSeek + Opus) (cloud)"},
-		{lemonade.HybridModels{Cheap: "Gemma-4-E4B-it-GGUF", Strong: "Qwen3.6-35B-A3B-GGUF", Classifier: "Gemma-4-E4B-it-GGUF"},
-			"Hybrid (Gemma + Qwen3.6) (local)"},
-		{lemonade.HybridModels{Cheap: "fireworks.deepseek-v4p1-flash", Strong: "claude-opus-5-5", Classifier: "fireworks.deepseek-v4p1-flash"},
-			"Hybrid (Deepseek + Opus) (cloud)"},
+		{hybridapi.Entry{DisplayName: "Hybrid (DeepSeek + Opus)", Remote: &remote, Available: true}, "Hybrid (DeepSeek + Opus) (cloud)"},
+		{hybridapi.Entry{DisplayName: "Hybrid (Gemma + Qwen3.6)", Remote: &local, Available: true}, "Hybrid (Gemma + Qwen3.6) (local)"},
 	} {
-		stubHybrid(t, tc.h, nil, nil)
-		v := joined(hybridPanel(t))
+		v := joined(hybridPanel(t, tc.entry, nil))
 		if !strings.Contains(v, "› "+tc.want) || !strings.Contains(v, "/hybrid changes the models") {
 			t.Errorf("want %q:\n%s", tc.want, v)
 		}
@@ -63,9 +58,8 @@ func TestHybridIsItsOwnRowNamedByItsPair(t *testing.T) {
 }
 
 func TestChoosingHybridSelectsTheHybridID(t *testing.T) {
-	stubHybrid(t, lemonade.HybridModels{Cheap: "Gemma-4-E4B-it-GGUF", Strong: "amd.Claude-Opus-5-5",
-		Classifier: "Gemma-4-E4B-it-GGUF"}, nil, nil)
-	_, cmd := hybridPanel(t).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m := hybridPanel(t, hybridapi.Entry{DisplayName: "Hybrid (Gemma + Opus)", Available: true}, nil)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("enter on hybrid did nothing")
 	}
@@ -75,16 +69,18 @@ func TestChoosingHybridSelectsTheHybridID(t *testing.T) {
 }
 
 func TestHybridRowSaysWhyItCannotBeChosen(t *testing.T) {
+	why := "Local only is on, and this sends turns to the cloud (amd.x)"
 	for name, tc := range map[string]struct {
-		readErr, localErr error
-		want              string
+		entry hybridapi.Entry
+		err   error
+		want  string
 	}{
-		"broken config": {errors.New("hybrid_policy must be one of quality"), nil, "Fix it in /hybrid"},
-		"local only":    {nil, errors.New("Local only is on, so hybrid won't send turns to amd.x"), "Local only is on"},
+		"backend reason": {hybridapi.Entry{DisplayName: "Hybrid (A + B)", Reason: &why}, nil, "Local only is on"},
+		"no backend": {hybridapi.Entry{}, &hybridapi.UnreachableError{What: "Naming hybrid", Reason: "isn't running"},
+			"needs GAIA's background service"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			stubHybrid(t, lemonade.HybridModels{Cheap: "amd.a", Strong: "amd.b", Classifier: "amd.a"}, tc.readErr, tc.localErr)
-			m := hybridPanel(t)
+			m := hybridPanel(t, tc.entry, tc.err)
 			if v := joined(m); !strings.Contains(v, "Can't use: ") || !strings.Contains(v, tc.want) {
 				t.Fatalf("row:\n%s", v)
 			}
@@ -99,9 +95,49 @@ func TestHybridRowSaysWhyItCannotBeChosen(t *testing.T) {
 	}
 }
 
+// A slow backend must not hold up the providers list, and hybrid can't be
+// chosen until it has answered.
+func TestProvidersAreListedWithoutWaitingForHybridsEntry(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	orig := newHybridAPI
+	t.Cleanup(func() { newHybridAPI = orig })
+	newHybridAPI = func() hybridapi.API { return blockingAPI{Fake: &hybridapitest.Fake{}, release: release} }
+	m := New("", 100, 40).WithCurrent(lemonade.HybridProvider)
+	done := make(chan tea.Msg, 1)
+	go func() { done <- m.readProviders()() }()
+	select {
+	case msg := <-done:
+		if _, ok := msg.(loadedMsg); !ok {
+			t.Fatalf("readProviders answered %T", msg)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("listing the providers waited on hybrid's entry")
+	}
+	if v := joined(m); !strings.Contains(v, "Checking hybrid's settings") {
+		t.Fatalf("row before the entry:\n%s", v)
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || !strings.Contains(next.(Model).note, "Still checking") {
+		t.Fatalf("hybrid chosen before its entry arrived: %q", next.(Model).note)
+	}
+}
+
+type blockingAPI struct {
+	*hybridapitest.Fake
+	release chan struct{}
+}
+
+func (b blockingAPI) Entry(ctx context.Context) (hybridapi.Entry, error) {
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	return hybridapi.Entry{}, errors.New("released")
+}
+
 // Hybrid is not one of the gateway's models any more: its own row replaces it.
 func TestTheGatewayListHasNoHybridRow(t *testing.T) {
-	stubHybrid(t, lemonade.HybridModels{Cheap: "amd.a", Strong: "amd.b", Classifier: "amd.a"}, nil, nil)
 	m := New("", 100, 40)
 	m.selected = 2
 	m = m.setup()
@@ -109,31 +145,6 @@ func TestTheGatewayListHasNoHybridRow(t *testing.T) {
 	for _, e := range next.(Model).entries {
 		if lemonade.IsHybridID(e.Model.ID) {
 			t.Fatal("hybrid listed among the gateway's models")
-		}
-	}
-}
-
-func TestTheServersEntryNamesTheRowWhenItAnswers(t *testing.T) {
-	stubHybrid(t, lemonade.HybridModels{Cheap: "amd.a", Strong: "amd.b", Classifier: "amd.a"}, nil, nil)
-	orig := fetchHybridEntry
-	t.Cleanup(func() { fetchHybridEntry = orig })
-	remote := false
-	why := "Download Qwen3.6-35B-A3B-GGUF in Settings › Models"
-	for _, tc := range []struct {
-		entry      hybrid.Entry
-		label, why string
-	}{
-		{hybrid.Entry{ID: "hybrid", DisplayName: "Hybrid (Gemma + Qwen3.6)", Remote: &remote, Available: true, Shown: true},
-			"Hybrid (Gemma + Qwen3.6) (local)", ""},
-		{hybrid.Entry{ID: "hybrid", DisplayName: "Hybrid (Gemma + Qwen3.6)", Remote: &remote, Reason: &why, Shown: true},
-			"Hybrid (Gemma + Qwen3.6) (local)", why},
-	} {
-		fetchHybridEntry = func(context.Context) (hybrid.Entry, error) { return tc.entry, nil }
-		m := hybridPanel(t)
-		next, _ := m.Update(m.Init()())
-		got := next.(Model)
-		if got.hybrid.label != tc.label || got.hybrid.reason != tc.why {
-			t.Errorf("row %+v, want %q / %q", got.hybrid, tc.label, tc.why)
 		}
 	}
 }

@@ -112,13 +112,13 @@ func TestPaletteFiltersAsYouType(t *testing.T) {
 // because the user typed the space by hand — filterPaletteCommands's own
 // CutPrefix branch has to re-check availability, not just the top-level list.
 func TestModelPaletteSecondLevelGatedByAvailability(t *testing.T) {
-	blocked := filterPaletteCommands(modelPalettePrefix+"haiku", map[string]bool{})
+	blocked := filterPaletteCommands(modelPalettePrefix+"haiku", map[string]bool{}, "")
 	if len(blocked) != 0 {
 		t.Fatalf("typing %q on an agent that refuses /model must not open the model picker, got %v",
 			modelPalettePrefix+"haiku", blocked)
 	}
 
-	allowed := filterPaletteCommands(modelPalettePrefix+"haiku", map[string]bool{modelCommandPrefix: true})
+	allowed := filterPaletteCommands(modelPalettePrefix+"haiku", map[string]bool{modelCommandPrefix: true}, "")
 	if len(allowed) == 0 {
 		t.Fatal("test setup: an agent that supports /model should still get the picker")
 	}
@@ -483,7 +483,7 @@ func containsAll(haystack []string, want ...string) bool {
 
 // With room to spare, every description shows whole and starts in one column.
 func TestPaletteShowsDescriptionsWholeAndAligned(t *testing.T) {
-	items := filterPaletteCommands("/", nil)
+	items := filterPaletteCommands("/", nil, "")
 	box, ok := buildPaletteBox("/", items, 0, 160, 40)
 	if !ok {
 		t.Fatal("palette did not render on a 160x40 window")
@@ -517,7 +517,7 @@ func TestPaletteShowsDescriptionsWholeAndAligned(t *testing.T) {
 // "tight") made a 14-row window — taller than a 13-row one that worked —
 // silently draw nothing.
 func TestPaletteRendersOnEveryWindowTallEnoughForItsLines(t *testing.T) {
-	items := filterPaletteCommands("/", nil)
+	items := filterPaletteCommands("/", nil, "")
 	lines := len(paletteBodyLines("/", items, 0, paletteBoxMaxWidth-4))
 	for h := lines; h <= lines+6; h++ {
 		if _, ok := buildPaletteBox("/", items, 0, 100, h); !ok {

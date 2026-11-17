@@ -13,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/hybridapi"
 	"github.com/amd/gaia/tui/internal/lemonade"
 )
 
@@ -33,6 +34,8 @@ func hybridScreen(t *testing.T, doc map[string]any, models ...string) (GatewayMo
 		}
 	}
 	m := New(&Client{}, nil)
+	remote := true
+	m.hybrid = &hybridapi.Entry{ID: "hybrid", DisplayName: "Hybrid (DeepSeek + Opus)", Remote: &remote, Available: true}
 	m.haveInit = true
 	m.stage = stageModels
 	m.width, m.height = 100, 40
@@ -58,7 +61,7 @@ func defaultModelIn(t *testing.T, cfg string) any {
 
 func TestEnterOnHybridMakesItTheDefaultLikeGatewayUseHybrid(t *testing.T) {
 	m, cfg := hybridScreen(t, map[string]any{"default_model": "amd.Gemma-4-31B", "full_access": true},
-		lemonade.DefaultHybridCheapModel, lemonade.DefaultHybridStrongModel, "amd.Gemma-4-31B")
+		"amd.DeepSeek-V4.1-Flash", "amd.Claude-Opus-5-5", "amd.Gemma-4-31B")
 	view := ansi.Strip(m.View())
 	if !strings.Contains(view, "Hybrid (DeepSeek + Opus) (cloud)") || !strings.Contains(view, "amd.Gemma-4-31B (active)") {
 		t.Fatalf("list:\n%s", view)
@@ -80,13 +83,14 @@ func TestEnterOnHybridMakesItTheDefaultLikeGatewayUseHybrid(t *testing.T) {
 	}
 }
 
-func TestHybridIsRefusedWhenTheGatewayLacksAModel(t *testing.T) {
-	m, cfg := hybridScreen(t, map[string]any{"default_model": "amd.Gemma-4-31B",
-		"hybrid_classifier_model": "amd.Tiny"},
-		lemonade.DefaultHybridCheapModel, lemonade.DefaultHybridStrongModel)
+func TestHybridIsRefusedWithTheBackendsReason(t *testing.T) {
+	m, cfg := hybridScreen(t, map[string]any{"default_model": "amd.Gemma-4-31B"},
+		"amd.DeepSeek-V4.1-Flash", "amd.Claude-Opus-5-5")
+	why := "The AMD LLM Gateway doesn't list amd.Tiny"
+	m.hybrid.Available, m.hybrid.Reason = false, &why
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(GatewayModel)
-	if !strings.Contains(m.errMsg, "amd.Tiny") || !strings.Contains(m.errMsg, "/hybrid") {
+	if !strings.Contains(m.errMsg, "amd.Tiny") {
 		t.Fatalf("err %q", m.errMsg)
 	}
 	if got := defaultModelIn(t, cfg); got != "amd.Gemma-4-31B" {
@@ -94,8 +98,25 @@ func TestHybridIsRefusedWhenTheGatewayLacksAModel(t *testing.T) {
 	}
 }
 
+func TestHybridIsNotChosenUntilTheBackendAnswers(t *testing.T) {
+	m, cfg := hybridScreen(t, map[string]any{"default_model": "amd.Gemma-4-31B"},
+		"amd.DeepSeek-V4.1-Flash", "amd.Claude-Opus-5-5")
+	m.hybrid = nil
+	if v := ansi.Strip(m.View()); !strings.Contains(v, "checking its settings") {
+		t.Fatalf("list:\n%s", v)
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := defaultModelIn(t, cfg); got != "amd.Gemma-4-31B" || next.(GatewayModel).errMsg == "" {
+		t.Fatalf("hybrid chosen before the backend answered: %v", got)
+	}
+	next, _ = m.Update(hybridEntryMsg{err: &hybridapi.UnreachableError{What: "Naming hybrid", Reason: "isn't running"}})
+	if v := ansi.Strip(next.(GatewayModel).View()); !strings.Contains(v, "needs GAIA's background service") {
+		t.Fatalf("list:\n%s", v)
+	}
+}
+
 func TestSpaceOnHybridTogglesNothing(t *testing.T) {
-	m, _ := hybridScreen(t, nil, lemonade.DefaultHybridCheapModel, lemonade.DefaultHybridStrongModel)
+	m, _ := hybridScreen(t, nil, "amd.DeepSeek-V4.1-Flash", "amd.Claude-Opus-5-5")
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
 	m = next.(GatewayModel)
 	if m.state.IsEnabled(lemonade.HybridModelID) || !strings.Contains(m.notice, "enter makes it the default") {
@@ -108,7 +129,7 @@ func TestSpaceOnHybridTogglesNothing(t *testing.T) {
 func TestLoadingModelsNeverReplacesHybrid(t *testing.T) {
 	m, cfg := hybridScreen(t, map[string]any{"default_model": "hybrid"})
 	m.state.ActiveModel = ""
-	next, _ := m.Update(modelsMsg{models: []Model{{ID: lemonade.DefaultHybridCheapModel}, {ID: lemonade.DefaultHybridStrongModel}}})
+	next, _ := m.Update(modelsMsg{models: []Model{{ID: "amd.DeepSeek-V4.1-Flash"}, {ID: "amd.Claude-Opus-5-5"}}})
 	m = next.(GatewayModel)
 	if got := defaultModelIn(t, cfg); got != "hybrid" {
 		t.Fatalf("default_model replaced with %v", got)

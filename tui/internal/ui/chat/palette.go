@@ -76,10 +76,14 @@ const modelPalettePrefix = modelCommandPrefix + " "
 
 // modelPaletteCommands is the model picker's rows, built fresh per call so
 // the list can never drift from client.ClaudeModels.
-func modelPaletteCommands() []paletteCommand {
+// hybridDesc is the hybrid row's description, read from the backend once
+// rather than per keystroke; "" leaves the row out.
+func modelPaletteCommands(hybridDesc string) []paletteCommand {
 	out := []paletteCommand{
 		{modelCommandPrefix, "List every model, including the local ones this machine has"},
-		{modelPalettePrefix + lemonade.HybridModelID, hybridPaletteDesc()},
+	}
+	if hybridDesc != "" {
+		out = append(out, paletteCommand{modelPalettePrefix + lemonade.HybridModelID, hybridDesc})
 	}
 	for _, cm := range client.ClaudeModels {
 		out = append(out, paletteCommand{
@@ -98,12 +102,12 @@ func modelPaletteCommands() []paletteCommand {
 // filterModelCommands narrows the model picker to rows matching what has been
 // typed after `/model `. Matched by substring, not prefix: nobody types
 // "claude-" to find Haiku, they type "haiku".
-func filterModelCommands(arg string) []paletteCommand {
+func filterModelCommands(arg, hybridDesc string) []paletteCommand {
 	if arg == "" {
-		return modelPaletteCommands()
+		return modelPaletteCommands(hybridDesc)
 	}
 	var out []paletteCommand
-	for _, c := range modelPaletteCommands() {
+	for _, c := range modelPaletteCommands(hybridDesc) {
 		if strings.Contains(strings.ToLower(c.Name), arg) {
 			out = append(out, c)
 		}
@@ -119,7 +123,7 @@ func filterModelCommands(arg string) []paletteCommand {
 //
 // available is nil-safe: a nil map (no gating context, e.g. a bare palette
 // unit test) offers everything, same as before per-agent gating existed.
-func filterPaletteCommands(value string, available map[string]bool) []paletteCommand {
+func filterPaletteCommands(value string, available map[string]bool, hybridDesc string) []paletteCommand {
 	// The space after `/model` is the switch into the model picker, so this
 	// one case is matched BEFORE trimming — trimming would erase the very
 	// character that distinguishes "/model" (still naming a command) from
@@ -129,7 +133,7 @@ func filterPaletteCommands(value string, available map[string]bool) []paletteCom
 		if available != nil && !available[modelCommandPrefix] {
 			return nil
 		}
-		return filterModelCommands(strings.TrimSpace(arg))
+		return filterModelCommands(strings.TrimSpace(arg), hybridDesc)
 	}
 	q := strings.ToLower(strings.TrimSpace(value))
 	var out []paletteCommand
@@ -154,10 +158,13 @@ type commandPalette struct {
 	selected int
 }
 
+// hybridDesc is the /model palette's hybrid row from the entry last read.
+func (m ChatModel) hybridDesc() string { return hybridPaletteDesc(m.hybridEntry, m.hybridEntryErr) }
+
 // paletteFiltered is the command list for the composer's CURRENT text,
 // narrowed to what this session's agent actually supports (availability.go).
 func (m ChatModel) paletteFiltered() []paletteCommand {
-	return filterPaletteCommands(m.input.Value(), m.availableCommandSet())
+	return filterPaletteCommands(m.input.Value(), m.availableCommandSet(), m.hybridDesc())
 }
 
 // syncPalette opens, filters, or closes the palette to match the composer's
@@ -179,7 +186,7 @@ func (m *ChatModel) syncPalette() {
 		m.palette.selected = 0
 		return
 	}
-	if len(filterPaletteCommands(value, m.availableCommandSet())) == 0 {
+	if len(filterPaletteCommands(value, m.availableCommandSet(), m.hybridDesc())) == 0 {
 		m.palette.open = false
 		m.palette.selected = 0
 		return

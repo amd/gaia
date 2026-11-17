@@ -21,8 +21,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/hybridapi"
+	"github.com/amd/gaia/tui/internal/hybridapi/hybridapitest"
 	"github.com/amd/gaia/tui/internal/lemonade"
-	"github.com/amd/gaia/tui/internal/ui/hybrid"
 )
 
 // keyStoreCalls records what the panel asked the daemon to keep, forget and
@@ -45,10 +46,8 @@ var realRestoreKey = restoreKey
 func TestMain(m *testing.M) {
 	// A developer's own Local only must not change what these tests send.
 	os.Setenv("GAIA_POLICY_FILE", filepath.Join(os.TempDir(), "gaia-providers-test-no-policy.json"))
-	// Nor reach a developer's own Agent UI server for hybrid's entry.
-	fetchHybridEntry = func(context.Context) (hybrid.Entry, error) {
-		return hybrid.Entry{}, &hybrid.ServerDownError{Base: "test", What: "Naming hybrid", Err: errors.New("test: no server")}
-	}
+	// Nor reach a daemon for hybrid's entry.
+	newHybridAPI = func() hybridapi.API { return &hybridapitest.Fake{EntryErr: errors.New("test: no daemon")} }
 	callDaemon = func(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
 		return nil, errors.New("a test reached the daemon")
 	}
@@ -87,10 +86,6 @@ func TestRestoringAKeyStartsTheDaemon(t *testing.T) {
 	orig := callDaemon
 	t.Cleanup(func() { callDaemon = orig })
 	var started []bool
-	// Nor reach a developer's own Agent UI server for hybrid's entry.
-	fetchHybridEntry = func(context.Context) (hybrid.Entry, error) {
-		return hybrid.Entry{}, &hybrid.ServerDownError{Base: "test", What: "Naming hybrid", Err: errors.New("test: no server")}
-	}
 	callDaemon = func(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
 		started = append(started, start)
 		return []byte(`{"authenticated":true}`), nil
@@ -264,7 +259,7 @@ func TestOpeningThePanelRestoresKeptKeys(t *testing.T) {
 	resetStore()
 	srv := fakeLemonade(t, nil)
 	m := New(srv, 100, 30)
-	m.Init()()
+	m.readProviders()()
 	if strings.Join(store.restored, ",") != "fireworks,amd" {
 		t.Errorf("restored %v, want fireworks and amd", store.restored)
 	}
@@ -341,7 +336,7 @@ func TestADaemonThatWillNotStartIsTriedOnce(t *testing.T) {
 	resetStore()
 	store.restoreErr = fmt.Errorf("could not reach the GAIA daemon: %w", &daemon.StartError{Reason: "hung"})
 	m := New(fakeLemonade(t, nil), 100, 30)
-	msg := m.Init()()
+	msg := m.readProviders()()
 	if len(store.restored) != 1 {
 		t.Fatalf("restore tried %v, want one attempt", store.restored)
 	}
@@ -355,7 +350,7 @@ func TestOneProvidersRefusalStillRestoresTheNext(t *testing.T) {
 	resetStore()
 	store.restoreErr = errors.New("HTTP 503: gateway down")
 	m := New(fakeLemonade(t, nil), 100, 30)
-	m.Init()()
+	m.readProviders()()
 	if len(store.restored) != 2 {
 		t.Fatalf("restore tried %v, want both providers", store.restored)
 	}

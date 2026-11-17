@@ -22,12 +22,8 @@ import (
 // Unknown keys are preserved: this file is shared with the Python side
 // (gaia.config.GaiaConfig), which owns fields this package does not model.
 func setDefaultModel(modelID string) error {
-	if lemonade.IsHybridID(modelID) {
-		// Local only allows hybrid when every model it routes to is on this PC.
-		if err := lemonade.HybridLocalOnlyRefusal(); err != nil {
-			return err
-		}
-	} else if lemonade.LocalOnly() {
+	// Hybrid's Local only check is the backend's, in the entry useHybrid reads.
+	if !lemonade.IsHybridID(modelID) && lemonade.LocalOnly() {
 		return fmt.Errorf("Local only is on, so GAIA did not make %s the default model. %s",
 			modelID, lemonade.LocalOnlyHint)
 	}

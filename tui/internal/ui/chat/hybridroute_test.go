@@ -4,6 +4,8 @@
 package chat
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/hybridapi"
+	"github.com/amd/gaia/tui/internal/hybridapi/hybridapitest"
 	"github.com/amd/gaia/tui/internal/ui/hybrid"
 )
 
@@ -103,21 +107,99 @@ func TestHybridCommandOpensAndClosesTheSettings(t *testing.T) {
 	if !strings.Contains(ansi.Strip(m.View()), "Hybrid routing") {
 		t.Fatalf("view:\n%s", ansi.Strip(m.View()))
 	}
-	next, _ = m.Update(hybrid.ClosedMsg{})
+	next, cmd = m.Update(hybrid.ClosedMsg{})
 	m = next.(ChatModel)
 	if m.hybridPanel != nil {
 		t.Fatal("still open")
 	}
+	// Closing re-reads hybrid's entry, so the palette names the new pair.
+	if cmd == nil {
+		t.Fatal("closing /hybrid did not refresh hybrid's palette entry")
+	}
+	if _, ok := cmd().(hybridEntryMsg); !ok {
+		t.Fatal("closing /hybrid sent something other than the entry refresh")
+	}
 }
 
-func TestModelPaletteOffersHybrid(t *testing.T) {
+// countingAPI counts entry reads, to prove the palette doesn't read per key.
+type countingAPI struct {
+	*hybridapitest.Fake
+	reads *int
+}
+
+func (c countingAPI) Entry(ctx context.Context) (hybridapi.Entry, error) {
+	*c.reads++
+	return c.Fake.Entry(ctx)
+}
+
+func TestModelPaletteNamesHybridFromTheEntryReadOnce(t *testing.T) {
+	reads := 0
+	remote := true
+	orig := newHybridEntryAPI
+	t.Cleanup(func() { newHybridEntryAPI = orig })
+	newHybridEntryAPI = func() hybridapi.API {
+		return countingAPI{Fake: &hybridapitest.Fake{EntryAnswer: hybridapi.Entry{
+			ID: "hybrid", DisplayName: "Hybrid (DeepSeek + Opus)", Remote: &remote, Available: true, Shown: true}}, reads: &reads}
+	}
+	m := gaiaTestModel(t)
+	next, _ := m.Update(fetchHybridEntryCmd()())
+	m = next.(ChatModel)
+	for _, r := range "/model hyb" {
+		m = typeInto(t, m, string(r))
+	}
 	found := false
-	for _, c := range filterModelCommands("hyb") {
+	for _, c := range m.paletteFiltered() {
 		if c.Name == "/model hybrid" && strings.Contains(c.Desc, "Hybrid (DeepSeek + Opus) (cloud)") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("/model hybrid missing from the model picker: %+v", filterModelCommands("hyb"))
+		t.Fatalf("/model hybrid missing or unnamed: %+v", m.paletteFiltered())
+	}
+	if reads != 1 {
+		t.Fatalf("the entry was read %d times; typing must not read it", reads)
+	}
+}
+
+func TestModelPaletteSaysWhenHybridCantBeNamed(t *testing.T) {
+	if got := hybridPaletteDesc(nil, errors.New("down")); !strings.Contains(got, "/hybrid says why") {
+		t.Fatal(got)
+	}
+	reason := "Local only is on"
+	e := hybridapi.Entry{DisplayName: "Hybrid (Gemma + Opus)", Reason: &reason, Shown: true}
+	if got := hybridPaletteDesc(&e, nil); !strings.Contains(got, "can't use yet") {
+		t.Fatal(got)
+	}
+}
+
+func TestTheModelPaletteRereadsTheEntryOncePerOpening(t *testing.T) {
+	m := gaiaTestModel(t)
+	m = typeInto(t, m, "/model h")
+	if !m.palette.open || !m.hybridEntryAsked {
+		t.Fatal("opening the /model palette did not re-read hybrid's entry")
+	}
+	if m.refreshHybridEntry() != nil {
+		t.Fatal("typing in an open /model palette read the entry again")
+	}
+	m.input.SetValue("")
+	m.syncPalette()
+	if m.refreshHybridEntry() != nil || m.hybridEntryAsked {
+		t.Fatal("a closed palette read the entry, or kept its mark")
+	}
+	m = typeInto(t, m, "/model ")
+	if !m.hybridEntryAsked {
+		t.Fatal("reopening the /model palette did not re-read hybrid's entry")
+	}
+}
+
+func TestHybridIsLeftOutOfThePaletteWhenNothingCanRun(t *testing.T) {
+	e := hybridapi.Entry{DisplayName: "Hybrid (A + B)", Shown: false}
+	if got := hybridPaletteDesc(&e, nil); got != "" {
+		t.Fatalf("desc %q", got)
+	}
+	for _, c := range filterModelCommands("hyb", "") {
+		if c.Name == "/model hybrid" {
+			t.Fatal("hybrid offered though the backend says nothing can run")
+		}
 	}
 }

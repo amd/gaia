@@ -24,6 +24,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
+	"github.com/amd/gaia/tui/internal/hybridapi"
 	"github.com/amd/gaia/tui/internal/ui/hybrid"
 	"github.com/amd/gaia/tui/internal/ui/modelsetup"
 	"github.com/amd/gaia/tui/internal/ui/providers"
@@ -172,6 +173,13 @@ type ChatModel struct {
 	hybridPanel *hybrid.Model
 	// hybridNotice is the degraded-classifier notice last shown, so it is said once.
 	hybridNotice string
+	// hybridEntry is hybrid's /model palette row as last read from the
+	// backend: at launch and whenever /hybrid closes.
+	hybridEntry    *hybridapi.Entry
+	hybridEntryErr error
+	// hybridEntryAsked is set once the open /model palette has re-read the
+	// entry, so it is read once per opening, never per keystroke.
+	hybridEntryAsked bool
 	// modelSetup is /models, /gpu or first-run setup. It outlives its screen
 	// while a /models download runs in the background; modelSetupOpen is
 	// whether it is on screen.
@@ -698,6 +706,7 @@ func (m ChatModel) Init() tea.Cmd {
 		// probeCapabilitiesCmd.
 		m.probeCapabilitiesCmd(),
 		loadReadAloudAutoCmd,
+		fetchHybridEntryCmd(),
 	}
 	if m.agentID == setupAgentID {
 		// Whether /gpu applies here: only a PC with an integrated GPU has a
@@ -881,6 +890,9 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if capCmd := next.applyMouseCapture(); capCmd != nil {
 		cmd = tea.Batch(cmd, capCmd)
 	}
+	if entryCmd := next.refreshHybridEntry(); entryCmd != nil {
+		cmd = tea.Batch(cmd, entryCmd)
+	}
 
 	if len(next.queued) == 0 || next.streaming || next.startup.pending || next.relayedSwitching ||
 		next.setupChecking || next.setupRunning ||
@@ -951,11 +963,21 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateChat is update for everything the setup screens did not take.
 func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if v, ok := msg.(hybridEntryMsg); ok {
+		m.hybridEntry, m.hybridEntryErr = nil, v.err
+		if v.err == nil {
+			e := v.entry
+			m.hybridEntry = &e
+		}
+		return m, nil
+	}
+
 	if m.providerPanel != nil {
 		switch v := msg.(type) {
 		case providers.ClosedMsg:
 			m.providerPanel = nil
-			return m, nil
+			// A provider set up or removed changes what hybrid can use.
+			return m, fetchHybridEntryCmd()
 		case providers.SelectedMsg:
 			m.providerPanel = nil
 			if c, ok := m.client.(interface{ SetModelBeforeStart(string) bool }); ok && c.SetModelBeforeStart(v.ID) {

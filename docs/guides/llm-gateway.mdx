@@ -304,13 +304,15 @@ on; the rest say "not yet measured", and one that needs a model or key you
 don't have says which), then the cheap, strong and classifier models from every
 provider set up on this PC (local, AMD LLM Gateway, Fireworks, direct Claude),
 the classifier's time limit, the policy, and for **Custom** a rules table you
-can start from Quality or Balanced. It saves to `~/.gaia/config.json` with the
-same checks as `gaia config set`, and notes when the classifier is a small
-local model, which may route less accurately. Its **Try a request** box and its
-routing stats need the Agent UI server running (`gaia chat --ui`; set
-`GAIA_AGENT_UI_URL`, e.g. `http://localhost:8080`, when it runs on another
-port). The stats cover Agent UI chats only for now, not the terminal's. Without
-the server, templates are judged from what this PC's providers offer. Each hybrid answer
+can start from Quality or Balanced. GAIA's background service supplies all of
+it and checks every change before saving it to `~/.gaia/config.json`, so a
+model no provider offers is refused with the reason, the same as in the Agent
+UI. It also notes when the classifier is a small local model, which may route
+less accurately. **Try a request** runs the real classifier (billed like a
+turn's classifier call) to show where a prompt would run, and the
+routing stats say how past hybrid turns were routed and what they cost; the
+stats cover Agent UI chats only for now, not the terminal's. If the background
+service can't be reached, the screen says so and changes nothing. Each hybrid answer
 ends with where it ran, such as `→ DeepSeek (writing, d1)`.
 
 Before each turn, the cheap model labels your request: what kind of work it is,

@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 // Package hybrid is the /hybrid screen: templates, the models hybrid routes
-// between (from every provider set up here), its policy and custom rules, a
-// preview of how a request would be routed, and how past turns were.
+// between, its policy and custom rules, a preview of how a request would be
+// routed, and how past turns were.
 //
-// Settings are read from and saved to ~/.gaia/config.json with the checks
-// GaiaConfig applies, the way every other TUI setting is saved. The preview, the
-// stats and the server's own template list need the Agent UI server; without
-// it the templates are judged here from what this PC's providers offer.
+// Everything comes from and goes to GAIA's background service (hybridapi):
+// it owns the presets, the validation and which models and templates can run
+// here. This screen renders its answers and sends the user's changes back.
 package hybrid
 
 import (
@@ -17,7 +16,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,8 +23,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/event"
-	"github.com/amd/gaia/tui/internal/lemonade"
-	"github.com/amd/gaia/tui/internal/ui/preflight"
+	"github.com/amd/gaia/tui/internal/hybridapi"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -34,29 +31,28 @@ import (
 type ClosedMsg struct{}
 
 type settingsMsg struct {
-	settings lemonade.HybridSettings
+	settings hybridapi.Settings
 	err      error
 }
 
-type catalogMsg struct{ catalog lemonade.HybridCatalog }
+type savedMsg struct {
+	settings hybridapi.Settings
+	err      error
+}
 
-type serverTemplatesMsg struct {
-	templates []lemonade.HybridTemplate
+type templatesMsg struct {
+	templates []hybridapi.Template
 	err       error
 }
 
 type appliedMsg struct {
-	name string
-	err  error
-}
-
-type notesMsg struct {
-	notes serverNotes
-	err   error
+	name     string
+	settings hybridapi.Settings
+	err      error
 }
 
 type statsMsg struct {
-	stats Stats
+	stats hybridapi.Stats
 	err   error
 }
 
@@ -66,40 +62,15 @@ type previewMsg struct {
 	err   error
 }
 
-// loadCatalog lists what each provider offers here. A var so tests reach no
-// server.
-var loadCatalog = func(ctx context.Context, base string) lemonade.HybridCatalog {
-	c := lemonade.HybridCatalog{Models: map[string][]string{}, Errs: map[string]error{},
-		ClaudeKey: preflight.ClaudeCredentialConfigured(), LocalOnly: lemonade.LocalOnly()}
-	lc := lemonade.New(base)
-	for _, p := range []string{lemonade.HybridFromLocal, lemonade.HybridFromGateway, lemonade.HybridFromFireworks} {
-		models, err := lc.Models(ctx, p)
-		if err != nil {
-			c.Errs[p] = err
-			continue
-		}
-		for _, m := range models {
-			c.Models[p] = append(c.Models[p], m.ID)
-		}
-	}
-	if c.ClaudeKey {
-		c.Models[lemonade.HybridFromClaude] = lemonade.HybridClaudeModels
-	}
-	local, err := lemonade.DefaultLocalChatModel()
-	if err != nil {
-		c.Errs[lemonade.HybridFromLocal] = err
-	}
-	c.DefaultLocal = local
-	return c
-}
+// NewAPI builds the backend the screen talks to. A var so tests script it.
+var NewAPI = func() hybridapi.API { return hybridapi.New() }
 
-// Settings I/O, vars so tests touch no real config.
-var (
-	readSettings = lemonade.ReadHybridSettings
-	saveSettings = lemonade.SaveHybridSettings
-)
+// customPolicy is the policy whose rules are the user's own table.
+const customPolicy = "custom"
 
-const loadTimeout = 30 * time.Second
+// maxDifficulty is the top of the classifier's difficulty scale, the most a
+// rule's stepper offers; the backend checks the value on save.
+const maxDifficulty = 5
 
 // Field rows, top to bottom below the templates. The rules table sits between
 // policy and the preview.
@@ -112,45 +83,50 @@ const (
 	rowRules
 )
 
-func rowTry() int { return rowRules + len(lemonade.HybridKinds) }
+// pick is a model chosen on this screen and not saved yet. An empty id means
+// GAIA's default, saved as null.
+type pick struct {
+	set bool
+	id  string
+}
 
-// choice is one row of the model picker: a provider heading, or a model.
+// choice is one row of the model picker: a provider heading, a note, or a model.
 type choice struct {
-	id       string
-	heading  string
-	reason   string
-	isModel  bool
-	provider string
+	id        string
+	heading   string
+	reason    string
+	isModel   bool
+	isDefault bool
+	provider  string
 }
 
 // Model is the /hybrid screen.
 type Model struct {
 	ctx    context.Context
 	cancel context.CancelFunc
-	base   string
-	api    api
+	api    hybridapi.API
 
 	loaded  bool
-	saved   lemonade.HybridSettings
-	edit    lemonade.HybridSettings
 	loadErr error
+	// saved is the backend's last answer: what config.json holds now.
+	saved      hybridapi.Settings
+	savedRules hybridapi.Rules
+	rulesErr   error
+	presets    []hybridapi.Preset
+	presetsErr error
 
-	catalog       lemonade.HybridCatalog
-	catalogLoaded bool
+	// The edit: models picked, the policy, and the custom table.
+	picks  [3]pick
+	policy string
+	rules  hybridapi.Rules
 
-	// templates are the server's when it answered, else judged here.
-	templates     []lemonade.HybridTemplate
-	fromServer    bool
-	serverChecked bool
-	templatesErr  error
-	applying      bool
+	templates    []hybridapi.Template
+	templatesErr error
+	applying     bool
+	saving       bool
 
 	stats    string
 	statsErr error
-
-	// server is the Agent UI's notes for the saved settings; nil when it
-	// isn't running, so the notes are worked out here.
-	server *serverNotes
 
 	// focus counts the template rows first, then the field rows.
 	focus   int
@@ -173,67 +149,45 @@ type Model struct {
 	width, height int
 }
 
-// New builds the screen for the Lemonade at base, which lists the models.
-func New(base string, width, height int) Model {
+// New builds the screen.
+func New(width, height int) Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	timeout := textinput.New()
 	timeout.Prompt = ""
-	timeout.CharLimit = 3
+	timeout.CharLimit = 6
 	timeout.Width = 5
 	try := textinput.New()
 	try.Prompt = "› "
 	try.Placeholder = "Type a request to see where it would run"
 	try.CharLimit = 4000
-	return Model{ctx: ctx, cancel: cancel, base: base, api: newAPI(), timeout: timeout, try: try,
+	return Model{ctx: ctx, cancel: cancel, api: NewAPI(), timeout: timeout, try: try,
 		picking: -1, width: width, height: height}
 }
 
-// Init reads the settings, every provider's models, the server's templates
-// and the stats together.
+// Init reads the settings, the templates and the stats together.
 func (m Model) Init() tea.Cmd {
-	ctx, base, a := m.ctx, m.base, m.api
+	ctx, a := m.ctx, m.api
 	return tea.Batch(
-		readSettingsCmd(),
-		m.readNotesCmd(),
 		func() tea.Msg {
-			c, cancel := context.WithTimeout(ctx, loadTimeout)
-			defer cancel()
-			return catalogMsg{catalog: loadCatalog(c, base)}
+			s, err := a.Settings(ctx)
+			return settingsMsg{settings: s, err: err}
 		},
 		func() tea.Msg {
-			c, cancel := context.WithTimeout(ctx, loadTimeout)
-			defer cancel()
-			t, err := a.Templates(c)
-			return serverTemplatesMsg{templates: t, err: err}
+			t, err := a.Templates(ctx)
+			return templatesMsg{templates: t, err: err}
 		},
 		func() tea.Msg {
-			c, cancel := context.WithTimeout(ctx, loadTimeout)
-			defer cancel()
-			s, err := a.Stats(c)
+			s, err := a.Stats(ctx)
 			return statsMsg{stats: s, err: err}
 		},
 	)
 }
 
-func readSettingsCmd() tea.Cmd {
-	return func() tea.Msg {
-		s, err := readSettings()
-		return settingsMsg{settings: s, err: err}
-	}
-}
-
-func (m Model) readNotesCmd() tea.Cmd {
-	ctx, a := m.ctx, m.api
-	return func() tea.Msg {
-		c, cancel := context.WithTimeout(ctx, loadTimeout)
-		defer cancel()
-		n, err := a.Notes(c)
-		return notesMsg{notes: n, err: err}
-	}
-}
-
 // Close stops anything still in flight.
 func (m Model) Close() { m.cancel() }
+
+// rowTryAt is the preview row: after one rule row per kind.
+func (m Model) rowTryAt() int { return rowRules + len(m.saved.Kinds) }
 
 // field is the focused field row, or -1 on a template.
 func (m Model) field() int {
@@ -243,54 +197,93 @@ func (m Model) field() int {
 	return m.focus - len(m.templates)
 }
 
-func (m Model) dirty() bool {
-	return m.loaded && !sameSettings(m.current(), m.saved)
+// adopt makes s the saved settings and drops every edit.
+func (m *Model) adopt(s hybridapi.Settings) {
+	m.saved = s
+	m.picks = [3]pick{}
+	m.policy = string(s.Policy)
+	m.savedRules, m.rulesErr = s.RuleTable()
+	m.rules = nil
+	if m.policy == customPolicy {
+		m.rules = m.savedRules.Clone()
+	}
+	m.presets, m.presetsErr = s.PresetList()
+	m.timeout.SetValue(string(s.ClassifierTimeout))
 }
 
-// current is the edit with the timeout field as typed; an unparsable entry is
-// 0, which Validate refuses with the range.
-func (m Model) current() lemonade.HybridSettings {
-	s := m.edit
-	n, err := strconv.Atoi(strings.TrimSpace(m.timeout.Value()))
-	if err != nil {
-		n = 0
+func (m Model) savedModel(row int) string {
+	switch row {
+	case rowCheap:
+		return string(m.saved.CheapModel)
+	case rowStrong:
+		return string(m.saved.StrongModel)
 	}
-	s.Timeout = n
-	return s
+	return string(m.saved.ClassifierModel)
 }
 
-func sameSettings(a, b lemonade.HybridSettings) bool {
-	if a.Cheap != b.Cheap || a.Strong != b.Strong || a.Classifier != b.Classifier ||
-		a.Timeout != b.Timeout || a.Policy != b.Policy {
-		return false
-	}
-	if a.Policy != lemonade.HybridPolicyCustom {
-		return true
-	}
-	if len(a.Rules) != len(b.Rules) {
-		return false
-	}
-	for k, v := range a.Rules {
-		if b.Rules[k] != v {
-			return false
+// modelFields are the request fields for the model rows.
+var modelFields = [3]string{"cheap_model", "strong_model", "classifier_model"}
+
+// changes are the fields the user changed, as the backend takes them. A
+// timeout that isn't a number is sent as typed, so the backend's refusal
+// names the range.
+func (m Model) changes() map[string]any {
+	out := map[string]any{}
+	for row, p := range m.picks {
+		switch {
+		case !p.set:
+		case p.id == "":
+			out[modelFields[row]] = nil
+		case p.id != m.savedModel(row):
+			out[modelFields[row]] = p.id
 		}
 	}
-	return true
+	if typed := strings.TrimSpace(m.timeout.Value()); typed != string(m.saved.ClassifierTimeout) {
+		if n, err := strconv.Atoi(typed); err == nil {
+			out["classifier_timeout"] = n
+		} else {
+			out["classifier_timeout"] = typed
+		}
+	}
+	if m.policy != string(m.saved.Policy) {
+		out["policy"] = m.policy
+	}
+	if m.policy == customPolicy && (m.policy != string(m.saved.Policy) || !m.rules.Equal(m.savedRules)) {
+		out["rules"] = m.rules
+	}
+	return out
 }
 
-// refreshTemplates judges the built-in templates here while the server's
-// list is not in use.
-func (m *Model) refreshTemplates() {
-	if m.fromServer || !m.catalogLoaded || !m.serverChecked {
-		return
+func (m Model) dirty() bool { return m.loaded && m.loadErr == nil && len(m.changes()) > 0 }
+
+func (m Model) presetRules(name string) hybridapi.Rules {
+	for _, p := range m.presets {
+		if p.Name == name {
+			return p.Rules
+		}
 	}
-	before := len(m.templates)
-	m.templates = lemonade.BuiltinHybridTemplates(m.catalog)
-	m.keepFocus(before)
+	return nil
+}
+
+// policies are the presets in the backend's order, then custom.
+func (m Model) policies() []string {
+	out := make([]string, 0, len(m.presets)+1)
+	for _, p := range m.presets {
+		out = append(out, p.Name)
+	}
+	return append(out, customPolicy)
+}
+
+// effectiveRules is the table the chosen policy stands for.
+func (m Model) effectiveRules() hybridapi.Rules {
+	if m.policy == customPolicy {
+		return m.rules
+	}
+	return m.presetRules(m.policy)
 }
 
 // keepFocus holds the focus on the same field when the template rows above
-// it change; before any key it starts on the first template.
+// it change; before any key it starts on the first row.
 func (m *Model) keepFocus(before int) {
 	if !m.moved {
 		m.focus = 0
@@ -305,69 +298,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = v.Width, v.Height
 		return m, nil
 	case settingsMsg:
-		m.loaded = true
-		m.loadErr = v.err
-		if v.err != nil {
-			// Shown, and the screen opens on the defaults so the bad value can be
-			// replaced; saving writes every hybrid key.
-			v.settings = lemonade.DefaultHybridSettings()
+		if errors.Is(v.err, context.Canceled) {
+			return m, nil
 		}
-		m.saved = v.settings
-		m.edit = v.settings
-		if m.edit.Rules != nil {
-			m.edit.Rules = m.edit.Rules.Clone()
-		}
-		m.timeout.SetValue(strconv.Itoa(v.settings.Timeout))
-		if m.loadErr != nil {
-			// Not saved as loaded: the file still holds the bad value.
-			m.saved = lemonade.HybridSettings{}
+		m.loaded, m.loadErr = true, v.err
+		if v.err == nil {
+			m.adopt(v.settings)
 		}
 		return m, nil
-	case catalogMsg:
-		m.catalog, m.catalogLoaded = v.catalog, true
-		m.refreshTemplates()
-		return m, nil
-	case serverTemplatesMsg:
-		m.serverChecked = true
-		var down *ServerDownError
-		var missing *RouteMissingError
+	case savedMsg:
+		m.saving = false
 		switch {
-		case v.err == nil:
-			before := len(m.templates)
-			m.templates, m.fromServer = v.templates, true
-			m.keepFocus(before)
-		case errors.As(v.err, &down), errors.As(v.err, &missing):
-			m.refreshTemplates()
+		case errors.Is(v.err, context.Canceled):
+		case v.err != nil:
+			m.errMsg = "Not saved: " + sentence(v.err)
 		default:
-			m.templatesErr = v.err
+			m.adopt(v.settings)
+			m.note = "Saved. A chat already on hybrid picks this up after /model hybrid."
 		}
+		return m, nil
+	case templatesMsg:
+		if errors.Is(v.err, context.Canceled) {
+			return m, nil
+		}
+		before := len(m.templates)
+		m.templates, m.templatesErr = v.templates, v.err
+		m.keepFocus(before)
 		return m, nil
 	case appliedMsg:
 		m.applying = false
-		if v.err != nil {
-			m.errMsg = "Not applied: " + v.err.Error()
-			return m, nil
-		}
-		m.note = v.name + " applied. A chat already on hybrid picks this up after /model hybrid."
-		return m, tea.Batch(readSettingsCmd(), m.readNotesCmd())
-	case notesMsg:
-		m.server = nil
-		if v.err == nil {
-			n := v.notes
-			m.server = &n
-		} else if !IsServerAbsent(v.err) {
-			m.errMsg = "The Agent UI server's hybrid notes couldn't be read: " + v.err.Error()
+		switch {
+		case errors.Is(v.err, context.Canceled):
+		case v.err != nil:
+			m.errMsg = "Not applied: " + sentence(v.err)
+		default:
+			m.adopt(v.settings)
+			m.note = v.name + " applied. A chat already on hybrid picks this up after /model hybrid."
 		}
 		return m, nil
 	case statsMsg:
-		if v.err != nil {
+		switch {
+		case errors.Is(v.err, context.Canceled):
+		case v.err != nil:
 			m.statsErr = v.err
-		} else {
+		default:
 			m.stats = v.stats.Line()
 		}
 		return m, nil
 	case previewMsg:
-		if v.seq != m.previewSeq {
+		if v.seq != m.previewSeq || errors.Is(v.err, context.Canceled) {
 			return m, nil
 		}
 		m.previewBusy = false
@@ -389,7 +368,7 @@ func (m Model) forward(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.field() {
 	case rowTimeout:
 		m.timeout, cmd = m.timeout.Update(msg)
-	case rowTry():
+	case m.rowTryAt():
 		m.try, cmd = m.try.Update(msg)
 	}
 	return m, cmd
@@ -406,8 +385,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if k.String() != "esc" {
 		m.discardArmed = false
 	}
-	switch k.String() {
-	case "esc":
+	if k.String() == "esc" {
 		if m.dirty() && !m.discardArmed {
 			m.discardArmed = true
 			m.note = "You have unsaved changes. ctrl+s saves them; esc again leaves without saving."
@@ -415,21 +393,22 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.cancel()
 		return m, func() tea.Msg { return ClosedMsg{} }
+	}
+	if !m.loaded || m.loadErr != nil {
+		return m, nil
+	}
+	switch k.String() {
 	case "ctrl+s":
-		m = m.save()
-		return m, m.readNotesCmd()
+		return m.save()
 	case "up", "shift+tab":
 		return m.move(-1)
 	case "down", "tab":
 		return m.move(1)
 	}
-	if !m.loaded {
-		return m, nil
-	}
 	f := m.field()
 	switch {
 	case f < 0:
-		if k.String() == "enter" {
+		if k.String() == "enter" && !m.busy() {
 			return m.applyTemplate(m.templates[m.focus])
 		}
 		return m, nil
@@ -440,7 +419,7 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case f == rowTimeout:
-		if k.Type == tea.KeyRunes && !isDigits(string(k.Runes)) {
+		if k.Type == tea.KeyRunes && !isNumber(string(k.Runes)) {
 			return m, nil
 		}
 		return m.forward(k)
@@ -450,13 +429,11 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setPolicy(-1)
 		case "right", "l", " ", "enter":
 			m.setPolicy(1)
-		case "q":
-			m.startFrom(lemonade.HybridPolicyQuality)
-		case "b":
-			m.startFrom(lemonade.HybridPolicyBalanced)
+		default:
+			m.startFromKey(k.String())
 		}
 		return m, nil
-	case f < rowTry():
+	case f < m.rowTryAt():
 		return m.handleRuleKey(k), nil
 	default:
 		if k.String() == "enter" {
@@ -466,9 +443,14 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func isDigits(s string) bool {
+// busy is a save or a template apply in flight; a second change waits for it.
+func (m Model) busy() bool { return m.saving || m.applying }
+
+// isNumber is typed text that can be part of a number of seconds; the
+// backend says which numbers it takes.
+func isNumber(s string) bool {
 	for _, r := range s {
-		if r < '0' || r > '9' {
+		if (r < '0' || r > '9') && r != '.' {
 			return false
 		}
 	}
@@ -477,166 +459,130 @@ func isDigits(s string) bool {
 
 func (m Model) move(delta int) (tea.Model, tea.Cmd) {
 	m.moved = true
-	rows := len(m.templates) + rowTry() + 1
+	rows := len(m.templates) + m.rowTryAt() + 1
 	m.focus = (m.focus + delta + rows) % rows
 	m.timeout.Blur()
 	m.try.Blur()
 	switch m.field() {
 	case rowTimeout:
 		return m, m.timeout.Focus()
-	case rowTry():
+	case m.rowTryAt():
 		return m, m.try.Focus()
 	}
 	return m, nil
 }
 
-// applyTemplate sets a template's models and policy: through the server when
-// the list came from it, else by saving config.json here.
-func (m Model) applyTemplate(t lemonade.HybridTemplate) (tea.Model, tea.Cmd) {
+// applyTemplate asks the backend to make the template the settings; it
+// refuses one that can't run here, with why.
+func (m Model) applyTemplate(t hybridapi.Template) (tea.Model, tea.Cmd) {
 	m.note, m.errMsg = "", ""
 	if !t.Available {
-		m.errMsg = t.Name + " can't be used yet: " + t.Reason + "."
+		m.errMsg = t.Name + " can't be used yet: " + strings.TrimSuffix(t.Why(), ".") + "."
 		return m, nil
 	}
-	if m.fromServer {
-		m.applying = true
-		ctx, a := m.ctx, m.api
-		return m, func() tea.Msg {
-			return appliedMsg{name: t.Name, err: a.ApplyTemplate(ctx, t.ID)}
-		}
+	m.applying = true
+	ctx, a := m.ctx, m.api
+	return m, func() tea.Msg {
+		s, err := a.ApplyTemplate(ctx, t.ID)
+		return appliedMsg{name: t.Name, settings: s, err: err}
 	}
-	s := t.Settings(m.saved)
-	if m.loadErr != nil || s.Timeout == 0 {
-		s.Timeout = lemonade.DefaultHybridTimeout
-	}
-	if err := saveSettings(s); err != nil {
-		m.errMsg = "Not applied: " + err.Error()
-		return m, nil
-	}
-	m.note = t.Name + " applied. A chat already on hybrid picks this up after /model hybrid."
-	return m, tea.Batch(readSettingsCmd(), m.readNotesCmd())
 }
 
-// setPolicy steps through Quality, Balanced and Custom. Custom with no table
-// yet starts from the preset it was reached from.
+// setPolicy steps through the policies. Custom with no table yet starts from
+// the preset it was reached from.
 func (m *Model) setPolicy(delta int) {
-	policies := lemonade.HybridPolicies
+	policies := m.policies()
 	i := 0
 	for j, p := range policies {
-		if p == m.edit.Policy {
+		if p == m.policy {
 			i = j
 		}
 	}
-	from := m.edit.Policy
-	m.edit.Policy = policies[(i+delta+len(policies))%len(policies)]
-	if m.edit.Policy == lemonade.HybridPolicyCustom && m.edit.Rules == nil {
-		m.edit.Rules = lemonade.HybridPreset(from).Clone()
-		if m.edit.Rules == nil {
-			m.edit.Rules = lemonade.HybridPreset(lemonade.HybridPolicyQuality).Clone()
+	from := m.policy
+	m.policy = policies[(i+delta+len(policies))%len(policies)]
+	if m.policy == customPolicy && m.rules == nil {
+		m.rules = m.presetRules(from).Clone()
+		if m.rules == nil && len(m.presets) > 0 {
+			m.rules = m.presets[0].Rules.Clone()
 		}
 	}
 	m.note, m.errMsg = "", ""
 }
 
-// startFrom replaces the custom table with a preset's, turning Custom on.
-func (m *Model) startFrom(preset string) {
-	m.edit.Policy = lemonade.HybridPolicyCustom
-	m.edit.Rules = lemonade.HybridPreset(preset).Clone()
-	m.note = "Custom rules now match " + titleCase(preset) + ". Edit them, then ctrl+s to save."
-	m.errMsg = ""
+// startFromKey replaces the custom table with the preset whose initial is key
+// (q for quality, b for balanced), turning Custom on.
+func (m *Model) startFromKey(key string) bool {
+	for _, p := range m.presets {
+		if len(key) == 1 && strings.HasPrefix(p.Name, key) {
+			m.policy = customPolicy
+			m.rules = p.Rules.Clone()
+			m.note = "Custom rules now match " + titleCase(p.Name) + ". Edit them, then ctrl+s to save."
+			m.errMsg = ""
+			return true
+		}
+	}
+	return false
 }
 
 // handleRuleKey edits the focused kind's rule. Editing a preset's table turns
 // Custom on, starting from that preset, and says so.
 func (m Model) handleRuleKey(k tea.KeyMsg) Model {
-	kind := lemonade.HybridKinds[m.field()-rowRules]
+	kind := m.saved.Kinds[m.field()-rowRules]
 	switch k.String() {
-	case "q":
-		m.startFrom(lemonade.HybridPolicyQuality)
-		return m
-	case "b":
-		m.startFrom(lemonade.HybridPolicyBalanced)
-		return m
 	case "left", "h", "right", "l", " ", "enter":
 	default:
+		m.startFromKey(k.String())
 		return m
 	}
-	if m.edit.Policy != lemonade.HybridPolicyCustom {
-		from := m.edit.Policy
-		m.edit.Policy = lemonade.HybridPolicyCustom
-		m.edit.Rules = lemonade.HybridPreset(from).Clone()
+	if m.policy != customPolicy {
+		from := m.policy
+		m.policy = customPolicy
+		m.rules = m.presetRules(from).Clone()
 		m.note = "Switched to Custom, starting from " + titleCase(from) + "."
 	} else {
 		m.note = ""
 	}
+	if m.rules == nil {
+		m.rules = hybridapi.Rules{}
+	}
 	m.errMsg = ""
-	rule := m.edit.Rules[kind]
+	rule := m.rules[kind]
 	switch k.String() {
 	case "left", "h":
 		rule.CheapMaxDifficulty = max(0, rule.CheapMaxDifficulty-1)
 	case "right", "l":
-		rule.CheapMaxDifficulty = min(lemonade.MaxHybridDifficulty, rule.CheapMaxDifficulty+1)
+		rule.CheapMaxDifficulty = min(maxDifficulty, rule.CheapMaxDifficulty+1)
 	default:
 		rule.AllowHighStakes = !rule.AllowHighStakes
 	}
-	m.edit.Rules[kind] = rule
+	m.rules[kind] = rule
 	return m
 }
 
-// offered checks every model s routes to against the providers set up here,
-// as the backend accepts a model any configured provider offers.
-func (m Model) offered(s lemonade.HybridSettings) error {
-	if !m.catalogLoaded {
-		return errors.New("the models each provider offers are still loading; try again in a moment")
-	}
-	h := s.Models()
-	for _, r := range h.Roles() {
-		if _, err := m.catalog.Find(r.Model); err != nil {
-			return fmt.Errorf("the %s model %s can't be used: %v. %s", r.Role, r.Model, err, m.catalog.Checked())
-		}
-	}
-	return nil
-}
-
-func (m Model) save() Model {
+// save sends the changes; the backend validates them and answers with what
+// it saved, or why it refused.
+func (m Model) save() (tea.Model, tea.Cmd) {
 	m.note, m.errMsg = "", ""
-	if !m.loaded {
-		return m
+	if m.busy() {
+		return m, nil
 	}
-	if strings.TrimSpace(m.timeout.Value()) == "" {
-		m.errMsg = fmt.Sprintf("Not saved: enter the classifier limit in seconds (1-%d; %d is the default).",
-			lemonade.MaxHybridTimeout, lemonade.DefaultHybridTimeout)
-		return m
+	changes := m.changes()
+	if len(changes) == 0 {
+		m.note = "Nothing to save."
+		return m, nil
 	}
-	s := m.current()
-	if s.Policy != lemonade.HybridPolicyCustom {
-		s.Rules = nil
+	m.saving = true
+	ctx, a := m.ctx, m.api
+	return m, func() tea.Msg {
+		s, err := a.Update(ctx, changes)
+		return savedMsg{settings: s, err: err}
 	}
-	if err := s.Validate(); err != nil {
-		m.errMsg = "Not saved: " + err.Error()
-		return m
-	}
-	if err := m.offered(s); err != nil {
-		m.errMsg = "Not saved: " + err.Error()
-		return m
-	}
-	if err := saveSettings(s); err != nil {
-		m.errMsg = "Not saved: " + err.Error()
-		return m
-	}
-	m.saved = s
-	if s.Rules != nil {
-		m.saved.Rules = s.Rules.Clone()
-	}
-	m.loadErr = nil
-	m.note = "Saved to GAIA's config. A chat already on hybrid picks this up after /model hybrid."
-	return m
 }
 
 func (m Model) runPreview() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.try.Value())
 	if text == "" {
-		m.previewErr = fmt.Errorf("type a request first")
+		m.previewErr = errors.New("type a request first")
 		return m, nil
 	}
 	m.previewSeq++
@@ -649,29 +595,47 @@ func (m Model) runPreview() (tea.Model, tea.Cmd) {
 	}
 }
 
+// roleValue is a model row's value: the pick when there is one, else saved.
+// An empty id is the default.
+func (m Model) roleValue(row int) string {
+	if p := m.picks[row]; p.set {
+		return p.id
+	}
+	return m.savedModel(row)
+}
+
+func (m Model) modelInfo(id string) (hybridapi.Model, bool) {
+	for _, mo := range m.saved.Models {
+		if strings.EqualFold(mo.ID, id) {
+			return mo, true
+		}
+	}
+	return hybridapi.Model{}, false
+}
+
 // choices are the picker's rows: the default first, then each provider's
-// models under its heading. A provider with nothing to offer says why, and the
-// current choice stays listed with the reason when no provider offers it.
+// models under its heading, as the backend lists them.
 func (m Model) choices() []choice {
-	current := m.roleValue(m.picking)
-	out := []choice{{isModel: true}}
-	placed := current == ""
-	for _, p := range lemonade.HybridProviders {
-		out = append(out, choice{heading: lemonade.HybridProviderLabel(p)})
-		if err := m.catalog.Errs[p]; err != nil {
-			out = append(out, choice{reason: "couldn't list them: " + err.Error()})
-		} else if len(m.catalog.Models[p]) == 0 {
-			out = append(out, choice{reason: m.emptyReason(p)})
+	out := []choice{{isModel: true, isDefault: true}}
+	if m.saved.ModelsError != nil {
+		out = append(out, choice{reason: "Models couldn't be listed: " + *m.saved.ModelsError})
+	} else if len(m.saved.Models) == 0 {
+		out = append(out, choice{reason: "No provider set up here offers a model. Add one with /provider or /gateway."})
+	}
+	last := ""
+	for _, mo := range m.saved.Models {
+		if mo.Provider != last {
+			out = append(out, choice{heading: providerLabel(mo.Provider)})
+			last = mo.Provider
 		}
-		for _, id := range m.catalog.Models[p] {
-			out = append(out, choice{id: id, isModel: true, provider: p})
-			placed = placed || strings.EqualFold(id, current)
+		c := choice{id: mo.ID, isModel: true, provider: mo.Provider}
+		if !mo.Available {
+			c.reason = "can't be used here"
+			if mo.Reason != nil && *mo.Reason != "" {
+				c.reason = *mo.Reason
+			}
 		}
-		if !placed && lemonade.HybridProviderOf(current) == p {
-			_, err := m.catalog.Find(current)
-			out = append(out, choice{id: current, isModel: true, provider: p, reason: reasonOf(err)})
-			placed = true
-		}
+		out = append(out, c)
 	}
 	needle := strings.ToLower(m.pickSearch)
 	if needle == "" {
@@ -679,35 +643,11 @@ func (m Model) choices() []choice {
 	}
 	var filtered []choice
 	for _, c := range out {
-		if c.isModel && c.id != "" && strings.Contains(strings.ToLower(c.id), needle) {
+		if c.isModel && !c.isDefault && strings.Contains(strings.ToLower(c.id), needle) {
 			filtered = append(filtered, c)
 		}
 	}
 	return filtered
-}
-
-// sentence is an error as one sentence: a trailing period added only when the
-// message lacks one, so none reads "..".
-func sentence(err error) string {
-	text := strings.TrimSpace(err.Error())
-	if strings.HasSuffix(text, ".") {
-		return text
-	}
-	return text + "."
-}
-
-func reasonOf(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
-func (m Model) emptyReason(p string) string {
-	if !m.catalogLoaded {
-		return "loading…"
-	}
-	return lemonade.HybridSetupHint(p)
 }
 
 // selectable are the indexes of choices that can be picked.
@@ -719,27 +659,6 @@ func selectable(cs []choice) []int {
 		}
 	}
 	return out
-}
-
-func (m Model) roleValue(row int) string {
-	switch row {
-	case rowCheap:
-		return m.edit.Cheap
-	case rowStrong:
-		return m.edit.Strong
-	}
-	return m.edit.Classifier
-}
-
-func (m *Model) setRole(row int, id string) {
-	switch row {
-	case rowCheap:
-		m.edit.Cheap = id
-	case rowStrong:
-		m.edit.Strong = id
-	default:
-		m.edit.Classifier = id
-	}
 }
 
 func (m Model) handlePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -758,11 +677,11 @@ func (m Model) handlePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		c := m.choices()[rows[m.pickCursor]]
 		if c.reason != "" {
-			m.errMsg = c.id + " can't be used: " + c.reason + "."
+			m.errMsg = c.id + " can't be used: " + strings.TrimSuffix(c.reason, ".") + "."
 			m.picking = -1
 			return m, nil
 		}
-		m.setRole(m.picking, c.id)
+		m.picks[m.picking] = pick{set: true, id: c.id}
 		m.note, m.errMsg = "", ""
 		m.picking = -1
 	case "backspace":
@@ -777,6 +696,16 @@ func (m Model) handlePickKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// sentence is an error as one sentence: a trailing period added only when the
+// message lacks one, so none reads "..".
+func sentence(err error) string {
+	text := strings.TrimSpace(err.Error())
+	if strings.HasSuffix(text, ".") {
+		return text
+	}
+	return text + "."
 }
 
 func titleCase(s string) string {
@@ -796,38 +725,30 @@ var (
 	chosenStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Highlight)
 )
 
-// modelLabel is a role's value as shown: the id, or what the default is.
+// modelLabel is a role's value as shown: the id and its provider, or the default.
 func (m Model) modelLabel(row int) string {
 	v := m.roleValue(row)
-	h := m.edit.Models()
-	switch {
-	case v != "":
-	case row == rowCheap:
-		return h.Cheap + " (default)"
-	case row == rowStrong:
-		return h.Strong + " (default)"
-	default:
-		return "same as the cheap model"
+	if v == "" {
+		if row == rowClassifier {
+			return "same as the cheap model"
+		}
+		return "GAIA's default"
 	}
-	return v + " · " + lemonade.HybridProviderLabel(lemonade.HybridProviderOf(v))
+	if mo, ok := m.modelInfo(v); ok && mo.Provider != "" {
+		return v + " · " + providerLabel(mo.Provider)
+	}
+	return v
 }
 
-// notes are the cautions the pair earns: the server's for the saved pair when
-// it answers, else worked out here in the same words.
+// notes are the backend's cautions for the saved pair.
 func (m Model) notes() []string {
-	var out []string
-	if m.server != nil && !m.dirty() {
-		for _, n := range []*string{m.server.MeasuredNote, m.server.ClassifierNote} {
-			if n != nil && *n != "" {
-				out = append(out, *n)
-			}
-		}
-		return out
+	if m.dirty() {
+		return nil
 	}
-	_, measured, classifier := lemonade.HybridNotes(m.current())
-	for _, n := range []string{measured, classifier} {
-		if n != "" {
-			out = append(out, n)
+	var out []string
+	for _, n := range []*string{m.saved.MeasuredNote, m.saved.ClassifierNote} {
+		if n != nil && *n != "" {
+			out = append(out, *n)
 		}
 	}
 	return out
@@ -836,11 +757,14 @@ func (m Model) notes() []string {
 func (m Model) View() string {
 	w := max(20, m.width-4)
 	lines := []string{titleStyle.Render("Hybrid routing")}
-	if !m.loaded {
+	switch {
+	case !m.loaded:
 		lines = append(lines, "", "Reading the hybrid settings…")
 		return m.frame(lines, "esc close", w, -1)
-	}
-	if m.picking >= 0 {
+	case m.loadErr != nil:
+		lines = append(lines, "", errStyle.Render(sentence(m.loadErr)))
+		return m.frame(lines, "esc close", w, -1)
+	case m.picking >= 0:
 		return m.pickView(w)
 	}
 	lines = append(lines, dimStyle.Render(
@@ -852,15 +776,19 @@ func (m Model) View() string {
 	case m.stats != "":
 		lines = append(lines, dimStyle.Render(m.stats))
 	}
-	if m.loadErr != nil {
-		lines = append(lines, errStyle.Render("Your saved settings can't be used: "+strings.TrimSuffix(sentence(m.loadErr), ".")+
-			". Showing the defaults; ctrl+s or a template replaces them."))
+	if m.saved.ConfigError != nil {
+		lines = append(lines, errStyle.Render("Your saved settings can't be used: "+
+			strings.TrimSuffix(strings.TrimSpace(*m.saved.ConfigError), ".")+
+			". Change what it names and press ctrl+s, or apply a template."))
 	}
 
 	focusLine := -1
-	lines = append(lines, "", m.templatesHeading())
-	if m.templatesErr != nil {
+	lines = append(lines, "", dimStyle.Render("Templates"))
+	switch {
+	case m.templatesErr != nil:
 		lines = append(lines, errStyle.Render("  Templates couldn't be listed: "+sentence(m.templatesErr)))
+	case m.templates == nil:
+		lines = append(lines, dimStyle.Render("  Checking what this PC offers…"))
 	}
 	for i, t := range m.templates {
 		text := t.Name
@@ -871,7 +799,7 @@ func (m Model) View() string {
 		}
 		detail := t.Description
 		if !t.Available {
-			detail = "Can't use yet: " + t.Reason
+			detail = "Can't use yet: " + t.Why()
 		}
 		switch {
 		case i == m.focus:
@@ -904,43 +832,51 @@ func (m Model) View() string {
 	lines = append(lines, row(rowTimeout, "Classifier limit", timeout+" seconds"))
 
 	var policies []string
-	for _, p := range lemonade.HybridPolicies {
+	for _, p := range m.policies() {
 		name := titleCase(p)
-		if p == m.edit.Policy {
+		if p == m.policy {
 			name = chosenStyle.Render("[" + name + "]")
 		}
 		policies = append(policies, name)
 	}
 	lines = append(lines, row(rowPolicy, "Policy", strings.Join(policies, "  ")))
+	if m.presetsErr != nil {
+		lines = append(lines, errStyle.Render("  "+sentence(m.presetsErr)))
+	}
 	for _, n := range m.notes() {
 		lines = append(lines, warnStyle.Render("  "+n))
 	}
 
 	lines = append(lines, "", dimStyle.Render(fmt.Sprintf("  %-18s %-16s %s", "Request kind", "Cheap up to", "High stakes")))
-	rules := m.edit.EffectiveRules()
-	for i, kind := range lemonade.HybridKinds {
-		r := rules[kind]
-		stakes := "strong only"
-		if r.AllowHighStakes {
-			stakes = "cheap allowed"
-		}
-		limit := "Never"
-		if r.CheapMaxDifficulty > 0 {
+	if m.rulesErr != nil && m.policy == customPolicy {
+		lines = append(lines, errStyle.Render("  "+sentence(m.rulesErr)))
+	}
+	rules := m.effectiveRules()
+	for i, kind := range m.saved.Kinds {
+		r, ok := rules[kind]
+		limit, stakes := "Never", "strong only"
+		if ok && r.CheapMaxDifficulty > 0 {
 			limit = "difficulty " + strconv.Itoa(r.CheapMaxDifficulty)
 		}
-		text := fmt.Sprintf("%-18s %-16s %s", lemonade.HybridKindLabel(kind), limit, stakes)
+		if ok && r.AllowHighStakes {
+			stakes = "cheap allowed"
+		}
+		if !ok {
+			limit, stakes = "no rule", ""
+		}
+		text := fmt.Sprintf("%-18s %-16s %s", kindLabel(kind), limit, stakes)
 		switch {
 		case rowRules+i == m.field():
 			focusLine = len(lines)
 			lines = append(lines, focusStyle.Render("› "+text))
-		case m.edit.Policy != lemonade.HybridPolicyCustom:
+		case m.policy != customPolicy:
 			lines = append(lines, dimStyle.Render("  "+text))
 		default:
 			lines = append(lines, "  "+text)
 		}
 	}
 
-	lines = append(lines, "", row(rowTry(), "Try a request", ""))
+	lines = append(lines, "", row(m.rowTryAt(), "Try a request", ""))
 	try := m.try
 	try.Width = max(10, w-4)
 	lines = append(lines, "  "+try.View())
@@ -954,13 +890,19 @@ func (m Model) View() string {
 		if m.preview.Reason != "" {
 			lines = append(lines, dimStyle.Render("  "+m.preview.Reason))
 		}
+		if m.preview.Fix != "" {
+			lines = append(lines, warnStyle.Render("  "+m.preview.Fix))
+		}
 		if m.dirty() {
 			lines = append(lines, dimStyle.Render("  That used your saved settings; ctrl+s to try these."))
 		}
 	}
 
-	if m.applying {
+	switch {
+	case m.applying:
 		lines = append(lines, "", dimStyle.Render("Applying the template…"))
+	case m.saving:
+		lines = append(lines, "", dimStyle.Render("Saving…"))
 	}
 	if m.note != "" {
 		lines = append(lines, "", okStyle.Render(m.note))
@@ -971,36 +913,6 @@ func (m Model) View() string {
 	return m.frame(lines, m.hint(), w, focusLine)
 }
 
-func (m Model) templatesHeading() string {
-	switch {
-	case m.fromServer:
-		return dimStyle.Render("Templates")
-	case !m.serverChecked || !m.catalogLoaded:
-		return dimStyle.Render("Templates (checking what this PC offers…)")
-	}
-	return dimStyle.Render("Templates (judged on this PC; the Agent UI server isn't running)")
-}
-
-// PreviewLine is a preview's route in the chat's words, with how long the
-// classifier took.
-func PreviewLine(r event.CanonicalRoute) string {
-	line := RouteOf(r).Line()
-	if r.Seconds > 0 {
-		line += fmt.Sprintf(" · %.1fs", r.Seconds)
-	}
-	return line
-}
-
-// RouteOf is the decision a route record carries.
-func RouteOf(r event.CanonicalRoute) lemonade.HybridRoute {
-	d := 0
-	if r.Difficulty != nil {
-		d = *r.Difficulty
-	}
-	return lemonade.HybridRoute{Model: r.Model, Kind: r.Kind, Difficulty: d, Stakes: r.Stakes,
-		Classified: r.Classified, Sticky: r.Sticky}
-}
-
 func (m Model) hint() string {
 	f := m.field()
 	switch {
@@ -1009,13 +921,31 @@ func (m Model) hint() string {
 	case f <= rowClassifier:
 		return "↑/↓ move · enter choose model · ctrl+s save · esc close"
 	case f == rowTimeout:
-		return "type seconds (1-120) · ↑/↓ move · ctrl+s save · esc close"
+		return "type seconds · ↑/↓ move · ctrl+s save · esc close"
 	case f == rowPolicy:
-		return "←/→ policy · q/b start from Quality/Balanced · ctrl+s save · esc close"
-	case f < rowTry():
-		return "←/→ cheap up to · space high stakes · q/b start from Quality/Balanced · ctrl+s save · esc close"
+		return "←/→ policy · " + m.presetHint() + "ctrl+s save · esc close"
+	case f < m.rowTryAt():
+		return "←/→ cheap up to · space high stakes · " + m.presetHint() + "ctrl+s save · esc close"
 	}
 	return "type a request · enter try it · ↑/↓ move · ctrl+s save · esc close"
+}
+
+// presetHint names the keys that start Custom from each preset, as
+// startFromKey reads them: a preset's initial.
+func (m Model) presetHint() string {
+	if len(m.presets) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m.presets))
+	names := make([]string, 0, len(m.presets))
+	for _, p := range m.presets {
+		if p.Name == "" {
+			continue
+		}
+		keys = append(keys, p.Name[:1])
+		names = append(names, titleCase(p.Name))
+	}
+	return strings.Join(keys, "/") + " start from " + strings.Join(names, "/") + " · "
 }
 
 func (m Model) pickView(w int) string {
@@ -1043,17 +973,13 @@ func (m Model) pickView(w int) string {
 			continue
 		}
 		label := c.id
-		if label == "" {
-			switch m.picking {
-			case rowCheap:
-				label = "Default (" + lemonade.DefaultHybridCheapModel + ")"
-			case rowStrong:
-				label = "Default (" + lemonade.DefaultHybridStrongModel + ")"
-			default:
+		if c.isDefault {
+			label = "GAIA's default"
+			if m.picking == rowClassifier {
 				label = "Same as the cheap model"
 			}
 		}
-		if c.id == current {
+		if !c.isDefault && strings.EqualFold(c.id, current) {
 			label += " · current"
 		}
 		if c.reason != "" {

@@ -4,10 +4,13 @@
 package chat
 
 import (
+	"context"
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/event"
-	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/hybridapi"
 	"github.com/amd/gaia/tui/internal/ui/hybrid"
 )
 
@@ -16,7 +19,7 @@ func routeLine(r *event.CanonicalRoute) string {
 	if r == nil {
 		return ""
 	}
-	return hybrid.RouteOf(*r).Line()
+	return hybrid.RouteLine(*r)
 }
 
 // noteHybridDegraded says once that the classifier keeps failing, so every
@@ -35,7 +38,7 @@ func (m *ChatModel) noteHybridDegraded(r *event.CanonicalRoute) {
 
 // openHybridSettings shows /hybrid in place of the transcript.
 func (m ChatModel) openHybridSettings() (tea.Model, tea.Cmd) {
-	panel := hybrid.New(m.lemonadeBaseURL, m.width, m.height)
+	panel := hybrid.New(m.width, m.height)
 	m.hybridPanel = &panel
 	m.palette.open = false
 	return m, panel.Init()
@@ -46,7 +49,8 @@ func (m ChatModel) updateHybridPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(hybrid.ClosedMsg); ok {
 		m.hybridPanel = nil
 		m.updateViewport()
-		return m, nil
+		// The pair may have changed, and the palette names hybrid by it.
+		return m, fetchHybridEntryCmd()
 	}
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
 		m.width = size.Width
@@ -59,12 +63,53 @@ func (m ChatModel) updateHybridPanel(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// hybridPaletteDesc names hybrid by its models and where they run, as the
-// provider panel does. Broken settings are reported by the switch itself.
-func hybridPaletteDesc() string {
-	h, err := lemonade.ReadHybridModels()
-	if err != nil {
-		return "Hybrid · settings need fixing in /hybrid"
+// hybridEntryMsg is hybrid's picker entry from the backend, or why there is none.
+type hybridEntryMsg struct {
+	entry hybridapi.Entry
+	err   error
+}
+
+// newHybridEntryAPI reads the entry without starting GAIA's background
+// service. A var so tests reach no daemon.
+var newHybridEntryAPI = func() hybridapi.API { return hybridapi.NewAttached() }
+
+// fetchHybridEntryCmd reads hybrid's entry once, for the /model palette row.
+func fetchHybridEntryCmd() tea.Cmd {
+	return func() tea.Msg {
+		e, err := newHybridEntryAPI().Entry(context.Background())
+		return hybridEntryMsg{entry: e, err: err}
 	}
-	return lemonade.HybridEntryLabel(h) + " " + lemonade.HybridWhere(h) + " · routes each turn"
+}
+
+// refreshHybridEntry re-reads hybrid's entry once each time the /model
+// palette opens, since /provider, /gateway or another app may have changed
+// what it can use.
+func (m *ChatModel) refreshHybridEntry() tea.Cmd {
+	open := m.palette.open && strings.HasPrefix(strings.ToLower(m.input.Value()), modelPalettePrefix)
+	if !open {
+		m.hybridEntryAsked = false
+		return nil
+	}
+	if m.hybridEntryAsked {
+		return nil
+	}
+	m.hybridEntryAsked = true
+	return fetchHybridEntryCmd()
+}
+
+// hybridPaletteDesc is the /model palette's hybrid row, from the entry last
+// read: its pair and where it runs, or why it can't be used. "" when the
+// backend says no hybrid pairing can run here, so the row is left out.
+func hybridPaletteDesc(e *hybridapi.Entry, err error) string {
+	switch {
+	case e != nil && !e.Shown:
+		return ""
+	case err != nil:
+		return "Hybrid · its settings couldn't be read; /hybrid says why"
+	case e == nil:
+		return "Hybrid · routes each turn to a cheap or a strong model"
+	case e.Why() != "":
+		return e.Label() + " · can't use yet; /hybrid says why"
+	}
+	return e.Label() + " · routes each turn"
 }

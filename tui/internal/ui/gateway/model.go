@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/hybridapi"
 	"github.com/amd/gaia/tui/internal/lemonade"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -100,8 +101,8 @@ type GatewayModel struct {
 	// is the one in use.
 	defaultModel string
 	defaultErr   error
-	// hybrid is what the hybrid row names, read when the screen opens.
-	hybrid    lemonade.HybridModels
+	// hybrid is the backend's entry for the hybrid row; nil until it answers.
+	hybrid    *hybridapi.Entry
 	hybridErr error
 
 	// pendingPersist saves the token once the gateway has accepted it. It is a
@@ -132,7 +133,6 @@ func New(client *Client, clientErr error) GatewayModel {
 	}
 	// Unreadable, it only costs the hybrid row its "(active)"; that row says why.
 	defaultModel, defaultErr := readDefaultModel()
-	hybrid, hybridErr := readHybridModels()
 	url.SetValue(state.BaseURL)
 
 	return GatewayModel{
@@ -144,8 +144,6 @@ func New(client *Client, clientErr error) GatewayModel {
 		initErr:      clientErr,
 		defaultModel: defaultModel,
 		defaultErr:   defaultErr,
-		hybrid:       hybrid,
-		hybridErr:    hybridErr,
 	}
 }
 
@@ -153,7 +151,7 @@ func (m GatewayModel) Init() tea.Cmd {
 	if m.client == nil {
 		return nil
 	}
-	return m.fetchStatus()
+	return tea.Batch(m.fetchStatus(), fetchHybridEntry())
 }
 
 // -- commands ---------------------------------------------------------------
@@ -230,6 +228,14 @@ func (m GatewayModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		return m, nil
+
+	case hybridEntryMsg:
+		m.hybrid, m.hybridErr = nil, msg.err
+		if msg.err == nil {
+			e := msg.entry
+			m.hybrid = &e
+		}
 		return m, nil
 
 	case statusMsg:

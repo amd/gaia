@@ -4,13 +4,8 @@
 package hybrid
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -18,94 +13,67 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/event"
+	"github.com/amd/gaia/tui/internal/hybridapi"
+	"github.com/amd/gaia/tui/internal/hybridapi/hybridapitest"
 )
 
-type stubs struct {
-	saved   []lemonade.HybridSettings
-	saveErr error
-	catalog lemonade.HybridCatalog
-}
+var kinds = []string{"write_prose", "answer_question", "analyze_data", "operate_tools",
+	"change_code", "find_defects", "plan_or_design", "other"}
 
-func testCatalog() lemonade.HybridCatalog {
-	return lemonade.HybridCatalog{
-		Models: map[string][]string{
-			lemonade.HybridFromLocal:   {"Gemma-4-E4B-it-GGUF"},
-			lemonade.HybridFromGateway: {"amd.DeepSeek-V4.1-Flash", "amd.Claude-Opus-5-5", "amd.Gemma-4-31B", "amd.Claude-Sonnet-5-5"},
+const presetsJSON = `{
+ "quality":{"write_prose":{"cheap_max_difficulty":3,"allow_high_stakes":false},"answer_question":{"cheap_max_difficulty":3,"allow_high_stakes":false},
+  "analyze_data":{"cheap_max_difficulty":3,"allow_high_stakes":false},"operate_tools":{"cheap_max_difficulty":3,"allow_high_stakes":false},
+  "change_code":{"cheap_max_difficulty":2,"allow_high_stakes":false},"find_defects":{"cheap_max_difficulty":0,"allow_high_stakes":false},
+  "plan_or_design":{"cheap_max_difficulty":0,"allow_high_stakes":false},"other":{"cheap_max_difficulty":0,"allow_high_stakes":false}},
+ "balanced":{"write_prose":{"cheap_max_difficulty":3,"allow_high_stakes":false},"answer_question":{"cheap_max_difficulty":3,"allow_high_stakes":false},
+  "analyze_data":{"cheap_max_difficulty":3,"allow_high_stakes":false},"operate_tools":{"cheap_max_difficulty":3,"allow_high_stakes":false},
+  "change_code":{"cheap_max_difficulty":3,"allow_high_stakes":true},"find_defects":{"cheap_max_difficulty":0,"allow_high_stakes":false},
+  "plan_or_design":{"cheap_max_difficulty":0,"allow_high_stakes":false},"other":{"cheap_max_difficulty":0,"allow_high_stakes":false}}}`
+
+func str(s string) *string { return &s }
+
+// saved is a backend answer: the measured pair on Quality.
+func saved() hybridapi.Settings {
+	var presets map[string]json.RawMessage
+	_ = json.Unmarshal([]byte(presetsJSON), &presets)
+	return hybridapi.Settings{
+		CheapModel: "amd.DeepSeek-V4.1-Flash", StrongModel: "amd.Claude-Opus-5-5",
+		ClassifierModel: "amd.DeepSeek-V4.1-Flash", ClassifierTimeout: "15", Policy: "quality",
+		Rules: presets["quality"], Presets: json.RawMessage(presetsJSON), Kinds: kinds,
+		Models: []hybridapi.Model{
+			{ID: "Gemma-4-E4B-it-GGUF", Provider: "local", Available: true},
+			{ID: "amd.Claude-Opus-5-5", Provider: "amd", Available: true},
+			{ID: "amd.DeepSeek-V4.1-Flash", Provider: "amd", Available: true},
+			{ID: "amd.Gone", Provider: "amd", Reason: str("The AMD LLM Gateway doesn't list amd.Gone")},
 		},
-		Errs:         map[string]error{},
-		DefaultLocal: "Gemma-4-E4B-it-GGUF",
+		Measured: true,
 	}
 }
 
-// fastAPI404 answers unknown routes the way the Agent UI's FastAPI does.
-func fastAPI404(mux *http.ServeMux) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, pattern := mux.Handler(r); pattern == "" {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = io.WriteString(w, `{"detail":"Not Found"}`)
-			return
-		}
-		mux.ServeHTTP(w, r)
-	})
+func templates() []hybridapi.Template {
+	return []hybridapi.Template{
+		{ID: "gateway-deepseek-opus", Name: "DeepSeek + Opus", Description: "The measured pair.", Available: true, Measured: true},
+		{ID: "claude-direct", Name: "Claude direct", Reason: str("Add an Anthropic API key")},
+	}
 }
 
-// open builds the screen over stubbed config, provider lists and Agent UI.
-func open(t *testing.T, s lemonade.HybridSettings, readErr error, server http.Handler) (Model, *stubs) {
-	return openWith(t, s, readErr, server, testCatalog())
-}
-
-func openWith(t *testing.T, s lemonade.HybridSettings, readErr error, server http.Handler, c lemonade.HybridCatalog) (Model, *stubs) {
+// open builds the screen over a scripted backend and lets its reads land.
+func open(t *testing.T, f *hybridapitest.Fake) Model {
 	t.Helper()
-	st := &stubs{catalog: c}
-	t.Setenv(AgentUIURLEnv, "")
-	origRead, origSave, origLoad, origURL := readSettings, saveSettings, loadCatalog, AgentUIURL
-	t.Cleanup(func() {
-		readSettings, saveSettings, loadCatalog, AgentUIURL = origRead, origSave, origLoad, origURL
-	})
-	readSettings = func() (lemonade.HybridSettings, error) {
-		if len(st.saved) > 0 {
-			return st.saved[len(st.saved)-1], nil
-		}
-		return s, readErr
-	}
-	saveSettings = func(s lemonade.HybridSettings) error {
-		if err := s.Validate(); err != nil {
-			return err
-		}
-		if st.saveErr != nil {
-			return st.saveErr
-		}
-		st.saved = append(st.saved, s)
-		return nil
-	}
-	loadCatalog = func(context.Context, string) lemonade.HybridCatalog { return st.catalog }
-	if server != nil {
-		srv := httptest.NewServer(server)
-		t.Cleanup(srv.Close)
-		AgentUIURL = srv.URL
-	} else {
-		AgentUIURL = closedURL(t)
-	}
-	m := New("", 110, 80)
-	m = settle(t, m, m.Init())
-	return m, st
+	orig := NewAPI
+	t.Cleanup(func() { NewAPI = orig })
+	NewAPI = func() hybridapi.API { return f }
+	m := New(100, 80)
+	return settle(t, m, m.Init())
 }
 
-// closedURL is a loopback address nothing listens on.
-func closedURL(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	l.Close()
-	return "http://" + addr
+func backend() *hybridapitest.Fake {
+	return &hybridapitest.Fake{View: saved(), TemplateList: templates(),
+		StatsAnswer: hybridapi.Stats{Scope: hybridapi.ScopeAgentUIChats}}
 }
 
-// settle runs a command and the screen's own messages it leads to, as Bubble
-// Tea would. Cursor blinks never settle, so anything else is dropped unrun.
+// settle runs cmd and every command its messages lead to.
 func settle(t *testing.T, m Model, cmd tea.Cmd) Model {
 	t.Helper()
 	queue := []tea.Cmd{cmd}
@@ -127,7 +95,7 @@ func settle(t *testing.T, m Model, cmd tea.Cmd) Model {
 		switch v := msg.(type) {
 		case tea.BatchMsg:
 			queue = append(queue, v...)
-		case settingsMsg, catalogMsg, serverTemplatesMsg, appliedMsg, notesMsg, statsMsg, previewMsg:
+		case settingsMsg, savedMsg, templatesMsg, appliedMsg, statsMsg, previewMsg:
 			next, more := m.Update(msg)
 			m = next.(Model)
 			queue = append(queue, more)
@@ -168,7 +136,7 @@ func key(t *testing.T, m Model, keys ...string) Model {
 	return m
 }
 
-// focus moves to a field row (rowCheap…rowTry()).
+// focus moves to a field row.
 func focus(t *testing.T, m Model, row int) Model {
 	t.Helper()
 	for i := 0; m.field() != row; i++ {
@@ -190,322 +158,261 @@ func view(m Model) string {
 	return strings.Join(lines, " ")
 }
 
-func TestScreenShowsTheSavedSettings(t *testing.T) {
-	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, nil)
+func TestScreenShowsWhatTheBackendReturns(t *testing.T) {
+	m := open(t, backend())
 	v := view(m)
 	for _, want := range []string{
-		"amd.DeepSeek-V4.1-Flash (default)", "amd.Claude-Opus-5-5 (default)", "same as the cheap model",
-		"15 seconds", "[Quality]", "writing", "difficulty 3", "finding bugs", "Never",
+		"amd.DeepSeek-V4.1-Flash · AMD LLM Gateway", "amd.Claude-Opus-5-5 · AMD LLM Gateway", "15 seconds",
+		"[Quality]", "Balanced", "Custom", "code change", "difficulty 2", "DeepSeek + Opus · measured",
+		"Claude direct · not yet measured", "Can't use yet: Add an Anthropic API key",
+		"No hybrid turns recorded yet (Agent UI chats only).",
 	} {
 		if !strings.Contains(v, want) {
-			t.Errorf("view lacks %q:\n%s", want, v)
+			t.Errorf("missing %q:\n%s", want, v)
 		}
 	}
 }
 
-func TestABrokenConfigIsShownAndCanBeReplaced(t *testing.T) {
-	m, st := open(t, lemonade.HybridSettings{}, errors.New("config.json: 'hybrid_policy' must be one of quality, balanced, custom"), nil)
-	if !strings.Contains(view(m), "can't be used") || !strings.Contains(view(m), "hybrid_policy") {
-		t.Fatalf("the read error is not shown:\n%s", view(m))
+func TestAnUnreachableBackendIsAnActionableErrorAndNothingIsWritten(t *testing.T) {
+	f := backend()
+	f.SettingsErr = &hybridapi.UnreachableError{What: "Reading the hybrid settings", Base: "http://127.0.0.1:5000",
+		Reason: "isn't running"}
+	m := open(t, f)
+	v := view(m)
+	for _, want := range []string{"needs GAIA's background service at http://127.0.0.1:5000", "Quit and reopen GAIA"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("missing %q:\n%s", want, v)
+		}
 	}
-	_ = key(t, m, "ctrl+s")
-	if len(st.saved) != 1 || st.saved[0].Policy != lemonade.HybridPolicyQuality {
-		t.Fatalf("saving should replace the bad value with the defaults: %+v", st.saved)
+	m = key(t, m, "down", "enter", "right", "ctrl+s")
+	if len(f.Updates) != 0 || len(f.Applied) != 0 {
+		t.Fatalf("a screen with no backend sent %v %v", f.Updates, f.Applied)
 	}
 }
 
-func TestPickingModelsAndSaving(t *testing.T) {
-	m, st := open(t, lemonade.DefaultHybridSettings(), nil, nil)
+func TestSavingSendsOnlyWhatChangedAndShowsTheAnswer(t *testing.T) {
+	f := backend()
+	f.UpdateFn = func(changes map[string]any) (hybridapi.Settings, error) {
+		s := saved()
+		s.Policy = "balanced"
+		s.StrongModel = "Gemma-4-E4B-it-GGUF"
+		return s, nil
+	}
+	m := open(t, f)
 	m = focus(t, m, rowStrong)
-	m = key(t, m, "enter", "3", "1", "b", "enter")
-	if m.edit.Strong != "amd.Gemma-4-31B" {
-		t.Fatalf("strong = %q", m.edit.Strong)
+	m = key(t, m, "enter", "gemma", "enter")
+	m = focus(t, m, rowPolicy)
+	m = key(t, m, "right", "ctrl+s")
+	if len(f.Updates) != 1 {
+		t.Fatalf("updates %v", f.Updates)
 	}
-	m = key(t, m, "ctrl+s")
-	if len(st.saved) != 1 || st.saved[0].Strong != "amd.Gemma-4-31B" || st.saved[0].Rules != nil {
-		t.Fatalf("saved %+v", st.saved)
+	got := f.Updates[0]
+	if len(got) != 2 || got["strong_model"] != "Gemma-4-E4B-it-GGUF" || got["policy"] != "balanced" {
+		t.Fatalf("sent %v", got)
 	}
-	if !strings.Contains(view(m), "Saved") {
-		t.Fatalf("no confirmation:\n%s", view(m))
+	if v := view(m); !strings.Contains(v, "Saved.") || !strings.Contains(v, "[Balanced]") || m.dirty() {
+		t.Fatalf("after save:\n%s", v)
 	}
 }
 
-func TestPickerGroupsModelsByProviderAndSaysWhyOnesAreMissing(t *testing.T) {
-	s := lemonade.DefaultHybridSettings()
-	s.Cheap = "fireworks.glm-5p3-flash"
-	m, _ := open(t, s, nil, nil)
+func TestARefusedSaveShowsTheBackendsReasonAndKeepsTheEdit(t *testing.T) {
+	msg := "classifier_timeout must be a whole number of seconds, 1-120, but it is 500."
+	f := backend()
+	f.UpdateFn = func(map[string]any) (hybridapi.Settings, error) {
+		return hybridapi.Settings{}, &hybridapi.StatusError{Status: 422, Detail: msg}
+	}
+	m := open(t, f)
+	m = focus(t, m, rowTimeout)
+	m = key(t, m, "backspace", "backspace", "500", "ctrl+s")
+	if len(f.Updates) != 1 || f.Updates[0]["classifier_timeout"] != 500 {
+		t.Fatalf("sent %v", f.Updates)
+	}
+	if v := view(m); !strings.Contains(v, "Not saved: "+msg) || !m.dirty() {
+		t.Fatalf("refusal:\n%s", v)
+	}
+}
+
+func TestNothingChangedSendsNothing(t *testing.T) {
+	f := backend()
+	m := key(t, open(t, f), "ctrl+s")
+	if len(f.Updates) != 0 || !strings.Contains(view(m), "Nothing to save.") {
+		t.Fatalf("sent %v:\n%s", f.Updates, view(m))
+	}
+}
+
+func TestPickerGroupsTheBackendsModelsAndSaysWhyOnesCantBeUsed(t *testing.T) {
+	m := open(t, backend())
 	m = focus(t, m, rowCheap)
 	m = key(t, m, "enter")
 	v := view(m)
-	for _, want := range []string{
-		"On this PC", "Gemma-4-E4B-it-GGUF", "AMD LLM Gateway", "amd.Claude-Sonnet-5-5",
-		"Fireworks AI", "fireworks.glm-5p3-flash · current · can't use: fireworks.glm-5p3-flash needs",
-		"Anthropic (Claude)", "Add an Anthropic API key",
-	} {
-		if !strings.Contains(v, want) {
-			t.Errorf("picker lacks %q:\n%s", want, v)
-		}
+	local, gateway := strings.Index(v, "On this PC"), strings.Index(v, "AMD LLM Gateway")
+	if local < 0 || gateway < local || !strings.Contains(v, "amd.Gone · can't use: The AMD LLM Gateway doesn't list amd.Gone") {
+		t.Fatalf("picker:\n%s", v)
 	}
-	if i := strings.Index(v, "On this PC"); i < 0 || i > strings.Index(v, "AMD LLM Gateway") {
-		t.Error("local models come first")
-	}
-	m = key(t, m, "enter") // the default
-	if m.edit.Cheap != "" {
-		t.Fatalf("default not chosen: %q", m.edit.Cheap)
+	m = key(t, m, "Gone", "enter")
+	if m.picking >= 0 || !strings.Contains(m.errMsg, "doesn't list amd.Gone") || m.roleValue(rowCheap) != "amd.DeepSeek-V4.1-Flash" {
+		t.Fatalf("an unusable model was picked: %q", m.errMsg)
 	}
 }
 
-func TestPickingAnUnavailableModelSaysWhy(t *testing.T) {
-	s := lemonade.DefaultHybridSettings()
-	s.Strong = "fireworks.glm-5p3-flash"
-	m, _ := open(t, s, nil, nil)
-	m = focus(t, m, rowStrong)
-	m = key(t, m, "enter", "g", "l", "m", "enter")
-	if m.edit.Strong != "fireworks.glm-5p3-flash" || !strings.Contains(view(m), "can't be used: fireworks.glm-5p3-flash needs Fireworks AI") {
-		t.Fatalf("strong %q\n%s", m.edit.Strong, view(m))
+func TestTheDefaultIsSavedAsNull(t *testing.T) {
+	f := backend()
+	m := open(t, f)
+	m = focus(t, m, rowClassifier)
+	m = key(t, m, "enter", "enter", "ctrl+s")
+	if len(f.Updates) != 1 {
+		t.Fatalf("updates %v", f.Updates)
+	}
+	if v, ok := f.Updates[0]["classifier_model"]; !ok || v != nil {
+		t.Fatalf("sent %v", f.Updates[0])
 	}
 }
 
-func TestDirectClaudeAndFireworksAreChoosableWhenSetUp(t *testing.T) {
-	c := testCatalog()
-	c.ClaudeKey = true
-	c.Models[lemonade.HybridFromClaude] = lemonade.HybridClaudeModels
-	c.Models[lemonade.HybridFromFireworks] = []string{"fireworks.accounts/fireworks/models/deepseek-v4p1-flash"}
-	m, st := openWith(t, lemonade.DefaultHybridSettings(), nil, nil, c)
-	m = focus(t, m, rowCheap)
-	m = key(t, m, "enter", "v", "4", "p", "1", "enter")
-	m = focus(t, m, rowStrong)
-	m = key(t, m, "enter", "c", "l", "a", "u", "d", "e", "-", "o", "p", "u", "s", "down", "enter") // the gateway Opus lists first
-	if m.edit.Strong != "claude-opus-5-5" {
-		t.Fatalf("strong %q", m.edit.Strong)
-	}
-	m = key(t, m, "ctrl+s")
-	if len(st.saved) != 1 || st.saved[0].Cheap != "fireworks.accounts/fireworks/models/deepseek-v4p1-flash" {
-		t.Fatalf("saved %+v\n%s", st.saved, view(m))
-	}
-}
-
-func TestSaveRefusesAModelNoProviderOffers(t *testing.T) {
-	s := lemonade.DefaultHybridSettings()
-	s.Strong = "amd.Retired-Model"
-	m, st := open(t, s, nil, nil)
-	m = key(t, m, "ctrl+s")
-	v := view(m)
-	if len(st.saved) != 0 || !strings.Contains(v, "amd.Retired-Model can't be used") ||
-		!strings.Contains(v, "Checked this PC, the AMD LLM Gateway. To use more models: Add a Fireworks key with /provider") {
-		t.Fatalf("saved %+v\n%s", st.saved, v)
-	}
-}
-
-func TestNotesForUnmeasuredPairsAndLocalClassifiers(t *testing.T) {
-	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, nil)
-	if v := view(m); strings.Contains(v, lemonade.HybridMeasuredNote) || strings.Contains(v, lemonade.HybridClassifierNote) {
-		t.Fatalf("the measured default earns no notes:\n%s", v)
-	}
-	s := lemonade.DefaultHybridSettings()
-	s.Cheap = "Gemma-4-E4B-it-GGUF"
-	m, _ = open(t, s, nil, nil)
-	v := view(m)
-	if !strings.Contains(v, lemonade.HybridMeasuredNote) || !strings.Contains(v, lemonade.HybridClassifierNote) {
-		t.Fatalf("notes missing:\n%s", v)
-	}
-}
-
-func TestValidationErrorsAreShownAndNothingIsSaved(t *testing.T) {
-	m, st := open(t, lemonade.DefaultHybridSettings(), nil, nil)
-	// Strong = the cheap default.
-	m = focus(t, m, rowStrong)
-	m = key(t, m, "enter", "d", "e", "e", "p", "enter", "ctrl+s")
-	if len(st.saved) != 0 || !strings.Contains(view(m), "nothing to route between") {
-		t.Fatalf("saved %+v\n%s", st.saved, view(m))
-	}
-	m.edit.Strong = ""
-	m = focus(t, m, rowTimeout)
-	m = key(t, m, "backspace", "backspace", "x", "ctrl+s")
-	if len(st.saved) != 0 || !strings.Contains(view(m), "enter the classifier limit") {
-		t.Fatalf("empty timeout: saved %+v\n%s", st.saved, view(m))
-	}
-	m = key(t, m, "2", "0", "0", "ctrl+s")
-	if len(st.saved) != 0 || !strings.Contains(view(m), "1-120 seconds") {
-		t.Fatalf("200 s: saved %+v\n%s", st.saved, view(m))
-	}
-	m = key(t, m, "backspace", "ctrl+s")
-	if len(st.saved) != 1 || st.saved[0].Timeout != 20 {
-		t.Fatalf("20 s: %+v", st.saved)
-	}
-}
-
-func TestCustomRulesEditing(t *testing.T) {
-	m, st := open(t, lemonade.DefaultHybridSettings(), nil, nil)
-	m = focus(t, m, rowPolicy)
-	m = key(t, m, "right")
-	if m.edit.Policy != lemonade.HybridPolicyBalanced {
-		t.Fatalf("policy = %s", m.edit.Policy)
-	}
-	// Editing a preset's row switches to Custom, starting from that preset.
+func TestEditingARuleTurnsCustomOnAndSendsTheTable(t *testing.T) {
+	f := backend()
+	m := open(t, f)
 	m = focus(t, m, rowRules+4) // change_code
-	m = key(t, m, "right")
-	if m.edit.Policy != lemonade.HybridPolicyCustom {
-		t.Fatal("editing a preset row did not switch to Custom")
-	}
-	if got := m.edit.Rules["change_code"]; got.CheapMaxDifficulty != 4 || !got.AllowHighStakes {
-		t.Fatalf("not started from Balanced: %+v", got)
-	}
-	if !strings.Contains(view(m), "starting from Balanced") {
-		t.Fatalf("the switch is not said:\n%s", view(m))
-	}
-	m = key(t, m, "space")
-	m = focus(t, m, rowRules+7) // other
-	m = key(t, m, "left", "right", "right", "right", "right", "right", "right", "right")
-	if got := m.edit.Rules["other"].CheapMaxDifficulty; got != lemonade.MaxHybridDifficulty {
-		t.Fatalf("difficulty is not clamped to 0-5: %d", got)
-	}
-	m = key(t, m, "ctrl+s")
-	if len(st.saved) != 1 {
-		t.Fatalf("not saved: %s", view(m))
-	}
-	got := st.saved[0]
-	if got.Policy != lemonade.HybridPolicyCustom || got.Rules["change_code"].AllowHighStakes ||
-		got.Rules["other"].CheapMaxDifficulty != 5 || len(got.Rules) != len(lemonade.HybridKinds) {
-		t.Fatalf("saved %+v", got)
-	}
-
-	// Start from Quality replaces the whole table.
-	m = key(t, m, "q")
-	if !sameRules(m.edit.Rules, lemonade.HybridPreset(lemonade.HybridPolicyQuality)) {
-		t.Fatalf("q did not start from Quality: %+v", m.edit.Rules)
-	}
-	m = key(t, m, "b")
-	if !sameRules(m.edit.Rules, lemonade.HybridPreset(lemonade.HybridPolicyBalanced)) {
-		t.Fatalf("b did not start from Balanced: %+v", m.edit.Rules)
-	}
-	if !m.dirty() {
-		t.Fatal("an edited table must read as unsaved")
+	m = key(t, m, "right", "space", "ctrl+s")
+	got := f.Updates[0]
+	rules, ok := got["rules"].(hybridapi.Rules)
+	if got["policy"] != "custom" || !ok || rules["change_code"].CheapMaxDifficulty != 3 ||
+		!rules["change_code"].AllowHighStakes || len(rules) != len(kinds) {
+		t.Fatalf("sent %v", got)
 	}
 }
 
-func sameRules(a, b lemonade.HybridRules) bool {
-	if len(a) != len(b) {
-		return false
+func TestStartingFromAPresetCopiesTheBackendsTable(t *testing.T) {
+	m := open(t, backend())
+	m = focus(t, m, rowPolicy)
+	m = key(t, m, "b")
+	if m.policy != "custom" || !m.rules["change_code"].AllowHighStakes {
+		t.Fatalf("policy %s rules %v", m.policy, m.rules)
 	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
+}
+
+func TestApplyingATemplateGoesThroughTheBackend(t *testing.T) {
+	f := backend()
+	f.ApplyFn = func(id string) (hybridapi.Settings, error) {
+		s := saved()
+		s.Policy = "balanced"
+		return s, nil
 	}
-	return true
+	m := key(t, open(t, f), "enter")
+	if len(f.Applied) != 1 || f.Applied[0] != "gateway-deepseek-opus" {
+		t.Fatalf("applied %v", f.Applied)
+	}
+	if v := view(m); !strings.Contains(v, "DeepSeek + Opus applied") || !strings.Contains(v, "[Balanced]") {
+		t.Fatalf("after apply:\n%s", v)
+	}
+}
+
+func TestEnterIsIgnoredWhileATemplateIsApplying(t *testing.T) {
+	f := backend()
+	m := open(t, f)
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil || !m.applying {
+		t.Fatal("enter did not start applying")
+	}
+	next, again := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if again != nil || !next.(Model).applying {
+		t.Fatal("a second enter started a second apply")
+	}
+}
+
+func TestAnUnavailableTemplateIsNotApplied(t *testing.T) {
+	f := backend()
+	m := key(t, open(t, f), "down", "enter")
+	if len(f.Applied) != 0 || !strings.Contains(m.errMsg, "Add an Anthropic API key") {
+		t.Fatalf("applied %v, err %q", f.Applied, m.errMsg)
+	}
 }
 
 func TestEscWithUnsavedChangesAsksFirst(t *testing.T) {
-	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, nil)
+	m := open(t, backend())
 	m = focus(t, m, rowPolicy)
 	m = key(t, m, "right")
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(Model)
-	if cmd != nil {
-		t.Fatal("the first esc over unsaved changes closed the screen")
+	if cmd != nil || !strings.Contains(m.note, "unsaved changes") {
+		t.Fatalf("esc closed with unsaved changes: %q", m.note)
 	}
 	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
-		t.Fatal("the second esc did not close")
+		t.Fatal("second esc did not close")
 	}
 	if _, ok := cmd().(ClosedMsg); !ok {
-		t.Fatal("esc did not close the screen")
+		t.Fatal("second esc did not close")
 	}
 }
 
-func TestPreviewPostsTheTextAndShowsTheRoute(t *testing.T) {
-	var gotBody map[string]string
-	var gotHeader string
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/hybrid/stats", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"since":"2026-11-01","turns":10,"cheap_turns":7,"strong_turns":3,"failed_closed":1,"cost":0.5,"cost_if_all_strong":2.0,"saving_pct":75}`)
-	})
-	mux.HandleFunc("/api/hybrid/preview", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method", http.StatusMethodNotAllowed)
-			return
-		}
-		gotHeader = r.Header.Get("X-Gaia-UI")
-		_ = json.NewDecoder(r.Body).Decode(&gotBody)
-		_, _ = io.WriteString(w, `{"model":"amd.DeepSeek-V4.1-Flash","kind":"write_prose","difficulty":1,"stakes":"low","reason":"a short email","classified":true,"seconds":0.8,"policy":"quality"}`)
-	})
-	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, mux)
-	if v := view(m); !strings.Contains(v, "Agent UI chats (this terminal's turns aren't counted yet), since 1 Nov 2026: 10 turns: 7 on the cheap model, 3 on the strong (1 unclassified)") ||
-		!strings.Contains(v, "75% saved") {
-		t.Fatalf("stats line missing:\n%s", v)
+func TestPreviewShowsTheRoute(t *testing.T) {
+	f := backend()
+	d := 1
+	f.Route = event.CanonicalRoute{Model: "amd.DeepSeek-V4.1-Flash", Kind: "write_prose", Difficulty: &d,
+		Stakes: "low", Classified: true, Seconds: 1.2, Reason: "writing at difficulty 1"}
+	m := open(t, f)
+	m = focus(t, m, m.rowTryAt())
+	m = key(t, m, "hi", "enter")
+	if len(f.Previews) != 1 || f.Previews[0] != "hi" {
+		t.Fatalf("previews %v", f.Previews)
 	}
-	m = focus(t, m, rowTry())
-	m = key(t, m, "write a thank-you note", "enter")
-	if gotBody["text"] != "write a thank-you note" || gotHeader != "1" {
-		t.Fatalf("sent %v with X-Gaia-UI %q", gotBody, gotHeader)
-	}
-	v := view(m)
-	if !strings.Contains(v, "→ DeepSeek (writing, d1) · 0.8s") || !strings.Contains(v, "a short email") {
-		t.Fatalf("route not shown:\n%s", v)
+	if v := view(m); !strings.Contains(v, "→ DeepSeek (writing, d1) · 1.2s") || !strings.Contains(v, "writing at difficulty 1") {
+		t.Fatalf("preview:\n%s", v)
 	}
 }
 
-func TestPreviewWithNoServerSaysItNeedsOne(t *testing.T) {
-	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, nil)
-	if !strings.Contains(view(m), "Showing routing stats needs the GAIA Agent UI server") {
-		t.Fatalf("stats without a server:\n%s", view(m))
-	}
-	m = focus(t, m, rowTry())
-	m = key(t, m, "hello", "enter")
-	v := view(m)
-	if !strings.Contains(v, "Trying a request needs the GAIA Agent UI server") || !strings.Contains(v, "gaia chat --ui") {
-		t.Fatalf("no server must be said plainly:\n%s", v)
-	}
-}
-
-func TestPreviewServerErrors(t *testing.T) {
-	for name, tc := range map[string]struct {
-		status int
-		body   string
-		want   string
-	}{
-		"older server": {http.StatusNotFound, `{"detail":"Not Found"}`, "older than this TUI"},
-		"refused":      {http.StatusUnprocessableEntity, `{"detail":"text must not be empty"}`, "text must not be empty"},
-		"list detail":  {http.StatusUnprocessableEntity, `{"detail":[{"msg":"field required"}]}`, "field required"},
-		"no model":     {http.StatusOK, `{"kind":"other"}`, "named no model"},
-		"not json":     {http.StatusOK, `oops`, "isn't JSON"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tc.status)
-				_, _ = io.WriteString(w, tc.body)
-			})
-			m, _ := open(t, lemonade.DefaultHybridSettings(), nil, h)
-			m = focus(t, m, rowTry())
-			m = key(t, m, "x", "enter")
-			if !strings.Contains(view(m), tc.want) {
-				t.Fatalf("want %q:\n%s", tc.want, view(m))
-			}
-		})
-	}
-}
-
-func TestUnclassifiedPreviewSaysSo(t *testing.T) {
-	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `{"model":"amd.Claude-Opus-5-5","classified":false,"reason":"classifier timed out after 15s","policy":"quality"}`)
-	})
-	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, h)
-	m = focus(t, m, rowTry())
+func TestUnclassifiedPreviewSaysSoAndHowToFixIt(t *testing.T) {
+	f := backend()
+	f.Route = event.CanonicalRoute{Model: "amd.Claude-Opus-5-5", Classified: false,
+		Reason: "classifier timed out after 15s", Fix: "Raise the classifier limit, or pick a faster classifier."}
+	m := open(t, f)
+	m = focus(t, m, m.rowTryAt())
 	m = key(t, m, "x", "enter")
-	if v := view(m); !strings.Contains(v, "→ Opus (couldn't classify the request)") || !strings.Contains(v, "timed out") {
-		t.Fatalf("fail-closed preview:\n%s", v)
+	v := view(m)
+	reason, fix := strings.Index(v, "timed out"), strings.Index(v, "Raise the classifier limit")
+	if !strings.Contains(v, "→ Opus (couldn't classify the request)") || reason < 0 || fix < reason {
+		t.Fatalf("fail-closed preview needs its reason, then its fix:\n%s", v)
 	}
 }
 
-func TestStatsLineWithNoTurns(t *testing.T) {
-	if got := (Stats{}).Line(); got != "Agent UI chats (this terminal's turns aren't counted yet): no hybrid turns recorded yet." {
-		t.Fatal(got)
+func TestPreviewErrorsAreShown(t *testing.T) {
+	f := backend()
+	f.PreviewErr = &hybridapi.TimeoutError{What: "Trying a request", Base: "http://127.0.0.1:5000", Limit: 150 * time.Second}
+	m := open(t, f)
+	m = focus(t, m, m.rowTryAt())
+	m = key(t, m, "x", "enter")
+	if v := view(m); !strings.Contains(v, "didn't answer within 2m30s") || !strings.Contains(v, "http://127.0.0.1:5000") {
+		t.Fatalf("preview error:\n%s", v)
+	}
+}
+
+// A hand-broken config is shown with what's wrong, and a save can fix it.
+func TestABrokenConfigIsShownAndCanBeFixed(t *testing.T) {
+	f := backend()
+	f.View.ConfigError = str(`C:\Users\someone\.gaia\config.json: 'hybrid_policy' is custom but 'hybrid_rules' ` +
+		`is missing. Edit the rules in /hybrid, or set the policy back to quality.`)
+	m := open(t, f)
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 70, Height: 30})
+	v := ansi.Strip(next.(Model).View())
+	if !strings.Contains(v, `C:\Users\someone`) || strings.Contains(v, "quality..") {
+		t.Fatalf("notice clipped or doubled period:\n%s", v)
+	}
+	if strings.Contains(v, "gaia config") || strings.Contains(v, "gaia chat") {
+		t.Fatalf("the screen tells the user to type a CLI command:\n%s", v)
+	}
+}
+
+func TestStatsErrorsAreShown(t *testing.T) {
+	f := backend()
+	f.StatsErr = errors.New("the routing stats name a scope this app doesn't know (\"agent_ui\")")
+	if v := view(open(t, f)); !strings.Contains(v, "doesn't know") {
+		t.Fatalf("stats error:\n%s", v)
 	}
 }
 
 func TestViewFitsSmallWindows(t *testing.T) {
-	m, _ := open(t, lemonade.DefaultHybridSettings(), nil, nil)
+	m := open(t, backend())
 	for _, size := range [][2]int{{60, 20}, {40, 15}, {120, 50}} {
 		next, _ := m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		lines := strings.Split(ansi.Strip(next.(Model).View()), "\n")
@@ -517,5 +424,58 @@ func TestViewFitsSmallWindows(t *testing.T) {
 				t.Errorf("%dx%d: line too wide: %q", size[0], size[1], l)
 			}
 		}
+	}
+}
+
+func TestRouteLine(t *testing.T) {
+	d := 2
+	for _, tc := range []struct {
+		r    event.CanonicalRoute
+		want string
+	}{
+		{event.CanonicalRoute{Model: "amd.Claude-Opus-5-5", Kind: "change_code", Difficulty: &d, Stakes: "high", Classified: true},
+			"→ Opus (code change, d2, high stakes)"},
+		{event.CanonicalRoute{Model: "claude-haiku-5-5", Sticky: true}, "→ Haiku (kept on it after an earlier hard turn)"},
+		{event.CanonicalRoute{Model: "fireworks.accounts/fireworks/models/deepseek-v4p1-flash", Kind: "brand_new", Classified: true},
+			"→ Deepseek (brand_new)"},
+	} {
+		if got := RouteLine(tc.r); got != tc.want {
+			t.Errorf("got %q want %q", got, tc.want)
+		}
+	}
+}
+
+func TestASaveAndATemplateApplyNeverRace(t *testing.T) {
+	m := open(t, backend())
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.applying {
+		t.Fatal("enter did not start applying")
+	}
+	m.policy = "balanced"
+	if _, cmd := m.save(); cmd != nil {
+		t.Fatal("ctrl+s sent a save while a template was applying")
+	}
+	m.applying, m.saving = false, true
+	m.focus = 0
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Fatal("enter applied a template while a save was in flight")
+	}
+}
+
+// A saved limit with a fraction fits and reads as unchanged.
+func TestADecimalLimitIsShownWhole(t *testing.T) {
+	f := backend()
+	f.View.ClassifierTimeout = "100.5"
+	m := open(t, f)
+	if m.timeout.Value() != "100.5" || m.dirty() {
+		t.Fatalf("timeout %q, dirty %v", m.timeout.Value(), m.dirty())
+	}
+}
+
+func TestPresetKeysComeFromTheBackendsPresets(t *testing.T) {
+	m := focus(t, open(t, backend()), rowPolicy)
+	if h := m.hint(); !strings.Contains(h, "q/b start from Quality/Balanced") {
+		t.Fatalf("hint %q", h)
 	}
 }

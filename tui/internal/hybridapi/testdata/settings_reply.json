@@ -1,0 +1,172 @@
+{
+ "cheap_model": "amd.DeepSeek-V4.1-Flash",
+ "strong_model": "amd.Claude-Opus-5-5",
+ "classifier_model": "amd.DeepSeek-V4.1-Flash",
+ "classifier_timeout": 15,
+ "policy": "quality",
+ "rules": {
+  "write_prose": {
+   "cheap_max_difficulty": 3,
+   "allow_high_stakes": false
+  },
+  "answer_question": {
+   "cheap_max_difficulty": 3,
+   "allow_high_stakes": false
+  },
+  "analyze_data": {
+   "cheap_max_difficulty": 3,
+   "allow_high_stakes": false
+  },
+  "operate_tools": {
+   "cheap_max_difficulty": 3,
+   "allow_high_stakes": false
+  },
+  "change_code": {
+   "cheap_max_difficulty": 2,
+   "allow_high_stakes": false
+  },
+  "find_defects": {
+   "cheap_max_difficulty": 0,
+   "allow_high_stakes": false
+  },
+  "plan_or_design": {
+   "cheap_max_difficulty": 0,
+   "allow_high_stakes": false
+  },
+  "other": {
+   "cheap_max_difficulty": 0,
+   "allow_high_stakes": false
+  }
+ },
+ "presets": {
+  "quality": {
+   "write_prose": {
+    "cheap_max_difficulty": 3,
+    "allow_high_stakes": false
+   },
+   "answer_question": {
+    "cheap_max_difficulty": 3,
+    "allow_high_stakes": false
+   },
+   "analyze_data": {
+    "cheap_max_difficulty": 3,
+    "allow_high_stakes": false
+   },
+   "operate_tools": {
+    "cheap_max_difficulty": 3,
+    "allow_high_stakes": false
+   },
+   "change_code": {
+    "cheap_max_difficulty": 2,
+    "allow_high_stakes": false
+   },
+   "find_defects": {
+    "cheap_max_difficulty": 0,
+    "allow_high_stakes": false
+   },
+   "plan_or_design": {
+    "cheap_max_difficulty": 0,
+    "allow_high_stakes": false
+   },
+   "other": {
+    "cheap_max_difficulty": 0,
+    "allow_high_stakes": false
+   }
+  },
+  "balanced": {
+   "write_prose": {
+    "cheap_max_difficulty": 3,
+    "allow_high_stakes": false
+   },
+   "answer_question": {
+    "cheap_max_difficulty": 3,
+    "allow_high_stakes": false
+   },
+   "analyze_data": {
+    "cheap_max_difficulty": 3,
+    "allow_high_stakes": false
+   },
+   "operate_tools": {
+    "cheap_max_difficulty": 3,
+    "allow_high_stakes": false
+   },
+   "change_code": {
+    "cheap_max_difficulty": 3,
+    "allow_high_stakes": true
+   },
+   "find_defects": {
+    "cheap_max_difficulty": 0,
+    "allow_high_stakes": false
+   },
+   "plan_or_design": {
+    "cheap_max_difficulty": 0,
+    "allow_high_stakes": false
+   },
+   "other": {
+    "cheap_max_difficulty": 0,
+    "allow_high_stakes": false
+   }
+  }
+ },
+ "kinds": [
+  "write_prose",
+  "answer_question",
+  "analyze_data",
+  "operate_tools",
+  "change_code",
+  "find_defects",
+  "plan_or_design",
+  "other"
+ ],
+ "models": [
+  {
+   "id": "Gemma-4-E4B-it-GGUF",
+   "display_name": "Gemma-4-E4B-it-GGUF",
+   "provider": "local",
+   "available": false,
+   "reason": "Gemma-4-E4B-it-GGUF isn't downloaded",
+   "input_per_million": null,
+   "output_per_million": null,
+   "cache_read_per_million": null,
+   "price_source": null
+  },
+  {
+   "id": "amd.Claude-Opus-5-5",
+   "display_name": "Claude-Opus-5-5",
+   "provider": "amd",
+   "available": true,
+   "reason": null,
+   "input_per_million": null,
+   "output_per_million": null,
+   "cache_read_per_million": null,
+   "price_source": null
+  },
+  {
+   "id": "amd.DeepSeek-V4.1-Flash",
+   "display_name": "DeepSeek-V4.1-Flash",
+   "provider": "amd",
+   "available": true,
+   "reason": null,
+   "input_per_million": null,
+   "output_per_million": null,
+   "cache_read_per_million": null,
+   "price_source": null
+  }
+ ],
+ "models_error": null,
+ "prices_fetched_at": null,
+ "prices_error": null,
+ "measured": true,
+ "measured_note": null,
+ "classifier_note": null,
+ "entry": {
+  "id": "hybrid",
+  "display_name": "Hybrid (DeepSeek + Opus)",
+  "remote": true,
+  "available": true,
+  "reason": null,
+  "shown": true
+ },
+ "is_active": false,
+ "config_error": null
+}
