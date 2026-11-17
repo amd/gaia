@@ -2572,7 +2572,7 @@ export const enMessages = {
     'guide.discord.intent': 'Turn on Message Content Intent',
     'guide.discord.intentBody': 'On the same Bot page. Without it the bot can’t sign in.',
     'guide.discord.invite': 'Add the bot to your server',
-    'guide.discord.inviteBody': 'Under OAuth2 → URL Generator, tick bot, View Channels and Read Message History, then open the URL it makes.',
+    'guide.discord.inviteBody': 'Under OAuth2 → URL Generator, tick bot, then View Channels, Read Message History, Send Messages and Add Reactions. Open the URL it makes.',
     'guide.notion.integration': 'Create a Notion integration',
     'guide.notion.integrationBody': 'Click New integration, choose Internal, and copy its secret. It starts with ntn_.',
     'guide.notion.integrationLink': 'Open Notion',

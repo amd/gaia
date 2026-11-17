@@ -2572,7 +2572,7 @@ const messages: Messages = {
     'guide.discord.intent': 'فعّل Message Content Intent',
     'guide.discord.intentBody': 'في صفحة Bot نفسها. لا يستطيع البوت تسجيل الدخول بدونه.',
     'guide.discord.invite': 'أضف البوت إلى خادمك',
-    'guide.discord.inviteBody': 'في OAuth2 ثم URL Generator حدّد bot وView Channels وRead Message History، ثم افتح الرابط الناتج.',
+    'guide.discord.inviteBody': 'في OAuth2 ثم URL Generator حدّد bot، ثم View Channels وRead Message History وSend Messages وAdd Reactions، وافتح الرابط الناتج.',
     'guide.notion.integration': 'أنشئ تكاملًا في Notion',
     'guide.notion.integrationBody': 'انقر New integration واختر Internal وانسخ سرّه. يبدأ بـ ntn_.',
     'guide.notion.integrationLink': 'افتح Notion',
