@@ -61,7 +61,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 - **Plain language first, in every artifact** — the release notes, PR body, Discord post, and your own between-phase status updates all follow [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate): lead with what a user can now do, layer version numbers, SHAs, and pipeline mechanics underneath. Say each point once — don't restate a highlight in the changelog and again in the announcement.
 - **No Claude attribution anywhere** — not in PR titles, PR bodies, commit messages (no `Co-Authored-By: Claude ...` trailer), release notes, code comments, or the Discord announcement.
 - **No silent fallbacks** — if a validator fails, a step times out, or a workflow run isn't found, stop with an actionable error. Do not retry blindly. Do not "proceed anyway."
-- **Release notes are bulleted, plain, and short** — see *Notes format* in Phase 1. Every entry is one bullet, never a prose block; no narrative overview paragraph; no emoji; a hard word budget that is checked, not eyeballed. Sections in order: `## Breaking Changes` (only if any), `## What's New`, `## Bug Fixes`, `## Known Issues` (only if any), `## Contributors`, `## Full Changelog`. Patch releases do **not** include a `pip install` block.
+- **Release notes are bulleted, plain, and short** — see *Notes format* in Phase 1. Every entry is one bullet, never a prose block; no narrative overview paragraph; no emoji; a hard word budget that is checked, not eyeballed. Sections in order: `## Summary`, `## Breaking Changes` (only if any), `## What's New`, `## Bug Fixes`, `## Known Issues` (only if any), `## Contributors`, `## Full Changelog`. Patch releases do **not** include a `pip install` block.
 - **Match the previous release PR body shape exactly** — read the most recent merged `Release vX.Y.Z` PR (e.g. `gh pr list --repo amd/gaia --state merged --search "Release v in:title" --limit 3`). Open with `# GAIA vX.Y.Z Release Notes` (no MDX frontmatter in the PR body), end with a `Release checklist` section. Style drift here costs review cycles.
 - **The `version.py` bump and its notes land in the same commit.** `docs.yml` and `tests/unit/test_docs_json_release.py` both resolve `docs/releases/v<version>.mdx` and the `docs.json` navbar label from the *declared* `__version__`, so bumping ahead of the notes (the old `0.17.3` → "bump to 0.17.4 for development" pattern) turns every later docs and unit run red, not just the release PR. Never bump on its own.
 - **Bulletproof commits only** — every change made by this skill must satisfy the four criteria in CLAUDE.md (validated, critiqued, scope-clean, no half-finished work) before being committed.
@@ -113,8 +113,11 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    # GAIA v<version> Release Notes
 
-   <Optional single sentence naming what this release is about. Drop it entirely if
-   the bullets already say it — that is the common case. Never a paragraph.>
+   ## Summary
+
+   - <highest-impact user-visible outcome, in plain words>
+   - <the next one; 3–5 bullets in all>
+   - <N> contributors merged <M> PRs since v<previous>.
 
    ## Breaking Changes
 
@@ -143,6 +146,17 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    Full Changelog: [v<previous>...v<version>](https://github.com/amd/gaia/compare/v<previous>...v<version>)
    ```
+
+   **`## Summary` comes first — high signal, low noise.** 3–5 short bullets, each one
+   user-visible outcome of *this* release in plain words: no implementation detail, no
+   PR/issue numbers or file names, no sub-bullets. Then one stats bullet: the line
+   `python util/release_stats.py v<previous> HEAD --bullet` prints (each person counted
+   once; re-run it against the tag commit before tagging). Release-window figures only: no
+   stars, downloads, or growth, and no eval data (scores, cost, token or time figures, task
+   counts or traces). The notes are public.
+
+   > - Ask about a PDF longer than 100 pages and get a complete answer.
+   > - 42 contributors merged 310 PRs since v0.25.4.
 
    Omit `## Breaking Changes` and `## Known Issues` when empty — no "None" placeholder. Drop
    the `---` rules between sections; the headings already separate them.
@@ -179,8 +193,9 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    - **Bullets, not paragraphs.** Every entry is one bullet: a bold clause naming what the
      user can now do, then at most one sentence, then the PR links. No `###` prose blocks
      inside `What's New`.
-   - **Say it once.** A highlight appears in the bullet list or in the opening sentence,
-     never both. The frontmatter `description` is not a third copy.
+   - **Say it once.** `## Summary` names an outcome in a few words; its `What's New` or
+     `Bug Fixes` bullet carries the detail and links. The frontmatter `description` is not
+     a third copy.
    - **Factual, not promotional.** State the capability and stop. Banned: emoji, "we're
      excited to announce", "finally", "blazing(-fast)", "game-changer", "seamless",
      "powerful", "unlock", "Here's the good stuff", "makes X effortless", "no more
@@ -594,30 +609,6 @@ Never delete the tag, the GitHub release, or a PyPI/npm version: other machines 
 5. **Fix forward** as the next patch through Phases 1 to 6, with an RC (Phase 3.5) for anything that reached users through the installer path.
 
 Npm versions cannot be re-published with different bytes (see Notes), so a fix is always a new version.
-
----
-
-## Internal summary (optional, after the final ships)
-
-**Goal:** a ~300-word momentum-and-capabilities update for AMD leadership, only when the maintainer asks for one. The public notes leave out activity stats and eval figures by design; this is where they go.
-
-### Steps
-
-1. Run the stats script from the previous final to the new final (fetch tags first):
-   ```bash
-   python .claude/skills/gaia-release/release_stats.py v<previous-final> v<version>
-   ```
-   `--no-github` skips the issue and star counts when `gh` isn't signed in.
-2. Take the user-facing themes from the release notes' `## What's New`.
-3. Add the release eval result, quoted from that release's eval run. The script never prints one; never estimate it.
-4. Write it in this order: bottom line, momentum, quality, what's new, what's next. Voice per [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate).
-
-### Rules
-
-- **Internal only** — never posted to GitHub, Discord, the release PR, or the notes.
-- **No competitor or partner names.**
-- **Contributor counts are git-author based** (bots excluded); say so if you quote one.
-- **Verify every count before quoting it** — re-run the script against the final tag, not an RC.
 
 ---
 
