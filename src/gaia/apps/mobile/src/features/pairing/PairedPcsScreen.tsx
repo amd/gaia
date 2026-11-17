@@ -46,7 +46,11 @@ export function PairedPcsScreen({ onAdd }: { onAdd: () => void }) {
                             onPress={current ? undefined : () => use.mutate(item)}
                             trailing={
                                 <Row gap="xs">
-                                    {current ? <Badge tone="success" label={t('mobileApp.pairing.pcs.inUse')} /> : null}
+                                    {current ? (
+                                        <Stack self="center">
+                                            <Badge tone="success" label={t('mobileApp.pairing.pcs.inUse')} />
+                                        </Stack>
+                                    ) : null}
                                     <IconButton
                                         icon={Ellipsis}
                                         size="sm"
