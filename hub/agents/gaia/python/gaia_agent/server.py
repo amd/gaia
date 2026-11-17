@@ -1866,6 +1866,14 @@ async def query(request: QueryRequest):
                         "Cancel that run or wait for it to finish, then retry."
                     ),
                 )
+            # The model server or MCP connectors changed in Settings since this agent was built.
+            if await _off_loop(
+                functools.partial(session.follow_settings, **kwargs),
+                on_abandon=lambda _rebuilt: _unwind_setup(),
+            ):
+                logger.info(
+                    "session %s rebuilt for changed settings", request.session_id
+                )
             target = _switch_target(session, request)
             if target is not None:
                 # Switched in place rather than refused. Rebuilding the agent
@@ -1904,6 +1912,10 @@ async def query(request: QueryRequest):
             if callable(follow):
                 # Off the loop: it reads config.json and may ask Lemonade.
                 await _off_loop(follow)
+            # Skills added or removed in Settings since the catalogue was built.
+            follow_skills = getattr(agent, "follow_installed_skills", None)
+            if callable(follow_skills):
+                await _off_loop(follow_skills)
             if request.working_directory is not None:
                 config = getattr(agent, "config", None)
                 if config is not None:

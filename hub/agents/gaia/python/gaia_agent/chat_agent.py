@@ -8,6 +8,7 @@ import ast
 import dataclasses
 import errno
 import functools
+import hashlib
 import importlib.util
 import os
 import platform
@@ -553,6 +554,20 @@ _AGENT_UI_SCHEDULE_LINE = (
 )
 
 
+def _mcp_settings_fingerprint() -> str:
+    """Hash of the files that decide which MCP servers' tools an agent offers."""
+    from gaia.connectors.activations import activations_path
+
+    digest = hashlib.sha256()
+    for path in (gaia_home() / "mcp_servers.json", activations_path()):
+        try:
+            digest.update(path.read_bytes())
+        except FileNotFoundError:
+            digest.update(b"<missing>")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 @dataclass
 class ChatAgentConfig:
     """Configuration for ChatAgent."""
@@ -862,6 +877,8 @@ class ChatAgent(
         # centrally: an inline default here cannot see GAIA's embedded Lemonade,
         # which binds a port chosen at start time.
         effective_base_url = resolve_lemonade_base_url(config.base_url)
+        # Its clients keep this server; a change in Settings needs a new agent.
+        self._model_server_at_build = configured_lemonade_url()
 
         # Embedder is device-scoped: the NPU profile uses the FLM-native
         # embedder so chat and embeddings stay co-resident on the NPU backend
@@ -2502,12 +2519,38 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         except Exception as e:
             logger.warning(f"Auto-save failed: {e}")
 
+    def built_settings_changed(self) -> bool:
+        """True when a setting this agent was built from changed since.
+
+        Its model server and MCP tools are fixed as it is built, so a chat
+        must rebuild its agent to follow Settings.
+        """
+        return self.model_server_changed() or self.mcp_settings_changed()
+
+    def model_server_changed(self) -> bool:
+        """True when the Lemonade Server chosen in Settings changed since this agent was built.
+
+        A cloud-model chat counts too: its embedder and documents still use Lemonade.
+        """
+        built = getattr(self, "_model_server_at_build", _UNSET)
+        return built is not _UNSET and built != configured_lemonade_url()
+
+    def mcp_settings_changed(self) -> bool:
+        """True when MCP servers, or their activation, changed since this agent was built.
+
+        Its MCP tools were registered then, so it must be rebuilt to match.
+        """
+        built = getattr(self, "_mcp_settings_at_build", None)
+        return built is not None and built != _mcp_settings_fingerprint()
+
     def _load_mcp_tools(self) -> None:
         """Register tools from the MCP servers in ``mcp_servers.json``.
 
         Any server that can't be offered leaves a notice naming it and why,
         shown to the user by :meth:`report_mcp_dropped`. The agent starts either way.
         """
+        self._mcp_settings_at_build = _mcp_settings_fingerprint()
+        self._own_mcp_tools: Set[str] = set()
         _mcp_config_path = gaia_home() / "mcp_servers.json"
         if not _mcp_config_path.exists():
             self._set_mcp_dropped_notice(None)
@@ -2551,6 +2594,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             before = len(_TOOL_REGISTRY)
             for srv, converted in admitted.items():
                 self._register_mcp_tools(self._mcp_manager.get_client(srv), converted)
+                self._own_mcp_tools.update(
+                    gaia_tool["name"] for _, gaia_tool in converted
+                )
             added = len(_TOOL_REGISTRY) - before
             if added > 0:
                 logger.info("Loaded %d MCP tool(s)", added)
@@ -3753,6 +3799,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
         self._register_output_reader()
         self._snapshot_tools()
+        # The registry is process-wide: drop MCP tools other agents registered,
+        # from servers that may be off or not active for this agent.
+        own_mcp = getattr(self, "_own_mcp_tools", set())
+        for _name in [
+            n
+            for n, t in self._instance_tools.items()
+            if isinstance(t, dict) and t.get("_mcp_server") and n not in own_mcp
+        ]:
+            self._instance_tools.pop(_name)
         if spec.generic_file_ops:
             _chat_exclude = {
                 "write_python_file",

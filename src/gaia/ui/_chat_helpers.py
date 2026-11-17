@@ -1666,10 +1666,13 @@ def _canonical_agent_type(agent_type: str) -> str:
 
 
 def _follow_model_settings(agent) -> None:
-    """Apply a vision model chosen in Settings since this cached agent last ran."""
+    """Apply a vision model, or skills, changed in Settings since this cached agent last ran."""
     follow = getattr(agent, "follow_model_switch", None)
     if callable(follow):
         follow()
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
 
 
 def _get_cached_agent(
@@ -1716,6 +1719,17 @@ def _get_cached_agent(
                 )
                 return None
             entry["document_ids"] = list(document_ids)
+        changed = getattr(entry["agent"], "built_settings_changed", None)
+        # ``is True``: a stand-in agent's mock answers truthy to anything.
+        if callable(changed) and changed() is True:
+            # Its model server and MCP tools were fixed as it was built.
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
+            logger.debug(
+                "Agent cache miss (settings changed) for session %s",
+                session_id[:8],
+            )
+            return None
         _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
