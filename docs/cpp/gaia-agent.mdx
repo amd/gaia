@@ -144,20 +144,22 @@ A call takes up to 16 tasks, each `{"task": "<the brief>", "paths": ["<file or f
 |---|---|
 | A cloud model (through Lemonade, or `--provider fireworks`) | 8 |
 | A local llama.cpp model | Its slot count (`--parallel`), at most 4 |
-| A model on the NPU | 1 |
+| A model on the NPU | 1, whatever `--max-helpers` says |
 | The server does not report a slot count | 1, and the result says why |
 
-Tasks beyond that number wait their turn. `--max-helpers N` (or `maxHelpers`, `GAIA_MAX_HELPERS`) sets the number yourself, and `0` removes the tool. `gaiacpp` reads the slot count the model was loaded with; it does not reload a model to get more.
+Tasks beyond that number wait their turn. `--max-helpers N` (or `maxHelpers` in the settings file, or `GAIA_MAX_HELPERS`), from 0 to 64, sets the number yourself, and `0` removes the tool. The flag and the variable also apply when `gaiacpp` runs as the Agent UI's agent. `gaiacpp` reads the slot count the model was loaded with; it does not reload a model to get more.
 
-**Limits and failures.** A helper has 30 steps and 10 minutes. The result lists every helper with a status:
+**Limits and failures.** A helper has 30 steps and 10 minutes; a model request still running when the 10 minutes end is cut off there. The result lists every helper with a status:
 
 | Helper `status` | Meaning |
 |---|---|
-| `ok` | It answered. `conclusion` holds the answer, cut at 2,000 characters; `detail` names the `read_tool_output` id that returns the rest. |
-| `partial` | It ran out of steps and gave a closing answer from what it had. |
-| `failed` | Nothing usable came back. `reason` says why: `error` (the model server failed), `empty`, `step_limit`, `timeout` or `cancelled`. |
+| `ok` | It answered. `conclusion` holds the answer, cut at 2,000 characters, or sooner when many helpers share one result; `detail` then names the `read_tool_output` id that returns the rest. |
+| `partial` | It stopped short and gave a closing answer from what it had. `reason` says why it stopped. |
+| `failed` | Nothing usable came back. `reason` says why. |
 
-The result's own `status` is `success` only when every helper is `ok`, `partial` when some are not, and `error` when none returned anything. Its first line counts them and tells the agent to redo failed parts itself or say they are missing. Stopping the agent stops its helpers.
+`reason` is `step_limit` (out of steps), `loop` (stopped for repeating a tool call), `empty` (the model returned no text), `error` (the model server failed, or the helper could not start), `timeout` or `cancelled`.
+
+The result's own `status` is `success` only when every helper is `ok`, `partial` when some are not, and `error` when none returned anything. Its first line counts them and tells the agent to redo failed parts itself or say they are missing. Stopping the agent stops its helpers: each ends when the model request it has in flight returns.
 
 A compact model is not offered `delegate_task` unless `--max-helpers` names a number above 0.
 
@@ -209,7 +211,7 @@ The counters use the same names as `gaia -p --output-format json`, so one script
 | `output_tokens` | Tokens the model wrote, the helpers' included |
 | `peak_context_tokens` | The largest single request, prompt plus reply: how full the context window got |
 
-The token fields are 0 when the server reports no usage. `usage` and `peak_context_tokens` are the agent's own; `num_tool_calls` counts a `delegate_task` call once and not the tools its helpers ran.
+The token fields are 0 when the server reports no usage. The token totals, here and in `usage`, include the helpers' requests. `num_steps`, `num_llm_calls` and `peak_context_tokens` are the agent's own, and `num_tool_calls` counts a `delegate_task` call once and not the tools its helpers ran.
 
 A run that used helpers adds a `helpers` object: `runs`, `ok`, `partial` and `failed` count them, `width` is the most that ran at once, `input_tokens`, `cached_tokens` and `output_tokens` are their share of the totals, and `wall_s` is the time the agent spent waiting on them.
 

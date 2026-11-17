@@ -238,6 +238,8 @@ TEST(HelperWidth, TheNpuServesOneHelperAtATime) {
     cap.slots = 4;
     EXPECT_EQ(helperWidth("gemma4-it-e4b-FLM", "http://localhost:13305/api/v1", cap, -1).width, 1);
     EXPECT_EQ(helperWidth("gemma4-it-e4b-FLM", "http://localhost:13305/api/v1", {}, -1).source, "npu");
+    EXPECT_EQ(helperWidth("gemma4-it-e4b-FLM", "http://localhost:13305/api/v1", cap, 4).width, 1)
+        << "asking for more does not change what the NPU serves";
 }
 
 TEST(HelperWidth, AnUnknownSlotCountRunsOneAndSaysWhy) {
@@ -517,6 +519,52 @@ TEST(DelegateTask, AHelperPastItsTimeLimitFails) {
     EXPECT_EQ(r["helpers"][0]["status"], "failed") << r.dump(2);
     EXPECT_EQ(r["helpers"][0]["reason"], "timeout");
     EXPECT_LT(secs, 10.0);
+}
+
+TEST(DelegateTask, AModelCallStillRunningAtTheDeadlineIsCutOff) {
+    Workdir w;
+    RoutedServer server([](const json&) { return RoutedServer::Reply{answer("too late"), 200, 6000}; });
+    GaiaAgent::Options o = optionsFor(w);
+    o.helperTimeoutSeconds = 1;
+    GaiaAgent agent(cfgFor(server.lemonadeUrl()), o);
+    const auto t0 = std::chrono::steady_clock::now();
+    const json r = delegate(agent, tasksFor({"one slow call"}));
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    EXPECT_EQ(r["helpers"][0]["status"], "failed") << r.dump(2);
+    EXPECT_EQ(r["helpers"][0]["reason"], "timeout");
+    EXPECT_LT(secs, 5.0) << "the call was not waited out";
+}
+
+TEST(DelegateTask, AHelperStoppedForRepeatingItselfSaysSo) {
+    Workdir w;
+    RoutedServer server([](const json& req) {
+        if (has(text(req), "Stopped: repeated tool calls")) return RoutedServer::Reply{answer("")};
+        return RoutedServer::Reply{call("file_search", {{"pattern", "*.none"}})};
+    });
+    GaiaAgent agent(cfgFor(server.lemonadeUrl()), optionsFor(w));
+    const json r = delegate(agent, tasksFor({"spin"}));
+    EXPECT_EQ(r["helpers"][0]["status"], "failed") << r.dump(2);
+    EXPECT_EQ(r["helpers"][0]["reason"], "loop");
+}
+
+TEST(DelegateTask, SixteenLongConclusionsAllFitTheParentsToolResult) {
+    Workdir w;
+    const std::string body = "ANSWER \"quoted\"\n" + std::string(6000, 'y');
+    RoutedServer server([&](const json&) { return RoutedServer::Reply{answer(body)}; });
+    GaiaAgent::Options o = optionsFor(w);
+    o.maxHelpers = 8;
+    const AgentConfig cfg = cfgFor(server.lemonadeUrl());
+    GaiaAgent agent(cfg, o);
+    std::vector<std::string> briefs;
+    for (int i = 0; i < 16; ++i) briefs.push_back("task " + std::to_string(i) + " " + std::string(300, 't'));
+    const json r = delegate(agent, tasksFor(briefs));
+    ASSERT_EQ(r["helpers"].size(), 16u);
+    EXPECT_LE(r.dump().size(), static_cast<size_t>(cfg.toolResultCharLimit())) << "nothing is clipped out of the middle";
+    for (const auto& h : r["helpers"]) {
+        EXPECT_EQ(h["status"], "ok");
+        EXPECT_GE(h["conclusion"].get<std::string>().size(), 80u);
+        EXPECT_TRUE(h.contains("detail"));
+    }
 }
 
 TEST(DelegateTask, CancellingTheParentStopsItsHelpers) {

@@ -440,6 +440,7 @@ private:
         cfg.responseMode = ResponseMode::Conversational;
         cfg.apiKey = lemonadeKey_;
         GaiaAgent::Options o;
+        o.maxHelpers = opts_.maxHelpers;
         if (s.roots.empty()) {
             // Roots are UTF-8; the environment's narrow strings are the code page on Windows.
 #ifdef _WIN32

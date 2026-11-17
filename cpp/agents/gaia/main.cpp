@@ -228,6 +228,18 @@ int toPositiveInt(const std::string& flag, const std::string& v) {
     return n;
 }
 
+int toHelperCount(const std::string& flag, const std::string& v) {
+    const int n = toInt(flag, v);
+    if (n < 0 || n > 64) usageError(flag + " needs a whole number from 0 to 64, got '" + v + "'");
+    return n;
+}
+
+// GAIA_MAX_HELPERS, or -1 when it is not set.
+int maxHelpersFromEnv() {
+    const std::string v = gaia::getEnvVar("GAIA_MAX_HELPERS");
+    return v.empty() ? -1 : toHelperCount("GAIA_MAX_HELPERS", v);
+}
+
 bool validTemperature(double t) { return std::isfinite(t) && t >= 0.0 && t <= 2.0; }
 
 double toTemperature(const std::string& flag, const std::string& v) {
@@ -287,11 +299,7 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--max-tokens") cli.maxTokens = toPositiveInt(a, need(i, a));
         else if (a == "--temperature") cli.temperature = toTemperature(a, need(i, a));
         else if (a == "--max-steps") cli.maxSteps = toPositiveInt(a, need(i, a));
-        else if (a == "--max-helpers") {
-            const std::string v = need(i, a);
-            cli.maxHelpers = toInt(a, v);
-            if (cli.maxHelpers < 0) usageError("--max-helpers needs a whole number, 0 or more, got '" + v + "'");
-        }
+        else if (a == "--max-helpers") cli.maxHelpers = toHelperCount(a, need(i, a));
         else if (a == "--cwd") cli.cwd = need(i, a);
         else if (a == "--mcp-config") cli.mcpConfig = need(i, a);
         else if (a == "--embedding-model") cli.embeddingModel = need(i, a);
@@ -452,12 +460,7 @@ Settings buildSettings(const Cli& cli) {
         if (!v.empty()) merged[field] = toPositiveInt(var, v);
     }
 
-    const std::string envHelpers = gaia::getEnvVar("GAIA_MAX_HELPERS");
-    if (!envHelpers.empty()) {
-        const int n = toInt("GAIA_MAX_HELPERS", envHelpers);
-        if (n < 0) usageError("GAIA_MAX_HELPERS needs a whole number, 0 or more, got '" + envHelpers + "'");
-        merged["maxHelpers"] = n;
-    }
+    if (const int n = maxHelpersFromEnv(); n >= 0) merged["maxHelpers"] = n;
     if (cli.maxHelpers >= 0) merged["maxHelpers"] = cli.maxHelpers;
 
     if (!cli.provider.empty()) applyProvider(merged, cli.provider, "--provider");
@@ -764,10 +767,9 @@ int runPrint(const Cli& cli) {
                       {"num_llm_calls", result.value("llm_calls", 0)},
                       {"num_tool_calls", result.value("tool_calls", 0)},
                       {"error_count", result.value("tool_errors", 0)},
-                      // The run's whole cost: this agent's calls plus its helpers'.
-                      {"input_tokens", usage.value("prompt_tokens", 0) + helpers.value("input_tokens", 0)},
-                      {"cached_tokens", usage.value("cached_tokens", 0) + helpers.value("cached_tokens", 0)},
-                      {"output_tokens", usage.value("completion_tokens", 0) + helpers.value("output_tokens", 0)},
+                      {"input_tokens", usage.value("prompt_tokens", 0)},
+                      {"cached_tokens", usage.value("cached_tokens", 0)},
+                      {"output_tokens", usage.value("completion_tokens", 0)},
                       {"peak_context_tokens", usage.value("peak_context_tokens", 0)}};
     if (result.contains("usage")) out["usage"] = usage;
     if (helpers.value("runs", 0) > 0) out["helpers"] = helpers;
@@ -991,6 +993,7 @@ int main(int argc, char** argv) {
             so.host = cli.host;
             so.port = cli.port;
             so.defaultModel = cli.model.empty() ? gaia::getEnvVar("GAIA_MODEL_ID") : cli.model;
+            so.maxHelpers = cli.maxHelpers >= 0 ? cli.maxHelpers : maxHelpersFromEnv();
             return gaia::runSidecar(so);
         }
         if (!cli.cwd.empty()) {

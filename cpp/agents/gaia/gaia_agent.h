@@ -82,6 +82,8 @@ protected:
     /// Lists the working folder once, so every model call of the turn shows it as it began.
     void onTurnStart() override;
 
+    UsageStats sideUsage() const override;
+
 public:
     /// Files the answer says were created or saved, as written in it.
     static std::vector<std::string> claimedFiles(const std::string& answer);

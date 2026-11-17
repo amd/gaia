@@ -713,6 +713,9 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
                   << std::endl;
     }
 
+    const int timeoutSec =
+        requestTimeout_ ? std::clamp(requestTimeout_(), 1, LEMONADE_REQUEST_TIMEOUT) : LEMONADE_REQUEST_TIMEOUT;
+
     // ---- Streaming path ----
     if (cfg.streaming) {
         std::string accumulated;
@@ -725,7 +728,8 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
                     accumulated += token;
                     console_->printStreamToken(token);
                 },
-                streamedToolCalls
+                streamedToolCalls,
+                timeoutSec
             );
         } catch (const std::exception& e) {
             if (accumulated.empty() || cancelRequested()) throw;
@@ -804,7 +808,7 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
     }
 
     // ---- Non-streaming path ----
-    std::string responseBody = lemonade_.chatCompletions(requestBody);
+    std::string responseBody = lemonade_.chatCompletions(requestBody, timeoutSec);
 
     // Parse response
     json responseJson;
@@ -2641,6 +2645,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         {"tool_calls", turnToolCalls_.size()},
         {"llm_calls", llmCallLog.size()}
     };
+    if (!stopReason.empty()) result["stop_reason"] = stopReason == "cap" ? "step_limit" : stopReason;
     json toolCallLog = json::array();
     for (const auto& call : turnToolCalls_) {
         // Arguments are what make a trace readable; capped so one huge write can't bloat the log.
@@ -2659,6 +2664,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
     result["telemetry"] = {{"llm_calls", std::move(llmCallLog)},
                            {"tool_calls", std::move(toolCallLog)}};
+    totalUsage += sideUsage();
     if (totalUsage.totalTokens > 0) {
         result["usage"] = totalUsage.toJson();
     }

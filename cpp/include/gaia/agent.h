@@ -186,6 +186,9 @@ public:
     /// so a turn that is killed or hangs still leaves a record.
     void setStepLogger(std::function<void(const json&)> logger) { stepLogger_ = std::move(logger); }
 
+    /// Seconds one model request may take, asked before each request; unset = the client's own limit.
+    void setRequestTimeout(std::function<int()> seconds) { requestTimeout_ = std::move(seconds); }
+
     /// Check whether a cancel has been requested.
     bool isCancelled() const { return cancelRequested(); }
 
@@ -346,6 +349,9 @@ protected:
     /// capture what the system prompt should hold fixed for the whole query.
     virtual void onTurnStart() {}
 
+    /// Model usage this turn outside the agent's own calls (its helpers'), added to the turn's usage.
+    virtual UsageStats sideUsage() const { return {}; }
+
     /// One tool call made during the current query.
     struct ToolCallRecord {
         std::string name;
@@ -472,6 +478,7 @@ private:
     std::atomic<bool> cancelled_{false};
     std::function<bool()> cancelCheck_;
     std::function<void(const json&)> stepLogger_;
+    std::function<int()> requestTimeout_;
     bool cancelRequested() const { return cancelled_.load() || (cancelCheck_ && cancelCheck_()); }
 
     AgentState executionState_ = AgentState::PLANNING;

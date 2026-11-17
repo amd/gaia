@@ -29,8 +29,8 @@ inline constexpr int kMaxHelperTasks = 16;
 /// True when modelId at baseUrl is served by a hosted provider, read off the names alone.
 bool isHostedModel(const std::string& modelId, const std::string& baseUrl);
 
-/// The width for a model: `fixed` above 0 wins; a hosted model gets kCloudHelperWidth; the
-/// NPU serves one request at a time; a local model gets its slot count, at most
+/// The width for a model: one on the NPU, whatever was asked; else `fixed` above 0; else
+/// kCloudHelperWidth for a hosted model; else a local model's slot count, at most
 /// kLocalHelperWidth; one when the server does not say.
 HelperWidth helperWidth(const std::string& modelId, const std::string& baseUrl,
                         const ModelCapacity& capacity, int fixed);

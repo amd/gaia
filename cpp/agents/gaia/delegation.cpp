@@ -22,8 +22,6 @@ namespace fs = std::filesystem;
 
 namespace {
 constexpr size_t kConclusionChars = 2000;
-constexpr size_t kMinConclusionChars = 300;
-constexpr size_t kRecordOverheadChars = 260;  // one helper's fields other than its conclusion
 constexpr size_t kTaskEchoChars = 200;
 
 std::string lowered(std::string s) {
@@ -62,11 +60,12 @@ bool isHostedModel(const std::string& modelId, const std::string& baseUrl) {
 
 HelperWidth helperWidth(const std::string& modelId, const std::string& baseUrl,
                         const ModelCapacity& capacity, int fixed) {
-    if (fixed > 0) return {fixed, "override", ""};
-    if (capacity.recipe == "cloud" || isHostedModel(modelId, baseUrl)) return {kCloudHelperWidth, "cloud", ""};
     const std::string id = lowered(modelId);
     const bool npu = capacity.recipe == "flm" || (id.size() >= 4 && id.substr(id.size() - 4) == "-flm");
+    // The NPU runs one agent's turn at a time, so more helpers would only wait on each other's clock.
     if (npu) return {1, "npu", ""};
+    if (fixed > 0) return {fixed, "override", ""};
+    if (capacity.recipe == "cloud" || isHostedModel(modelId, baseUrl)) return {kCloudHelperWidth, "cloud", ""};
     if (capacity.slots > 0) return {(std::min)(capacity.slots, kLocalHelperWidth), "slots", ""};
     return {1, "unknown", capacity.unknown};
 }
@@ -231,17 +230,9 @@ json GaiaAgent::delegateTasks(const json& args) {
     cfg.maxSteps = options_.helperMaxSteps;
 
     ModelCapacity capacity;
-    if (options_.maxHelpers <= 0 && !isHostedModel(cfg.modelId, cfg.baseUrl)) {
-        capacity = lemonade().modelCapacity(cfg.modelId);
-    }
+    if (!isHostedModel(cfg.modelId, cfg.baseUrl)) capacity = lemonade().modelCapacity(cfg.modelId);
     const HelperWidth width = helperWidth(cfg.modelId, cfg.baseUrl, capacity, options_.maxHelpers);
-    const size_t atOnce = (std::min)(tasks.size(), static_cast<size_t>(width.width));
-    // Every conclusion must fit the one tool result the parent reads, or the middle ones are clipped away.
-    const size_t resultChars = static_cast<size_t>((std::max)(cfg.toolResultCharLimit(), 0));
-    const size_t share = resultChars / tasks.size();
-    const size_t conclusionChars =
-        (std::clamp)(share > kRecordOverheadChars ? share - kRecordOverheadChars : 0, kMinConclusionChars,
-                     kConclusionChars);
+    const size_t wanted = (std::min)(tasks.size(), static_cast<size_t>(width.width));
 
     // A helper on the NPU needs the lock this turn holds; it comes back with the next model call.
     releaseNpu();
@@ -249,6 +240,7 @@ json GaiaAgent::delegateTasks(const json& args) {
     const auto began = std::chrono::steady_clock::now();
     std::vector<json> records(tasks.size());
     std::vector<UsageStats> usages(tasks.size());
+    std::vector<std::string> answers(tasks.size());
     std::atomic<size_t> next{0};
     std::atomic<size_t> finished{0};
 
@@ -273,6 +265,13 @@ json GaiaAgent::delegateTasks(const json& args) {
                     timedOut.store(true);
                     return true;
                 });
+                // A request still running at the deadline is cut off there, not at the client's own limit.
+                helper.setRequestTimeout([deadline] {
+                    const auto left = std::chrono::duration_cast<std::chrono::seconds>(
+                        deadline - std::chrono::steady_clock::now());
+                    const long long seconds = static_cast<long long>(left.count()) + 1;
+                    return static_cast<int>(seconds < 1 ? 1 : seconds);
+                });
                 helper.setStepLogger([this, i](const json& step) {
                     json line = step;
                     line["helper"] = i + 1;
@@ -286,6 +285,8 @@ json GaiaAgent::delegateTasks(const json& args) {
                 }
                 const json r = helper.processQuery(brief, options_.helperMaxSteps);
                 const std::string status = r.value("status", "error");
+                // Why the helper's turn stopped short: step_limit, loop, empty or error.
+                const std::string stopped = r.value("stop_reason", "error");
                 const std::string answer = trimmed(stripReasoning(r.value("result", "")));
                 rec["steps"] = r.value("steps_taken", 0);
                 rec["tool_calls"] = r.value("tool_calls", 0);
@@ -297,27 +298,24 @@ json GaiaAgent::delegateTasks(const json& args) {
                     u.cachedTokens = r["usage"].value("cached_tokens", 0);
                     usages[i] = u;
                 }
-                if (timedOut.load()) {
+                if (timedOut.load() || std::chrono::steady_clock::now() >= deadline) {
                     fail("timeout", "No answer within " + std::to_string(options_.helperTimeoutSeconds) + " s.");
                 } else if (status == "cancelled") {
                     fail("cancelled", "");
                 } else if (status == "error") {
-                    const bool outOfSteps = r.value("steps_taken", 0) >= r.value("steps_limit", options_.helperMaxSteps);
-                    fail(outOfSteps ? "step_limit" : "error", answer);
+                    fail(stopped, answer);
                 } else if (answer.empty()) {
                     fail("empty", "The helper returned no text.");
                 } else {
                     rec["status"] = status == "success" ? "ok" : "partial";
-                    if (status != "success") rec["reason"] = "step_limit";
-                    rec["conclusion"] = clipped(answer, conclusionChars);
-                    if (answer.size() > conclusionChars) {
-                        rec["detail"] = "clipped; read_tool_output output_id=" +
-                                        std::to_string(storeToolOutput(answer)) + " returns all of it";
-                    }
+                    if (status != "success") rec["reason"] = stopped;
+                    answers[i] = answer;
                 }
             }
         } catch (const std::exception& e) {
             fail("error", e.what());
+        } catch (...) {
+            fail("error", "The helper stopped on an error it did not describe.");
         }
         const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         rec["input_tokens"] = usages[i].promptTokens;
@@ -325,36 +323,49 @@ json GaiaAgent::delegateTasks(const json& args) {
         rec["output_tokens"] = usages[i].completionTokens;
         rec["wall_s"] = rounded(wall);
         const size_t done = ++finished;
-        {
+        const std::string status = rec.value("status", "failed");
+        records[i] = std::move(rec);
+        try {
             std::lock_guard<std::mutex> lock(helperMu_);
             logStep({{"kind", "helper"},
                      {"helper", i + 1},
-                     {"status", rec["status"]},
-                     {"reason", rec.value("reason", "")},
-                     {"steps", rec.value("steps", 0)},
-                     {"wall_s", rec["wall_s"]},
+                     {"status", status},
+                     {"reason", records[i].value("reason", "")},
+                     {"steps", records[i].value("steps", 0)},
+                     {"wall_s", records[i]["wall_s"]},
                      {"input_tokens", usages[i].promptTokens},
                      {"cached_tokens", usages[i].cachedTokens},
                      {"output_tokens", usages[i].completionTokens}});
             console().printInfo("Helper " + std::to_string(done) + " of " + std::to_string(tasks.size()) +
-                                " finished (" + rec["status"].get<std::string>() + ")");
+                                " finished (" + status + ")");
+        } catch (...) {
+            // The record above already holds the outcome; a log line that cannot be written must not end the process.
         }
-        records[i] = std::move(rec);
     };
     auto worker = [&] {
         for (size_t i = next++; i < tasks.size(); i = next++) runOne(i);
     };
 
-    std::vector<std::thread> pool;
-    for (size_t w = 1; w < atOnce; ++w) {
+    size_t atOnce = 1;
+    {
+        std::vector<std::thread> pool;
+        struct Join {
+            std::vector<std::thread>& threads;
+            ~Join() {
+                for (auto& t : threads) {
+                    if (t.joinable()) t.join();
+                }
+            }
+        } join{pool};
         try {
-            pool.emplace_back(worker);
-        } catch (const std::system_error&) {
-            break;  // the threads that did start, and this one, still run every task
+            pool.reserve(wanted);
+            for (size_t w = 1; w < wanted; ++w) pool.emplace_back(worker);
+        } catch (const std::exception&) {
+            // Fewer threads than wanted: those that started, and this one, still run every task.
         }
+        atOnce = pool.size() + 1;
+        worker();
     }
-    worker();
-    for (auto& t : pool) t.join();
 
     int ok = 0, partial = 0, failed = 0;
     UsageStats total;
@@ -377,14 +388,13 @@ json GaiaAgent::delegateTasks(const json& args) {
 
     const int n = static_cast<int>(records.size());
     std::string summary = std::to_string(ok) + " of " + std::to_string(n) + " helpers finished";
-    if (partial > 0) summary += "; " + std::to_string(partial) + " stopped at a limit with a partial answer";
+    if (partial > 0) summary += "; " + std::to_string(partial) + " stopped short with a partial answer";
     if (failed > 0) {
         summary += "; " + std::to_string(failed) +
                    " FAILED and returned nothing usable. Do that work yourself or tell the user it is missing";
     }
     json out = {{"status", ok == n ? "success" : ok + partial > 0 ? "partial" : "error"},
                 {"summary", summary + "."},
-                {"helpers", records},
                 {"width", atOnce},
                 {"width_source", width.source},
                 {"usage",
@@ -392,8 +402,42 @@ json GaiaAgent::delegateTasks(const json& args) {
                   {"cached_tokens", total.cachedTokens},
                   {"output_tokens", total.completionTokens}}}};
     if (!width.note.empty()) out["width_note"] = "Ran one helper at a time: " + width.note;
+    if (atOnce < wanted) {
+        out["width_note"] = "Only " + std::to_string(atOnce) + " of " + std::to_string(wanted) +
+                            " helper threads could be started.";
+    }
     if (ok + partial == 0) out["error"] = summary + ".";
+
+    // Every conclusion has to fit the one tool result the parent reads, or the middle ones are clipped away.
+    const size_t limit = static_cast<size_t>((std::max)(cfg.toolResultCharLimit(), 0));
+    std::vector<int> stored(tasks.size(), 0);
+    struct Sizes {
+        size_t conclusion, task;
+    };
+    static const Sizes kSteps[] = {{kConclusionChars, kTaskEchoChars}, {1500, kTaskEchoChars}, {1100, kTaskEchoChars},
+                                   {800, kTaskEchoChars},              {600, kTaskEchoChars},  {450, kTaskEchoChars},
+                                   {300, kTaskEchoChars},              {300, 60},              {200, 60},
+                                   {120, 40},                          {80, 40}};
+    for (const Sizes& size : kSteps) {
+        for (size_t i = 0; i < records.size(); ++i) {
+            records[i]["task"] = clipped(trimmed(tasks[i].text), size.task);
+            if (answers[i].empty()) continue;
+            records[i]["conclusion"] = clipped(answers[i], size.conclusion);
+            if (answers[i].size() > size.conclusion) {
+                if (stored[i] == 0) stored[i] = storeToolOutput(answers[i]);
+                records[i]["detail"] = "clipped; read_tool_output output_id=" + std::to_string(stored[i]) +
+                                       " returns all of it";
+            }
+        }
+        out["helpers"] = records;
+        if (out.dump(-1, ' ', false, json::error_handler_t::replace).size() <= limit) break;
+    }
     return out;
+}
+
+UsageStats GaiaAgent::sideUsage() const {
+    std::lock_guard<std::mutex> lock(helperMu_);
+    return helperTotals_.usage;
 }
 
 }  // namespace gaia
