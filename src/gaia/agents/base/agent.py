@@ -10790,6 +10790,10 @@ Do NOT wrap conversational replies in JSON.
                 a fresh uuid is synthesised for backward compatibility
                 with embedded-JSON paths that don't carry an id.
         """
+        view = (self._tools_registry.get(tool_name) or {}).get("model_view")
+        if view is not None and isinstance(tool_output, dict):
+            tool_output = view(tool_output)
+
         if isinstance(tool_output, str) or tool_name == "read_tool_output":
             # A read_tool_output page is bounded by the store and must stay exact.
             text_content = tool_output

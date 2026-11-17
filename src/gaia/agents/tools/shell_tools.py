@@ -1569,6 +1569,35 @@ _WAIT_TOOL = "wait_for_condition"
 MAX_OUTPUT_CHARS = 10_000
 
 
+# Fields of a shell result the model reads only when they say something.
+_ONLY_ON_TIMEOUT = ("timeout", "timeout_class")
+_ONLY_WHEN_SET = ("stderr", "has_errors", "output_truncated", "check_result")
+
+
+def lean_shell_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """The copy of a ``run_shell_command`` result the model reads.
+
+    The model wrote the command, so echoing it back (twice, with ``steps``) is
+    context spent on nothing; so are empty fields and the timeout it left at
+    its default. A line of several steps keeps ``steps``: each has its own
+    exit code.
+    """
+    lean = {k: v for k, v in result.items() if k not in ("command", "shell")}
+    steps = lean.get("steps")
+    if isinstance(steps, list) and len(steps) <= 1:
+        del lean["steps"]
+    if not lean.get("timed_out"):
+        for key in _ONLY_ON_TIMEOUT:
+            lean.pop(key, None)
+    for key in _ONLY_WHEN_SET:
+        if not lean.get(key):
+            lean.pop(key, None)
+    duration = lean.get("duration_seconds")
+    if isinstance(duration, float):
+        lean["duration_seconds"] = round(duration, 1)
+    return lean
+
+
 def _truncate(text: Optional[str], stream: str) -> str:
     """*text* capped at ``MAX_OUTPUT_CHARS``, saying so when it was cut."""
     text = text or ""
@@ -8140,6 +8169,7 @@ class ShellToolsMixin:
             # build would be abandoned by the loop while the subprocess is still
             # inside its own (correct) timeout.
             timeout=MAX_COMMAND_TIMEOUT + 60,
+            model_view=lean_shell_result,
         )
         # The class table leads the docstring because the prompt renders a tool
         # by its FIRST LINE; anything below is seen only by models using native
@@ -8170,9 +8200,9 @@ class ShellToolsMixin:
                     ceiling it is refused, not clamped.
 
             Returns:
-                status, output, the last exit code, 'steps' (each with its own
-                code), the applied 'timeout' and 'timeout_class'; one killed at
-                the limit carries 'timed_out'.
+                status, output, the last exit code; several steps add
+                'steps' (each with its code); a kill at the limit adds
+                'timed_out', 'timeout' and 'timeout_class'.
             """
             working_directory = _expand_home(working_directory)
             try:
