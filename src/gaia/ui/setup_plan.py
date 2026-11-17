@@ -389,7 +389,11 @@ def _catalog(
         is_embedding_model_id,
         remaining_download_gb,
     )
-    from gaia.llm.lemonade_client import is_cloud_model_entry, runs_on_npu
+    from gaia.llm.lemonade_client import (
+        DEFAULT_MODEL_LADDER,
+        is_cloud_model_entry,
+        runs_on_npu,
+    )
 
     same = model_choice.ids_match
     lemonade_list = (
@@ -441,8 +445,12 @@ def _catalog(
         entry = entry_for(model_id)
         downloaded = bool(entry.get("downloaded")) if entry else False
         full = entry.get("size") if entry else None
-        if not isinstance(full, (int, float)):
-            full = _registry_size(model_id)
+        # The plan's fit checks run on the server's size for setup's own models;
+        # any other model shows the one size Settings shows for it.
+        if not isinstance(full, (int, float)) or not listed(
+            model_id, [*base, *DEFAULT_MODEL_LADDER]
+        ):
+            full = model_choice.download_size_gb(model_id, full)
         partial_gb = 0.0 if downloaded else round((on_disk.get(model_id) or 0) / 1e9, 2)
         remaining: Optional[float] = (
             0.0 if downloaded else remaining_download_gb(full, on_disk.get(model_id))
