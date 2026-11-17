@@ -253,6 +253,7 @@ def _components(
     what comes to this PC, how big it is and from where. ``size_gb`` is None
     when nothing here can know it before the download starts."""
     from gaia.hub import installer as hub_installer
+    from gaia.hub.prerelease import flagship_origin
     from gaia.llm.lemonade_embedded import (
         BUNDLED_ARCHIVE_DIR_ENV,
         GITHUB_RELEASE_BASE,
@@ -285,7 +286,7 @@ def _components(
             "id": "agent",
             "version": None,
             "size_gb": None,
-            "source": "hub.amd-gaia.ai",
+            "source": flagship_origin(),
             "installed": hub_installer.read_sentinel("gaia") is not None,
         }
     )
