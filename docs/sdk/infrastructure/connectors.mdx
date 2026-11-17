@@ -430,10 +430,11 @@ The ledger stores explicit `true`/`false` entries; an unknown pair returns
 `is_agent_active == False`.
 
 The flagship checks activation as `installed:gaia` in every app: the Agent
-UI, the terminal UI and `gaia -p`. Turning a connector on or off, or
-activating or deactivating it, reaches a chat that is already open with its
-next message: its agent is rebuilt with the new tools, keeping the
-conversation and loaded skills, and the old agent's MCP servers stop.
+UI, the terminal UI and `gaia -p`. In the Agent UI, turning a connector on or
+off, or activating or deactivating it, reaches a chat that is already open
+with its next message: its agent is rebuilt with the new tools, keeping the
+conversation and loaded skills, and the old agent's MCP servers stop. A
+terminal UI chat picks the change up when it starts again.
 
 <Warning>
 **OAuth connectors do not accept activations.** Agents reach OAuth providers
