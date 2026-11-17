@@ -698,7 +698,8 @@ bool treeIsGone(const fs::path& dir) {
 #ifdef _WIN32
 const char* kStartThenSleep = "echo x>started.txt & cmd /c ping -n 60 127.0.0.1 >held.txt";
 #else
-const char* kStartThenSleep = "echo x > started.txt; sleep 60 & echo $! > pid.txt; wait";
+// started.txt is written last: the cancel fires on it, and the check needs pid.txt.
+const char* kStartThenSleep = "sleep 60 & echo $! > pid.txt; echo x > started.txt; wait";
 #endif
 
 }  // namespace

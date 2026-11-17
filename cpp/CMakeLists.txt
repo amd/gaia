@@ -617,7 +617,9 @@ if(GAIA_BUILD_INTEGRATION_TESTS)
     )
 
     include(GoogleTest)
+    # Listed when the tests run: a just-linked binary can fail to start while the build is still going.
     gtest_discover_tests(tests_integration
+        DISCOVERY_MODE PRE_TEST
         PROPERTIES TIMEOUT 300
     )
 endif()
