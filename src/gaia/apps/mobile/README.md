@@ -1,6 +1,6 @@
 # GAIA mobile
 
-The phone app for GAIA, built with Expo and React Native (iOS first; Android can't pair yet).
+The phone app for GAIA, built with Expo and React Native, for iOS and Android.
 
 ## What it is
 
@@ -18,7 +18,7 @@ changing the app.
 ## Quick start
 
 You need Node 22.13 or newer (what React Native 0.88 declares; the repo-root `.nvmrc` pins 20.20.0
-for the web UI), Xcode with an iOS simulator, and
+for the web UI), Xcode with an iOS simulator (or the Android SDK with an emulator), and
 the Python environment that runs GAIA ([`docs/reference/dev.mdx`](../../../../docs/reference/dev.mdx)).
 Ruby with Bundler is needed only for the fastlane lanes under [Native builds](#native-builds).
 
@@ -26,6 +26,7 @@ Ruby with Bundler is needed only for the fastlane lanes under [Native builds](#n
 cd src/gaia/apps/mobile
 npm ci
 APP_ENV=development npx expo run:ios      # first time: generates ios/ and builds a dev client
+# or: APP_ENV=development npx expo run:android
 APP_ENV=development npx expo start --dev-client
 ```
 
@@ -62,9 +63,11 @@ PC. The simulator must reach the PC's home-network address, so run both on the s
   library and design tokens.
 - **Pairing and the pinned transport.** `src/features/pairing` is the flow
   (`PairingFlow.tsx`, `pinnedPairingService.ts`; `fakePairingService.ts` serves dev builds
-  and the web export). The native module `modules/gaia-transport` (Swift, `ios/`) opens every request
-  to a paired PC with its certificate pin and keeps the device token in the Keychain, so
-  JavaScript never holds it. A pin that no longer matches shows `PinMismatchScreen`. The PC
+  and the web export). The native module `modules/gaia-transport` (Swift in `ios/`, Kotlin in
+  `android/`) opens every request to a paired PC with its certificate pin and keeps the device
+  token in the Keychain, or on Android sealed by a non-exportable Keystore key in storage that is
+  never backed up, so JavaScript never holds it. The Kotlin unit tests run with
+  `./gradlew :gaia-transport:testDebugUnitTest` from a prebuilt `android/`. A pin that no longer matches shows `PinMismatchScreen`. The PC
   must also **Allow** each new phone before it can reach any chat.
 - **Route classes.** A paired phone reaches only the routes the PC's device allowlist
   (`src/gaia/ui/devices/routes.py`) lists. `src/api/routeAccess.gen.ts` is generated from the PC's
@@ -163,4 +166,3 @@ the native fingerprint needs a new build.
 - **The installed dev client ignores a new native module or plugin.** The native fingerprint
   changed. Compare it as above and rebuild with `npx expo run:ios`; Metro can't deliver native
   changes.
-- **Android can't pair.** The pinned transport is iOS only.

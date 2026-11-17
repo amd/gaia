@@ -1,6 +1,6 @@
 ---
 title: "Phone App"
-description: "Use GAIA from your iPhone on your home network: pair it with your PC and chat, review permissions and check on tasks"
+description: "Use GAIA from your iPhone or Android phone on your home network: pair it with your PC and chat, review permissions and check on tasks"
 icon: "mobile"
 ---
 
@@ -10,8 +10,8 @@ permission requests and check on scheduled tasks. It works only while the phone 
 are on the same home network.
 
 <Info>
-  Phone access is still in development, and the app is built from source for now (iPhone
-  first). See [Build the app](#build-the-app).
+  Phone access is still in development, and the app is built from source for now, for iPhone
+  and Android. See [Build the app](#build-the-app).
 </Info>
 
 ## Pair a phone
@@ -95,6 +95,15 @@ cd src/gaia/apps/mobile
 bundle exec fastlane ios check      # unsigned simulator build, no credentials
 bundle exec fastlane ios device     # signed build for your registered iPhone
 bundle exec fastlane ios sideload   # install that build over the cable
+```
+
+On Android, connect the phone with USB debugging on (or start an emulator), then build and install
+the app with Expo; it needs the Android SDK and no account:
+
+```bash
+cd src/gaia/apps/mobile
+npm ci
+APP_ENV=production npx expo run:android --variant release
 ```
 
 ## See also
