@@ -120,10 +120,14 @@ class _AgentSession:
         self.reclaimed_after_eviction = False
         #: True once, for the turn that finds this session newly built —
         #: eviction-reclaim, a sidecar restart that has lost all memory of
-        #: this id, or true first use. Unlike ``reclaimed_after_eviction``
-        #: (eviction only), the caller surfaces this on every fresh build so
-        #: state the client assumed outlived the old agent, such as paths
-        #: approved at a prompt, is dropped on a restart too.
+        #: this id, or true first use (deliberately included, not just the
+        #: two recognisable-as-a-loss cases: the caller drops stale
+        #: pre-this-turn state either way, and on first use there IS none,
+        #: so the drop is a harmless no-op there). Unlike
+        #: ``reclaimed_after_eviction`` (eviction only), the caller surfaces
+        #: this on every fresh build so state the client assumed outlived
+        #: the old agent, such as paths approved at a prompt, is dropped on
+        #: a restart too.
         self.freshly_built = True
         #: Permission state that outlives any single turn: whether bypass is on,
         #: and which calls the user has granted "always". A fresh

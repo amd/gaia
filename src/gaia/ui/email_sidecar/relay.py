@@ -281,6 +281,7 @@ def _dispatch_one(
     answers_confirmations: bool = False,
     offers_always: bool = False,
     session_id: Optional[str] = None,
+    approved_before: Optional[List[str]] = None,
 ) -> bool:
     """Emit one canonical event as a UI event. Returns True if terminal.
 
@@ -292,11 +293,16 @@ def _dispatch_one(
     a fresh agent — eviction, a restart, or first use) drop any path this
     chat had approved at a prompt for the agent instance that no longer
     exists, instead of leaving the panel listing it as still reachable.
+    *approved_before* is this turn's own approved-paths snapshot, taken at
+    its start (``relay_query``) — only those paths are dropped, so an
+    approval the user makes during this very turn (the common case on the
+    first turn of a rebuilt agent) survives rather than being erased by the
+    terminal event that reports the rebuild.
     """
     if event.get("session_created") and session_id:
         from gaia.ui import session_environment
 
-        session_environment.forget_session(session_id)
+        session_environment.forget_approved_before(session_id, approved_before or [])
     etype = event.get("type")
     if answers_confirmations:
         # Any event after a prompt means the sidecar has stopped waiting on it.
@@ -798,6 +804,14 @@ def relay_query(
         )
 
     rid = run_id or str(uuid.uuid4())
+    # Taken before this turn can approve anything, so a `session_created`
+    # later in the SAME turn only erases what is stale from before it — not
+    # what this turn's own prompt just approved.
+    approved_before: List[str] = []
+    if session_id:
+        from gaia.ui import session_environment
+
+        approved_before = session_environment.approved_paths(session_id)
     # can_answer_questions=True (#2595): this relay DOES render needs_input
     # and POST the answer back via POST /api/chat/user-input ->
     # EmailSidecarProxy.respond_query. Omitting it defaults to the sidecar's
@@ -937,6 +951,7 @@ def relay_query(
                 answers_confirmations,
                 offers_always,
                 session_id,
+                approved_before,
             ):
                 terminated = True
                 break

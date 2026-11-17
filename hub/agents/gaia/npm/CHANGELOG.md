@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **The session panel no longer keeps listing a file as approved after its
+  agent is gone (contract 2.31).** A chat's "Files GAIA can reach" could
+  keep showing a file as approved after the agent that held that approval —
+  evicted, or lost to a sidecar restart — no longer existed. `final` and
+  `error` now carry `session_created: true` when the sidecar had to rebuild
+  the turn's agent, so a client can drop exactly the approvals that predate
+  this turn and keep any the turn's own prompt just granted.
 - **Deleting a conversation can stop its MCP servers (contract 2.30).**
   `DELETE /v1/gaia/sessions/{session_id}` ends a session and closes its agent,
   which stops the servers it started. Until now a session's servers ran until it

@@ -260,6 +260,39 @@ def forget_session(session_id: str) -> None:
         _approved_paths.pop(session_id, None)
 
 
+def approved_paths(session_id: str) -> List[str]:
+    """What *session_id*'s relayed agent was allowed at its prompts, right now.
+
+    A snapshot for :func:`forget_approved_before` to diff against later —
+    taking it at a turn's start lets that turn's own approval, made before
+    the turn ends, survive a `session_created` that also arrives this turn.
+    """
+    return _approved(session_id)
+
+
+def forget_approved_before(session_id: str, before: List[str]) -> None:
+    """Drop *session_id*'s approved paths that were already approved in
+    *before* (an earlier :func:`approved_paths` snapshot), keeping any
+    approved since.
+
+    Used when the agent was rebuilt partway through a turn: *before* is
+    stale — it belongs to the agent instance that is now gone — but a path
+    the live turn just approved is not, and must not be dropped with it.
+    """
+    if not before:
+        return
+    stale = set(before)
+    with _approved_guard:
+        paths = _approved_paths.get(session_id)
+        if not paths:
+            return
+        remaining = [p for p in paths if p not in stale]
+        if remaining:
+            _approved_paths[session_id] = remaining
+        else:
+            _approved_paths.pop(session_id, None)
+
+
 def _approved(session_id: str) -> List[str]:
     with _approved_guard:
         return list(_approved_paths.get(session_id, []))

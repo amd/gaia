@@ -109,7 +109,9 @@ AGENT_ID = "gaia"
 #: ``turns``: the turn's first call is measured before the answer streams.
 #: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
 #: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
-API_VERSION = "2.30"
+#: 2.31 added ``session_created`` on ``final``/``error``: the sidecar rebuilt
+#: this turn's agent (eviction, restart, or first use).
+API_VERSION = "2.31"
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
