@@ -133,7 +133,11 @@ def test_old_desktop_package_postrm_accepts_disappear():
 
 def test_documented_uninstall_names_the_desktop_package():
     pkg = _deb()["packageName"]
-    for doc in ("guides/install.mdx", "guides/agent-ui.mdx", "deployment/ui.mdx"):
+    for doc in (
+        "guides/install.mdx",
+        "guides/agent-ui/getting-started.mdx",
+        "deployment/ui.mdx",
+    ):
         text = (REPO_ROOT / "docs" / doc).read_text(encoding="utf-8")
         assert f"sudo apt remove {pkg}" in text, doc
 
