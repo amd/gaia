@@ -2529,6 +2529,8 @@ export const enMessages = {
     'settings.connectors.setupRequired': 'Setup required',
     'settings.connectors.paused': 'Paused',
     'settings.connectors.notWorking': 'Not working',
+    'settings.connectors.turnedOn': 'Turned on',
+    'settings.connectors.checkingShort': 'Checking…',
     'settings.connectors.disconnected': 'Disconnected',
     'settings.connectors.deviceFailed': 'Device sign-in failed.',
     'settings.connectors.required': 'Required: {fields}',
