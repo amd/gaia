@@ -1,0 +1,33 @@
+# FIXTURE-SYNC: ~/gaia-eval/csv/sales.csv (+ ground_truth.json) — aggregates
+# defined in eval/scenarios/GAIA_FIXTURE_VALUES.md.
+id: delegation_single_csv_total
+name: "Delegation — One CSV Total Is Not a Job for Helpers"
+category: gaia_delegation
+severity: medium
+tags: [t1_basic]
+description: |
+  One CSV and one total: a single script or data tool computes it in one step.
+  Splitting this across helpers adds cost and a chance of a wrong sum, so the
+  agent should do it itself. The number must come from a real computation.
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "Fixture CSV at ~/gaia-eval/csv/sales.csv (staged there from tests/fixtures/gaia/csv/ by eval setup)."
+
+turns:
+  - turn: 1
+    objective: "Ask for the total revenue across all rows of ~/gaia-eval/csv/sales.csv"
+    user_message: "What's the total revenue across all rows of ~/gaia-eval/csv/sales.csv?"
+    ground_truth:
+      expected_answer: "$18,600"
+    success_criteria: |
+      Agent answers exactly $18,600, computed by a real tool call
+      (analyze_data_file, run_python, a scratchpad query, or reading the file
+      and summing it). agent_tools[] must NOT show delegate_task: the whole
+      job is one computation. A total with no tool call is a FAIL, and so is
+      any call to delegate_task.
+
+expected_outcome: |
+  The agent computes $18,600 itself in one step, without helpers.

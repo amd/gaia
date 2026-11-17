@@ -1,0 +1,46 @@
+# FIXTURE-SYNC: ~/gaia-eval/tiers_documents/regional_reports/ — see
+# GAIA_FIXTURE_VALUES.md "Documents and data".
+id: delegation_eight_regional_reports
+name: "Delegation — Judge Eight Regional Reports Side by Side"
+category: gaia_delegation
+severity: medium
+tags: [t2_compound]
+description: |
+  Eight short, independent regional reports (mixed .md and .txt), each with Q2
+  revenue, Q2 target and headcount plus a Q1 decoy line. Judging each one is a
+  separate piece of reading, which is the work delegate_task is for: one helper
+  per report (or per group of reports), each returning that region's verdict.
+  The answer must still be exact, and a helper that failed must be redone or
+  named, never silently dropped.
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "Fixture folder staged at ~/gaia-eval/tiers_documents/regional_reports/ (8 files)."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to go through every report in ~/gaia-eval/tiers_documents/regional_reports and say, for each region, its Q2 2026 revenue and whether it met its Q2 target"
+    user_message: "Go through each of the eight reports in ~/gaia-eval/tiers_documents/regional_reports. For every region give me its Q2 2026 revenue and whether it hit its Q2 target."
+    ground_truth:
+      expected_answer: "North 412,000 met; South 367,500 missed; East 455,250 met; West 298,000 missed; Central 501,750 met; Pacific 389,000 met; Mountain 276,500 missed; Gulf 344,000 met"
+    success_criteria: |
+      All eight regions appear with the right Q2 2026 revenue and the right
+      met/missed verdict: missed = South, West, Mountain, the other five met.
+      agent_tools[] shows the reports were read, either by delegate_task
+      helpers or by the agent itself. If delegate_task was used, the
+      answer must not contain a region whose helper failed unless the agent
+      re-read that report itself or told the user it is missing. FAIL on any
+      wrong figure, a Q1 decoy value, a wrong verdict, or a missing region.
+
+  - turn: 2
+    objective: "Ask which region did best against its target"
+    user_message: "Which one beat its target by the most?"
+    ground_truth:
+      expected_answer: "Central, by $21,750 (501,750 vs 480,000)"
+    success_criteria: "Agent answers Central, beating its target by $21,750. Any other region or margin is a FAIL."
+
+expected_outcome: |
+  Every report is judged on its own: eight exact per-region figures, the
+  three misses named, and Central as the biggest beat.

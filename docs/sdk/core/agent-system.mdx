@@ -1404,6 +1404,28 @@ quota exhaustion return explicit errors. Restarting an agent invalidates its
 output handles; rerun the source tool if the session has ended. A continuation
 reads captured output rather than re-executing a potentially state-changing tool.
 
+### Read-only helpers
+
+`DelegateToolsMixin` (`gaia.agents.tools.delegate_tools`, `KNOWN_TOOLS["delegate"]`)
+adds `delegate_task`: the agent hands 1 to 16 tasks to read-only helpers and gets
+back each helper's `status` (`ok`, `partial` or `failed`), its `conclusion` and
+its tokens. The host needs a `path_validator`; call
+`configure_delegation(max_helpers=-1)` before `_register_tools()` and
+`register_delegate_tools()` inside it. `max_helpers=0` registers nothing; a
+number above 0 fixes how many run at once. Otherwise a cloud model runs 8 and a
+local model 1, since this process sends one request at a time to a local model.
+
+A helper is a `HelperAgent`: `read_file`, `search_file_content`,
+`browse_directory` and `read_tool_output`, enforced through `tool_scope`, inside a
+copy of the parent's `PathValidator` that never prompts, with its own console that
+denies every confirmation. Its tools are built in a private registry
+(`gaia.agents.base.tools.private_tool_registry`), so nothing reaches
+`_TOOL_REGISTRY`. Local helpers call the model on the side slot, as memory
+extraction does. The result's `usage` is folded into the parent's turn totals
+once, cached tokens included; a conclusion too long for the tool result is kept
+whole for `read_tool_output`. The flagship offers the tool on the full feature
+tier; see [Helpers](/guides/gaia#helpers).
+
 ### Exhaustive document extraction
 
 For explicit requests to list every item in a text document, the agent offers

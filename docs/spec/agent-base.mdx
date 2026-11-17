@@ -369,6 +369,14 @@ def _register_tools(self):
         return {"result": "value"}
 ```
 
+A tool that makes its own model calls reports them in a `usage` object on its
+result (`input_tokens`, `output_tokens`, optionally `cached_tokens`); the agent
+adds it to the turn's `input_tokens`, `output_tokens` and `cached_tokens` once.
+`delegate_task` ([Helpers](/guides/gaia#helpers)) reports its helpers this way.
+`@tool` without `registry=` writes to the process-wide `_TOOL_REGISTRY`, except
+inside `private_tool_registry(d)`, which sends it to `d` instead; a name
+registered twice there raises unless the second says `override=True`.
+
 ### JSON Response Format
 
 The LLM must respond with JSON in one of these formats:

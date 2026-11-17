@@ -35,7 +35,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 
 ## Surface totals
 
-- Registered agent-loop tools: **105** (CORE 29 + 27 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
+- Registered agent-loop tools: **106** (CORE 30 + 28 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
   - `audio_generation`: 3
   - `browser_nav`: 2
   - `browser_use`: 6
@@ -43,6 +43,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `clipboard`: 2
   - `code_index`: 4
   - `data`: 6
+  - `delegation`: 1
   - `desktop`: 3
   - `email`: 5
   - `email_threads`: 3
@@ -90,10 +91,11 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 - Eval suites: **2**
   - `perf`: enforce=False, acceptance_enforce=None
   - `quality`: enforce=True, acceptance_enforce=None
-- Judged scenario categories (`eval/scenarios/gaia_*`): **19**
+- Judged scenario categories (`eval/scenarios/gaia_*`): **20**
   - `gaia_code`
   - `gaia_core`
   - `gaia_data`
+  - `gaia_delegation`
   - `gaia_email`
   - `gaia_files`
   - `gaia_git`
