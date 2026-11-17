@@ -78,13 +78,18 @@ std::string narrate(const std::string& tool, const json& args) {
     if (tool == "query_documents") return "Searching the documents";
     if (tool == "index_document") return "Indexing " + argOf(args, "path");
     if (tool == "search_code") return "Searching the code";
+    if (tool == "delegate_task") {
+        const size_t n = args.is_object() && args.contains("tasks") && args["tasks"].is_array() ? args["tasks"].size() : 0;
+        return n > 0 ? "Handing " + std::to_string(n) + (n == 1 ? " task" : " tasks") + " to helpers"
+                     : "Handing work to helpers";
+    }
     return "";
 }
 
 std::string previewOf(const json& result) {
     if (result.is_string()) return clip(result.get<std::string>(), 200);
     if (result.is_object()) {
-        for (const char* key : {"error", "message", "output", "stdout", "content"}) {
+        for (const char* key : {"error", "message", "output", "stdout", "content", "summary"}) {
             if (result.contains(key) && result[key].is_string() && !result[key].get<std::string>().empty()) {
                 return clip(result[key].get<std::string>(), 200);
             }

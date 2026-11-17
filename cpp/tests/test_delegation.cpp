@@ -317,6 +317,31 @@ TEST(HelperAgentTest, ItCannotReadOutsideTheParentsFolders) {
     EXPECT_EQ(r.value("status", ""), "error");
 }
 
+TEST(HelperAgentTest, DotDotAndLinksDoNotLeadOutOfTheParentsFolders) {
+    Workdir root;
+    fs::create_directories(root.path / "inside");
+    fs::create_directories(root.path / "outside");
+    std::ofstream(root.path / "outside" / "secret.txt") << "TOP-SECRET-42";
+    const fs::path inside = root.path / "inside";
+    HelperAgent helper(cfgFor("http://127.0.0.1:9/api/v1"),
+                       std::make_shared<const Workspace>(std::vector<std::string>{inside.u8string()}));
+    const fs::path before = fs::current_path();
+    fs::current_path(inside);
+    json r = helper.toolRegistry().executeTool("file_read", {{"path", "../outside/secret.txt"}});
+    EXPECT_FALSE(has(r.dump(), "TOP-SECRET-42")) << r.dump();
+    r = helper.toolRegistry().executeTool("file_search", {{"pattern", "*.txt"}, {"path", ".."}});
+    EXPECT_FALSE(has(r.dump(), "secret.txt")) << r.dump();
+    std::error_code ec;
+    fs::create_directory_symlink(root.path / "outside", inside / "link", ec);
+    if (!ec) {
+        r = helper.toolRegistry().executeTool("file_read", {{"path", "link/secret.txt"}});
+        EXPECT_FALSE(has(r.dump(), "TOP-SECRET-42")) << r.dump();
+        r = helper.toolRegistry().executeTool("file_search", {{"pattern", "*.txt"}, {"content_pattern", "SECRET"}});
+        EXPECT_FALSE(has(r.dump(), "TOP-SECRET-42")) << r.dump();
+    }
+    fs::current_path(before);
+}
+
 // ---- The tool ----
 
 TEST(DelegateTask, HelpersRunSideBySideAndTheirConclusionsComeBack) {
@@ -447,7 +472,24 @@ TEST(DelegateTask, BadArgumentsAreRefusedBeforeAnythingRuns) {
     r = delegate(agent, {{"tasks", json::array({{{"task", "read it"},
                                                   {"paths", json::array({outside.str("secret.txt")})}}})}});
     EXPECT_EQ(r.value("status", ""), "error") << "a path outside the folders is refused, not handed to a helper";
+    fs::create_directories(w.path / "sub");
+    const fs::path before = fs::current_path();
+    fs::current_path(w.path / "sub");
+    r = delegate(agent, {{"tasks", json::array({{{"task", "read it"}, {"paths", json::array({"../../../etc"})}}})}});
+    fs::current_path(before);
+    EXPECT_EQ(r.value("status", ""), "error") << "a .. path that leaves the folders is refused";
     EXPECT_EQ(requests.load(), 0) << "no helper ran";
+}
+
+TEST(DelegateTask, ATaskListSentAsJsonTextIsRead) {
+    Workdir w;
+    RoutedServer server([](const json&) { return RoutedServer::Reply{answer("done")}; });
+    GaiaAgent agent(cfgFor(server.lemonadeUrl()), optionsFor(w));
+    const json asText = {{"tasks", tasksFor({"one", "two"})["tasks"].dump()}};
+    const json r = delegate(agent, asText);
+    EXPECT_EQ(r.value("status", ""), "success") << r.dump(2);
+    EXPECT_EQ(r["helpers"].size(), 2u);
+    EXPECT_EQ(delegate(agent, {{"tasks", "not a list"}}).value("status", ""), "error");
 }
 
 TEST(DelegateTask, AFailedHelperIsReportedAsFailedNeverAsSuccess) {
@@ -797,6 +839,58 @@ TEST(DelegateTask, TheParentDelegatesThenAnswersFromTheConclusions) {
 }
 
 // ---- Stress ----
+
+TEST(DelegateTaskStress, FailingAndCancelledRoundsLeaveNothingRunning) {
+    Workdir w;
+    std::atomic<int> n{0};
+    RoutedServer server([&](const json& req) {
+        const int k = ++n;
+        if (k % 5 == 0) return RoutedServer::Reply{R"({"error":"boom"})", 500, 3};
+        if (k % 7 == 0) return RoutedServer::Reply{answer(""), 200, 3};
+        if (k % 3 == 0 && !has(text(req), "call_file_search")) {
+            return RoutedServer::Reply{call("file_search", {{"pattern", "*.txt"}}), 200, 3};
+        }
+        return RoutedServer::Reply{answer("done"), 200, 3};
+    });
+    GaiaAgent::Options o = optionsFor(w);
+    o.maxHelpers = 8;
+    GaiaAgent agent(cfgFor(server.lemonadeUrl()), o);
+    std::vector<std::string> briefs;
+    for (int i = 0; i < 16; ++i) briefs.push_back("task " + std::to_string(i));
+    for (int round = 0; round < 25; ++round) {
+        std::atomic<bool> stop{false};
+        agent.setCancelCheck([&] { return stop.load(); });
+        std::thread stopper;
+        if (round % 3 == 0) {
+            stopper = std::thread([&] {
+                std::this_thread::sleep_for(std::chrono::milliseconds(15));
+                stop.store(true);
+            });
+        }
+        const json r = delegate(agent, tasksFor(briefs));
+        if (stopper.joinable()) stopper.join();
+        ASSERT_EQ(r["helpers"].size(), 16u) << "round " << round;
+        int ok = 0;
+        for (const auto& h : r["helpers"]) {
+            const std::string status = h.value("status", "");
+            ASSERT_TRUE(status == "ok" || status == "partial" || status == "failed") << h.dump();
+            if (status == "ok") {
+                ++ok;
+                EXPECT_FALSE(h.value("conclusion", "").empty()) << "an ok helper has an answer";
+            } else if (status == "failed") {
+                EXPECT_FALSE(h.contains("conclusion")) << h.dump();
+                EXPECT_FALSE(h.value("reason", "").empty());
+            }
+        }
+        EXPECT_EQ(r.value("status", "") == "success", ok == 16);
+    }
+    agent.setCancelCheck(nullptr);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const int settled = n.load();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_EQ(n.load(), settled) << "no helper is still sending requests";
+}
+
 
 TEST(DelegateTaskStress, SixteenTasksAtWidthEightRepeated) {
     Workdir w;
