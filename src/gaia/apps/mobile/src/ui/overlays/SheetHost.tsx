@@ -38,6 +38,16 @@ export function SheetHost({ children }: { children: ReactNode }) {
     );
 }
 
+/**
+ * Android back over a sheet: closes it and stops there, so the screen beneath doesn't also pop. A sheet that must be
+ * answered keeps back; one already closing lets it through, so a second press is the next step back.
+ */
+export function backFromSheet(entry: Pick<SheetEntry, 'open' | 'dismissible' | 'onClose'>): boolean {
+    if (!entry.open) return false;
+    if (entry.dismissible) entry.onClose();
+    return true;
+}
+
 function ActiveSheet({ entry }: { entry: SheetEntry }) {
     const t = useT();
     const { colors, radius, space, shadows } = useTheme();
@@ -56,12 +66,9 @@ function ActiveSheet({ entry }: { entry: SheetEntry }) {
         if (latest.current.dismissible && latest.current.open) latest.current.onClose();
     };
 
-    // Android back closes this sheet and stops there, so navigation doesn't also pop.
+    // A sheet opened over this one registers later, so Android asks it first.
     useEffect(() => {
-        const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-            dismiss();
-            return true;
-        });
+        const sub = BackHandler.addEventListener('hardwareBackPress', () => backFromSheet(latest.current));
         return () => sub.remove();
     }, []);
 

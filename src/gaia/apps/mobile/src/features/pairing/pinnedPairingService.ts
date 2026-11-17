@@ -67,7 +67,7 @@ function deviceName(): string {
 
 const NO_ANSWER = new Set(['unreachable', 'not_home_network', 'network']);
 
-/** The PairingService of an iOS build: everything over TLS pinned to the PC, the token kept natively. */
+/** The PairingService of a phone build: everything over TLS pinned to the PC, the token kept natively. */
 export function createPinnedPairingService(): PairingService & { restore(): Promise<ConnectionConfig | null>; deviceGone(pcId: string): Promise<void> } {
     let saved: Saved | null = null;
 

@@ -4,7 +4,7 @@
 import { deriveCustomTokens } from '@webui/utils/palette.core';
 
 import { colors, palettes } from '../tokens/generated';
-import { DEFAULT_APPEARANCE, parseStored, resolveScheme, themeColors } from './appearance';
+import { DEFAULT_APPEARANCE, parseStored, resolveScheme, themeColors, withDerivedColors } from './appearance';
 import { useAppearance } from './appearanceStore';
 
 describe('appearance to theme', () => {
@@ -34,6 +34,14 @@ describe('appearance to theme', () => {
         s = useAppearance.getState();
         expect({ scheme: s.scheme, palette: s.palette, custom: s.custom, showResources: s.showResources }).toEqual(DEFAULT_APPEARANCE);
         expect(resolveScheme(s.scheme, 'light')).toBe('light');
+    });
+
+    it('derives the ripple token, 12% of the text color, for both themes, a palette and custom colors', () => {
+        expect(withDerivedColors(colors.dark).ripple).toBe('rgba(239, 236, 230, 0.12)');
+        expect(withDerivedColors(colors.light).ripple).toBe('rgba(31, 29, 26, 0.12)');
+        expect(withDerivedColors(palettes.marble.dark).ripple).toMatch(/^rgba\(\d+, \d+, \d+, 0\.12\)$/);
+        expect(withDerivedColors(themeColors('light', 'custom', { accent: '#C0392B', base: '#445566' })).ripple).toMatch(/^rgba\(\d+, \d+, \d+, 0\.12\)$/);
+        expect(() => withDerivedColors({ ...colors.dark, textPrimary: 'white' })).toThrow(/textPrimary/);
     });
 
     it('ignores saved values it does not recognize', () => {

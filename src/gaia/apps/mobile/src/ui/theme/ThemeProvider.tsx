@@ -3,17 +3,17 @@
 
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useColorScheme } from 'react-native';
-import { radius, shadows, motion, faces, type ColorRole } from '../tokens/generated';
+import { radius, shadows, motion, faces } from '../tokens/generated';
 import { space } from '../tokens/space';
 import { typeScale } from '../tokens/type';
-import { resolveScheme, themeColors, type Scheme } from './appearance';
+import { resolveScheme, themeColors, withDerivedColors, type Scheme, type ThemeColorRole } from './appearance';
 import { useAppearance } from './appearanceStore';
 
 export type { Scheme };
 
 export interface Theme {
     scheme: Scheme;
-    colors: Record<ColorRole, string>;
+    colors: Record<ThemeColorRole, string>;
     radius: typeof radius;
     space: typeof space;
     type: typeof typeScale;
@@ -33,7 +33,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const theme = useMemo<Theme>(
         () => ({
             scheme,
-            colors: themeColors(scheme, palette, custom),
+            colors: withDerivedColors(themeColors(scheme, palette, custom)),
             radius,
             space,
             type: typeScale,

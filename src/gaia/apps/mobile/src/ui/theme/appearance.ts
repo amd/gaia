@@ -40,6 +40,17 @@ export function themeColors(scheme: Scheme, palette: AppearancePaletteId, custom
     return palettes[palette][scheme];
 }
 
+/** Roles the app derives on top of the web's: `ripple` is Android's press layer, 12% of the text color as the tint tokens are. */
+export type ThemeColorRole = ColorRole | 'ripple';
+export const RIPPLE_OPACITY = 0.12;
+
+export function withDerivedColors(roles: Record<ColorRole, string>): Record<ThemeColorRole, string> {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(roles.textPrimary);
+    if (!m) throw new Error(`themeColors: expected textPrimary as #rrggbb to derive the ripple, got ${roles.textPrimary}`);
+    const [r, g, b] = [m[1]!, m[2]!, m[3]!].map((h) => parseInt(h, 16));
+    return { ...roles, ripple: `rgba(${r}, ${g}, ${b}, ${RIPPLE_OPACITY})` };
+}
+
 /** Reads what the device saved; anything unrecognized falls back to that field's default, as the web does. */
 export function parseStored(raw: unknown): Partial<AppearanceState> {
     if (!raw || typeof raw !== 'object') return {};

@@ -30,7 +30,14 @@ export function SmallButton({ label, accessibilityLabel, icon, variant = 'defaul
     const accent = variant === 'accent' || variant === 'plain' || variant === 'primary';
     const tone: Tone = variant === 'default' || variant === 'plain' ? 'primary' : variant === 'primary' ? 'onAccent' : 'accent';
     return (
-        <Pressable onPress={onPress} disabled={disabled} accessibilityLabel={accessibilityLabel ?? label} minSize={44} testID={testID}>
+        <Pressable
+            onPress={onPress}
+            disabled={disabled}
+            accessibilityLabel={accessibilityLabel ?? label}
+            minSize={44}
+            shape={{ radius: accent ? radius.md : radius.sm, hug: true }}
+            testID={testID}
+        >
             <View
                 style={{
                     alignSelf: 'flex-start',

@@ -6,11 +6,12 @@ import { Platform } from 'react-native';
 
 import { describeError, useT } from '@/i18n/useT';
 import { useConnectionStore } from '@/state/connection';
-import { Button, Card, Icon, Notice, Row, Screen, Spinner, Stack, Text, TextField } from '@/ui';
+import { Button, Card, Icon, Notice, Row, Screen, Spinner, Stack, Text, TextField, useBackStep } from '@/ui';
 import { CircleAlert, Clock, Monitor, Smartphone } from '@/ui/icons';
 
 import { parseInvite, type PairingInvite } from './invite';
 import { PairingScanner } from './PairingScanner';
+import { isNetworkFailure, pollSettled } from './pollSettled';
 import { getPairingService } from './registry';
 import type { PairingStatus, RedeemResult } from './service';
 
@@ -31,10 +32,12 @@ export interface PairingFlowProps {
     onPaired?: () => void;
     /** Replaces the built-in camera step behind "Scan the code". */
     onScan?: () => void;
+    /** False while a drawer route keeps this flow mounted behind another screen, so its Android back stays out of the way. */
+    backActive?: boolean;
 }
 
 /** First launch: welcome, how to pair, paste a link or code, wait for Allow, and the two ways it can fail. */
-export function PairingFlow({ initialStep = 'welcome', onPaired, onScan }: PairingFlowProps) {
+export function PairingFlow({ initialStep = 'welcome', onPaired, onScan, backActive = true }: PairingFlowProps) {
     const t = useT();
     const setConnection = useConnectionStore((s) => s.setConnection);
     const removedFrom = useConnectionStore((s) => s.removedFrom);
@@ -43,6 +46,8 @@ export function PairingFlow({ initialStep = 'welcome', onPaired, onScan }: Pairi
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const alive = useRef(true);
+    // Bumped when the person backs out of Pair while a code is being redeemed, so that answer is taken back.
+    const redeeming = useRef(0);
 
     useEffect(() => {
         alive.current = true;
@@ -86,15 +91,22 @@ export function PairingFlow({ initialStep = 'welcome', onPaired, onScan }: Pairi
     // The camera exists on a phone build only; the web build pastes.
     const canScan = onScan !== undefined || Platform.OS !== 'web';
     const waiting = typeof view === 'object' && view.at === 'waiting';
+    // Checks until the PC answers: allowed, refused or gone. Only a network failure is tried again.
     useEffect(() => {
         if (!waiting) return;
-        const timer = setInterval(() => {
-            getPairingService()
-                .status()
-                .then(settle)
-                .catch((e) => alive.current && setError(describeError(e, t)));
-        }, POLL_MS);
-        return () => clearInterval(timer);
+        return pollSettled(
+            () => getPairingService().status(),
+            POLL_MS,
+            (result) => {
+                // Nothing waits for Allow any more (canceled elsewhere, or its key is gone), so this code is spent.
+                settle(result.state === 'none' ? { state: 'refused' } : result);
+                return result.state === 'pending';
+            },
+            (e) => {
+                if (alive.current) setError(describeError(e, t));
+                return isNetworkFailure(e);
+            },
+        );
     }, [waiting, settle, t]);
 
     // A code only names a PC; the person confirms it before this phone sends the invitation.
@@ -122,12 +134,20 @@ export function PairingFlow({ initialStep = 'welcome', onPaired, onScan }: Pairi
     const redeem = async (invite: PairingInvite) => {
         setError(null);
         setBusy(true);
+        const attempt = ++redeeming.current;
+        const abandoned = () => attempt !== redeeming.current;
         try {
-            settle(await getPairingService().redeem(invite));
+            const result = await getPairingService().redeem(invite);
+            // Backed out mid-redeem: the PC already holds a request, so take it back, as Cancel does.
+            if (abandoned()) {
+                if (result.state === 'pending') await getPairingService().cancel();
+                return;
+            }
+            settle(result);
         } catch (e) {
-            if (alive.current) setError(describeError(e, t));
+            if (alive.current && !abandoned()) setError(describeError(e, t));
         } finally {
-            if (alive.current) setBusy(false);
+            if (alive.current && !abandoned()) setBusy(false);
         }
     };
 
@@ -140,6 +160,36 @@ export function PairingFlow({ initialStep = 'welcome', onPaired, onScan }: Pairi
         setError(null);
         setView('how');
     };
+
+    // Android's back walks the flow one step back, as its own back controls do; on the first step it leaves.
+    useBackStep(() => {
+        if (!backActive) return false;
+        if (typeof view === 'object') {
+            if (view.at === 'confirm') {
+                if (busy) {
+                    redeeming.current++;
+                    setBusy(false);
+                }
+                setError(null);
+                setView(view.back);
+            } else if (view.at === 'waiting') {
+                cancel();
+            } else {
+                retry();
+            }
+            return true;
+        }
+        if (view === 'scan' || view === 'manual') {
+            setError(null);
+            setView('how');
+            return true;
+        }
+        if (view === 'how' && initialStep === 'welcome') {
+            setView('welcome');
+            return true;
+        }
+        return false;
+    });
 
     if (typeof view === 'object' && view.at === 'confirm') {
         const { invite, replaces, back } = view;
@@ -289,7 +339,7 @@ function Page({
                 ) : undefined
             }
         >
-            <Stack flex={1} gap="lg" padding="xl" justify="center" maxWidth={560} self="center">
+            <Stack flex={1} gap="lg" padding="xl" justify="center" width="100%" maxWidth={560} self="center" testID="pairing-page">
                 {icon ? (
                     <Stack align="center">
                         <Icon icon={icon} size="lg" tone="accent" />

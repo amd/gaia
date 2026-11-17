@@ -23,6 +23,8 @@ interface BoxProps {
     flex?: number;
     /** Where this box sits across its parent's axis; `end` is the reading end in either direction. */
     self?: 'start' | 'center' | 'end';
+    /** A centered box shrinks to its content unless it is given a width, e.g. '100%' under a `maxWidth`. */
+    width?: DimensionValue;
     maxWidth?: DimensionValue;
     minHeight?: number;
     /** Layout direction of this box, for content whose language differs from the UI's. */
@@ -55,6 +57,7 @@ function boxStyle(space: Record<Space, number>, p: BoxProps): Mut<ViewStyle> {
     if (p.flex !== undefined) style.flex = p.flex;
     if (p.dir) style.direction = p.dir;
     if (p.self) style.alignSelf = ALIGN[p.self];
+    if (p.width !== undefined) style.width = p.width;
     if (p.maxWidth !== undefined) style.maxWidth = p.maxWidth;
     if (p.minHeight !== undefined) style.minHeight = p.minHeight;
     return style;

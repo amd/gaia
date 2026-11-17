@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { createContext, useContext, type ReactNode } from 'react';
-import { StatusBar } from 'react-native';
+import { Platform, StatusBar } from 'react-native';
 import { useFonts } from 'expo-font';
+import { NavigationBar } from 'expo-navigation-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -26,7 +27,9 @@ function Frame({ children }: { children: ReactNode }) {
         <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.bgPrimary }}>
             <SafeAreaProvider>
                 <KeyboardProvider>
+                    {/* Both bars follow GAIA's theme, not the phone's; the navigation bar's style names its buttons' color. */}
                     <StatusBar barStyle={scheme === 'dark' ? 'light-content' : 'dark-content'} />
+                    {Platform.OS === 'android' ? <NavigationBar style={scheme === 'dark' ? 'light' : 'dark'} /> : null}
                     <SheetHost>{children}</SheetHost>
                 </KeyboardProvider>
             </SafeAreaProvider>
