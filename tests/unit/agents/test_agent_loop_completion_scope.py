@@ -27,6 +27,7 @@ from gaia.agents.base.completion import CompletionEvidence
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.turn_scope import TurnScopeGuard
 from gaia.chat.sdk import AgentResponse
+from gaia.llm.failure_record import failure_kind
 from gaia.llm.lemonade_client import LemonadeClientError
 from gaia.llm.providers.lemonade import (
     LemonadeProvider,
@@ -534,6 +535,25 @@ def test_a_reply_that_stalled_partway_is_requested_again(agent):
     assert len(calls) == 3
     assert result["result"].startswith("Wrote a.md.")
     assert agent.writes == [("a.md", "real\n")]
+
+
+def test_a_reply_that_stalls_every_time_ends_the_turn_failed_with_a_report(agent):
+    def stalled():
+        error = LemonadeReplyStalledError(_stalled(before_output=False).args[0])
+        error.__cause__ = _stalled(before_output=False)
+        return ["Let me build it.", error]
+
+    calls = _streams(agent, stalled(), stalled(), stalled(), stalled())
+    saved = []
+    with patch.object(
+        agent, "_save_failure_record", lambda exc: saved.append(exc) or "GF-1"
+    ):
+        result = agent.process_query("Write a.md.")
+    assert len(calls) == 3
+    assert result["status"] == "failed"
+    assert "GF-1" in result["result"]
+    assert "Let me build it" not in result["result"]
+    assert failure_kind(saved[0]) == "timeout"
 
 
 def _provider_stream_iter(chunks):
