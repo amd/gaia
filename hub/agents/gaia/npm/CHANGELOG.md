@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
+
 ## [0.3.6]
 
 Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
