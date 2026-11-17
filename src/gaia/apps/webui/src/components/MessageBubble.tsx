@@ -17,10 +17,10 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { plainAnswerText } from '../utils/plainText';
 import { AnswerStats } from './AnswerStats';
-import { dropErrorsEchoedInAnswer, isErrorContent } from '../utils/answerErrors.core';
+import { dropErrorsEchoedInAnswer, isErrorContent, isModelFailure, namesAgentLog } from '../utils/answerErrors.core';
 import { SERVER_CANCELLED_TEXT, splitCutOff, turnEnding } from '../utils/turnEnding.core';
 
-export { dropErrorsEchoedInAnswer, isErrorContent, splitCutOff, turnEnding };
+export { dropErrorsEchoedInAnswer, isErrorContent, isModelFailure, namesAgentLog, splitCutOff, turnEnding };
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
@@ -599,8 +599,14 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {t.compose((say) => say('failedTurn.openSettings', { tab: say(`settings.section.${section}`) }))}
                         </button>
                     ))}
-                    {/* A local model failed: what Lemonade and its backend wrote says why. */}
-                    {isError && !isStreaming && place?.remote === false && (
+                    {/* The agent itself stopped: its own log says why, not the model server's. */}
+                    {(isError || endedBy) && !isStreaming && namesAgentLog(endedBy ?? message.content) ? (
+                        <button type="button" className="msg-try-again" onClick={() => showServerLog('agent')}>
+                            <ScrollText size={12} aria-hidden="true" />
+                            {t('logs.agentLog')}
+                        </button>
+                    ) : (isError || (message.role === 'assistant' && isModelFailure(message.content))) && !isStreaming && place?.remote === false && (
+                        /* A local model failed: what Lemonade and its backend wrote says why. */
                         <button type="button" className="msg-try-again" onClick={() => showServerLog('model_server')}>
                             <ScrollText size={12} aria-hidden="true" />
                             {t('logs.serverLog')}
