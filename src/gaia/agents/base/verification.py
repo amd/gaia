@@ -79,6 +79,19 @@ EXECUTED_KEY = "executed"
 #: Spread into a tool's pre-execution refusal: ``{**NOT_EXECUTED, "status": …}``.
 NOT_EXECUTED: Dict[str, Any] = {EXECUTED_KEY: False}
 
+#: What a tool returns instead of starting a run the turn's time limit has no
+#: room for.
+OUT_OF_TIME: Dict[str, Any] = {
+    **NOT_EXECUTED,
+    "status": "error",
+    "error": (
+        "Nothing ran: this turn's time limit is nearly up. Write the result "
+        "you have now instead of starting another run."
+    ),
+    "has_errors": True,
+    "out_of_time": True,
+}
+
 #: On a result that looked on disk and found the path missing: nothing ran,
 #: but the absence was checked, which is what a "doesn't exist" claim needs.
 CHECKED_ABSENT_KEY = "checked_absent"

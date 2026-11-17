@@ -952,6 +952,8 @@ _TIME_NOTICE = (
 )
 _TIME_NOTICE_AT = 0.7
 _TIME_STOP_AT = 0.9
+# Shortest run worth starting when a time limit cuts a tool's timeout.
+_MIN_CAPPED_RUN_S = 5
 
 # How much of the step budget must be gone before each notice is sent, and
 # what it says. Until these existed the only thing the model ever heard about
@@ -12025,6 +12027,22 @@ Do NOT wrap conversational replies in JSON.
             )
             return notice
         return None
+
+    def time_capped_run_seconds(self, seconds: int) -> int:
+        """*seconds*, cut so a run a tool starts ends before the turn's stop point.
+
+        A command left at its class default can outlast the whole turn; this
+        keeps the time to write up what was found. Unchanged with no time
+        limit. 0 when under ``_MIN_CAPPED_RUN_S`` is left: start nothing.
+        """
+        limit = getattr(self, "time_limit_s", None)
+        started = getattr(self, "_turn_started_at", None)
+        if not limit or limit <= 0 or started is None:
+            return seconds
+        left = limit * _TIME_STOP_AT - (time.monotonic() - started)
+        if left < _MIN_CAPPED_RUN_S:
+            return 0
+        return min(seconds, int(left))
 
     def _time_limit_passed(self) -> bool:
         """True once the turn is past its time limit's stop point.

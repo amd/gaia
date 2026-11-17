@@ -48,7 +48,7 @@ from gaia.agents.base.denied_effects import (
 )
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
-from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
+from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED, OUT_OF_TIME
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
     TIMEOUT_CLASSES,
@@ -8159,6 +8159,7 @@ class ShellToolsMixin:
                 timeout: Maximum execution time in seconds, for the whole
                     line. Omit it for the class default above. Above the 3600s
                     ceiling it is refused, not clamped.
+                    A turn with a time limit cuts it to end before the limit.
 
             Returns:
                 status, output, the last exit code, 'steps' (each with its own
@@ -8178,6 +8179,11 @@ class ShellToolsMixin:
                         "command": command,
                         "has_errors": True,
                     }
+                # Hosts that are not an Agent have no turn and no time limit.
+                cap = getattr(self, "time_capped_run_seconds", None)
+                timeout = cap(timeout) if callable(cap) else timeout
+                if not timeout:
+                    return {**OUT_OF_TIME, "command": command}
 
                 # Check rate limits first to prevent DOS
                 allowed, reason, wait_time, waited = (

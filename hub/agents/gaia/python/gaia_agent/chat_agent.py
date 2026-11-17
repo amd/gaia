@@ -103,7 +103,7 @@ from gaia.agents.base.tool_loader import (
     thin_tool_schema,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.base.verification import NOT_EXECUTED, OUT_OF_TIME
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
@@ -2729,6 +2729,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     timeout = resolve_python_timeout(timeout)
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
+                timeout = self.time_capped_run_seconds(timeout)
+                if not timeout:
+                    return dict(OUT_OF_TIME)
 
                 file_path = str(
                     _resolve_target(file_path, None, _workspace_default(self))
@@ -2879,6 +2882,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     timeout = resolve_python_timeout(timeout)
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
+                timeout = self.time_capped_run_seconds(timeout)
+                if not timeout:
+                    return dict(OUT_OF_TIME)
 
                 tool_names = set(_TOOL_REGISTRY) | set(
                     getattr(self, "_tools_registry", None) or ()
