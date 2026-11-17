@@ -1203,6 +1203,18 @@ class PathValidator:
         self.allowed_paths.add(Path(path).resolve())
         logger.debug(f"Added allowed path: {path}")
 
+    def remove_allowed_path(self, path: str) -> None:
+        """Withdraw a grant made by :meth:`add_allowed_path` for exactly *path*.
+
+        A wider folder that holds *path* stays granted; use
+        :meth:`withhold_path` to refuse *path* despite one.
+
+        Args:
+            path: The path that was granted.
+        """
+        self.allowed_paths.discard(Path(path).resolve())
+        logger.debug("Removed allowed path: %s", path)
+
     def add_read_only_path(self, path: str) -> None:
         """Let reads under *path* through without widening the write scope.
 

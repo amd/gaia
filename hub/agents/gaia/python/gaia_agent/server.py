@@ -982,7 +982,11 @@ def _grant_unloaded(agent: Any, documents: List[str]) -> None:
 
 
 def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
-    """Take the documents attached last turn but not this one out of the index."""
+    """Take the documents attached last turn but not this one out of the index.
+
+    Their grants go too: a grant left behind lets ``query_specific_file``
+    index the file again from disk.
+    """
     attached = getattr(agent, "_attached_documents", set())
     dropped = attached - set(documents)
     agent._attached_documents = set(documents)
@@ -990,6 +994,7 @@ def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
         return
     rag = agent.rag
     for doc in sorted(dropped):
+        agent.path_validator.remove_allowed_path(doc)
         if doc not in agent.indexed_files:
             continue
         held = rag is not None and str(Path(doc).absolute()) in rag.indexed_files
