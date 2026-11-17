@@ -2553,12 +2553,10 @@ def _withdrawn_reply(content: str) -> Optional[str]:
 
 def _agent_crash_notes() -> tuple:
     """What each relayed agent's reply ends with when the agent crashed mid-answer."""
-    from .email_sidecar.profiles import EMAIL_PROFILE, GAIA_PROFILE
+    from .email_sidecar.profiles import relay_profiles
 
     return tuple(
-        p.stream_ended_message
-        for p in (GAIA_PROFILE, EMAIL_PROFILE)
-        if p.stream_ended_message
+        p.stream_ended_message for p in relay_profiles() if p.stream_ended_message
     )
 
 
