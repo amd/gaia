@@ -12,6 +12,7 @@ See: https://docs.pytest.org/en/stable/reference/fixtures.html#conftest-py-shari
 
 Current fixtures:
 - _block_real_browser_launch: Session-autouse guard so no test can open a real browser
+- _block_real_screen_capture: Session-autouse guard so no test can grab the real screen
 - api_server: Function-scoped fixture that starts GAIA API server for integration tests
 - api_client: HTTP client (requests.Session) configured for API testing
 - lemonade_available: Session-scoped fixture checking if Lemonade server is running
@@ -77,6 +78,29 @@ def _block_real_browser_launch():
     yield
     for name, original in saved.items():
         setattr(webbrowser, name, original)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _block_real_screen_capture():
+    """No test may grab the real screen: it prompts for screen recording on macOS."""
+    saved = []
+
+    def _blocked(*_args, **_kwargs):
+        raise RuntimeError(
+            "tests must not capture the real screen; stub it like "
+            "tests/unit/test_screenshot_tools.py"
+        )
+
+    for module_name, attr in (("PIL.ImageGrab", "grab"), ("mss", "mss")):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        saved.append((module, attr, getattr(module, attr)))
+        setattr(module, attr, _blocked)
+    yield
+    for module, attr, original in saved:
+        setattr(module, attr, original)
 
 
 _EMAIL_CORPUS_DIR = Path(__file__).parent / "fixtures" / "email"
