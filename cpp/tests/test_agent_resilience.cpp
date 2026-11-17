@@ -7,6 +7,10 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+
+#include <thread>
+
 #include <atomic>
 #include <map>
 #include <set>
@@ -1396,4 +1400,42 @@ TEST(AgentResilience, AToolResultReachesTheModelWithItsCredentialsMasked) {
     EXPECT_NE(bodies[1].find("./.env:[credential file content hidden]"), std::string::npos);
     EXPECT_NE(bodies[2].find("remote = git@github.com:amd/gaia.git"), std::string::npos);
     EXPECT_NE(bodies[2].find("url = https://[redacted]@github.com/amd/gaia.git"), std::string::npos);
+}
+
+TEST(AgentResilience, ToolCallingIsReadFromTheModelsOwnEntryNotTheWholeCatalog) {
+    httplib::Server srv;
+    std::atomic<int> catalogHits{0};
+    std::string chatBody;
+    srv.Get("/api/v1/health", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(R"({"status":"ok","all_models_loaded":[{"model_name":"swarm-model","recipe":"cloud"}]})",
+                        "application/json");
+    });
+    srv.Get("/api/v1/models/swarm-model", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content(R"({"id":"swarm-model","labels":["cloud","tool-calling"]})", "application/json");
+    });
+    srv.Get("/api/v1/models", [&catalogHits](const httplib::Request&, httplib::Response& res) {
+        ++catalogHits;
+        res.set_content(R"({"data":[]})", "application/json");
+    });
+    srv.Post("/api/v1/chat/completions", [&chatBody](const httplib::Request& req, httplib::Response& res) {
+        chatBody = req.body;
+        res.set_content(answer("ready"), "application/json");
+    });
+    const int port = srv.bind_to_any_port("127.0.0.1");
+    std::thread t([&srv] { srv.listen_after_bind(); });
+    while (!srv.is_running()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    AgentConfig cfg;
+    cfg.baseUrl = "http://127.0.0.1:" + std::to_string(port) + "/api/v1";
+    cfg.modelId = "swarm-model";
+    cfg.silentMode = true;
+    cfg.streaming = false;
+    cfg.llmRetries = 0;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    EXPECT_EQ(agent.processQuery("say ready")["result"], "ready");
+    EXPECT_EQ(catalogHits.load(), 0);
+    EXPECT_NE(chatBody.find("\"tools\""), std::string::npos) << "the label turns native tool calls on";
+    srv.stop();
+    t.join();
 }

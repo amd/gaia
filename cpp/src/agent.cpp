@@ -1745,14 +1745,29 @@ bool Agent::autoNativeToolCalls(const AgentConfig& cfg) {
     const std::string key = cfg.baseUrl + "\n" + cfg.modelId;
     if (auto it = serverToolCalling_.find(key); it != serverToolCalling_.end()) return it->second;
     bool labelled = false;
+    const auto toolCalling = [](const json& model) {
+        const auto labels = model.find("labels");
+        return labels != model.end() && labels->is_array() &&
+               std::find(labels->begin(), labels->end(), "tool-calling") != labels->end();
+    };
+    // One model's entry first: the server builds the whole catalog one request at a time,
+    // which many agents starting together would queue on.
+    try {
+        const json model = lemonade_.getModelDetails(cfg.modelId);
+        if (model.is_object() && model.value("id", "") == cfg.modelId) {
+            labelled = toolCalling(model);
+            serverToolCalling_[key] = labelled;
+            return labelled;
+        }
+    } catch (const std::exception&) {
+        // No such route on this server, or an id it cannot take in a path: the catalog answers instead.
+    }
     try {
         const json catalog = lemonade_.listModels(true);
         if (!catalog.is_object() || !catalog.contains("data") || !catalog["data"].is_array()) return false;
         for (const auto& model : catalog["data"]) {
             if (!model.is_object() || model.value("id", "") != cfg.modelId) continue;
-            const auto labels = model.find("labels");
-            labelled = labels != model.end() && labels->is_array() &&
-                       std::find(labels->begin(), labels->end(), "tool-calling") != labels->end();
+            labelled = toolCalling(model);
             break;
         }
     } catch (const std::exception& e) {

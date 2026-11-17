@@ -341,12 +341,34 @@ namespace {
 // The command that starts Python 3 here, or "" when there is none. On Windows
 // `python3` is usually a Store stub that runs nothing, and a model that tries
 // it first spends several steps hunting for an interpreter.
+// The first folder on PATH that holds `program`, skipping the Store's app aliases, or "".
+std::string onPath(const std::string& program) {
+#ifdef _WIN32
+    const char separator = ';';
+#else
+    const char separator = ':';
+#endif
+    std::istringstream path(getEnvVar("PATH"));
+    for (std::string dir; std::getline(path, dir, separator);) {
+        if (dir.empty() || dir.find("WindowsApps") != std::string::npos) continue;
+        std::error_code ec;
+        const fs::path candidate = fs::u8path(dir) / program;
+        if (fs::is_regular_file(candidate, ec) && !ec) return candidate.u8string();
+    }
+    return "";
+}
+
 const std::string& pythonCommand() {
     static const std::string found = [] {
+        // Found on PATH without running it: starting a program is the slow part of an agent's
+        // own start, and many agents starting together queue on it.
 #ifdef _WIN32
-        const char* const candidates[] = {"python", "py -3", "python3"};
+        if (!onPath("python.exe").empty()) return std::string("python");
+        if (!onPath("py.exe").empty()) return std::string("py -3");
+        const char* const candidates[] = {"python3"};
 #else
-        const char* const candidates[] = {"python3", "python"};
+        if (!onPath("python3").empty()) return std::string("python3");
+        const char* const candidates[] = {"python"};
 #endif
         for (const char* candidate : candidates) {
             try {
