@@ -19,14 +19,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Dict, List, Optional
 
-from gaia.llm.pricing import (  # noqa: F401 -- spending's callers read these here
-    ANTHROPIC_PRICE_SOURCE,
-    FIREWORKS_PRICE_SOURCE,
-    GATEWAY_PRICE_SOURCE,
-    model_price,
-    price_card,
-    turn_cost,
-)
+from gaia.llm.pricing import FIREWORKS_PRICE_SOURCE, price_card, turn_cost
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
