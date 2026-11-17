@@ -138,7 +138,7 @@ class GaiaTransportModule : Module() {
     val pinned = PinnedRequest(authorized.pin, label = RequestLabel(id, "home"))
     requests.add(id, pinned)
     val body = try {
-      UploadBody.make(segments, UploadRoots(context.cacheDir, context.filesDir, context.noBackupFilesDir))
+      UploadBody.make(segments, UploadRoots(context.cacheDir, context.noBackupFilesDir))
     } catch (e: TransportException) {
       requests.remove(id)
       promise.reject(e)
@@ -354,7 +354,7 @@ private class Pairing(
   private fun finish(origin: String, status: Int, data: ByteArray) {
     val text = String(data, Charsets.UTF_8)
     if (status != 200) {
-      promise.resolve(mapOf("status" to status, "origin" to origin, "body" to text))
+      promise.resolve(mapOf("status" to status, "origin" to origin, "body" to withoutToken(text)))
       return
     }
     val answer = try {
@@ -376,4 +376,15 @@ private class Pairing(
     }
     promise.resolve(mapOf("status" to status, "origin" to origin, "body" to answer.toString()))
   }
+}
+
+/** A pairing answer's JSON without its `token`, so the device token never reaches JavaScript; other text is returned as it is. */
+internal fun withoutToken(text: String): String {
+  val answer = try {
+    JSONObject(text)
+  } catch (e: JSONException) {
+    return text
+  }
+  answer.remove("token")
+  return answer.toString()
 }

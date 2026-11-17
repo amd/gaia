@@ -26,12 +26,12 @@ class BodySegment : Record {
 }
 
 /**
- * Where a file to send may be: the app's cache (pickers and the camera copy there) and files directories.
+ * Where a file to send may be: the app's cache, where pickers and the camera copy files.
  * `vault` is noBackupFilesDir, which holds the paired PCs' sealed secrets and is never sent.
  */
-internal class UploadRoots(cache: File, files: File, vault: File) {
+internal class UploadRoots(cache: File, vault: File) {
   val cache: File = cache.canonicalFile
-  val allowed: List<File> = listOf(this.cache, files.canonicalFile)
+  val allowed: List<File> = listOf(this.cache)
   val vault: File = vault.canonicalFile
 }
 

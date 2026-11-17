@@ -27,21 +27,27 @@ class UploadBodyTest {
     cache = folder.newFolder("cache")
     files = folder.newFolder("files")
     vault = folder.newFolder("no_backup")
-    roots = UploadRoots(cache, files, vault)
+    roots = UploadRoots(cache, vault)
   }
 
   @Test
-  fun sendsOnlyReadableFilesUnderTheCacheOrFilesDirectory() {
+  fun sendsOnlyReadableFilesUnderTheCache() {
     val picked = File(cache, "ImagePicker/photo.jpg").apply { parentFile!!.mkdirs(); writeText("jpg") }
     val saved = File(files, "notes.txt").apply { writeText("notes") }
+    assertRefused(saved.path, "isn't one this app picked")
     assertEquals(picked.canonicalFile, sendableFile(picked.path, roots))
-    assertEquals(saved.canonicalFile, sendableFile(saved.path, roots))
 
     val outside = folder.newFile("elsewhere.txt")
     assertRefused(outside.path, "isn't one this app picked")
     assertRefused("${cache.path}/ImagePicker/../../elsewhere.txt", "isn't one this app picked")
     assertRefused("${cache.path}/missing.jpg", "Couldn't read")
     assertRefused(cache.path, "isn't one this app picked")
+  }
+
+  @Test
+  fun stripsTheTokenFromAnyPairingAnswer() {
+    assertEquals("{\"error\":\"x\"}", withoutToken("{\"token\":\"gaiad_abc\",\"error\":\"x\"}"))
+    assertEquals("not json gaiad_abc", withoutToken("not json gaiad_abc"))
   }
 
   @Test
