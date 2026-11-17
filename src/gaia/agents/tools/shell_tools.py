@@ -8159,7 +8159,6 @@ class ShellToolsMixin:
                 timeout: Maximum execution time in seconds, for the whole
                     line. Omit it for the class default above. Above the 3600s
                     ceiling it is refused, not clamped.
-                    A turn with a time limit cuts it to end before the limit.
 
             Returns:
                 status, output, the last exit code, 'steps' (each with its own
