@@ -579,6 +579,32 @@ def test_catalog_offers_the_users_flm_model_but_not_speech_or_strays(flm_box):
     assert not _entry(plan, DEFAULT_EMBEDDING_MODEL)["chat_choice"]
 
 
+def test_catalog_shows_settings_size_for_a_model_outside_setups_own(
+    running, monkeypatch
+):
+    """Lemonade lists Muse Glimmer in GiB (19.9); Settings shows 21.4 GB."""
+    from gaia.llm.lemonade_client import MUSE_GLIMMER_MODEL_NAME
+
+    fake = running(BIG_GPU)
+    listed = fake.list_models
+    muse = {
+        "id": MUSE_GLIMMER_MODEL_NAME,
+        "downloaded": False,
+        "size": 19.9,
+        "recipe": "llamacpp",
+        "labels": ["chat", "tool-calling"],
+    }
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [muse]}
+    )
+    plan = sp.build_plan()
+    shown = sp.model_choice.download_size_gb(MUSE_GLIMMER_MODEL_NAME, 19.9)
+    assert shown == 21.36
+    assert _entry(plan, MUSE_GLIMMER_MODEL_NAME)["full_size_gb"] == shown
+    # Setup's own models keep the size the plan's fit checks run on.
+    assert _entry(plan, DEFAULT_MODEL_NAME)["full_size_gb"] == 5.6
+
+
 def test_catalog_leaves_out_cloud_models_lemonade_lists_as_downloaded(
     flm_box, monkeypatch
 ):
