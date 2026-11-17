@@ -22,6 +22,8 @@ from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.security import PathValidator
 
 _WINDOWS = os.name == "nt"
+# cmd.exe changes drive only with /d; pytest's tmp_path may be on another drive.
+_CD = "cd /d" if _WINDOWS else "cd"
 
 
 class _Agent(Agent, FileIOToolsMixin, ShellToolsMixin):
@@ -169,7 +171,7 @@ class TestShell:
         agent = _Agent(layout["project"], True)
         (layout["system"] / "marker.txt").write_text("here", encoding="utf-8")
 
-        moved = _shell(agent, f'cd "{layout["system"]}"')
+        moved = _shell(agent, f'{_CD} "{layout["system"]}"')
         listed = _shell(agent, "dir /b" if _WINDOWS else "ls")
 
         assert moved["status"] == "success", moved
@@ -303,7 +305,7 @@ class TestMultiLine:
         agent = _Agent(layout["project"], True)
         (layout["system"] / "marker.txt").write_text("here", encoding="utf-8")
 
-        _shell(agent, f'cd "{layout["system"]}"\necho moved')
+        _shell(agent, f'{_CD} "{layout["system"]}"\necho moved')
         listed = _shell(agent, "dir /b" if _WINDOWS else "ls")
 
         assert "marker.txt" in listed["stdout"]
@@ -334,7 +336,7 @@ class TestTurningFullAccessOff:
 
     def test_the_shell_folder_full_access_reached_is_judged_again(self, layout, audit):
         agent = _Agent(layout["project"], True)
-        moved = _shell(agent, f'cd "{layout["system"]}"')
+        moved = _shell(agent, f'{_CD} "{layout["system"]}"')
         assert moved["status"] == "success", moved
         assert os.path.normcase(agent.shell_session.cwd) == os.path.normcase(
             str(layout["system"].resolve())
@@ -388,21 +390,26 @@ class TestTurningFullAccessOff:
         agent.console.full_access = False
         assert agent._policy_refusal("run_python", {"code": code}) is not None
 
-    def test_the_agent_child_marker_and_guarded_folders_come_back(self, layout):
-        from gaia_agent.chat_agent import _guarded_folders
-
+    def test_the_agent_child_marker_comes_back(self, layout):
         from gaia.agents.tools.shell_tools import _full_access_launch, _segment_env
         from gaia.skills.human_only import AGENT_CHILD_ENV
 
         agent = _Agent(layout["project"], True)
         assert AGENT_CHILD_ENV not in _full_access_launch("echo", None)[1]["env"]
-        assert _guarded_folders(agent._full_access_on()) == ""
 
         agent.console.full_access = False
         assert agent._full_access_on() is False
         # The ordinary runner marks every child it starts.
         assert _segment_env({})[AGENT_CHILD_ENV] == "1"
-        assert _guarded_folders(agent._full_access_on()) != ""
+
+    def test_the_guarded_folders_come_back(self, layout):
+        chat_agent = pytest.importorskip("gaia_agent.chat_agent")
+
+        agent = _Agent(layout["project"], True)
+        assert chat_agent._guarded_folders(agent._full_access_on()) == ""
+
+        agent.console.full_access = False
+        assert chat_agent._guarded_folders(agent._full_access_on()) != ""
 
     def test_withheld_folders_come_back(self, layout):
         agent = _Agent(layout["project"], True)
