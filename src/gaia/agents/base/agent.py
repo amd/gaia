@@ -1277,7 +1277,10 @@ def _sum_conversation_tokens(
     return total_input, total_output
 
 
-def _sum_cached_tokens(conversation: List[Dict[str, Any]]) -> int:
+def _sum_cached_tokens(
+    conversation: List[Dict[str, Any]],
+    tool_usage_entries: Optional[List[Dict[str, Any]]] = None,
+) -> int:
     """Prompt tokens the backend served from its own cache this turn.
 
     Reported by a cloud-routed step (Fireworks puts it in
@@ -1299,6 +1302,9 @@ def _sum_cached_tokens(conversation: List[Dict[str, Any]]) -> int:
         stats = content["performance_stats"]
         if isinstance(stats, dict):
             total += _safe_number(stats.get("cached_tokens"))
+    # A tool's own model calls (delegate_task's helpers) report theirs here.
+    for usage in tool_usage_entries or []:
+        total += _safe_number(usage.get("cached_tokens"))
     return total
 
 
@@ -7234,6 +7240,9 @@ Do NOT wrap conversational replies in JSON.
                     # gpt-oss's chat template reads ``items`` on every array;
                     # without it Lemonade answers every request with HTTP 500.
                     prop["items"] = dict(param_info.get("items") or {})
+                    for bound in ("minItems", "maxItems"):
+                        if bound in param_info:
+                            prop[bound] = param_info[bound]
                 properties[param_name] = prop
                 if param_info.get("required", True):
                     required.append(param_name)
@@ -15190,7 +15199,9 @@ Do NOT wrap conversational replies in JSON.
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
                     input_tokens=_pre_input_tokens,
-                    cached_tokens=_sum_cached_tokens(conversation),
+                    cached_tokens=_sum_cached_tokens(
+                        conversation, self._tool_reported_usage
+                    ),
                     ttft_seconds=_query_ttft_seconds(conversation),
                     tok_per_s=_query_tok_per_s(conversation),
                 )
@@ -15316,7 +15327,9 @@ Do NOT wrap conversational replies in JSON.
                         streaming=self.streaming,
                         total_tokens=cap_output_tokens,
                         input_tokens=_cap_input_tokens,
-                        cached_tokens=_sum_cached_tokens(conversation),
+                        cached_tokens=_sum_cached_tokens(
+                            conversation, self._tool_reported_usage
+                        ),
                         ttft_seconds=_query_ttft_seconds(conversation),
                         tok_per_s=_query_tok_per_s(conversation),
                     )
@@ -15388,7 +15401,9 @@ Do NOT wrap conversational replies in JSON.
                 streaming=self.streaming,
                 total_tokens=break_output_tokens,
                 input_tokens=_break_input_tokens,
-                cached_tokens=_sum_cached_tokens(conversation),
+                cached_tokens=_sum_cached_tokens(
+                    conversation, self._tool_reported_usage
+                ),
                 ttft_seconds=_query_ttft_seconds(conversation),
                 tok_per_s=_query_tok_per_s(conversation),
             )
@@ -15467,7 +15482,9 @@ Do NOT wrap conversational replies in JSON.
             "output_tokens": total_output_tokens,  # Total output tokens across all steps
             "total_tokens": total_input_tokens
             + total_output_tokens,  # Combined token count
-            "cached_tokens": _sum_cached_tokens(conversation),
+            "cached_tokens": _sum_cached_tokens(
+                conversation, self._tool_reported_usage
+            ),
             "error_count": len(self._turn_errors()),
             "error_history": self._turn_errors(),  # this query's errors only
             "tool_schema": self._trace_tool_schema(),

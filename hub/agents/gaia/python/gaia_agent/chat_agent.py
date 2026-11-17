@@ -129,6 +129,7 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
     ShellToolsMixin,
     WaitToolsMixin,
 )
+from gaia.agents.tools.delegate_tools import DelegateToolsMixin, validate_max_helpers
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import (
     _forget_evicted,
@@ -670,6 +671,11 @@ class ChatAgentConfig:
     enable_3d_tools: bool = False  # Opt-in Lemonade TRELLIS image-to-3D
     enable_audio_generation_tools: bool = False  # Lemonade music and sound effects
 
+    # Read-only helpers for delegate_task on the "full" profile: -1 sizes them
+    # to the model, 0 leaves the tool out, N runs N at once (and offers it to a
+    # compact model too). Off here; the flagship turns it on.
+    max_helpers: int = 0
+
     # MCP settings.
     # 50 default is the validated middle ground: covers the 49-tool MCP
     # server tested on Gemma-4-E4B at 100% pass rate in PR #718 with one
@@ -759,6 +765,7 @@ class ChatAgent(
     AudioGenerationToolsMixin,
     WaitToolsMixin,
     ReasoningEffortToolsMixin,
+    DelegateToolsMixin,
     MCPClientMixin,
 ):
     """
@@ -2685,6 +2692,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self._register_external_tools_conditional()
             return
 
+        # Here, not __init__: tool-cost skeletons build agents without it.
+        self.configure_delegation(
+            max_helpers=validate_max_helpers(self.config.max_helpers, "max_helpers")
+        )
+
         # All other profiles get at least shell tools
         self.register_shell_tools()
         self.register_cli_setup_tools()
@@ -3821,6 +3833,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             for _name in _chat_exclude:
                 self._instance_tools.pop(_name, None)
         self._offer_features(self.model_features)
+
+    def _offer_features(self, features) -> None:
+        """A compact model still gets helpers when max_helpers names a number."""
+        if self.helpers_requested_by_number() and not features.delegation:
+            features = dataclasses.replace(features, delegation=True)
+        super()._offer_features(features)
 
     def _offers_scheduling(self) -> bool:
         """The Agent UI has a Scheduled tasks panel; other surfaces don't."""

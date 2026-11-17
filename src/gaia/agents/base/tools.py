@@ -46,6 +46,11 @@ _BUILD_NAMES: contextvars.ContextVar[Optional[set[str]]] = contextvars.ContextVa
     "gaia_tool_build_names", default=None
 )
 
+# Where ``@tool`` without ``registry=`` writes instead of ``_TOOL_REGISTRY``.
+_PRIVATE_REGISTRY: contextvars.ContextVar[Optional[dict[str, dict]]] = (
+    contextvars.ContextVar("gaia_private_tool_registry", default=None)
+)
+
 
 class DuplicateToolError(ValueError):
     """Two different functions tried to register one tool name."""
@@ -63,6 +68,22 @@ def tool_build() -> Iterator[None]:
         yield
     finally:
         _BUILD_NAMES.reset(token)
+
+
+@contextmanager
+def private_tool_registry(registry: dict[str, dict]) -> Iterator[dict[str, dict]]:
+    """Send every ``@tool`` without ``registry=`` in this context to *registry*.
+
+    For an agent built from shared mixins that must neither leave its tools in
+    ``_TOOL_REGISTRY`` nor pick up anyone else's. Per thread, like
+    :func:`tool_build`. A name registered twice here raises unless the second
+    one says ``override=True``.
+    """
+    token = _PRIVATE_REGISTRY.set(registry)
+    try:
+        yield registry
+    finally:
+        _PRIVATE_REGISTRY.reset(token)
 
 
 def _tool_source(f: Callable) -> str:
@@ -431,11 +452,16 @@ def tool(
             params[name] = param_info
 
         # Register the tool with atomic metadata
-        destination = _TOOL_REGISTRY if registry is None else registry
+        destination = registry
+        if destination is None:
+            destination = _PRIVATE_REGISTRY.get()
+        if destination is None:
+            destination = _TOOL_REGISTRY
+        local = destination is not _TOOL_REGISTRY
         if not override:
-            _check_name_free(tool_name, f, destination, registry is not None)
+            _check_name_free(tool_name, f, destination, local)
         build = _BUILD_NAMES.get()
-        if build is not None and registry is None:
+        if build is not None and not local:
             build.add(tool_name)
         destination[tool_name] = {
             "name": tool_name,

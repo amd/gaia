@@ -194,7 +194,7 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (29 tools). Deliberately a smaller share of the registry than
+# Always-on set (30 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
 # signalling, plus ``sleep``: a rate limit arrives mid-turn, when no selection
@@ -253,6 +253,9 @@ FULL_CORE_TOOLS = frozenset(
         # in about a fifth more steps
         "search_file_content",
         "list_files",
+        # its prompt section tells the model when to split a job; a tool that
+        # appears only after a jump would contradict it
+        "delegate_task",
     }
 )
 
@@ -528,6 +531,14 @@ FULL_BUNDLES = [
         description="Persistent memory: store, recall, update, and forget facts.",
     ),
     ToolBundle(
+        name="delegation",
+        members=frozenset({"delegate_task"}),
+        description=(
+            "Hand independent reading or judgement over several files to "
+            "read-only helpers that work side by side."
+        ),
+    ),
+    ToolBundle(
         name="loop_control",
         members=frozenset(
             {"set_loop_state", "request_user_input", "sleep", "set_reasoning_effort"}
@@ -667,6 +678,8 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "generate_music",
         "generate_sound_effect",
         "list_audio_generation_models",
+        # Withheld from a compact model, and absent when max_helpers is 0.
+        "delegate_task",
     }
 )
 

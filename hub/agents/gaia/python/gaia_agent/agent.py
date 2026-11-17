@@ -74,6 +74,7 @@ from gaia.agents.base.skill_suggester import (
 )
 from gaia.agents.base.text_task import instruction_part
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+from gaia.agents.tools.delegate_tools import max_helpers_from_env
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
@@ -251,6 +252,10 @@ class GaiaAgentConfig(ChatAgentConfig):
     enable_filesystem: bool = True
     enable_scratchpad: bool = True
     enable_browser: bool = True
+
+    # Read-only helpers for delegate_task: -1 sizes them to the model, 0 leaves
+    # the tool out, N runs N at once. GAIA_MAX_HELPERS sets the default.
+    max_helpers: int = field(default_factory=max_helpers_from_env)
 
     # Qwen3.6's template re-renders earlier steps with their reasoning; dropping
     # it at the next request re-reads the whole previous tool turn uncached.

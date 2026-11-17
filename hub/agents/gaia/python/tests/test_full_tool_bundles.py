@@ -129,6 +129,7 @@ def test_core_is_the_list_every_session_starts_on():
     assert FULL_CORE_TOOLS == {
         "analyze_data_file",
         "browse_directory",
+        "delegate_task",
         "edit_file",
         "fetch_page",
         "find_files",

@@ -1188,6 +1188,21 @@ def _positive_int(value: str) -> int:
     return number
 
 
+def _non_negative_int(value: str) -> int:
+    """argparse type: an integer of at least 0."""
+    import argparse
+
+    try:
+        number = int(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(
+            f"expected a whole number, got {value!r}"
+        ) from e
+    if number < 0:
+        raise argparse.ArgumentTypeError(f"must be 0 or more, got {number}")
+    return number
+
+
 def build_parser():
     """Build and return the root argparse parser."""
     import argparse
@@ -1296,6 +1311,15 @@ def build_parser():
         help="With -p: run N (up to 4) independent attempts, each in a copy of the "
         "current folder, then one more that checks and combines them. Better "
         "reviews and answers for about N+1 times the tokens",
+    )
+    parser.add_argument(
+        "--max-helpers",
+        dest="print_max_helpers",
+        type=_non_negative_int,
+        default=None,
+        metavar="N",
+        help="With -p: how many read-only delegate_task helpers run at once; 0 "
+        "removes the tool (default: GAIA_MAX_HELPERS, else sized to the model)",
     )
     parser.add_argument(
         "--dangerously-skip-permissions",
@@ -5203,6 +5227,7 @@ def main():
         "--max-steps": args.print_max_steps is not None,
         "--time-limit": args.print_time_limit is not None,
         "--attempts": args.print_attempts is not None,
+        "--max-helpers": args.print_max_helpers is not None,
         "--dangerously-skip-permissions": args.print_skip_permissions,
         "--full-access": args.print_full_access,
     }
@@ -5251,6 +5276,7 @@ def main():
                 full_access=args.print_full_access,
                 base_url=args.base_url,
                 time_limit=args.print_time_limit,
+                max_helpers=args.print_max_helpers,
             )
         )
 

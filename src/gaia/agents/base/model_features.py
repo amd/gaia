@@ -23,6 +23,7 @@ class ModelFeatures:
     calendar: bool
     image_generation: bool
     skill_hub: bool
+    delegation: bool
 
 
 #: The tools each feature brings, withheld from a model that lacks it.
@@ -66,21 +67,29 @@ FEATURE_TOOLS: Dict[str, FrozenSet[str]] = {
     ),
     # Installed skills still load and capture_skill stays; only the hub goes.
     "skill_hub": frozenset({"search_skill_hub", "install_skill", "remove_skill"}),
+    # A compact model gets it only when max_helpers names a number above 0.
+    "delegation": frozenset({"delegate_task"}),
 }
 
 FULL = ModelFeatures(
-    scratchpad=True, email=True, calendar=True, image_generation=True, skill_hub=True
+    scratchpad=True,
+    email=True,
+    calendar=True,
+    image_generation=True,
+    skill_hub=True,
+    delegation=True,
 )
 # Measured on Gemma 4 E4B (GPU and NPU): no scratchpad scenario passed, email
 # passed 2/12 and followed phishing, image generation only ever fired on an
 # injected request, and no skill-hub scenario passed. Calendar has no compact
-# eval yet, and it writes to a real calendar.
+# eval yet, and it writes to a real calendar. Delegation has no compact eval yet.
 COMPACT = ModelFeatures(
     scratchpad=False,
     email=False,
     calendar=False,
     image_generation=False,
     skill_hub=False,
+    delegation=False,
 )
 
 TIERS: Dict[str, ModelFeatures] = {"full": FULL, "compact": COMPACT}

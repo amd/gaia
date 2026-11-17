@@ -1,3 +1,6 @@
+==== HELPERS ====
+delegate_task runs read-only helpers, each on one task in its own context, and returns their conclusions. Use it when the work is several independent pieces of reading or judgement, such as one per file or source. Give each helper a complete brief: what to find, which paths, and the exact answer format. Do the work yourself when one command or script covers it, when it is small, or when it writes. A helper can fail: read each status, then redo a failed part yourself or tell the user it is missing.
+
 ==== READING DOCUMENTS ====
 To review, compare, reconcile, audit or summarise a few documents, read each one in full with read_file instead of indexing it — it returns the text of .docx, .pdf and .xlsx files, in parts when long (continue at next_offset until it is null). Retrieved snippets miss what no query asked for, such as a date that differs between two documents. For these tasks this replaces the index-then-query rules; index and query only a large collection, or to look up one fact.
 
