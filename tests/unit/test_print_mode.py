@@ -1375,3 +1375,18 @@ def test_relayed_turn_refuses_tool_restrictions_naming_the_flag():
             base_url=None,
             restricted="--no-web",
         )
+
+
+def test_no_web_tells_the_model_the_shell_is_not_a_way_around(stub_env):
+    """The withheld tools only imply the rule; a model with a shell used curl."""
+    with patch.object(print_mode, "restrict_tools", lambda *a, **k: []):
+        assert print_mode.run("find the answer", model="m", no_web=True) == 0
+    (query,) = _agent().queries
+    assert query.startswith("find the answer")
+    assert query.endswith(print_mode.NO_WEB_NOTE)
+    assert "through the shell" in query
+
+
+def test_without_no_web_the_request_is_the_users_own(stub_env):
+    assert print_mode.run("find the answer", model="m") == 0
+    assert _agent().queries == ["find the answer"]

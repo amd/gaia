@@ -40,6 +40,14 @@ WEB_TOOL_PATTERNS = (
     "transcribe_media",
 )
 
+#: Added to the request under ``--no-web``: the shell can still reach the
+#: internet, so the model is told the rule the withheld tools only imply.
+NO_WEB_NOTE = (
+    "\n\n[Web access is off for this run. Do not search the web or fetch "
+    "pages, repositories or answers through the shell or a script either. "
+    "Installing a package the task needs is fine.]"
+)
+
 #: Tools ``--no-skills`` withholds, so no skill can be found, loaded or learned.
 SKILL_TOOL_PATTERNS = (
     "list_skills",
@@ -449,7 +457,7 @@ def _run_turn(
     timer = _arm_time_limit(agent, time_limit) if time_limit else None
     started = time.time()
     try:
-        result = agent.process_query(text) or {}
+        result = agent.process_query(text + NO_WEB_NOTE if no_web else text) or {}
     finally:
         if timer is not None:
             timer.cancel()
