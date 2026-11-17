@@ -266,6 +266,15 @@ describe('Settings > default chat model', () => {
         await waitFor(() => expect(refresh).toHaveBeenCalled());
         expect(select).not.toHaveBeenCalled();
     });
+
+    it('asks for the plan of where chat runs now, never for a local setup', async () => {
+        mocked.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, on(EMBED)]));
+        render(<LocalModelsSections />);
+        await screen.findByRole('combobox', { name: 'Default chat model' });
+        expect(mocked.getSetupPlan).toHaveBeenCalled();
+        // Unset lets the server leave the local chat model out while chat runs on a cloud model.
+        for (const call of mocked.getSetupPlan.mock.calls) expect(call[0]).toBeUndefined();
+    });
 });
 
 describe('the download chip counts only what is downloading', () => {

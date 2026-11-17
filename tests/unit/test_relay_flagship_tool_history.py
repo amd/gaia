@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 import gaia.ui._chat_helpers as chat_helpers_module
+from gaia.security import PathValidator
 from gaia.ui import permissions as session_permissions
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
@@ -54,6 +55,7 @@ class _ToolAgent:
         # The sidecar syncs attached documents against these every turn.
         self.indexed_files: set = set()
         self.rag = None
+        self.path_validator = PathValidator([])
         self.seen: list = []
         self.external_marks = 0
 

@@ -436,7 +436,7 @@ def effective_skill_body(agent, skill) -> str:
         # runs, with nothing to show it happened.
         rows = store.search_deltas(
             base_name=skill.name,
-            scope=agent.learned_skill_scope(),
+            scope=agent.learned_skill_scopes(),
             status=STATUS_ACTIVE,
             limit=None,
         )
@@ -959,6 +959,8 @@ _TIME_OPENING_NOTE = (
     "anything not already written is lost.]"
 )
 _TIME_STOP_AT = 0.9
+# Shortest run worth starting when a time limit cuts a tool's timeout.
+_MIN_CAPPED_RUN_S = 5
 
 # How much of the step budget must be gone before each notice is sent, and
 # what it says. Until these existed the only thing the model ever heard about
@@ -3273,6 +3275,8 @@ class Agent(abc.ABC):
     #: composed prompt byte-identical; GaiaAgent turns it on.
     #: See :mod:`gaia.agents.base.skill_catalog`.
     _skill_catalog_enabled: bool = False
+    #: The SKILL.md files the catalogue last listed; None until it is built.
+    _installed_skills_listed: Optional[Tuple[Tuple[str, int], ...]] = None
 
     #: What this agent's model is offered; see :mod:`gaia.agents.base.model_features`.
     model_features: ModelFeatures = FULL
@@ -5241,10 +5245,47 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
+        current = self._installed_skills()
+        # Rescan when the folders moved on since the scan, so the record and
+        # the list it describes agree, e.g. a skill added during a turn.
+        listed = self._installed_skills_listed
+        if listed is not None and current != listed:
+            self.skill_manager.reload()
+        self._installed_skills_listed = current
         catalog = render_catalog(
             self._catalog_skills(), list_project=self._lists_project_skills()
         )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _installed_skills(self) -> Tuple[Tuple[str, int], ...]:
+        """Each installed ``SKILL.md`` and its modification time, across every root."""
+        from gaia.skills.format import SKILL_FILENAME
+
+        found = []
+        for root in self.skill_manager.roots:
+            if not root.path.is_dir():
+                continue
+            for entry in root.path.iterdir():
+                skill_file = entry / SKILL_FILENAME
+                try:
+                    found.append((str(skill_file), skill_file.stat().st_mtime_ns))
+                except (FileNotFoundError, NotADirectoryError):
+                    # Not a skill, or removed while scanning: the next turn sees it.
+                    continue
+        return tuple(sorted(found))
+
+    def follow_installed_skills(self) -> bool:
+        """List skills added, changed or removed since the catalogue was built.
+
+        The catalogue sits in the cached head of the prompt, so it is rebuilt
+        only on a change. Returns True when it was.
+        """
+        listed = self._installed_skills_listed
+        if listed is None or listed == self._installed_skills():
+            return False
+        self.skill_manager.reload()
+        self.rebuild_system_prompt()
+        return True
 
     def _catalog_skills(self) -> Dict[str, Any]:
         """Installed skills this model can load: the pool the catalogue lists from."""
@@ -6194,6 +6235,16 @@ Do NOT wrap conversational replies in JSON.
         name, which is stable across sessions and distinct between agents.
         """
         return self._namespaced_agent_id() or type(self).__name__
+
+    def learned_skill_scopes(self) -> Tuple[str, ...]:
+        """Every scope this agent's learned changes may sit under, current first.
+
+        An agent built outside the registry stored them under its class name
+        before it carried an id, so those still apply.
+        """
+        current = self.learned_skill_scope()
+        legacy = type(self).__name__
+        return (current,) if legacy == current else (current, legacy)
 
     def _effective_skill_body(self, skill) -> str:
         """This agent's view of *skill* with its approved learned changes applied.
@@ -12047,20 +12098,42 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(request.get("content"), str):
             request["content"] += _TIME_OPENING_NOTE.format(total=int(limit))
 
-    def _time_limit_passed(self) -> bool:
-        """True once the turn is past its time limit's stop point.
+    def time_capped_run_seconds(self, seconds: int) -> int:
+        """*seconds*, cut so a run a tool starts ends before the turn's stop point.
+
+        A command left at its class default can outlast the whole turn; this
+        keeps the time to write up what was found. Unchanged with no time
+        limit. 0 when under ``_MIN_CAPPED_RUN_S`` is left: start nothing.
+        """
+        left = self._time_to_stop_s()
+        if left is None:
+            return seconds
+        if left < _MIN_CAPPED_RUN_S:
+            return 0
+        return min(seconds, int(left))
+
+    def _time_to_stop_s(self) -> Optional[float]:
+        """Seconds until the turn's stop point, or None with no time limit.
 
         The stop point leaves room for the write-only step and the closing
         answer: a tenth of the limit, or two of the turn's slowest steps so
-        far when that is more. It is also why a stop the caller's own timer
-        forces at the limit counts as reaching it.
+        far when that is more.
         """
         limit = getattr(self, "time_limit_s", None)
         started = getattr(self, "_turn_started_at", None)
         if not limit or limit <= 0 or started is None:
-            return False
+            return None
         reserve = max(limit * (1 - _TIME_STOP_AT), 2 * self._slowest_step_s)
-        return time.monotonic() - started >= limit - reserve
+        return limit - reserve - (time.monotonic() - started)
+
+    def _time_limit_passed(self) -> bool:
+        """True once the turn is past its time limit's stop point.
+
+        See ``_time_to_stop_s`` for where that is. It is also why a stop the
+        caller's own timer forces at the limit counts as reaching it.
+        """
+        left = self._time_to_stop_s()
+        return left is not None and left <= 0
 
     def _time_is_up(self, messages: List[Dict], conversation: List[Dict]) -> bool:
         """Warn once near the turn's time limit; True once it is time to stop.

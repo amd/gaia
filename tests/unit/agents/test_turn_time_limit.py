@@ -425,3 +425,138 @@ def test_notices_off_adds_nothing_to_the_request(agent, clock, monkeypatch):
     agent.process_query(_REQUEST)
 
     assert chat.sent[0][-1]["content"] == _REQUEST
+
+
+class _Timed:
+    """The agent attributes the run-time cap reads, with a clock the test sets."""
+
+    time_capped_run_seconds = Agent.time_capped_run_seconds
+    _time_to_stop_s = Agent._time_to_stop_s
+
+    def __init__(self, limit, used, slowest=0.0):
+        self.time_limit_s = limit
+        self._turn_started_at = 1000.0 - used if used is not None else None
+        self._slowest_step_s = slowest
+
+
+@pytest.mark.parametrize(
+    "limit, used, asked, expected",
+    [
+        (None, 0, 600, 600),  # no limit: untouched
+        (720, None, 600, 600),  # no turn running: untouched
+        (720, 100, 600, 548),  # 720 * 0.9 - 100 left before the stop point
+        (720, 100, 30, 30),  # a short run already fits
+        (720, 645, 600, 0),  # under 5 s left: start nothing
+        (720, 700, 600, 0),  # past the stop point
+    ],
+)
+def test_a_run_is_cut_to_end_before_the_stop_point(limit, used, asked, expected):
+    clock = _Clock()
+    with patch.object(agent_module, "time", clock):
+        assert _Timed(limit, used).time_capped_run_seconds(asked) == expected
+
+
+def test_the_shell_caps_a_default_timeout_and_refuses_with_no_time_left():
+    from gaia.agents.base.verification import OUT_OF_TIME
+    from gaia.agents.tools.shell_tools import ShellToolsMixin
+
+    class _Host(ShellToolsMixin):
+        time_capped_run_seconds = Agent.time_capped_run_seconds
+        _time_to_stop_s = Agent._time_to_stop_s
+        _slowest_step_s = 0.0
+
+        def __init__(self, limit, used):
+            self.time_limit_s = limit
+            self._turn_started_at = 1000.0 - used
+            self.applied = None
+
+        def full_access_active(self):
+            return True
+
+        def _run_full_access(self, command, cwd, timeout, timeout_class):
+            self.applied = timeout
+            return {"status": "success", "timeout": timeout}
+
+    def run(host):
+        host.register_shell_tools()
+        return _TOOL_REGISTRY["run_shell_command"]["function"]("python train.py")
+
+    saved = dict(_TOOL_REGISTRY)
+    clock = _Clock()
+    try:
+        with patch.object(agent_module, "time", clock):
+            capped = _Host(720, 100)
+            assert run(capped)["timeout"] == 548
+            spent = _Host(720, 700)
+            refused = run(spent)
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+    assert spent.applied is None
+    assert refused == {**OUT_OF_TIME, "command": "python train.py"}
+    assert refused["executed"] is False
+
+
+def test_the_cap_ends_at_the_same_stop_point_the_loop_uses():
+    """Slow steps move the stop earlier; a run capped to 90% would overrun it."""
+    clock = _Clock()
+    with patch.object(agent_module, "time", clock):
+        # 600 s limit, slowest step 60 s: the stop is at 600 - 120 = 480 s.
+        assert _Timed(600, 300, slowest=60).time_capped_run_seconds(900) == 180
+        assert _Timed(600, 300).time_capped_run_seconds(900) == 240
+
+
+def test_the_loop_stops_exactly_where_the_cap_ends(agent, clock):
+    agent.time_limit_s = 600
+    agent._turn_started_at = clock.now
+    agent._slowest_step_s = 60.0
+    clock.now += 479
+    assert agent._time_limit_passed() is False
+    assert agent.time_capped_run_seconds(900) == 0  # 1 s left: start nothing
+    clock.now += 1
+    assert agent._time_limit_passed() is True
+
+
+def test_a_run_the_limit_cut_short_is_not_told_to_rescope_or_ask_for_longer():
+    from gaia.agents.base.verification import TIME_LIMIT_CUT_RUN
+    from gaia.agents.tools.shell_tools import ShellToolsMixin
+
+    class _Host(ShellToolsMixin, _Timed):
+        pass
+
+    clock = _Clock()
+    with patch.object(agent_module, "time", clock):
+        cut = _Host(720, 648)._timeout_hint("script", ".")
+        not_cut = _Host(720, 100)._timeout_hint("script", ".")
+        no_limit = _Host(None, 0)._timeout_hint("script", ".")
+    assert cut == TIME_LIMIT_CUT_RUN
+    assert "time limit" not in not_cut and "It ran as a 'script' command" in not_cut
+    assert no_limit == not_cut
+
+
+def test_sleep_and_wait_for_condition_stop_short_of_the_limit():
+    from gaia.agents.base.verification import OUT_OF_TIME
+    from gaia.agents.tools.shell_tools import ShellToolsMixin
+    from gaia.agents.tools.wait_tools import WaitToolsMixin
+
+    class _Host(ShellToolsMixin, WaitToolsMixin, _Timed):
+        slept = None
+
+        def _require_stop_channels(self):
+            return None
+
+        def _wait_interrupted(self):
+            return False
+
+    saved = dict(_TOOL_REGISTRY)
+    clock = _Clock()
+    try:
+        with patch.object(agent_module, "time", clock):
+            spent = _Host(720, 646)
+            assert spent._sleep(120, "rate limit") == OUT_OF_TIME
+            spent.register_shell_tools()
+            waited = _TOOL_REGISTRY["wait_for_condition"]["function"]("true")
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+    assert waited == OUT_OF_TIME
