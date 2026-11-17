@@ -16,6 +16,8 @@ import pytest
 
 from gaia import cli_agent
 from gaia.agents.base.agent import (
+    _CUT_OFF_ALL_THINKING_PROMPT,
+    _CUT_OFF_CONTINUE_PROMPT,
     _CUT_OFF_FAILURE_ANSWER,
     _MAX_CUT_OFF_CONTINUATIONS,
     Agent,
@@ -261,6 +263,40 @@ def test_empty_cut_off_reply_is_continued(agent):
     assert len(sent) == 2
     assert "cut off at the output-token limit" in sent[1][-1]["content"]
     assert _final(result) == "gfx90a is the MI200 series."
+
+
+@pytest.mark.parametrize("reply", ["", "  \n"])
+def test_a_reply_that_was_all_thinking_is_told_to_act_not_to_continue(agent, reply):
+    """Thinking is not carried over, so "continue" restarts it and it runs out again.
+
+    Two real turns ended this way: three replies in a row spent all 32,768
+    output tokens on reasoning, and the turn failed with nothing done.
+    """
+    sent = _stub_chat(
+        agent,
+        (reply, "length"),
+        ("gfx90a is the MI200 series.", "stop"),
+    )
+
+    agent.process_query("What about gfx90a?", max_steps=10)
+
+    nudge = sent[1][-1]["content"]
+    assert nudge == _CUT_OFF_ALL_THINKING_PROMPT
+    assert "whole limit went on thinking" in nudge
+    assert "make one tool call now" in nudge
+    assert "Continue from where you stopped" not in nudge
+
+
+def test_a_reply_cut_off_mid_text_is_still_asked_to_continue(agent):
+    sent = _stub_chat(
+        agent,
+        (TR8319_CB_REPLY, "length"),
+        ("Added trigger_test_label_only to gfx90a.", "stop"),
+    )
+
+    agent.process_query("Fix gfx90a PR testing", max_steps=20)
+
+    assert sent[1][-1]["content"] == _CUT_OFF_CONTINUE_PROMPT
 
 
 def test_repeated_cut_offs_end_with_an_honest_failure(agent):
