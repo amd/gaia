@@ -223,6 +223,7 @@ def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
         agent.internet_off = True
         agent._incognito, agent._incognito_reason = True, "private"
         agent.path_validator.add_allowed_path(str(granted))
+        agent._attached_documents = {str(granted / "notes.txt")}
         path.write_text(
             json.dumps(
                 {
@@ -238,6 +239,7 @@ def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
         assert moved.internet_off is True
         assert (moved._incognito, moved._incognito_reason) == (True, "private")
         assert moved.path_validator.is_path_allowed(str(granted), prompt_user=False)
+        assert moved._attached_documents == agent._attached_documents
         session.run_lock.release()
     finally:
         registry.clear()
