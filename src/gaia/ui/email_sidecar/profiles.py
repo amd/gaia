@@ -205,6 +205,9 @@ class RelayProfile:
     min_tools_api_version: Optional[Tuple[int, int]] = None
     #: Shown in Agent info when the installed agent can't list its tools.
     tools_upgrade_message: str = ""
+    #: Contract version from which ``DELETE /sessions/{id}`` ends a session and
+    #: stops its MCP servers. ``None`` means deleting a chat leaves it to idle out.
+    min_end_session_api_version: Optional[Tuple[int, int]] = None
     #: Shown when the agent itself fails to start (it crashed or never got
     #: healthy). Shown through :meth:`start_failed_text`, which adds the log folder.
     start_failed_message: str = ""
@@ -629,6 +632,8 @@ GAIA_PROFILE = RelayProfile(
     min_grants_api_version=(2, 26),
     # 2.27 added GET /sessions/{id}/tools.
     min_tools_api_version=(2, 27),
+    # 2.30 added DELETE /sessions/{id}.
+    min_end_session_api_version=(2, 30),
     tools_upgrade_message=(
         "The installed GAIA agent is too old to list its tools here. Update GAIA "
         "to the latest version, then reopen Agent info. Its tools still work in "
@@ -838,6 +843,15 @@ def tools_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
     return floor is not None and _meets(api_version, floor)
 
 
+def end_session_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* ends a session on ``DELETE /sessions/{id}``.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_end_session_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
 def _meets(api_version: Optional[str], floor: Tuple[int, int]) -> bool:
     if not api_version:
         return False
@@ -871,4 +885,5 @@ __all__ = [
     "changes_supported",
     "session_id_supported",
     "tools_supported",
+    "end_session_supported",
 ]

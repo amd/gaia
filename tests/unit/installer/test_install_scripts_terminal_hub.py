@@ -1347,6 +1347,111 @@ def test_ps1_keeps_gaia_tui_working_for_an_install_that_had_it(
 
 
 @needs_powershell
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="a running exe locks only on Windows"
+)
+@pytest.mark.parametrize("running", ["gaia-tui.exe", "gaia-cli.exe"])
+def test_ps1_replaces_a_terminal_that_is_still_running(tmp_path, fake_hub, running):
+    """One window updating while another runs under the other name."""
+    bin_dir = tmp_path / "ps-bin"
+    bin_dir.mkdir()
+    (bin_dir / "gaia-tui.exe").write_text("the old terminal", encoding="utf-8")
+    ping = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "PING.EXE"
+    shutil.copyfile(ping, bin_dir / running)
+    held = subprocess.Popen(
+        [str(bin_dir / running), "-n", "120", "127.0.0.1"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        result, _ = _run_ps1(tmp_path, fake_hub.base, "Install-Tui")
+    finally:
+        held.kill()
+        held.wait()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    for name in ("gaia-cli.exe", "gaia-tui.exe"):
+        assert RELEASE_TAG in (bin_dir / name).read_text(encoding="utf-8"), name
+
+
+# Shadow the cmdlets so only the write of the new file fails; the move aside
+# (Move-Item -LiteralPath) still goes through.
+_FAIL_WRITE = {
+    "gaia-cli.exe": r"""
+function Move-Item {
+    param($Path, $LiteralPath, $Destination, [switch]$Force)
+    if ($Path) { throw "simulated: the file is locked" }
+    Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath -Destination $Destination -Force:$Force
+}
+""",
+    "gaia-tui.exe": 'function Copy-Item { throw "simulated: the file is locked" }\n',
+}
+
+
+@needs_powershell
+@pytest.mark.parametrize("existing", sorted(_FAIL_WRITE))
+def test_ps1_puts_the_old_terminal_back_when_the_new_one_cant_be_written(
+    tmp_path, fake_hub, existing
+):
+    """A failed write after the move aside must not leave no terminal at all."""
+    bin_dir = tmp_path / "ps-bin"
+    bin_dir.mkdir()
+    for name in ("gaia-cli.exe", "gaia-tui.exe"):
+        (bin_dir / name).write_text("the old terminal", encoding="utf-8")
+    snippet = _FAIL_WRITE[existing]
+
+    result, _ = _run_ps1(tmp_path, fake_hub.base, snippet + "Install-Tui")
+
+    out = result.stdout + result.stderr
+    assert result.returncode != 0, out
+    assert "Fix:" in out
+    assert (bin_dir / existing).read_text(encoding="utf-8") == "the old terminal"
+    assert not list(bin_dir.glob(f"{existing}*.old")), sorted(os.listdir(bin_dir))
+
+
+@needs_powershell
+def test_ps1_moving_aside_never_overwrites_an_earlier_leftover(tmp_path, fake_hub):
+    """A .old still held by a running exe gets a second, per-run name."""
+    bin_dir = tmp_path / "ps-bin"
+    bin_dir.mkdir()
+    (bin_dir / "gaia-cli.exe").write_text("current", encoding="utf-8")
+    (bin_dir / "gaia-cli.exe.old").write_text("earlier", encoding="utf-8")
+
+    result, _ = _run_ps1(
+        tmp_path,
+        fake_hub.base,
+        '$a = Move-Aside "$GAIA_BIN\\gaia-cli.exe"; Write-Host "ASIDE=$a";'
+        '$n = Move-Aside "$GAIA_BIN\\missing.exe"; Write-Host "NONE=[$n]"',
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "NONE=[]" in result.stdout
+    assert (bin_dir / "gaia-cli.exe.old").read_text(encoding="utf-8") == "earlier"
+    moved = list(bin_dir.glob("gaia-cli.exe.*.old"))
+    assert len(moved) == 1 and moved[0].read_text(encoding="utf-8") == "current"
+    assert not (bin_dir / "gaia-cli.exe").exists()
+
+
+@needs_powershell
+def test_ps1_restoring_leaves_a_new_file_alone(tmp_path, fake_hub):
+    bin_dir = tmp_path / "ps-bin"
+    bin_dir.mkdir()
+    (bin_dir / "gaia-cli.exe").write_text("new", encoding="utf-8")
+    (bin_dir / "gaia-cli.exe.old").write_text("old", encoding="utf-8")
+
+    result, _ = _run_ps1(
+        tmp_path,
+        fake_hub.base,
+        'Restore-Aside "$GAIA_BIN\\gaia-cli.exe" "$GAIA_BIN\\gaia-cli.exe.old";'
+        'Restore-Aside "$GAIA_BIN\\gaia-cli.exe" $null',
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (bin_dir / "gaia-cli.exe").read_text(encoding="utf-8") == "new"
+    assert (bin_dir / "gaia-cli.exe.old").read_text(encoding="utf-8") == "old"
+
+
+@needs_powershell
 @pytest.mark.parametrize("tag", ["v0.25.0;id", "0.25.0", "v0.25.0/../x"])
 def test_ps1_refuses_a_malformed_tag(tmp_path, fake_hub, tag):
     result, bin_dir = _run_ps1(tmp_path, fake_hub.base, "Install-Tui", tag=tag)
