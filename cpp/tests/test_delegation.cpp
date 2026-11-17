@@ -505,8 +505,8 @@ TEST(DelegateTask, AFailedHelperIsReportedAsFailedNeverAsSuccess) {
     const json r = delegate(agent, tasksFor({"TASK-ok", "TASK-http", "TASK-empty", "TASK-garbage"}));
 
     EXPECT_EQ(r.value("status", ""), "partial") << r.dump(2);
-    EXPECT_TRUE(has(r.value("summary", ""), "1 of 4 helpers finished"));
-    EXPECT_TRUE(has(r.value("summary", ""), "3 FAILED"));
+    EXPECT_EQ(r.value("summary", ""), "1 of 4 helpers finished, 3 failed.");
+    EXPECT_TRUE(has(r.value("advice", ""), "do that work yourself or tell the user it is missing"));
     EXPECT_EQ(r["helpers"][0]["status"], "ok");
     for (size_t i = 1; i < 4; ++i) {
         EXPECT_EQ(r["helpers"][i]["status"], "failed") << r["helpers"][i].dump();

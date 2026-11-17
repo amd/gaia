@@ -242,7 +242,7 @@ json GaiaAgent::delegateTasks(const json& args) {
     std::vector<UsageStats> usages(tasks.size());
     std::vector<std::string> answers(tasks.size());
     std::atomic<size_t> next{0};
-    std::atomic<size_t> finished{0};
+    size_t finished = 0, failedSoFar = 0;  // under helperMu_
 
     auto runOne = [&](size_t i) {
         const auto t0 = std::chrono::steady_clock::now();
@@ -322,7 +322,6 @@ json GaiaAgent::delegateTasks(const json& args) {
         rec["cached_tokens"] = usages[i].cachedTokens;
         rec["output_tokens"] = usages[i].completionTokens;
         rec["wall_s"] = rounded(wall);
-        const size_t done = ++finished;
         const std::string status = rec.value("status", "failed");
         records[i] = std::move(rec);
         try {
@@ -336,8 +335,12 @@ json GaiaAgent::delegateTasks(const json& args) {
                      {"input_tokens", usages[i].promptTokens},
                      {"cached_tokens", usages[i].cachedTokens},
                      {"output_tokens", usages[i].completionTokens}});
-            console().printInfo("Helper " + std::to_string(done) + " of " + std::to_string(tasks.size()) +
-                                " finished (" + status + ")");
+            ++finished;
+            if (status == "failed") ++failedSoFar;
+            std::string progress = std::to_string(finished) + " of " + std::to_string(tasks.size()) +
+                                   (tasks.size() == 1 ? " helper done" : " helpers done");
+            if (failedSoFar > 0) progress += ", " + std::to_string(failedSoFar) + " failed";
+            console().printToolProgress("helpers", progress);
         } catch (...) {
             // The record above already holds the outcome; a log line that cannot be written must not end the process.
         }
@@ -387,14 +390,22 @@ json GaiaAgent::delegateTasks(const json& args) {
     }
 
     const int n = static_cast<int>(records.size());
-    std::string summary = std::to_string(ok) + " of " + std::to_string(n) + " helpers finished";
-    if (partial > 0) summary += "; " + std::to_string(partial) + " stopped short with a partial answer";
+    // summary is what a person reads; advice is for the model.
+    std::string summary = std::to_string(ok) + " of " + std::to_string(n) + (n == 1 ? " helper" : " helpers") +
+                          " finished";
+    if (partial > 0) summary += ", " + std::to_string(partial) + " stopped short";
+    if (failed > 0) summary += ", " + std::to_string(failed) + " failed";
+    summary += ".";
+    std::string advice;
     if (failed > 0) {
-        summary += "; " + std::to_string(failed) +
-                   " FAILED and returned nothing usable. Do that work yourself or tell the user it is missing";
+        advice = "A FAILED helper returned nothing usable: do that work yourself or tell the user it is missing.";
+    }
+    if (partial > 0) {
+        advice += std::string(advice.empty() ? "" : " ") +
+                  "A helper that stopped short gave a partial answer: check what it left out.";
     }
     json out = {{"status", ok == n ? "success" : ok + partial > 0 ? "partial" : "error"},
-                {"summary", summary + "."},
+                {"summary", summary},
                 {"width", atOnce},
                 {"width_source", width.source},
                 {"usage",
@@ -406,7 +417,8 @@ json GaiaAgent::delegateTasks(const json& args) {
         out["width_note"] = "Only " + std::to_string(atOnce) + " of " + std::to_string(wanted) +
                             " helper threads could be started.";
     }
-    if (ok + partial == 0) out["error"] = summary + ".";
+    if (!advice.empty()) out["advice"] = advice;
+    if (ok + partial == 0) out["error"] = summary + " " + advice;
 
     // Every conclusion has to fit the one tool result the parent reads, or the middle ones are clipped away.
     const size_t limit = static_cast<size_t>((std::max)(cfg.toolResultCharLimit(), 0));
