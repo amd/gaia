@@ -212,10 +212,52 @@ func TestNewPlanNeedsAVerifiableInstaller(t *testing.T) {
 	if _, err := NewPlan(Release{Tag: "v0.26.0", Assets: []Asset{ui, sums}}, false); err == nil {
 		t.Error("the Agent UI setup was taken for the GAIA setup")
 	}
-	p, err := NewPlan(Release{Tag: "v0.26.0", Assets: []Asset{setup, sums}}, true)
+	p, err := NewPlan(Release{Tag: "v0.26.0", Assets: []Asset{setup, sums, {Name: tuiBinary()}}}, true)
 	if err != nil || p.Kind != KindWindowsSetup || !p.Pin {
 		t.Fatalf("plan = %+v, %v", p, err)
 	}
+}
+
+// A setup or pkg from before the rename writes gaia-tui and leaves this
+// gaia-cli on PATH, still the newer version.
+func TestNewPlanRefusesAPackageFromBeforeGaiaCli(t *testing.T) {
+	home := withHome(t)
+	prevArch := goarch
+	t.Cleanup(func() { goarch = prevArch })
+	for _, c := range []struct {
+		exe, os, installer, legacy string
+	}{
+		{`C:\Programs\GAIA Terminal Hub\gaia-cli.exe`, "windows", "gaia-0.25.4-win-x64-setup.exe", "gaia-windows-amd64.exe"},
+		{"/usr/local/bin/gaia-cli", "darwin", "gaia-0.25.4-darwin-arm64.pkg", "gaia-darwin-arm64"},
+	} {
+		withExecutable(t, c.exe, c.os)
+		if c.os == "darwin" {
+			goarch = "arm64"
+		}
+		old := Release{Tag: "v0.25.4", Assets: []Asset{{Name: c.installer}, {Name: installerSums}, {Name: c.legacy}}}
+		if _, err := NewPlan(old, true); err == nil || !strings.Contains(err.Error(), "uninstall GAIA first") {
+			t.Errorf("%s: a pre-gaia-cli installer must be refused, got %v", c.os, err)
+		}
+		if Installable(old, mustKind(t)) {
+			t.Errorf("%s: a pre-gaia-cli installer must not be offered", c.os)
+		}
+	}
+	// The one-line installer replaces gaia-cli itself, so it can still go back.
+	withExecutable(t, filepath.Join(home, ".gaia", "bin", "gaia-cli.exe"), "windows")
+	goarch = "amd64"
+	old := Release{Tag: "v0.25.4", Assets: []Asset{{Name: tuiSums}, {Name: "gaia-windows-amd64.exe"}}}
+	if _, err := NewPlan(old, true); err != nil {
+		t.Errorf("a script install must still go back before the rename: %v", err)
+	}
+}
+
+func mustKind(t *testing.T) Kind {
+	t.Helper()
+	k, err := DetectKind()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }
 
 // A release after the rename carries both names; one from before it only

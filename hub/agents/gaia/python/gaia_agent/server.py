@@ -16,8 +16,9 @@ Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
 2.14), ``/sessions/{session_id}/bypass``, ``/sessions/{session_id}/internet``
-(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26) and
-``/sessions/{session_id}/tools`` (contract >= 2.27).
+(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26),
+``/sessions/{session_id}/tools`` (contract >= 2.27) and
+``DELETE /sessions/{session_id}`` (contract >= 2.30).
 ``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
@@ -107,7 +108,8 @@ AGENT_ID = "gaia"
 #: 2.28 added the non-terminal ``context_usage`` event for a caller that sends
 #: ``turns``: the turn's first call is measured before the answer streams.
 #: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
-API_VERSION = "2.29"
+#: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
+API_VERSION = "2.30"
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
@@ -544,6 +546,13 @@ class GrantsResponse(_Strict):
 
     session_id: str
     grants: List[GrantView]
+
+
+class SessionDeletedResponse(_Strict):
+    """``DELETE /sessions/{id}`` (contract >= 2.30)."""
+
+    session_id: str
+    deleted: bool
 
 
 class ToolView(_Strict):
@@ -2493,6 +2502,31 @@ async def list_tools(session_id: str) -> ToolsResponse:
         )
     tools = await asyncio.to_thread(session.agent.describe_tools)
     return ToolsResponse(session_id=session_id, tools=tools)
+
+
+@router.delete("/sessions/{session_id}", response_model=SessionDeletedResponse)
+async def delete_session(session_id: str) -> SessionDeletedResponse:
+    """End a session and close its agent, stopping its MCP servers.
+
+    A session running a turn is a 409, not a quiet success: its agent and
+    servers are still alive, so the caller must not believe they are gone.
+    """
+    _require_valid_session_id(session_id)
+    if not await asyncio.to_thread(session_registry.delete, session_id):
+        # delete() is False for both; only a session still present is busy.
+        if session_registry.get(session_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No session {session_id!r} exists; it may have ended already.",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Session {session_id!r} is running a turn. Cancel it, then "
+                "delete the session again."
+            ),
+        )
+    return SessionDeletedResponse(session_id=session_id, deleted=True)
 
 
 @router.delete("/sessions/{session_id}/grants", response_model=GrantsResponse)

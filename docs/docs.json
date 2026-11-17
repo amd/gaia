@@ -41,6 +41,19 @@
             ]
           },
           {
+            "group": "Desktop app",
+            "pages": [
+              "guides/agent-ui",
+              "guides/agent-ui/getting-started",
+              "guides/agent-ui/chat",
+              "guides/agent-ui/documents",
+              "guides/agent-ui/control",
+              "guides/agent-ui/extend",
+              "guides/agent-ui/desktop",
+              "guides/agent-ui/settings"
+            ]
+          },
+          {
             "group": "C++ Framework",
             "pages": [
               "cpp/setup",
@@ -68,7 +81,6 @@
               "guides/install",
               "setup",
               "quickstart",
-              "guides/agent-ui",
               "guides/tui",
               "guides/memory",
               {
