@@ -141,6 +141,10 @@ def create_app(
     import anyio
     from fastapi import Depends, FastAPI, HTTPException
 
+    from gaia.daemon.hybrid_routes import ChatDatabaseOpener
+
+    hybrid_chat_db = ChatDatabaseOpener()
+
     @asynccontextmanager
     async def lifespan(_app):
         # A client quitting mid-connection is not an error here.
@@ -152,6 +156,7 @@ def create_app(
         try:
             yield
         finally:
+            hybrid_chat_db.close()
             if on_shutdown is not None:
                 on_shutdown()
 
@@ -331,6 +336,13 @@ def create_app(
     from gaia.daemon.setup_routes import build_setup_router
 
     app.include_router(build_setup_router(token))
+    # The TUI's hybrid settings; the Agent UI serves the same under /api/hybrid.
+    from gaia.daemon.hybrid_routes import build_hybrid_router, tui_wording
+    from gaia.ui.dependencies import get_db
+
+    app.include_router(build_hybrid_router(token))
+    app.dependency_overrides[get_db] = hybrid_chat_db
+    app.middleware("http")(tui_wording)
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router

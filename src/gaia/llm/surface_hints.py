@@ -253,6 +253,15 @@ _SWAPS = {
     "tui": (),
 }
 
+
+def agent_ui_to_tui(text: str) -> str:
+    """*text* worded for the Agent UI, reworded back to the TUI's advice."""
+    for tui, own in _SWAPS["agent_ui"]:
+        if own:
+            text = text.replace(own, tui)
+    return text
+
+
 #: Every front-end :func:`surface_wording` knows. ``service`` is a headless
 #: caller of the agent's HTTP API, which has no settings screen of its own.
 SURFACES = tuple(sorted(_SWAPS))

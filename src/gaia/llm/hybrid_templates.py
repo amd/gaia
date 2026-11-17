@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.llm.hybrid import (
     DEFAULT_CHEAP_MODEL,
@@ -47,6 +47,26 @@ CLI_SETUP_HINTS = {
     SETUP_HINTS[FIREWORKS]: "Add a Fireworks key with /provider in `gaia-cli`",
 }
 _DOWNLOAD_IN_SETTINGS = re.compile(r"Download (\S+) in Settings › Models(?! ›)")
+#: The TUI's words for each set-up hint above: its own screens, never a command.
+TUI_SETUP_HINTS = {
+    SETUP_HINTS[LOCAL]: "Download a model with /setup",
+    SETUP_HINTS[AMD]: "Connect the AMD LLM Gateway with /gateway",
+    SETUP_HINTS[FIREWORKS]: "Add a Fireworks key with /provider",
+}
+TUI_SETTINGS_SCREEN = "/hybrid"
+
+
+def tui_text(text: str) -> str:
+    """*text* worded for the Agent UI, reworded for the TUI's screens."""
+    from gaia.llm.surface_hints import agent_ui_to_tui
+
+    if not text:
+        return text
+    text = agent_ui_to_tui(text)
+    for app, tui in TUI_SETUP_HINTS.items():
+        text = text.replace(app, tui)
+    text = _DOWNLOAD_IN_SETTINGS.sub(lambda m: f"Download {m[1]} with /setup", text)
+    return text.replace(SETTINGS_SCREEN, TUI_SETTINGS_SCREEN)
 
 
 def _pull_hint(model: str) -> str:
@@ -153,6 +173,8 @@ class Inventory:
     local_only: bool = False
     #: On AMD's network direct Claude is refused; the gateway's Claude is used.
     amd_network: bool = False
+    #: Why the model server couldn't be asked; set, its providers can't be used.
+    server_down: Optional[str] = None
 
     def check(self, model_id: str) -> Optional[str]:
         """None when *model_id* can be used now, else why not."""
@@ -160,6 +182,9 @@ class Inventory:
         if offer is not None:
             return None if offer.available else offer.reason
         provider = provider_of(model_id)
+        # Local, gateway and Fireworks models all run through the model server.
+        if self.server_down and provider != CLAUDE:
+            return self.server_down
         if provider == LOCAL:
             from gaia.llm.lemonade_client import find_model_requirement
 
@@ -223,6 +248,87 @@ def _fits(model_id: str, entry: Dict[str, Any], capacity: Any) -> Optional[bool]
     return model_choice.memory_fit(model_id, size, capacity).get("fits")
 
 
+def anthropic_key_set() -> bool:
+    """Whether an Anthropic API key is set for direct Claude models."""
+    from gaia.env import credential, load_env
+
+    load_env()
+    return bool(credential("ANTHROPIC_API_KEY"))
+
+
+def current_inventory(payloads: Callable[[], Tuple[Any, Any]]) -> Inventory:
+    """What every provider offers here now; the one owner the apps and CLI share.
+
+    *payloads* returns the model server's ``/models?show_all=true`` and
+    ``/system-info`` answers; its errors reach the caller unchanged.
+
+    Raises:
+        HybridConfigError: an answer is not in the model server's format.
+    """
+    from gaia.llm.local_only import cloud_blocked
+
+    models, info = payloads()
+    return build_inventory(
+        models, info, anthropic_key=anthropic_key_set(), local_only=cloud_blocked()
+    )
+
+
+def current_offline_inventory(server_down: str) -> Inventory:
+    """:func:`current_inventory` while the model server can't be asked."""
+    from gaia.llm.local_only import cloud_blocked
+
+    return offline_inventory(
+        server_down, anthropic_key=anthropic_key_set(), local_only=cloud_blocked()
+    )
+
+
+def offered_problem(inv: Inventory, model_id: str) -> Optional[str]:
+    """None when a set-up provider offers *model_id*, else why not and what was checked."""
+    reason = inv.check(model_id)
+    return f"{reason}. {inv.checked()}" if reason else None
+
+
+def save_settings(values: Dict[str, Any]) -> None:
+    """Write already-validated ``hybrid_*`` *values* into config.json.
+
+    Raises:
+        GaiaConfigError: config.json can't be written, or the result is invalid.
+    """
+    from gaia.config import GaiaConfig
+
+    if values:
+        GaiaConfig.edit_doc(lambda doc: doc.update(values))
+
+
+def offline_inventory(
+    server_down: str, *, anthropic_key: bool, local_only: bool
+) -> Inventory:
+    """What can be used while the model server isn't answering: direct Claude only."""
+    inv = Inventory(local_only=local_only, server_down=server_down)
+    claude_setup = _add_claude_offers(inv, anthropic_key=anthropic_key)
+    inv.setup = {LOCAL: None, AMD: None, FIREWORKS: None, CLAUDE: claude_setup}
+    return inv
+
+
+def _add_claude_offers(inv: Inventory, *, anthropic_key: bool) -> Optional[str]:
+    """Offer the direct Claude models; returns Anthropic's set-up hint, or None.
+
+    On AMD's network they are listed unavailable with the gateway model to use.
+    """
+    from gaia.llm.amd_network import gateway_only_reason, on_amd_network
+
+    # Probed only when direct Claude could be used; otherwise no AMD host is contacted.
+    inv.amd_network = on_amd_network(probe=anthropic_key)
+    amd_block = gateway_only_reason(CLAUDE_STRONG) if inv.amd_network else None
+    if anthropic_key or amd_block:
+        for model_id in CLAUDE_MODELS:
+            reason = gateway_only_reason(model_id) if amd_block else None
+            if inv.local_only:
+                reason = f"Local only is on, so {model_id} can't be used"
+            inv.offers[model_id] = Offer(model_id, CLAUDE, reason is None, reason)
+    return amd_block or (None if anthropic_key else SETUP_HINTS[CLAUDE])
+
+
 def build_inventory(
     models_payload: Any,
     system_info: Any,
@@ -280,23 +386,13 @@ def build_inventory(
                     else None
                 ),
             )
-    from gaia.llm.amd_network import gateway_only_reason, on_amd_network
-
-    # Probed only when direct Claude could be used; otherwise no AMD host is contacted.
-    inv.amd_network = on_amd_network(probe=anthropic_key)
-    amd_block = gateway_only_reason(CLAUDE_STRONG) if inv.amd_network else None
-    if anthropic_key or amd_block:
-        for model_id in CLAUDE_MODELS:
-            reason = gateway_only_reason(model_id) if amd_block else None
-            if local_only:
-                reason = f"Local only is on, so {model_id} can't be used"
-            inv.offers[model_id] = Offer(model_id, CLAUDE, reason is None, reason)
+    claude_setup = _add_claude_offers(inv, anthropic_key=anthropic_key)
     offered = {o.provider for o in inv.offers.values()}
     inv.setup = {
         LOCAL: None if LOCAL in offered else SETUP_HINTS[LOCAL],
         AMD: None if AMD in offered else SETUP_HINTS[AMD],
         FIREWORKS: None if FIREWORKS in offered else SETUP_HINTS[FIREWORKS],
-        CLAUDE: amd_block or (None if anthropic_key else SETUP_HINTS[CLAUDE]),
+        CLAUDE: claude_setup,
     }
     return inv
 

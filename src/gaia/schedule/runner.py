@@ -72,7 +72,8 @@ def resolve_model(prompt: str) -> str:
     from gaia.llm.lemonade_client import LemonadeClient, cloud_model_provider
 
     model, hybrid_key = _chosen_model(prompt)
-    if cloud_model_provider(model):
+    # Anthropic's API serves a direct Claude model; Lemonade has nothing to load.
+    if model.startswith("claude-") or cloud_model_provider(model):
         return model
     client = LemonadeClient(verbose=False)
     # A gateway model the catalog leaves out (no or expired token) has nothing to download.
@@ -107,7 +108,12 @@ def fire(schedule: Schedule) -> str:
     sinks.validate(schedule.sink, schedule.sink_args)
     log.info("schedule %r firing (sink=%s)", schedule.name, schedule.sink)
 
-    sdk = AgentSDK(AgentConfig(model=resolve_model(prompt)))
+    model = resolve_model(prompt)
+    if model.startswith("claude-"):
+        config = AgentConfig(use_claude=True, claude_model=model)
+    else:
+        config = AgentConfig(model=model)
+    sdk = AgentSDK(config)
     response = sdk.send(prompt, no_history=True)
     output = response.text
 

@@ -462,7 +462,14 @@ class GaiaAgent(
         if is_hybrid_model(requested):
             router = HybridRouter()
             # Built on the cheap model; each turn's route switches as needed.
-            resolved.model_id = router.settings.cheap_model
+            cheap = router.settings.cheap_model
+            if cheap.startswith("claude-"):
+                # Anthropic's API, not Lemonade, serves a direct Claude model.
+                resolved.use_claude = True
+                resolved.claude_model = cheap
+                resolved.model_id = None
+            else:
+                resolved.model_id = cheap
         super().__init__(config=resolved)
         #: Picks each turn's model when the session runs on ``hybrid``.
         self.hybrid_router: Optional[HybridRouter] = router

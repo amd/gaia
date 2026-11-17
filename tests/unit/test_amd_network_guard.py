@@ -1153,3 +1153,11 @@ def test_the_doc_walkthrough_uses_the_gateway_on_amds_network():
         assert "llm-api.amd.com/Anthropic" in step["env"]["ANTHROPIC_BASE_URL"]
         assert "LEMONADE_AMD_API_KEY" in step["env"]["ANTHROPIC_CUSTOM_HEADERS"]
         assert "amd_net.outputs.on != 'true'" in step["with"]["claude_code_oauth_token"]
+
+
+def test_the_offline_list_also_marks_direct_claude_unavailable(on_network):
+    from gaia.llm.hybrid_templates import offline_inventory
+
+    inv = offline_inventory("down", anthropic_key=True, local_only=False)
+    offer = inv.offers["claude-opus-5-5"]
+    assert offer.available is False and "amd.Claude-Opus-5-5" in offer.reason

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -102,13 +103,37 @@ def record(body: Any, base_url: str) -> Dict[str, Any]:
     return doc
 
 
+#: The last file read, keyed by its path, mtime and size, so a page of price
+#: lookups reads it once.
+_cache: Dict[str, Any] = {}
+_cache_lock = threading.Lock()
+
+
 def load() -> Optional[Dict[str, Any]]:
     """The kept prices, or None when none were read yet."""
     path = prices_file()
     try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
+        stat = path.stat()
     except FileNotFoundError:
         return None
+    except OSError as e:
+        raise GatewayPriceError(
+            f"The gateway prices at {path} could not be read ({e}). Delete the "
+            "file; GAIA reads the prices again."
+        ) from e
+    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    with _cache_lock:
+        if _cache.get("key") == key:
+            return _cache["doc"]
+    doc = _read(path)
+    with _cache_lock:
+        _cache.update(key=key, doc=doc)
+    return doc
+
+
+def _read(path: Path) -> Dict[str, Any]:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise GatewayPriceError(
             f"The gateway prices at {path} could not be read ({e}). Delete the "
@@ -118,6 +143,17 @@ def load() -> Optional[Dict[str, Any]]:
         raise GatewayPriceError(
             f"The gateway prices at {path} are not in GAIA's format. Delete the "
             "file; GAIA reads the prices again."
+        )
+    epoch = doc.get("fetched_at_epoch")
+    if (
+        isinstance(epoch, bool)
+        or not isinstance(epoch, (int, float))
+        or not math.isfinite(epoch)
+    ):
+        raise GatewayPriceError(
+            f"The gateway prices at {path} have no readable time they were read "
+            f"(fetched_at_epoch is {epoch!r}). Delete the file; GAIA reads the "
+            "prices again."
         )
     return doc
 
@@ -174,7 +210,7 @@ def refresh() -> Dict[str, Any]:
 def ensure_fresh(max_age_s: float = MAX_AGE_S) -> Dict[str, Any]:
     """The kept prices, read again from the gateway when absent or older than *max_age_s*."""
     doc = load()
-    age = None if doc is None else time.time() - float(doc.get("fetched_at_epoch", 0))
+    age = None if doc is None else time.time() - doc["fetched_at_epoch"]
     if doc is None or age is None or age > max_age_s:
         doc = refresh()
         log.info("Read prices for %d gateway models", len(doc["models"]))

@@ -7918,22 +7918,15 @@ def handle_hybrid_command(args) -> None:
 
 def _cli_hybrid_inventory():
     """What every provider offers here, read from the model server; exits on failure."""
-    from gaia.env import credential
     from gaia.llm.hybrid import HybridConfigError
-    from gaia.llm.hybrid_templates import build_inventory
-    from gaia.llm.local_only import cloud_blocked
+    from gaia.llm.hybrid_templates import current_inventory
 
-    load_env()
-    try:
+    def payloads():
         client = LemonadeClient()
-        models = client.list_models(show_all=True)
-        info = client.get_system_info()
-        return build_inventory(
-            models,
-            info,
-            anthropic_key=bool(credential("ANTHROPIC_API_KEY")),
-            local_only=cloud_blocked(),
-        )
+        return client.list_models(show_all=True), client.get_system_info()
+
+    try:
+        return current_inventory(payloads)
     except HybridConfigError as e:
         print(f"❌ {_cli_wording(e)}", file=sys.stderr)
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -7947,9 +7940,14 @@ def _cli_hybrid_inventory():
 
 def _hybrid_templates_command(args) -> None:
     """``gaia hybrid templates`` lists the pairings; ``gaia hybrid use <id>`` applies one."""
-    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.config import GaiaConfigError
     from gaia.llm.hybrid import HybridConfigError
-    from gaia.llm.hybrid_templates import cli_text, list_templates, template_settings
+    from gaia.llm.hybrid_templates import (
+        cli_text,
+        list_templates,
+        save_settings,
+        template_settings,
+    )
 
     inv = _cli_hybrid_inventory()
     if args.hybrid_action == "templates":
@@ -7967,7 +7965,7 @@ def _hybrid_templates_command(args) -> None:
         return
     try:
         values = template_settings(args.template, inv)
-        GaiaConfig.save_keys(values)
+        save_settings(values)
     except KeyError as e:
         print(f"❌ {e.args[0]}", file=sys.stderr)
         sys.exit(1)
@@ -7983,12 +7981,11 @@ def _hybrid_templates_command(args) -> None:
 
 def _check_hybrid_model_offered(key: str, value: str) -> None:
     """Exit unless a provider set up here offers *value* for hybrid *key*."""
-    from gaia.llm.hybrid_templates import cli_text
+    from gaia.llm.hybrid_templates import cli_text, offered_problem
 
-    inv = _cli_hybrid_inventory()
-    reason = inv.check(value.strip())
-    if reason:
-        print(f"❌ {key}: {cli_text(f'{reason}. {inv.checked()}')}", file=sys.stderr)
+    problem = offered_problem(_cli_hybrid_inventory(), value.strip())
+    if problem:
+        print(f"❌ {key}: {cli_text(problem)}", file=sys.stderr)
         sys.exit(1)
 
 

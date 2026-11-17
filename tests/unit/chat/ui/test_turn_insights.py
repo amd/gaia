@@ -170,9 +170,9 @@ def test_a_failed_cloud_turn_that_never_answered_is_not_priced():
 
 
 def test_a_failed_cloud_turn_that_reported_usage_is_still_priced(monkeypatch):
-    from gaia.eval.bench import metering
+    from gaia.llm import pricing
 
-    monkeypatch.setattr(metering, "price", lambda *a: 0.0123)
+    monkeypatch.setattr(pricing, "price", lambda *a: 0.0123)
     result = {
         "timing_summary": {"llm_seconds": 2.0, "tool_seconds": 0.0},
         "conversation": [

@@ -84,6 +84,10 @@ class _ModelListFailed(ProviderError):
     """The model server answered ``/models`` with a 5xx: its own state, no verdict on a model."""
 
 
+#: Public name for other routers.
+ModelListFailed = _ModelListFailed
+
+
 # ── Lemonade access ────────────────────────────────────────────────────────
 
 
@@ -160,6 +164,13 @@ def _lemonade(
     except ValueError:
         body = {}
     return resp.status_code, body if isinstance(body, dict) else {"data": body}
+
+
+def lemonade_request(
+    method: str, path: str, payload: Optional[Dict[str, Any]] = None
+) -> Tuple[int, Dict[str, Any]]:
+    """``(status, body)`` for a request to the model server; ProviderError if unreachable."""
+    return _lemonade(method, path, payload)
 
 
 def _cloud_error(
@@ -673,6 +684,8 @@ def cloud_provider_name(model_id: str) -> Optional[str]:
     if provider != LOCAL:
         return _NAMES[provider]
     cloud = _ui_cloud_provider(model_id)
+    if cloud == "anthropic":
+        return "Anthropic"
     return _NAMES.get(cloud, cloud) if cloud else None
 
 
