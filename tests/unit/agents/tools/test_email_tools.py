@@ -1748,3 +1748,44 @@ def test_an_untagged_id_is_refused_when_several_accounts_are_read():
     out = json.loads(_two_inboxes()._tool("read_email")(message_id="w1"))
     assert out["success"] is False
     assert "does not say which account" in out["error"]
+
+
+class _WorkSignInExpires(_Harness):
+    """WORK's mailbox rejects the token; on the re-read its sign-in has expired."""
+
+    REASON = "its sign-in expired or was revoked. Reconnect it under Settings"
+
+    def __init__(self):
+        super().__init__(backend=None)
+        self.builds = 0
+
+    def _build_email_mailboxes(self):
+        self.builds += 1
+        home = Mailbox(HOME, _inbox(_mail("h1", "2026-09-02T08:00:00Z", "home")))
+        if self.builds == 1:
+            dead = make_backend(lambda r: httpx.Response(401, text="expired"))
+            return [home, Mailbox(WORK, dead)], []
+        return [home], [(WORK, self.REASON)]
+
+
+def test_a_sign_in_that_expires_mid_turn_says_reconnect_and_is_listed_once():
+    h = _WorkSignInExpires()
+    h.register_email_tools()
+    out = json.loads(h._tool("list_inbox")())
+
+    assert out["success"] is True
+    assert [m["subject"] for m in out["messages"]] == ["home"]
+    [missed] = out["accounts_not_read"]
+    assert missed["account"] == WORK.email
+    assert "Reconnect" in missed["error"]
+    assert "no longer connected" not in missed["error"]
+
+
+def test_reading_an_id_whose_sign_in_expired_says_reconnect():
+    h = _WorkSignInExpires()
+    h.register_email_tools()
+    out = json.loads(h._tool("read_email")(message_id=f"{WORK.tag}:w1"))
+
+    assert out["success"] is False
+    assert "Reconnect" in out["error"]
+    assert "no longer connected" not in out["error"]

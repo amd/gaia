@@ -691,6 +691,13 @@ class EmailToolsMixin:
         for box in self._email_boxes():
             if box.account.tag == account.tag:
                 return box
+        # Still connected but unusable (e.g. its sign-in expired): give its own remedy.
+        for other, why in self._email_unusable or ():
+            if other.tag == account.tag:
+                raise ValueError(
+                    f"{account.name} can't be used right now: {why}. Nothing was "
+                    "read or changed."
+                )
         raise ValueError(
             f"{account.name} is no longer connected, so nothing was read or "
             "changed. List again to see the connected accounts."
@@ -759,9 +766,11 @@ class EmailToolsMixin:
         if not answers:
             raise first
         if not narrowed:
+            listed = {entry["account"] for entry in not_read}
             not_read += [
                 {"account": a.name, "provider": a.provider, "error": why}
                 for a, why in self._email_unusable or ()
+                if a.name not in listed
             ]
         return answers, not_read
 
