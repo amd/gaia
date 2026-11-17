@@ -150,6 +150,37 @@ def inventory():
         raise ProviderError(_app_message(e, "Hybrid models can't be listed")) from e
 
 
+def _inventory_or_offline():
+    """The inventory; while the model server is starting or down, direct Claude only.
+
+    So a picker still shows hybrid, with why it can't run yet, instead of an error.
+    """
+    from gaia.env import credential, load_env
+    from gaia.llm.hybrid_templates import offline_inventory
+    from gaia.llm.local_only import cloud_blocked
+
+    from .providers import ProviderError, _ModelListFailed
+
+    try:
+        return inventory()
+    except ProviderError as e:
+        if e.status != 503 and not isinstance(e, _ModelListFailed):
+            raise HTTPException(
+                status_code=503,
+                detail=surface_wording(
+                    "Couldn't list the models hybrid can use: "
+                    + _app_message(e, "Hybrid models can't be listed"),
+                    "agent_ui",
+                ),
+            ) from e
+        load_env()
+        return offline_inventory(
+            _app_message(e, "The model server isn't answering").rstrip("."),
+            anthropic_key=bool(credential("ANTHROPIC_API_KEY")),
+            local_only=cloud_blocked(),
+        )
+
+
 def _inventory_or_503():
     from .providers import ProviderError
 
@@ -426,11 +457,11 @@ def put_hybrid_settings(
         GaiaConfig._from_doc(doc, GaiaConfig.config_path())
     except (GaiaConfigError, HybridConfigError) as e:
         raise _unprocessable(_app_message(e, "Invalid hybrid settings")) from e
-    chosen = [f for f in _MODEL_FIELDS if body.get(f)]
+    chosen = [f for f in _MODEL_FIELDS if values.get(FIELDS[f])]
     if chosen:
         inv = _inventory_or_503()
         for f in chosen:
-            reason = inv.check(body[f])
+            reason = inv.check(values[FIELDS[f]])
             if reason:
                 raise _unprocessable(f"{f}: {reason}. {inv.checked()}")
     _save(values)
@@ -460,7 +491,7 @@ def hybrid_picker_entry() -> Dict[str, Any]:
     from gaia.config import GaiaConfigError
     from gaia.llm.hybrid_templates import picker_entry
 
-    inv = _inventory_or_503()
+    inv = _inventory_or_offline()
     try:
         settings, error = HybridSettings.load(), None
     except (GaiaConfigError, HybridConfigError) as e:
@@ -477,7 +508,7 @@ def hybrid_templates() -> List[Dict[str, Any]]:
     """The built-in pairings, resolved on this PC, with whether each can be used."""
     from gaia.llm.hybrid_templates import list_templates
 
-    templates = list_templates(_inventory_or_503())
+    templates = list_templates(_inventory_or_offline())
     for t in templates:
         if t["reason"]:
             t["reason"] = surface_wording(t["reason"], "agent_ui")
@@ -505,7 +536,9 @@ def apply_hybrid_template(
 
 
 @router.post("/api/hybrid/preview")
-def preview_hybrid_route(body: Any = Body(...)) -> Dict[str, Any]:
+def preview_hybrid_route(
+    body: Any = Body(...), db: ChatDatabase = Depends(get_db)
+) -> Dict[str, Any]:
     """Where *text* would run as a new chat's first turn; nothing else happens.
 
     Runs the real classifier and policy. No turn runs, no tool is offered, and
@@ -536,6 +569,8 @@ def preview_hybrid_route(body: Any = Body(...)) -> Dict[str, Any]:
         raise HTTPException(
             status_code=409, detail=_app_wording(e, "Hybrid preview refused")
         ) from e
+    # A preview's classifier call is billed like a turn's.
+    spending.record_classifier(db, decision.as_record())
     return {
         "model": decision.model,
         "tier": decision.tier,

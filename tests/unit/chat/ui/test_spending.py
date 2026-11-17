@@ -642,3 +642,53 @@ def test_the_month_names_where_its_prices_came_from(db, gateway_prices_read):
 
 def test_a_month_with_no_priced_turns_names_no_single_provider(db):
     assert spending.month_report(db)["price_source"] == spending.ANY_PRICE_SOURCE
+
+
+# ── The hybrid classifier's own calls ─────────────────────────────────────
+
+
+def _route(classifier, usage, classified=True):
+    return {
+        "model": "Gemma-4-E4B-it-GGUF",
+        "classified": classified,
+        "classifier_model": classifier,
+        "classifier_usage": usage,
+    }
+
+
+def test_a_cloud_classifier_call_counts_toward_the_month(db, gateway_prices_read):
+    usage = {"input_tokens": 1_000_000, "output_tokens": 100_000}
+    spending.record_turn(
+        db,
+        "Gemma-4-E4B-it-GGUF",
+        {"input_tokens": 10, "output_tokens": 10},
+        route=_route(GATEWAY_MODEL, usage),
+    )
+    report = spending.month_report(db)
+    assert report["turns"] == 1 and report["by_model"][0]["model"] == GATEWAY_MODEL
+    assert report["total_usd"] == pytest.approx(0.357, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    "classifier,usage",
+    [
+        ("Gemma-4-E4B-it-GGUF", {"input_tokens": 5, "output_tokens": 5}),
+        (GATEWAY_MODEL, None),
+    ],
+    ids=["local classifier", "failed call"],
+)
+def test_a_local_or_failed_classifier_call_adds_nothing(db, classifier, usage):
+    spending.record_turn(
+        db, "Gemma-4-E4B-it-GGUF", {}, route=_route(classifier, usage, False)
+    )
+    assert spending.month_report(db)["turns"] == 0
+
+
+def test_the_limit_stops_a_local_pair_with_a_gateway_classifier(db, monkeypatch):
+    monkeypatch.setattr(
+        "gaia.llm.hybrid.candidate_models",
+        lambda m: ("Gemma-4-E4B-it-GGUF", "Qwen3.6-35B-A3B-GGUF", GATEWAY_MODEL),
+    )
+    spending.set_limit(db, 0.01)
+    _turn(db, model=CLAUDE_MODEL, inp=1_000_000, out=100_000)
+    assert "AMD LLM Gateway" in spending.limit_refusal(db, "hybrid")

@@ -593,6 +593,8 @@ def test_route_record_has_every_field():
         "notice": "",
         "classifier_format": "json_object",
         "tier": "cheap",
+        "classifier_model": CLASSIFIER,
+        "classifier_usage": None,
     }
     assert isinstance(record["seconds"], float)
 
@@ -819,6 +821,8 @@ def test_p_hybrid_records_the_route_and_runs_on_its_model(print_mode_doubles, ca
         "notice",
         "classifier_format",
         "tier",
+        "classifier_model",
+        "classifier_usage",
     }
     assert record["route"]["policy"] == "quality"
     assert "hybrid runs this turn on amd.Claude-Strong" in err
@@ -1399,3 +1403,40 @@ def test_p_prints_the_cli_command_for_a_failed_classification(
     command = "`gaia config set hybrid_classifier_model <model id>`"
     assert command in record["route"]["fix"] and command in err
     assert "Settings › Models › Hybrid" not in err
+
+
+class _UsageClient(FakeClient):
+    def get_last_usage(self):
+        return {"prompt_tokens": 900, "completion_tokens": 40, "cached_tokens": 800}
+
+
+def test_the_route_carries_what_the_classifier_call_used():
+    client = _UsageClient(_label("answer_question", 1, "low"))
+    router = HybridRouter(
+        HybridSettings(
+            cheap_model=CHEAP, strong_model=STRONG, classifier_model=CLASSIFIER
+        ),
+        client_factory=lambda model, base_url: client,
+    )
+    route = router.decide("What is 2+2?")
+    assert route.classifier_model == CLASSIFIER
+    assert route.classifier_usage == {
+        "input_tokens": 900,
+        "output_tokens": 40,
+        "cached_tokens": 800,
+    }
+
+
+def test_the_classifier_is_a_candidate_model(monkeypatch):
+    monkeypatch.setattr(
+        hybrid.HybridSettings,
+        "load",
+        classmethod(
+            lambda cls, config=None: HybridSettings(
+                cheap_model="Gemma-4-E4B-it-GGUF",
+                strong_model="Qwen3.6-35B-A3B-GGUF",
+                classifier_model="amd.DeepSeek-V4.1-Flash",
+            )
+        ),
+    )
+    assert "amd.DeepSeek-V4.1-Flash" in hybrid.candidate_models("hybrid")

@@ -165,11 +165,15 @@ def record_turn(
     model_id: Optional[str],
     stats: Optional[Dict[str, Any]],
     failed: bool = False,
+    route: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Add a finished cloud turn to this month's spending.
 
     A *failed* turn that reported no tokens never got a reply, so it is left out.
+    A hybrid turn's *route* adds its cloud classifier's call as well.
     """
+    if route:
+        record_classifier(db, route)
     provider = billed_provider(model_id)
     if provider is None:
         return
@@ -198,6 +202,29 @@ def record_turn(
         inp if isinstance(inp, int) else None,
         out if isinstance(out, int) else None,
         usd,
+    )
+
+
+def record_classifier(db, route: Dict[str, Any]) -> None:
+    """Add a hybrid classifier call on a cloud model to this month's spending.
+
+    A call that reported no tokens got no answer (it failed), so it is left out.
+    """
+    model = route.get("classifier_model")
+    usage = route.get("classifier_usage")
+    if not isinstance(model, str) or billed_provider(model) is None:
+        return
+    counts = _token_counts(usage) if isinstance(usage, dict) else None
+    if counts is None:
+        return
+    inp, out, cached = counts
+    db.add_cloud_spend(
+        current_month(),
+        model,
+        billed_provider(model),
+        inp,
+        out,
+        turn_cost(model, inp, out, cached),
     )
 
 
@@ -502,6 +529,18 @@ def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:
     return turn_cost(model, inp, out, cached)
 
 
+def _classifier_cost(route: Dict[str, Any]) -> Optional[float]:
+    """What the route's classifier call cost; 0 for none or a local one, None if unknown."""
+    model = route.get("classifier_model")
+    if not isinstance(model, str) or billed_provider(model) is None:
+        return 0.0
+    usage = route.get("classifier_usage")
+    if not isinstance(usage, dict):
+        # Asked but reported nothing: a failed call is not billed.
+        return 0.0 if not route.get("classified") else None
+    return _list_cost(model, _token_counts(usage))
+
+
 #: What :func:`hybrid_stats` covers: answers in the Agent UI's chat database.
 STATS_SCOPE = "agent_ui_chats"
 #: Shown verbatim by the apps next to the numbers.
@@ -519,7 +558,8 @@ def hybrid_stats(db, settings) -> Dict[str, Any]:
     the models' prices (:func:`model_price`): ``cost`` is what the turns cost on
     the models they ran on, ``cost_if_all_strong`` the same tokens at the strong
     model's price (the one *settings* name now). Either is None, never $0, when
-    any turn's price is unknown; ``unpriced_turns`` counts those turns.
+    any turn's price is unknown; ``unpriced_turns`` counts those turns. ``cost``
+    includes each turn's classifier call, which an all-strong session wouldn't make.
     """
     turns = cheap = failed = unpriced = 0
     cost: Optional[float] = 0.0
@@ -543,6 +583,8 @@ def hybrid_stats(db, settings) -> Dict[str, Any]:
         counts = _token_counts(row["stats"])
         ran = _list_cost(model, counts)
         strong = _list_cost(settings.strong_model, counts)
+        classifier = _classifier_cost(route)
+        ran = None if ran is None or classifier is None else ran + classifier
         if ran is None or strong is None:
             unpriced += 1
         cost = None if cost is None or ran is None else cost + ran

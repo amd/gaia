@@ -1155,3 +1155,94 @@ def test_a_wrongly_typed_hybrid_value_is_reported_not_a_500(client, gateway, doc
     assert isinstance(body["cheap_model"], str)
     assert isinstance(body["classifier_model"], str)
     assert isinstance(body["classifier_timeout"], int)
+
+
+def test_stats_charge_each_turn_its_classifier_call(client, db, gateway_list):
+    gateway_list["body"] = GATEWAY_PAYLOAD
+    session = db.create_session(model="hybrid")["id"]
+    route = {
+        **_route(DEFAULT_STRONG_MODEL, "strong"),
+        "classifier_model": DEFAULT_CHEAP_MODEL,
+        "classifier_usage": {"input_tokens": 100_000, "output_tokens": 1_000},
+    }
+    _answer(db, session, route, (10_000, 1_000, 0))
+    body = client.get("/api/hybrid/stats").json()
+    strong = (10_000 * 4.0 + 1_000 * 20.0) / 1e6
+    classifier = (100_000 * 0.255 + 1_000 * 1.02) / 1e6
+    assert body["cost"] == pytest.approx(strong + classifier, abs=1e-6)
+    # An all-strong session asks no classifier.
+    assert body["cost_if_all_strong"] == pytest.approx(strong, abs=1e-6)
+    assert body["saving_pct"] < 0
+
+
+def test_a_preview_bills_its_cloud_classifier_call(client, db, gateway, monkeypatch):
+    from gaia.llm.hybrid import RouteDecision
+
+    monkeypatch.setattr(
+        hybrid.HybridRouter,
+        "preview",
+        lambda self, text, base_url=None: RouteDecision(
+            model=DEFAULT_CHEAP_MODEL,
+            classified=True,
+            classifier_model=DEFAULT_CHEAP_MODEL,
+            classifier_usage={"input_tokens": 900, "output_tokens": 20},
+        ),
+    )
+    assert client.post("/api/hybrid/preview", json={"text": "hi"}).status_code == 200
+    from gaia.ui import spending
+
+    rows = db.cloud_spend_for_month(spending.current_month())
+    assert [r["model"] for r in rows] == [DEFAULT_CHEAP_MODEL]
+
+
+@pytest.fixture
+def server_down(monkeypatch, gateway):
+    def down():
+        raise providers.ProviderError(
+            "The local model server is not reachable at http://127.0.0.1:1.",
+            status=503,
+        )
+
+    monkeypatch.setattr(hybrid_router, "_lemonade_payloads", down)
+    return gateway
+
+
+def test_entry_while_the_model_server_is_down_says_why_not_503(client, server_down):
+    resp = client.get("/api/hybrid/entry")
+    assert resp.status_code == 200, resp.text
+    entry = resp.json()
+    assert entry["available"] is False and "not reachable" in entry["reason"]
+    assert entry["shown"] is False
+
+
+def test_direct_claude_still_offered_while_the_model_server_is_down(
+    client, server_down
+):
+    server_down["anthropic"] = True
+    templates = _templates(client)
+    assert templates["claude-direct"]["available"] is True
+    assert "not reachable" in templates["gateway-deepseek-opus"]["reason"]
+    assert client.get("/api/hybrid/entry").json()["shown"] is True
+
+
+def test_put_checks_and_saves_the_trimmed_model_id(client, gateway):
+    resp = client.put(
+        "/api/hybrid/settings", json={"strong_model": "  amd.Gemma-4-31B  "}
+    )
+    assert resp.status_code == 200, resp.text
+    assert _config()["hybrid_strong_model"] == "amd.Gemma-4-31B"
+
+
+def test_a_broken_hybrid_key_is_logged_once_with_its_fix(tmp_path, caplog):
+    from gaia.config import GaiaConfig
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"hybrid_classifier_timeout": "15"}), encoding="utf-8")
+    with caplog.at_level("WARNING", logger="gaia.config"):
+        GaiaConfig.load(path)
+        GaiaConfig.load(path)
+    warned = [
+        r.getMessage() for r in caplog.records if "hybrid_classifier" in r.getMessage()
+    ]
+    assert len(warned) == 1
+    assert "gaia config set hybrid_classifier_timeout 15" in warned[0]
