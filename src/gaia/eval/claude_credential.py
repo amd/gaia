@@ -207,7 +207,6 @@ def gateway_credential() -> ClaudeCredential:
         RuntimeError: no gateway key, or no known Anthropic route for it.
     """
     from gaia.llm import gateway
-
     from gaia.llm.amd_network import AMD_GATEWAY_ANTHROPIC_BASE_URL, is_gateway_url
 
     try:

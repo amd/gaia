@@ -37,12 +37,12 @@ gateway model to switch to. The eval judge is the one deliberate exception —
 from __future__ import annotations
 
 import os
+import re
 import socket
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional
-import re
 from urllib.parse import urlparse
 
 from gaia.logger import get_logger
