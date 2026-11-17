@@ -1051,6 +1051,14 @@ std::string Agent::recordToolOutput(const json& toolResult, int maxChars) {
            full.substr(tailStart);
 }
 
+int Agent::storeToolOutput(const std::string& text) {
+    std::lock_guard<std::mutex> lock(toolOutputsMutex_);
+    const int id = nextToolOutputId_++;
+    toolOutputs_[id] = text;
+    while (toolOutputs_.size() > kMaxStoredToolOutputs) toolOutputs_.erase(toolOutputs_.begin());
+    return id;
+}
+
 size_t Agent::elideOldToolOutputs(std::vector<Message>& messages, size_t keepRecent) {
     std::vector<size_t> toolIdx;
     for (size_t i = 0; i < messages.size(); ++i) {

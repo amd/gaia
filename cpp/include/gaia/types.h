@@ -244,6 +244,9 @@ struct ToolParameter {
     ToolParamType type = ToolParamType::UNKNOWN;
     bool required = true;
     std::string description;
+    /// The JSON schema sent for this parameter in place of the bare type, for an array or
+    /// object whose shape the model must be told. Null = type and description only.
+    json schema = nullptr;
 };
 
 // Callback type for tool functions.

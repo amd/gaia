@@ -53,6 +53,13 @@ struct GAIA_API LemonadeHealth {
     std::string error;     // why the server could not be reached (empty when it answered)
 };
 
+/// How many requests a loaded model serves at once.
+struct GAIA_API ModelCapacity {
+    int slots = 0;        // llama.cpp slots; 0 when the server did not say
+    std::string recipe;   // "llamacpp", "flm", "cloud"; empty when not reported
+    std::string unknown;  // why slots is 0 (empty when it is known)
+};
+
 // ---- Composite status ----
 
 /// Composite status from health + models endpoints.
@@ -122,6 +129,13 @@ public:
     /// Composite status from health + models endpoints.
     /// Mirrors Python get_status().
     LemonadeStatus getStatus();
+
+    /// The slot count modelId was loaded with: `--parallel` in Lemonade's /health, or
+    /// `total_slots` in /props on a bare llama.cpp server. Mirrors Python slot_count().
+    ModelCapacity modelCapacity(const std::string& modelId);
+
+    /// The `--parallel N` / `-np N` value in a llama.cpp argument list; 0 when absent.
+    static int slotsInFlags(const std::vector<std::string>& flags);
 
     // ---- Model management ----
 

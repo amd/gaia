@@ -172,6 +172,7 @@ json ToolRegistry::buildOpenAiToolSchemas() const {
             prop["type"] = (param.type == ToolParamType::UNKNOWN)
                                ? "string"
                                : paramTypeToString(param.type);
+            if (param.schema.is_object()) prop = param.schema;
             if (!param.description.empty()) {
                 prop["description"] = param.description;
             }

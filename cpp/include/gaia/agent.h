@@ -365,6 +365,14 @@ protected:
     /// The user's request for the query in progress, as text (for answer review).
     const std::string& turnRequest() const { return turnRequest_; }
 
+    /// Keep text for read_tool_output and return its output_id.
+    int storeToolOutput(const std::string& text);
+
+    /// Write one line to the step log, if one is set. The caller serializes concurrent writers.
+    void logStep(const json& line) {
+        if (stepLogger_) stepLogger_(line);
+    }
+
 private:
     /// Unified entry point for all processQuery overloads. Owns the full
     /// conversation turn: concurrency guard, empty-input validation,
