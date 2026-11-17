@@ -4090,6 +4090,24 @@ class CloudProviderDisconnectedError(LemonadeClientError):
         self.model_id = model_id
 
 
+class CloudProviderUnreachableError(LemonadeClientError):
+    """GAIA's Lemonade holds the provider's key but found no models on it, so the
+    404 is its own: it could not reach the provider, or the key was refused."""
+
+    def __init__(self, provider: str, model_id: Optional[str]):
+        from gaia.llm.inference_location import provider_phrase
+
+        where = provider_phrase(provider)
+        super().__init__(
+            f"GAIA's AI engine couldn't get the list of models from {where}, so "
+            "this message wasn't sent. Check your internet connection, then send "
+            f"it again. If you are online, check the {where} key "
+            f"{TUI_PROVIDER_SETTINGS}."
+        )
+        self.provider = provider
+        self.model_id = model_id
+
+
 def describe_version_refusal(
     found_version: Optional[str], min_version: str, url: Optional[str] = None
 ) -> str:
@@ -6757,12 +6775,15 @@ class LemonadeClient:
 
         Raises:
             CloudProviderDisconnectedError: it was lost and could not be brought back.
+            CloudProviderUnreachableError: it holds a key but lists no models.
         """
         from gaia.llm.cloud_keys import (
             PROVIDERS,
             CloudKeyError,
+            provider_found_no_models,
             provider_lost,
             reconnect_provider,
+            rediscover_models,
         )
         from gaia.llm.gateway import GatewayError
         from gaia.llm.local_only import CloudDisabledError
@@ -6772,7 +6793,17 @@ class LemonadeClient:
             return False
         try:
             if not provider_lost(provider, client=self):
-                return False
+                if not provider_found_no_models(provider, client=self):
+                    return False
+                if not rediscover_models(provider, client=self):
+                    # The 404 was Lemonade's own; it says nothing about the model.
+                    _remember_cloud_availability(model, ok=True)
+                    raise CloudProviderUnreachableError(provider, model) from error
+                self.log.warning(
+                    f"GAIA's Lemonade Server had found no {provider} models; it "
+                    "found them now, sending the request once more."
+                )
+                return True
             if reconnect_provider(provider, client=self):
                 reason = None
             elif provider == "fireworks":

@@ -35,6 +35,7 @@ from ..lemonade_client import (
     CloudContextOverflowError,
     CloudModelUnavailableError,
     CloudProviderDisconnectedError,
+    CloudProviderUnreachableError,
     GaiaLemonadeStartError,
     LemonadeAuthError,
     LemonadeClient,
@@ -979,7 +980,9 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeAuthRejectedError(user_message=str(cur))
         if isinstance(cur, ModelOutputCorruptedError):
             return LemonadeOutputCorruptedError()
-        if isinstance(cur, CloudProviderDisconnectedError):
+        if isinstance(
+            cur, (CloudProviderDisconnectedError, CloudProviderUnreachableError)
+        ):
             return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
