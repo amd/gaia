@@ -6,7 +6,7 @@ import { AlertTriangle, Check, Copy, Hourglass } from 'lucide-react';
 import QRCode from 'qrcode';
 import { useT } from '../../i18n/useT';
 import type { Translate } from '../../i18n/translator';
-import type { MessageKey } from '../../i18n/registry';
+import { ref, type MessageKey, type MessageRef } from '../../i18n/registry';
 import { ApiError } from '../../services/api';
 import {
     allowDevice,
@@ -53,16 +53,23 @@ function mapped<K extends string>(table: Record<K, string>, code: string, t: Tra
     return code;
 }
 
-export const platformName = (platform: string, t: Translate) => mapped(PLATFORM_KEYS, platform, t, 'platform');
+/** Like `mapped`, but a ref for a `t()` param, so the outer sentence glosses it once. */
+function mappedRef<K extends string>(table: Record<K, string>, code: string, what: string): MessageRef | string {
+    if (code in table) return ref(table[code as K] as MessageKey);
+    log.ui.error(`Unmapped device ${what} from the API: ${code}`);
+    return code;
+}
 
-function ago(iso: string, now: number, t: Translate): string {
+export const platformName = (platform: string) => mappedRef(PLATFORM_KEYS, platform, 'platform');
+
+function ago(iso: string, now: number): MessageRef {
     const secs = Math.max(0, Math.floor((now - Date.parse(iso)) / 1000));
-    if (secs < 60) return t('time.justNow');
+    if (secs < 60) return ref('time.justNow');
     const mins = Math.floor(secs / 60);
-    if (mins < 60) return t('time.minutesAgo', { n: mins });
+    if (mins < 60) return ref('time.minutesAgo', { n: mins });
     const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return t('time.hoursAgo', { n: hrs });
-    return t('time.daysAgo', { n: Math.floor(hrs / 24) });
+    if (hrs < 24) return ref('time.hoursAgo', { n: hrs });
+    return ref('time.daysAgo', { n: Math.floor(hrs / 24) });
 }
 
 const secondsLeft = (deadlineMs: number, now: number) => Math.max(0, Math.ceil((deadlineMs - now) / 1000));
@@ -272,7 +279,7 @@ export function DevicesSettings() {
                                 <div className="devices-row-text">
                                     <span className="devices-name"><bdi>{d.name}</bdi></span>
                                     <span className="settings-hint">
-                                        {t('settings.devices.pairedAt', { platform: platformName(d.platform, t), when: ago(d.created_at, now, t) })}
+                                        {t('settings.devices.pairedAt', { platform: platformName(d.platform), when: ago(d.created_at, now) })}
                                         {d.expires_at && (
                                             <> · <span className="perm-card-timer" title={t('prompt.timer')}><bdi dir="ltr">{formatCountdown(secondsLeft(Date.parse(d.expires_at), now))}</bdi></span></>
                                         )}
@@ -305,8 +312,8 @@ export function DevicesSettings() {
                                     <span className="devices-name"><bdi>{d.name}</bdi></span>
                                     <span className="settings-hint">
                                         {d.last_seen_at
-                                            ? t('settings.devices.lastConnected', { platform: platformName(d.platform, t), when: ago(d.last_seen_at, now, t) })
-                                            : t('settings.devices.neverConnected', { platform: platformName(d.platform, t) })}
+                                            ? t('settings.devices.lastConnected', { platform: platformName(d.platform), when: ago(d.last_seen_at, now) })
+                                            : t('settings.devices.neverConnected', { platform: platformName(d.platform) })}
                                     </span>
                                 </div>
                                 <div className="devices-row-actions">
@@ -331,8 +338,8 @@ export function DevicesSettings() {
                                 <AlertTriangle size={14} aria-hidden="true" />
                                 <span>
                                     <MarkedText text={t('settings.devices.failedRow', {
-                                        when: ago(f.at, now, t),
-                                        reason: mapped(REASON_KEYS, f.reason, t, 'failure reason'),
+                                        when: ago(f.at, now),
+                                        reason: mappedRef(REASON_KEYS, f.reason, 'failure reason'),
                                         address: markLtr(f.address),
                                     })} />
                                 </span>
