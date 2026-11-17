@@ -907,10 +907,10 @@ class TestDownloadModels(unittest.TestCase):
     def test_npu_profile_pulls_builtin_model_without_recipe(self):
         """NPU/FLM models are built-in; pulling with a recipe 400s (#1655).
 
-        The npu profile must download both the FLM chat model and the FLM-native
-        embedder (#1744) via ensure_model_downloaded (pull by name), never
-        pull_model(recipe=...), which Lemonade rejects unless the name carries a
-        ``user.`` prefix.
+        The npu profile downloads the FLM chat model and the GPU embedder (the
+        FLM one's search isn't proven) via ensure_model_downloaded (pull by
+        name), never pull_model(recipe=...), which Lemonade rejects for a
+        built-in model.
         """
         from gaia.installer.init_command import InitCommand
 
@@ -927,7 +927,9 @@ class TestDownloadModels(unittest.TestCase):
             pulled = {
                 c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
             }
-            self.assertEqual(pulled, {"gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"})
+            self.assertEqual(
+                pulled, {"gemma4-it-e4b-FLM", "user.embeddinggemma-300m-GGUF"}
+            )
             # Regression guard: no recipe-bearing pull_model call.
             mock_client.pull_model.assert_not_called()
 
@@ -2863,7 +2865,9 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
         self.assertIn("gaia", HUB_INSTALL_AGENTS)
         # The NPU profile keeps its own FLM models and device keys.
         npu = INIT_PROFILES["npu"]
-        self.assertEqual(npu["models"], ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"])
+        self.assertEqual(
+            npu["models"], ["gemma4-it-e4b-FLM", "user.embeddinggemma-300m-GGUF"]
+        )
         self.assertEqual(npu["backend"], "flm:npu")
         # The flagship runs in the daemon / Agent UI, which [ui] installs.
         self.assertEqual(npu["pip_extras"], INIT_PROFILES["gaia"]["pip_extras"])

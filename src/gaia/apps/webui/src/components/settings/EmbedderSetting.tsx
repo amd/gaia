@@ -7,7 +7,7 @@ import * as memoryApi from '../../services/memoryApi';
 import { useT } from '../../i18n/useT';
 import { isolate } from '../../i18n/registry';
 
-/** Value of the "follow this PC's setup" option. */
+/** Value of the "default device" option. */
 const PROFILE = 'profile';
 
 /** Where documents and memory are embedded, and the choice to move it. */
@@ -59,13 +59,15 @@ export function EmbedderSetting() {
                     disabled={busy}
                 >
                     <option value={PROFILE}>
-                        {t.bare('settings.memory.embedder.followProfile', { device: deviceName(view.profile_device) })}
+                        {t.bare('settings.memory.embedder.default', { device: deviceName(view.default_device) })}
                     </option>
                     {view.options.map((o) => (
                         <option key={o.device} value={o.device} disabled={o.available === false}>
-                            {o.available === false
+                            {o.present === false
                                 ? t.bare('settings.memory.embedder.unavailable', { device: deviceName(o.device) })
-                                : deviceName(o.device)}
+                                : !o.proven
+                                    ? t.bare('settings.memory.embedder.unproven', { device: deviceName(o.device) })
+                                    : deviceName(o.device)}
                         </option>
                     ))}
                 </select>
@@ -74,6 +76,9 @@ export function EmbedderSetting() {
                 {t('settings.memory.embedder.runsOn', { name: isolate(current?.display_name ?? view.device, 'ltr'), device: deviceName(view.device) })}
                 {' '}{t('settings.memory.embedder.why')}
             </span>
+            {view.options.some((o) => o.device === 'npu' && !o.proven && o.present) && (
+                <span className="settings-hint">{t('settings.memory.embedder.npuUnproven')}</span>
+            )}
             {current?.downloaded === false && (
                 <span className="settings-hint">{t('settings.memory.embedder.notDownloaded')}</span>
             )}

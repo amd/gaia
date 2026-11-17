@@ -556,7 +556,7 @@ export interface DownloadProgress {
   total_files?: number;
 }
 /**
- * ``npu`` or ``gpu``; None follows the PC's profile.
+ * ``npu`` or ``gpu``; None is the default (the GPU).
  */
 export interface EmbedderBody {
   device?: ("npu" | "gpu") | null;

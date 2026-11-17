@@ -155,15 +155,15 @@ def test_every_chat_on_a_pc_uses_its_profiles_embedder(server, tmp_path, profile
     """A chat built on, or switched to, either device keeps the PC's embedder.
 
     Memory has one store; a different embedder clears all its vectors (#6008).
+    It is the GPU one on an NPU PC too: the NPU build's search isn't proven.
     """
     from gaia_agent import stdio
     from gaia_agent.session_registry import build_session_agent, close_agent
 
-    from gaia.agents.registry import get_embedding_model_for_device
     from gaia.config import GaiaConfig
 
     GaiaConfig.save_keys({"default_device": profile})
-    expected = get_embedding_model_for_device(profile)
+    expected = EMBEDDER
     for model, device in ((GPU, "gpu"), (NPU, None)):
         agent = build_session_agent(
             model_id=model, device=device, allowed_paths=[str(tmp_path / "work")]
@@ -187,7 +187,14 @@ def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
 
     from gaia.config import GaiaConfig
 
-    GaiaConfig.save_keys({"default_device": "npu"})
+    # A choice saved before the NPU embedder was withdrawn still loads.
+    path = GaiaConfig.config_path()
+    path.write_text(
+        json.dumps(
+            {**json.loads(path.read_text(encoding="utf-8")), "embedding_device": "npu"}
+        ),
+        encoding="utf-8",
+    )
     registry = sr._SessionRegistry()
     kwargs = {"model_id": NPU, "allowed_paths": [str(tmp_path / "work")]}
     try:
@@ -199,7 +206,7 @@ def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
         assert session.follow_embedder(**kwargs) is False
         assert session.agent is old
 
-        GaiaConfig.save_key("embedding_device", "gpu")
+        GaiaConfig.save_key("embedding_device", "auto")
         # A later turn names no model: the chat keeps the one it is on.
         assert session.follow_embedder(allowed_paths=kwargs["allowed_paths"])
         assert session.agent is not old

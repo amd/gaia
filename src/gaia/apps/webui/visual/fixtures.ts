@@ -218,10 +218,10 @@ const ROUTES: Record<string, unknown> = {
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
     'GET /memory/embedder': {
-        device: 'npu', chosen: false, profile_device: 'npu',
+        device: 'gpu', chosen: false, default_device: 'gpu',
         options: [
-            { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', available: true, reason: null, downloaded: true },
-            { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', available: true, reason: null, downloaded: true },
+            { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', proven: true, present: true, available: true, reason: null, downloaded: true },
+            { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', proven: false, present: true, available: false, reason: "its search results aren't reliable yet, so GAIA embeds on the GPU", downloaded: true },
         ],
     },
     'GET /skills': { skills: [] },
@@ -393,10 +393,10 @@ export async function withSettingsPanes(page: Page, options: { networkPolicy?: '
         },
         'GET /memory/settings': { memory_enabled: true },
         'GET /memory/embedder': {
-            device: 'npu', chosen: false, profile_device: 'npu',
+            device: 'gpu', chosen: false, default_device: 'gpu',
             options: [
-                { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', available: true, reason: null, downloaded: true },
-                { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', available: true, reason: null, downloaded: true },
+                { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', proven: true, present: true, available: true, reason: null, downloaded: true },
+                { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', proven: false, present: true, available: false, reason: "its search results aren't reliable yet, so GAIA embeds on the GPU", downloaded: true },
             ],
         },
         'GET /skills': {

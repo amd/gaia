@@ -309,9 +309,7 @@ def _compute_custom_origin_hash(py_file: Path) -> str:
     return hashlib.sha256(py_file.read_bytes()).hexdigest()[:16]
 
 
-# Default embedder (GPU/CPU) — the one `gaia init` downloads. The NPU device
-# overrides it with the FLM-native embedder so chat + embeddings stay
-# co-resident on the NPU backend (#1744).
+# The embedder `gaia init` downloads, and every PC's, an NPU PC's too.
 DEFAULT_EMBEDDING_MODEL = LEMONADE_DEFAULT_EMBEDDING_MODEL
 
 
@@ -374,8 +372,8 @@ DEFAULT_DEVICE_CONFIGS: List[DeviceConfig] = [
         backend="flm:npu",
         verified=True,
         ctx_size=npu_default_ctx(NPU_DEFAULT_MODEL_NAME),
-        # FLM-native embedder so chat + embeddings stay co-resident on the NPU
-        # backend and don't thrash NPU<->Vulkan every turn (#1744).
+        # Used only where embedding_device is saved as npu: its search isn't
+        # proven (GaiaConfig.TESTED_EMBEDDING_DEVICES).
         embedding_model="embed-gemma-300m-FLM",
     ),
 ]
@@ -386,9 +384,9 @@ def get_embedding_model_for_device(device: Optional[str]) -> str:
 
     Single source of truth: reads ``DEFAULT_DEVICE_CONFIGS`` so the embedder
     choice lives next to the chat model/recipe/backend for each device. The NPU
-    profile uses the FLM-native embedder (see ``DeviceConfig.embedding_model``);
-    GPU/CPU and an unspecified device default to the GGUF embedder `gaia init`
-    downloads, which matches the GPU-default policy elsewhere in the CLI.
+    entry names the FLM embedder, used only for a saved ``embedding_device`` of
+    ``npu``; GPU/CPU and an unspecified device get the GGUF embedder `gaia init`
+    downloads.
     """
     for dc in DEFAULT_DEVICE_CONFIGS:
         if dc.device == device:
@@ -397,9 +395,10 @@ def get_embedding_model_for_device(device: Optional[str]) -> str:
 
 
 def machine_embedding_device() -> str:
-    """``npu`` or ``gpu``: where every chat on this PC embeds.
+    """``gpu`` or ``npu``: where every chat on this PC embeds.
 
-    The user's ``embedding_device``, else the PC's profile (``default_device``).
+    The saved ``embedding_device``, else the GPU, on an NPU PC too: the NPU
+    embedder's search isn't proven (``GaiaConfig.TESTED_EMBEDDING_DEVICES``).
 
     Raises:
         GaiaConfigError: ``~/.gaia/config.json`` can't be read.
@@ -413,9 +412,7 @@ def machine_embedding_device() -> str:
             f"Cannot tell which embedder this PC uses for documents and memory: "
             f"{e}. Fix or delete {GaiaConfig.config_path()}."
         ) from e
-    return config.embedding_device or (
-        "npu" if config.default_device == "npu" else "gpu"
-    )
+    return config.embedding_device or "gpu"
 
 
 def machine_embedding_model() -> str:

@@ -254,6 +254,10 @@ export interface EmbedderOption {
     device: EmbedderDevice;
     model: string;
     display_name: string;
+    /** False for a device GAIA hasn't proven; it is shown but can't be chosen. */
+    proven: boolean;
+    /** Whether this PC's hardware can run it; null while the model server is starting. */
+    present: boolean | null;
     available: boolean | null;
     reason: string | null;
     downloaded: boolean | null;
@@ -262,9 +266,9 @@ export interface EmbedderOption {
 /** Where every chat embeds documents and memory. */
 export interface EmbedderView {
     device: EmbedderDevice;
-    /** True when the user chose the device; false when the PC's setup decides it. */
+    /** True when the user chose the device; false when it is the default. */
     chosen: boolean;
-    profile_device: EmbedderDevice;
+    default_device: EmbedderDevice;
     options: EmbedderOption[];
     /** Set by a change: false when the embedder stayed the same. */
     changed?: boolean;

@@ -43,12 +43,16 @@ class TestDeviceEmbedderResolution:
         assert embedder in INIT_PROFILES["gaia"]["models"]
 
     @pytest.mark.parametrize(
-        "profile, embedder",
-        [("npu", "embed-gemma-300m-FLM"), ("gpu", "user.embeddinggemma-300m-GGUF")],
+        "keys, embedder",
+        [
+            # The NPU build's search isn't proven, so an NPU PC embeds on the GPU.
+            ({"default_device": "npu"}, "user.embeddinggemma-300m-GGUF"),
+            ({"default_device": "gpu"}, "user.embeddinggemma-300m-GGUF"),
+            # A saved choice from before it was withdrawn still loads.
+            ({"embedding_device": "npu"}, "embed-gemma-300m-FLM"),
+        ],
     )
-    def test_the_pcs_profile_picks_the_embedder(
-        self, profile, embedder, tmp_path, monkeypatch
-    ):
+    def test_one_embedder_per_pc(self, keys, embedder, tmp_path, monkeypatch):
         """One per PC: a chat on the other device must not change it (#6008)."""
         import json
 
@@ -56,9 +60,7 @@ class TestDeviceEmbedderResolution:
         from gaia.agents.registry import machine_embedding_model
 
         config_file = tmp_path / "config.json"
-        config_file.write_text(
-            json.dumps({"default_device": profile}), encoding="utf-8"
-        )
+        config_file.write_text(json.dumps(keys), encoding="utf-8")
         monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
         assert machine_embedding_model() == embedder
 
@@ -72,10 +74,10 @@ class TestDeviceEmbedderResolution:
             ("npu", "chat", "gpu"),  # a GPU-only profile chosen on purpose
         ],
     )
-    def test_setup_keeps_an_npu_pcs_embedder(
+    def test_setup_keeps_an_npu_pcs_device(
         self, before, profile, after, tmp_path, monkeypatch
     ):
-        """Moving an NPU PC to the GPU would clear every memory vector (#6008)."""
+        """The app's own setup leaves an NPU PC's chat on the NPU."""
         import json
 
         from gaia import config as config_mod
@@ -116,11 +118,14 @@ class TestModelRegistry:
         # FLM/NPU server 500s on a tools payload, like the e2b chat model.
         assert mr.tool_calling is False
 
-    def test_npu_init_profile_downloads_flm_embedder(self):
+    def test_npu_init_profile_downloads_the_gpu_embedder(self):
+        """An NPU PC embeds on the GPU, so setup must download that embedder."""
+        from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL
         from gaia.installer.init_command import INIT_PROFILES
 
         models = INIT_PROFILES["npu"]["models"]
-        assert "embed-gemma-300m-FLM" in models
+        assert DEFAULT_EMBEDDING_MODEL in models
+        assert "embed-gemma-300m-FLM" not in models
         # Chat model must remain so both pull on `gaia init --profile npu`.
         assert "gemma4-it-e4b-FLM" in models
 

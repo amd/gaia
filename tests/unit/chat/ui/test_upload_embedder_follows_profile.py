@@ -3,9 +3,8 @@
 
 """An Agent UI upload indexes with the embedder chat searches with (#6008).
 
-On an NPU PC the GGUF embedder loads on Vulkan and evicts the FLM chat model,
-and its vectors sit under a different hash than chat's, so the document would
-be embedded a second time on the first question about it.
+Vectors from another embedder sit under a different hash than chat's, so the
+document would be embedded a second time on the first question about it.
 """
 
 from __future__ import annotations
@@ -62,7 +61,10 @@ def _doc(tmp_path, name="notes.txt"):
 @pytest.mark.parametrize(
     "text, embedder",
     [
-        (json.dumps({"default_device": "npu"}), FLM),
+        # The NPU build's search isn't proven: an NPU PC embeds on the GPU.
+        (json.dumps({"default_device": "npu"}), GGUF),
+        # A saved choice from before it was withdrawn still loads.
+        (json.dumps({"default_device": "npu", "embedding_device": "npu"}), FLM),
         (json.dumps({"default_device": "gpu"}), GGUF),
         (json.dumps({"default_device": "cpu"}), GGUF),
         (json.dumps({"profile": "gaia"}), GGUF),
@@ -78,8 +80,8 @@ def test_an_upload_uses_the_pcs_embedder(
     assert [c.embedding_model for c in fake_rag.configs] == [embedder]
 
 
-def test_every_file_of_a_folder_uses_the_npu_embedder(fake_rag, monkeypatch, tmp_path):
-    _pc(monkeypatch, tmp_path, json.dumps({"default_device": "npu"}))
+def test_every_file_of_a_folder_uses_the_pcs_embedder(fake_rag, monkeypatch, tmp_path):
+    _pc(monkeypatch, tmp_path, json.dumps({"embedding_device": "npu"}))
     paths = [_doc(tmp_path, f"f{i}.txt") for i in range(3)]
 
     async def _all():
@@ -93,7 +95,7 @@ def test_every_file_of_a_folder_uses_the_npu_embedder(fake_rag, monkeypatch, tmp
 def test_an_unreadable_config_fails_the_upload_instead_of_guessing(
     fake_rag, monkeypatch, tmp_path
 ):
-    """Guessing GGUF on an NPU PC is the eviction this guards against."""
+    """A guessed embedder would index under the wrong vectors."""
     _pc(monkeypatch, tmp_path, "{not json")
 
     with pytest.raises(RuntimeError, match="embedder this PC uses") as exc:

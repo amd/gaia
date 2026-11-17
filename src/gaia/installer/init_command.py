@@ -247,12 +247,11 @@ INIT_PROFILES = {
         # The flagship, from the Agent Hub like the `gaia` profile -- the Agent
         # UI lists no agent without it (#2972). Only the models differ.
         "agent": "gaia",
-        # FLM chat model + FLM-native embedder so chat and embeddings stay
-        # co-resident on the NPU backend. A GGUF embedder would run on Vulkan
-        # and evict the FLM chat model every turn (#1744). Both are built-in
-        # Lemonade *-FLM models, pulled by name only (no recipe — #1655).
+        # FLM chat model, pulled by name only (no recipe — #1655), and the
+        # GPU embedder: the FLM one's search isn't proven. Lemonade holds one
+        # model per type, so the two stay loaded side by side.
         # The chat model is Gemma 4 E4B's NPU twin (``with_chat_model``).
-        "models": ["gemma4-it-e4b-FLM", "embed-gemma-300m-FLM"],
+        "models": ["gemma4-it-e4b-FLM", "user.embeddinggemma-300m-GGUF"],
         "approx_size": "~10 GB",
         # The floor every profile shares (issue #1745); the chat model itself
         # loads at its own window, 64K for the NPU twin.

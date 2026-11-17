@@ -10,14 +10,19 @@ vi.mock('../../../services/memoryApi');
 
 const mockedApi = vi.mocked(memoryApi);
 
-function view(device: memoryApi.EmbedderDevice, chosen: boolean, npuAvailable = true): memoryApi.EmbedderView {
+function view(
+    device: memoryApi.EmbedderDevice,
+    chosen: boolean,
+    { gpuAvailable = true, changed }: { gpuAvailable?: boolean; changed?: boolean } = {},
+): memoryApi.EmbedderView {
     return {
         device,
         chosen,
-        profile_device: 'npu',
+        default_device: 'gpu',
+        changed,
         options: [
-            { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', available: true, reason: null, downloaded: true },
-            { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', available: npuAvailable, reason: npuAvailable ? null : 'no NPU', downloaded: true },
+            { device: 'gpu', model: 'user.embeddinggemma-300m-GGUF', display_name: 'EmbeddingGemma 300M', proven: true, present: gpuAvailable, available: gpuAvailable, reason: gpuAvailable ? null : 'no Vulkan', downloaded: true },
+            { device: 'npu', model: 'embed-gemma-300m-FLM', display_name: 'EmbeddingGemma 300M NPU', proven: false, present: true, available: false, reason: 'not reliable yet', downloaded: true },
         ],
     };
 }
@@ -28,43 +33,63 @@ beforeEach(() => {
 
 describe('EmbedderSetting', () => {
     it('says which embedder runs and on which device', async () => {
-        mockedApi.getEmbedder.mockResolvedValue(view('npu', false));
+        mockedApi.getEmbedder.mockResolvedValue(view('gpu', false));
         render(<EmbedderSetting />);
         // The model name is bidi-isolated, so it reads whole in a right-to-left line.
-        expect(await screen.findByText(/EmbeddingGemma 300M NPU\u2069? runs on the NPU/)).toBeInTheDocument();
+        expect(await screen.findByText(/EmbeddingGemma 300M⁩? runs on the GPU/)).toBeInTheDocument();
         expect(screen.getByRole('combobox', { name: 'Embedding model' })).toHaveValue('profile');
+        expect(screen.getByRole('option', { name: 'Default (GPU)' })).toBeInTheDocument();
     });
 
-    it('moves the embedder to the GPU when chosen', async () => {
-        mockedApi.getEmbedder.mockResolvedValue(view('npu', false));
-        mockedApi.setEmbedder.mockResolvedValue(view('gpu', true));
+    it('shows the NPU but does not offer it, and says why', async () => {
+        mockedApi.getEmbedder.mockResolvedValue(view('gpu', false));
         render(<EmbedderSetting />);
-        fireEvent.change(await screen.findByRole('combobox', { name: 'Embedding model' }), { target: { value: 'gpu' } });
-        await waitFor(() => expect(mockedApi.setEmbedder).toHaveBeenCalledExactlyOnceWith('gpu'));
-        expect(await screen.findByRole('status')).toHaveTextContent(/Changed/);
-        expect(screen.getByRole('combobox', { name: 'Embedding model' })).toHaveValue('gpu');
+        expect(await screen.findByRole('option', { name: 'NPU (not supported yet)' })).toBeDisabled();
+        expect(screen.getByText(/Search with the NPU embedder isn't reliable yet/)).toBeInTheDocument();
     });
 
-    it('returns to the PC setup', async () => {
-        mockedApi.getEmbedder.mockResolvedValue(view('gpu', true));
-        mockedApi.setEmbedder.mockResolvedValue(view('npu', false));
+    it('moves a saved NPU choice back to the default', async () => {
+        mockedApi.getEmbedder.mockResolvedValue(view('npu', true));
+        mockedApi.setEmbedder.mockResolvedValue(view('gpu', false, { changed: true }));
         render(<EmbedderSetting />);
         fireEvent.change(await screen.findByRole('combobox', { name: 'Embedding model' }), { target: { value: 'profile' } });
         await waitFor(() => expect(mockedApi.setEmbedder).toHaveBeenCalledExactlyOnceWith(null));
+        expect(await screen.findByRole('status')).toHaveTextContent(/Changed/);
+        expect(screen.getByRole('combobox', { name: 'Embedding model' })).toHaveValue('profile');
+    });
+
+    it('says nothing changed when the embedder stays the same', async () => {
+        mockedApi.getEmbedder.mockResolvedValue(view('gpu', false));
+        mockedApi.setEmbedder.mockResolvedValue(view('gpu', true, { changed: false }));
+        render(<EmbedderSetting />);
+        fireEvent.change(await screen.findByRole('combobox', { name: 'Embedding model' }), { target: { value: 'gpu' } });
+        await waitFor(() => expect(mockedApi.setEmbedder).toHaveBeenCalledExactlyOnceWith('gpu'));
+        await waitFor(() => expect(screen.getByRole('combobox', { name: 'Embedding model' })).toHaveValue('gpu'));
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it('on a PC without an NPU, says it is not available and skips the reason', async () => {
+        const noNpu = view('gpu', false);
+        noNpu.options[1] = { ...noNpu.options[1], present: false, reason: 'no NPU' };
+        mockedApi.getEmbedder.mockResolvedValue(noNpu);
+        render(<EmbedderSetting />);
+        expect(await screen.findByRole('option', { name: 'NPU (not available on this PC)' })).toBeDisabled();
+        expect(screen.queryByText(/Search with the NPU embedder isn't reliable yet/)).not.toBeInTheDocument();
     });
 
     it('offers a device this PC lacks as unavailable', async () => {
-        mockedApi.getEmbedder.mockResolvedValue(view('gpu', false, false));
+        mockedApi.getEmbedder.mockResolvedValue(view('gpu', false, { gpuAvailable: false }));
         render(<EmbedderSetting />);
-        const npu = await screen.findByRole('option', { name: /NPU \(not available on this PC\)/ });
-        expect(npu).toBeDisabled();
+        expect(await screen.findByRole('option', { name: /GPU \(not available on this PC\)/ })).toBeDisabled();
     });
 
-    it('shows why a change was refused', async () => {
-        mockedApi.getEmbedder.mockResolvedValue(view('npu', false));
+    it('shows why a change was refused, and what is saved now', async () => {
+        mockedApi.getEmbedder.mockResolvedValue(view('npu', true));
         mockedApi.setEmbedder.mockRejectedValue(new Error('A reply is running. Change the embedder once it finishes.'));
         render(<EmbedderSetting />);
-        fireEvent.change(await screen.findByRole('combobox', { name: 'Embedding model' }), { target: { value: 'gpu' } });
+        fireEvent.change(await screen.findByRole('combobox', { name: 'Embedding model' }), { target: { value: 'profile' } });
         expect(await screen.findByRole('alert')).toHaveTextContent('A reply is running');
+        await waitFor(() => expect(mockedApi.getEmbedder).toHaveBeenCalledTimes(2));
+        expect(screen.getByRole('combobox', { name: 'Embedding model' })).toHaveValue('npu');
     });
 });

@@ -828,14 +828,16 @@ class TestConsolidateEndpoint:
 # ===========================================================================
 
 
-def _npu_pc(monkeypatch, tmp_path) -> None:
-    """A PC set up with ``gaia init --profile npu``."""
+def _npu_pc(monkeypatch, tmp_path, **keys) -> None:
+    """A PC set up with ``gaia init --profile npu``, plus *keys*."""
     import json
 
     from gaia import config as config_mod
 
     config_file = tmp_path / "npu-config.json"
-    config_file.write_text(json.dumps({"default_device": "npu"}), encoding="utf-8")
+    config_file.write_text(
+        json.dumps({"default_device": "npu", **keys}), encoding="utf-8"
+    )
     monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
 
 
@@ -874,14 +876,11 @@ class TestRebuildEmbeddingsEndpoint:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 500
 
-    def test_rebuild_uses_the_pcs_embedder_not_the_gguf_default(
+    def test_an_npu_pc_re_embeds_its_npu_vectors_on_the_gpu(
         self, client, test_store, monkeypatch, tmp_path
     ):
-        """On an NPU PC, re-embed with its FLM embedder (#1744, #6008).
-
-        Embedding with the GGUF default would mix vector spaces in one table
-        and reload a Vulkan embedder that evicts the FLM chat model.
-        """
+        """Vectors from the NPU embedder are replaced: its search isn't proven,
+        and the two builds' vectors don't match (#6008)."""
         _npu_pc(monkeypatch, tmp_path)
         test_store.set_embedder_id("embed-gemma-300m-FLM")
         mock_provider = MagicMock()
@@ -891,14 +890,15 @@ class TestRebuildEmbeddingsEndpoint:
         ) as ctor:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 200
-        ctor.assert_called_once_with(model="embed-gemma-300m-FLM")
+        ctor.assert_called_once_with(model="user.embeddinggemma-300m-GGUF")
+        assert test_store.get_embedder_id() == "user.embeddinggemma-300m-GGUF"
 
     def test_rebuild_replaces_a_stamp_left_by_another_profile(
         self, client, test_store, monkeypatch, tmp_path
     ):
         """The next agent start re-stamps the PC's embedder; rebuilding with the
         old one would only be cleared again."""
-        _npu_pc(monkeypatch, tmp_path)
+        _npu_pc(monkeypatch, tmp_path, embedding_device="npu")
         test_store.set_embedder_id("user.embeddinggemma-300m-GGUF")
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1] * 768]
@@ -1513,8 +1513,8 @@ class TestDashboardWritesAreEmbedded:
     def test_create_embeds_with_the_pcs_embedder(
         self, client, test_store, fake_embedder, monkeypatch, tmp_path
     ):
-        _npu_pc(monkeypatch, tmp_path)
-        # Stamped by a chat before the user moved the embedder to the NPU.
+        # A saved NPU choice still loads; the stamp is from before it.
+        _npu_pc(monkeypatch, tmp_path, embedding_device="npu")
         test_store.set_embedder_id("user.embeddinggemma-300m-GGUF")
         data = _create_knowledge(client, "The gateway listens on port 8080")
 

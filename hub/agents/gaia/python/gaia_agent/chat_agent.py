@@ -847,9 +847,8 @@ class ChatAgent(
         # which binds a port chosen at start time.
         effective_base_url = resolve_lemonade_base_url(config.base_url)
 
-        # The PC's profile picks it, not this chat's device: the NPU profile's
-        # FLM embedder stays beside the FLM chat model (#1744), and Memory's
-        # vectors aren't cleared by a chat on the other device.
+        # One per PC, not per chat device, so a chat on the other device
+        # doesn't clear Memory's vectors.
         effective_embedding_model = machine_embedding_model()
 
         # RAG (#2323 Increment 3): ``RAGConfig`` is cheap (no I/O) and built

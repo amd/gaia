@@ -1861,7 +1861,7 @@ def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
 
 
 class EmbedderBody(BaseModel):
-    """``npu`` or ``gpu``; None follows the PC's profile."""
+    """``npu`` or ``gpu``; None is the default (the GPU)."""
 
     device: Optional[Literal["npu", "gpu"]] = None
 
@@ -1874,30 +1874,42 @@ def _embedder_for(device: str) -> Tuple[str, str]:
     return config.embedding_model, config.recipe
 
 
+_UNPROVEN_REASON = "its search results aren't reliable yet, so GAIA embeds on the GPU"
+
+
 def _embedder_option(device: str) -> Dict[str, Any]:
     """One device the embedder may run on, and whether this PC can use it now."""
+    from gaia.config import GaiaConfig
     from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
     from .providers import ProviderError, device_unavailable_reason, display_name
 
     model, recipe = _embedder_for(device)
+    proven = device in GaiaConfig.TESTED_EMBEDDING_DEVICES
     option: Dict[str, Any] = {
         "device": device,
         "model": model,
         "display_name": display_name(model),
+        "proven": proven,
+        "present": None,
         "available": None,
         "reason": None,
         "downloaded": None,
     }
     try:
         option["reason"] = device_unavailable_reason(recipe)
-        option["available"] = option["reason"] is None
+        option["present"] = option["reason"] is None
+        option["available"] = option["present"]
         option["downloaded"] = bool(
             LemonadeClient(verbose=False).get_model_info(model)["downloaded"]
         )
     except (ProviderError, LemonadeClientError) as e:
         # Unknown, not refused: the model server isn't answering yet.
         option["reason"] = str(e)
+    if not proven:
+        option["available"] = False
+        if option["present"]:
+            option["reason"] = _UNPROVEN_REASON
     return option
 
 
@@ -1910,7 +1922,7 @@ def _embedder_view() -> Dict[str, Any]:
     return {
         "device": device,
         "chosen": config.embedding_device is not None,
-        "profile_device": "npu" if config.default_device == "npu" else "gpu",
+        "default_device": "gpu",
         "options": [_embedder_option(d) for d in GaiaConfig.EMBEDDING_DEVICE_CHOICES],
     }
 
@@ -1928,7 +1940,7 @@ def get_embedder() -> Dict[str, Any]:
 
 @router.put("/api/memory/embedder", dependencies=[Depends(_require_ui_header)])
 def set_embedder(body: EmbedderBody) -> Dict[str, Any]:
-    """Run the embedder on *device* for every chat; None follows the profile.
+    """Run the embedder on *device* for every chat; None is the default (GPU).
 
     Each chat moves to it on its next turn, and stored memory is re-embedded
     with it. ``changed`` is False when the embedder stays the same. Refused
@@ -1944,6 +1956,14 @@ def set_embedder(body: EmbedderBody) -> Dict[str, Any]:
         raise HTTPException(
             status_code=409,
             detail="A reply is running. Change the embedder once it finishes.",
+        )
+    if (
+        body.device is not None
+        and body.device not in GaiaConfig.TESTED_EMBEDDING_DEVICES
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"GAIA doesn't embed on the {body.device.upper()}: {_UNPROVEN_REASON}.",
         )
     if body.device is not None:
         _, recipe = _embedder_for(body.device)

@@ -83,7 +83,7 @@ gaia init --profile npu
 This will:
 1. Verify NPU hardware is detected
 2. Install the FLM backend (`flm:npu`)
-3. Download `gemma4-it-e4b-FLM` (see [Which NPU model](#which-npu-model)) and `embed-gemma-300m-FLM` for documents and memory
+3. Download `gemma4-it-e4b-FLM` (see [Which NPU model](#which-npu-model)) and `user.embeddinggemma-300m-GGUF` for documents and memory
 4. Install the [GAIA agent](/guides/gaia) if it is missing, the same agent a bare `gaia init` installs
 5. Run a verification test and make NPU the default device
 
@@ -93,13 +93,13 @@ reached, setup still downloads the models, then reports itself incomplete and ex
 `gaia config set default_model <id>` with a GPU model; picking one in the Agent UI or terminal
 UI model list changes only the model those open on.
 
-The embedder for documents and memory follows the PC's profile, not the chat model: after
-`gaia init --profile npu` every chat uses `embed-gemma-300m-FLM`, including a chat switched
-to a GPU model. Memory keeps one set of vectors, made by one embedder, so a chat on the other
-device never clears them. Setup run from the Agent UI or terminal UI keeps an NPU PC on its
-NPU embedder. Running `gaia init` with a GPU-only profile, such as `--profile chat`, moves the PC
-to the GPU embedder, and memory is re-embedded with it. To move the embedder yourself, choose it
-in the Agent UI under **Settings → Memory**; that choice outlasts setup.
+Documents and memory are embedded on the GPU, with `user.embeddinggemma-300m-GGUF`, on an NPU
+PC too. FastFlowLM's NPU build, `embed-gemma-300m-FLM`, ranks text no better than chance on
+FastFlowLM 1.0.7, so search with it would return unrelated passages. Lemonade keeps one model of
+each kind loaded, so the GPU embedder and the NPU chat model stay loaded side by side. Every chat
+uses the same embedder, including a chat switched to a GPU model, so memory keeps one set of
+vectors. **Settings → Memory** in the Agent UI shows where it runs; the NPU is listed there but
+can't be chosen until a FastFlowLM release passes GAIA's search check.
 
 ## Which NPU model
 

@@ -42,7 +42,7 @@ The agent supports the **Model Context Protocol** in both directions — connect
 
 The agent can remember facts, preferences, and decisions across sessions. Memory is **on by default (beta)** — see the [Agent Memory guide](/guides/memory) to learn more. Turn it off in **Settings → Memory**, and open **Memory** in the sidebar to search, edit or forget what GAIA remembers.
 
-**Settings → Memory** also shows the embedding model, which turns documents and memories into vectors for search, and the device it runs on. It follows the PC's setup: the NPU after `gaia init --profile npu`, the GPU otherwise. Every chat uses the same one. You can move it to the other device, for example to keep it off an NPU another app is using; a device this PC can't use is shown but can't be chosen. Changing it waits for a running reply, and stored memory is re-embedded with the new model.
+**Settings → Memory** also shows the embedding model, which turns documents and memories into vectors for search, and the device it runs on. It runs on the GPU, on a PC with an NPU too, and every chat uses the same one. The NPU is listed but can't be chosen yet: its embedder's search results aren't reliable. A device this PC can't use is shown but can't be chosen either. Changing it waits for a running reply, and stored memory is re-embedded with the new model.
 
 ## Scheduled tasks
 
