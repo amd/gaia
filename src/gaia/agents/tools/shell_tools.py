@@ -8360,12 +8360,11 @@ class ShellToolsMixin:
         ) -> Dict[str, Any]:
             """Execute a shell command. Leave timeout unset — it defaults by class: 900s tests, 1800s builds/installs, 300s git/network, 600s scripts, 30s the rest.
 
-            Chain on one line: 'a && b', 'a || b', 'a; b', 'a | b',
-            'cd <dir> && b'. One approval covers the line; every part is
-            allowlist-checked. '2>&1' keeps stderr, '2>/dev/null' drops it,
-            'VAR=x cmd' scopes a variable. Other redirections and
-            ` $() & newline are refused. Full access runs the line unchecked
-            in bash (cmd.exe on Windows).
+            Chain on one line with && || ; | and 'cd <dir> && b'. One
+            approval covers the line; every part is allowlist-checked.
+            '2>&1' keeps stderr, '2>/dev/null' drops it, 'VAR=x cmd' scopes
+            a variable. Other redirections and ` $() & newline are refused.
+            Full access runs any line.
 
             Args:
                 command: Shell command to execute
