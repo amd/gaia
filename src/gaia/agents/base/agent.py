@@ -5234,10 +5234,38 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
+        self._installed_skills_listed = self._installed_skills()
         catalog = render_catalog(
             self._catalog_skills(), list_project=self._lists_project_skills()
         )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _installed_skills(self) -> Tuple[Tuple[str, int], ...]:
+        """Each installed ``SKILL.md`` and its modification time, across every root."""
+        from gaia.skills.format import SKILL_FILENAME
+
+        found = []
+        for root in self.skill_manager.roots:
+            if not root.path.is_dir():
+                continue
+            for entry in root.path.iterdir():
+                skill_file = entry / SKILL_FILENAME
+                if skill_file.is_file():
+                    found.append((str(skill_file), skill_file.stat().st_mtime_ns))
+        return tuple(sorted(found))
+
+    def follow_installed_skills(self) -> bool:
+        """List skills added, changed or removed since the catalogue was built.
+
+        The catalogue sits in the cached head of the prompt, so it is rebuilt
+        only on a change. Returns True when it was.
+        """
+        listed = getattr(self, "_installed_skills_listed", None)
+        if listed is None or listed == self._installed_skills():
+            return False
+        self.skill_manager.reload()
+        self.rebuild_system_prompt()
+        return True
 
     def _catalog_skills(self) -> Dict[str, Any]:
         """Installed skills this model can load: the pool the catalogue lists from."""

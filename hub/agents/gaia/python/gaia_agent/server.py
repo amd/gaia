@@ -1912,6 +1912,10 @@ async def query(request: QueryRequest):
             if callable(follow):
                 # Off the loop: it reads config.json and may ask Lemonade.
                 await _off_loop(follow)
+            # Skills added or removed in Settings since the catalogue was built.
+            follow_skills = getattr(agent, "follow_installed_skills", None)
+            if callable(follow_skills):
+                await _off_loop(follow_skills)
             if request.working_directory is not None:
                 config = getattr(agent, "config", None)
                 if config is not None:

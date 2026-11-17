@@ -1666,10 +1666,13 @@ def _canonical_agent_type(agent_type: str) -> str:
 
 
 def _follow_model_settings(agent) -> None:
-    """Apply a vision model chosen in Settings since this cached agent last ran."""
+    """Apply a vision model, or skills, changed in Settings since this cached agent last ran."""
     follow = getattr(agent, "follow_model_switch", None)
     if callable(follow):
         follow()
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
 
 
 def _get_cached_agent(

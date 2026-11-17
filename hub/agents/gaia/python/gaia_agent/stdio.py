@@ -1833,6 +1833,10 @@ def run_turn(
         debug=dev,
     )
     result: Dict[str, Any] = {}
+    # Skills added or removed since the catalogue was built, e.g. in the Agent UI.
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
 
     def _run() -> None:
         try:
