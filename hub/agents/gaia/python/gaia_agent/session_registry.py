@@ -87,8 +87,8 @@ def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
     A retained session keeps these until the caller changes them, so a
     rebuild that dropped them would quietly put an offline chat back online,
     or a private one back into memory: the conversation, loaded skills, the
-    internet switch, the memory mode, granted folders and documents, and the
-    working folder.
+    internet switch, the memory mode, granted, read-only and withheld paths,
+    which documents are attached, and the working folder.
     """
     new.conversation_history = list(getattr(old, "conversation_history", None) or [])
     if hasattr(old, "internet_off"):
@@ -96,11 +96,22 @@ def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
     if getattr(old, "_incognito", False) and hasattr(new, "_incognito"):
         new._incognito = True
         new._incognito_reason = getattr(old, "_incognito_reason", None)
-    old_paths = getattr(getattr(old, "path_validator", None), "allowed_paths", None)
+    old_validator = getattr(old, "path_validator", None)
     new_validator = getattr(new, "path_validator", None)
-    if old_paths and new_validator is not None:
-        for path in sorted(old_paths - new_validator.allowed_paths):
+    if old_validator is not None and new_validator is not None:
+        for path in sorted(old_validator.allowed_paths - new_validator.allowed_paths):
             new_validator.add_allowed_path(str(path))
+        for path in sorted(
+            old_validator.read_only_paths - new_validator.read_only_paths
+        ):
+            new_validator.add_read_only_path(str(path))
+        # Last, so a document the user took off stays refused over any grant.
+        for path in sorted(old_validator.withheld_paths):
+            new_validator.withhold_path(str(path))
+    # Which documents are attached, so one removed next turn loses its grant.
+    for records in ("_attached_documents", "_withheld_documents"):
+        if hasattr(old, records):
+            setattr(new, records, set(getattr(old, records)))
     old_dir = getattr(getattr(old, "config", None), "working_directory", None)
     if old_dir is not None and getattr(new, "config", None) is not None:
         new.config.working_directory = old_dir
