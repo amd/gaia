@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Every terminal installer ships gaiacpp beside gaia-tui, final and RC alike.
+"""Every terminal installer ships gaiacpp beside gaia-cli, final and RC alike.
 
 The terminal UI runs gaiacpp when it sits beside it and gaia-agent otherwise,
 so an installer that drops gaiacpp silently moves its users back to the Python
@@ -410,7 +410,7 @@ def test_the_one_line_installers_fetch_gaiacpp_from_the_tuis_release():
     for platform in ("linux-x64", "darwin-arm64"):
         assert f"'{fg.PLATFORM_BINARIES[platform]}\\n'" in sh
     assert f'$filename = "{fg.PLATFORM_BINARIES["win-x64"]}"' in ps1
-    # In main, after the agent, from the release gaia-tui was installed from.
+    # In main, after the agent, from the release gaia-cli was installed from.
     assert sh.index("\n    install_flagship_agent\n") < sh.index(
         "\n    install_gaiacpp\n"
     )

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: MIT
 """Stage gaiacpp, the native GAIA agent, for the terminal installers.
 
-The terminal UI runs gaiacpp when it sits beside gaia-tui and gaia-agent when
+The terminal UI runs gaiacpp when it sits beside gaia-cli and gaia-agent when
 it does not, so each terminal installer ships the gaiacpp its release built for
 its platform. The bytes come from one named source, never a guessed "latest":
 
@@ -73,7 +73,7 @@ class NoGaiacppForPlatform(Exception):
 
 
 def installed_name(platform: str) -> str:
-    """The name gaiacpp is installed under, beside gaia-tui."""
+    """The name gaiacpp is installed under, beside gaia-cli."""
     return "gaiacpp.exe" if platform.startswith("win") else "gaiacpp"
 
 

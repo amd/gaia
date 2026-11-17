@@ -631,7 +631,7 @@ function Write-AgentInstallRecord {
 }
 
 # A gaiacpp.exe left by an earlier install would run in place of gaia-agent
-# beside a gaia-tui from another release, so it goes whenever this release's
+# beside a gaia-cli from another release, so it goes whenever this release's
 # does not land.
 function Remove-StaleGaiacpp {
     $stale = "$GAIA_BIN\gaiacpp.exe"
@@ -660,8 +660,8 @@ function Get-GaiacppVersion {
     return $out
 }
 
-# gaiacpp, the native GAIA agent. gaia-tui runs it from beside itself in place
-# of gaia-agent, so it comes from the same release as gaia-tui into $GAIA_BIN.
+# gaiacpp, the native GAIA agent. gaia-cli runs it from beside itself in place
+# of gaia-agent, so it comes from the same release as gaia-cli into $GAIA_BIN.
 #
 # A PC or release with no gaiacpp keeps the Python agent, and says so. A
 # checksum mismatch, or a binary from another release, fails the install.
@@ -722,7 +722,7 @@ function Install-Gaiacpp {
             return
         }
 
-        # gaia-tui picks gaiacpp whenever it is there, so one that cannot start
+        # gaia-cli picks gaiacpp whenever it is there, so one that cannot start
         # on this PC must not be put there.
         $expected = "gaiacpp " + ($tag.Substring(1) -replace '-rc([0-9]+)\z', '-rc.$1')
         $got = Get-GaiacppVersion -Path "$stage\gaiacpp.exe"

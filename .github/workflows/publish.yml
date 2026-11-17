@@ -803,7 +803,7 @@ jobs:
       gaiacpp: artifact
       gaiacpp_tag: ${{ needs.validate.outputs.tag_name }}
 
-  # Every package, final or RC, ships THIS run's gaiacpp beside gaia-tui, so the
+  # Every package, final or RC, ships THIS run's gaiacpp beside gaia-cli, so the
   # terminal UI runs the native agent; build-gaiacpp must have passed first.
   tui-installers:
     name: Terminal installers
@@ -1052,7 +1052,7 @@ jobs:
 
           The GAIA agent itself is attached as `gaia-agent-<os>-<arch>`, built from this candidate's commit. This candidate's `gaia init` and `gaia hub install gaia` install it from here rather than from the Agent Hub, and say so if it is missing.
 
-          On Windows x64, Linux x64 and Apple Silicon, the terminal installers and the one-line installer also put `gaiacpp`, the native GAIA agent attached as `gaiacpp-<os>-<arch>`, beside `gaia-tui`, and the terminal runs it in place of `gaia-agent`. Elsewhere the terminal runs `gaia-agent`.
+          On Windows x64, Linux x64 and Apple Silicon, the terminal installers and the one-line installer also put `gaiacpp`, the native GAIA agent attached as `gaiacpp-<os>-<arch>`, beside `gaia-cli`, and the terminal runs it in place of `gaia-agent`. Elsewhere the terminal runs `gaia-agent`.
 
           ### One-line installer
 

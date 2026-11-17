@@ -25,7 +25,7 @@ func isolateNative(t *testing.T) nativeFixture {
 	t.Setenv("USERPROFILE", f.home)
 	t.Chdir(f.cwd)
 	orig := selfExecutable
-	selfExecutable = func() (string, error) { return filepath.Join(f.beside, "gaia-tui"), nil }
+	selfExecutable = func() (string, error) { return filepath.Join(f.beside, "gaia-cli"), nil }
 	t.Cleanup(func() { selfExecutable = orig })
 	return f
 }
@@ -385,7 +385,7 @@ func TestIsNativeAgentBinary(t *testing.T) {
 		"gaia-agent":                         false,
 		"gaia-agent.exe":                     false,
 		"gaiacppish":                         false,
-		filepath.Join("gaiacpp", "gaia-tui"): false,
+		filepath.Join("gaiacpp", "gaia-cli"): false,
 	}
 	// A backslash separates folders only on Windows.
 	if runtime.GOOS == "windows" {
