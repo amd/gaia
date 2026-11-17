@@ -87,6 +87,53 @@ def test_a_final_without_usage_still_answers():
     assert _drain(handler) == [{"type": "answer", "content": "hi"}]
 
 
+# ── session_created drops stale approved paths (#8083) ─────────────────────
+#
+# The sidecar flags a terminal event ``session_created: true`` whenever it had
+# to build a fresh agent for this session_id — eviction, a restart that lost
+# all memory of the id, or first use. The relay must drop the chat's own
+# record of paths approved at a prompt for the agent instance that no longer
+# exists, or the session panel keeps listing a withheld file as approved.
+
+
+def test_session_created_final_drops_the_chat_s_approved_paths(monkeypatch):
+    forgotten = []
+    monkeypatch.setattr(
+        "gaia.ui.session_environment.forget_session",
+        lambda session_id: forgotten.append(session_id),
+    )
+    handler = SSEOutputHandler()
+    final = {"type": "final", "answer": "done", "session_created": True}
+    relay._dispatch_one(handler, final, GAIA_PROFILE, session_id="chat-1")
+    assert forgotten == ["chat-1"]
+
+
+def test_a_final_with_no_session_created_leaves_approved_paths_alone(monkeypatch):
+    forgotten = []
+    monkeypatch.setattr(
+        "gaia.ui.session_environment.forget_session",
+        lambda session_id: forgotten.append(session_id),
+    )
+    handler = SSEOutputHandler()
+    relay._dispatch_one(
+        handler, {"type": "final", "answer": "done"}, GAIA_PROFILE, session_id="chat-1"
+    )
+    assert forgotten == []
+
+
+def test_session_created_on_an_error_terminal_also_drops_approved_paths(monkeypatch):
+    """The agent was still built fresh this turn, whether or not it answered."""
+    forgotten = []
+    monkeypatch.setattr(
+        "gaia.ui.session_environment.forget_session",
+        lambda session_id: forgotten.append(session_id),
+    )
+    handler = SSEOutputHandler()
+    error = {"type": "error", "detail": "boom", "session_created": True}
+    relay._dispatch_one(handler, error, GAIA_PROFILE, session_id="chat-1")
+    assert forgotten == ["chat-1"]
+
+
 def test_relayed_usage_becomes_the_messages_token_counts():
     answer = {"type": "answer", "content": "x", "tokens": 812, "input_tokens": 15000}
     stats = helpers._turn_inference_stats(

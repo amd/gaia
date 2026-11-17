@@ -118,6 +118,13 @@ class _AgentSession:
         #: docstring), and an LRU-cap eviction can happen to a conversation
         #: that is still very much in use, just crowded out by others.
         self.reclaimed_after_eviction = False
+        #: True once, for the turn that finds this session newly built —
+        #: eviction-reclaim, a sidecar restart that has lost all memory of
+        #: this id, or true first use. Unlike ``reclaimed_after_eviction``
+        #: (eviction only), the caller surfaces this on every fresh build so
+        #: state the client assumed outlived the old agent, such as paths
+        #: approved at a prompt, is dropped on a restart too.
+        self.freshly_built = True
         #: Permission state that outlives any single turn: whether bypass is on,
         #: and which calls the user has granted "always". A fresh
         #: ``SSEOutputHandler`` is built per turn, so without this both are lost

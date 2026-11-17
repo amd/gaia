@@ -280,6 +280,7 @@ def _dispatch_one(
     profile: RelayProfile = EMAIL_PROFILE,
     answers_confirmations: bool = False,
     offers_always: bool = False,
+    session_id: Optional[str] = None,
 ) -> bool:
     """Emit one canonical event as a UI event. Returns True if terminal.
 
@@ -287,7 +288,15 @@ def _dispatch_one(
     for an answer over ``tool_decision``; otherwise the prompt is a card only.
     *offers_always* says the chat can list and revoke the sidecar's "always"
     grants, so a prompt that carries a scope may offer one.
+    *session_id* lets a ``session_created`` terminal event (the sidecar built
+    a fresh agent — eviction, a restart, or first use) drop any path this
+    chat had approved at a prompt for the agent instance that no longer
+    exists, instead of leaving the panel listing it as still reachable.
     """
+    if event.get("session_created") and session_id:
+        from gaia.ui import session_environment
+
+        session_environment.forget_session(session_id)
     etype = event.get("type")
     if answers_confirmations:
         # Any event after a prompt means the sidecar has stopped waiting on it.
@@ -922,7 +931,12 @@ def relay_query(
                             terminated = True
                         break
             if _dispatch_one(
-                handler, event, profile, answers_confirmations, offers_always
+                handler,
+                event,
+                profile,
+                answers_confirmations,
+                offers_always,
+                session_id,
             ):
                 terminated = True
                 break
