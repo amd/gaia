@@ -12,6 +12,9 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 - A reply that goes quiet partway through is requested again, up to twice,
   instead of ending the turn; the work done so far is kept either way.
+- A cloud model that spends a whole reply reasoning and returns nothing is
+  asked for its lowest reasoning level on the next request, so the turn moves
+  on. A turn now ends on its third cut-off reply in a row, not its third overall.
 
 ## [0.3.6]
 
