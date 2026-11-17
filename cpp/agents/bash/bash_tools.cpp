@@ -259,11 +259,9 @@ std::string BashTools::detectShell() {
     }();
     return shell;
 #else
-    // On POSIX, prefer bash, fall back to sh
-    if (isToolAvailable("bash")) {
-        return "bash";
-    }
-    return "sh";
+    // On POSIX, prefer bash, fall back to sh. Looked up once: the lookup runs a program.
+    static const std::string shell = isToolAvailable("bash") ? "bash" : "sh";
+    return shell;
 #endif
 }
 
