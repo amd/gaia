@@ -4,6 +4,7 @@
 package ai.amd.gaia.transport
 
 import java.io.File
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -40,8 +41,21 @@ class UploadBodyTest {
     val outside = folder.newFile("elsewhere.txt")
     assertRefused(outside.path, "isn't one this app picked")
     assertRefused("${cache.path}/ImagePicker/../../elsewhere.txt", "isn't one this app picked")
+    assertRefused("${cache.path}/ImagePicker/../../files/notes.txt", "isn't one this app picked")
     assertRefused("${cache.path}/missing.jpg", "Couldn't read")
     assertRefused(cache.path, "isn't one this app picked")
+  }
+
+  @Test
+  fun refusesLinksOutOfTheCacheAndLookalikeFolders() {
+    val saved = File(files, "notes.txt").apply { writeText("notes") }
+    val link = File(cache, "notes.txt").toPath()
+    Files.createSymbolicLink(link, saved.toPath())
+    assertRefused(link.toString(), "isn't one this app picked")
+
+    val sibling = folder.newFolder("cache-evil")
+    val lookalike = File(sibling, "photo.jpg").apply { writeText("jpg") }
+    assertRefused(lookalike.path, "isn't one this app picked")
   }
 
   @Test
