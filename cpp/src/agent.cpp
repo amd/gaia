@@ -1938,8 +1938,21 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     bool claimPushed = false;
     // One chance for the agent to send a final answer back (reviewFinalAnswer), and one
     // more push when the answer after it still claims work that isn't there.
+    int announcePushes = 0;
     auto reviewOnce = [&](const std::string& answer) -> std::optional<Message> {
         if (stepsTaken >= stepsLimit) return std::nullopt;
+        // A small model narrates "next I will read X" between tool calls; that is not an answer.
+        if (announcePushes < 3) {
+            if (const std::optional<std::string> note = announcedStepNote(answer)) {
+                ++announcePushes;
+                if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
+                console_->printWarning("Answer sent back: " + *note);
+                Message m;
+                m.role = MessageRole::USER;
+                m.content = "[Not done yet] " + *note;
+                return m;
+            }
+        }
         if (answerReviewed) {
             if (!answerSentBack || claimPushed) return std::nullopt;
             claimPushed = true;
@@ -2242,6 +2255,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 console_->prettyPrintJson(toolResult, "Tool Result");
 
                 recordToolCall(toolCallHistory, tc.name, toolArgs, cfg.maxConsecutiveRepeats);
+                announcePushes = 0;  // narration that is followed by the work is progress
 
                 Message toolMsg;
                 toolMsg.role = MessageRole::TOOL;
@@ -2442,6 +2456,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             console_->prettyPrintJson(toolResult, "Tool Result");
 
             recordToolCall(toolCallHistory, toolName, toolArgs, cfg.maxConsecutiveRepeats);
+            announcePushes = 0;  // narration that is followed by the work is progress
 
             // Add tool result to messages
             Message toolMsg;

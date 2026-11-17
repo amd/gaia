@@ -66,6 +66,7 @@ protected:
     /// Sends an answer back once when it says a file was saved that doesn't exist.
     std::optional<std::string> reviewFinalAnswer(const std::string& answer) override;
     std::optional<std::string> unresolvedClaims(const std::string& answer) override;
+    std::optional<std::string> announcedStepNote(const std::string& answer) override;
 
     /// Lists the working folder once, so every model call of the turn shows it as it began.
     void onTurnStart() override;
@@ -132,6 +133,10 @@ public:
     /// The answer offers to read or work something out instead of doing it.
     static std::optional<std::string> handBackNote(const std::string& answer,
                                                    const std::vector<CallSeen>& calls);
+
+    /// The answer's last line says it will read or work out a named file, after tool calls this turn.
+    static std::optional<std::string> announcedStepNote(const std::string& answer,
+                                                        const std::vector<CallSeen>& calls);
 
     /// A script failed on a missing module and the answer stops there, with the script's inputs unread.
     static std::optional<std::string> failedScriptNote(const std::string& answer, const std::vector<CallSeen>& calls);

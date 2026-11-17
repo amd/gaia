@@ -1439,3 +1439,34 @@ TEST(AgentResilience, ToolCallingIsReadFromTheModelsOwnEntryNotTheWholeCatalog) 
     srv.stop();
     t.join();
 }
+
+TEST(AgentResilience, AReplyThatAnnouncesAStepIsSentBackUpToThreeTimes) {
+    struct NarratingAgent : ResilienceAgent {
+        using ResilienceAgent::ResilienceAgent;
+        std::optional<std::string> announcedStepNote(const std::string& reply) override {
+            if (reply.find("I will now") == std::string::npos) return std::nullopt;
+            return "Do it now.";
+        }
+    };
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 4; ++i) mock.pushResponse(answer("I will now read b.md"));
+    NarratingAgent agent(cfgFor(mock));
+    agent.initForTest();
+    const json r = agent.processQuery("go");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 4u) << "three send-backs, then the reply stands";
+    EXPECT_NE(bodies.back().find("[Not done yet] Do it now."), std::string::npos);
+    EXPECT_EQ(r["result"], "I will now read b.md");
+
+    // Narration between tool calls is sent back every time: the count starts again after a tool runs.
+    bench::MockLlmServer working;
+    for (int i = 0; i < 5; ++i) {
+        working.pushResponse(answer("I will now read the next file"));
+        working.pushResponse(call("c" + std::to_string(i), "add", json{{"a", i}, {"b", 2}}.dump()));
+    }
+    working.pushResponse(answer("All five are done."));
+    NarratingAgent steady(cfgFor(working));
+    steady.initForTest();
+    EXPECT_EQ(steady.processQuery("go")["result"], "All five are done.");
+    EXPECT_EQ(working.receivedBodies().size(), 11u);
+}

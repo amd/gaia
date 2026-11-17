@@ -924,6 +924,10 @@ TEST(GaiaAgentTest, AnOfferToReadInsteadOfReadingIsSentBack) {
     EXPECT_TRUE(GaiaAgent::handBackNote(
         "I cannot run make_report.py.\n\nTo get the totals another way, I will read the contents of `orders.csv`.\n",
         listed));
+    EXPECT_TRUE(GaiaAgent::handBackNote(
+        "I have extracted the owner from `notes_03.md`.\n\nI will now proceed to read `notes_05.md`.", listed));
+    EXPECT_TRUE(GaiaAgent::handBackNote(
+        "Owner: Jonas Berg.\n\nI will now proceed to read `notes_05.md` to continue the extraction process.", listed));
     EXPECT_FALSE(GaiaAgent::handBackNote(
         "I will read orders.csv first.\n\nDone: the total across orders.csv is 4,200.", listed));
     EXPECT_TRUE(GaiaAgent::handBackNote("I can analyze sales.csv if you'd like.", {}));

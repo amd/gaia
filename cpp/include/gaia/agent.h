@@ -330,6 +330,12 @@ protected:
         return std::nullopt;
     }
 
+    /// The reply says a step comes next and calls no tool, so the turn would end with it
+    /// undone. Return a note to send it back; asked at most three times in a row.
+    virtual std::optional<std::string> announcedStepNote(const std::string& /*answer*/) {
+        return std::nullopt;
+    }
+
     /// What is still untrue in the answer given after a send-back, in words for the
     /// user. It is added under that answer; nullopt adds nothing.
     virtual std::optional<std::string> unresolvedClaims(const std::string& /*answer*/) {

@@ -928,18 +928,8 @@ std::optional<std::string> GaiaAgent::handBackNote(const std::string& answer, co
     static const std::regex namesFile(R"(\w\.[a-z][a-z0-9]{1,3}\b)", std::regex::icase);
     const std::string plain = plainPunctuation(answer, "-");
     const std::string tail = plain.size() > 600 ? plain.substr(plain.size() - 600) : plain;
+    if (auto note = announcedStepNote(answer, calls)) return note;
     std::smatch m;
-    // "I will read orders.csv." as the last line: the turn ends there, so the read never happens.
-    static const std::regex announces(
-        R"(\b(?:i will|i'll|i am going to|i'm going to|let me)\s+(?:(?:now|next|first|also|then)\s+)*)"
-        R"((read|open|look|check|search|list|inspect|analy[sz]e|review|extract|compute|calculate)"
-        R"(|count|compare|find|scan|parse|examine|retrieve|tally|total|go through|dig into)\b([^?!\n]{0,120})\s*$)",
-        std::regex::icase);
-    if (!calls.empty() && std::regex_search(tail, m, announces) && std::regex_search(m[2].str(), namesFile)) {
-        return "Your answer ends by saying you will " + lowered(m[1].str()) +
-               " something, but the turn ends with your answer, so that never happens. Do it now, then give your "
-               "whole answer again: keep everything you already told the user and add what you find.";
-    }
     if (!std::regex_search(tail, m, offer)) return std::nullopt;
     // With no tool call the turn was conversation: only an offer to open a named file is a hand-back.
     const bool offersAFile = std::regex_search(m[2].str(), namesFile);
@@ -950,6 +940,26 @@ std::optional<std::string> GaiaAgent::handBackNote(const std::string& answer, co
            " instead of doing it. That step only reads or works out the result the user asked for, so "
            "do it now and answer with what you find. Ask first only before changing, sending or "
            "deleting something the user did not ask for.";
+}
+
+std::optional<std::string> GaiaAgent::announcedStepNote(const std::string& answer, const std::vector<CallSeen>& calls) {
+    static const std::regex namesFile(R"(\w\.[a-z][a-z0-9]{1,3}\b)", std::regex::icase);
+    const std::string plain = plainPunctuation(answer, "-");
+    const std::string tail = plain.size() > 600 ? plain.substr(plain.size() - 600) : plain;
+    std::smatch m;
+    // "I will read orders.csv." as the last line: the turn ends there, so the read never happens.
+    static const std::regex announces(
+        R"(\b(?:i will|i'll|i am going to|i'm going to|let me)\s+(?:(?:now|next|first|also|then)\s+)*)"
+        R"((?:(?:proceed|continue|go on|move on)\s+(?:to|and)\s+)?)"
+        R"((read|open|look|check|search|list|inspect|analy[sz]e|review|extract|compute|calculate)"
+        R"(|count|compare|find|scan|parse|examine|retrieve|tally|total|go through|dig into)\b([^?!\n]{0,120})\s*$)",
+        std::regex::icase);
+    if (!calls.empty() && std::regex_search(tail, m, announces) && std::regex_search(m[2].str(), namesFile)) {
+        return "Your answer ends by saying you will " + lowered(m[1].str()) +
+               " something, but the turn ends with your answer, so that never happens. Do it now, then give your "
+               "whole answer again: keep everything you already told the user and add what you find.";
+    }
+    return std::nullopt;
 }
 
 std::optional<std::string> GaiaAgent::failedScriptNote(const std::string& answer, const std::vector<CallSeen>& calls) {
@@ -1580,6 +1590,13 @@ std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answe
 
 std::optional<std::string> GaiaAgent::unresolvedClaims(const std::string& answer) {
     return reviewAnswer(reviewedPart(answer), true);
+}
+
+std::optional<std::string> GaiaAgent::announcedStepNote(const std::string& answer) {
+    if (asksForNoAction(turnRequest())) return std::nullopt;
+    std::vector<CallSeen> seen;
+    for (const auto& c : turnToolCalls()) seen.push_back({c.name, c.args, c.output});
+    return announcedStepNote(reviewedPart(answer), seen);
 }
 
 std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bool factsOnly) {
