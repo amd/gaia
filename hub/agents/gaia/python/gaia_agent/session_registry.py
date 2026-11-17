@@ -152,6 +152,49 @@ class _AgentSession:
         self.provider = PROVIDER_CLAUDE if is_claude_model(target) else PROVIDER_LOCAL
         return display
 
+    def follow_embedder(self, **config_kwargs: Any) -> bool:
+        """Rebuild the agent when the PC's embedder moved since it was built.
+
+        Keeps this session's model, conversation and loaded skills; the old
+        agent's pending memory work finishes before it closes. Must be called
+        with ``run_lock`` held. Returns True when it rebuilt.
+        """
+        from gaia.agents.registry import machine_embedding_model
+
+        built_with = getattr(self.agent, "_embedding_model", None)
+        if built_with is None or built_with == machine_embedding_model():
+            return False
+        kwargs = {
+            k: v
+            for k, v in config_kwargs.items()
+            if k not in ("model_id", "claude_model", "use_claude")
+        }
+        if self.provider == PROVIDER_CLAUDE:
+            kwargs["use_claude"] = True
+            if self.model_id:
+                kwargs["claude_model"] = self.model_id
+        elif self.model_id:
+            kwargs["model_id"] = self.model_id
+        old = self.agent
+        new = build_session_agent(**kwargs)
+        new.conversation_history = list(
+            getattr(old, "conversation_history", None) or []
+        )
+        for name in list(getattr(old, "loaded_skills", None) or {}):
+            try:
+                new.load_skill(name)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning(
+                    "session %s: skill %r was not loaded again after the "
+                    "embedder moved (%s); the user can load it again",
+                    self.session_id,
+                    name,
+                    exc,
+                )
+        self.agent = new
+        close_agent(old)
+        return True
+
     def is_running(self) -> bool:
         return self.run_lock.locked()
 

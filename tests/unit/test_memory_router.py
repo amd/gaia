@@ -1510,16 +1510,18 @@ class TestDashboardWritesAreEmbedded:
             )
         )
 
-    def test_create_embeds_with_the_stored_embedder(
-        self, client, test_store, fake_embedder
+    def test_create_embeds_with_the_pcs_embedder(
+        self, client, test_store, fake_embedder, monkeypatch, tmp_path
     ):
-        test_store.set_embedder_id("embed-gemma-300m-FLM")
+        _npu_pc(monkeypatch, tmp_path)
+        # Stamped by a chat before the user moved the embedder to the NPU.
+        test_store.set_embedder_id("user.embeddinggemma-300m-GGUF")
         data = _create_knowledge(client, "The gateway listens on port 8080")
 
         assert data["embedded"] is True
         assert "embed_error" not in data
         assert self._has_vector(test_store, data["knowledge_id"])
-        # Same embedder as the stored vectors, not the module default (#1744).
+        # The embedder every chat on this PC uses, not the stale stamp (#1744).
         fake_embedder.assert_called_with(model="embed-gemma-300m-FLM")
         fake_embedder.instance.embed.assert_called_with(
             ["The gateway listens on port 8080"], model="embed-gemma-300m-FLM"

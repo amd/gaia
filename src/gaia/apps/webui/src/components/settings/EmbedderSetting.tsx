@@ -29,10 +29,13 @@ export function EmbedderSetting() {
         setError(null);
         setNotice(false);
         try {
-            setView(await memoryApi.setEmbedder(value === PROFILE ? null : (value as memoryApi.EmbedderDevice)));
-            setNotice(true);
+            const next = await memoryApi.setEmbedder(value === PROFILE ? null : (value as memoryApi.EmbedderDevice));
+            setView(next);
+            setNotice(next.changed !== false);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
+            // Show what is saved now, not the choice that was refused.
+            await memoryApi.getEmbedder().then(setView).catch(() => undefined);
         } finally {
             setBusy(false);
         }

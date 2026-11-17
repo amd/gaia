@@ -266,6 +266,8 @@ export interface EmbedderView {
     chosen: boolean;
     profile_device: EmbedderDevice;
     options: EmbedderOption[];
+    /** Set by a change: false when the embedder stayed the same. */
+    changed?: boolean;
 }
 
 export function getEmbedder() {

@@ -3,8 +3,10 @@
 """Settings › Memory shows where documents and memory are embedded, and moves it.
 
 One embedder serves every chat: the PC's profile picks it, and the user may
-choose the other device. A change reaches chats already open, since their
-agents are rebuilt, and is refused while a reply runs.
+choose the other device. Whether this PC can run each one comes from the
+model server's ``/system-info``, the same reading setup uses. A change reaches
+chats already open, since their agents are rebuilt, and is refused while a
+reply runs.
 """
 
 from __future__ import annotations
@@ -25,24 +27,31 @@ GGUF = "user.embeddinggemma-300m-GGUF"
 FLM = "embed-gemma-300m-FLM"
 
 
+def _system_info(npu: bool) -> dict:
+    """``/system-info`` of a Windows PC with a Radeon iGPU, with or without an NPU."""
+    devices = {"amd_igpu": {"available": True, "vram_gb": 16.0}}
+    if npu:
+        devices["amd_npu"] = {"available": True, "name": "AMD NPU"}
+    return {
+        "OS Version": "Windows 11",
+        "Physical Memory": "64.0 GB",
+        "devices": devices,
+        "unavailable_recipes": [] if npu else ["flm"],
+    }
+
+
 @pytest.fixture
 def pc(tmp_path, monkeypatch):
-    """A PC with *profile*; the model server says what it can run."""
+    """A PC with *profile*; ``state["npu"]`` says whether it has an NPU."""
     config_file = tmp_path / "config.json"
     monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
-    state = {"unavailable": {}, "stopped": [], "evicted": 0}
+    state = {"npu": True, "evicted": 0}
     monkeypatch.setattr(
-        providers,
-        "local_unavailable_reason",
-        lambda model: state["unavailable"].get(model),
+        providers, "_read_system_info", lambda: _system_info(state["npu"])
     )
     monkeypatch.setattr(
         "gaia.llm.lemonade_client.LemonadeClient.get_model_info",
         lambda self, model: {"id": model, "downloaded": True},
-    )
-    monkeypatch.setattr(
-        "gaia.ui.email_sidecar.daemon_client.stop_sidecar",
-        lambda agent_id: state["stopped"].append(agent_id),
     )
 
     def evict():
@@ -82,25 +91,38 @@ def test_an_npu_pc_shows_its_npu_embedder(pc, client):
 
 def test_a_pc_without_an_npu_offers_it_as_unavailable(pc, client):
     state = pc("gpu")
-    state["unavailable"][FLM] = "this PC has no NPU"
+    state["npu"] = False
     options = {
         o["device"]: o for o in client.get("/api/memory/embedder").json()["options"]
     }
     assert options["npu"]["available"] is False
-    assert options["npu"]["reason"] == "this PC has no NPU"
+    assert "NPU" in options["npu"]["reason"]
     assert options["gpu"]["available"] is True
 
 
+def test_a_pc_with_an_npu_offers_both(pc, client):
+    pc("gpu")
+    options = client.get("/api/memory/embedder").json()["options"]
+    assert all(o["available"] is True for o in options)
+
+
 def test_choosing_the_gpu_on_an_npu_pc_moves_every_chat(pc, client):
-    """Every agent is rebuilt, the sidecar's too: they picked theirs as they were built."""
+    """This process's agents are rebuilt; the sidecar's rebuild on their next turn."""
     from gaia.agents.registry import machine_embedding_model
 
     state = pc("npu")
     body = client.put("/api/memory/embedder", json={"device": "gpu"}).json()
-    assert (body["device"], body["chosen"]) == ("gpu", True)
+    assert (body["device"], body["chosen"], body["changed"]) == ("gpu", True, True)
     assert machine_embedding_model() == GGUF
     assert state["evicted"] == 1
-    assert state["stopped"] == ["gaia"]
+
+
+def test_choosing_the_device_already_in_use_changes_nothing(pc, client):
+    """Pinning the profile's own device keeps every chat's agent and vectors."""
+    state = pc("npu")
+    body = client.put("/api/memory/embedder", json={"device": "npu"}).json()
+    assert (body["device"], body["chosen"], body["changed"]) == ("npu", True, False)
+    assert state["evicted"] == 0
 
 
 def test_following_the_setup_again_clears_the_choice(pc, client):
@@ -112,12 +134,12 @@ def test_following_the_setup_again_clears_the_choice(pc, client):
 
 def test_a_device_this_pc_cant_use_is_refused(pc, client):
     state = pc("gpu")
-    state["unavailable"][FLM] = "this PC has no NPU"
+    state["npu"] = False
     resp = client.put("/api/memory/embedder", json={"device": "npu"})
     assert resp.status_code == 409
-    assert "no NPU" in resp.json()["detail"]
+    assert "NPU" in resp.json()["detail"]
     assert GaiaConfig.load().embedding_device is None
-    assert state["stopped"] == []
+    assert state["evicted"] == 0
 
 
 def test_a_change_waits_for_a_running_reply(pc, client, monkeypatch):

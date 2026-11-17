@@ -1815,6 +1815,14 @@ async def query(request: QueryRequest):
                         "Cancel that run or wait for it to finish, then retry."
                     ),
                 )
+            # The embedder moved in Settings since this agent was built.
+            if await _off_loop(
+                functools.partial(session.follow_embedder, **kwargs),
+                on_abandon=lambda _rebuilt: _unwind_setup(),
+            ):
+                logger.info(
+                    "session %s rebuilt on this PC's embedder", request.session_id
+                )
             target = _switch_target(session, request)
             if target is not None:
                 # Switched in place rather than refused. Rebuilding the agent

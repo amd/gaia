@@ -437,8 +437,8 @@ def _embed_row(store, knowledge_id: str) -> Dict[str, Any]:
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    # The stored vectors' embedder, else the one every chat on this PC uses.
-    model = store.get_embedder_id() or machine_embedding_model()
+    # The one every chat on this PC uses; the agent re-stamps the store with it.
+    model = machine_embedding_model()
     try:
         store.store_embedding(knowledge_id, _make_embed_fn(model)(item["content"]))
     except Exception as exc:  # the row is saved; only its vector is missing
@@ -1866,14 +1866,21 @@ class EmbedderBody(BaseModel):
     device: Optional[Literal["npu", "gpu"]] = None
 
 
+def _embedder_for(device: str) -> Tuple[str, str]:
+    """``(model, recipe)`` of the embedder that runs on *device*."""
+    from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+    config = next(dc for dc in DEFAULT_DEVICE_CONFIGS if dc.device == device)
+    return config.embedding_model, config.recipe
+
+
 def _embedder_option(device: str) -> Dict[str, Any]:
     """One device the embedder may run on, and whether this PC can use it now."""
-    from gaia.agents.registry import get_embedding_model_for_device
     from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
-    from .providers import ProviderError, display_name, local_unavailable_reason
+    from .providers import ProviderError, device_unavailable_reason, display_name
 
-    model = get_embedding_model_for_device(device)
+    model, recipe = _embedder_for(device)
     option: Dict[str, Any] = {
         "device": device,
         "model": model,
@@ -1883,7 +1890,7 @@ def _embedder_option(device: str) -> Dict[str, Any]:
         "downloaded": None,
     }
     try:
-        option["reason"] = local_unavailable_reason(model)
+        option["reason"] = device_unavailable_reason(recipe)
         option["available"] = option["reason"] is None
         option["downloaded"] = bool(
             LemonadeClient(verbose=False).get_model_info(model)["downloaded"]
@@ -1923,17 +1930,15 @@ def get_embedder() -> Dict[str, Any]:
 def set_embedder(body: EmbedderBody) -> Dict[str, Any]:
     """Run the embedder on *device* for every chat; None follows the profile.
 
-    Stored memory is re-embedded with it as the agent next starts. Refused
-    while a reply runs: its agent holds the old embedder.
+    Each chat moves to it on its next turn, and stored memory is re-embedded
+    with it. ``changed`` is False when the embedder stays the same. Refused
+    while a reply runs here: its agent holds the old embedder.
     """
-    from gaia.agents.registry import get_embedding_model_for_device
+    from gaia.agents.registry import machine_embedding_model
     from gaia.config import GaiaConfig, GaiaConfigError
-    from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.security import FLAGSHIP_AGENT_ID
 
     from .._chat_helpers import _active_sse_handlers, evict_all_session_agents
-    from .providers import ProviderError, local_unavailable_reason
+    from .providers import ProviderError, device_unavailable_reason
 
     if _active_sse_handlers:
         raise HTTPException(
@@ -1941,9 +1946,9 @@ def set_embedder(body: EmbedderBody) -> Dict[str, Any]:
             detail="A reply is running. Change the embedder once it finishes.",
         )
     if body.device is not None:
-        model = get_embedding_model_for_device(body.device)
+        _, recipe = _embedder_for(body.device)
         try:
-            reason = local_unavailable_reason(model)
+            reason = device_unavailable_reason(recipe)
         except ProviderError as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
         if reason:
@@ -1952,22 +1957,16 @@ def set_embedder(body: EmbedderBody) -> Dict[str, Any]:
                 detail=f"This PC can't run the embedder on the {body.device.upper()}: {reason}",
             )
     try:
+        before = machine_embedding_model()
         GaiaConfig.save_key("embedding_device", body.device or "auto")
+        changed = machine_embedding_model() != before
     except GaiaConfigError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
-    # Agents pick their embedder as they are built: rebuild every one.
-    evict_all_session_agents()
-    try:
-        daemon_client.stop_sidecar(FLAGSHIP_AGENT_ID)
-    except SidecarError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                f"Saved, but GAIA's agent didn't restart ({e}), so chats keep the "
-                "old embedder until it does. Close GAIA and open it again."
-            ),
-        ) from e
-    return _embedder_view()
+    if changed:
+        # This process's agents picked theirs as they were built; GAIA's agent
+        # sidecar rebuilds each session on its next turn.
+        evict_all_session_agents()
+    return {**_embedder_view(), "changed": changed}
 
 
 @router.get("/api/memory/settings")

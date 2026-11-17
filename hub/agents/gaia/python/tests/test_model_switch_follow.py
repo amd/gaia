@@ -175,3 +175,37 @@ def test_every_chat_on_a_pc_uses_its_profiles_embedder(server, tmp_path, profile
             assert agent._embedding_model == expected
         finally:
             close_agent(agent)
+
+
+def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
+    """Moving the embedder rebuilds an open chat on its next turn, keeping it.
+
+    The model, the conversation and the loaded skills carry over; nothing is
+    rebuilt while the embedder stays where it is.
+    """
+    from gaia_agent import session_registry as sr
+
+    from gaia.config import GaiaConfig
+
+    GaiaConfig.save_keys({"default_device": "npu"})
+    registry = sr._SessionRegistry()
+    kwargs = {"model_id": NPU, "allowed_paths": [str(tmp_path / "work")]}
+    try:
+        session, took = registry.checkout("chat-1", **kwargs)
+        assert took
+        old = session.agent
+        assert old._embedding_model == NPU_EMBEDDER
+        old.conversation_history = [{"role": "user", "content": "hello"}]
+        assert session.follow_embedder(**kwargs) is False
+        assert session.agent is old
+
+        GaiaConfig.save_key("embedding_device", "gpu")
+        # A later turn names no model: the chat keeps the one it is on.
+        assert session.follow_embedder(allowed_paths=kwargs["allowed_paths"])
+        assert session.agent is not old
+        assert session.agent._embedding_model == EMBEDDER
+        assert session.agent.model_id == NPU
+        assert session.agent.conversation_history == old.conversation_history
+        session.run_lock.release()
+    finally:
+        registry.clear()
