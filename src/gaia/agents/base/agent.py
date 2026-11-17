@@ -3266,6 +3266,8 @@ class Agent(abc.ABC):
     #: composed prompt byte-identical; GaiaAgent turns it on.
     #: See :mod:`gaia.agents.base.skill_catalog`.
     _skill_catalog_enabled: bool = False
+    #: The SKILL.md files the catalogue last listed; None until it is built.
+    _installed_skills_listed: Optional[Tuple[Tuple[str, int], ...]] = None
 
     #: What this agent's model is offered; see :mod:`gaia.agents.base.model_features`.
     model_features: ModelFeatures = FULL
@@ -5237,7 +5239,8 @@ Do NOT wrap conversational replies in JSON.
         current = self._installed_skills()
         # Rescan when the folders moved on since the scan, so the record and
         # the list it describes agree, e.g. a skill added during a turn.
-        if current != getattr(self, "_installed_skills_listed", current):
+        listed = self._installed_skills_listed
+        if listed is not None and current != listed:
             self.skill_manager.reload()
         self._installed_skills_listed = current
         catalog = render_catalog(
@@ -5268,7 +5271,7 @@ Do NOT wrap conversational replies in JSON.
         The catalogue sits in the cached head of the prompt, so it is rebuilt
         only on a change. Returns True when it was.
         """
-        listed = getattr(self, "_installed_skills_listed", None)
+        listed = self._installed_skills_listed
         if listed is None or listed == self._installed_skills():
             return False
         self.skill_manager.reload()
