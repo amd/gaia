@@ -964,7 +964,8 @@ std::optional<std::string> GaiaAgent::unitPriceOnlyNote(const std::string& reque
     static const std::regex asksTotal(R"(\b(?:comes? to|adds? up to|altogether|in total|total (?:cost|price|amount))\b)",
                                       std::regex::icase);
     if (!std::regex_search(request, asksTotal)) return std::nullopt;
-    static const std::regex quantity(R"(\b([2-9]|\d{2,5})\s*[xX\u00d7]\s+[A-Za-z][\w-]*)");
+    // The multiplication sign as its two UTF-8 bytes: a character class matches one byte at a time.
+    static const std::regex quantity(R"(\b([2-9]|\d{2,5})\s*(?:[xX]|)" "\xC3\x97" R"()\s+[A-Za-z][\w-]*)");
     static const std::regex figure(R"(\d[\d,]*(?:\.\d+)?)");
     const auto value = [](std::string n) {
         n.erase(std::remove(n.begin(), n.end(), ','), n.end());
@@ -977,7 +978,10 @@ std::optional<std::string> GaiaAgent::unitPriceOnlyNote(const std::string& reque
     std::set<std::string> seen;
     std::string example;
     for (const auto& c : calls) {
-        const std::string text = c.args.dump() + " " + c.output;
+        // A figure a command printed may be one it worked out, so only what was read from a file counts as copied.
+        const std::string text = readsContents(c.name) && c.name != "bash_execute"
+                                     ? c.args.dump(-1, ' ', false, json::error_handler_t::replace) + " " + c.output
+                                     : std::string();
         for (auto it = std::sregex_iterator(text.begin(), text.end(), figure); it != std::sregex_iterator(); ++it) {
             seen.insert(value(it->str()));
         }
@@ -1098,6 +1102,24 @@ std::string GaiaAgent::withoutPaths(const std::string& text) {
 namespace {
 bool skippedDir(const std::string& name) {
     return name.empty() || name[0] == '.' || name == "node_modules" || name == "__pycache__";
+}
+
+// The largest cut at or before `limit` that does not split a UTF-8 character.
+size_t utf8Cut(const std::string& text, size_t limit) {
+    if (limit >= text.size()) return text.size();
+    while (limit > 0 && (static_cast<unsigned char>(text[limit]) & 0xC0) == 0x80) --limit;
+    return limit;
+}
+
+// std::regex recurses per matched character, so the answer checks read only the
+// start and the end of a very long answer.
+std::string reviewedPart(const std::string& answer) {
+    constexpr size_t kHead = 6000;
+    constexpr size_t kTail = 2000;
+    if (answer.size() <= kHead + kTail) return answer;
+    size_t tail = answer.size() - kTail;
+    while (tail < answer.size() && (static_cast<unsigned char>(answer[tail]) & 0xC0) == 0x80) ++tail;
+    return answer.substr(0, utf8Cut(answer, kHead)) + "\n...\n" + answer.substr(tail);
 }
 }  // namespace
 
@@ -1405,7 +1427,7 @@ std::string GaiaAgent::guardedFileReason(const fs::path& path) {
         std::string first;
         std::getline(in, first);
         if (!first.empty() && !std::regex_search(first, heldBy)) continue;
-        return lock.filename().u8string() + " sits beside it" + (first.empty() ? "" : " (" + first.substr(0, 120) + ")");
+        return lock.filename().u8string() + " sits beside it" + (first.empty() ? "" : " (" + first.substr(0, utf8Cut(first, 120)) + ")");
     }
     std::ifstream in(path);
     static const std::regex notice(
@@ -1416,7 +1438,7 @@ std::string GaiaAgent::guardedFileReason(const fs::path& path) {
     std::string line;
     for (int i = 0; i < 6 && std::getline(in, line); ++i) {
         std::smatch m;
-        if (std::regex_search(line, m, notice)) return "its header says: " + line.substr(0, 160);
+        if (std::regex_search(line, m, notice)) return "its header says: " + line.substr(0, utf8Cut(line, 160));
     }
     return "";
 }
@@ -1518,11 +1540,11 @@ std::optional<std::string> GaiaAgent::unsavedFiguresNote(const std::string& answ
 }
 
 std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answer) {
-    return reviewAnswer(answer, false);
+    return reviewAnswer(reviewedPart(answer), false);
 }
 
 std::optional<std::string> GaiaAgent::unresolvedClaims(const std::string& answer) {
-    return reviewAnswer(answer, true);
+    return reviewAnswer(reviewedPart(answer), true);
 }
 
 std::optional<std::string> GaiaAgent::reviewAnswer(const std::string& answer, bool factsOnly) {

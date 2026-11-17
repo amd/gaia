@@ -70,12 +70,22 @@ bool isPrivateV4(uint32_t a) {  // host byte order
 }
 
 // The first local/private address `host` resolves to, or "" when all are public.
-std::string privateAddressOf(const std::string& host) {
+// `resolved` is false when the name could not be looked up at all.
+std::string privateAddressOf(const std::string& host, bool& resolved) {
+#ifdef _WIN32
+    // Name lookup fails until Winsock is started, and a failed lookup is a refusal.
+    static const int winsock = [] {
+        WSADATA data;
+        return WSAStartup(MAKEWORD(2, 2), &data);
+    }();
+    (void)winsock;
+#endif
     addrinfo hints{};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     addrinfo* res = nullptr;
-    if (getaddrinfo(host.c_str(), nullptr, &hints, &res) != 0 || res == nullptr) return "";
+    resolved = getaddrinfo(host.c_str(), nullptr, &hints, &res) == 0 && res != nullptr;
+    if (!resolved) return "";
     std::string found;
     for (addrinfo* ai = res; ai != nullptr && found.empty(); ai = ai->ai_next) {
         char buf[INET6_ADDRSTRLEN] = {};
@@ -161,7 +171,15 @@ json WebTools::doWebFetch(const json& args) {
                     {"error", "Too many redirects (more than " + std::to_string(kMaxRedirects) + ")."}};
         }
         if (!allowPrivate) {
-            const std::string blocked = privateAddressOf(hostOf(origin));
+            bool resolved = false;
+            const std::string blocked = privateAddressOf(hostOf(origin), resolved);
+            if (!resolved) {
+                return {{"status", "error"}, {"url", url},
+                        {"error", "Refused: the address of " + hostOf(origin) + " could not be looked up, so "
+                                      "web_fetch cannot tell whether it is a public site. Check the host name "
+                                      "and the network connection (set GAIA_WEB_FETCH_ALLOW_PRIVATE=1 to skip "
+                                      "this check)."}};
+            }
             if (!blocked.empty()) {
                 return {{"status", "error"}, {"url", url},
                         {"error", "Refused: " + hostOf(origin) + " resolves to " + blocked +

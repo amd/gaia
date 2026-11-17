@@ -50,6 +50,7 @@ struct GAIA_API LemonadeHealth {
     std::string modelId;   // currently loaded model (empty if none)
     int contextSize = 0;   // active n_ctx (0 if unknown)
     json raw;              // full health response JSON
+    std::string error;     // why the server could not be reached (empty when it answered)
 };
 
 // ---- Composite status ----

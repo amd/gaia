@@ -749,6 +749,19 @@ TEST_F(VectorIndexTest, FailedLoadLeavesTheExistingIndexUsable) {
     EXPECT_EQ(index.search({1.0f, 1.0f}, 1), before);
 }
 
+TEST_F(VectorIndexTest, SaveDoesNotDependOnASharedTempName) {
+    VectorIndex index(2, Metric::L2);
+    index.add("a", {1.0f, 0.0f});
+    const fs::path file = path("shared.vec");
+    // Stands in for another process's in-flight save under the old fixed name.
+    fs::create_directories(file.string() + ".tmp");
+
+    EXPECT_NO_THROW(index.save(file.string()));
+    VectorIndex loaded;
+    loaded.load(file.string());
+    EXPECT_EQ(loaded.size(), 1u);
+}
+
 TEST_F(VectorIndexTest, SaveFailsLoudlyWhenTheTargetPathIsUnusable) {
     const auto blocker = path("blocker");
     writeFile(blocker, "not a directory");

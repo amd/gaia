@@ -393,6 +393,29 @@ TEST(CleanConsoleTest, PrintFinalAnswerJsonExtraction) {
         << "Expected Conclusion label; got: " << out;
 }
 
+TEST(CleanConsoleTest, FinalAnswerKeepsWindowsPathsIntact) {
+    CleanConsole console;
+    CoutCapture cap;
+    console.printFinalAnswer("Saved to C:\\notes\\new.txt");
+    EXPECT_TRUE(cap.str().find("C:\\notes\\new.txt") != std::string::npos) << cap.str();
+}
+
+TEST(CleanConsoleTest, ModelAndToolTextCannotDriveTheTerminal) {
+    CleanConsole console;
+    CoutCapture cap;
+    console.printStreamToken("to\x1b[2Jken");
+    console.prettyPrintJson({{"output", "line\x1b]0;owned\x07 one\x1b[1A"}}, "Tool Result");
+    console.printFinalAnswer("an\x1b[3Jswer");
+    const std::string out = cap.str();
+    EXPECT_TRUE(out.find("token") != std::string::npos) << out;
+    EXPECT_TRUE(out.find("line one") != std::string::npos) << out;
+    EXPECT_TRUE(out.find("answer") != std::string::npos) << out;
+    EXPECT_TRUE(out.find("[2J") == std::string::npos);
+    EXPECT_TRUE(out.find("[1A") == std::string::npos);
+    EXPECT_TRUE(out.find("[3J") == std::string::npos);
+    EXPECT_TRUE(out.find("owned") == std::string::npos);
+}
+
 // ---- 20. printFinalAnswer empty ----
 
 TEST(CleanConsoleTest, PrintFinalAnswerEmpty) {

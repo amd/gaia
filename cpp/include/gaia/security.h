@@ -33,7 +33,8 @@ GAIA_API bool validatePath(const std::string& basePath, const std::string& reque
 GAIA_API bool isSafeShellArg(const std::string& arg);
 
 /// What an "always allow" for a shell command covers: the program for a short
-/// list of single-purpose programs ("pytest", "mkdir"), program + subcommand
+/// list of single-purpose programs ("pytest", "mkdir") unless a flag makes it
+/// run another program or write a file (rg --pre, sort -o), program + subcommand
 /// for tools whose subcommands differ in risk ("git status", "npm test"), and
 /// the exact command for everything else: interpreters, wrappers, unknown
 /// programs, and anything that chains, pipes, quotes, substitutes or redirects.

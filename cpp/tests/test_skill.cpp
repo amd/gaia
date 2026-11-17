@@ -414,6 +414,18 @@ TEST(SkillFailure, NullKeyIsRefusedRatherThanBecomingTheEmptyKey) {
                 HasSubstr("empty, null, or non-scalar YAML key"));
 }
 
+TEST(SkillFailure, AliasBombIsRefusedInsteadOfExpanded) {
+    std::string yaml = "name: ok\ndescription: d\nl0: &l0 [x, x, x, x, x, x, x, x, x, x]\n";
+    for (int level = 1; level <= 9; ++level) {
+        const std::string prev = "*l" + std::to_string(level - 1);
+        yaml += "l" + std::to_string(level) + ": &l" + std::to_string(level) + " [";
+        for (int i = 0; i < 10; ++i) yaml += (i == 0 ? "" : ", ") + prev;
+        yaml += "]\n";
+    }
+    EXPECT_THAT(errorFrom([&yaml] { gaia::parseSkill(frontmatter(yaml)); }),
+                HasSubstr("too large once its YAML aliases are expanded"));
+}
+
 // ---------------------------------------------------------------------------
 // Conformance corpus — every GAIA skill on disk parses and round-trips
 // ---------------------------------------------------------------------------

@@ -19,12 +19,21 @@ namespace {
 struct Pattern {
     std::regex re;
     bool notAfterGpio;  // Python's (?<!gpio ) lookbehind, which std::regex lacks
+    std::size_t group;  // the capture the secret starts at; 0 = the whole match
+};
+
+struct PatternSource {
+    const char* re;
+    bool notAfterGpio;
+    std::size_t group = 0;
+    bool caseSensitive = false;
 };
 
 const std::vector<Pattern>& credentialPatterns() {
     static const std::vector<Pattern> patterns = [] {
         const auto flags = std::regex::ECMAScript | std::regex::icase | std::regex::optimize;
-        const std::vector<std::pair<const char*, bool>> sources = {
+        const auto casedFlags = std::regex::ECMAScript | std::regex::optimize;
+        const std::vector<PatternSource> sources = {
             {R"(\bsk-ant-[a-zA-Z0-9_-]{10,})", false},
             {R"(\bsk-[a-zA-Z0-9_-]{20,})", false},
             {R"(\bgh[pousr]_[a-zA-Z0-9]{20,})", false},
@@ -34,8 +43,13 @@ const std::vector<Pattern>& credentialPatterns() {
             {R"(\bxox[baprs]-[a-zA-Z0-9-]{10,})", false},
             {R"(\bglpat-[a-zA-Z0-9_-]{20,})", false},
             {R"(\bBearer\s+[a-zA-Z0-9._-]{20,})", false},
-            {R"(\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|credential)s?\b\s*(?:is(?!\s+(?:in|on|at|with|not|stored|kept|saved|the|a|an)\b)|:|=)\s*\S+)",
-             false},
+            // Group 1 stands in for a lookbehind: `_` may precede the word (DB_PASSWORD), a letter may not.
+            {R"((?:^|[^A-Za-z0-9])((?:password|passphrase|api[_ -]?key|secret(?:[_ -]?(?:access[_ -]?)?key)?|access[_ -]?token|auth[_ -]?token|credential)s?\b\s*(?:is(?!\s+(?:in|on|at|with|not|stored|kept|saved|the|a|an)\b)|:|=)\s*\S+))",
+             false, 1},
+            // An environment-style name: GITHUB_TOKEN=..., AWS_SECRET_ACCESS_KEY: ...
+            {R"((?:^|[^A-Za-z0-9_])((?:[A-Z0-9]+_)*(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|(?:API|ACCESS|PRIVATE|SECRET)_KEY)(?:_[A-Z0-9]+)*\s*[=:]\s*\S+))",
+             false, 1, true},
+            {R"(\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})", false},
             {R"(\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b)", false},
             {R"(\bpin(?:'s)?(?:\s+number)?\s+(?:for|on|at|of)(?:\s+\w+){1,8}?\s*)" GAIA_SEP
              R"(\s*\d{3,8}\b)",
@@ -60,7 +74,9 @@ const std::vector<Pattern>& credentialPatterns() {
         };
         std::vector<Pattern> out;
         out.reserve(sources.size());
-        for (const auto& [src, gpio] : sources) out.push_back({std::regex(src, flags), gpio});
+        for (const auto& s : sources) {
+            out.push_back({std::regex(s.re, s.caseSensitive ? casedFlags : flags), s.notAfterGpio, s.group});
+        }
         return out;
     }();
     return patterns;
@@ -198,12 +214,38 @@ void cardSpans(const std::string& text, std::vector<std::pair<std::size_t, std::
     }
 }
 
+// A PEM private key, from its BEGIN line to its END line (or to the end of the text when cut short).
+void privateKeySpans(const std::string& text, std::vector<std::pair<std::size_t, std::size_t>>& spans) {
+    static const std::string begin = "-----BEGIN ";
+    static const std::string tail = "PRIVATE KEY-----";
+    std::size_t at = 0;
+    while ((at = text.find(begin, at)) != std::string::npos) {
+        const std::size_t dashes = text.find("-----", at + begin.size());
+        if (dashes == std::string::npos) break;
+        const std::size_t headEnd = dashes + 5;
+        if (headEnd - at > 80 || headEnd - at < begin.size() + tail.size() ||
+            text.compare(headEnd - tail.size(), tail.size(), tail) != 0) {
+            at += begin.size();
+            continue;
+        }
+        std::size_t end = text.size();
+        const std::size_t footer = text.find("-----END ", headEnd);
+        if (footer != std::string::npos) {
+            const std::size_t close = text.find("-----", footer + 9);
+            if (close != std::string::npos) end = close + 5;
+        }
+        spans.emplace_back(at, end);
+        at = end;
+    }
+}
+
 }  // namespace
 
 std::vector<std::pair<std::size_t, std::size_t>> credentialSpans(const std::string& text) {
     std::vector<std::pair<std::size_t, std::size_t>> spans;
     if (text.empty()) return spans;
     cardSpans(text, spans);
+    privateKeySpans(text, spans);
 
     // Line by line, in bounded windows: std::regex backtracks recursively, and
     // a credential never needs more than a few hundred characters of context.
@@ -218,9 +260,9 @@ std::vector<std::pair<std::size_t, std::size_t>> credentialSpans(const std::stri
             const std::string chunk = text.substr(w, wEnd - w);
             for (const auto& p : credentialPatterns()) {
                 for (std::sregex_iterator it(chunk.begin(), chunk.end(), p.re), end; it != end; ++it) {
-                    const std::size_t s = w + static_cast<std::size_t>(it->position(0));
+                    const std::size_t s = w + static_cast<std::size_t>(it->position(p.group));
                     if (p.notAfterGpio && precededByGpio(text, s)) continue;
-                    std::size_t e = s + static_cast<std::size_t>(it->length(0));
+                    std::size_t e = w + static_cast<std::size_t>(it->position(0) + it->length(0));
                     // A match cut by the window edge may run on: match it again from its own start.
                     if (e == wEnd && wEnd < lineEnd) {
                         const std::string rest = text.substr(s, std::min(lineEnd, s + kWindow) - s);

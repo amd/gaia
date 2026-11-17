@@ -23,7 +23,7 @@ namespace {
 constexpr size_t kMaxAudioBytes = 100u * 1024u * 1024u;
 
 std::string lowerExt(const std::string& p) {
-    std::string e = fs::path(p).extension().string();
+    std::string e = fs::u8path(p).extension().u8string();
     std::transform(e.begin(), e.end(), e.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return e;
@@ -100,7 +100,24 @@ ToolInfo MediaTools::screenshotTool(std::function<std::string(const std::string&
             if (!why.empty()) return {{"status", "error"}, {"error", why}};
         }
         if (lowerExt(out) != ".png") return {{"status", "error"}, {"error", "output_path must end in .png"}};
-        const std::string abs = fs::absolute(out).string();
+        std::error_code absEc;
+        const fs::path absPath = fs::absolute(fs::u8path(out), absEc);
+        if (absEc) return {{"status", "error"}, {"error", "Can't resolve output_path " + out + ": " + absEc.message()}};
+        const std::string abs = absPath.u8string();
+        // The capture program is started through a shell, where these would end the quoted path.
+#ifdef _WIN32
+        const std::string unsafe = "\"`$%;&|<>";  // a ' is doubled for PowerShell below
+#else
+        const std::string unsafe = "'\"`$%;&|<>";
+#endif
+        for (const unsigned char c : abs) {
+            if (c < 0x20 || c == 0x7F || unsafe.find(static_cast<char>(c)) != std::string::npos) {
+                return {{"status", "error"},
+                        {"error", "The full path of output_path (" + abs + ") holds a quote, a control character "
+                                  "or one of ` $ % ; & | < >, which a screenshot path may not contain. Save to a "
+                                  "path without them."}};
+            }
+        }
         std::vector<std::string> attempts;
 #ifdef _WIN32
         std::string ps = abs;
@@ -121,8 +138,8 @@ ToolInfo MediaTools::screenshotTool(std::function<std::string(const std::string&
         for (const auto& cmd : attempts) {
             const ProcessResult r = ProcessRunner::run(cmd, 30000);
             std::error_code ec;
-            if (r.exitCode == 0 && fs::exists(abs, ec) && fs::file_size(abs, ec) > 0) {
-                return {{"status", "success"}, {"path", out}, {"bytes", fs::file_size(abs, ec)}};
+            if (r.exitCode == 0 && fs::exists(absPath, ec) && fs::file_size(absPath, ec) > 0) {
+                return {{"status", "success"}, {"path", out}, {"bytes", fs::file_size(absPath, ec)}};
             }
             if (r.exitCode != 127) why += (why.empty() ? "" : "; ") + cmd.substr(0, cmd.find(' ')) + ": " +
                                           r.stderr_output.substr(0, 160);
@@ -158,16 +175,17 @@ void MediaTools::registerAll(ToolRegistry& registry, MediaToolsOptions options) 
                         {"error", "Not an audio file this tool reads (wav, mp3, m4a, ogg, flac, webm): " + path}};
             }
             std::error_code ec;
-            const auto size = fs::file_size(path, ec);
+            const auto size = fs::file_size(fs::u8path(path), ec);
             if (ec) return {{"status", "error"}, {"error", "Can't read " + path + ": " + ec.message()}};
             if (size > kMaxAudioBytes) {
                 return {{"status", "error"}, {"error", path + " is over 100 MB; split it first."}};
             }
-            std::ifstream in(path, std::ios::binary);
+            std::ifstream in(fs::u8path(path), std::ios::binary);
+            if (!in.is_open()) return {{"status", "error"}, {"error", "Can't open " + path + " for reading."}};
             std::ostringstream data;
             data << in.rdbuf();
             std::vector<HttpMultipartPart> parts = {
-                {"file", data.str(), fs::path(path).filename().string(), mime},
+                {"file", data.str(), fs::u8path(path).filename().u8string(), mime},
                 {"model", opts->transcribeModel, "", ""},
                 {"response_format", "json", "", ""}};
             if (!a.value("language", "").empty()) parts.push_back({"language", a.value("language", ""), "", ""});
@@ -220,10 +238,17 @@ void MediaTools::registerAll(ToolRegistry& registry, MediaToolsOptions options) 
                 }
                 const std::string png = base64Decode(b64);
                 std::error_code ec;
-                if (fs::path(out).has_parent_path()) fs::create_directories(fs::path(out).parent_path(), ec);
-                std::ofstream f(out, std::ios::binary);
+                const fs::path outPath = fs::u8path(out);
+                if (outPath.has_parent_path()) fs::create_directories(outPath.parent_path(), ec);
+                std::ofstream f(outPath, std::ios::binary);
                 if (!f) return {{"status", "error"}, {"error", "Can't write " + out}};
-                f << png;
+                f.write(png.data(), static_cast<std::streamsize>(png.size()));
+                f.close();
+                if (f.fail()) {
+                    fs::remove(outPath, ec);
+                    return {{"status", "error"},
+                            {"error", "Writing " + out + " failed (the disk may be full); no image was saved."}};
+                }
                 return {{"status", "success"}, {"path", out}, {"bytes", png.size()},
                         {"model", opts->imageModel}};
             } catch (const HttpError& e) {

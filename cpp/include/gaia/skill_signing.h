@@ -34,6 +34,11 @@ GAIA_API std::string skillSha256Hex(const std::string& data);
 /// POSIX relative path — Python's file_digests().
 GAIA_API std::map<std::string, std::string> skillFileDigests(const std::string& directory);
 
+/// Throws SkillError when `directory` holds anything but regular files and real
+/// folders. A link's target is not covered by the signature, yet would be
+/// copied into the install.
+GAIA_API void requirePlainSkillBundle(const std::string& directory);
+
 /// The exact bytes a signature covers — Python's signing_payload().
 GAIA_API std::string skillSigningPayload(const std::string& name, const std::string& version,
                                          const std::map<std::string, std::string>& digests);

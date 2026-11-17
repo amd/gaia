@@ -151,3 +151,26 @@ TEST(CredentialSpansTest, KeyCrossingTheScanWindowIsMaskedWhole) {
     EXPECT_EQ(masked.find("AAAA"), std::string::npos);
     EXPECT_NE(masked.find("[secret removed] tail"), std::string::npos);
 }
+
+TEST(SecretsTest, FlagsAssignmentsToUnderscoreJoinedNames) {
+    for (const std::string s : {"DB_PASSWORD=Blue-Heron-77", "aws_secret_access_key = wJalrXUtnFEMIbPxRfiCYzEXAMPLE",
+                                "GITHUB_TOKEN=abcdef0123456789", "export STRIPE_SECRET_KEY: sk_live_abcdef"}) {
+        EXPECT_TRUE(looksLikeCredential(s)) << s;
+    }
+    // The character before the name is kept; the name and its value go.
+    EXPECT_EQ(maskCredentials("run with DB_PASSWORD=hunter2 today"), "run with [secret removed] today");
+    EXPECT_EQ(maskCredentials("my_password: hunter2 ok"), "my_[secret removed] ok");
+    for (const std::string s : {"MAX_TOKENS=4096", "the tokens = words", "compassword=1"}) {
+        EXPECT_FALSE(looksLikeCredential(s)) << s;
+    }
+}
+
+TEST(SecretsTest, FlagsJwtsAndPrivateKeyBlocks) {
+    EXPECT_TRUE(looksLikeCredential(
+        "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV"));
+    const std::string pem =
+        "deploy key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\nq7x9\n-----END RSA PRIVATE KEY-----\nafter";
+    EXPECT_EQ(maskCredentials(pem), "deploy key:\n[secret removed]\nafter");
+    EXPECT_TRUE(looksLikeCredential("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk"));
+    EXPECT_FALSE(looksLikeCredential("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"));
+}

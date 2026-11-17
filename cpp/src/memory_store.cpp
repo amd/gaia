@@ -146,14 +146,22 @@ std::string MemoryStore::remember(const std::string& content, const std::string&
     if (!why.empty()) throw std::invalid_argument(why);
 
     std::lock_guard<std::mutex> lock(mutex_);
-    // The same statement twice is one memory, refreshed.
-    auto dup = db_->prepare("SELECT id FROM knowledge WHERE content = ? AND category = ?");
-    dup.bindAll(content, category);
+    // One write transaction: the duplicate check and both tables change together.
+    Transaction txn(*db_, Transaction::Behavior::Immediate);
     const std::string now = nowIso();
-    if (dup.step()) {
-        const std::string id = dup.columnText(0);
-        db_->prepare("UPDATE knowledge SET updated_at = ? WHERE id = ?").bindAll(now, id).execute();
-        return id;
+    std::string existing;
+    {
+        // The same statement twice is one memory, refreshed.
+        auto dup = db_->prepare("SELECT id FROM knowledge WHERE content = ? AND category = ?");
+        dup.bindAll(content, category);
+        if (dup.step()) existing = dup.columnText(0);
+    }
+    if (!existing.empty()) {
+        db_->prepare("UPDATE knowledge SET updated_at = ? WHERE id = ?")
+            .bindAll(now, existing)
+            .execute();
+        txn.commit();
+        return existing;
     }
     const std::string id = newId();
     db_->prepare("INSERT INTO knowledge VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
@@ -162,6 +170,7 @@ std::string MemoryStore::remember(const std::string& content, const std::string&
     db_->prepare("INSERT INTO knowledge_fts (id, content, domain, category) VALUES (?, ?, ?, ?)")
         .bindAll(id, content, domain, category)
         .execute();
+    txn.commit();
     return id;
 }
 
@@ -200,19 +209,23 @@ bool MemoryStore::update(const std::string& id, const std::string& content) {
     const std::string why = refusalFor(content);
     if (!why.empty()) throw std::invalid_argument(why);
     std::lock_guard<std::mutex> lock(mutex_);
+    Transaction txn(*db_, Transaction::Behavior::Immediate);
     db_->prepare("UPDATE knowledge SET content = ?, updated_at = ? WHERE id = ?")
         .bindAll(content, nowIso(), id)
         .execute();
     if (db_->changes() == 0) return false;
     db_->prepare("UPDATE knowledge_fts SET content = ? WHERE id = ?").bindAll(content, id).execute();
+    txn.commit();
     return true;
 }
 
 bool MemoryStore::forget(const std::string& id) {
     std::lock_guard<std::mutex> lock(mutex_);
+    Transaction txn(*db_, Transaction::Behavior::Immediate);
     db_->prepare("DELETE FROM knowledge WHERE id = ?").bindAll(id).execute();
     const bool removed = db_->changes() > 0;
     db_->prepare("DELETE FROM knowledge_fts WHERE id = ?").bindAll(id).execute();
+    txn.commit();
     return removed;
 }
 

@@ -10,6 +10,7 @@
 #include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <random>
 
 using namespace gaia;
@@ -85,6 +86,46 @@ TEST(DocumentIndexTest, ReindexReplacesAFilesChunks) {
     auto hits = idx.query("epsilon", 5);
     ASSERT_FALSE(hits.empty());
     EXPECT_NE(hits[0].chunk.text.find("epsilon"), std::string::npos);
+}
+
+TEST(DocumentIndexTest, ABadEmbeddingLeavesThePreviousIndexIntact) {
+    TempDir d;
+    const std::string f = d.write("notes.txt", "alpha beta gamma");
+    std::atomic<bool> broken{false};
+    DocumentIndex idx(
+        [&broken](const std::vector<std::string>& t) {
+            auto out = letterEmbed(t);
+            if (broken) out[0][0] = std::numeric_limits<float>::quiet_NaN();
+            return out;
+        },
+        "letters");
+    idx.indexFile(f);
+    d.write("notes.txt", "delta epsilon");
+    broken = true;
+    EXPECT_THROW(idx.indexFile(f), std::runtime_error);
+    broken = false;
+    EXPECT_EQ(idx.files().size(), 1u);
+    auto hits = idx.query("alpha", 5);
+    ASSERT_FALSE(hits.empty());
+    EXPECT_NE(hits[0].chunk.text.find("alpha"), std::string::npos);
+}
+
+TEST(DocumentIndexTest, FolderToolSkipsDependencyAndIgnoredFolders) {
+    TempDir d;
+    d.write("policy.txt", "Remote work requires manager approval.");
+    d.write(".gitignore", "private/");
+    fs::create_directories(d.path / "node_modules");
+    fs::create_directories(d.path / "private");
+    d.write("node_modules/dep.txt", "A vendored dependency readme.");
+    d.write("private/secret.txt", "Something the user chose to ignore.");
+    DocumentIndex idx;
+    ToolRegistry reg;
+    idx.registerTools(reg, nullptr);
+    json indexed = reg.executeTool("index_document", json{{"path", d.path.string()}});
+    ASSERT_EQ(indexed["status"], "success") << indexed.dump();
+    ASSERT_EQ(indexed["indexed"].size(), 1u) << indexed.dump();
+    EXPECT_NE(indexed["indexed"][0]["file"].get<std::string>().find("policy.txt"),
+              std::string::npos);
 }
 
 TEST(DocumentIndexTest, HybridUsesTheEmbedderForQueriesToo) {

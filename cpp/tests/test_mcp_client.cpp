@@ -89,6 +89,47 @@ TEST(MCPClientTest, StdioTransportSendWithoutConnect) {
     EXPECT_THROW(transport.sendRequest("test"), std::runtime_error);
 }
 
+TEST(MCPClientTest, StdioTransportSkipsMessagesThatAreNotTheReply) {
+    // A notification and a stale reply come out ahead of the reply to request 0.
+#ifdef _WIN32
+    const std::string server =
+        "cmd /c echo {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}"
+        "& echo {\"jsonrpc\":\"2.0\",\"id\":41,\"result\":{\"which\":\"stale\"}}"
+        "& echo {\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"which\":\"mine\"}}"
+        "& ping -n 6 127.0.0.1 >nul";
+#else
+    const std::string server =
+        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}' "
+        "'{\"jsonrpc\":\"2.0\",\"id\":41,\"result\":{\"which\":\"stale\"}}' "
+        "'{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"which\":\"mine\"}}'; sleep 5";
+#endif
+    StdioTransport transport(server, 4, false);
+    ASSERT_TRUE(transport.connect());
+    json reply = transport.sendRequest("tools/list");
+    EXPECT_EQ(reply["id"], 0);
+    EXPECT_EQ(reply["result"]["which"], "mine");
+    transport.disconnect();
+}
+
+TEST(MCPClientTest, StdioTransportIsUnusableAfterATimeout) {
+#ifdef _WIN32
+    const std::string server = "powershell -NoProfile -Command Start-Sleep 5";
+#else
+    const std::string server = "sleep 5";
+#endif
+    StdioTransport transport(server, 1, false);
+    ASSERT_TRUE(transport.connect());
+    try {
+        transport.sendRequest("tools/list");
+        FAIL() << "a silent server must time out";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("did not answer 'tools/list'"), std::string::npos)
+            << e.what();
+    }
+    EXPECT_FALSE(transport.isConnected());
+    EXPECT_THROW(transport.sendRequest("tools/list"), std::runtime_error);
+}
+
 // ---- MCPClient Tests ----
 
 TEST(MCPClientTest, MCPClientFromConfig) {

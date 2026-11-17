@@ -211,3 +211,13 @@ TEST(ImageTest, ImageToContentPartDataUri) {
     EXPECT_EQ(p.kind, ContentPart::Kind::IMAGE_URL);
     EXPECT_EQ(p.imageUrl.rfind("data:image/png;base64,", 0), 0u);
 }
+
+TEST(ImageTest, ImageFromFileReadsANonAsciiUtf8Name) {
+    namespace fs = std::filesystem;
+    const fs::path copy = fs::temp_directory_path() / fs::u8path("gaia-im\xc3\xa1gen-\xe6\x97\xa5.png");
+    std::error_code ec;
+    fs::remove(copy, ec);
+    fs::copy_file(fixturePath("tiny.png"), copy);
+    EXPECT_EQ(Image::fromFile(copy.u8string()).mimeType(), "image/png");
+    fs::remove(copy, ec);
+}

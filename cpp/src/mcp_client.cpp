@@ -345,9 +345,13 @@ struct StdioTransport::Impl {
 
     void writeLine(const std::string& line) {
         std::string data = line + "\n";
-        DWORD written;
-        WriteFile(childStdinWrite, data.c_str(), static_cast<DWORD>(data.size()), &written, nullptr);
-        FlushFileBuffers(childStdinWrite);
+        DWORD written = 0;
+        // No FlushFileBuffers: on a pipe it blocks until the server reads, with no timeout.
+        if (!WriteFile(childStdinWrite, data.c_str(), static_cast<DWORD>(data.size()), &written, nullptr) ||
+            written != data.size()) {
+            throw std::runtime_error("Could not send the request to the MCP server: its input is closed (error " +
+                                     std::to_string(GetLastError()) + "). The server has probably exited.");
+        }
     }
 
     std::string readLine(int timeoutMs) {
@@ -527,6 +531,10 @@ struct StdioTransport::Impl {
 
 // ---- StdioTransport ----
 
+namespace {
+bool isReplyTo(const json& message, int requestId);
+}  // namespace
+
 StdioTransport::StdioTransport(const std::string& command, int timeout, bool debug)
     : command_(command), timeout_(timeout), debug_(debug), impl_(std::make_unique<Impl>()) {}
 
@@ -599,9 +607,10 @@ json StdioTransport::sendRequest(const std::string& method, const json& params) 
     }
 
     // Build JSON-RPC request
+    const int id = requestId_++;
     json request = {
         {"jsonrpc", "2.0"},
-        {"id", requestId_++},
+        {"id", id},
         {"method", method},
         {"params", params}
     };
@@ -613,24 +622,48 @@ json StdioTransport::sendRequest(const std::string& method, const json& params) 
     // Send request
     impl_->writeLine(request.dump());
 
-    // Read response (blocking up to timeout_ seconds)
-    std::string responseLine = impl_->readLine(timeout_ * 1000);
-    if (responseLine.empty()) {
-        if (!impl_->isAlive()) {
-            impl_->running = false;
-            throw std::runtime_error("MCP server process died while waiting for response");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_);
+    while (true) {
+        const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count();
+        std::string responseLine;
+        bool timedOut = remainingMs <= 0;
+        if (!timedOut) {
+            try {
+                responseLine = impl_->readLine(static_cast<int>(remainingMs));
+            } catch (const std::runtime_error&) {
+                timedOut = true;
+            }
         }
-        throw std::runtime_error("Server closed connection");
-    }
+        if (timedOut) {
+            // A reply arriving late would be read as the answer to the next request.
+            impl_->cleanup();
+            throw std::runtime_error("MCP server did not answer '" + method + "' within " +
+                                     std::to_string(timeout_) +
+                                     "s. The server was stopped so a late reply cannot be "
+                                     "mistaken for a later one; reconnect to use it again.");
+        }
+        if (responseLine.empty()) {
+            if (!impl_->isAlive()) {
+                impl_->running = false;
+                throw std::runtime_error("MCP server process died while waiting for response");
+            }
+            throw std::runtime_error("Server closed connection");
+        }
 
-    try {
-        json response = json::parse(responseLine);
+        json response;
+        try {
+            response = json::parse(responseLine);
+        } catch (const json::parse_error& e) {
+            throw std::runtime_error(std::string("Invalid JSON response from MCP server: ") + e.what());
+        }
         if (debug_) {
             std::cerr << "[MCP] Received: " << response.dump(2) << std::endl;
         }
-        return response;
-    } catch (const json::parse_error& e) {
-        throw std::runtime_error(std::string("Invalid JSON response from MCP server: ") + e.what());
+        // Notifications, server requests and replies to abandoned requests are not the answer.
+        if (response.is_object() && !response.contains("method") && isReplyTo(response, id)) {
+            return response;
+        }
     }
 }
 

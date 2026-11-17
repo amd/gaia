@@ -160,6 +160,40 @@ TEST(SkillLibraryTest, InstallValidatesCopiesAndReplaces) {
     EXPECT_THROW(SkillLibrary::removeInstalled("../etc", dest), SkillError);
 }
 
+TEST(SkillLibraryTest, InstallLeftoversAreIgnoredAndDoNotBlockInstalls) {
+    TempTree t;
+    t.skill("src", "data-explore", "Explore a CSV.", "Version one.");
+    t.skill("installed", ".data-explore.installing", "Explore a CSV.", "Half-copied.");
+    t.skill("installed", ".data-explore.installing-1a2b-0", "Explore a CSV.", "Half-copied.");
+    t.skill("installed", ".data-explore.old-1a2b-0", "Explore a CSV.", "Superseded.");
+    const std::string dest = (t.path() / "installed").string();
+
+    SkillLibrary before({SkillRoot{"user", dest, true, false}});
+    EXPECT_TRUE(before.failures().empty()) << before.failures()[0];
+
+    EXPECT_NO_THROW(
+        SkillLibrary::installFromFolder((t.path() / "src" / "data-explore").string(), dest, true));
+    EXPECT_TRUE(fs::exists(fs::path(dest) / ".data-explore.installing-1a2b-0"))
+        << "a staging folder that may belong to a running install is left alone";
+    SkillLibrary after({SkillRoot{"user", dest, true, false}});
+    EXPECT_TRUE(after.failures().empty()) << after.failures()[0];
+    EXPECT_EQ(after.skills().count("data-explore"), 1u);
+}
+
+TEST(SkillLibraryTest, InstallRefusesBundlesWithSymlinks) {
+    TempTree t;
+    t.skill("src", "data-explore", "Explore a CSV.", "Body.");
+    std::ofstream(t.path() / "outside.txt") << "not part of the bundle\n";
+    std::error_code ec;
+    fs::create_symlink(t.path() / "outside.txt", t.path() / "src" / "data-explore" / "notes.txt", ec);
+    if (ec) GTEST_SKIP() << "this account can't create symlinks: " << ec.message();
+    const std::string dest = (t.path() / "installed").string();
+    EXPECT_THROW(
+        SkillLibrary::installFromFolder((t.path() / "src" / "data-explore").string(), dest, true),
+        SkillError);
+    EXPECT_FALSE(fs::exists(fs::path(dest) / "data-explore"));
+}
+
 TEST(SkillLibraryTest, InstallRefusesInvalidSkills) {
     TempTree t;
     t.raw("src", "broken", "no frontmatter\n");

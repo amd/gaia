@@ -1157,3 +1157,139 @@ TEST(AgentResilience, ACallCutOffWhilePastingRowsGetsAScriptExample) {
     EXPECT_NE(mock.receivedBodies()[1].find("pasting rows of data"), std::string::npos);
     EXPECT_NE(mock.receivedBodies()[1].find("pd.read_csv"), std::string::npos);
 }
+
+namespace {
+class LongErrorAgent : public ResilienceAgent {
+public:
+    explicit LongErrorAgent(const AgentConfig& config) : ResilienceAgent(config) {}
+
+protected:
+    void registerTools() override {
+        ResilienceAgent::registerTools();
+        toolRegistry().registerTool(
+            "long_fail", "Fail with a very long error",
+            [](const json&) -> json {
+                std::string error = "\xFF bad byte ";
+                for (int i = 0; i < 2000; ++i) error += "\xC3\xA9";
+                return json{{"ok", false}, {"error", error}};
+            },
+            {});
+    }
+};
+}  // namespace
+
+TEST(AgentResilience, ALongToolErrorWithABadByteIsClippedAndStillSent) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "long_fail", "{}"));
+    mock.pushResponse(answer("It failed."));
+    LongErrorAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "It failed.");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    std::string recovery;
+    const json sent = json::parse(bodies[1]);
+    for (const auto& m : sent["messages"]) {
+        if (m.value("role", "") != "user" || !m.contains("content") || !m["content"].is_string()) continue;
+        const std::string text = m["content"].get<std::string>();
+        if (text.find("TOOL EXECUTION FAILED") != std::string::npos) recovery = text;
+    }
+    ASSERT_FALSE(recovery.empty());
+    EXPECT_LT(recovery.size(), 2400u);
+    size_t replaced = 0;
+    for (size_t at = recovery.find("\xEF\xBF\xBD"); at != std::string::npos;
+         at = recovery.find("\xEF\xBF\xBD", at + 3)) {
+        ++replaced;
+    }
+    EXPECT_EQ(replaced, 1u) << "only the bad byte is replaced; the cut must not split a character";
+}
+
+TEST(AgentStreaming, AStreamedReplyCutOffMidCallSaysWhatWasLost) {
+    bench::MockLlmServer mock;
+    mock.enableSseStreaming(true);
+    const json whole = {{"index", 0},
+                        {"id", "c1"},
+                        {"type", "function"},
+                        {"function", {{"name", "add"}, {"arguments", R"({"a":1,"b":2})"}}}};
+    const json cut = {{"index", 1},
+                      {"id", "c2"},
+                      {"type", "function"},
+                      {"function", {{"name", "add"}, {"arguments", R"({"a":3,"b)"}}}};
+    json fields = json::object();
+    fields["tool_calls"] = json::array({whole, cut});
+    mock.pushSseStream(sse({delta(fields, "length")}));
+    mock.pushSseStream(sse({delta({{"content", "Done."}}, "stop")}));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.streaming = true;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("add them");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    EXPECT_NE(bodies[1].find("cut off at the length limit"), std::string::npos);
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"add"}));
+}
+
+TEST(AgentStreaming, AStreamThatFailsAfterTextWasShownIsNotSentAgain) {
+    bench::MockLlmServer mock;
+    mock.enableSseStreaming(true);
+    mock.pushSseStream("data: " + delta({{"content", "The answer is"}}).dump() + "\n\n" +
+                       "data: {\"error\":{\"message\":\"upstream overloaded\"}}\n\n");
+    mock.pushSseStream(sse({delta({{"content", "The answer is 4."}}, "stop")}));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.streaming = true;
+    cfg.llmRetries = 2;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(mock.requestCount(), 1) << "a second send would show the first words twice";
+    EXPECT_EQ(r["status"], "error");
+    const std::string why = r["result"].get<std::string>();
+    EXPECT_NE(why.find("already shown"), std::string::npos) << why;
+    EXPECT_NE(why.find("upstream overloaded"), std::string::npos) << why;
+}
+
+TEST(AgentResilience, ALoopWarningIsEarnedAgainAfterADifferentCallSucceeds) {
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 3; ++i) mock.pushResponse(call("a" + std::to_string(i), "add", R"({"a":1})"));
+    mock.pushResponse(call("b0", "add", R"({"a":2})"));
+    for (int i = 0; i < 3; ++i) mock.pushResponse(call("c" + std::to_string(i), "add", R"({"a":3})"));
+    mock.pushResponse(answer("done"));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxConsecutiveRepeats = 3;
+    cfg.stepBudgetNotices = false;  // no closing call: a stop would show in the result
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "done") << "the second loop gets a warning of its own, not a stop";
+    EXPECT_EQ(agent.executed.size(), 5u);
+    EXPECT_EQ(mock.requestCount(), 8);
+}
+
+TEST(AgentResilience, AnEmptyReplyIsAskedAboutAgainAfterAToolRan) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("<think>long reasoning cut off"));
+    mock.pushResponse(call("c1", "add", R"({"a":1})"));
+    mock.pushResponse(answer("<think>cut off once more"));
+    mock.pushResponse(answer("Here it is."));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.stepBudgetNotices = false;  // no closing call: a stop would show in the result
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "Here it is.");
+    EXPECT_EQ(mock.requestCount(), 4);
+}
+
+TEST(AgentResilience, AFurtherTagCallInOneReplyIsReportedToTheModel) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer(std::string(kTagCall) + "\n" + kTagCall));
+    mock.pushResponse(answer("Done."));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    agent.processQuery("add 2 and 3, twice");
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"add"}));
+    ASSERT_EQ(mock.receivedBodies().size(), 2u);
+    EXPECT_NE(mock.receivedBodies()[1].find("Only the first tool call of your reply ran"), std::string::npos);
+}

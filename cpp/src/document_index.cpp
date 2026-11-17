@@ -89,6 +89,33 @@ std::string docxText(const std::string& path) {
     return decodeXmlEntities(out);
 }
 
+// Files worth indexing under root: skips VCS/build folders, ignored paths and unreadable folders.
+std::vector<std::string> indexableFiles(const std::string& root, bool withDocuments) {
+    static const std::set<std::string> skipDirs = {
+        ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__", "build", "dist",
+        "target", ".tox", ".mypy_cache", ".pytest_cache", ".next", ".gradle", "out"};
+    const GitignoreMatcher ignore = GitignoreMatcher::forDirectory(root);
+    std::error_code ec;
+    std::vector<std::string> files;
+    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+    for (; it != end && !ec; it.increment(ec)) {
+        const fs::path& p = it->path();
+        const bool dir = it->is_directory(ec);
+        if (dir && (skipDirs.count(p.filename().string()) || ignore.isIgnored(p.u8string(), true))) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        if (dir || !it->is_regular_file(ec)) continue;
+        if (ignore.isIgnored(p.u8string(), false)) continue;
+        const std::string ext = lowerExt(p.string());
+        const bool document = withDocuments && (ext == ".pdf" || ext == ".docx");
+        if (!document && !isSupportedExtension(ext)) continue;
+        if (it->file_size(ec) > (document ? kMaxExtractBytes : (size_t{1} << 20))) continue;
+        files.push_back(p.string());
+    }
+    return files;
+}
+
 }  // namespace
 
 DocumentIndex::DocumentIndex(EmbedFunction embed, std::string embeddingModel,
@@ -211,6 +238,25 @@ size_t DocumentIndex::indexFile(const std::string& path) {
         }
     }
     std::lock_guard<std::mutex> lock(mutex_);
+    // Refuse a bad embedding while the file's previous chunks are still indexed.
+    const size_t dimension =
+        vectors_ && vectors_->dimension() != 0 ? vectors_->dimension()
+                                               : (vecs.empty() ? 0 : vecs[0].size());
+    for (size_t j = 0; j < vecs.size(); ++j) {
+        const auto& v = vecs[j];
+        const bool finite = std::all_of(v.begin(), v.end(), [](float x) { return std::isfinite(x); });
+        const bool zero = std::all_of(v.begin(), v.end(), [](float x) { return x == 0.0f; });
+        if (v.empty() || v.size() != dimension || !finite || zero) {
+            throw std::runtime_error(
+                "Embedder returned an unusable vector for chunk " + std::to_string(j + 1) + " of " +
+                file + " (" + std::to_string(v.size()) + " values, expected " +
+                std::to_string(dimension) +
+                " finite values that are not all zero); the file was not re-indexed. Check that "
+                "the embedding model" +
+                (embeddingModel_.empty() ? std::string() : " " + embeddingModel_) +
+                " is loaded and is the one this index was built with.");
+        }
+    }
     removeFile(file);
     for (size_t j = 0; j < fresh.size(); ++j) {
         std::map<std::string, int> tf;
@@ -226,28 +272,12 @@ size_t DocumentIndex::indexFile(const std::string& path) {
 }
 
 size_t DocumentIndex::indexDirectory(const std::string& root, std::vector<std::string>* failures) {
-    static const std::set<std::string> skipDirs = {
-        ".git", ".hg", ".svn", "node_modules", ".venv", "venv", "__pycache__", "build", "dist",
-        "target", ".tox", ".mypy_cache", ".pytest_cache", ".next", ".gradle", "out"};
-    const GitignoreMatcher ignore = GitignoreMatcher::forDirectory(root);
-    std::error_code ec;
     size_t total = 0;
-    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
-    for (; it != end && !ec; it.increment(ec)) {
-        const fs::path& p = it->path();
-        const bool dir = it->is_directory(ec);
-        if (dir && (skipDirs.count(p.filename().string()) || ignore.isIgnored(p.u8string(), true))) {
-            it.disable_recursion_pending();
-            continue;
-        }
-        if (dir || !it->is_regular_file(ec)) continue;
-        if (ignore.isIgnored(p.u8string(), false)) continue;
-        if (it->file_size(ec) > (1u << 20)) continue;
-        if (!isSupportedExtension(lowerExt(p.string()))) continue;
+    for (const auto& file : indexableFiles(root, false)) {
         try {
-            total += indexFile(p.string());
+            total += indexFile(file);
         } catch (const std::exception& e) {
-            if (failures) failures->push_back(p.string() + ": " + e.what());
+            if (failures) failures->push_back(file + ": " + e.what());
         }
     }
     return total;
@@ -335,13 +365,7 @@ void DocumentIndex::registerTools(ToolRegistry& registry,
         std::error_code ec;
         std::vector<std::string> targets;
         if (fs::is_directory(path, ec)) {
-            for (const auto& e : fs::recursive_directory_iterator(path, ec)) {
-                if (!e.is_regular_file(ec)) continue;
-                const std::string ext = lowerExt(e.path().string());
-                if (ext == ".pdf" || ext == ".docx" || isSupportedExtension(ext)) {
-                    targets.push_back(e.path().string());
-                }
-            }
+            targets = indexableFiles(path, true);
         } else {
             targets.push_back(path);
         }

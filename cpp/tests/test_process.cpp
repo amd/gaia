@@ -840,3 +840,48 @@ TEST(ShellSessionTempFiles, LeftoversOfDeadProcessesAreRemovedAndNothingElse) {
         fs::remove(tmp / name, ec);
     }
 }
+
+#ifndef _WIN32
+#include <fcntl.h>
+#include <unistd.h>
+
+TEST(ProcessRunnerTest, OutputPastTheCapDoesNotStallTheCommand) {
+    // Far more than a pipe holds, so a reader that stops at the cap blocks the command.
+    const auto result = ProcessRunner::run("head -c 2000000 /dev/zero | tr '\\000' x", 20000, "", {}, 256);
+
+    EXPECT_FALSE(result.timedOut);
+    EXPECT_EQ(result.exitCode, 0);
+    EXPECT_EQ(result.stdout_output.size(), 256u);
+}
+
+TEST(ProcessRunnerTest, CommandDoesNotInheritOpenDescriptors) {
+    const int fd = open("/dev/null", O_RDONLY);
+    ASSERT_GE(fd, 3);
+
+    const auto result = ProcessRunner::run(
+        "if [ -e /dev/fd/" + std::to_string(fd) + " ]; then echo fd_open; else echo fd_closed; fi", 10000);
+    close(fd);
+
+    EXPECT_NE(result.stdout_output.find("fd_closed"), std::string::npos) << result.stdout_output;
+}
+#else
+TEST(ProcessRunnerTest, OutputAfterASubstituteByteIsStillRead) {
+    const auto result = ProcessRunner::run(
+        "powershell -NoProfile -Command \"[Console]::Out.Write('before' + [char]26 + 'after')\"", 60000);
+
+    EXPECT_EQ(result.exitCode, 0) << result.stderr_output;
+    EXPECT_NE(result.stdout_output.find("before"), std::string::npos) << result.stdout_output;
+    EXPECT_NE(result.stdout_output.find("after"), std::string::npos) << result.stdout_output;
+}
+
+TEST_F(ShellSessionTest, AValueWithAQuoteIsNotReplayedIntoTheBatchScript) {
+    ShellSession session;
+    session.setEnv("GAIA_QUOTED_VAR", "a\" & echo GAIA_INJECTED & rem \"");
+
+    const auto result = session.run("echo ran", 10000);
+
+    EXPECT_EQ(result.stdout_output.find("GAIA_INJECTED"), std::string::npos) << result.stdout_output;
+    EXPECT_NE(result.stderr_output.find("GAIA_QUOTED_VAR"), std::string::npos) << result.stderr_output;
+    EXPECT_EQ(session.environment().count("GAIA_QUOTED_VAR"), 0u);
+}
+#endif

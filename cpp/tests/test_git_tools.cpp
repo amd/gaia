@@ -235,3 +235,10 @@ TEST(GitToolsTest, LogRejectsUnsafePath) {
     json result = info.callback(args);
     EXPECT_TRUE(result.contains("error"));
 }
+
+TEST(GitToolsTest, AFailureWithoutTheWordFatalIsStillAnError) {
+    // git rejects the option with "error: invalid option" and a non-zero exit code.
+    json result = GitTools::gitDiff().callback({{"ref", "--gaia-no-such-option"}});
+    ASSERT_TRUE(result.contains("error")) << result.dump();
+    EXPECT_FALSE(result.contains("diff"));
+}

@@ -5,8 +5,10 @@
 #include <gaia/file_tools.h>
 #include <gaia/tool_registry.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -1092,4 +1094,76 @@ TEST_F(FileToolsTest, NonAsciiNamesAreReadAndWrittenAsUtf8) {
         EXPECT_EQ(fs::u8path(match).filename().u8string(), name);
         EXPECT_NO_THROW(found.dump()) << "the result is valid UTF-8 JSON";
     }
+}
+
+TEST_F(FileToolsTest, FileSearch_DoesNotLeaveTheFolderThroughALink) {
+    const fs::path outside = fs::temp_directory_path() / "gaia_file_tools_outside";
+    std::error_code ec;
+    fs::remove_all(outside, ec);
+    fs::create_directories(outside);
+    {
+        std::ofstream secret(outside / "private.txt", std::ios::binary);
+        secret << "ORCHID\n";
+    }
+    writeFile("inside.txt", "ORCHID\n");
+    const fs::path link = tempDir_ / "linked";
+#ifdef _WIN32
+    // A junction, which needs no privilege and is not reported as a symlink.
+    const std::string make = "cmd /c mklink /J \"" + link.string() + "\" \"" + outside.string() + "\" >nul";
+    ASSERT_EQ(std::system(make.c_str()), 0) << make;
+#else
+    fs::create_directory_symlink(outside, link);
+    fs::create_symlink(outside / "private.txt", tempDir_ / "alias.txt");
+#endif
+
+    for (const json& args : {json{{"pattern", "*"}, {"path", tempDir_.u8string()}},
+                             json{{"pattern", "*"}, {"path", tempDir_.u8string()}, {"content_pattern", "ORCHID"}}}) {
+        json found = FileIOTools::fileSearch().callback(args);
+        ASSERT_FALSE(found.contains("error")) << found.dump();
+        ASSERT_EQ(found["matches"].size(), 1u) << found.dump();
+        const std::string match = found["matches"][0]["path"];
+        EXPECT_EQ(fs::u8path(match).filename().u8string(), "inside.txt");
+    }
+
+    // The link first, so cleaning up cannot reach through it.
+    fs::remove(link, ec);
+    fs::remove_all(outside, ec);
+}
+
+TEST_F(FileToolsTest, FileWrite_ReplacesTheFileWholeAndLeavesNoTemporaryFile) {
+    const std::string path = writeFile("keep.sh", "old\n");
+#ifndef _WIN32
+    fs::permissions(path, fs::perms::owner_all);
+#endif
+    ASSERT_FALSE(FileIOTools::fileRead().callback({{"path", path}}).contains("error"));
+
+    json written = FileIOTools::fileWrite().callback({{"path", path}, {"content", "new\n"}});
+    ASSERT_FALSE(written.contains("error")) << written.dump();
+    json edited = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", "new"}, {"new_string", "newer"}});
+    ASSERT_FALSE(edited.contains("error")) << edited.dump();
+
+    EXPECT_EQ(readFile(path), "newer\n");
+    size_t entries = 0;
+    for (const auto& e : fs::directory_iterator(tempDir_)) {
+        ++entries;
+        EXPECT_EQ(e.path().filename().string(), "keep.sh");
+    }
+    EXPECT_EQ(entries, 1u);
+#ifndef _WIN32
+    EXPECT_NE(fs::status(path).permissions() & fs::perms::owner_exec, fs::perms::none)
+        << "an edited script stays executable";
+#endif
+}
+
+TEST_F(FileToolsTest, FileRead_RefusesFoldersAndDeviceNames) {
+    json folder = FileIOTools::fileRead().callback({{"path", tempDir_.string()}});
+    ASSERT_TRUE(folder.contains("error")) << folder.dump();
+    EXPECT_NE(folder["error"].get<std::string>().find("is a folder"), std::string::npos) << folder.dump();
+#ifdef _WIN32
+    for (const char* name : {"NUL", "con", "COM1.txt", "aux.log", "lpt9"}) {
+        json device = FileIOTools::fileRead().callback({{"path", (tempDir_ / name).string()}});
+        ASSERT_TRUE(device.contains("error")) << name;
+        EXPECT_NE(device["error"].get<std::string>().find("Windows device"), std::string::npos) << device.dump();
+    }
+#endif
 }

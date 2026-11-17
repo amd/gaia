@@ -547,6 +547,15 @@ void StdioServer::pumpStdin() {
         line = line.substr(first, line.find_last_not_of(" \t\r") - first + 1);
         if (line.front() == '{') {
             const json msg = json::parse(line, nullptr, false);
+            if (msg.is_discarded()) {
+                // Likely a cut-off message; queued so its error lands in turn order.
+                std::lock_guard<std::mutex> lock(mutex_);
+                queue_.push_back({Item::Reject, "A line starting with '{' was not valid JSON, so it was not "
+                                                "sent to the model. Send one complete JSON object per line, "
+                                                "or plain text that does not start with '{'."});
+                queueCv_.notify_all();
+                continue;
+            }
             if (msg.is_object() && msg.contains(kControlKey)) {
                 try {
                     applyControl(msg);
@@ -869,6 +878,10 @@ int StdioServer::run() {
             if (item.kind == Item::Stop) break;
             if (item.kind == Item::Clear) {
                 agent_.clearHistory();
+                continue;
+            }
+            if (item.kind == Item::Reject) {
+                write({{"type", "error"}, {"detail", item.text}});
                 continue;
             }
             runQuery(item.text);

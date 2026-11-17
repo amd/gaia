@@ -169,6 +169,30 @@ private:
     }
 };
 
+/// Shorten each run of `*` to the few that decide its meaning: the matcher
+/// spends a stack frame on every one.
+std::string collapseStars(const std::string& pattern, bool pathMode) {
+    std::string out;
+    out.reserve(pattern.size());
+    for (size_t i = 0; i < pattern.size();) {
+        if (pattern[i] == '\\' && i + 1 < pattern.size()) {
+            out.append(pattern, i, 2);
+            i += 2;
+            continue;
+        }
+        if (pattern[i] != '*') {
+            out += pattern[i++];
+            continue;
+        }
+        size_t run = 0;
+        for (; i < pattern.size() && pattern[i] == '*'; ++i) ++run;
+        // In path mode stars pair up into `**`, so only whether the run is odd or even matters.
+        const size_t keep = !pathMode ? 1 : run <= 4 ? run : (run % 2 == 1 ? 3 : 4);
+        out.append(keep, '*');
+    }
+    return out;
+}
+
 /// Canonicalize to a generic-separator absolute path without requiring the
 /// path to exist (weakly_canonical tolerates missing tails).
 std::string normalizePath(const std::string& path) {
@@ -229,7 +253,8 @@ void stripTrailingSpace(std::string& line) {
 bool globMatch(const std::string& pattern,
                const std::string& text,
                const GlobOptions& options) {
-    GlobEngine engine(pattern, text, options);
+    const std::string collapsed = collapseStars(pattern, options.pathMode);
+    GlobEngine engine(collapsed, text, options);
     return engine.run();
 }
 
@@ -294,6 +319,7 @@ void GitignoreMatcher::addFile(const std::string& gitignorePath) {
 
 void GitignoreMatcher::addRules(const std::string& contents,
                                 const std::string& baseDir) {
+    constexpr size_t kMaxRuleBytes = 4096;
     const std::string base = normalizePath(baseDir);
 
     std::istringstream stream(contents);
@@ -303,6 +329,8 @@ void GitignoreMatcher::addRules(const std::string& contents,
         stripTrailingSpace(line);
         if (line.empty()) continue;
         if (line[0] == '#') continue;
+        // No path is this long, and the matcher's table grows with the rule's length.
+        if (line.size() > kMaxRuleBytes) continue;
 
         Rule rule;
         rule.baseDir = base;

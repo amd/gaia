@@ -140,7 +140,22 @@ std::string SkillSignature::tier() const {
     return "experimental";
 }
 
+void requirePlainSkillBundle(const std::string& directory) {
+    std::error_code ec;
+    fs::recursive_directory_iterator it(directory, ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        const fs::file_status status = it->symlink_status(ec);
+        if (ec || (!fs::is_regular_file(status) && !fs::is_directory(status))) {
+            fail("The skill bundle contains " + it->path().string() +
+                 ", which is a symbolic link or special file. A bundle may hold only regular "
+                 "files and folders; replace it with a real copy and install again.");
+        }
+    }
+    if (ec) fail("Can't read the skill folder " + directory + ": " + ec.message() + ".");
+}
+
 std::map<std::string, std::string> skillFileDigests(const std::string& directory) {
+    requirePlainSkillBundle(directory);
     std::map<std::string, std::string> out;
     std::error_code ec;
     for (const auto& e : fs::recursive_directory_iterator(directory, ec)) {

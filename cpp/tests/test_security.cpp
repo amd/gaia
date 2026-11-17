@@ -419,3 +419,24 @@ TEST(GaiaHomeTest, ApprovalsSessionsAndMemoryAllFollowGaiaHome) {
     std::error_code ec;
     std::filesystem::remove_all(home, ec);
 }
+
+TEST(ShellCommandScopeTest, AFlagThatRunsOrWritesIsApprovedOnlyAsWritten) {
+    for (const char* line : {"rg --pre ./run.sh needle", "rg --pre=./run.sh needle", "sort -o /etc/hosts in.txt",
+                             "sort -uo out.txt in.txt", "sort --output=out.txt in.txt", "sort --out=out.txt in.txt",
+                             "sort --compress-program=./run.sh big.txt", "tree -o listing.txt",
+                             "cmake -P script.cmake", "cmake -E env ./run.sh"}) {
+        EXPECT_EQ(shellCommandScope(line), std::string("exact:") + line) << line;
+    }
+    EXPECT_EQ(shellCommandScope("rg -n needle src"), "cmd:rg");
+    EXPECT_EQ(shellCommandScope("sort -u -k2 in.txt"), "cmd:sort");
+    EXPECT_EQ(shellCommandScope("tree -L 2"), "cmd:tree");
+    EXPECT_EQ(shellCommandScope("cmake --build build"), "cmd:cmake");
+}
+
+TEST(InternetRefusalTest, AnOverlongCommandIsRefusedBeforeItIsScanned) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    const std::string refused = internetRefusal(sh, {{"command", "echo " + std::string(300000, 'a')}});
+    EXPECT_NE(refused.find("65536"), std::string::npos) << refused.substr(0, 200);
+    EXPECT_EQ(internetRefusal(sh, {{"command", "echo " + std::string(1000, 'a')}}), "");
+}

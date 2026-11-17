@@ -4,9 +4,13 @@
 #include "gaia/skill_library.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <sstream>
+#include <vector>
 
 #include "gaia/http_client.h"
 #include "gaia/process.h"
@@ -74,6 +78,36 @@ std::string catalogDescription(const std::string& d) {
     return one.substr(0, cut) + "…";
 }
 
+// Unique per call, so concurrent installs never share a staging folder.
+std::string installSuffix() {
+    static std::atomic<unsigned> counter{0};
+    std::random_device rd;
+    std::ostringstream out;
+    out << std::hex << rd() << rd() << "-" << counter.fetch_add(1);
+    return out.str();
+}
+
+bool isInstallLeftover(const std::string& leaf) {
+    return leaf.size() > 1 && leaf[0] == '.' &&
+           (leaf.find(".installing") != std::string::npos ||
+            leaf.find(".old") != std::string::npos);
+}
+
+// A crashed install leaves its staging copy behind; one this old is no longer in use.
+void removeStaleInstallLeftovers(const fs::path& root, const std::string& name) {
+    std::error_code ec;
+    const auto cutoff = fs::file_time_type::clock::now() - std::chrono::hours(24);
+    std::vector<fs::path> stale;
+    for (fs::directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string leaf = it->path().filename().string();
+        if (!isInstallLeftover(leaf) || leaf.rfind("." + name + ".", 0) != 0) continue;
+        std::error_code timeEc;
+        const auto written = fs::last_write_time(it->path(), timeEc);
+        if (!timeEc && written < cutoff) stale.push_back(it->path());
+    }
+    for (const auto& dir : stale) fs::remove_all(dir, ec);
+}
+
 } // namespace
 
 std::vector<SkillRoot> SkillLibrary::defaultRoots() {
@@ -106,6 +140,7 @@ void SkillLibrary::refresh() {
         if (!fs::is_directory(root.path, ec)) continue;
         std::vector<fs::path> dirs;
         for (const auto& entry : fs::directory_iterator(root.path, ec)) {
+            if (isInstallLeftover(entry.path().filename().string())) continue;
             if (entry.is_directory(ec) && fs::is_regular_file(entry.path() / "SKILL.md", ec)) {
                 dirs.push_back(entry.path());
             }
@@ -234,6 +269,7 @@ std::string SkillLibrary::installFromFolder(const std::string& source, const std
     // Validates the frontmatter and that the folder is named after the skill.
     const Skill skill = parseSkillFile(src.string(), "user", false, true);
     validateSkill(skill, (src / "SKILL.md").string());
+    requirePlainSkillBundle(src.string());
     const SkillSignature sig =
         verifySkillBundle(src.string(), skill.name, skill.version.value_or(""), destRoot);
     if (tierOut) *tierOut = sig.tier();
@@ -251,22 +287,36 @@ std::string SkillLibrary::installFromFolder(const std::string& source, const std
     if (ec) throw SkillError("Can't create " + root.string() + ": " + ec.message());
     const fs::path target = root / skill.name;
     if (fs::equivalent(src, target, ec)) return target.string();  // already in place
-    const fs::path staging = root / ("." + skill.name + ".installing");
-    fs::remove_all(staging, ec);
-    fs::copy(src, staging, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
+    removeStaleInstallLeftovers(root, skill.name);
+    const std::string suffix = installSuffix();
+    const fs::path staging = root / ("." + skill.name + ".installing-" + suffix);
+    fs::copy(src, staging, fs::copy_options::recursive, ec);
     if (ec) {
         std::error_code ignore;
         fs::remove_all(staging, ignore);
         throw SkillError("Copying " + src.string() + " failed: " + ec.message());
     }
-    const fs::path retired = root / ("." + skill.name + ".old");
-    fs::remove_all(retired, ec);
-    if (fs::exists(target, ec)) fs::rename(target, retired, ec);
-    fs::rename(staging, target, ec);
+    const fs::path retired = root / ("." + skill.name + ".old-" + suffix);
+    // Another install of this skill may put its copy in place between the two renames.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        ec.clear();
+        if (fs::exists(target, ec)) {
+            fs::remove_all(retired, ec);
+            fs::rename(target, retired, ec);
+        }
+        fs::rename(staging, target, ec);
+        if (!ec) break;
+    }
     if (ec) {
+        const std::string why = ec.message();
         std::error_code ignore;
-        if (fs::exists(retired, ignore)) fs::rename(retired, target, ignore);
-        throw SkillError("Installing into " + target.string() + " failed: " + ec.message());
+        if (!fs::exists(target, ignore) && fs::exists(retired, ignore)) {
+            fs::rename(retired, target, ignore);
+        }
+        if (fs::exists(target, ignore)) fs::remove_all(retired, ignore);
+        fs::remove_all(staging, ignore);
+        throw SkillError("Installing into " + target.string() + " failed: " + why +
+                         ". Close anything using that folder and install again.");
     }
     fs::remove_all(retired, ec);
     return target.string();

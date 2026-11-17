@@ -207,3 +207,20 @@ TEST_F(GitignoreTest, PathsOutsideBaseDirAreNeverIgnored) {
     EXPECT_FALSE(matcher.isIgnored((fs::temp_directory_path() / "elsewhere.log").string(),
                                    false));
 }
+
+TEST(GlobMatchTest, AHugeRunOfStarsNeitherOverflowsNorChangesMeaning) {
+    const std::string stars(200000, '*');
+    EXPECT_TRUE(globMatch(stars + ".cpp", "main.cpp", nameMode()));
+    EXPECT_FALSE(globMatch(stars + ".cpp", "main.h", nameMode()));
+    EXPECT_TRUE(globMatch("src/" + stars + ".cpp", "src/a/b/main.cpp", pathMode()));
+    EXPECT_FALSE(globMatch("src/" + stars + ".cpp", "lib/main.cpp", pathMode()));
+    // An escaped star is a literal and is left alone.
+    EXPECT_TRUE(globMatch("a\\**", "a*bc", nameMode()));
+    EXPECT_FALSE(globMatch("a\\**", "abc", nameMode()));
+
+    GitignoreMatcher matcher;
+    matcher.addRules(stars + "\n*.log\n", fs::temp_directory_path().string());
+    EXPECT_FALSE(matcher.isIgnored((fs::temp_directory_path() / "keep.txt").string(), false))
+        << "an overlong rule is skipped";
+    EXPECT_TRUE(matcher.isIgnored((fs::temp_directory_path() / "build.log").string(), false));
+}

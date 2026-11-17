@@ -95,7 +95,7 @@ public:
 
 private:
     struct Item {
-        enum Kind { Query, Clear, Stop } kind;
+        enum Kind { Query, Clear, Stop, Reject } kind;
         std::string text;
         bool cancelled = false;
     };

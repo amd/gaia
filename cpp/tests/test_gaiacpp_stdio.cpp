@@ -616,6 +616,24 @@ TEST_F(GaiacppStdio, APlainLineAndAJsonLookingLineAreBothQueries) {
     EXPECT_EQ(waitTerminal(3)["answer"], "three");
 }
 
+TEST_F(GaiacppStdio, AnUnparseableJsonLineIsAnErrorNotAPrompt) {
+    mock_.pushResponse(answer("asked"));
+    start();
+    askRaw(R"({"gaia_query": "half a mess)");
+    const json refused = waitTerminal(1);
+    ASSERT_TRUE(refused.is_object());
+    EXPECT_EQ(refused["type"], "error") << refused.dump();
+    EXPECT_NE(refused.value("detail", "").find("not valid JSON"), std::string::npos) << refused.dump();
+    EXPECT_EQ(mock_.requestCount(), 0) << "the broken line reached the model";
+
+    askRaw("{braces} in plain words? no: but this line is fine");
+    askRaw("plain words still work");
+    const json asked = waitTerminal(3);
+    ASSERT_TRUE(asked.is_object());
+    EXPECT_EQ(mock_.requestCount(), 1) << "only the plain-text line is a prompt";
+    EXPECT_EQ(asked["answer"], "asked");
+}
+
 // ---- approvals ----
 
 TEST_F(GaiacppStdio, AllowRunsTheToolOnce) {
@@ -1332,7 +1350,6 @@ TEST_F(GaiacppStdio, ModelSwitchUsesTheServersSpellingOfAUserModel) {
 
 TEST_F(GaiacppStdio, AMalformedControlIsRejectedAndChangesNothing) {
     const fs::path out = work_ / "out.txt";
-    mock_.pushResponse(answer("That was not JSON."));
     mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", "hi"}}));
     mock_.pushResponse(answer("Not written."));
     start();
@@ -1343,12 +1360,13 @@ TEST_F(GaiacppStdio, AMalformedControlIsRejectedAndChangesNothing) {
     control({{"gaia_control", 5}});
     control({{"gaia_control", json::array({"cancel"})}});
     control({{"gaia_control", "make_coffee"}});
-    // Cut off mid-object, so not a control: it is asked like any other line.
+    // Cut off mid-object: neither a control nor something to ask the model.
     askRaw(R"({"gaia_control": "full_access", "enabled": tru)");
     const json asked = waitTerminal(1);
     ASSERT_TRUE(asked.is_object());
-    EXPECT_EQ(asked["answer"], "That was not JSON.");
-    EXPECT_EQ(events().size(), 3u) << "the ping, Thinking and the final: no control wrote to stdout";
+    EXPECT_EQ(asked["type"], "error") << asked.dump();
+    EXPECT_EQ(events().size(), 2u) << "the ping and the error: no control wrote to stdout";
+    EXPECT_EQ(mock_.requestCount(), 0);
 
     ask("write it");
     const json prompt = waitFor("needs_confirmation");

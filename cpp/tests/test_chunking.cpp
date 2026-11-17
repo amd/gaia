@@ -138,6 +138,19 @@ TEST_F(ChunkingTest, BlankRunsNeverProduceEmptyChunks) {
     }
 }
 
+TEST_F(ChunkingTest, ZeroOverlapRepeatsNothing) {
+    std::string text;
+    for (int i = 0; i < 12; ++i) {
+        if (i) text += "\n\n";
+        text += paragraphOfTokens(15);
+    }
+    const auto chunks = splitTextIntoChunks(text, {20, 0});
+    ASSERT_GT(chunks.size(), 1u);
+    std::size_t total = 0;
+    for (const auto& chunk : chunks) total += chunk.size();
+    EXPECT_LE(total, text.size()) << "chunks carry text from their predecessors";
+}
+
 TEST_F(ChunkingTest, RejectsUnusableConfiguration) {
     EXPECT_THROW(splitTextIntoChunks("text", {0, 0}), std::invalid_argument);
     EXPECT_THROW(splitTextIntoChunks("text", {100, 100}), std::invalid_argument);
@@ -461,6 +474,8 @@ TEST_F(ChunkingTest, ChunkBoundariesMatchPythonRagSdk) {
         const ChunkingConfig config{testCase["chunk_size"].get<std::size_t>(),
                                     testCase["chunk_overlap"].get<std::size_t>()};
         const auto expectedChunks = testCase["chunks"].get<std::vector<std::string>>();
+        // Python carries the whole previous chunk forward at overlap 0; C++ carries nothing.
+        if (config.chunkOverlap == 0) continue;
 
         const std::string text = extractFile((fixtures / file).string()).text;
 

@@ -219,6 +219,18 @@ TEST(TuiTranscript, MultiLineEntriesKeepTheirLineBreaks) {
     EXPECT_TRUE(contains(plain, "2. write_file"));
 }
 
+TEST(TuiTranscript, OddPlanStepsAndInvalidUtf8DoNotThrow) {
+    TuiTranscript transcript;
+    EXPECT_NO_THROW(
+        transcript.printPlan(json::array({"read the notes", {{"tool", 7}}, {{"tool", "write_file"}}}), 0));
+    EXPECT_NO_THROW(transcript.prettyPrintJson({{"output", "bad\xff" "bytes"}}, "Tool Result"));
+
+    const std::string plain = gaia_test::stripAnsi(renderTranscript(transcript, 80, 24));
+    EXPECT_TRUE(contains(plain, "1. read the notes"));
+    EXPECT_TRUE(contains(plain, "2. ???"));
+    EXPECT_TRUE(contains(plain, "3. write_file"));
+}
+
 // ---------------------------------------------------------------------------
 // Status bar
 // ---------------------------------------------------------------------------

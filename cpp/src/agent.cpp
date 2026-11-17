@@ -520,6 +520,12 @@ struct UnreadableLlmReply : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+/// A stream that failed after part of the reply was shown. Sending the request
+/// again would show that text twice, so it is never retried.
+struct PartialStreamError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 /// An id for a tool call the server sent without one. The id only has to match
 /// between the call echoed back and its result, and the agent writes both.
 std::string assignedToolCallId() {
@@ -710,14 +716,24 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
     if (cfg.streaming) {
         std::string accumulated;
         std::vector<ToolCall> streamedToolCalls;
-        std::string rawResponse = lemonade_.chatCompletionsStreaming(
-            requestBody,
-            [this, &accumulated](const std::string& token) {
-                accumulated += token;
-                console_->printStreamToken(token);
-            },
-            streamedToolCalls
-        );
+        std::string rawResponse;
+        try {
+            rawResponse = lemonade_.chatCompletionsStreaming(
+                requestBody,
+                [this, &accumulated](const std::string& token) {
+                    accumulated += token;
+                    console_->printStreamToken(token);
+                },
+                streamedToolCalls
+            );
+        } catch (const std::exception& e) {
+            if (accumulated.empty() || cancelRequested()) throw;
+            console_->printStreamEnd();
+            throw PartialStreamError(
+                std::string("The model's reply was cut off after part of it was already shown (") + e.what() +
+                "). The request was not sent again, because the text already shown would repeat. "
+                "Check the connection to the model server, then send your message again.");
+        }
 
         // Never consume tool_calls we did not ask for. Some servers volunteer
         // them (llama.cpp --jinja) even with no `tools` in the request; acting
@@ -731,16 +747,17 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
         if (!streamedToolCalls.empty()) {
             validateStreamedToolCalls(streamedToolCalls);
             if (!accumulated.empty()) console_->printStreamEnd();
-            const UsageStats usage = summarizeStream(rawResponse).usage;
+            const StreamSummary summary = summarizeStream(rawResponse);
             if (cfg.debug) {
                 std::cerr << "[LLM] streamed tool_calls=" << streamedToolCalls.size() << std::endl;
             }
-            return {accumulated, usage, std::move(streamedToolCalls)};
+            return {accumulated, summary.usage, std::move(streamedToolCalls), summary.finishReason};
         }
 
         if (!accumulated.empty()) {
             console_->printStreamEnd();
-            return {accumulated, summarizeStream(rawResponse).usage, {}};
+            const StreamSummary summary = summarizeStream(rawResponse);
+            return {accumulated, summary.usage, {}, summary.finishReason};
         }
 
         // Fallback: server returned a non-streaming response despite "stream":true.
@@ -959,6 +976,7 @@ Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
             return r;
         } catch (const std::exception& e) {
             if (cancelRequested()) throw;
+            if (dynamic_cast<const PartialStreamError*>(&e)) throw;
             if (isContextOverflow(e)) {
                 // Free more each time: older tool output, then all of it, then long replies.
                 bool freed = false;
@@ -981,7 +999,7 @@ Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
             }
             if (attempt >= cfg.llmRetries || !isTransientLlmFailure(e)) throw;
             ++attempt;
-            const int waitSec = std::min(30, 2 << (attempt - 1));
+            const int waitSec = std::min(30, 2 << std::min(attempt - 1, 4));
             console_->printWarning(std::string("Model call failed (") + e.what() +
                                    "); retry " + std::to_string(attempt) + "/" +
                                    std::to_string(cfg.llmRetries) + " in " +
@@ -1549,7 +1567,7 @@ std::optional<std::string> toolFailure(const json& r) {
             if (e.is_object() && e.contains("message") && e["message"].is_string()) {
                 return e["message"].get<std::string>();
             }
-            if (!e.is_null()) return e.dump();
+            if (!e.is_null()) return e.dump(-1, ' ', false, json::error_handler_t::replace);
         }
         return "the tool reported a failure without a message";
     };
@@ -1781,6 +1799,23 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         cfg = config_;
     }
 
+    // No tokenizer yields fewer than one token per 16 bytes of text; sending it would only time out.
+    size_t requestBytes = 0;
+    for (const auto& m : userMessages) {
+        requestBytes += m.content.size();
+        if (m.parts.has_value()) {
+            for (const auto& part : *m.parts) {
+                if (part.kind == ContentPart::Kind::TEXT) requestBytes += part.text.size();
+            }
+        }
+    }
+    if (cfg.contextSize > 0 && requestBytes / 16 > static_cast<size_t>(cfg.contextSize)) {
+        throw std::invalid_argument("The request is " + std::to_string(requestBytes) +
+                                    " bytes of text, more than the model's " + std::to_string(cfg.contextSize) +
+                                    "-token context window can hold. Save long material to a file and ask about "
+                                    "the file, or load the model with a larger window (--ctx-size).");
+    }
+
     // Settled once so the prompt and every request of the turn agree.
     if (cfg.nativeToolCalls == NativeToolCalls::Auto) {
         cfg.nativeToolCalls = autoNativeToolCalls(cfg) ? NativeToolCalls::Always : NativeToolCalls::Never;
@@ -1848,6 +1883,16 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     bool lastToolFailed = false;
     bool loopWarned = false;
     bool emptyNudged = false;
+    ToolCallWindow warnedLoop;  // the calls of the loop last warned about
+    // Progress since a nudge earns a fresh one; repeating the warned loop does not.
+    auto toolSucceeded = [&](const std::string& name, const json& args) {
+        emptyNudged = false;
+        if (loopWarned && std::none_of(warnedLoop.begin(), warnedLoop.end(), [&](const auto& c) {
+                return c.first == name && c.second == args;
+            })) {
+            loopWarned = false;
+        }
+    };
     bool emptyAtLimit = false;  // an empty reply that had used the whole reply limit
     // After a compact model's runaway reply, the next ask is short so another costs a minute,
     // not four. A reasoning model needs its full limit to think, so it keeps it.
@@ -1898,7 +1943,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         if (!still || still->empty()) return answer;
         if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"unresolved", *still}});
         // Streamed text is already on screen; otherwise the note prints with the answer.
-        if (config_.streaming && !config_.structuredEvents) console_->printWarning(*still);
+        if (cfg.streaming && !cfg.structuredEvents) console_->printWarning(*still);
         return answer + "\n\n" + *still;
     };
 
@@ -1922,7 +1967,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             errorMsg.role = MessageRole::USER;
             errorMsg.content =
                 "TOOL EXECUTION FAILED!\n\n"
-                "Error: " + lastError + "\n\n"
+                "Error: " + lastError.substr(0, utf8Boundary(lastError, 2000)) + "\n\n"
                 "Original task: " + userInput + "\n\n"
                 "Please analyze the error and try an alternative approach.\n";
             // The envelope reminder only applies to the prompt-JSON path; under
@@ -1985,6 +2030,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 return m.role == MessageRole::TOOL;
             });
             if (gathered && !dynamic_cast<const HttpError*>(&e) &&
+                !dynamic_cast<const PartialStreamError*>(&e) &&
                 llmError.find("no longer fits the model's context window") == std::string::npos) {
                 stopReason = "error";
                 break;
@@ -2123,7 +2169,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
             // structuredEvents consumers (TUI/WebUI) expect a thought per step;
             // a native turn's reasoning is whatever prose came with the calls.
-            if (!config_.streaming || config_.structuredEvents) {
+            if (!cfg.streaming || cfg.structuredEvents) {
                 console_->printThought(response);
             }
 
@@ -2150,6 +2196,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                     reply.toolCallId = tc.id;
                     reply.content = loopNudge(tc.name, cfg.maxConsecutiveRepeats, period);
                     messages.push_back(reply);
+                    warnedLoop = toolCallHistory;
+                    warnedLoop.emplace_back(tc.name, toolArgs);
                     toolCallHistory.clear();
                     continue;
                 }
@@ -2179,6 +2227,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                     lastError = *err;
                     executionState_ = AgentState::ERROR_RECOVERY;
                     lastToolFailed = true;
+                } else {
+                    toolSucceeded(tc.name, toolArgs);
                 }
             }
 
@@ -2250,7 +2300,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         // Skip when streaming — the raw tokens were already printed during callLlm().
         // Exception: structuredEvents mode emits both stream tokens AND structured events,
         // so the TUI/WebUI gets live progress AND parsed agent activity.
-        if (!config_.streaming || config_.structuredEvents) {
+        if (!cfg.streaming || cfg.structuredEvents) {
             console_->printThought(parsed.thought);
             console_->printGoal(parsed.goal);
         }
@@ -2278,7 +2328,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 continue;
             }
             finalAnswer = withUnresolved(parsed.answer.value());
-            if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
+            if (!cfg.streaming || cfg.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
 
@@ -2319,6 +2369,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 nudge.name = toolName;
                 nudge.content = loopNudge(toolName, cfg.maxConsecutiveRepeats, period);
                 messages.push_back(nudge);
+                warnedLoop = toolCallHistory;
+                warnedLoop.emplace_back(toolName, toolArgs);
                 toolCallHistory.clear();
                 continue;
             }
@@ -2348,6 +2400,17 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 lastError = *err;
                 executionState_ = AgentState::ERROR_RECOVERY;
                 lastToolFailed = true;
+            } else {
+                toolSucceeded(toolName, toolArgs);
+            }
+
+            if (parsed.droppedToolCalls > 0) {
+                Message note;
+                note.role = MessageRole::USER;
+                note.content = "[Only the first tool call of your reply ran. The other " +
+                               std::to_string(parsed.droppedToolCalls) +
+                               " did not run: send them again, one tool call per reply.]";
+                messages.push_back(note);
             }
 
             continue;
@@ -2360,7 +2423,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 continue;
             }
             finalAnswer = withUnresolved(response);
-            if (!config_.streaming || config_.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
+            if (!cfg.streaming || cfg.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
     }

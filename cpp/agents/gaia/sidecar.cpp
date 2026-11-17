@@ -45,6 +45,9 @@ constexpr const char* kService = "gaia-agent-gaia";
 // UI turns features on by it, so it must never run ahead of the code.
 constexpr const char* kApiVersion = "2.27";
 constexpr auto kKeepalive = std::chrono::seconds(10);
+constexpr int kStreamWorkers = 64;
+// Every open turn's stream holds a worker; the rest stay free for approvals and cancels.
+constexpr size_t kMaxOpenTurns = 32;
 constexpr auto kConfirmTimeout = std::chrono::minutes(10);
 constexpr size_t kMaxSessions = 256;      // idle chats beyond this are forgotten, oldest first
 constexpr size_t kMaxEarlyCancels = 256;
@@ -284,7 +287,7 @@ public:
         }
         routes();
         // Each open answer stream holds a worker for the whole turn.
-        server_.new_task_queue = [] { return new httplib::ThreadPool(64); };
+        server_.new_task_queue = [] { return new httplib::ThreadPool(kStreamWorkers); };
         server_.set_payload_max_length(kMaxBodyBytes);
         // A field of the wrong type in a request body is the caller's mistake, not a crash.
         server_.set_exception_handler([](const httplib::Request&, httplib::Response& res, std::exception_ptr ep) {
@@ -852,21 +855,29 @@ private:
             throw BadRequest(422, e.what());
         }
 
-        if (findRun(runId)) throw BadRequest(409, "Duplicate run_id " + runId);
-        auto s = session(sid.empty() ? runId : sid);
-        bool expected = false;
-        if (!s->busy.compare_exchange_strong(expected, true)) {
-            throw BadRequest(409, "This session is already running a turn");
-        }
-        s->temporary = sid.empty();
-
         auto run = std::make_shared<Run>();
         run->id = runId;
         {
             std::lock_guard<std::mutex> lock(runsMu_);
+            if (runs_.count(runId)) throw BadRequest(409, "Duplicate run_id " + runId);
+            if (runs_.size() >= kMaxOpenTurns) {
+                throw BadRequest(503, "gaiacpp already has " + std::to_string(kMaxOpenTurns) +
+                                          " turns running or waiting. Send this again when one of them finishes.");
+            }
             runs_[runId] = run;
             if (earlyCancels_.erase(runId)) run->cancelled = true;
         }
+        // '~' is not a session id character, so a one-turn key can never name a real chat.
+        auto s = session(sid.empty() ? "~" + runId : sid);
+        bool expected = false;
+        if (!s->busy.compare_exchange_strong(expected, true)) {
+            {
+                std::lock_guard<std::mutex> lock(runsMu_);
+                runs_.erase(runId);
+            }
+            throw BadRequest(409, "This session is already running a turn");
+        }
+        s->temporary = sid.empty();
         // Folder scope only grows within a chat; an attached file is granted as that file.
         for (const auto& p : allowed) s->roots.insert(p);
         for (const auto& d : documents) s->roots.insert(d);

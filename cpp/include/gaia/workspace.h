@@ -22,14 +22,15 @@ namespace gaia {
 
 class GAIA_API Workspace {
 public:
-    /// The first root is primary: relative paths resolve against it. Roots and
-    /// every path checked against them are UTF-8 (fs::path::u8string()), on
-    /// Windows too; a string in the ANSI code page is not accepted.
+    /// Roots and every path checked against them are UTF-8
+    /// (fs::path::u8string()), on Windows too; a string in the ANSI code page
+    /// is not accepted. A relative path resolves against the process's working
+    /// directory, which is where the tools open it.
     explicit Workspace(std::vector<std::string> roots);
 
     const std::vector<std::string>& roots() const { return roots_; }
 
-    /// True when `path` (relative to the primary root) lies inside a root.
+    /// True when `path` (relative to the working directory) lies inside a root.
     bool contains(const std::string& path) const;
 
     /// "" when the path is allowed, else the refusal the model should read.

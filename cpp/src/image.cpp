@@ -101,7 +101,8 @@ Image Image::fromBytes(std::vector<std::uint8_t> bytes, const std::string& mimeT
 static std::vector<std::uint8_t> readFileBytesSecure(const std::string& path) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    fs::file_status st = fs::symlink_status(path, ec);
+    const fs::path filePath = fs::u8path(path);  // UTF-8, or a non-ASCII name fails on Windows
+    fs::file_status st = fs::symlink_status(filePath, ec);
     if (ec) {
         throw std::runtime_error("Image::fromFile: cannot stat path");
     }
@@ -153,13 +154,13 @@ static std::vector<std::uint8_t> readFileBytesSecure(const std::string& path) {
     }
     return bytes;
 #else
-    std::uintmax_t sz = fs::file_size(path, ec);
+    std::uintmax_t sz = fs::file_size(filePath, ec);
     if (ec) throw std::runtime_error("Image::fromFile: file_size failed");
     if (sz == 0) throw std::invalid_argument("Image::fromFile: empty file");
     if (sz > static_cast<std::uintmax_t>(GAIA_MAX_IMAGE_BYTES)) {
         throw std::invalid_argument("Image::fromFile: file exceeds GAIA_MAX_IMAGE_BYTES");
     }
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(filePath, std::ios::binary);
     if (!f.is_open()) {
         throw std::runtime_error("Image::fromFile: cannot open file");
     }

@@ -53,7 +53,7 @@ GAIA_API json validateJsonResponse(const std::string& responseText);
 ///   - Plain text (conversational) responses
 ///   - Valid JSON responses
 ///   - Malformed JSON with fallback extraction
-///   - Regex-based field extraction as last resort
+///   - Field-by-field extraction as last resort
 ///
 /// @param response Raw response from LLM
 /// @return Parsed response structure

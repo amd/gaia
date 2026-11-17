@@ -251,8 +251,11 @@ LemonadeHealth LemonadeClient::healthCheck() {
             h.modelId = entry->value("model_name", "");
             h.contextSize = loadedContextSize(*entry);
         }
-    } catch (...) {
+    } catch (const json::exception&) {
         h.running = false;
+    } catch (const std::exception& e) {
+        h.running = false;
+        h.error = e.what();
     }
     return h;
 }
@@ -388,10 +391,22 @@ std::vector<std::vector<float>> LemonadeClient::embeddings(const std::string& mo
                                      " inputs. Check that the model is an embedding model.");
         }
         std::vector<std::vector<float>> batch(end - start);
+        std::vector<bool> filled(batch.size(), false);
+        long long position = 0;
         for (const auto& item : resp["data"]) {
-            const size_t idx = item.value("index", static_cast<size_t>(0));
-            if (idx >= batch.size()) throw std::runtime_error("Embeddings response index out of range");
-            batch[idx] = item.at("embedding").get<std::vector<float>>();
+            const bool indexed = item.is_object() && item.contains("index") && item["index"].is_number_integer();
+            const long long idx = indexed ? item["index"].get<long long>() : position;
+            ++position;
+            const bool inRange = idx >= 0 && static_cast<size_t>(idx) < batch.size();
+            if (!inRange || filled[static_cast<size_t>(idx)]) {
+                throw std::runtime_error(
+                    "Embeddings from " + baseUrl_ + " with model " + model + " returned index " +
+                    std::to_string(idx) + (inRange ? " twice" : ", outside the batch") + " for " +
+                    std::to_string(batch.size()) + " inputs, so the vectors cannot be matched to their "
+                    "inputs. Check that the server follows the OpenAI embeddings format.");
+            }
+            filled[static_cast<size_t>(idx)] = true;
+            batch[static_cast<size_t>(idx)] = item.at("embedding").get<std::vector<float>>();
         }
         for (auto& v : batch) out.push_back(std::move(v));
     }
@@ -437,6 +452,11 @@ void LemonadeClient::ensureModelLoaded(const std::string& modelName, int ctxSize
     }
 
     LemonadeHealth h = healthCheck();
+    // A load request waits minutes for a model; a server that cannot answer /health gets none.
+    if (!h.error.empty()) {
+        throw std::runtime_error("Could not load model " + effectiveModel + ": the model server at " + baseUrl_ +
+                                 " did not answer its health check: " + h.error);
+    }
 
     if (const json* entry = h.running ? loadedModel(h.raw, effectiveModel) : nullptr) {
         // A cloud model has no local window to size, so its ctx_size never matches.
@@ -444,7 +464,8 @@ void LemonadeClient::ensureModelLoaded(const std::string& modelName, int ctxSize
         recipeModel_ = effectiveModel;
         const bool cloud = loadedRecipe_ == "cloud";
         const int loadedCtx = loadedContextSize(*entry);
-        if (cloud || effectiveCtx == 0 || loadedCtx == effectiveCtx) {
+        // A larger loaded window serves the request; reloading would evict another client's model.
+        if (cloud || effectiveCtx == 0 || loadedCtx >= effectiveCtx) {
             if (debug_) {
                 std::cerr << "[Lemonade] Model already loaded: " << effectiveModel
                           << " ctx=" << loadedCtx << std::endl;
@@ -477,7 +498,9 @@ std::pair<bool, std::string> LemonadeClient::validateContextSize(int tokens) {
 // ---------------------------------------------------------------------------
 
 std::string LemonadeClient::chatCompletions(const json& requestBody, int timeoutSec) {
-    std::string responseBody = httpPost("/chat/completions", requestBody.dump(), timeoutSec);
+    // Text from a tool or a file may hold invalid UTF-8, which a strict dump throws on.
+    std::string responseBody = httpPost(
+        "/chat/completions", requestBody.dump(-1, ' ', false, json::error_handler_t::replace), timeoutSec);
 
     // Lemonade returns HTTP 200 even for server-side errors -- check the body
     // before returning so all callers get a proper exception instead of a
@@ -523,7 +546,7 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
 
     httpPostStreaming(
         "/chat/completions",
-        body.dump(),
+        body.dump(-1, ' ', false, json::error_handler_t::replace),
         [this, &parser, &rawBytes](const char* data, size_t len) -> bool {
             if (abortCheck_ && abortCheck_()) return false;
             rawBytes.append(data, len);

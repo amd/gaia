@@ -68,6 +68,17 @@ TEST(SkillSigningTest, TamperingIsRefused) {
         << "a signature does not transfer between versions";
 }
 
+TEST(SkillSigningTest, LinkedFolderInABundleIsRefused) {
+    Scratch s;
+    const fs::path copy = s.path / "signed-demo";
+    fs::copy(kBundle, copy, fs::copy_options::recursive);
+    std::error_code ec;
+    fs::create_directory_symlink(kBundle / "refs", copy / "more", ec);
+    if (ec) GTEST_SKIP() << "this account can't create symlinks: " << ec.message();
+    EXPECT_THROW(verifySkillBundle(copy.string(), "signed-demo", "1.2.0", kTrust.string()), SkillError)
+        << "a link's target is not covered by the signature";
+}
+
 TEST(SkillSigningTest, UnsignedBundleIsUnsignedNotAnError) {
     Scratch s;
     fs::create_directories(s.path / "plain");

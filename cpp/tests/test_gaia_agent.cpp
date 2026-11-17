@@ -1398,3 +1398,52 @@ TEST(GaiaAgentTest, AClaimStillUntrueWhenStepsRunOutIsNotedOnTheClosingAnswer) {
     const std::string result = r["result"];
     EXPECT_NE(result.find("no such file exists"), std::string::npos) << r.dump();
 }
+
+TEST(GaiaAgentTest, ATotalAScriptWorkedOutIsNotTreatedAsCopiedFromAFile) {
+    const std::string request = "What does the hydrophone line on Northwick's purchase request come to at list price?";
+    const std::vector<GaiaAgent::CallSeen> turn = {
+        {"file_read", {{"path", "docs/purchase_request.txt"}}, "  - 30 x TL-400 tide loggers\n  - 4 x HM-3 hydrophones"},
+        {"file_read", {{"path", "docs/price_list.csv"}}, "HM-3,Hydrophone,instrument,3120.00,1000 m rated"},
+        {"bash_execute", {{"command", "python -c \"print(4 * 3120)\""}}, "12480"}};
+    EXPECT_FALSE(GaiaAgent::unitPriceOnlyNote(request, "The hydrophone line comes to $12,480.", turn));
+    EXPECT_TRUE(GaiaAgent::unitPriceOnlyNote(request, "The list price is $3,120.00.", turn));
+}
+
+TEST(GaiaAgentTest, AQuantityWrittenWithAMultiplicationSignIsRecognised) {
+    const std::string request = "What does the hydrophone line on the purchase request come to at list price?";
+    const std::vector<GaiaAgent::CallSeen> read = {
+        {"file_read", {{"path", "docs/purchase_request.txt"}}, "  - 4 \xC3\x97 HM-3 hydrophones"},
+        {"file_read", {{"path", "docs/price_list.csv"}}, "HM-3,Hydrophone,instrument,3120.00,1000 m rated"}};
+    const auto note = GaiaAgent::unitPriceOnlyNote(request, "The list price is $3,120.00.", read);
+    ASSERT_TRUE(note);
+    EXPECT_NE(note->find("HM-3"), std::string::npos) << *note;
+}
+
+TEST(GaiaAgentTest, AGuardReasonIsCutBetweenCharactersNotInsideOne) {
+    Workdir w;
+    std::string wide;
+    for (int i = 0; i < 200; ++i) wide += "\xC3\xA9";
+    std::ofstream(w.path / "app.ini") << "# Do not edit: " << wide << "\nport=1\n";
+    std::ofstream(w.path / "sync.toml") << "port = 8080\n";
+    std::ofstream(w.path / "sync.toml.lock") << "pid=12 " << wide << "\n";
+    for (const char* name : {"app.ini", "sync.toml"}) {
+        const std::string reason = GaiaAgent::guardedFileReason(w.path / name);
+        ASSERT_FALSE(reason.empty()) << name;
+        EXPECT_NO_THROW(json(reason).dump()) << name << ": the reason holds half a character";
+    }
+}
+
+TEST(GaiaAgentTest, AVeryLongAnswerIsStillCheckedAtItsEnd) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    std::string longAnswer;
+    while (longAnswer.size() < 300000) longAnswer += "The tide table has one more row of figures. ";
+    mock.pushResponse(answer(longAnswer + "All done: I saved the summary to report.md."));
+    mock.pushResponse(answer("Correction: I could not write report.md; here is the summary inline."));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    json r = agent.processQuery("summarize");
+    EXPECT_EQ(r["result"], "Correction: I could not write report.md; here is the summary inline.");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    EXPECT_NE(bodies[1].find("no such file exists"), std::string::npos);
+}

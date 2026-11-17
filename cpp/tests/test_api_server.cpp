@@ -458,6 +458,26 @@ TEST(ApiServerTest, BadRequestsFailLoudly) {
     EXPECT_EQ(h.mock.requestCount(), 0);
 }
 
+TEST(ApiServerTest, WronglyTypedFieldsAre400WithAJsonError) {
+    Harness h;
+    auto cli = h.client();
+    auto expect400 = [&](const json& messages, json extra = json::object()) {
+        auto r = cli.Post("/v1/chat/completions", chatBody(messages, false, extra),
+                          "application/json");
+        ASSERT_TRUE(r);
+        EXPECT_EQ(r->status, 400) << r->body;
+        json body = json::parse(r->body, nullptr, false);
+        ASSERT_TRUE(body.is_object()) << r->body;
+        EXPECT_EQ(body["error"].value("type", ""), "invalid_request_error");
+        EXPECT_FALSE(body["error"].value("message", "").empty());
+    };
+    expect400(userOnly("hi"), {{"stream", "yes"}});
+    expect400(json::array({{{"role", "user"},
+                            {"content", json::array({{{"type", "text"}, {"text", 5}}})}}}));
+    expect400(json::array({{{"role", "user"}, {"content", json::array({{{"type", 7}}})}}}));
+    EXPECT_EQ(h.mock.requestCount(), 0);
+}
+
 TEST(ApiServerTest, RejectSystemMessagesOption) {
     ServerOptions o;
     o.rejectSystemMessages = true;

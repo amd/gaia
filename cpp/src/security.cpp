@@ -390,8 +390,12 @@ bool urlIsLocal(const std::string& url) {
     return std::regex_match(h, loop);
 }
 
+// Longer than any real command, and std::regex recurses once per character matched.
+constexpr size_t kMaxScannedBytes = 64 * 1024;
+
 // Every URL in free text that leaves this PC.
 bool mentionsRemoteUrl(const std::string& text) {
+    if (text.size() > kMaxScannedBytes) return true;  // too long to scan, so not known to stay local
     static const std::regex url(R"([A-Za-z][A-Za-z0-9+.\-]*://[^\s'"<>`()]+)");
     for (std::sregex_iterator it(text.begin(), text.end(), url), end; it != end; ++it) {
         if (!urlIsLocal(it->str())) return true;
@@ -421,6 +425,11 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
     }
     if (name == "bash_execute") {
         const std::string command = args.value("command", "");
+        if (command.size() > kMaxScannedBytes) {
+            return why + "a command of " + std::to_string(command.size()) + " bytes: over " +
+                   std::to_string(kMaxScannedBytes) + " bytes it cannot be checked for going online. Write long "
+                   "input to a file and have the command read it.";
+        }
         // Commands that go online with no URL in sight: a remote, a package index, an API.
         static const std::regex online(
             R"(\b(?:git\b.*\b(?:clone|fetch|pull|push|ls-remote|submodule\s+update)\b)"
@@ -492,7 +501,35 @@ std::string shellCommandScope(const std::string& command) {
         if (!(words >> sub) || sub[0] == '-') return "exact:" + cmd;
         return "cmd:" + program + " " + sub;
     }
-    if (plain.count(program)) return "cmd:" + program;
+    if (plain.count(program)) {
+        // A flag that runs another program or writes a file is approved only as written.
+        for (std::string w; words >> w;) {
+            if (w.size() < 2) continue;
+#ifdef _WIN32
+            if (program == "sort" && w[0] == '/' && (w[1] == 'o' || w[1] == 'O')) return "exact:" + cmd;
+#endif
+            if (w[0] != '-') continue;
+            const bool longOpt = w[1] == '-';
+            const std::string name = w.substr(0, w.find('='));
+            // GNU tools accept any unambiguous prefix of a long option.
+            const auto abbreviates = [&](const std::string& option) {
+                return longOpt && name.size() > 2 && option.compare(0, name.size(), name) == 0;
+            };
+            bool risky = false;
+            if (program == "rg") {
+                risky = w.rfind("--pre", 0) == 0 || w.rfind("--hostname-bin", 0) == 0;
+            } else if (program == "sort") {
+                risky = (!longOpt && w.find('o') != std::string::npos) || abbreviates("--output") ||
+                        abbreviates("--compress-program");
+            } else if (program == "tree") {
+                risky = (!longOpt && w.find('o') != std::string::npos) || abbreviates("--output");
+            } else if (program == "cmake") {
+                risky = !longOpt && (w[1] == 'P' || w[1] == 'E' || w[1] == 'C');
+            }
+            if (risky) return "exact:" + cmd;
+        }
+        return "cmd:" + program;
+    }
     // Interpreters, wrappers (env, xargs, sudo), a path to a program, VAR=x cmd.
     return "exact:" + cmd;
 }

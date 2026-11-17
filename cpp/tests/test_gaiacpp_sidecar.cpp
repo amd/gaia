@@ -995,6 +995,58 @@ TEST_F(GaiacppSidecar, SecondQueryWhileOneIsInFlightGets409) {
     EXPECT_EQ(after.events().back()["answer"], "Second message answered.") << after.describe();
 }
 
+TEST_F(GaiacppSidecar, RunIdEqualToAChatsIdDoesNotTakeOverThatChat) {
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    {
+        Turn chat(port_, queryBody("run-keep-1", "hello", {{"session_id", "chat-keep"}}));
+        ASSERT_TRUE(chat.waitDone()) << chat.describe();
+        ASSERT_EQ(chat.status(), 200) << chat.describe();
+    }
+    {
+        Turn oneOff(port_, queryBody("chat-keep", "a one-off turn named like the chat"));
+        ASSERT_TRUE(oneOff.waitDone()) << oneOff.describe();
+        ASSERT_EQ(oneOff.status(), 200) << oneOff.describe();
+        ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(oneOff.events(), "final")) << oneOff.describe();
+    }
+    auto still = send("POST", "/v1/gaia/sessions/chat-keep/internet", bearer(), R"({"internet_off":true})");
+    ASSERT_TRUE(still);
+    EXPECT_EQ(still->status, 200) << "the chat was dropped with the one-off turn: " << still->body;
+}
+
+TEST_F(GaiacppSidecar, TurnsBeyondTheQueueBoundGet503AndApprovalsStillGetThrough) {
+    hold();  // the first turn to run never finishes, so every accepted turn stays open
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+    constexpr int kSent = 40;
+    constexpr int kAccepted = 32;
+    std::vector<std::unique_ptr<Turn>> turns;
+    for (int i = 0; i < kSent; ++i) {
+        turns.push_back(std::make_unique<Turn>(port_, queryBody("run-q-" + std::to_string(i), "wait")));
+    }
+    auto refused = [&] {
+        int n = 0;
+        for (auto& t : turns) n += t->status() == 503 ? 1 : 0;
+        return n;
+    };
+    ASSERT_TRUE(waitUntil([&] { return refused() >= kSent - kAccepted; }, seconds(60)))
+        << refused() << " of " << kSent << " turns were refused";
+    std::this_thread::sleep_for(milliseconds(300));
+    EXPECT_EQ(refused(), kSent - kAccepted) << "exactly the turns over the bound are refused";
+    std::string openRun;
+    for (int i = 0; i < kSent; ++i) {
+        if (turns[i]->status() == 503) {
+            const json b = turns[i]->errorBody();
+            ASSERT_TRUE(b.is_object()) << turns[i]->raw();
+            EXPECT_NE(b.value("detail", "").find("Send this again"), std::string::npos) << b.dump();
+        } else {
+            openRun = "run-q-" + std::to_string(i);
+        }
+    }
+    ASSERT_FALSE(openRun.empty());
+    auto decision = decide(openRun, "allow", "");
+    ASSERT_TRUE(decision) << "the sidecar had no worker left for an approval";
+    EXPECT_EQ(decision->status, 409) << decision->body;
+}
+
 // ---- 8. per-chat scope ----
 
 TEST_F(GaiacppSidecar, FileOutsideTheChatsFoldersIsRefused) {

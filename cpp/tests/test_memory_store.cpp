@@ -113,6 +113,22 @@ TEST(MemoryStoreTest, PersistsAcrossOpens) {
     fs::remove(db, ec);
 }
 
+TEST(MemoryStoreTest, AFailedIndexWriteStoresNothing) {
+    std::mt19937_64 rng(std::random_device{}());
+    const fs::path db = fs::temp_directory_path() / ("gaia-mem-" + std::to_string(rng()) + ".db");
+    {
+        MemoryStore m(db.string());
+        {
+            Database raw(db.string());
+            raw.execute("DROP TABLE knowledge_fts");
+        }
+        EXPECT_ANY_THROW(m.remember("Uses metric units"));
+        EXPECT_EQ(m.count(), 0u) << "the fact row must roll back with the failed index row";
+    }
+    std::error_code ec;
+    fs::remove(db, ec);
+}
+
 TEST(MemoryStoreTest, Tools) {
     MemoryStore m(":memory:");
     ToolRegistry reg;

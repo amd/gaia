@@ -275,4 +275,133 @@ TEST_F(GaiacppCli, UnwritableTurnLogStopsBeforeAnyModelRequest) {
     EXPECT_EQ(mock.requestCount(), 0);
 }
 
+TEST_F(GaiacppCli, ARunThatThrowsStillPrintsOneJsonRecord) {
+    bench::MockLlmServer mock;
+    const fs::path bad = dir_ / "missing-folder" / "turns.jsonl";
+    const gaia::ProcessResult r = run(mock, bad.string());
+    EXPECT_EQ(r.exitCode, 1) << r.stderr_output;
+    const json out = json::parse(r.stdout_output, nullptr, false);
+    ASSERT_TRUE(out.is_object()) << "stdout is not one JSON record: " << r.stdout_output;
+    EXPECT_EQ(out["status"], "error");
+    EXPECT_EQ(out["is_error"], true);
+    EXPECT_NE(out.value("result", "").find("GAIA_TURN_LOG"), std::string::npos) << out.dump();
+    EXPECT_NE(r.stderr_output.find("GAIA_TURN_LOG"), std::string::npos) << r.stderr_output;
+}
+
+TEST_F(GaiacppCli, BadNumericFlagsAndVariablesAreUsageErrors) {
+    bench::MockLlmServer mock;
+    const auto refused = [&](const std::string& args, const std::map<std::string, std::string>& env,
+                             const std::string& name, const std::string& value) {
+        const gaia::ProcessResult r = run(mock, "", args, env);
+        EXPECT_EQ(r.exitCode, 2) << name << " " << value << ": " << r.stderr_output;
+        EXPECT_NE(r.stderr_output.find(name), std::string::npos) << r.stderr_output;
+        EXPECT_NE(r.stderr_output.find("'" + value + "'"), std::string::npos) << r.stderr_output;
+    };
+    refused(" --ctx-size -1", {}, "--ctx-size", "-1");
+    refused(" --max-tokens 0", {}, "--max-tokens", "0");
+    refused(" --max-tokens 99999999999", {}, "--max-tokens", "99999999999");
+    refused(" --max-steps -5", {}, "--max-steps", "-5");
+    refused(" --max-steps 5x", {}, "--max-steps", "5x");
+    refused(" --temperature nan", {}, "--temperature", "nan");
+    refused(" --temperature 2.5", {}, "--temperature", "2.5");
+    refused(" --temperature 0.5c", {}, "--temperature", "0.5c");
+    refused("", {{"GAIA_MAX_STEPS", "0"}}, "GAIA_MAX_STEPS", "0");
+    refused("", {{"GAIA_CONTEXT_SIZE", "-4"}}, "GAIA_CONTEXT_SIZE", "-4");
+    EXPECT_EQ(mock.requestCount(), 0);
+}
+
+TEST_F(GaiacppCli, AWronglyTypedSettingNamesTheFileAndTheKey) {
+    bench::MockLlmServer mock;
+    const auto refused = [&](const std::string& name, const json& settings, const std::string& key,
+                             const std::string& expected) {
+        const fs::path file = dir_ / name;
+        std::ofstream(file) << settings.dump();
+        const gaia::ProcessResult r = run(mock, "", " --config \"" + file.string() + "\"");
+        EXPECT_EQ(r.exitCode, 1) << r.stderr_output;
+        EXPECT_NE(r.stderr_output.find(name), std::string::npos) << r.stderr_output;
+        EXPECT_NE(r.stderr_output.find("\"" + key + "\" must be " + expected), std::string::npos)
+            << r.stderr_output;
+        EXPECT_EQ(r.stderr_output.find("json.exception"), std::string::npos) << r.stderr_output;
+    };
+    refused("list-temperature.json", {{"temperature", json::array({1})}}, "temperature", "a number from 0 to 2");
+    refused("hot-temperature.json", {{"temperature", 9}}, "temperature", "a number from 0 to 2");
+    refused("number-model.json", {{"modelId", 5}}, "modelId", "a string");
+    refused("zero-steps.json", {{"maxSteps", 0}}, "maxSteps", "a whole number above 0");
+    refused("text-context.json", {{"contextSize", "big"}}, "contextSize", "a whole number above 0");
+    refused("text-streaming.json", {{"streaming", "yes"}}, "streaming", "true or false");
+    EXPECT_EQ(mock.requestCount(), 0);
+}
+
+TEST_F(GaiacppCli, EveryFailureAfterParsingEndsStdoutWithAnErrorRecord) {
+    const auto expectRecord = [](const gaia::ProcessResult& r, const std::string& what) {
+        EXPECT_EQ(r.exitCode, 1) << what << ": " << r.stderr_output;
+        const json out = json::parse(r.stdout_output, nullptr, false);
+        ASSERT_TRUE(out.is_object()) << what << ": stdout is not one JSON record: " << r.stdout_output;
+        EXPECT_EQ(out.value("status", ""), "error") << what << ": " << out.dump();
+        EXPECT_EQ(out.value("is_error", false), true) << what;
+        EXPECT_FALSE(out.value("result", "").empty()) << what;
+        EXPECT_FALSE(r.stderr_output.empty()) << what;
+    };
+    bench::MockLlmServer mock;
+
+    const fs::path corrupt = dir_ / "corrupt.json";
+    std::ofstream(corrupt) << "{ \"modelId\": ";
+    expectRecord(run(mock, "", " --config \"" + corrupt.string() + "\""), "corrupt settings file");
+
+    const fs::path typed = dir_ / "typed.json";
+    std::ofstream(typed) << json{{"temperature", json::array({1})}}.dump();
+    expectRecord(run(mock, "", " --config \"" + typed.string() + "\""), "wrongly typed settings file");
+
+    const fs::path mcp = dir_ / "mcp.json";
+    std::ofstream(mcp) << json{{"mcpServers", {{"down", {{"url", "http://127.0.0.1:9/mcp"}}}}}}.dump();
+    expectRecord(run(mock, "", " --mcp-config \"" + mcp.string() + "\""), "MCP server that cannot start");
+
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    const fs::path missing = dir_ / "no-such-prompt.txt";
+    expectRecord(gaia::ProcessRunner::run(
+                     bin + " --prompt-file \"" + missing.string() + "\" -m mock-model --base-url " +
+                         mock.baseUrl() + " --output-format json --no-memory --no-skills --no-web",
+                     60000, (dir_ / "work").string(),
+                     {{"GAIACPP_CONFIG", (dir_ / "no-config.json").string()}}),
+                 "unreadable prompt file");
+    EXPECT_EQ(mock.requestCount(), 0);
+
+    for (int i = 0; i < 12; ++i) mock.pushResponse(R"({"error":{"message":"model failed to load"}})", 500);
+    expectRecord(run(mock, ""), "model failure");
+}
+
+TEST_F(GaiacppCli, ServeOnAPortInUseFailsWithoutWaiting) {
+    bench::MockLlmServer mock;
+    // A listener that shares its port with nobody, whatever options the other side sets.
+    httplib::Server blocker;
+    blocker.set_socket_options([](socket_t sock) {
+#ifdef _WIN32
+        int yes = 1;
+        setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char*>(&yes), sizeof(yes));
+#else
+        (void)sock;
+#endif
+    });
+    const int port = blocker.bind_to_any_port("127.0.0.1");
+    ASSERT_GT(port, 0);
+
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    const std::string cmd = bin + " serve --host 127.0.0.1 --port " + std::to_string(port) +
+                            " -m mock-model --base-url " + mock.baseUrl() +
+                            " --no-memory --no-skills --no-web";
+    const auto t0 = std::chrono::steady_clock::now();
+    const gaia::ProcessResult r = gaia::ProcessRunner::run(
+        cmd, 30000, (dir_ / "work").string(),
+        {{"GAIACPP_CONFIG", (dir_ / "no-config.json").string()}});
+    const auto elapsed = std::chrono::steady_clock::now() - t0;
+    blocker.stop();
+
+    EXPECT_NE(r.exitCode, 0);
+    EXPECT_NE(r.stderr_output.find("failed to bind"), std::string::npos) << r.stderr_output;
+    EXPECT_EQ(r.stdout_output.find("\"ready\""), std::string::npos) << r.stdout_output;
+    EXPECT_LT(elapsed, std::chrono::seconds(6)) << "the bind error waited for the ready announcement";
+}
+
 }  // namespace

@@ -666,11 +666,22 @@ struct ApiServer::Impl {
         }
 
         Conversation conv;
+        bool stream = false;
+        bool includeUsage = false;
         try {
             conv = parseConversation(body.contains("messages") ? body["messages"] : json(),
                                      opts.rejectSystemMessages);
+            stream = body.value("stream", false);
+            includeUsage = body.contains("stream_options") &&
+                           body["stream_options"].is_object() &&
+                           body["stream_options"].value("include_usage", false);
         } catch (const RequestError& e) {
             sendError(res, e.status, e.what(), "invalid_request_error");
+            return;
+        } catch (const json::exception& e) {
+            sendError(res, 400,
+                      std::string("A request field has the wrong JSON type: ") + e.what(),
+                      "invalid_request_error");
             return;
         }
 
@@ -685,10 +696,6 @@ struct ApiServer::Impl {
         }
         auto slot = std::make_shared<BusySlot>(busy);
 
-        const bool stream = body.value("stream", false);
-        const bool includeUsage = body.contains("stream_options") &&
-                                  body["stream_options"].is_object() &&
-                                  body["stream_options"].value("include_usage", false);
         if (stream) {
             startStream(res, std::move(conv), includeUsage, slot);
         } else {

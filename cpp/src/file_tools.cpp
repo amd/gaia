@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -181,6 +183,91 @@ bool readWholeFile(const std::string& path, std::string& out) {
     buffer << file.rdbuf();
     out = buffer.str();
     return true;
+}
+
+/// "" when `path` can be opened as a file; else why not. A device name is
+/// refused by its spelling: asking Windows about CON or COM1 can itself block.
+std::string notAFileReason(const std::string& path) {
+#ifdef _WIN32
+    const bool devicePath = path.size() >= 4 && (path[0] == '\\' || path[0] == '/') &&
+                            (path[1] == '\\' || path[1] == '/') && path[2] == '.' &&
+                            (path[3] == '\\' || path[3] == '/');
+    // Windows ignores an extension, a stream name and trailing spaces on a device name.
+    std::string stem = path.substr(path.find_last_of("/\\") + 1);
+    stem = stem.substr(0, stem.find_first_of(".:"));
+    while (!stem.empty() && stem.back() == ' ') stem.pop_back();
+    std::transform(stem.begin(), stem.end(), stem.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    static const std::set<std::string> devices = {
+        "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"};
+    if (devicePath || devices.count(stem)) {
+        return path + " names a Windows device, not a file, and was not opened. Use a different file name.";
+    }
+#endif
+    std::error_code ec;
+    const fs::file_status status = fs::status(fs::u8path(path), ec);
+    if (ec || !fs::exists(status) || fs::is_regular_file(status)) return "";
+    if (fs::is_directory(status)) {
+        return path + " is a folder, not a file. Use file_search with this path to list what is in it.";
+    }
+    return path + " is not a regular file (a device, pipe or socket) and was not opened.";
+}
+
+/// Replace the file at `path` with `content` through a temporary file beside
+/// it, so a write that fails leaves the original intact. "" on success, else
+/// what went wrong.
+std::string replaceFileContents(const std::string& path, const std::string& content) {
+    fs::path target = fs::u8path(path);
+    std::error_code ec;
+    if (fs::is_symlink(target, ec)) {
+        // Written through the link, as opening it would: renaming over it would replace the link itself.
+        target = fs::canonical(target, ec);
+        if (ec) return "Cannot open file for writing: " + path + " (" + ec.message() + ")";
+    }
+    const bool existed = fs::exists(target, ec);
+    if (existed) {
+        // A rename would replace a file this process may not write to.
+        std::ofstream probe(target, std::ios::binary | std::ios::app);
+        if (!probe.is_open()) return "Cannot open file for writing: " + path;
+    }
+
+    static std::atomic<unsigned> counter{0};
+    fs::path temp = target;
+    temp += ".gaia-tmp-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
+            std::to_string(counter.fetch_add(1));
+    const auto discard = [&temp] {
+        std::error_code removeEc;
+        fs::remove(temp, removeEc);
+    };
+    {
+        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+        if (!out.is_open()) return "Cannot open file for writing: " + path;
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+        out.close();
+        if (out.fail()) {
+            discard();
+            return "Write failed for: " + path + " (the disk may be full). The file is unchanged.";
+        }
+    }
+    if (existed) {
+        const fs::perms mode = fs::status(target, ec).permissions();
+        if (!ec) fs::permissions(temp, mode, ec);
+        if (ec) {
+            const std::string why = ec.message();
+            discard();
+            return "Write failed for: " + path + " (could not keep its permissions: " + why +
+                   "). The file is unchanged.";
+        }
+    }
+    fs::rename(temp, target, ec);
+    if (ec) {
+        const std::string why = ec.message();
+        discard();
+        return "Write failed for: " + path + " (" + why + "). The file is unchanged.";
+    }
+    return "";
 }
 
 /// Locate a whitespace-insensitive near-match for `needle`, so a failed edit
@@ -835,6 +922,9 @@ json FileIOTools::doFileRead(const json& args) {
             return json{{"error", "path is required"}};
         }
 
+        const std::string notAFile = notAFileReason(path);
+        if (!notAFile.empty()) return json{{"error", notAFile}};
+
         // Binary, so what the model is shown is byte-for-byte what file_edit
         // will search: a CRLF file must not read back as LF and then fail to
         // match. One pass, so the hash anchors exactly the bytes returned —
@@ -1270,6 +1360,9 @@ json FileIOTools::doFileWrite(const json& args) {
         }
         const std::string& content = args["content"].get_ref<const std::string&>();
 
+        const std::string notAFile = notAFileReason(path);
+        if (!notAFile.empty()) return json{{"error", notAFile}};
+
         FileStateTracker& tracker = FileStateTracker::instance();
         bool recreated = false;
         std::error_code existsEc;
@@ -1297,16 +1390,8 @@ json FileIOTools::doFileWrite(const json& args) {
             }
         }
 
-        std::ofstream file(fs::u8path(path), std::ios::binary);
-        if (!file.is_open()) {
-            return json{{"error", "Cannot open file for writing: " + path}};
-        }
-
-        file.write(content.data(), static_cast<std::streamsize>(content.size()));
-        if (!file.good()) {
-            return json{{"error", "Write failed for: " + path}};
-        }
-        file.close();
+        const std::string writeError = replaceFileContents(path, content);
+        if (!writeError.empty()) return json{{"error", writeError}};
 
         tracker.recordWrite(path, content);
 
@@ -1362,6 +1447,9 @@ json FileIOTools::doFileEdit(const json& args) {
         }
 
         std::string newStr = args.value("new_string", "");
+
+        const std::string notAFile = notAFileReason(path);
+        if (!notAFile.empty()) return json{{"error", notAFile}};
 
         std::string content;
         if (!readWholeFile(path, content)) {
@@ -1439,17 +1527,8 @@ json FileIOTools::doFileEdit(const json& args) {
         content.replace(offsets[0], oldStr.size(), newStr);
         const int replacements = 1;
 
-        // Write back
-        std::ofstream outFile(fs::u8path(path), std::ios::binary);
-        if (!outFile.is_open()) {
-            return json{{"error", "Cannot open file for writing: " + path}};
-        }
-
-        outFile.write(content.data(), static_cast<std::streamsize>(content.size()));
-        if (!outFile.good()) {
-            return json{{"error", "Write failed for: " + path}};
-        }
-        outFile.close();
+        const std::string writeError = replaceFileContents(path, content);
+        if (!writeError.empty()) return json{{"error", writeError}};
 
         tracker.recordWrite(path, content);
 
@@ -1533,8 +1612,18 @@ json FileIOTools::doFileSearch(const json& args) {
         GitignoreMatcher ignore = GitignoreMatcher::forDirectory(searchPath);
 
         std::error_code rootEc;
-        fs::path root = fs::weakly_canonical(searchDir, rootEc);
-        if (rootEc) root = searchDir;
+        const fs::path root = fs::canonical(searchDir, rootEc);
+        if (rootEc) {
+            return json{{"error", "Cannot resolve search path " + searchPath + ": " + rootEc.message()}};
+        }
+        // By resolved path, not by is_symlink: a Windows junction is not a symlink.
+        const auto resolvesInsideRoot = [&root](const fs::path& entry) {
+            std::error_code linkEc;
+            const fs::path target = fs::canonical(entry, linkEc);
+            if (linkEc) return false;
+            const fs::path fromRoot = target.lexically_relative(root);
+            return !fromRoot.empty() && *fromRoot.begin() != fs::path("..");
+        };
 
         // A pattern with a separator addresses a path; otherwise a file name.
         const bool pathPattern = pattern.find('/') != std::string::npos;
@@ -1557,6 +1646,10 @@ json FileIOTools::doFileSearch(const json& args) {
             const std::string filename = entryPath.filename().u8string();
 
             if (it->is_directory(ec) && !ec) {
+                if (!resolvesInsideRoot(entryPath)) {
+                    it.disable_recursion_pending();
+                    continue;
+                }
                 // .git is never interesting and is huge; it is pruned always
                 // and is not counted as an ignore-rule skip, or the counter
                 // would be non-zero on every repository and say nothing.
@@ -1576,6 +1669,11 @@ json FileIOTools::doFileSearch(const json& args) {
 
             if (!it->is_regular_file(ec)) continue;
             if (ec) { ec.clear(); continue; }
+
+            // A file's own folder was checked on the way in, so only a link can lead out.
+            const bool fileLink = it->is_symlink(ec) || ec;
+            ec.clear();
+            if (fileLink && !resolvesInsideRoot(entryPath)) continue;
 
             if (ignore.isIgnored(entryPath.u8string(), /*isDirectory=*/false)) {
                 ++ignoredSkipped;

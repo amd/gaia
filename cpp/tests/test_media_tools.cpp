@@ -131,3 +131,40 @@ TEST(MediaToolsTest, ScreenshotIsConfirmGatedAndConfined) {
     EXPECT_EQ(t.callback(json{{"output_path", "/etc/shot.png"}})["status"], "error");
     EXPECT_EQ(t.callback(json{{"output_path", "shot.jpg"}})["status"], "error");
 }
+
+TEST(MediaToolsTest, ScreenshotRefusesAPathThatWouldEndTheShellQuote) {
+    Dir d;
+    ToolInfo t = MediaTools::screenshotTool();
+    for (const char* name : {"a'; echo pwned > pwned.txt; '.png", "a\"b.png", "a`id`.png", "a$(id).png",
+                             "a%PATH%.png", "a&b.png", "a|b.png", "a\nb.png"}) {
+        const json r = t.callback(json{{"output_path", (d.path / name).string()}});
+        ASSERT_EQ(r["status"], "error") << name;
+        EXPECT_NE(r["error"].get<std::string>().find("may not contain"), std::string::npos) << r.dump();
+    }
+    EXPECT_TRUE(fs::is_empty(d.path)) << "nothing ran and nothing was written";
+}
+
+TEST(MediaToolsTest, NonAsciiFileNamesAreUtf8) {
+    MediaServer s;
+    Dir d;
+    const fs::path folder = d.path / fs::u8path("caf\xc3\xa9 \xe6\x97\xa5\xe6\x9c\xac");
+    fs::create_directories(folder);
+    const fs::path audio = folder / fs::u8path("r\xc3\xa9union.wav");
+    std::ofstream(audio, std::ios::binary) << std::string(512, '\1');
+    ToolRegistry reg;
+    reg.setConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+    MediaToolsOptions o;
+    o.transcribeModel = "Whisper-Base";
+    o.imageModel = "SDXL-Turbo";
+    o.chatEndpoint = [&s] { return MediaEndpoint{s.url(), ""}; };
+    MediaTools::registerAll(reg, o);
+
+    json heard = reg.executeTool("transcribe_audio", json{{"path", audio.u8string()}});
+    ASSERT_EQ(heard["status"], "success") << heard.dump();
+    EXPECT_EQ(s.lastFileSize, 512u);
+
+    const fs::path image = folder / fs::u8path("dess\xc3\xadn.png");
+    json drawn = reg.executeTool("generate_image", json{{"prompt", "a cat"}, {"output_path", image.u8string()}});
+    ASSERT_EQ(drawn["status"], "success") << drawn.dump();
+    EXPECT_EQ(fs::file_size(image), 7u);
+}

@@ -15,8 +15,9 @@ namespace {
 /// Maximum output size returned to the LLM (32 KiB).
 constexpr std::size_t kMaxOutputBytes = 32u * 1024u;
 
-/// Run `git <command>` via ProcessRunner, capturing stdout+stderr.
-std::string runGit(const std::string& command) {
+/// Run `git <command>` via ProcessRunner, capturing stdout+stderr. `failure`
+/// receives why git did not succeed, or "" when it exited 0.
+std::string runGit(const std::string& command, std::string& failure) {
     auto result = gaia::ProcessRunner::run(
         "git " + command,
         /*timeoutMs=*/30000,
@@ -30,6 +31,15 @@ std::string runGit(const std::string& command) {
             result.stdout_output += "\n";
         }
         result.stdout_output += result.stderr_output;
+    }
+    failure.clear();
+    if (result.timedOut) {
+        failure = "git " + command + " did not finish within 30 seconds and was stopped.";
+    } else if (result.exitCode != 0) {
+        failure = result.stdout_output.empty()
+                      ? "git " + command + " failed with exit code " + std::to_string(result.exitCode) +
+                            ". Check that git is installed and that this folder is a repository."
+                      : result.stdout_output;
     }
     return result.stdout_output;
 }
@@ -100,11 +110,12 @@ ToolInfo GitTools::gitStatus() {
 }
 
 json GitTools::doGitStatus(const json& /*args*/) {
-    std::string output = runGit("status --porcelain");
+    std::string failure;
+    std::string output = runGit("status --porcelain", failure);
 
     // Check for git errors (e.g. not a git repo)
-    if (output.find("fatal:") != std::string::npos) {
-        return json{{"error", output}};
+    if (!failure.empty()) {
+        return json{{"error", failure}};
     }
 
     // Trim trailing whitespace
@@ -165,9 +176,10 @@ json GitTools::doGitDiff(const json& args) {
         cmd += " -- " + path;
     }
 
-    std::string diffOutput = runGit(cmd);
-    if (diffOutput.find("fatal:") != std::string::npos) {
-        return json{{"error", diffOutput}};
+    std::string failure;
+    std::string diffOutput = runGit(cmd, failure);
+    if (!failure.empty()) {
+        return json{{"error", failure}};
     }
 
     // Count files changed via --stat
@@ -182,9 +194,12 @@ json GitTools::doGitDiff(const json& args) {
         statCmd += " -- " + args["path"].get<std::string>();
     }
 
-    std::string statOutput = runGit(statCmd);
+    std::string statOutput = runGit(statCmd, failure);
+    if (!failure.empty()) {
+        return json{{"error", failure}};
+    }
     int filesChanged = 0;
-    if (!statOutput.empty() && statOutput.find("fatal:") == std::string::npos) {
+    if (!statOutput.empty()) {
         // Each changed file has its own line; the last line is the summary.
         // Count lines that are not the summary line (which contains "changed").
         int totalLines = countLines(statOutput);
@@ -237,9 +252,10 @@ json GitTools::doGitLog(const json& args) {
         cmd += " -- " + path;
     }
 
-    std::string output = runGit(cmd);
-    if (output.find("fatal:") != std::string::npos) {
-        return json{{"error", output}};
+    std::string failure;
+    std::string output = runGit(cmd, failure);
+    if (!failure.empty()) {
+        return json{{"error", failure}};
     }
 
     int commits = countLines(output);
@@ -270,9 +286,10 @@ json GitTools::doGitShow(const json& args) {
         return json{{"error", "Invalid ref argument: contains unsafe characters."}};
     }
 
-    std::string output = runGit("show " + ref);
-    if (output.find("fatal:") != std::string::npos) {
-        return json{{"error", output}};
+    std::string failure;
+    std::string output = runGit("show " + ref, failure);
+    if (!failure.empty()) {
+        return json{{"error", failure}};
     }
 
     return json{{"content", truncateOutput(output)}, {"ref", ref}};

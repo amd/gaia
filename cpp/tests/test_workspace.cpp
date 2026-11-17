@@ -7,6 +7,7 @@
 #include <gaia/tool_registry.h>
 #include <gaia/workspace.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <random>
@@ -33,11 +34,22 @@ struct Dirs {
     }
 };
 
+// The working directory for one test: relative paths resolve against it.
+struct InFolder {
+    fs::path before = fs::current_path();
+    explicit InFolder(const fs::path& folder) { fs::current_path(folder); }
+    ~InFolder() {
+        std::error_code ec;
+        fs::current_path(before, ec);
+    }
+};
+
 }  // namespace
 
 TEST(WorkspaceTest, ContainsResolvesRelativeAndDotDot) {
     Dirs d;
     Workspace ws({d.work.string()});
+    InFolder in(d.work);
     EXPECT_TRUE(ws.contains("notes.txt"));
     EXPECT_TRUE(ws.contains("sub/../notes.txt"));
     EXPECT_TRUE(ws.contains((d.work / "sub" / "x.csv").string()));
@@ -150,6 +162,7 @@ TEST(WorkspaceTest, ConfinedToolsRefuseOutsidePaths) {
     };
     ToolRegistry reg;
     reg.registerTool(Workspace::confine(t, ws, {"path"}));
+    InFolder in(d.work);
     EXPECT_EQ(reg.executeTool("read", json{{"path", "inside.txt"}})["status"], "success");
     json refused = reg.executeTool("read", json{{"path", (d.other / "x").string()}});
     EXPECT_EQ(refused["status"], "error");
@@ -178,7 +191,10 @@ TEST(WorkspaceTest, NonAsciiFoldersAreUtf8) {
 
     Workspace named({root.u8string()});
     EXPECT_TRUE(named.contains(inside));
-    EXPECT_TRUE(named.contains("sub/new.txt"));
+    {
+        InFolder in(root);
+        EXPECT_TRUE(named.contains("sub/new.txt"));
+    }
     EXPECT_FALSE(named.contains(outside));
     EXPECT_EQ(named.checkPath(inside), "");
     EXPECT_NO_THROW(json(named.checkPath(outside)).dump()) << "a refusal is valid UTF-8 JSON";
@@ -192,4 +208,56 @@ TEST(WorkspaceTest, NonAsciiFoldersAreUtf8) {
     fs::current_path(before);
     EXPECT_TRUE(sees);
     EXPECT_FALSE(refuses);
+}
+
+TEST(WorkspaceTest, RelativePathsResolveWhereTheToolsOpenThem) {
+    Dirs d;
+    Workspace ws({d.work.string(), d.other.string()});
+    {
+        InFolder in(d.other);
+        EXPECT_TRUE(ws.contains("x.txt")) << "the working directory is the second root";
+        EXPECT_FALSE(ws.contains("../outside.txt"));
+    }
+    InFolder in(d.base);
+    EXPECT_FALSE(ws.contains("notes.txt")) << "it would be opened in the working directory, not in the first root";
+    EXPECT_NE(ws.checkPath("notes.txt"), "");
+    EXPECT_TRUE(ws.contains("work/notes.txt"));
+}
+
+TEST(WorkspaceTest, AnOverlongCommandIsRefusedBeforeItIsScanned) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const std::string refused = ws.checkCommand("cat /" + std::string(300000, 'a'));
+    EXPECT_NE(refused.find("65536"), std::string::npos) << refused.substr(0, 200);
+    EXPECT_EQ(ws.checkCommand("echo " + std::string(1000, 'a')), "");
+}
+
+#ifdef _WIN32
+TEST(WorkspaceTest, NetworkAndDevicePathsAreRefusedByTheirSpelling) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    for (const char* path : {"\\\\gaia-no-such-host.invalid\\share\\x.txt", "//gaia-no-such-host.invalid/share/x.txt",
+                             "\\\\?\\C:\\Windows\\win.ini", "\\\\.\\C:\\Windows\\win.ini", "\\\\.\\pipe\\gaia"}) {
+        EXPECT_FALSE(ws.contains(path)) << path;
+        EXPECT_NE(ws.checkPath(path), "") << path;
+    }
+}
+#endif
+
+TEST(WorkspaceTest, ACommandNamingALinkOutOfTheFolderIsRefused) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    InFolder in(d.work);
+#ifdef _WIN32
+    const std::string make = "cmd /c mklink /J linked \"" + d.other.string() + "\" >nul 2>&1";
+    ASSERT_EQ(std::system(make.c_str()), 0);
+#else
+    std::error_code ec;
+    fs::create_directory_symlink(d.other, "linked", ec);
+    ASSERT_FALSE(ec) << ec.message();
+#endif
+    EXPECT_NE(ws.checkCommand("cat linked/private.txt"), "");
+    EXPECT_NE(ws.checkCommand("cd linked && ls"), "");
+    EXPECT_EQ(ws.checkCommand("ls sub && cat notes.txt"), "");
+    fs::remove("linked");
 }

@@ -31,6 +31,7 @@
 #   endif
 #   include <windows.h>
 #   include <direct.h>
+#   include <fcntl.h>
 #   include <io.h>
 #else
 #   include <cerrno>
@@ -109,6 +110,17 @@ std::string readStream(FILE* stream, size_t maxBytes) {
 }
 
 #ifdef _WIN32
+
+// Pipes are read binary, because text mode ends a stream at a 0x1A byte; CRLF is folded here instead.
+std::string foldCrLf(std::string text) {
+    size_t out = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == '\r' && i + 1 < text.size() && text[i + 1] == '\n') continue;
+        text[out++] = text[i];
+    }
+    text.resize(out);
+    return text;
+}
 
 /// Save current working directory (Windows).
 std::string saveCwd() {
@@ -424,14 +436,14 @@ ProcessResult runWithTimeout(const std::string& command,
 
     // Read stdout and stderr from pipes using file descriptors
     // Convert HANDLEs to FILE* for readStream()
-    int stdoutFd = _open_osfhandle(reinterpret_cast<intptr_t>(stdoutReadH), 0);
-    int stderrFd = _open_osfhandle(reinterpret_cast<intptr_t>(stderrReadH), 0);
+    int stdoutFd = _open_osfhandle(reinterpret_cast<intptr_t>(stdoutReadH), _O_RDONLY | _O_BINARY);
+    int stderrFd = _open_osfhandle(reinterpret_cast<intptr_t>(stderrReadH), _O_RDONLY | _O_BINARY);
 
     FILE* stdoutFile = nullptr;
     FILE* stderrFile = nullptr;
 
-    if (stdoutFd >= 0) stdoutFile = _fdopen(stdoutFd, "r");
-    if (stderrFd >= 0) stderrFile = _fdopen(stderrFd, "r");
+    if (stdoutFd >= 0) stdoutFile = _fdopen(stdoutFd, "rb");
+    if (stderrFd >= 0) stderrFile = _fdopen(stderrFd, "rb");
 
     // Read pipes in background threads while waiting for process with timeout.
     // This avoids deadlock: reading before waiting blocks if child keeps stdout
@@ -440,11 +452,11 @@ ProcessResult runWithTimeout(const std::string& command,
     std::atomic<int> readersDone{0};
 
     std::thread convergentStdout([&]() {
-        capturedStdout = readStream(stdoutFile, maxOutputBytes);
+        capturedStdout = foldCrLf(readStream(stdoutFile, maxOutputBytes));
         ++readersDone;
     });
     std::thread convergentStderr([&]() {
-        capturedStderr = readStream(stderrFile, maxOutputBytes);
+        capturedStderr = foldCrLf(readStream(stderrFile, maxOutputBytes));
         ++readersDone;
     });
 
@@ -515,11 +527,24 @@ ProcessResult runWithTimeout(const std::string& command,
     int stdoutPipe[2];
     int stderrPipe[2];
 
-    if (pipe(stdoutPipe) != 0 || pipe(stderrPipe) != 0) {
+    if (pipe(stdoutPipe) != 0) {
         result.exitCode = -1;
-        result.stderr_output = "Failed to create pipes";
+        result.stderr_output = "Failed to create pipes: " + std::string(strerror(errno));
         return result;
     }
+    if (pipe(stderrPipe) != 0) {
+        const std::string why = strerror(errno);
+        close(stdoutPipe[0]); close(stdoutPipe[1]);
+        result.exitCode = -1;
+        result.stderr_output = "Failed to create pipes: " + why;
+        return result;
+    }
+    // A command another thread starts meanwhile must not hold these open.
+    for (int fd : {stdoutPipe[0], stdoutPipe[1], stderrPipe[0], stderrPipe[1]}) fcntl(fd, F_SETFD, FD_CLOEXEC);
+
+    // Read before the fork: the child may only make async-signal-safe calls.
+    long maxFd = sysconf(_SC_OPEN_MAX);
+    if (maxFd < 0 || maxFd > 65536) maxFd = 65536;
 
     pid_t pid = fork();
 
@@ -553,6 +578,9 @@ ProcessResult runWithTimeout(const std::string& command,
         if (devNull < 0) _exit(126);
         dup2(devNull, STDIN_FILENO);
         if (devNull != STDIN_FILENO) close(devNull);
+
+        // The command gets stdin, stdout and stderr and nothing else this process has open.
+        for (int fd = 3; fd < maxFd; ++fd) close(fd);
 
         execl("/bin/sh", "sh", "-c", command.c_str(), static_cast<char*>(nullptr));
         _exit(127);  // exec failed
@@ -591,23 +619,26 @@ ProcessResult runWithTimeout(const std::string& command,
             break;
         }
 
-        // Try reading stdout
-        if (stdoutBuf.size() < maxOutputBytes) {
-            ssize_t n = read(stdoutPipe[0], readBuf.data(),
-                            std::min(readBuf.size(),
-                                     maxOutputBytes - stdoutBuf.size()));
+        // Past the cap the pipes are still read and the bytes dropped, or the child would block on a full pipe.
+        bool readAny = false;
+        {
+            ssize_t n = read(stdoutPipe[0], readBuf.data(), readBuf.size());
             if (n > 0) {
-                stdoutBuf.append(readBuf.data(), static_cast<size_t>(n));
+                readAny = true;
+                if (stdoutBuf.size() < maxOutputBytes) {
+                    stdoutBuf.append(readBuf.data(),
+                                     std::min(static_cast<size_t>(n), maxOutputBytes - stdoutBuf.size()));
+                }
             }
         }
-
-        // Try reading stderr
-        if (stderrBuf.size() < maxOutputBytes) {
-            ssize_t n = read(stderrPipe[0], readBuf.data(),
-                            std::min(readBuf.size(),
-                                     maxOutputBytes - stderrBuf.size()));
+        {
+            ssize_t n = read(stderrPipe[0], readBuf.data(), readBuf.size());
             if (n > 0) {
-                stderrBuf.append(readBuf.data(), static_cast<size_t>(n));
+                readAny = true;
+                if (stderrBuf.size() < maxOutputBytes) {
+                    stderrBuf.append(readBuf.data(),
+                                     std::min(static_cast<size_t>(n), maxOutputBytes - stderrBuf.size()));
+                }
             }
         }
 
@@ -621,7 +652,7 @@ ProcessResult runWithTimeout(const std::string& command,
             } else if (WIFSIGNALED(status)) {
                 result.exitCode = -1;
             }
-        } else {
+        } else if (!readAny) {
             // Brief sleep to avoid busy-waiting
             usleep(1000);  // 1ms
         }
@@ -1083,6 +1114,23 @@ struct ShellSession::Impl {
         return s.str();
     }
 
+    /// Forget variables a batch script cannot carry: after a quote or a line
+    /// break, the rest of the value in `set "K=V"` would run as a command.
+    /// Returns the names dropped.
+    std::string dropUnsafeBatchValues() {
+        std::string dropped;
+        if (posixScript) return dropped;
+        for (auto it = overrides.begin(); it != overrides.end();) {
+            if (it->second.find_first_of("\"\r\n") == std::string::npos) {
+                ++it;
+                continue;
+            }
+            dropped += (dropped.empty() ? "" : ", ") + it->first;
+            it = overrides.erase(it);
+        }
+        return dropped;
+    }
+
     /// Absorb the cwd and environment the command left behind.
     void absorbState(const std::string& stateText) {
         const size_t markerPos = stateText.find(kEnvMarker);
@@ -1229,6 +1277,7 @@ ProcessResult ShellSession::run(const std::string& command,
     }
 
     std::lock_guard<std::mutex> lock(impl_->mutex);
+    std::string droppedVars = impl_->dropUnsafeBatchValues();
     const auto build = [this](const std::string& commandFile, const std::string& stateFile) {
         return impl_->buildScript(commandFile, stateFile);
     };
@@ -1260,6 +1309,15 @@ ProcessResult ShellSession::run(const std::string& command,
     std::string state;
     result = runSessionScript(build, impl_->posixScript, impl_->shell, command, timeoutMs, maxOutputBytes, state);
     impl_->absorbState(state);
+
+    const std::string droppedAfter = impl_->dropUnsafeBatchValues();
+    if (!droppedAfter.empty()) droppedVars += (droppedVars.empty() ? "" : ", ") + droppedAfter;
+    if (!droppedVars.empty()) {
+        result.stderr_output += std::string(result.stderr_output.empty() ? "" : "\n") +
+                                "ShellSession: not kept for later commands: " + droppedVars +
+                                ". A value holding a double quote or a line break cannot be passed to a "
+                                "cmd.exe script; set it inside the command that needs it.";
+    }
 
     return result;
 }

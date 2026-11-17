@@ -686,6 +686,32 @@ TEST_F(DatabaseTest, FailingMigrationErrorNamesTheStep) {
     }
 }
 
+TEST_F(DatabaseTest, MigrateSkipsAStepAnotherConnectionAppliedMeanwhile) {
+    const std::string path = dbPath("race.db");
+    Database first(path);
+    Database second(path);
+    const std::vector<Migration> steps = {
+        Migration::fromSql(1, "create widgets", "CREATE TABLE widgets (id INTEGER PRIMARY KEY)")};
+
+    std::atomic<bool> firstHoldsLock{false};
+    std::thread firstThread([&] {
+        Transaction txn(first, Transaction::Behavior::Immediate);
+        first.execute("CREATE TABLE widgets (id INTEGER PRIMARY KEY)");
+        first.setUserVersion(1);
+        firstHoldsLock = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        txn.commit();
+    });
+    while (!firstHoldsLock) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    EXPECT_NO_THROW(second.migrate(steps));
+    firstThread.join();
+    EXPECT_EQ(second.userVersion(), 1);
+    EXPECT_TRUE(second.tableExists("widgets"));
+}
+
 TEST_F(DatabaseTest, MigrateRejectsOutOfOrderSteps) {
     Database db(dbPath());
     std::vector<Migration> steps{

@@ -336,3 +336,53 @@ TEST(JsonUtilsTest, TagsNamedInProseOrShownInACodeFenceStayAnAnswer) {
         EXPECT_EQ(p.answer.value_or(""), text);
     }
 }
+
+TEST(JsonUtilsTest, ANullOrNonStringThoughtAndGoalAreReadAsEmpty) {
+    for (const char* text : {
+             R"({"thought": null, "goal": null, "tool": "add", "tool_args": {"a": 1}})",
+             R"({"thought": 7, "goal": ["x"], "tool": "add", "tool_args": {"a": 1}})",
+             R"({"thought": null, "goal": 3, "tool": "add", "tool_args": {"a": 1},})",
+         }) {
+        ParsedResponse p;
+        ASSERT_NO_THROW(p = parseLlmResponse(text)) << text;
+        EXPECT_EQ(p.thought, "") << text;
+        EXPECT_EQ(p.goal, "") << text;
+    }
+    auto p = parseLlmResponse(R"({"thought": null, "tool": "add", "tool_args": {"a": 1}})");
+    EXPECT_EQ(p.toolName.value_or(""), "add");
+}
+
+TEST(JsonUtilsTest, ANullAnswerBesideAToolCallIsNotAnAnswer) {
+    auto p = parseLlmResponse(R"({"thought": "t", "answer": null, "tool": "add", "tool_args": {"a": 1}})");
+    EXPECT_FALSE(p.answer.has_value());
+    EXPECT_EQ(p.toolName.value_or(""), "add");
+}
+
+TEST(JsonUtilsTest, FurtherTagCallsInOneReplyAreCountedNotLost) {
+    auto p = parseLlmResponse(
+        "<tool_call>\n<function=add>\n<parameter=a>1</parameter>\n</function>\n</tool_call>\n"
+        "<tool_call>\n<function=add>\n<parameter=a>2</parameter>\n</function>\n</tool_call>\n"
+        "<tool_call>{\"name\": \"add\", \"arguments\": {\"a\": 3}}</tool_call>");
+    EXPECT_EQ(p.toolName.value_or(""), "add");
+    EXPECT_EQ(p.toolArgs.value_or(json::object()).value("a", ""), "1");
+    EXPECT_EQ(p.droppedToolCalls, 2u);
+
+    auto single = parseLlmResponse(
+        "<tool_call>\n<function=add>\n<parameter=a>1</parameter>\n</function>\n</tool_call>");
+    EXPECT_EQ(single.droppedToolCalls, 0u);
+}
+
+TEST(JsonUtilsTest, AVeryLongReplyIsParsedWithoutThrowing) {
+    const std::string filler(200000, 'a');
+    for (const std::string& text : {
+             "{\"thought\":\"" + filler,
+             "{\"thought\": \"t\", \"answer\": \"" + filler + "\", }}",
+             "{ broken ```json\n" + filler + "\n```",
+             "{ broken <json>" + filler,
+         }) {
+        ParsedResponse p;
+        ASSERT_NO_THROW(p = parseLlmResponse(text)) << text.substr(0, 40);
+        EXPECT_TRUE(p.answer.has_value()) << text.substr(0, 40);
+    }
+    EXPECT_EQ(parseLlmResponse("{\"thought\": \"t\", \"answer\": \"" + filler + "\", }}").answer.value_or(""), filler);
+}

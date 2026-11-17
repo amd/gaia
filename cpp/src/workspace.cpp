@@ -37,6 +37,27 @@ bool under(const std::string& path, const std::string& root) {
            path[root.size()] == '/';
 }
 
+// True for a \\host\share, //host/share, \\?\ or \\.\ path that lies under no root. Decided
+// on the spelling alone: resolving such a path makes Windows contact the host.
+bool outsideNetworkPath(const std::string& path, const std::vector<std::string>& roots) {
+#ifdef _WIN32
+    const auto slash = [](char c) { return c == '\\' || c == '/'; };
+    if (path.size() < 2 || !slash(path[0]) || !slash(path[1])) return false;
+    std::string s = fs::u8path(path).lexically_normal().generic_u8string();
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    while (s.size() > 1 && s.back() == '/') s.pop_back();
+    return std::none_of(roots.begin(), roots.end(), [&](const std::string& r) { return under(s, r); });
+#else
+    (void)path;
+    (void)roots;
+    return false;
+#endif
+}
+
+// Longer than any real command, and std::regex recurses once per character matched.
+constexpr size_t kMaxCommandBytes = 64 * 1024;
+
 // Places programs and scratch space live; commands may name them freely.
 const std::vector<std::string>& systemDirs() {
 #ifdef _WIN32
@@ -102,9 +123,10 @@ Workspace::Workspace(std::vector<std::string> roots) {
 }
 
 bool Workspace::contains(const std::string& path) const {
-    const fs::path p = fs::u8path(expandHome(path));
-    const std::string abs =
-        normalized(p.is_absolute() ? p : fs::u8path(roots_.front()) / p);
+    const std::string expanded = expandHome(path);
+    if (outsideNetworkPath(expanded, roots_)) return false;
+    // Against the working directory, which is where a tool opens a relative path.
+    const std::string abs = normalized(fs::u8path(expanded));
     return std::any_of(roots_.begin(), roots_.end(),
                        [&](const std::string& r) { return under(abs, r); });
 }
@@ -131,6 +153,10 @@ bool looksLikeCmdSwitch(const std::string& token) {
 } // namespace
 
 std::string Workspace::checkCommand(const std::string& command, bool posixShell) const {
+    if (command.size() > kMaxCommandBytes) {
+        return "Refused: the command is " + std::to_string(command.size()) + " bytes long and the limit is " +
+               std::to_string(kMaxCommandBytes) + ". Write long input to a file and have the command read it.";
+    }
     // Absolute POSIX paths, ~/ paths and Windows drive paths, as standalone words.
     static const std::regex pathRe(
         R"((?:^|[\s'"=(:,`])((?:/|~/|[A-Za-z]:[\\/])[^\s'"`;|&()<>,]*))");
@@ -183,6 +209,34 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
     static const std::regex uncRe(R"((?:^|[\s'"=(,`])(\\\\[^\s\\'"]+))");
     std::smatch unc;
     if (std::regex_search(command, unc, uncRe)) return refusal(unc[1].str());
+    // A relative name that exists here but resolves elsewhere is a link out of the folder.
+    static const std::string kBreaks = " \t\r\n'\"`;|&()<>=,";
+    std::error_code cwdError;
+    const fs::path here = fs::current_path(cwdError);
+    const std::string hereResolved = cwdError ? "" : normalized(here);
+    size_t checked = 0;
+    for (size_t start = command.find_first_not_of(kBreaks);
+         start != std::string::npos && checked < 256 && !hereResolved.empty();) {
+        const size_t end = command.find_first_of(kBreaks, start);
+        const std::string word = command.substr(start, end == std::string::npos ? end : end - start);
+        start = end == std::string::npos ? end : command.find_first_not_of(kBreaks, end);
+        if (word.empty() || word.size() > 1024 || word[0] == '-' || word[0] == '~') continue;
+        const fs::path rel = fs::u8path(fromShellPath(word));
+        if (rel.has_root_directory() || rel.has_root_name()) continue;
+        ++checked;
+        // Only a name that stays inside as written: `..` is not this check's business.
+        std::string written = (fs::u8path(hereResolved) / rel).lexically_normal().generic_u8string();
+        while (written.size() > 1 && written.back() == '/') written.pop_back();
+        if (!std::any_of(roots_.begin(), roots_.end(), [&](const std::string& r) { return under(written, r); })) {
+            continue;
+        }
+        const std::string abs = normalized(here / rel);
+        if (std::any_of(roots_.begin(), roots_.end(), [&](const std::string& r) { return under(abs, r); }) ||
+            inSystemDir(abs)) {
+            continue;
+        }
+        return refusal(word) + " It is a link that leads to " + abs + ".";
+    }
     return "";
 }
 
@@ -210,6 +264,7 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
                 if (w.empty()) continue;
             }
             if (w[0] == '~' && w != "~" && w.rfind("~/", 0) != 0) return false;  // ~other-user
+            if (outsideNetworkPath(w, roots_)) return false;
             // A component such as .* can match the parent folder.
             for (size_t at = 0; at < w.size(); ++at) {
                 if (w[at] != '.' || (at > 0 && w[at - 1] != '/' && w[at - 1] != '\\')) continue;

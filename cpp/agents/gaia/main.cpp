@@ -17,6 +17,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -216,6 +217,27 @@ int toInt(const std::string& flag, const std::string& v) {
     }
 }
 
+int toPositiveInt(const std::string& flag, const std::string& v) {
+    const int n = toInt(flag, v);
+    if (n <= 0) usageError(flag + " needs a whole number above 0, got '" + v + "'");
+    return n;
+}
+
+bool validTemperature(double t) { return std::isfinite(t) && t >= 0.0 && t <= 2.0; }
+
+double toTemperature(const std::string& flag, const std::string& v) {
+    double t = std::numeric_limits<double>::quiet_NaN();
+    try {
+        size_t used = 0;
+        t = std::stod(v, &used);
+        if (used != v.size()) t = std::numeric_limits<double>::quiet_NaN();
+    } catch (const std::exception&) {
+        t = std::numeric_limits<double>::quiet_NaN();
+    }
+    if (!validTemperature(t)) usageError(flag + " needs a number from 0 to 2, got '" + v + "'");
+    return t;
+}
+
 Cli parseArgs(int argc, char** argv) {
     Cli cli;
     auto need = [&](int& i, const std::string& flag) -> std::string {
@@ -248,13 +270,10 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--api-key-env") cli.apiKeyEnv = need(i, a);
         else if (a == "--native-tools") cli.nativeTools = need(i, a);
         else if (a == "--feature-tier") cli.featureTier = need(i, a);
-        else if (a == "--ctx-size") cli.ctxSize = toInt(a, need(i, a));
-        else if (a == "--max-tokens") cli.maxTokens = toInt(a, need(i, a));
-        else if (a == "--temperature") {
-            const std::string v = need(i, a);
-            try { cli.temperature = std::stod(v); } catch (...) { usageError("--temperature needs a number"); }
-        }
-        else if (a == "--max-steps") cli.maxSteps = toInt(a, need(i, a));
+        else if (a == "--ctx-size") cli.ctxSize = toPositiveInt(a, need(i, a));
+        else if (a == "--max-tokens") cli.maxTokens = toPositiveInt(a, need(i, a));
+        else if (a == "--temperature") cli.temperature = toTemperature(a, need(i, a));
+        else if (a == "--max-steps") cli.maxSteps = toPositiveInt(a, need(i, a));
         else if (a == "--cwd") cli.cwd = need(i, a);
         else if (a == "--mcp-config") cli.mcpConfig = need(i, a);
         else if (a == "--embedding-model") cli.embeddingModel = need(i, a);
@@ -316,6 +335,33 @@ void applyProvider(gaia::json& merged, const std::string& provider, const std::s
     }
 }
 
+// A wrongly typed or out-of-range value is named with its key and file, not left to a JSON type error.
+void checkSettingsFile(const gaia::json& j, const std::string& where) {
+    auto fail = [&](const std::string& key, const std::string& expected) {
+        throw std::runtime_error(where + ": \"" + key + "\" must be " + expected + ", got " +
+                                 j[key].dump(-1, ' ', false, gaia::json::error_handler_t::replace) +
+                                 ". Fix that value in the file and run again.");
+    };
+    for (const char* key : {"baseUrl", "modelId", "apiKeyEnv", "featureTier", "responseMode",
+                            "nativeToolCalls", "embeddingModel", "transcribeModel", "audioBaseUrl",
+                            "imageModel", "mcpConfig", "provider"}) {
+        if (j.contains(key) && !j[key].is_string()) fail(key, "a string");
+    }
+    for (const char* key : {"contextSize", "maxTokens", "maxSteps"}) {
+        if (!j.contains(key)) continue;
+        const gaia::json& v = j[key];
+        const bool ok = v.is_number_integer() && v >= 1 && v <= std::numeric_limits<int>::max();
+        if (!ok) fail(key, "a whole number above 0");
+    }
+    for (const char* key : {"debug", "showPrompts", "streaming", "silentMode", "structuredEvents"}) {
+        if (j.contains(key) && !j[key].is_boolean()) fail(key, "true or false");
+    }
+    if (j.contains("temperature") &&
+        !(j["temperature"].is_number() && validTemperature(j["temperature"].get<double>()))) {
+        fail("temperature", "a number from 0 to 2");
+    }
+}
+
 // Settings precedence: built-in defaults < settings file < environment < flags.
 struct Settings {
     gaia::AgentConfig cfg;
@@ -333,6 +379,7 @@ Settings buildSettings(const Cli& cli) {
                          {"responseMode", "conversational"},
                          {"maxSteps", 1000}};
     std::string mcpConfig;
+    std::string settingsFrom = "The settings";
 
     const fs::path file = cli.configFile.empty() ? defaultConfigPath() : fs::path(cli.configFile);
     std::error_code ec;
@@ -349,6 +396,8 @@ Settings buildSettings(const Cli& cli) {
         if (!j.is_object()) {
             throw std::runtime_error("Settings file " + file.string() + " must hold a JSON object");
         }
+        checkSettingsFile(j, "Settings file " + file.string());
+        settingsFrom = "Settings file " + file.string();
         if (j.contains("mcpConfig")) {
             fs::path m = j["mcpConfig"].get<std::string>();
             if (m.is_relative()) m = file.parent_path() / m;
@@ -373,7 +422,7 @@ Settings buildSettings(const Cli& cli) {
                                      {"GAIA_CONTEXT_SIZE", "contextSize"},
                                      {"GAIA_MAX_TOKENS", "maxTokens"}}) {
         const std::string v = gaia::getEnvVar(var);
-        if (!v.empty()) merged[field] = toInt(var, v);
+        if (!v.empty()) merged[field] = toPositiveInt(var, v);
     }
 
     if (!cli.provider.empty()) applyProvider(merged, cli.provider, "--provider");
@@ -401,7 +450,12 @@ Settings buildSettings(const Cli& cli) {
             merged.erase(key);
         }
     }
-    s.cfg = gaia::AgentConfig::fromJson(merged);
+    try {
+        s.cfg = gaia::AgentConfig::fromJson(merged);
+    } catch (const gaia::json::exception& e) {
+        throw std::runtime_error(settingsFrom + ": a value has the wrong type (" + e.what() +
+                                 "). Fix that value and run again.");
+    }
     s.cfg.debug = cli.debug;
     s.mcpConfig = mcpConfig;
     return s;
@@ -721,8 +775,9 @@ int runServe(const Cli& cli) {
     g_server = &server;
     g_agent = &agent;
     // One JSON line on stdout once bound, so a supervisor learns the real port.
-    std::thread announce([&server, &cli, &cfg] {
-        for (int i = 0; i < 500 && !server.isRunning(); ++i) {
+    std::atomic<bool> failed{false};
+    std::thread announce([&server, &cli, &cfg, &failed] {
+        for (int i = 0; i < 500 && !server.isRunning() && !failed.load(); ++i) {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         if (!server.isRunning()) return;
@@ -736,6 +791,7 @@ int runServe(const Cli& cli) {
     try {
         server.run();
     } catch (...) {
+        failed.store(true);
         announce.join();
         throw;
     }
@@ -902,7 +958,21 @@ int main(int argc, char** argv) {
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
         switch (cli.mode) {
-            case Cli::Mode::Print: return runPrint(cli);
+            case Cli::Mode::Print:
+                try {
+                    return runPrint(cli);
+                } catch (const std::exception& e) {
+                    // A JSON reader parses stdout whether or not the run got as far as an answer.
+                    if (cli.outputFormat == "json") {
+                        const gaia::json out = {{"status", "error"}, {"is_error", true},
+                                                {"result", std::string(e.what())},
+                                                {"steps", 0}, {"num_steps", 0}, {"num_llm_calls", 0},
+                                                {"num_tool_calls", 0}, {"error_count", 0}};
+                        std::cout << out.dump(-1, ' ', false, gaia::json::error_handler_t::replace)
+                                  << std::endl;
+                    }
+                    throw;
+                }
             case Cli::Mode::Serve: return runServe(cli);
             case Cli::Mode::Mcp: return runMcp(cli);
             case Cli::Mode::Stdio: return runStdio(cli);

@@ -348,6 +348,8 @@ struct ParsedResponse {
     // Tool-call tags that cannot be run as written (cut off, no name): neither
     // a call nor an answer. Holds what is wrong, for the model.
     std::optional<std::string> malformedToolCall;
+    // Further tag-written calls in the same reply; only the first one is run.
+    size_t droppedToolCalls = 0;
 };
 
 // ---- Agent Configuration ----

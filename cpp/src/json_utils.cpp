@@ -5,13 +5,44 @@
 
 #include <algorithm>
 #include <cstring>
-#include <regex>
 
 namespace gaia {
 
-// Shared patterns used by multiple functions — defined once at namespace scope.
-static const std::regex kTrailingCommaObj(R"(,\s*\})");
-static const std::regex kTrailingCommaArr(R"(,\s*\])");
+namespace {
+// Hand-written scans, not std::regex: a regex over a long reply overflows the
+// stack on libstdc++ and throws regex_error on MSVC.
+std::string dropTrailingCommas(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] == ',') {
+            const size_t next = text.find_first_not_of(" \t\r\n\f\v", i + 1);
+            if (next != std::string::npos && (text[next] == '}' || text[next] == ']')) {
+                i = next - 1;
+                continue;
+            }
+        }
+        out += text[i];
+    }
+    return out;
+}
+
+// The text between each `open` ... `close` pair, in order. With skipJsonTag, a
+// "json" right after `open` is not part of the text.
+std::vector<std::string> delimitedBlocks(const std::string& text, const std::string& open,
+                                         const std::string& close, bool skipJsonTag) {
+    std::vector<std::string> blocks;
+    for (size_t at = text.find(open); at != std::string::npos;) {
+        size_t start = at + open.size();
+        if (skipJsonTag && text.compare(start, 4, "json") == 0) start += 4;
+        const size_t end = text.find(close, start);
+        if (end == std::string::npos) break;
+        blocks.push_back(text.substr(start, end - start));
+        at = text.find(open, end + close.size());
+    }
+    return blocks;
+}
+}  // namespace
 
 std::string extractFirstJsonObject(const std::string& text) {
     auto startIdx = text.find('{');
@@ -56,8 +87,7 @@ std::string fixCommonJsonErrors(const std::string& text) {
     std::string fixed = text;
 
     // Remove trailing commas before } or ]
-    fixed = std::regex_replace(fixed, kTrailingCommaObj, "}");
-    fixed = std::regex_replace(fixed, kTrailingCommaArr, "]");
+    fixed = dropTrailingCommas(fixed);
 
     // Fix single quotes to double quotes (only if no double quotes present)
     if (fixed.find('"') == std::string::npos && fixed.find('\'') != std::string::npos) {
@@ -86,18 +116,14 @@ std::string fixCommonJsonErrors(const std::string& text) {
 
 std::optional<json> extractJsonFromResponse(const std::string& response) {
     // Strategy 1: Extract from code blocks
-    static const std::vector<std::regex> patterns = {
-        std::regex(R"(```(?:json)?\s*([\s\S]*?)\s*```)"),  // Standard code block
-        std::regex(R"(`json\s*([\s\S]*?)\s*`)"),            // Single backtick with json tag
-        std::regex(R"(<json>\s*([\s\S]*?)\s*</json>)"),     // XML-style tags
+    const std::vector<std::vector<std::string>> candidates = {
+        delimitedBlocks(response, "```", "```", true),         // Standard code block
+        delimitedBlocks(response, "`json", "`", false),        // Single backtick with json tag
+        delimitedBlocks(response, "<json>", "</json>", false), // XML-style tags
     };
 
-    for (const auto& pattern : patterns) {
-        std::sregex_iterator begin(response.begin(), response.end(), pattern);
-        std::sregex_iterator end;
-
-        for (auto it = begin; it != end; ++it) {
-            std::string match = (*it)[1].str();
+    for (const auto& blocks : candidates) {
+        for (const std::string& match : blocks) {
             try {
                 json result = json::parse(match);
                 if (result.is_object()) {
@@ -117,8 +143,7 @@ std::optional<json> extractJsonFromResponse(const std::string& response) {
     std::string extracted = extractFirstJsonObject(response);
     if (!extracted.empty()) {
         // Fix common issues before parsing
-        std::string fixed = std::regex_replace(extracted, kTrailingCommaObj, "}");
-        fixed = std::regex_replace(fixed, kTrailingCommaArr, "]");
+        const std::string fixed = dropTrailingCommas(extracted);
         try {
             json result = json::parse(fixed);
             if (result.is_object()) {
@@ -145,15 +170,16 @@ json validateJsonResponse(const std::string& responseText) {
         // Success - skip modification steps
     } catch (const json::parse_error& initialError) {
         // Step 2: Try extracting from code blocks
-        static const std::regex codeBlock(R"(```(?:json)?\s*(\{[\s\S]*?\})\s*```)");
-        std::smatch match;
-        if (std::regex_search(responseText, match, codeBlock)) {
+        for (const std::string& block : delimitedBlocks(responseText, "```", "```", true)) {
+            const size_t first = block.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos || block[first] != '{') continue;
             try {
-                result = json::parse(match[1].str());
+                result = json::parse(block);
                 modified = true;
             } catch (const json::parse_error&) {
                 // Continue to next strategy
             }
+            break;
         }
 
         // Step 3: Bracket-matching
@@ -255,6 +281,7 @@ struct TagToolCall {
     std::string prose;
     bool textArgs = false;
     std::string problem;  // set when the call is there but cannot be run
+    size_t dropped = 0;   // further calls in the same reply, which are not run
 };
 
 bool startsWithAt(const std::string& text, size_t at, const char* what) {
@@ -338,6 +365,7 @@ void parseJsonToolCall(const std::string& text, size_t at, TagToolCall& call) {
 // A tool call a model wrote as tags instead of sending it as one. "<tool_call>"
 // followed by words is prose about the format, and so is anything in a code fence.
 std::optional<TagToolCall> tagToolCall(const std::string& reply) {
+    std::optional<TagToolCall> first;
     for (size_t at = reply.find('<'); at != std::string::npos; at = reply.find('<', at + 1)) {
         size_t body = std::string::npos;
         if (startsWithAt(reply, at, "<tool_call>")) {
@@ -352,13 +380,50 @@ std::optional<TagToolCall> tagToolCall(const std::string& reply) {
             }
         }
         if (body == std::string::npos || insideCodeFence(reply, at)) continue;
+        if (first) {
+            ++first->dropped;
+            at = body;
+            continue;
+        }
         TagToolCall call;
         call.prose = trimmedCopy(reply.substr(0, at));
         if (reply[body] == '{') parseJsonToolCall(reply, body, call);
         else parseFunctionTags(reply, body, call);
-        return call;
+        first = std::move(call);
+        // Resume past this call, so its own contents are not counted as another one.
+        const size_t end = reply[body] == '{' ? body + extractFirstJsonObject(reply.substr(body)).size()
+                                              : reply.find("</function>", body);
+        if (end == std::string::npos) break;
+        at = std::max(end, body);
+    }
+    return first;
+}
+
+// Where the value of the first "key": at or after `from` starts, or npos.
+size_t fieldValueStart(const std::string& text, const char* key, size_t from) {
+    const std::string quoted = std::string("\"") + key + "\"";
+    for (size_t at = text.find(quoted, from); at != std::string::npos; at = text.find(quoted, at + 1)) {
+        const size_t colon = skipSpace(text, at + quoted.size());
+        if (colon < text.size() && text[colon] == ':') return skipSpace(text, colon + 1);
+    }
+    return std::string::npos;
+}
+
+// The text of the first "key": "value", up to the value's next quote.
+std::optional<std::string> quotedField(const std::string& text, const char* key) {
+    for (size_t pos = fieldValueStart(text, key, 0); pos != std::string::npos;
+         pos = fieldValueStart(text, key, pos)) {
+        if (pos >= text.size() || text[pos] != '"') continue;
+        const size_t close = text.find('"', pos + 1);
+        if (close == std::string::npos) return std::nullopt;
+        return text.substr(pos + 1, close - pos - 1);
     }
     return std::nullopt;
+}
+
+std::string stringField(const json& object, const char* key) {
+    const auto it = object.find(key);
+    return it != object.end() && it->is_string() ? it->get<std::string>() : std::string();
 }
 }  // namespace
 
@@ -392,6 +457,7 @@ ParsedResponse parseLlmResponse(const std::string& response) {
             parsed.toolName = call->name;
             parsed.toolArgs = call->args;
             parsed.toolArgsAreText = call->textArgs;
+            parsed.droppedToolCalls = call->dropped;
             return parsed;
         }
         // Models often say what they are about to do, then emit the call.
@@ -417,10 +483,10 @@ ParsedResponse parseLlmResponse(const std::string& response) {
     try {
         json j = json::parse(trimmed);
         if (j.is_object()) {
-            parsed.thought = j.value("thought", "");
-            parsed.goal = j.value("goal", "");
+            parsed.thought = stringField(j, "thought");
+            parsed.goal = stringField(j, "goal");
 
-            if (j.contains("answer")) {
+            if (j.contains("answer") && !j["answer"].is_null()) {
                 parsed.answer = jsonToString(j["answer"]);
             }
             if (j.contains("tool") && j["tool"].is_string()) {
@@ -445,8 +511,8 @@ ParsedResponse parseLlmResponse(const std::string& response) {
     auto extracted = extractJsonFromResponse(trimmed);
     if (extracted.has_value()) {
         const json& j = extracted.value();
-        parsed.thought = j.value("thought", "");
-        parsed.goal = j.value("goal", "");
+        parsed.thought = stringField(j, "thought");
+        parsed.goal = stringField(j, "goal");
 
         if (j.contains("answer") && !j["answer"].is_null()) {
             parsed.answer = jsonToString(j["answer"]);
@@ -462,31 +528,21 @@ ParsedResponse parseLlmResponse(const std::string& response) {
         return parsed;
     }
 
-    // Regex-based extraction as last resort
-    static const std::regex thoughtRe(R"re("thought"\s*:\s*"([^"]*)")re");
-    static const std::regex toolRe(R"re("tool"\s*:\s*"([^"]*)")re");
-    static const std::regex answerRe(R"re("answer"\s*:\s*"([^"]*)")re");
-    std::smatch match;
-
-    if (std::regex_search(trimmed, match, answerRe)) {
-        parsed.answer = match[1].str();
-        if (std::regex_search(trimmed, match, thoughtRe)) {
-            parsed.thought = match[1].str();
-        }
+    // Field-by-field extraction as last resort
+    if (auto answer = quotedField(trimmed, "answer")) {
+        parsed.answer = std::move(*answer);
+        parsed.thought = quotedField(trimmed, "thought").value_or("");
         return parsed;
     }
 
-    if (std::regex_search(trimmed, match, toolRe)) {
-        parsed.toolName = match[1].str();
+    if (auto tool = quotedField(trimmed, "tool")) {
+        parsed.toolName = std::move(*tool);
         parsed.toolArgs = json::object();
-        if (std::regex_search(trimmed, match, thoughtRe)) {
-            parsed.thought = match[1].str();
-        }
+        parsed.thought = quotedField(trimmed, "thought").value_or("");
 
         // Try to extract tool_args
-        static const std::regex argsRe(R"re("tool_args"\s*:\s*)re");
-        if (std::regex_search(trimmed, match, argsRe)) {
-            size_t argsStart = static_cast<size_t>(match.position() + match.length());
+        const size_t argsStart = fieldValueStart(trimmed, "tool_args", 0);
+        if (argsStart != std::string::npos) {
             std::string remaining = trimmed.substr(argsStart);
             std::string argsJson = extractFirstJsonObject(remaining);
             if (!argsJson.empty()) {
