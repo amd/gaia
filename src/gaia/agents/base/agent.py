@@ -12198,7 +12198,7 @@ Do NOT wrap conversational replies in JSON.
         call's time to first token. Unchanged with no limit or no rate yet.
         """
         left = self._time_left_s()
-        conversation = getattr(self, "_turn_conversation", None)
+        conversation = getattr(self, "_turn_conversation", None) or []
         if left is None or not conversation:
             return cap
         rate = _query_tok_per_s(conversation)
