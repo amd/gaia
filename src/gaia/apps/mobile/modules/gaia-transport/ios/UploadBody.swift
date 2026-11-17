@@ -64,10 +64,14 @@ private func readableFile(_ uri: String) throws -> URL {
   guard let url = URL(string: uri), url.isFileURL else {
     throw transportError("upload_file", "The file to send isn't on this phone.")
   }
-  guard FileManager.default.isReadableFile(atPath: url.path) else {
+  switch checkUploadFile(url, roots: appUploadRoots()) {
+  case .sendable(let file):
+    return file
+  case .notPicked:
+    throw transportError("upload_file", "The file to send isn't one this app picked, so it wasn't sent. Pick it again.")
+  case .unreadable:
     throw transportError("upload_file", "Couldn't read the file to send. Pick it again.")
   }
-  return url
 }
 
 private func copy(_ source: URL, to out: FileHandle) throws {

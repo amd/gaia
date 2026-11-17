@@ -305,12 +305,7 @@ private final class Pairing: @unchecked Sendable {
 
   private func finish(_ origin: String, status: Int, data: Data) {
     guard status == 200 else {
-      var body = data
-      if var other = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-        other.removeValue(forKey: "token")
-        body = (try? JSONSerialization.data(withJSONObject: other)) ?? Data()
-      }
-      promise.resolve(["status": status, "origin": origin, "body": String(decoding: body, as: UTF8.self)])
+      promise.resolve(["status": status, "origin": origin, "body": String(decoding: withoutToken(data), as: UTF8.self)])
       return
     }
     guard var answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],

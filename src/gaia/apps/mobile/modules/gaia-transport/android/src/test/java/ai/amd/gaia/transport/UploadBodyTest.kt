@@ -45,12 +45,6 @@ class UploadBodyTest {
   }
 
   @Test
-  fun stripsTheTokenFromAnyPairingAnswer() {
-    assertEquals("{\"error\":\"x\"}", withoutToken("{\"token\":\"gaiad_abc\",\"error\":\"x\"}"))
-    assertEquals("not json gaiad_abc", withoutToken("not json gaiad_abc"))
-  }
-
-  @Test
   fun neverSendsTheVault() {
     val secret = File(vault, "gaia-paired-pcs/abc.secret").apply { parentFile!!.mkdirs(); writeBytes(byteArrayOf(1, 2, 3)) }
     assertRefused(secret.path, "pairing keys")

@@ -378,12 +378,12 @@ private class Pairing(
   }
 }
 
-/** A pairing answer's JSON without its `token`, so the device token never reaches JavaScript; other text is returned as it is. */
+/** A pairing answer's JSON object without its `token`, so the device token never reaches JavaScript; anything else is dropped. */
 internal fun withoutToken(text: String): String {
   val answer = try {
     JSONObject(text)
   } catch (e: JSONException) {
-    return text
+    return ""
   }
   answer.remove("token")
   return answer.toString()
