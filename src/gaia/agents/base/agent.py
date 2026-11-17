@@ -951,6 +951,13 @@ _TIME_NOTICE = (
     "and anything not already written is lost."
 )
 _TIME_NOTICE_AT = 0.7
+# Appended to the request of a turn that has a time limit, for the model only.
+_TIME_OPENING_NOTE = (
+    "\n\n[This turn has {total} seconds in all. If the task asks "
+    "for files or other deliverables, write a first working version early "
+    "and improve it in place: when the time is up no tool can run and "
+    "anything not already written is lost.]"
+)
 _TIME_STOP_AT = 0.9
 # Shortest run worth starting when a time limit cuts a tool's timeout.
 _MIN_CAPPED_RUN_S = 5
@@ -12102,6 +12109,20 @@ Do NOT wrap conversational replies in JSON.
             return notice
         return None
 
+    def _tell_time_budget(self, messages: List[Dict]) -> None:
+        """Tell the model, with its request, how long the turn has.
+
+        Without it the model first hears of the limit at the 70% notice, after
+        spending most of the turn exploring. Only the copy sent this turn is
+        changed; the saved history keeps the user's words.
+        """
+        limit = getattr(self, "time_limit_s", None)
+        if not limit or limit <= 0 or not getattr(self, "_budget_notices_on", False):
+            return
+        request = messages[-1]
+        if isinstance(request.get("content"), str):
+            request["content"] += _TIME_OPENING_NOTE.format(total=int(limit))
+
     def time_capped_run_seconds(self, seconds: int) -> int:
         """*seconds*, cut so a run a tool starts ends before the turn's stop point.
 
@@ -12502,6 +12523,7 @@ Do NOT wrap conversational replies in JSON.
         messages.append(
             {"role": "user", "content": self._with_long_message_file(user_input)}
         )
+        self._tell_time_budget(messages)
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps
