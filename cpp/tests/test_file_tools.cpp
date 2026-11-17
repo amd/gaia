@@ -1262,3 +1262,74 @@ TEST_F(FileToolsTest, FileRead_RefusesFoldersAndDeviceNames) {
     }
 #endif
 }
+
+// ---------------------------------------------------------------------------
+// credential files and masked secrets
+// ---------------------------------------------------------------------------
+
+TEST_F(FileToolsTest, FileRead_ACredentialFileIsRefusedByName) {
+    const auto read = FileIOTools::fileRead().callback;
+    const auto edit = FileIOTools::fileEdit().callback;
+    for (const std::string name : {".env", "server.KEY", "sub/id_rsa"}) {
+        const std::string path = writeFile(name, "DB_PASSWORD=hunter2\n");
+        const json shown = read({{"path", path}});
+        ASSERT_TRUE(shown.contains("error")) << name;
+        EXPECT_NE(shown["error"].get<std::string>().find("holds credentials"), std::string::npos) << name;
+        EXPECT_EQ(shown.dump().find("hunter2"), std::string::npos) << name;
+        const json edited = edit({{"path", path}, {"old_string", "absent"}, {"new_string", "x"}});
+        ASSERT_TRUE(edited.contains("error")) << name;
+        EXPECT_EQ(edited.dump().find("hunter2"), std::string::npos) << name;
+    }
+    const std::string example = writeFile(".env.example", "DB_PASSWORD=\n");
+    EXPECT_FALSE(read({{"path", example}}).contains("error"));
+}
+
+TEST_F(FileToolsTest, FileSearch_AContentSearchSkipsCredentialFiles) {
+    writeFile("proj/.env", "DB_PASSWORD=hunter2\n");
+    const json found = FileIOTools::fileSearch().callback(
+        {{"pattern", ".env"}, {"path", (tempDir_ / "proj").string()}, {"content_pattern", "DB_PASSWORD"}});
+    ASSERT_FALSE(found.contains("error")) << found.dump();
+    EXPECT_EQ(found["total"], 0);
+    EXPECT_EQ(found.value("credential_files_skipped", 0), 1);
+    EXPECT_EQ(found.dump().find("hunter2"), std::string::npos);
+}
+
+TEST_F(FileToolsTest, FileEdit_TheRedactedMarkerIsNotWrittenOverASecret) {
+    const std::string token = std::string("ghp_") + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4";
+    const std::string masked = "\turl = https://[redacted]@github.com/amd/gaia.git";
+    const std::string config =
+        "[core]\n\turl = https://user:" + token + "@github.com/amd/gaia.git\n\tremote = origin\n";
+    const std::string path = writeFile("remotes.cfg", config);
+    const auto edit = FileIOTools::fileEdit().callback;
+    ASSERT_FALSE(FileIOTools::fileRead().callback({{"path", path}}).contains("error"));
+
+    json r = edit({{"path", path}, {"old_string", masked}, {"new_string", "\turl = https://github.com/amd/gaia.git"}});
+    EXPECT_EQ(r.value("error_type", ""), "redacted_secret") << r.dump();
+    r = edit({{"path", path}, {"old_string", "[core]"}, {"new_string", "[core]\n" + masked}});
+    EXPECT_EQ(r.value("error_type", ""), "redacted_secret") << r.dump();
+    r = FileIOTools::fileWrite().callback({{"path", path}, {"content", "[core]\n" + masked + "\n"}});
+    EXPECT_EQ(r.value("error_type", ""), "redacted_secret") << r.dump();
+    EXPECT_EQ(readFile(path), config);
+
+    r = edit({{"path", path},
+              {"old_string", "\tremote = origin\n"},
+              {"new_string", "\tremote = origin\n\tmerge = refs/heads/main\n"}});
+    EXPECT_FALSE(r.contains("error")) << r.dump();
+    EXPECT_NE(readFile(path).find(token), std::string::npos);
+    EXPECT_NE(readFile(path).find("merge = refs/heads/main"), std::string::npos);
+}
+
+TEST_F(FileToolsTest, FileEdit_AFileThatHoldsTheMarkerItselfStaysEditable) {
+    const std::string path = writeFile("check_masking.py", "MARKER = \"[redacted]\"\n");
+    ASSERT_FALSE(FileIOTools::fileRead().callback({{"path", path}}).contains("error"));
+    json r = FileIOTools::fileEdit().callback({{"path", path},
+                                               {"old_string", "MARKER = \"[redacted]\""},
+                                               {"new_string", "MARKER = \"[redacted]\"\nOTHER = \"[redacted]\""}});
+    EXPECT_FALSE(r.contains("error")) << r.dump();
+    EXPECT_NE(readFile(path).find("OTHER = \"[redacted]\""), std::string::npos);
+
+    const std::string notes = (tempDir_ / "notes.md").string();
+    r = FileIOTools::fileWrite().callback({{"path", notes}, {"content", "Tokens show as [redacted].\n"}});
+    EXPECT_FALSE(r.contains("error")) << r.dump();
+    EXPECT_EQ(readFile(notes), "Tokens show as [redacted].\n");
+}

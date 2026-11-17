@@ -4,7 +4,9 @@
 #include "gaia/secrets.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstring>
 #include <regex>
 #include <set>
 #include <vector>
@@ -309,6 +311,419 @@ std::string maskCredentials(const std::string& text) {
     }
     out.append(text, cursor, std::string::npos);
     return out;
+}
+
+namespace {
+
+constexpr const char* kRedacted = "[redacted]";
+constexpr const char* kHiddenLine = "[credential file content hidden]";
+
+bool isSpace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f'; }
+bool isUpper(char c) { return c >= 'A' && c <= 'Z'; }
+bool isLower(char c) { return c >= 'a' && c <= 'z'; }
+bool isAlpha(char c) { return isUpper(c) || isLower(c); }
+bool isAlnum(char c) { return isAlpha(c) || isDigit(c); }
+bool isWord(char c) { return isAlnum(c) || c == '_'; }
+bool isUpperName(char c) { return isUpper(c) || isDigit(c) || c == '_'; }
+char lowerChar(char c) { return isUpper(c) ? static_cast<char>(c - 'A' + 'a') : c; }
+
+std::string lowerCopy(std::string s) {
+    for (char& c : s) c = lowerChar(c);
+    return s;
+}
+
+// @p word is lower case.
+bool startsWithNoCase(const std::string& text, std::size_t at, const char* word, std::size_t len) {
+    if (at > text.size() || text.size() - at < len) return false;
+    for (std::size_t k = 0; k < len; ++k) {
+        if (lowerChar(text[at + k]) != word[k]) return false;
+    }
+    return true;
+}
+
+template <typename Pred>
+bool allOf(const std::string& s, std::size_t from, std::size_t to, Pred pred) {
+    for (std::size_t i = from; i < to; ++i) {
+        if (!pred(s[i])) return false;
+    }
+    return true;
+}
+
+struct TokenShape {
+    const char* prefix;  // lower case
+    const char* extra;   // body characters besides letters and digits
+    std::size_t min;
+    bool exact;  // exactly min characters, then a word boundary
+};
+
+const TokenShape kTokenShapes[] = {
+    {"sk-ant-", "_-", 10, false},   {"sk-", "_-", 20, false},    {"ghp_", "", 20, false},
+    {"gho_", "", 20, false},        {"ghu_", "", 20, false},     {"ghs_", "", 20, false},
+    {"ghr_", "", 20, false},        {"github_pat_", "_", 20, false}, {"akia", "", 16, true},
+    {"aiza", "_-", 20, false},      {"xoxb-", "-", 10, false},   {"xoxa-", "-", 10, false},
+    {"xoxp-", "-", 10, false},      {"xoxr-", "-", 10, false},   {"xoxs-", "-", 10, false},
+    {"glpat-", "_-", 20, false},
+};
+
+// End of the provider token starting at @p at, or npos. A prefix glued to a word or '-' is a name.
+std::size_t tokenEndAt(const std::string& text, std::size_t at) {
+    const char first = lowerChar(text[at]);
+    if (first != 's' && first != 'g' && first != 'a' && first != 'x') return std::string::npos;
+    if (at > 0 && (isWord(text[at - 1]) || text[at - 1] == '-')) return std::string::npos;
+    for (const TokenShape& shape : kTokenShapes) {
+        const std::size_t prefixLen = std::strlen(shape.prefix);
+        if (!startsWithNoCase(text, at, shape.prefix, prefixLen)) continue;
+        const std::size_t bodyStart = at + prefixLen;
+        std::size_t end = bodyStart;
+        while (end < text.size() &&
+               (isAlnum(text[end]) || (text[end] != '\0' && std::strchr(shape.extra, text[end]) != nullptr))) {
+            ++end;
+        }
+        if (end - bodyStart < shape.min) continue;
+        if (shape.exact) {
+            end = bodyStart + shape.min;
+            if (end < text.size() && isWord(text[end])) continue;
+        }
+        return end;
+    }
+    return std::string::npos;
+}
+
+// A run of 16+ key characters holding both a letter and a digit: what a generated token has and a hyphenated name lacks.
+bool looksGenerated(const std::string& text, std::size_t from, std::size_t to) {
+    std::size_t run = 0;
+    bool digit = false;
+    bool alpha = false;
+    for (std::size_t i = from; i <= to; ++i) {
+        if (i < to && isWord(text[i])) {
+            ++run;
+            digit = digit || isDigit(text[i]);
+            alpha = alpha || isAlpha(text[i]);
+            continue;
+        }
+        if (run >= 16 && digit && alpha) return true;
+        run = 0;
+        digit = alpha = false;
+    }
+    return false;
+}
+
+// A template or a stand-in for a secret, not a secret.
+bool isPlaceholder(const std::string& v) {
+    if (v.empty()) return true;
+    static const std::set<std::string> words = {"password", "passwd",  "pass",       "pwd",          "secret",
+                                                "token",    "changeme", "example",    "mypassword",   "yourpassword"};
+    if (words.count(lowerCopy(v))) return true;
+    const std::size_t n = v.size();
+    if (v[0] == '{') {
+        std::size_t i = 1;
+        if (i < n && v[i] == '{') ++i;
+        while (i < n && v[i] != '{' && v[i] != '}') ++i;
+        if (i < n && v[i] == '}') {
+            ++i;
+            if (i < n && v[i] == '}') ++i;
+            if (i == n) return true;
+        }
+    }
+    if (v[0] == '$' && n >= 2) {
+        if (v[1] == '{' && n >= 4 && v[n - 1] == '}') {
+            const bool env = (isUpper(v[2]) || v[2] == '_') && allOf(v, 3, n - 1, isUpperName);
+            const bool camel = isLower(v[2]) && allOf(v, 3, n - 1, isAlnum);
+            if (env || camel) return true;
+        }
+        if ((isUpper(v[1]) || v[1] == '_') && allOf(v, 2, n, isUpperName)) return true;
+    }
+    const auto noParen = [](char c) { return c != '(' && c != ')'; };
+    if (n >= 4 && v[0] == '%' && v[1] == '(' && v[n - 2] == ')' && (v[n - 1] == 's' || v[n - 1] == 'd') &&
+        allOf(v, 2, n - 2, noParen)) {
+        return true;
+    }
+    const auto noAngle = [](char c) { return c != '<' && c != '>'; };
+    if (n >= 2 && v[0] == '<' && v[n - 1] == '>' && allOf(v, 1, n - 1, noAngle)) return true;
+    static const std::string prefixes[] = {"YOUR_", "MY_"};
+    for (const std::string& prefix : prefixes) {
+        if (n > prefix.size() && v.compare(0, prefix.size(), prefix) == 0 && allOf(v, prefix.size(), n, isUpperName)) {
+            return true;
+        }
+    }
+    if (n > 5 && v.compare(n - 5, 5, "_HERE") == 0 && allOf(v, 0, n - 5, isUpperName)) return true;
+    const char c = v[0];
+    return (c == 'x' || c == 'X' || c == '*' || c == '.') && v.find_first_not_of(c) == std::string::npos;
+}
+
+bool endsUserinfo(char c) { return c == '/' || c == '@' || c == '?' || c == '#' || isSpace(c); }
+
+// File text: a bare user ("git@", "postgres@") is a login name, and a placeholder password is no secret.
+bool secretUserinfo(const std::string& text, std::size_t start, std::size_t end) {
+    const auto first = text.begin() + static_cast<std::ptrdiff_t>(start);
+    const auto last = text.begin() + static_cast<std::ptrdiff_t>(end);
+    const auto colon = std::find(first, last, ':');
+    if (colon == first) return false;
+    if (colon == last) return end - start >= 20 && looksGenerated(text, start, end);
+    return !isPlaceholder(std::string(colon + 1, last));
+}
+
+// What sits between "://" and the "@" before the host.
+std::string maskUserinfo(const std::string& text, bool fileText) {
+    std::string out;
+    std::size_t copied = 0;
+    std::size_t at = 0;
+    while ((at = text.find("://", at)) != std::string::npos) {
+        const std::size_t start = at + 3;
+        std::size_t end = start;
+        while (end < text.size() && !endsUserinfo(text[end])) ++end;
+        at = start;
+        if (end == start || end >= text.size() || text[end] != '@') continue;
+        at = end;
+        if (fileText && !secretUserinfo(text, start, end)) continue;
+        out.append(text, copied, start - copied);
+        out += kRedacted;
+        copied = end;
+    }
+    if (copied == 0) return text;
+    out.append(text, copied, std::string::npos);
+    return out;
+}
+
+// Start of the value of the secret query parameter named after the '?' or '&' at @p at, or npos.
+std::size_t secretQueryValueAt(const std::string& text, std::size_t at) {
+    static const char* const names[] = {"access_token", "private_token", "token",  "api_key", "apikey", "key",
+                                        "secret",       "password",      "passwd", "auth",    "sig",    "signature"};
+    for (const char* name : names) {
+        const std::size_t len = std::strlen(name);
+        const std::size_t equals = at + 1 + len;
+        if (equals < text.size() && text[equals] == '=' && startsWithNoCase(text, at + 1, name, len)) return equals + 1;
+    }
+    return std::string::npos;
+}
+
+bool endsQueryValue(char c, bool fileText) {
+    if (c == '&' || c == '#' || c == '"' || c == '\'' || c == '<' || c == '>' || isSpace(c)) return true;
+    // In file text a value also ends where code closes the string or the call.
+    return fileText && (c == '`' || c == '(' || c == ')');
+}
+
+std::string maskSecretQueries(const std::string& text, bool fileText) {
+    constexpr std::size_t kMinFileSecret = 8;
+    std::string out;
+    std::size_t copied = 0;
+    for (std::size_t i = 0; i < text.size();) {
+        const std::size_t valueStart =
+            (text[i] == '?' || text[i] == '&') ? secretQueryValueAt(text, i) : std::string::npos;
+        if (valueStart == std::string::npos) {
+            ++i;
+            continue;
+        }
+        std::size_t end = valueStart;
+        while (end < text.size() && !endsQueryValue(text[end], fileText)) ++end;
+        if (end == valueStart) {
+            ++i;
+            continue;
+        }
+        i = end;
+        if (fileText &&
+            (end - valueStart < kMinFileSecret || isPlaceholder(text.substr(valueStart, end - valueStart)))) {
+            continue;
+        }
+        out.append(text, copied, valueStart - copied);
+        out += kRedacted;
+        copied = end;
+    }
+    if (copied == 0) return text;
+    out.append(text, copied, std::string::npos);
+    return out;
+}
+
+std::string maskTokens(const std::string& text, bool fileText) {
+    std::string out;
+    std::size_t copied = 0;
+    for (std::size_t i = 0; i < text.size();) {
+        const std::size_t end = tokenEndAt(text, i);
+        if (end == std::string::npos) {
+            ++i;
+            continue;
+        }
+        // Only the bare "sk-" prefix collides with ordinary hyphenated names.
+        const bool name = fileText && startsWithNoCase(text, i, "sk-", 3) && !looksGenerated(text, i, end);
+        if (!name) {
+            out.append(text, copied, i - copied);
+            out += kRedacted;
+            copied = end;
+        }
+        i = end;
+    }
+    if (copied == 0) return text;
+    out.append(text, copied, std::string::npos);
+    return out;
+}
+
+const std::set<std::string>& credentialFileNames() {
+    static const std::set<std::string> names = {
+        ".env",        ".env.local",   ".env.production", ".env.development", "credentials.json",
+        "service_account.json",        "secrets.json",    "id_rsa",           "id_ed25519",
+        "id_ecdsa",    "id_dsa",       "authorized_keys", "known_hosts",      "shadow",
+        "passwd",      "sudoers",      "htpasswd",        ".netrc",           ".pgpass",
+        ".my.cnf",     "wallet.dat",   "keystore.jks",    ".npmrc",           ".pypirc",
+    };
+    return names;
+}
+
+const std::set<std::string>& credentialFileExtensions() {
+    static const std::set<std::string> extensions = {".pem", ".key", ".crt", ".cer",
+                                                     ".p12", ".pfx", ".jks", ".keystore"};
+    return extensions;
+}
+
+// The extension after the last dot; a name that is only leading dots and a word (".key") has none.
+std::string extensionOf(const std::string& name) {
+    const std::size_t dot = name.rfind('.');
+    if (dot == std::string::npos || name.find_first_not_of('.') >= dot) return "";
+    return name.substr(dot);
+}
+
+// Names and extensions, longest first, so ".env.local" is tried before ".env".
+const std::vector<std::string>& credentialWords() {
+    static const std::vector<std::string> words = [] {
+        std::vector<std::string> all(credentialFileNames().begin(), credentialFileNames().end());
+        all.insert(all.end(), credentialFileExtensions().begin(), credentialFileExtensions().end());
+        std::stable_sort(all.begin(), all.end(),
+                         [](const std::string& a, const std::string& b) { return a.size() > b.size(); });
+        return all;
+    }();
+    return words;
+}
+
+bool startsCredentialWord(char c) {
+    static const std::array<bool, 256> starts = [] {
+        std::array<bool, 256> table{};
+        for (const auto& word : credentialWords()) table[static_cast<unsigned char>(word[0])] = true;
+        return table;
+    }();
+    return starts[static_cast<unsigned char>(lowerChar(c))];
+}
+
+std::string stripAnsi(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (std::size_t i = 0; i < s.size();) {
+        if (s[i] == '\x1b' && i + 1 < s.size() && s[i + 1] == '[') {
+            std::size_t j = i + 2;
+            while (j < s.size() && (isDigit(s[j]) || s[j] == ';')) ++j;
+            if (j < s.size() && isAlpha(s[j])) {
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push_back(s[i++]);
+    }
+    return out;
+}
+
+// How much of @p line to keep when its "file:" prefix names a credential file, or npos when it does not.
+std::size_t credentialPrefixEnd(const std::string& line) {
+    constexpr std::size_t kPrefixSpan = 4096;
+    const bool coloured = line.find('\x1b') != std::string::npos;
+    const std::string stripped = coloured ? stripAnsi(line.substr(0, kPrefixSpan * 4)) : std::string();
+    const std::string& plain = coloured ? stripped : line;
+    // Select-String marks a match line with "> " and indents context lines.
+    std::size_t start = 0;
+    while (start < plain.size() && (plain[start] == ' ' || plain[start] == '>')) ++start;
+    const std::size_t limit = std::min(plain.size(), start + kPrefixSpan);
+    std::size_t nameStart = start;
+    std::size_t scanned = start;
+    for (std::size_t i = start; i < limit;) {
+        std::size_t end = 0;
+        if (startsCredentialWord(plain[i])) {
+            for (const auto& word : credentialWords()) {
+                if (i + word.size() <= limit && startsWithNoCase(plain, i, word.c_str(), word.size())) {
+                    end = i + word.size();
+                    break;
+                }
+            }
+        }
+        if (end == 0) {
+            ++i;
+            continue;
+        }
+        // A prefix ends at ':' (a match), '-' (a context line) or NUL (grep -Z).
+        if (end < plain.size() && (plain[end] == ':' || plain[end] == '-' || plain[end] == '\0')) {
+            for (std::size_t k = i; k > scanned; --k) {
+                const char c = plain[k - 1];
+                if (c != '/' && c != '\\' && c != ':') continue;
+                if (k - 1 >= nameStart) nameStart = k;
+                break;
+            }
+            scanned = i;
+            // Colour codes move the offsets, so a coloured line goes whole.
+            if (isCredentialFileName(plain.substr(nameStart, end - nameStart))) return coloured ? 0 : end + 1;
+        }
+        i = end;
+    }
+    return std::string::npos;
+}
+
+std::string maskCommandOutput(const std::string& text) { return redactCredentials(maskCredentialFileLines(text)); }
+
+void mapStrings(json& value, std::string (*mask)(const std::string&)) {
+    if (value.is_string()) {
+        std::string masked = mask(value.get_ref<const std::string&>());
+        value = std::move(masked);
+    } else if (value.is_structured()) {
+        for (auto& item : value) mapStrings(item, mask);
+    }
+}
+
+}  // namespace
+
+std::string redactCredentials(const std::string& text) {
+    return maskTokens(maskSecretQueries(maskUserinfo(text, false), false), false);
+}
+
+std::string redactFileText(const std::string& text) {
+    return maskTokens(maskSecretQueries(maskUserinfo(text, true), true), true);
+}
+
+bool holdsCredentials(const std::string& text) { return !text.empty() && redactFileText(text) != text; }
+
+bool isCredentialFileName(const std::string& name) {
+    const std::string lowered = lowerCopy(name);
+    return credentialFileNames().count(lowered) > 0 || credentialFileExtensions().count(extensionOf(lowered)) > 0;
+}
+
+std::string maskCredentialFileLines(const std::string& text) {
+    std::string out;
+    std::size_t copied = 0;
+    std::size_t lineStart = 0;
+    while (lineStart < text.size()) {
+        std::size_t lineEnd = text.find_first_of("\r\n", lineStart);
+        if (lineEnd == std::string::npos) lineEnd = text.size();
+        std::size_t next = lineEnd;
+        if (next < text.size()) next += (text[next] == '\r' && next + 1 < text.size() && text[next + 1] == '\n') ? 2 : 1;
+        if (lineEnd > lineStart) {
+            const std::string line = text.substr(lineStart, lineEnd - lineStart);
+            const std::size_t keep = credentialPrefixEnd(line);
+            if (keep != std::string::npos) {
+                out.append(text, copied, lineStart - copied);
+                out.append(line, 0, keep);
+                out += kHiddenLine;
+                copied = lineEnd;
+            }
+        }
+        lineStart = next;
+    }
+    if (copied == 0) return text;
+    out.append(text, copied, std::string::npos);
+    return out;
+}
+
+json redactToolOutput(json value) {
+    mapStrings(value, maskCommandOutput);
+    return value;
+}
+
+json redactFileContent(json value) {
+    mapStrings(value, redactFileText);
+    return value;
 }
 
 }  // namespace gaia

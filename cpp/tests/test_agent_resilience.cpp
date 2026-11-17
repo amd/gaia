@@ -1343,3 +1343,57 @@ TEST(AgentResilience, AFurtherTagCallInOneReplyIsReportedToTheModel) {
     ASSERT_EQ(mock.receivedBodies().size(), 2u);
     EXPECT_NE(mock.receivedBodies()[1].find("Only the first tool call of your reply ran"), std::string::npos);
 }
+
+namespace {
+
+class OutputAgent : public Agent {
+public:
+    using Agent::Agent;
+    // Assembled at run time so secret scanners don't flag the fixture.
+    const std::string token = std::string("ghp_") + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4";
+
+    void initForTest() { init(); }
+
+protected:
+    void registerTools() override {
+        toolRegistry().registerTool(
+            "git_log", "Print the remotes and a search of the folder",
+            [this](const json&) -> json {
+                return json{{"status", "success"},
+                            {"stdout", "origin\thttps://user:" + token + "@github.com/amd/gaia.git (fetch)\n" +
+                                           "./src/app.py:12:# TODO: retry\n./.env:3:DB_PASSWORD=hunter2\n"}};
+            },
+            {});
+        toolRegistry().registerTool(
+            "read_notes", "Return a file's text",
+            [this](const json&) -> json {
+                return json{{"content", "remote = git@github.com:amd/gaia.git\nurl = https://user:" + token +
+                                            "@github.com/amd/gaia.git\n"}};
+            },
+            {});
+    }
+    std::string getSystemPrompt() const override { return "test"; }
+};
+
+}  // namespace
+
+TEST(AgentResilience, AToolResultReachesTheModelWithItsCredentialsMasked) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "git_log", "{}"));
+    mock.pushResponse(call("c2", "read_notes", "{}"));
+    mock.pushResponse(answer("done"));
+    OutputAgent agent(cfgFor(mock));
+    agent.initForTest();
+    agent.processQuery("show the remotes");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_GE(bodies.size(), 3u);
+    for (const auto& body : bodies) {
+        EXPECT_EQ(body.find(agent.token), std::string::npos);
+        EXPECT_EQ(body.find("hunter2"), std::string::npos);
+    }
+    EXPECT_NE(bodies[1].find("https://[redacted]@github.com/amd/gaia.git (fetch)"), std::string::npos);
+    EXPECT_NE(bodies[1].find("./src/app.py:12:# TODO: retry"), std::string::npos) << "other lines of a search stay";
+    EXPECT_NE(bodies[1].find("./.env:[credential file content hidden]"), std::string::npos);
+    EXPECT_NE(bodies[2].find("remote = git@github.com:amd/gaia.git"), std::string::npos);
+    EXPECT_NE(bodies[2].find("url = https://[redacted]@github.com/amd/gaia.git"), std::string::npos);
+}

@@ -969,6 +969,9 @@ int main(int argc, char** argv) {
         }
         std::signal(SIGINT, onSignal);
         std::signal(SIGTERM, onSignal);
+#ifdef SIGBREAK
+        std::signal(SIGBREAK, onSignal);  // Ctrl+Break, and what a parent sends a console child on Windows
+#endif
         switch (cli.mode) {
             case Cli::Mode::Print:
                 try {

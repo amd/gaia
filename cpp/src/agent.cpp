@@ -5,6 +5,7 @@
 #include "gaia/http_client.h"
 #include "gaia/model_registry.h"
 #include "gaia/process.h"
+#include "gaia/secrets.h"
 #include "gaia/security.h"
 
 #include <algorithm>
@@ -1137,6 +1138,13 @@ std::string clippedArgs(const json& args) {
     while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
     return text.substr(0, cut) + "...";
 }
+
+// Tools whose result is what a command printed, not a file's own text.
+bool printsCommandOutput(const std::string& tool) {
+    static const std::set<std::string> tools = {"bash_execute", "git_status", "git_diff", "git_log",
+                                                "git_show"};
+    return tools.count(tool) > 0;
+}
 } // namespace
 
 json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
@@ -1153,6 +1161,10 @@ json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
     const double wall =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     const std::string resolved = tools_.resolveName(toolName);
+    // Masked here, before the console, the step log and the model read it.
+    result = printsCommandOutput(resolved.empty() ? toolName : resolved)
+                 ? redactToolOutput(std::move(result))
+                 : redactFileContent(std::move(result));
     std::string output = result.is_string() ? result.get<std::string>()
                                             : result.dump(-1, ' ', false, json::error_handler_t::replace);
     if (output.size() > 20000) output.resize(utf8Boundary(output, 20000));

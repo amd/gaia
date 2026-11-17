@@ -814,6 +814,27 @@ TEST(GaiaAgentTest, AZeroForSomethingTheTableLacksIsSentBack) {
     EXPECT_FALSE(GaiaAgent::zeroForAbsentNote("East revenue is 0.", {}));
 }
 
+TEST(GaiaAgentTest, AnUnreadableMemoryStoreSaysWhatToDoAndIsLeftAlone) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    const fs::path store = w.path / "memory.db";
+    const std::string junk(4096, 'J');
+    { std::ofstream(store, std::ios::binary) << junk; }
+    GaiaAgent::Options o = optionsFor(w);
+    o.memoryPath = store.u8string();
+    try {
+        GaiaAgent agent(cfgFor(mock), o);
+        FAIL() << "a file that is not a database must not open as a memory store";
+    } catch (const std::runtime_error& e) {
+        const std::string what = e.what();
+        EXPECT_NE(what.find("--no-memory"), std::string::npos) << what;
+        EXPECT_NE(what.find("memory.db"), std::string::npos) << what;
+    }
+    std::ifstream in(store, std::ios::binary);
+    const std::string after((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(after, junk);
+}
+
 TEST(GaiaAgentTest, AUnitPriceForAnOrderLineIsSentBack) {
     const std::string request = "What does the hydrophone line on Northwick's purchase request come to at list price?";
     const std::vector<GaiaAgent::CallSeen> read = {

@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "gaia/ignore.h"
+#include "gaia/secrets.h"
 
 namespace fs = std::filesystem;
 
@@ -278,6 +279,44 @@ std::string notAFileReason(const std::string& path) {
         return path + " is a folder, not a file. Use file_search with this path to list what is in it.";
     }
     return path + " is not a regular file (a device, pipe or socket) and was not opened.";
+}
+
+/// "" when the agent may open `path`; else why a credential file stays closed.
+/// Judged by the real file's name, so a link called notes.txt to .env is refused too.
+std::string credentialFileReason(const std::string& path) {
+    const fs::path given = fs::u8path(path);
+    std::error_code ec;
+    const fs::path real = fs::weakly_canonical(given, ec);
+    const std::string name = (ec ? given : real).filename().u8string();
+    if (!isCredentialFileName(name)) return "";
+    return "'" + name + "' holds credentials, keys or secrets, so the agent may not read or change it. "
+           "Open it yourself if you need its contents.";
+}
+
+size_t countOf(const std::string& text, const std::string& what) {
+    size_t count = 0;
+    for (size_t at = text.find(what); at != std::string::npos; at = text.find(what, at + what.size())) ++count;
+    return count;
+}
+
+/// "" unless the write would put "[redacted]" where `current` holds a secret a read showed masked.
+std::string maskedSecretReason(const std::string& path, const std::string& current,
+                               const std::string& oldText, const std::string& newText) {
+    static const std::string marker = "[redacted]";
+    const size_t inOld = countOf(oldText, marker);
+    const bool addsMarker = countOf(newText, marker) > inOld;
+    if (inOld == 0 && !addsMarker) return "";
+    std::string what;
+    if (inOld > 0 && crlfToLf(current).find(crlfToLf(oldText)) == std::string::npos) {
+        what = "old_string";
+    } else if (addsMarker && holdsCredentials(current)) {
+        what = "The new text";
+    } else {
+        return "";
+    }
+    return what + " contains " + marker + ", which stands in for a secret hidden from what you read; it is not "
+           "text in " + path + ". Nothing was written. Leave the lines that hold the secret out of old_string "
+           "and the new text, or ask the user to change them.";
 }
 
 /// Replace the file at `path` with `content` through a temporary file beside
@@ -1003,6 +1042,9 @@ json FileIOTools::doFileRead(const json& args) {
         const std::string notAFile = notAFileReason(path);
         if (!notAFile.empty()) return json{{"error", notAFile}};
 
+        const std::string credential = credentialFileReason(path);
+        if (!credential.empty()) return json{{"error", credential}};
+
         // One pass, so the hash anchors exactly the bytes on disk that were
         // shown — a second read could hash a version the model never saw.
         std::ifstream file(fs::u8path(path), std::ios::binary);
@@ -1461,6 +1503,17 @@ json FileIOTools::doFileWrite(const json& args) {
             if (divergence.diverged) {
                 return staleRejection(path, "file_write", divergence);
             }
+            if (given.find("[redacted]") != std::string::npos) {
+                std::string current;
+                if (!readWholeFile(path, current)) {
+                    return json{{"error", "Cannot read " + path +
+                                          " to check what the write would replace. Nothing was written."}};
+                }
+                const std::string masked = maskedSecretReason(path, current, "", given);
+                if (!masked.empty()) {
+                    return json{{"error", masked}, {"error_type", "redacted_secret"}, {"path", path}};
+                }
+            }
             if (given.find('\n') != std::string::npos && given.find('\r') == std::string::npos) {
                 LineBreaks existing;
                 if (!lineBreaksOfFile(path, existing)) {
@@ -1552,6 +1605,9 @@ json FileIOTools::doFileEdit(const json& args) {
         const std::string notAFile = notAFileReason(path);
         if (!notAFile.empty()) return json{{"error", notAFile}};
 
+        const std::string credential = credentialFileReason(path);
+        if (!credential.empty()) return json{{"error", credential}};
+
         std::string content;
         if (!readWholeFile(path, content)) {
             return json{{"error", "Cannot open file: " + path}};
@@ -1563,6 +1619,11 @@ json FileIOTools::doFileEdit(const json& args) {
         const std::string& shown = crlfFile ? contentLf : content;
         const std::string oldLf = crlfToLf(oldStr);
         const std::string newLf = crlfToLf(newStr);
+
+        const std::string masked = maskedSecretReason(path, content, oldStr, newStr);
+        if (!masked.empty()) {
+            return json{{"error", masked}, {"error_type", "redacted_secret"}, {"path", path}};
+        }
 
         FileStateTracker& tracker = FileStateTracker::instance();
         const auto divergence = tracker.check(path, content);
@@ -1759,6 +1820,7 @@ json FileIOTools::doFileSearch(const json& args) {
         json matches = json::array();
         int total = 0;
         int ignoredSkipped = 0;
+        int credentialSkipped = 0;
 
         std::error_code ec;
         for (auto it = fs::recursive_directory_iterator(searchDir, fs::directory_options::skip_permission_denied, ec);
@@ -1820,6 +1882,11 @@ json FileIOTools::doFileSearch(const json& args) {
 
             // If content_pattern is specified, search within file
             if (!contentPattern.empty()) {
+                // A match line would hand over what file_read refuses to show.
+                if (isCredentialFileName(filename)) {
+                    ++credentialSkipped;
+                    continue;
+                }
                 std::ifstream file(entryPath);
                 if (!file.is_open()) continue;
 
@@ -1854,11 +1921,13 @@ json FileIOTools::doFileSearch(const json& args) {
             }
         }
 
-        return json{
+        json result{
             {"matches", matches},
             {"total", total},
             {"ignored_skipped", ignoredSkipped},
         };
+        if (credentialSkipped > 0) result["credential_files_skipped"] = credentialSkipped;
+        return result;
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_search failed: ") + e.what()}};
     }

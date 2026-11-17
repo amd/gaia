@@ -37,8 +37,15 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
         setSkillLoader(skills_.get());
     }
     if (options_.memory) {
-        memory_ = std::make_unique<MemoryStore>(
-            options_.memoryPath.empty() ? MemoryStore::defaultPath() : options_.memoryPath);
+        const std::string memoryPath =
+            options_.memoryPath.empty() ? MemoryStore::defaultPath() : options_.memoryPath;
+        try {
+            memory_ = std::make_unique<MemoryStore>(memoryPath);
+        } catch (const std::exception& e) {
+            throw std::runtime_error("The memory store at " + memoryPath + " could not be opened: " + e.what() +
+                                     "\nNothing was changed. Move that file aside to start a new memory, or run "
+                                     "with --no-memory to work without one.");
+        }
     }
     if (options_.documents) {
         EmbedFunction embed;

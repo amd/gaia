@@ -8,6 +8,7 @@
 #include <gaia/secrets.h>
 
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace gaia;
@@ -187,4 +188,256 @@ TEST(SecretsTest, FlagsJwtsAndPrivateKeyBlocks) {
     EXPECT_EQ(maskCredentials(pem), "deploy key:\n[secret removed]\nafter");
     EXPECT_TRUE(looksLikeCredential("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk"));
     EXPECT_FALSE(looksLikeCredential("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"));
+}
+
+namespace {
+
+// Assembled at run time so secret scanners don't flag the fixtures.
+const std::string kGhp = std::string("ghp_") + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4";
+const std::string kPat = std::string("github_pat_") + "11ABCDEFG0123456789_abcdefghijklmnop";
+const std::string kGlpat = std::string("glpat-") + "abcdefghij0123456789";
+const std::string kAkia = std::string("AKIA") + "ABCDEFGHIJKLMNOP";
+const std::string kDbPw = std::string("DB_PASSWORD=") + "hunter2";
+const std::string kApiSecret = std::string("API_SECRET=") + "s3cr3t";
+const std::string kPem = std::string("-----BEGIN PRIVATE") + " KEY-----";
+const std::string kRemote = "https://user:" + kGhp + "@github.com/amd/gaia.git";
+const std::string kRedactedMark = "[redacted]";
+const std::string kHiddenMark = "[credential file content hidden]";
+
+std::string upperBody(const std::string& token, std::size_t prefix) {
+    std::string out = token;
+    for (std::size_t i = prefix; i < out.size(); ++i) {
+        if (out[i] >= 'a' && out[i] <= 'z') out[i] = static_cast<char>(out[i] - 'a' + 'A');
+    }
+    return out;
+}
+
+bool has(const std::string& text, const std::string& part) { return text.find(part) != std::string::npos; }
+
+}  // namespace
+
+TEST(RedactCredentialsTest, MasksTokensUrlUserinfoAndSecretQueryValues) {
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {"origin\thttps://user:" + kGhp + "@github.com/amd/gaia.git (fetch)", kGhp},
+        {"origin\thttps://x-access-token:" + kPat + "@github.com/a/b (push)", kPat},
+        {"origin https://" + kGhp + "@github.com/a/b.git", kGhp},
+        {std::string("remote ssh://deploy:") + "hunter2pass@git.example.com:2222/r.git", "hunter2pass"},
+        {"GET https://api.example.com/v1/items?access_token=" + kGlpat + "&page=2", kGlpat},
+        {std::string("GET https://api.example.com/v1/items?page=2&TOKEN=") + "s3cr3tvalue1", "s3cr3tvalue1"},
+        {std::string("HTTPS://User:") + "Pa55w0rdXYZ@Example.COM/x", "Pa55w0rdXYZ"},
+        {"export AWS_ACCESS_KEY_ID=" + kAkia, kAkia},
+        {"token: " + upperBody(kGhp, 4), upperBody(kGhp, 4).substr(4)},
+        {"GITLAB=" + upperBody(kGlpat, 6), upperBody(kGlpat, 6).substr(6)},
+        {"pat=" + kPat, kPat},
+        {std::string("slack ") + "xoxb-" + "123456789012-abcdefABCDEF", "123456789012-abcdefABCDEF"},
+        {std::string("maps ") + "AIza" + "SyA1b2C3d4E5f6G7h8I9j0K1l2", "SyA1b2C3d4E5f6G7h8I9j0K1l2"},
+        {std::string("key ") + "sk-ant-" + "api03-abcdefghij", "api03-abcdefghij"},
+    };
+    for (const auto& [text, secret] : cases) {
+        const std::string out = redactCredentials(text);
+        EXPECT_FALSE(has(out, secret)) << text;
+        EXPECT_TRUE(has(out, kRedactedMark)) << text;
+    }
+    EXPECT_EQ(redactCredentials("origin\thttps://user:" + kGhp + "@github.com/amd/gaia.git (fetch)"),
+              "origin\thttps://[redacted]@github.com/amd/gaia.git (fetch)");
+    EXPECT_EQ(redactCredentials("GET https://h/x?access_token=" + kGlpat + "&page=2"),
+              "GET https://h/x?access_token=[redacted]&page=2");
+}
+
+TEST(RedactCredentialsTest, LeavesOrdinaryTextAlone) {
+    const std::vector<std::string> ordinary = {
+        "origin\tgit@github.com:amd/gaia.git (fetch)",
+        "Author: Jane Doe <jane.doe@example.com>",
+        "see https://github.com/amd/gaia/pull/12 for details",
+        "https://www.npmjs.com/package/@scope/pkg",
+        "GET https://api.example.com/v1/items?page=2&sort=desc",
+        "max_tokens=512 tokens_per_second=31.2",
+        "ghp_short",
+        "mailto:someone@example.com",
+        std::string("task-sk-") + "abcdefghijklmnopqrstuvwxyz0123",
+        std::string("build_sk-") + "abcdefghijklmnopqrstuvwxyz0123",
+        "gaia version 0.25.4-rc16 (build 2026.11.16)",
+        "commit 3f2a9c1e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39 (HEAD -> main, origin/main)",
+        "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "22b5ebb4b fix(cpp): do not run tool-call text quoted from a file",
+        "AKIAABCDEFGHIJKLMNOPQ is one character too long for an access key id",
+        "",
+    };
+    for (const auto& text : ordinary) EXPECT_EQ(redactCredentials(text), text) << text;
+}
+
+TEST(RedactCredentialsTest, LongInputIsScannedWhole) {
+    std::string big(600000, 'a');
+    big += " https://user:" + kGhp + "@github.com/a/b ";
+    big += std::string(600000, '/');
+    big += " " + kAkia;
+    const std::string out = redactCredentials(big);
+    EXPECT_FALSE(has(out, kGhp));
+    EXPECT_FALSE(has(out, kAkia));
+    EXPECT_EQ(redactCredentials(std::string(600000, ':') + "//"), std::string(600000, ':') + "//");
+}
+
+TEST(RedactToolOutputTest, NestedResultsAreMaskedAndKeepTheirShape) {
+    const json result = {{"status", "success"},
+                         {"stdout", "https://u:" + kGhp + "@github.com/a/b"},
+                         {"steps", json::array({{{"output", "key " + kAkia}}})},
+                         {"return_code", 0}};
+    const json out = redactToolOutput(result);
+    const std::string dumped = out.dump();
+    EXPECT_FALSE(has(dumped, kGhp));
+    EXPECT_FALSE(has(dumped, kAkia));
+    EXPECT_EQ(out["return_code"], 0);
+    EXPECT_EQ(out["status"], "success");
+    EXPECT_EQ(out["steps"][0]["output"], "key [redacted]");
+    EXPECT_EQ(redactToolOutput(json("clone " + kRemote)), json("clone https://[redacted]@github.com/amd/gaia.git"));
+}
+
+TEST(CredentialFileLinesTest, ALineFromACredentialFileIsHidden) {
+    const std::vector<std::string> lines = {
+        "./.env:3:" + kDbPw,
+        ".env:" + kDbPw,
+        "sub/dir/.env.production:1:" + kDbPw,
+        "./config/.env.local-4-" + kApiSecret,
+        "certs/server.key:1:" + kPem,
+        "certs/server.pem:" + kPem,
+        "deploy/tls/site.KEY:" + kPem,
+        "proj\\secrets.json:2:  \"token\": \"abc\"",
+        "> proj\\.env:1:" + kDbPw,
+        "  proj\\.env:2:" + kApiSecret,
+        std::string("./.env") + '\0' + kDbPw,
+        "3:./.env:" + kDbPw,
+        "3:.env:" + kDbPw,
+        "\x1b[35m./.env\x1b[m\x1b[36m:\x1b[m3:" + kDbPw,
+        "C:\\work\\app\\.npmrc:1://registry/:_authToken=x",
+    };
+    for (const auto& line : lines) {
+        for (const std::string ending : {"\n", "\r\n"}) {
+            const std::string out = maskCredentialFileLines(line + ending);
+            for (const std::string secret : {"hunter2", "s3cr3t", "\"abc\"", "PRIVATE KEY", "_authToken"}) {
+                EXPECT_FALSE(has(out, secret)) << line;
+            }
+            EXPECT_TRUE(has(out, kHiddenMark)) << line;
+            ASSERT_GE(out.size(), ending.size());
+            EXPECT_EQ(out.substr(out.size() - ending.size()), ending) << line;
+        }
+    }
+    EXPECT_EQ(maskCredentialFileLines("./.env:3:" + kDbPw + "\n"), "./.env:" + kHiddenMark + "\n");
+    EXPECT_EQ(maskCredentialFileLines("./config/.env.local-4-" + kApiSecret), "./config/.env.local-" + kHiddenMark);
+}
+
+TEST(CredentialFileLinesTest, OtherLinesAreLeftAlone) {
+    const std::vector<std::string> lines = {
+        "./src/app.py:12:# TODO: retry",
+        "./.env.example:1:DB_PASSWORD=",
+        "docs/env.md:3:put DB_PASSWORD in .env",
+        ".gitignore:1:.env",
+        "./README.md:7:copy .env.example to .env",
+        "src/settings.py-40-load_dotenv('.env')",
+        " M .env",
+        "ls: cannot access '.env': No such file or directory",
+        "src/keys.py:3:PUBLIC_KEY_PATH = 'certs/server.key'",
+        "text-shadow: 0 1px 2px #000",
+        "",
+    };
+    for (const auto& line : lines) EXPECT_EQ(maskCredentialFileLines(line), line) << line;
+}
+
+TEST(CredentialFileLinesTest, ASearchKeepsItsOtherLines) {
+    const std::string grep = "./src/app.py:12:# TODO: retry\n./.env:3:" + kDbPw + "\n./config/.env.local-4-" +
+                             kApiSecret + "\n./README.md:7:TODO list\n";
+    const std::string out = maskCredentialFileLines(grep);
+    EXPECT_FALSE(has(out, "hunter2"));
+    EXPECT_FALSE(has(out, "s3cr3t"));
+    EXPECT_TRUE(has(out, "./src/app.py:12:# TODO: retry\n"));
+    EXPECT_TRUE(has(out, "./README.md:7:TODO list\n"));
+    std::size_t hidden = 0;
+    for (std::size_t at = out.find(kHiddenMark); at != std::string::npos; at = out.find(kHiddenMark, at + 1)) ++hidden;
+    EXPECT_EQ(hidden, 2u);
+    EXPECT_EQ(redactToolOutput(json{{"stdout", grep}})["stdout"], out);
+}
+
+TEST(CredentialFileNameTest, MatchesTheRefusedNamesAndExtensions) {
+    for (const std::string name : {".env", ".ENV", ".env.local", ".env.production", ".env.development",
+                                   "credentials.json", "service_account.json", "secrets.json", "id_rsa",
+                                   "id_ed25519", "id_ecdsa", "id_dsa", "authorized_keys", "known_hosts", "shadow",
+                                   "passwd", "sudoers", "htpasswd", ".netrc", ".pgpass", ".my.cnf", "wallet.dat",
+                                   "keystore.jks", ".npmrc", ".pypirc", "server.pem", "site.KEY", "ca.crt",
+                                   "ca.cer", "id.p12", "id.pfx", "app.jks", "debug.keystore"}) {
+        EXPECT_TRUE(isCredentialFileName(name)) << name;
+    }
+    for (const std::string name : {".env.example", "env.md", "README.md", "keys.py", ".key", "pem", "passwd.txt",
+                                   "id_rsa.pub", "package.json", ""}) {
+        EXPECT_FALSE(isCredentialFileName(name)) << name;
+    }
+}
+
+TEST(RedactFileTextTest, SecretShapedFileTextIsNotMasked) {
+    const std::vector<std::string> notSecrets = {
+        "\"repository\": \"git+ssh://git@github.com/amd/gaia.git\"",
+        "postgresql://postgres@localhost:5432/app",
+        "requests.get(f\"https://api.x.com/v1?key={api_key}\")",
+        "# sk-learn-compatible-estimator-wrapper",
+        "https://user:${GIT_TOKEN}@github.com/amd/gaia.git",
+        std::string("https://user:") + "password@example.com/x",
+        "curl https://api.example.com/v1?token=YOUR_TOKEN_HERE",
+        "url = https://example.com/x?api_key=%(key)s",
+        "see https://example.com/items?key=abc",
+        std::string("https://user:") + "MYPASSWORD@example.com/x",
+        "https://user:$GIT_TOKEN@github.com/a.git",
+        "https://user:<token>@github.com/a.git",
+        "https://example.com/x?token={{ api_token }}",
+        "https://example.com/x?access_token=YOUR_ACCESS_TOKEN",
+        "fetch(`https://x.com/?api_key=${apiKey}`)",
+        "requests.get(f'https://x.com/?token={token}')",
+        "https://user:${DB_PASSWORD}@db/app",
+        "[server]\nhost = 127.0.0.1\nport = 8080\ndocs = https://amd-gaia.ai/docs/guides/chat\n"
+        "remote = git@github.com:amd/gaia.git\n.env: listed here is not a search prefix\n",
+    };
+    for (const auto& line : notSecrets) {
+        EXPECT_EQ(redactFileText(line), line) << line;
+        EXPECT_FALSE(holdsCredentials(line)) << line;
+    }
+}
+
+TEST(RedactFileTextTest, RealSecretsInFileTextAreStillMasked) {
+    const std::string skProj = std::string("sk-proj-") + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4z";
+    const std::string skAnt = std::string("sk-ant-api03-") + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4z";
+    const std::string hexToken = "0123456789abcdef0123456789abcdef01234567";
+    const std::vector<std::pair<std::string, std::string>> cases = {
+        {"url = " + kRemote, kGhp},
+        {std::string("postgresql://app:") + "hunter2@db.internal:5432/app", "hunter2"},
+        {"https://x-access-token:" + kGlpat + "@gitlab.com/a/b.git", kGlpat},
+        {"https://" + hexToken + "@github.com/amd/gaia.git", hexToken},
+        {std::string("GET https://api.example.com/v1?access_token=") + "Zq81mXv0Lp7c", "Zq81mXv0Lp7c"},
+        {"OPENAI_API_KEY=" + skProj, skProj},
+        {"ANTHROPIC_API_KEY=" + skAnt, skAnt},
+        {std::string("OLD_KEY=sk-") + "Ab3dEf6hIj9kLm2nOp5qRs8t", "Ab3dEf6hIj9kLm2nOp5qRs8t"},
+        {std::string("postgresql://app:") + "p%40ssW0rd2024@db/app", "p%40ssW0rd2024"},
+        {std::string("postgresql://app:") + "Pa$$w0rd2024@db/app", "Pa$$w0rd2024"},
+        {std::string("postgresql://app:") + "{x}Pa55word@db/app", "Pa55word"},
+        {std::string("postgresql://app:") + "HUNTERPASS@db/app", "HUNTERPASS"},
+        {std::string("mysql://root:") + "$ecretP4ss@db/app", "$ecretP4ss"},
+        {std::string("mysql://root:") + "${mixed_Case9}@db/app", "mixed_Case9"},
+        {std::string("https://acct.blob.core.windows.net/c/b?sv=2022-11-02&sp=r") + "&sig=" +
+             "Xk2bLq9vPz4Rt7Yw1Mn5Cd8Ef3Gh6Jk0%2BaBcD%2FeFgH%3D%3D",
+         "Xk2bLq9vPz4Rt7Yw1Mn5Cd8Ef3Gh6Jk0"},
+    };
+    for (const auto& [line, secret] : cases) {
+        const std::string out = redactFileText(line);
+        EXPECT_FALSE(has(out, secret)) << line;
+        EXPECT_TRUE(has(out, kRedactedMark)) << line;
+        EXPECT_TRUE(holdsCredentials(line)) << line;
+    }
+    EXPECT_EQ(redactFileText("\turl = " + kRemote + "\n"), "\turl = https://[redacted]@github.com/amd/gaia.git\n");
+    EXPECT_EQ(redactFileText("POST https://ci.example.com/hook?token=" + kGlpat + "&x=1\n"),
+              "POST https://ci.example.com/hook?token=[redacted]&x=1\n");
+}
+
+TEST(RedactFileContentTest, MasksEveryStringAndNeverHidesLines) {
+    const json value = {{"content", ".env:3:KEY=1\nurl = " + kRemote + "\n"}, {"lines", json::array({kGhp, 3})}};
+    const json out = redactFileContent(value);
+    EXPECT_EQ(out["content"].get<std::string>().rfind(".env:3:KEY=1\n", 0), 0u);
+    EXPECT_FALSE(has(out.dump(), kGhp));
+    EXPECT_EQ(out["lines"][1], 3);
+    EXPECT_FALSE(has(out.dump(), kHiddenMark));
 }
