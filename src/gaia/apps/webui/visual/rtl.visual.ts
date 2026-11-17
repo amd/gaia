@@ -3751,6 +3751,11 @@ for (const locale of ['ar', 'en']) {
         const row = page.locator('.status-row--has-hint').first();
         await expect(row).toBeVisible();
         await expect(row).not.toContainText(/gaia init|Cloud providers still work/);
+        // The backend's sentence is worded in the app's language, in the row and in the banner.
+        if (locale === 'ar') {
+            await expect(row).toContainText('لا يشغّل خادم النماذج هذا');
+            await expect(page.locator('.connection-banner')).toContainText('لا يشغّل خادم النماذج هذا');
+        }
         await expect(page.getByRole('dialog').locator('.settings-card .btn-primary')).toHaveCount(0);
         await expect(page.locator('.connection-banner')).not.toContainText('gaia init');
         await shot(page, `advanced-${locale}-server-down`);

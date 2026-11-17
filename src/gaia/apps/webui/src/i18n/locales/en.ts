@@ -2621,6 +2621,7 @@ export const enMessages = {
 
     // The connection banner
     'banner.serverStopped': "The model server isn't answering.",
+    'server.otherServerStart': "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
     'banner.restartHint': 'If it stays this way, restart it:',
     'banner.startHint': 'To start it by hand, run',
     'banner.finishSetup': 'Set up models on this PC, or choose a cloud model in Settings.',
