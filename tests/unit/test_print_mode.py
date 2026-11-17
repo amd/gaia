@@ -610,7 +610,7 @@ def test_agent_config_is_headless(stub_env):
     print_mode.run("q", model="m1", max_steps=5)
     cfg = _agent().config
     assert cfg.silent_mode is True
-    assert cfg.streaming is False
+    assert cfg.streaming is True
     assert cfg.max_steps == 5
     assert cfg.model_id == "m1"
     assert cfg.base_url == "http://detected:13305/api/v1"
@@ -1390,3 +1390,15 @@ def test_no_web_tells_the_model_the_shell_is_not_a_way_around(stub_env):
 def test_without_no_web_the_request_is_the_users_own(stub_env):
     assert print_mode.run("find the answer", model="m") == 0
     assert _agent().queries == ["find the answer"]
+
+
+def test_streamed_text_never_reaches_stdout(capsys):
+    """-p streams its model calls; the console it runs with must swallow them."""
+    from gaia.agents.base.console import SilentConsole
+
+    console = SilentConsole()
+    console.print_streaming_text("partial answer")
+    console.print_streaming_text("", end_of_stream=True)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""

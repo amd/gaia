@@ -15,6 +15,7 @@ import platform
 import re
 import shutil
 import sqlite3
+import sys
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -370,10 +371,11 @@ def _lists_script_libraries(f):
             f"{f.__name__}'s docstring has no {SCRIPT_LIBRARIES_PLACEHOLDER} line"
         )
     names = script_libraries()
+    # Says whose Python: a project's own packages are not importable here.
     line = (
-        f"Has {', '.join(names)}; no pip."
+        f"GAIA's own Python: has {', '.join(names)}; no pip."
         if names
-        else "Has only the standard library; no pip."
+        else "GAIA's own Python: has only the standard library; no pip."
     )
     f.__doc__ = f.__doc__.replace(SCRIPT_LIBRARIES_PLACEHOLDER, line)
     return f
@@ -415,6 +417,53 @@ def _missing_library_hint(stderr_line: str) -> Optional[str]:
     )
 
 
+def system_python() -> Optional[str]:
+    """A Python on PATH other than the one running GAIA, or None."""
+    own_env = os.path.abspath(sys.prefix) + os.sep
+    in_venv = sys.prefix != sys.base_prefix
+    here = os.path.realpath(sys.executable)
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        # The Microsoft Store stub opens the Store instead of running Python.
+        if not found or "WindowsApps" in Path(found).parts:
+            continue
+        if os.path.abspath(found).startswith(own_env):
+            continue
+        # A venv's interpreter is a link to the base Python, which is still
+        # a different set of packages; outside a venv the same file is GAIA's.
+        if in_venv or os.path.realpath(found) != here:
+            return found
+    return None
+
+
+def _system_python_hint(stderr_line: str, can_run: bool) -> Optional[str]:
+    """Where a script can find a module GAIA's own Python lacks.
+
+    *can_run*: the shell would run that Python. Naming a command the shell
+    refuses costs the model a step.
+    """
+    match = _MISSING_MODULE_LINE.search(stderr_line or "")
+    if not match or not can_run:
+        return None
+    other = system_python()
+    if other is None:
+        return None
+    module = match.group(1).split(".")[0]
+    return (
+        f"This ran in GAIA's own Python, which has no {module}. The system "
+        f"Python at {other} is a separate install: save the code to a file "
+        "and run it there with run_shell_command."
+    )
+
+
+def _shell_runs_any_python(agent: Any) -> bool:
+    """True when the agent's shell would run a Python outside its allowlist."""
+    if "run_shell_command" not in agent._tools_registry:
+        return False
+    full_access = getattr(agent, "full_access_active", None)
+    return bool(full_access and full_access())
+
+
 def _stopped_run_result(agent: Any, job: Any, timeout: int) -> Dict[str, Any]:
     """A killed job's result; one the time limit cut short is not told to ask for longer."""
     result = stopped_job_result(job, timeout)
@@ -432,6 +481,7 @@ def _python_run_result(
     stderr: str,
     seconds: float,
     note: Optional[str] = None,
+    system_python_runs: bool = False,
 ) -> Dict[str, Any]:
     """A finished Python run as a tool result; a non-zero exit is an error.
 
@@ -457,7 +507,9 @@ def _python_run_result(
         result["error"] = f"Python exited with code {code}" + (
             f": {last[:300]}" if last else ""
         )
-        hint = _missing_library_hint(last)
+        hint = _missing_library_hint(last) or _system_python_hint(
+            last, system_python_runs
+        )
         if hint:
             result["error"] += f". {hint}"
     return result
@@ -2899,7 +2951,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             retain_excerpt(self, r.stdout, 8000),
                             retain_excerpt(self, r.stderr, 2000),
                             time.monotonic() - start,
-                            " ".join(
+                            system_python_runs=_shell_runs_any_python(self),
+                            note=" ".join(
                                 n for n in (finished_job_note(job), undo_note) if n
                             )
                             or None,
@@ -2923,12 +2976,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             def run_python(code: str, timeout: int = DEFAULT_PYTHON_TIMEOUT) -> dict:
                 """Run a Python snippet and return what it prints.
 
-                Compute or check something without creating a file. Runs
-                from the project root; with no project it may run in your
-                scratch directory, so use absolute paths for user files.
+                Compute or check something without a file. Runs from the
+                project root, or your scratch directory with no project, so
+                use absolute paths for user files.
                 Report numbers from its output.
 
-                No access to your tools: `from gaia import <tool>` fails —
+                No access to your tools: `from gaia import <tool>` fails;
                 call it directly as a tool.
 
                 {script_libraries}
@@ -3144,6 +3197,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     r.stderr[:2000],
                     time.monotonic() - start,
                     " ".join(n for n in notes if n) or None,
+                    system_python_runs=_shell_runs_any_python(self),
                 )
                 return attach_check(
                     result,
