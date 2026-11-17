@@ -87,3 +87,18 @@ def test_unchanged_skills_keep_the_prompt(chat):
     prompt = agent.system_prompt
     assert agent.follow_installed_skills() is False
     assert agent.system_prompt is prompt
+
+
+def test_a_skill_added_before_a_prompt_rebuild_is_still_listed(chat):
+    """A rebuild mid-turn (e.g. loading a skill) must not record a skill it didn't list."""
+    agent, add, _ = chat
+    assert "weekly-digest" in agent.system_prompt
+    add("expense-report")
+    agent.rebuild_system_prompt()
+    assert "expense-report" in agent.system_prompt
+
+
+def test_a_skill_folder_without_a_skill_file_is_ignored(chat, tmp_path):
+    agent, _, _ = chat
+    (tmp_path / "home" / "skills" / "half-copied").mkdir()
+    assert agent.follow_installed_skills() is False

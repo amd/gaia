@@ -5234,7 +5234,12 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        self._installed_skills_listed = self._installed_skills()
+        current = self._installed_skills()
+        # Rescan when the folders moved on since the scan, so the record and
+        # the list it describes agree, e.g. a skill added during a turn.
+        if current != getattr(self, "_installed_skills_listed", current):
+            self.skill_manager.reload()
+        self._installed_skills_listed = current
         catalog = render_catalog(
             self._catalog_skills(), list_project=self._lists_project_skills()
         )
@@ -5250,8 +5255,11 @@ Do NOT wrap conversational replies in JSON.
                 continue
             for entry in root.path.iterdir():
                 skill_file = entry / SKILL_FILENAME
-                if skill_file.is_file():
+                try:
                     found.append((str(skill_file), skill_file.stat().st_mtime_ns))
+                except (FileNotFoundError, NotADirectoryError):
+                    # Not a skill, or removed while scanning: the next turn sees it.
+                    continue
         return tuple(sorted(found))
 
     def follow_installed_skills(self) -> bool:
