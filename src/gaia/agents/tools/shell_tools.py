@@ -8191,9 +8191,9 @@ class ShellToolsMixin:
                     ceiling it is refused, not clamped.
 
             Returns:
-                status, output and the last exit code; a line of several
-                steps adds 'steps' (each with its own code); one killed at the
-                limit carries 'timed_out', 'timeout' and 'timeout_class'.
+                status, output, the last exit code; several steps add
+                'steps' (each with its code); a kill at the limit adds
+                'timed_out', 'timeout' and 'timeout_class'.
             """
             working_directory = _expand_home(working_directory)
             try:
