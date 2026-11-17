@@ -765,6 +765,39 @@ def test_the_windows_store_stub_is_not_a_python(monkeypatch):
     assert system_python() is None
 
 
+def test_a_venvs_base_python_is_a_different_python(monkeypatch, tmp_path):
+    """The venv's interpreter links to the base one, which has other packages."""
+    venv = tmp_path / "venv"
+    monkeypatch.setattr(sys, "prefix", str(venv))
+    monkeypatch.setattr(sys, "base_prefix", str(tmp_path / "base"))
+    monkeypatch.setattr(chat_agent.shutil, "which", _which({"python3": sys.executable}))
+    assert system_python() == sys.executable
+
+
+def test_the_venvs_own_python_is_not_the_system_python(monkeypatch, tmp_path):
+    venv = tmp_path / "venv"
+    own = str(venv / "bin" / "python3")
+    monkeypatch.setattr(sys, "prefix", str(venv))
+    monkeypatch.setattr(sys, "base_prefix", str(tmp_path / "base"))
+    monkeypatch.setattr(chat_agent.shutil, "which", _which({"python3": own}))
+    assert system_python() is None
+
+
+@pytest.mark.parametrize(
+    "has_shell, full_access, expected",
+    [(True, True, True), (True, False, False), (False, True, False)],
+)
+def test_the_hint_needs_a_shell_that_would_run_it(has_shell, full_access, expected):
+    """Outside full access the shell refuses a Python that is not on its list."""
+    from gaia_agent.chat_agent import _shell_runs_any_python
+
+    agent = SimpleNamespace(
+        _tools_registry={"run_shell_command": {}} if has_shell else {},
+        full_access_active=lambda: full_access,
+    )
+    assert _shell_runs_any_python(agent) is expected
+
+
 def test_python_is_used_when_there_is_no_python3(monkeypatch):
     monkeypatch.setattr(chat_agent.shutil, "which", _which({"python": _SYSTEM}))
     assert system_python() == _SYSTEM
@@ -772,7 +805,9 @@ def test_python_is_used_when_there_is_no_python3(monkeypatch):
 
 def test_a_missing_module_names_the_system_python(monkeypatch):
     monkeypatch.setattr(chat_agent, "system_python", lambda: _SYSTEM)
-    result = _python_run_result(_failed(_MISSING), "", _MISSING, 0.1, shell_tool=True)
+    result = _python_run_result(
+        _failed(_MISSING), "", _MISSING, 0.1, system_python_runs=True
+    )
     assert result["status"] == "error"
     assert "has no torch" in result["error"]
     assert _SYSTEM in result["error"]
@@ -790,7 +825,9 @@ def test_a_missing_module_names_the_system_python(monkeypatch):
 def test_no_hint_without_a_way_to_act_on_it(monkeypatch, stderr, shell_tool, other):
     monkeypatch.setattr(chat_agent, "system_python", lambda: other)
     assert _system_python_hint(stderr, shell_tool) is None
-    result = _python_run_result(_failed(stderr), "", stderr, 0.1, shell_tool=shell_tool)
+    result = _python_run_result(
+        _failed(stderr), "", stderr, 0.1, system_python_runs=shell_tool
+    )
     assert "system Python" not in result["error"]
 
 
@@ -798,7 +835,9 @@ def test_a_bundled_library_keeps_its_own_hint(monkeypatch):
     """pandas missing from a source install is retried without it, not rerouted."""
     monkeypatch.setattr(chat_agent, "system_python", lambda: _SYSTEM)
     stderr = "ModuleNotFoundError: No module named 'pandas'"
-    result = _python_run_result(_failed(stderr), "", stderr, 0.1, shell_tool=True)
+    result = _python_run_result(
+        _failed(stderr), "", stderr, 0.1, system_python_runs=True
+    )
     assert "pip is not available" in result["error"]
     assert "system Python" not in result["error"]
 

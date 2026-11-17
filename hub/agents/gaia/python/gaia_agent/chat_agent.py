@@ -413,21 +413,31 @@ def _missing_library_hint(stderr_line: str) -> Optional[str]:
 
 def system_python() -> Optional[str]:
     """A Python on PATH other than the one running GAIA, or None."""
+    own_env = os.path.abspath(sys.prefix) + os.sep
+    in_venv = sys.prefix != sys.base_prefix
     here = os.path.realpath(sys.executable)
     for name in ("python3", "python"):
         found = shutil.which(name)
         # The Microsoft Store stub opens the Store instead of running Python.
         if not found or "WindowsApps" in Path(found).parts:
             continue
-        if os.path.realpath(found) != here:
+        if os.path.abspath(found).startswith(own_env):
+            continue
+        # A venv's interpreter is a link to the base Python, which is still
+        # a different set of packages; outside a venv the same file is GAIA's.
+        if in_venv or os.path.realpath(found) != here:
             return found
     return None
 
 
-def _system_python_hint(stderr_line: str, shell_tool: bool) -> Optional[str]:
-    """Where a script can find a module GAIA's own Python lacks."""
+def _system_python_hint(stderr_line: str, can_run: bool) -> Optional[str]:
+    """Where a script can find a module GAIA's own Python lacks.
+
+    *can_run*: the shell would run that Python. Naming a command the shell
+    refuses costs the model a step.
+    """
     match = _MISSING_MODULE_LINE.search(stderr_line or "")
-    if not match or not shell_tool:
+    if not match or not can_run:
         return None
     other = system_python()
     if other is None:
@@ -440,13 +450,21 @@ def _system_python_hint(stderr_line: str, shell_tool: bool) -> Optional[str]:
     )
 
 
+def _shell_runs_any_python(agent: Any) -> bool:
+    """True when the agent's shell would run a Python outside its allowlist."""
+    if "run_shell_command" not in agent._tools_registry:
+        return False
+    full_access = getattr(agent, "full_access_active", None)
+    return bool(full_access and full_access())
+
+
 def _python_run_result(
     run: Any,
     stdout: str,
     stderr: str,
     seconds: float,
     note: Optional[str] = None,
-    shell_tool: bool = False,
+    system_python_runs: bool = False,
 ) -> Dict[str, Any]:
     """A finished Python run as a tool result; a non-zero exit is an error.
 
@@ -472,7 +490,9 @@ def _python_run_result(
         result["error"] = f"Python exited with code {code}" + (
             f": {last[:300]}" if last else ""
         )
-        hint = _missing_library_hint(last) or _system_python_hint(last, shell_tool)
+        hint = _missing_library_hint(last) or _system_python_hint(
+            last, system_python_runs
+        )
         if hint:
             result["error"] += f". {hint}"
     return result
@@ -2861,7 +2881,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             retain_excerpt(self, r.stdout, 8000),
                             retain_excerpt(self, r.stderr, 2000),
                             time.monotonic() - start,
-                            shell_tool="run_shell_command" in self._tools_registry,
+                            system_python_runs=_shell_runs_any_python(self),
                             note=" ".join(
                                 n for n in (finished_job_note(job), undo_note) if n
                             )
@@ -3104,7 +3124,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     r.stderr[:2000],
                     time.monotonic() - start,
                     " ".join(n for n in notes if n) or None,
-                    shell_tool="run_shell_command" in self._tools_registry,
+                    system_python_runs=_shell_runs_any_python(self),
                 )
                 return attach_check(
                     result,
