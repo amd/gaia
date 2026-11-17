@@ -52,8 +52,8 @@ Headless runs deny tools that change things (shell, writes, web) unless you pass
 
 1. Built-in defaults: Lemonade at `LEMONADE_BASE_URL`, else `http://localhost:13305/api/v1`, `Gemma-4-E4B-it-GGUF`, a 32768-token context window, 16384 output tokens, temperature 0.2 and a 1000-step limit
 2. The settings file: `--config FILE`, else `$GAIACPP_CONFIG`, else `$XDG_CONFIG_HOME/gaiacpp/config.json` or `~/.config/gaiacpp/config.json` (`%APPDATA%\gaiacpp\config.json` on Windows) when it exists
-3. Environment: `GAIA_BASE_URL`, `GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, `GAIA_MAX_TOKENS`, `GAIA_FEATURE_TIER`. `GAIA_AGENT_MAX_STEPS`, the name the Python agent reads, sets the step limit too; when both are set, `GAIA_MAX_STEPS` wins
-4. Flags: `--base-url`, `-m/--model`, `--provider`, `--api-key-env`, `--ctx-size`, `--max-tokens`, `--max-steps`, `--temperature`, `--native-tools`, `--feature-tier`
+3. Environment: `GAIA_BASE_URL`, `GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, `GAIA_MAX_TOKENS`, `GAIA_FEATURE_TIER`, `GAIA_MAX_HELPERS`. `GAIA_AGENT_MAX_STEPS`, the name the Python agent reads, sets the step limit too; when both are set, `GAIA_MAX_STEPS` wins
+4. Flags: `--base-url`, `-m/--model`, `--provider`, `--api-key-env`, `--ctx-size`, `--max-tokens`, `--max-steps`, `--temperature`, `--native-tools`, `--feature-tier`, `--max-helpers`
 
 The key for the endpoint is sent as `Authorization: Bearer`. It comes from the variable named by `--api-key-env` (or `apiKeyEnv` in the settings file), else `GAIA_API_KEY`, else `LEMONADE_API_KEY`, which is only ever sent to a loopback address (the local Lemonade). A key is never read from or written to a settings file. A variable that is named but unset stops the agent with an error instead of sending an anonymous request.
 
@@ -78,7 +78,7 @@ gaiacpp -p "…" --provider fireworks -m accounts/fireworks/models/deepseek-v4p1
 }
 ```
 
-Any [`AgentConfig`](/cpp/api-reference) field is accepted. `provider` (`lemonade` or `fireworks`) and `mcpConfig` (relative to the settings file) are the two extras.
+Any [`AgentConfig`](/cpp/api-reference) field is accepted. The extras are `provider` (`lemonade` or `fireworks`), `mcpConfig` (relative to the settings file) and `maxHelpers` (see [Helpers](#helpers)).
 
 ### MCP servers
 
@@ -130,6 +130,37 @@ A skill that ships Python tools (`tools.py`) loads as instructions only, and `lo
 
 Installing from the hub, or from a folder that has a `SIGNATURE.json`, needs a build with OpenSSL: it does the HTTPS download, the SHA-256 check and the signature check. A build without it stops the install and says so. The release binaries include it.
 
+### Helpers
+
+`delegate_task` lets the agent hand parts of a job to helpers: it gives each a task, they work side by side, each in its own context, and only their conclusions come back. That keeps the agent's own context small on jobs with a lot of reading, and finishes them sooner. The agent decides whether to split. Its instructions say to use helpers for independent reading or judgement, such as one question per file, and to do the work itself when one command or script covers it, when the job is small, or when it writes.
+
+A call takes up to 16 tasks, each `{"task": "<the brief>", "paths": ["<file or folder>"]}`. More than 16, an empty brief, or a path outside the agent's folders is refused before any helper starts.
+
+**A helper can only read.** It is built with `file_read`, `file_search` and `read_tool_output` and nothing else: no shell, no writes, no web, no memory and no `delegate_task` of its own, so helpers go one level deep. It reads inside the folders the agent itself is confined to. It never asks for approval and inherits none: `--dangerously-skip-permissions` and saved "always allow" answers apply to the agent, not to its helpers. Its instructions are a few hundred tokens, not the agent's full prompt.
+
+**How many run at once** follows the model:
+
+| Model | Helpers at once |
+|---|---|
+| A cloud model (through Lemonade, or `--provider fireworks`) | 8 |
+| A local llama.cpp model | Its slot count (`--parallel`), at most 4 |
+| A model on the NPU | 1 |
+| The server does not report a slot count | 1, and the result says why |
+
+Tasks beyond that number wait their turn. `--max-helpers N` (or `maxHelpers`, `GAIA_MAX_HELPERS`) sets the number yourself, and `0` removes the tool. `gaiacpp` reads the slot count the model was loaded with; it does not reload a model to get more.
+
+**Limits and failures.** A helper has 30 steps and 10 minutes. The result lists every helper with a status:
+
+| Helper `status` | Meaning |
+|---|---|
+| `ok` | It answered. `conclusion` holds the answer, cut at 2,000 characters; `detail` names the `read_tool_output` id that returns the rest. |
+| `partial` | It ran out of steps and gave a closing answer from what it had. |
+| `failed` | Nothing usable came back. `reason` says why: `error` (the model server failed), `empty`, `step_limit`, `timeout` or `cancelled`. |
+
+The result's own `status` is `success` only when every helper is `ok`, `partial` when some are not, and `error` when none returned anything. Its first line counts them and tells the agent to redo failed parts itself or say they are missing. Stopping the agent stops its helpers.
+
+A compact model is not offered `delegate_task` unless `--max-helpers` names a number above 0.
+
 ## Headless runs
 
 ```bash
@@ -173,16 +204,18 @@ The counters use the same names as `gaia -p --output-format json`, so one script
 | `num_llm_calls` | Requests sent to the model, including a closing answer after the step limit |
 | `num_tool_calls` | Tools run |
 | `error_count` | Tool calls that failed (same as `tool_errors`) |
-| `input_tokens` | Prompt tokens, summed over every model request |
+| `input_tokens` | Prompt tokens, summed over every model request, the helpers' included |
 | `cached_tokens` | The part of `input_tokens` the provider served from its cache. A local model reports none, so this is 0 |
-| `output_tokens` | Tokens the model wrote |
+| `output_tokens` | Tokens the model wrote, the helpers' included |
 | `peak_context_tokens` | The largest single request, prompt plus reply: how full the context window got |
 
-The token fields are 0 when the server reports no usage.
+The token fields are 0 when the server reports no usage. `usage` and `peak_context_tokens` are the agent's own; `num_tool_calls` counts a `delegate_task` call once and not the tools its helpers ran.
+
+A run that used helpers adds a `helpers` object: `runs`, `ok`, `partial` and `failed` count them, `width` is the most that ran at once, `input_tokens`, `cached_tokens` and `output_tokens` are their share of the totals, and `wall_s` is the time the agent spent waiting on them.
 
 Set `GAIA_TURN_LOG` to a file path and every `-p` run also appends one JSON line to it: the same counters, plus `llm_calls` (step, seconds, and input, cached and output tokens for each request) and `tool_calls` (step, tool name, seconds, and whether it succeeded). A path that cannot be written stops the run before it starts.
 
-Set `GAIA_STEP_LOG` to a file path to get one line per model call and tool call (with the call's arguments, shortened to 300 characters, so treat the file like the commands it records), written as each one finishes. A run that is killed or times out before the turn ends still leaves those lines, and a failed model call is recorded with its error.
+Set `GAIA_STEP_LOG` to a file path to get one line per model call and tool call (with the call's arguments, shortened to 300 characters, so treat the file like the commands it records), written as each one finishes. A run that is killed or times out before the turn ends still leaves those lines, and a failed model call is recorded with its error. A helper's model and tool calls are written too, each with a `helper` number, and a `helper` line records how each one ended.
 
 With `-p` and no prompt argument, the prompt is read from stdin until it closes.
 

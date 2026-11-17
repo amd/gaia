@@ -187,6 +187,8 @@ t1.join();
 t2.join();
 ```
 
+`gaiacpp` runs its [helpers](/cpp/gaia-agent#helpers) this way: each is its own `Agent` on its own thread. The working directory is shared by the whole process, so agents running side by side must not change it; the helpers have no tool that does. `LemonadeClient::modelCapacity()` reports how many requests a loaded model serves at once, which is the number worth running.
+
 ### Single-Agent Rules
 
 **Do NOT call `processQuery()` concurrently on the same agent instance.** The Agent enforces this with an atomic in-flight guard: the second concurrent call throws `std::runtime_error("Agent::processQuery is not re-entrant")`. Callers must serialize access to a single Agent (or create one per thread/session).
