@@ -113,6 +113,7 @@ export const enMessages = {
     // The log viewer
     'logs.title': "Logs",
     'logs.serverLog': "Model server log",
+    'logs.agentLog': "Agent log",
     'logs.view': "View logs",
     'logs.settingsHint': "What GAIA, its background service, the agent, the desktop app and the model server wrote. Look here when something fails, and save them all to attach to a report.",
     'logs.close': "Close",
