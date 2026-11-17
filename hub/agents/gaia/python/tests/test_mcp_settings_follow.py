@@ -186,3 +186,42 @@ def test_a_rebuilt_chat_keeps_what_the_user_set_in_it(chat, home, tmp_path):
     assert (agent._incognito, agent._incognito_reason) == (True, "private")
     assert agent.path_validator.is_path_allowed(str(granted), prompt_user=False)
     assert agent.config.working_directory == str(granted)
+
+
+def test_a_document_taken_off_after_a_rebuild_is_refused(chat, home, tmp_path):
+    """The rebuilt agent knows which documents were attached, so a removed one
+    loses its grant on the turn it is removed."""
+    from gaia_agent import server
+
+    first, _ = chat()
+    doc = tmp_path / "notes.txt"
+    doc.write_text("The pump logs 42 litres.", encoding="utf-8")
+    first.path_validator.add_allowed_path(str(doc))
+    first._attached_documents = {str(doc)}
+
+    home.set(enabled=False)
+    agent, rebuilt = chat()
+    assert rebuilt and agent._attached_documents == {str(doc)}
+    assert agent.path_validator.is_path_allowed(str(doc), prompt_user=False)
+
+    server._drop_detached_documents(agent, [])  # next turn, sent without it
+    assert not agent.path_validator.is_path_allowed(str(doc), prompt_user=False)
+
+
+def test_a_withheld_path_stays_refused_after_a_rebuild(chat, home, tmp_path):
+    """A file withheld inside a folder that stays granted, as GAIA's own copy of
+    a removed document sits in the Agent UI's granted documents folder."""
+    first, _ = chat()
+    folder = tmp_path / "documents"
+    folder.mkdir()
+    removed = folder / "old.pdf"
+    removed.write_text("x", encoding="utf-8")
+    first.path_validator.add_allowed_path(str(folder))
+    first.path_validator.withhold_path(str(removed))
+    assert first.path_validator.is_path_allowed(str(folder), prompt_user=False)
+
+    home.set(enabled=False)
+    agent, rebuilt = chat()
+    assert rebuilt
+    assert agent.path_validator.is_path_allowed(str(folder), prompt_user=False)
+    assert not agent.path_validator.is_path_allowed(str(removed), prompt_user=False)
