@@ -114,6 +114,7 @@ struct Cli {
     int maxSteps = 0;
     int ctxSize = 0;
     int maxTokens = 0;
+    int maxHelpers = -1;  // -1 = not given
     std::optional<double> temperature;
     bool skipPermissions = false;
     bool noWeb = false;
@@ -163,6 +164,10 @@ void printUsage() {
         "  --output-format FMT       text (default) or json\n"
         "  --cwd DIR                 Work in DIR\n"
         "  --max-steps N             Step budget (default 1000)\n"
+        "  --max-helpers N           Read-only helpers delegate_task runs at once. Default:\n"
+        "                            what the model serves (its slot count up to 4 locally,\n"
+        "                            8 on a cloud model). 0 turns the tool off\n"
+        "                            (env GAIA_MAX_HELPERS)\n"
         "  --mcp-config FILE         Connect the MCP servers in FILE (mcp.json)\n"
         "  --vision-model ID         Model analyze_image uses (default: the main model)\n"
         "  --transcribe-model ID     Whisper model for transcribe_audio (e.g. Whisper-Base on Lemonade)\n"
@@ -282,6 +287,11 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--max-tokens") cli.maxTokens = toPositiveInt(a, need(i, a));
         else if (a == "--temperature") cli.temperature = toTemperature(a, need(i, a));
         else if (a == "--max-steps") cli.maxSteps = toPositiveInt(a, need(i, a));
+        else if (a == "--max-helpers") {
+            const std::string v = need(i, a);
+            cli.maxHelpers = toInt(a, v);
+            if (cli.maxHelpers < 0) usageError("--max-helpers needs a whole number, 0 or more, got '" + v + "'");
+        }
         else if (a == "--cwd") cli.cwd = need(i, a);
         else if (a == "--mcp-config") cli.mcpConfig = need(i, a);
         else if (a == "--embedding-model") cli.embeddingModel = need(i, a);
@@ -368,6 +378,10 @@ void checkSettingsFile(const gaia::json& j, const std::string& where) {
     for (const char* key : {"debug", "showPrompts", "streaming", "silentMode", "structuredEvents"}) {
         if (j.contains(key) && !j[key].is_boolean()) fail(key, "true or false");
     }
+    if (j.contains("maxHelpers") &&
+        !(j["maxHelpers"].is_number_integer() && j["maxHelpers"] >= 0 && j["maxHelpers"] <= 64)) {
+        fail("maxHelpers", "a whole number from 0 to 64");
+    }
     if (j.contains("temperature") &&
         !(j["temperature"].is_number() && validTemperature(j["temperature"].get<double>()))) {
         fail("temperature", "a number from 0 to 2");
@@ -380,6 +394,7 @@ struct Settings {
     std::string mcpConfig;
     std::string embeddingModel;  // empty = keyword-only document retrieval
     std::string transcribeModel, audioBaseUrl, imageModel;
+    int maxHelpers = -1;  // -1 = sized to the model
 };
 
 Settings buildSettings(const Cli& cli) {
@@ -437,6 +452,14 @@ Settings buildSettings(const Cli& cli) {
         if (!v.empty()) merged[field] = toPositiveInt(var, v);
     }
 
+    const std::string envHelpers = gaia::getEnvVar("GAIA_MAX_HELPERS");
+    if (!envHelpers.empty()) {
+        const int n = toInt("GAIA_MAX_HELPERS", envHelpers);
+        if (n < 0) usageError("GAIA_MAX_HELPERS needs a whole number, 0 or more, got '" + envHelpers + "'");
+        merged["maxHelpers"] = n;
+    }
+    if (cli.maxHelpers >= 0) merged["maxHelpers"] = cli.maxHelpers;
+
     if (!cli.provider.empty()) applyProvider(merged, cli.provider, "--provider");
     if (!cli.baseUrl.empty()) merged["baseUrl"] = cli.baseUrl;
     if (!cli.model.empty()) merged["modelId"] = cli.model;
@@ -453,6 +476,10 @@ Settings buildSettings(const Cli& cli) {
     if (!cli.imageModel.empty()) merged["imageModel"] = cli.imageModel;
 
     Settings s;
+    if (merged.contains("maxHelpers")) {
+        s.maxHelpers = merged["maxHelpers"].get<int>();
+        merged.erase("maxHelpers");
+    }
     for (auto [key, field] : {std::pair<const char*, std::string*>{"embeddingModel", &s.embeddingModel},
                               {"transcribeModel", &s.transcribeModel},
                               {"audioBaseUrl", &s.audioBaseUrl},
@@ -528,6 +555,7 @@ gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) 
     o.memory = !cli.noMemory;
     o.screenshots = cli.screenshots;
     o.fullAccess = cli.fullAccess;
+    o.maxHelpers = settings.maxHelpers;
     std::error_code ec;
     o.workspaceRoots.push_back(fs::current_path(ec).u8string());
     for (const auto& d : cli.allowDirs) {
@@ -722,6 +750,7 @@ int runPrint(const Cli& cli) {
 
     const std::string status = result.value("status", "success");
     const gaia::json usage = result.value("usage", gaia::json::object());
+    const gaia::json helpers = agent.helperStats();
     // Same names as `gaia -p --output-format json`, so one reader takes both agents.
     gaia::json out = {{"status", status},
                       {"is_error", status != "success"},
@@ -735,11 +764,13 @@ int runPrint(const Cli& cli) {
                       {"num_llm_calls", result.value("llm_calls", 0)},
                       {"num_tool_calls", result.value("tool_calls", 0)},
                       {"error_count", result.value("tool_errors", 0)},
-                      {"input_tokens", usage.value("prompt_tokens", 0)},
-                      {"cached_tokens", usage.value("cached_tokens", 0)},
-                      {"output_tokens", usage.value("completion_tokens", 0)},
+                      // The run's whole cost: this agent's calls plus its helpers'.
+                      {"input_tokens", usage.value("prompt_tokens", 0) + helpers.value("input_tokens", 0)},
+                      {"cached_tokens", usage.value("cached_tokens", 0) + helpers.value("cached_tokens", 0)},
+                      {"output_tokens", usage.value("completion_tokens", 0) + helpers.value("output_tokens", 0)},
                       {"peak_context_tokens", usage.value("peak_context_tokens", 0)}};
     if (result.contains("usage")) out["usage"] = usage;
+    if (helpers.value("runs", 0) > 0) out["helpers"] = helpers;
     if (turnLog.is_open()) {
         gaia::json line = out;
         line["schema"] = "gaiacpp.turn/1";
