@@ -120,6 +120,11 @@ def turn_cost(
 
     Cached input on a model whose cached rate is unknown makes the cost unknown.
     """
+    if cloud_provider(model_id) == "fireworks":
+        from gaia.eval.bench.metering import price
+
+        # The one rate card the benchmark meters with.
+        return price(model_id, input_tokens, cached_tokens, output_tokens)
     card = price_card(model_id)
     if card is None:
         return None
@@ -501,8 +506,8 @@ def _list_cost(model: str, counts: Optional[tuple]) -> Optional[float]:
 STATS_SCOPE = "agent_ui_chats"
 #: Shown verbatim by the apps next to the numbers.
 STATS_SCOPE_LABEL = (
-    "Agent UI chats only; turns from the terminal UI and `gaia -p` aren't "
-    "counted yet"
+    "Agent UI chats only; turns from the terminal UI and one-off command-line "
+    "prompts aren't counted yet"
 )
 
 

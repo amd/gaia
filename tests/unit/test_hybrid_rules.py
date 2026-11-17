@@ -615,7 +615,11 @@ def test_cli_use_applies_a_template(monkeypatch, tmp_path, capsys):
     [
         ("nope", {}, "no hybrid template 'nope'"),
         ("claude-direct", {}, "Anthropic API key"),
-        ("all-local", {"local": (("Gemma-4-E4B-it-GGUF", True),)}, "gaia download"),
+        (
+            "all-local",
+            {"local": (("Gemma-4-E4B-it-GGUF", True),)},
+            "Qwen3.6-35B-A3B-GGUF",
+        ),
         (
             "local-plus-cloud",
             {"local": LOCAL_PAIR, "amd": GATEWAY_PAIR, "local_only": True},

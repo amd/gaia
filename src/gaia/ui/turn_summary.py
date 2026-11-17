@@ -437,6 +437,17 @@ class TurnLedger:
         return out
 
 
+def _priced_id(location: InferenceLocation) -> Optional[str]:
+    """The id prices are kept under: a relayed model arrives without its provider prefix."""
+    model = location.model
+    if not model or model.startswith("claude-"):
+        return model
+    prefix = f"{location.provider}."
+    if location.provider in ("fireworks", "amd") and not model.startswith(prefix):
+        return prefix + model
+    return model
+
+
 def _cost(
     location: Optional[InferenceLocation], usage: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -447,7 +458,8 @@ def _cost(
         return {"kind": "local"}
     from .spending import price_card, turn_cost
 
-    if not location.model or price_card(location.model) is None:
+    model = _priced_id(location)
+    if not model or price_card(model) is None:
         return {"kind": "unknown"}
     input_tokens = usage.get("input_tokens")
     output_tokens = usage.get("tokens")
@@ -456,7 +468,7 @@ def _cost(
         return {"kind": "unreported"}
     cached = usage.get("cached_tokens")
     cached = cached if isinstance(cached, int) else 0
-    usd = turn_cost(location.model, input_tokens, output_tokens, cached)
+    usd = turn_cost(model, input_tokens, output_tokens, cached)
     if usd is None:
         return {"kind": "unknown"}
     return {"kind": "estimate", "usd": round(usd, 6)}

@@ -207,7 +207,7 @@ def classifier(monkeypatch):
     asked = []
     answer = {"label": ("write_prose", 1, "low")}
 
-    def classify(_router, text, base_url=None):
+    def classify(_router, text, base_url=None, *, record=True):
         asked.append(text)
         label = answer["label"]
         if isinstance(label, BaseException):
