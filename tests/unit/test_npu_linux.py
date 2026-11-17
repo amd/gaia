@@ -707,7 +707,7 @@ class TestSetupEndpoints:
 
         from gaia.ui.routers import setup as setup_router
 
-        monkeypatch.setattr(setup_router, "build_plan", lambda: {"npu": "plan"})
+        monkeypatch.setattr(setup_router, "build_plan", lambda **_: {"npu": "plan"})
         app = FastAPI()
         app.include_router(setup_router.router)
         self.app = app

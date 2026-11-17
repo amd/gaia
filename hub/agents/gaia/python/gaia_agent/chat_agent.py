@@ -8,12 +8,14 @@ import ast
 import dataclasses
 import errno
 import functools
+import hashlib
 import importlib.util
 import os
 import platform
 import re
 import shutil
 import sqlite3
+import sys
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -103,7 +105,12 @@ from gaia.agents.base.tool_loader import (
     thin_tool_schema,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.base.verification import (
+    NOT_EXECUTED,
+    OUT_OF_TIME,
+    TIME_LIMIT_CUT_RUN,
+    cut_by_time_limit,
+)
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
@@ -384,10 +391,11 @@ def _lists_script_libraries(f):
             f"{f.__name__}'s docstring has no {SCRIPT_LIBRARIES_PLACEHOLDER} line"
         )
     names = script_libraries()
+    # Says whose Python: a project's own packages are not importable here.
     line = (
-        f"Has {', '.join(names)}; no pip."
+        f"GAIA's own Python: has {', '.join(names)}; no pip."
         if names
-        else "Has only the standard library; no pip."
+        else "GAIA's own Python: has only the standard library; no pip."
     )
     f.__doc__ = f.__doc__.replace(SCRIPT_LIBRARIES_PLACEHOLDER, line)
     return f
@@ -429,12 +437,71 @@ def _missing_library_hint(stderr_line: str) -> Optional[str]:
     )
 
 
+def system_python() -> Optional[str]:
+    """A Python on PATH other than the one running GAIA, or None."""
+    own_env = os.path.abspath(sys.prefix) + os.sep
+    in_venv = sys.prefix != sys.base_prefix
+    here = os.path.realpath(sys.executable)
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        # The Microsoft Store stub opens the Store instead of running Python.
+        if not found or "WindowsApps" in Path(found).parts:
+            continue
+        if os.path.abspath(found).startswith(own_env):
+            continue
+        # A venv's interpreter is a link to the base Python, which is still
+        # a different set of packages; outside a venv the same file is GAIA's.
+        if in_venv or os.path.realpath(found) != here:
+            return found
+    return None
+
+
+def _system_python_hint(stderr_line: str, can_run: bool) -> Optional[str]:
+    """Where a script can find a module GAIA's own Python lacks.
+
+    *can_run*: the shell would run that Python. Naming a command the shell
+    refuses costs the model a step.
+    """
+    match = _MISSING_MODULE_LINE.search(stderr_line or "")
+    if not match or not can_run:
+        return None
+    other = system_python()
+    if other is None:
+        return None
+    module = match.group(1).split(".")[0]
+    return (
+        f"This ran in GAIA's own Python, which has no {module}. The system "
+        f"Python at {other} is a separate install: save the code to a file "
+        "and run it there with run_shell_command."
+    )
+
+
+def _shell_runs_any_python(agent: Any) -> bool:
+    """True when the agent's shell would run a Python outside its allowlist."""
+    if "run_shell_command" not in agent._tools_registry:
+        return False
+    full_access = getattr(agent, "full_access_active", None)
+    return bool(full_access and full_access())
+
+
+def _stopped_run_result(agent: Any, job: Any, timeout: int) -> Dict[str, Any]:
+    """A killed job's result; one the time limit cut short is not told to ask for longer."""
+    result = stopped_job_result(job, timeout)
+    if job.stopped == "timeout" and cut_by_time_limit(agent):
+        result["error"] = (
+            f"Timed out after {timeout}s; the script and every process it "
+            f"started were stopped. {TIME_LIMIT_CUT_RUN}"
+        )
+    return result
+
+
 def _python_run_result(
     run: Any,
     stdout: str,
     stderr: str,
     seconds: float,
     note: Optional[str] = None,
+    system_python_runs: bool = False,
 ) -> Dict[str, Any]:
     """A finished Python run as a tool result; a non-zero exit is an error.
 
@@ -460,7 +527,9 @@ def _python_run_result(
         result["error"] = f"Python exited with code {code}" + (
             f": {last[:300]}" if last else ""
         )
-        hint = _missing_library_hint(last)
+        hint = _missing_library_hint(last) or _system_python_hint(
+            last, system_python_runs
+        )
         if hint:
             result["error"] += f". {hint}"
     return result
@@ -555,6 +624,20 @@ _AGENT_UI_SCHEDULE_LINE = (
     "there and help them word a valid schedule and prompt; never say scheduling "
     "is unavailable.\n"
 )
+
+
+def _mcp_settings_fingerprint() -> str:
+    """Hash of the files that decide which MCP servers' tools an agent offers."""
+    from gaia.connectors.activations import activations_path
+
+    digest = hashlib.sha256()
+    for path in (gaia_home() / "mcp_servers.json", activations_path()):
+        try:
+            digest.update(path.read_bytes())
+        except FileNotFoundError:
+            digest.update(b"<missing>")
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 @dataclass
@@ -866,6 +949,8 @@ class ChatAgent(
         # centrally: an inline default here cannot see GAIA's embedded Lemonade,
         # which binds a port chosen at start time.
         effective_base_url = resolve_lemonade_base_url(config.base_url)
+        # Its clients keep this server; a change in Settings needs a new agent.
+        self._model_server_at_build = configured_lemonade_url()
 
         # Embedder is device-scoped: the NPU profile uses the FLM-native
         # embedder so chat and embeddings stay co-resident on the NPU backend
@@ -2510,12 +2595,38 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         except Exception as e:
             logger.warning(f"Auto-save failed: {e}")
 
+    def built_settings_changed(self) -> bool:
+        """True when a setting this agent was built from changed since.
+
+        Its model server and MCP tools are fixed as it is built, so a chat
+        must rebuild its agent to follow Settings.
+        """
+        return self.model_server_changed() or self.mcp_settings_changed()
+
+    def model_server_changed(self) -> bool:
+        """True when the Lemonade Server chosen in Settings changed since this agent was built.
+
+        A cloud-model chat counts too: its embedder and documents still use Lemonade.
+        """
+        built = getattr(self, "_model_server_at_build", _UNSET)
+        return built is not _UNSET and built != configured_lemonade_url()
+
+    def mcp_settings_changed(self) -> bool:
+        """True when MCP servers, or their activation, changed since this agent was built.
+
+        Its MCP tools were registered then, so it must be rebuilt to match.
+        """
+        built = getattr(self, "_mcp_settings_at_build", None)
+        return built is not None and built != _mcp_settings_fingerprint()
+
     def _load_mcp_tools(self) -> None:
         """Register tools from the MCP servers in ``mcp_servers.json``.
 
         Any server that can't be offered leaves a notice naming it and why,
         shown to the user by :meth:`report_mcp_dropped`. The agent starts either way.
         """
+        self._mcp_settings_at_build = _mcp_settings_fingerprint()
+        self._own_mcp_tools: Set[str] = set()
         _mcp_config_path = gaia_home() / "mcp_servers.json"
         if not _mcp_config_path.exists():
             self._set_mcp_dropped_notice(None)
@@ -2559,6 +2670,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             before = len(_TOOL_REGISTRY)
             for srv, converted in admitted.items():
                 self._register_mcp_tools(self._mcp_manager.get_client(srv), converted)
+                self._own_mcp_tools.update(
+                    gaia_tool["name"] for _, gaia_tool in converted
+                )
             added = len(_TOOL_REGISTRY) - before
             if added > 0:
                 logger.info("Loaded %d MCP tool(s)", added)
@@ -2753,6 +2867,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     timeout = resolve_python_timeout(timeout)
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
+                timeout = self.time_capped_run_seconds(timeout)
+                if not timeout:
+                    return dict(OUT_OF_TIME)
 
                 file_path = str(
                     _resolve_target(file_path, None, _workspace_default(self))
@@ -2846,7 +2963,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             may_write=bool(written) or not complete,
                         )
                     if job.stopped:
-                        return stopped_job_result(job, timeout)
+                        return _stopped_run_result(self, job, timeout)
                     r = job.run
                     from gaia.agents.base.artifacts import retain_excerpt
 
@@ -2856,7 +2973,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             retain_excerpt(self, r.stdout, 8000),
                             retain_excerpt(self, r.stderr, 2000),
                             time.monotonic() - start,
-                            " ".join(
+                            system_python_runs=_shell_runs_any_python(self),
+                            note=" ".join(
                                 n for n in (finished_job_note(job), undo_note) if n
                             )
                             or None,
@@ -2880,12 +2998,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             def run_python(code: str, timeout: int = DEFAULT_PYTHON_TIMEOUT) -> dict:
                 """Run a Python snippet and return what it prints.
 
-                Compute or check something without creating a file. Runs
-                from the project root; with no project it may run in your
-                scratch directory, so use absolute paths for user files.
+                Compute or check something without a file. Runs from the
+                project root, or your scratch directory with no project, so
+                use absolute paths for user files.
                 Report numbers from its output.
 
-                No access to your tools: `from gaia import <tool>` fails —
+                No access to your tools: `from gaia import <tool>` fails;
                 call it directly as a tool.
 
                 {script_libraries}
@@ -2906,6 +3024,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     timeout = resolve_python_timeout(timeout)
                 except ValueError as e:
                     return {"status": "error", "error": str(e), "has_errors": True}
+                timeout = self.time_capped_run_seconds(timeout)
+                if not timeout:
+                    return dict(OUT_OF_TIME)
 
                 tool_names = set(_TOOL_REGISTRY) | set(
                     getattr(self, "_tools_registry", None) or ()
@@ -3067,7 +3188,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             may_write=bool(written) or not complete,
                         )
                     if job.stopped:
-                        return stopped_job_result(job, timeout)
+                        return _stopped_run_result(self, job, timeout)
                     r = job.run
                 except OSError as e:
                     logger.error("run_python could not start in %s: %s", run_dir, e)
@@ -3101,6 +3222,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     r.stderr[:2000],
                     time.monotonic() - start,
                     " ".join(n for n in notes if n) or None,
+                    system_python_runs=_shell_runs_any_python(self),
                 )
                 return attach_check(
                     result,
@@ -3761,6 +3883,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         # _TOOL_REGISTRY.pop() pattern that corrupted the global dict.
         self._register_output_reader()
         self._snapshot_tools()
+        # The registry is process-wide: drop MCP tools other agents registered,
+        # from servers that may be off or not active for this agent.
+        own_mcp = getattr(self, "_own_mcp_tools", set())
+        for _name in [
+            n
+            for n, t in self._instance_tools.items()
+            if isinstance(t, dict) and t.get("_mcp_server") and n not in own_mcp
+        ]:
+            self._instance_tools.pop(_name)
         if spec.generic_file_ops:
             _chat_exclude = {
                 "write_python_file",

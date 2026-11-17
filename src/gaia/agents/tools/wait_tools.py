@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from typing import Any, Dict
 
+from gaia.agents.base.verification import OUT_OF_TIME, time_capped
 from gaia.logger import get_logger
 from gaia.tool_cancellation import tool_cancelled
 
@@ -83,6 +84,11 @@ class WaitToolsMixin:
                     "your turn."
                 ),
             }
+
+        allowed = time_capped(self, math.ceil(seconds))
+        if not allowed:
+            return dict(OUT_OF_TIME)
+        seconds = min(seconds, allowed)
 
         logger.info("Waiting %gs: %s", seconds, reason or "(no reason given)")
         start = time.monotonic()

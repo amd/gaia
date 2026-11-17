@@ -239,6 +239,10 @@ class GaiaAgentConfig(ChatAgentConfig):
     # doc_rag + file_fs + data_scratch + web_browse + full_screenshot.
     prompt_profile: str = "full"
 
+    # The id Settings › Connectors activates MCP servers for, so the flagship
+    # offers a server's tools only once it is activated, however it was built.
+    namespaced_agent_id: Optional[str] = "installed:gaia"
+
     # None (the CLI's "not given") also resolves to the flagship limit.
     max_steps: Optional[int] = field(default_factory=flagship_max_steps)
 

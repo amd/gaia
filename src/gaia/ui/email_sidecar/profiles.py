@@ -664,6 +664,11 @@ _NO_PROFILE = RelayProfile(
 )
 
 
+def relay_profiles() -> Tuple[RelayProfile, ...]:
+    """Every relayed agent's profile."""
+    return tuple(_PROFILES.values())
+
+
 def profile_for(agent_id: str) -> Optional[RelayProfile]:
     """The relay profile for *agent_id*, or ``None`` if it is not a sidecar.
 

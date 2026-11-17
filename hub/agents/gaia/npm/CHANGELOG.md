@@ -28,11 +28,38 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   control that may not be undoable, or starting a server. Full access does not
   skip the script or a new server: a person still approves them, and a run with
   nobody to ask refuses them.
+Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
+
+### Fixed
+
+- A reply that goes quiet partway through is requested again, up to twice,
+  instead of ending the turn; the work done so far is kept either way.
 
 ## [0.3.6]
 
 Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A terminal UI chat follows Settings too.** Its one long-lived agent now
+  rebuilds before a message when the model server or an MCP connector changed,
+  keeping its transcript and what the session set, as Agent UI chats do.
+- **Skills added or removed reach open chats.** The skill list in an agent's
+  prompt came from a cached scan, so a skill added in Settings › Skills was
+  missing from chats already open, and a removed one stayed listed. Each turn
+  now checks the skill folders and rebuilds the list only when they changed,
+  in the Agent UI and the terminal UI.
+- **A model server chosen in Settings reaches open chats.** A session's model
+  client kept the Lemonade Server it was built on, so after switching between
+  GAIA's own and yours an open chat kept asking the old one, or waited for
+  GAIA's stopped server to come back. A session now rebuilds its agent on its
+  next turn when the chosen server changed, keeping the conversation.
+- **An MCP connector changed in Settings reaches open chats.** A session's
+  agent registered its MCP tools once, so a connector turned off stayed
+  callable and one turned on never appeared until GAIA restarted. A session now
+  rebuilds its agent on its next turn when the server list or activations
+  changed, keeping the conversation and loaded skills. The flagship also checks
+  activation as `installed:gaia` however it is built, as Settings shows it, and
+  offers only the MCP tools it registered itself, not those another session
+  left in the process.
 - **Deleting a conversation can stop its MCP servers (contract 2.30).**
   `DELETE /v1/gaia/sessions/{session_id}` ends a session and closes its agent,
   which stops the servers it started. Until now a session's servers ran until it

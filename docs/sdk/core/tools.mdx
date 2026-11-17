@@ -82,6 +82,7 @@ registry entry looks like this (source: `src/gaia/agents/base/tools.py:79-87`):
     "timeout": None,        # optional per-tool timeout (seconds); None = global default
     "preflight": None,      # optional check run before the confirmation prompt
     "dedup_key": None,      # optional argument names the repeat-call guard compares
+    "model_view": None,     # optional function shaping the copy of a result the model reads
 }
 ```
 
@@ -984,6 +985,12 @@ Notable implementation details:
   the confirmation prompt, so nobody is asked to approve a call that is going to
   be refused. The tool body must enforce the same rule itself; the file-editing
   tools use this for their read-before-edit check.
+- `@tool(model_view=...)` takes a function from the tool's dict result to the
+  copy the model reads. Use it to leave out what the model already knows, such
+  as its own arguments echoed back or fields that are empty on most calls:
+  every later step carries the result again. The UI, the agent's checks and
+  the saved conversation still get the full result. `run_shell_command` uses
+  it to drop the echoed command.
 - `@tool(dedup_key=["path", "query"])` names the arguments the repeat-call
   guard compares. By default it compares every argument, so a free-text
   argument such as `reason` makes each retry look new and the guard never

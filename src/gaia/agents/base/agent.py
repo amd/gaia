@@ -216,6 +216,7 @@ from gaia.llm.providers.lemonade import (
     CONNECTION_FAILURE_RE,
     MODEL_SERVER_DOWN,
     LemonadeContextOverflowError,
+    LemonadeReplyStalledError,
     LemonadeStreamCutOffError,
     classify_lemonade_exception,
 )
@@ -437,7 +438,7 @@ def effective_skill_body(agent, skill) -> str:
         # runs, with nothing to show it happened.
         rows = store.search_deltas(
             base_name=skill.name,
-            scope=agent.learned_skill_scope(),
+            scope=agent.learned_skill_scopes(),
             status=STATUS_ACTIVE,
             limit=None,
         )
@@ -952,7 +953,16 @@ _TIME_NOTICE = (
     "and anything not already written is lost."
 )
 _TIME_NOTICE_AT = 0.7
+# Appended to the request of a turn that has a time limit, for the model only.
+_TIME_OPENING_NOTE = (
+    "\n\n[This turn has {total} seconds in all. If the task asks "
+    "for files or other deliverables, write a first working version early "
+    "and improve it in place: when the time is up no tool can run and "
+    "anything not already written is lost.]"
+)
 _TIME_STOP_AT = 0.9
+# Shortest run worth starting when a time limit cuts a tool's timeout.
+_MIN_CAPPED_RUN_S = 5
 
 # How much of the step budget must be gone before each notice is sent, and
 # what it says. Until these existed the only thing the model ever heard about
@@ -1478,6 +1488,31 @@ _CUT_OFF_CONTINUE_PROMPT = (
     "your reasoning brief and make the next tool call, or give the final "
     "answer if the task is complete."
 )
+# For a cut-off reply with no text at all: the limit went on thinking alone,
+# and thinking is not carried over, so "continue" would start it again.
+_CUT_OFF_ALL_THINKING_PROMPT = (
+    "Your last reply was cut off at the output-token limit with nothing in "
+    "it: the whole limit went on thinking, so there is no answer and no tool "
+    "call. Thinking it through the same way will end the same way. Do not "
+    "work the whole problem out in your head. In a few lines pick the next "
+    "small step and make one tool call now: run an experiment, or write a "
+    "rough first version to a file and improve it from there."
+)
+
+
+def _was_all_thinking(
+    response: str, reasoning: Optional[str], stats: Optional[Dict[str, Any]]
+) -> bool:
+    """True when a cut-off reply holds no text because thinking used the limit.
+
+    An empty reply alone is not enough: a full context window also ends a
+    reply empty at ``finish_reason=length``, with no thinking behind it.
+    """
+    if response.strip():
+        return False
+    return bool(reasoning or (stats or {}).get("reasoning_tokens"))
+
+
 _CUT_OFF_FAILURE_ANSWER = (
     "I couldn't finish this: my reply kept growing longer than the model can "
     "send at once, so it was cut off before I could carry out the next step."
@@ -3267,6 +3302,8 @@ class Agent(abc.ABC):
     #: composed prompt byte-identical; GaiaAgent turns it on.
     #: See :mod:`gaia.agents.base.skill_catalog`.
     _skill_catalog_enabled: bool = False
+    #: The SKILL.md files the catalogue last listed; None until it is built.
+    _installed_skills_listed: Optional[Tuple[Tuple[str, int], ...]] = None
 
     #: What this agent's model is offered; see :mod:`gaia.agents.base.model_features`.
     model_features: ModelFeatures = FULL
@@ -5239,10 +5276,47 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
+        current = self._installed_skills()
+        # Rescan when the folders moved on since the scan, so the record and
+        # the list it describes agree, e.g. a skill added during a turn.
+        listed = self._installed_skills_listed
+        if listed is not None and current != listed:
+            self.skill_manager.reload()
+        self._installed_skills_listed = current
         catalog = render_catalog(
             self._catalog_skills(), list_project=self._lists_project_skills()
         )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _installed_skills(self) -> Tuple[Tuple[str, int], ...]:
+        """Each installed ``SKILL.md`` and its modification time, across every root."""
+        from gaia.skills.format import SKILL_FILENAME
+
+        found = []
+        for root in self.skill_manager.roots:
+            if not root.path.is_dir():
+                continue
+            for entry in root.path.iterdir():
+                skill_file = entry / SKILL_FILENAME
+                try:
+                    found.append((str(skill_file), skill_file.stat().st_mtime_ns))
+                except (FileNotFoundError, NotADirectoryError):
+                    # Not a skill, or removed while scanning: the next turn sees it.
+                    continue
+        return tuple(sorted(found))
+
+    def follow_installed_skills(self) -> bool:
+        """List skills added, changed or removed since the catalogue was built.
+
+        The catalogue sits in the cached head of the prompt, so it is rebuilt
+        only on a change. Returns True when it was.
+        """
+        listed = self._installed_skills_listed
+        if listed is None or listed == self._installed_skills():
+            return False
+        self.skill_manager.reload()
+        self.rebuild_system_prompt()
+        return True
 
     def _catalog_skills(self) -> Dict[str, Any]:
         """Installed skills this model can load: the pool the catalogue lists from."""
@@ -6192,6 +6266,16 @@ Do NOT wrap conversational replies in JSON.
         name, which is stable across sessions and distinct between agents.
         """
         return self._namespaced_agent_id() or type(self).__name__
+
+    def learned_skill_scopes(self) -> Tuple[str, ...]:
+        """Every scope this agent's learned changes may sit under, current first.
+
+        An agent built outside the registry stored them under its class name
+        before it carried an id, so those still apply.
+        """
+        current = self.learned_skill_scope()
+        legacy = type(self).__name__
+        return (current,) if legacy == current else (current, legacy)
 
     def _effective_skill_body(self, skill) -> str:
         """This agent's view of *skill* with its approved learned changes applied.
@@ -10730,6 +10814,10 @@ Do NOT wrap conversational replies in JSON.
                 a fresh uuid is synthesised for backward compatibility
                 with embedded-JSON paths that don't carry an id.
         """
+        view = (self._tools_registry.get(tool_name) or {}).get("model_view")
+        if view is not None and isinstance(tool_output, dict):
+            tool_output = view(tool_output)
+
         if isinstance(tool_output, str) or tool_name == "read_tool_output":
             # A read_tool_output page is bounded by the store and must stay exact.
             text_content = tool_output
@@ -12050,20 +12138,56 @@ Do NOT wrap conversational replies in JSON.
             return notice
         return None
 
-    def _time_limit_passed(self) -> bool:
-        """True once the turn is past its time limit's stop point.
+    def _tell_time_budget(self, messages: List[Dict]) -> None:
+        """Tell the model, with its request, how long the turn has.
+
+        Without it the model first hears of the limit at the 70% notice, after
+        spending most of the turn exploring. Only the copy sent this turn is
+        changed; the saved history keeps the user's words.
+        """
+        limit = getattr(self, "time_limit_s", None)
+        if not limit or limit <= 0 or not getattr(self, "_budget_notices_on", False):
+            return
+        request = messages[-1]
+        if isinstance(request.get("content"), str):
+            request["content"] += _TIME_OPENING_NOTE.format(total=int(limit))
+
+    def time_capped_run_seconds(self, seconds: int) -> int:
+        """*seconds*, cut so a run a tool starts ends before the turn's stop point.
+
+        A command left at its class default can outlast the whole turn; this
+        keeps the time to write up what was found. Unchanged with no time
+        limit. 0 when under ``_MIN_CAPPED_RUN_S`` is left: start nothing.
+        """
+        left = self._time_to_stop_s()
+        if left is None:
+            return seconds
+        if left < _MIN_CAPPED_RUN_S:
+            return 0
+        return min(seconds, int(left))
+
+    def _time_to_stop_s(self) -> Optional[float]:
+        """Seconds until the turn's stop point, or None with no time limit.
 
         The stop point leaves room for the write-only step and the closing
         answer: a tenth of the limit, or two of the turn's slowest steps so
-        far when that is more. It is also why a stop the caller's own timer
-        forces at the limit counts as reaching it.
+        far when that is more.
         """
         limit = getattr(self, "time_limit_s", None)
         started = getattr(self, "_turn_started_at", None)
         if not limit or limit <= 0 or started is None:
-            return False
+            return None
         reserve = max(limit * (1 - _TIME_STOP_AT), 2 * self._slowest_step_s)
-        return time.monotonic() - started >= limit - reserve
+        return limit - reserve - (time.monotonic() - started)
+
+    def _time_limit_passed(self) -> bool:
+        """True once the turn is past its time limit's stop point.
+
+        See ``_time_to_stop_s`` for where that is. It is also why a stop the
+        caller's own timer forces at the limit counts as reaching it.
+        """
+        left = self._time_to_stop_s()
+        return left is not None and left <= 0
 
     def _time_is_up(self, messages: List[Dict], conversation: List[Dict]) -> bool:
         """Warn once near the turn's time limit; True once it is time to stop.
@@ -12428,6 +12552,7 @@ Do NOT wrap conversational replies in JSON.
         messages.append(
             {"role": "user", "content": self._with_long_message_file(user_input)}
         )
+        self._tell_time_budget(messages)
 
         # Use provided max_steps or fall back to class default
         steps_limit = max_steps if max_steps is not None else self.max_steps
@@ -13006,7 +13131,16 @@ Do NOT wrap conversational replies in JSON.
                                 steps_taken,
                                 steps_limit,
                             )
-                            final_answer = e.user_message
+                            if isinstance(e, LemonadeReplyStalledError):
+                                # A stall is a failed model call, not just a fragment.
+                                model_call_failed = True
+                                self._turn_model_retries["failed"] = True
+                                final_answer = self._model_call_failed_answer(
+                                    e, e.user_message, steps_taken, conversation
+                                )
+                                loop_break_answer_unprinted = True
+                            else:
+                                final_answer = e.user_message
                             break
                         logger.warning(
                             "[WORKFLOW] Reply stream ended before the model "
@@ -13407,7 +13541,16 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if response:
                     messages.append({"role": "assistant", "content": response})
-                messages.append({"role": "user", "content": _CUT_OFF_CONTINUE_PROMPT})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            _CUT_OFF_ALL_THINKING_PROMPT
+                            if _was_all_thinking(response, reasoning, response_stats)
+                            else _CUT_OFF_CONTINUE_PROMPT
+                        ),
+                    }
+                )
                 continue
 
             # Parse the response. Small models (e.g. 4B) sometimes emit malformed
