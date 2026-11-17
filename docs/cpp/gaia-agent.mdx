@@ -86,7 +86,7 @@ Any [`AgentConfig`](/cpp/api-reference) field is accepted. `provider` (`lemonade
 
 ### Where the agent may work
 
-The file, git and shell tools are confined to the working directory (`--cwd`) and any folder added with `--allow-dir DIR`. A file tool given a path outside them is refused, and so is a shell command that names an existing folder outside them, other than system folders such as `/usr`, `/etc` and `/tmp`. The prompt tells the model which folders it has. The shell check reads the command text: it stops an agent from wandering, for example a whole-disk `find` or a path a document planted, but it is not a sandbox. `--full-access` removes the confinement.
+The file, git and shell tools are confined to the working directory (`--cwd`) and any folder added with `--allow-dir DIR`. A file tool given a path outside them is refused, and so is a shell command that names an existing folder outside them, other than system folders such as `/usr`, `/etc` and `/tmp`. The prompt tells the model which folders it has. A link or Windows junction inside the folder that leads outside it is treated as outside: file search does not walk into it, and a shell command that names it is refused. The shell check reads the command text: it stops an agent from wandering, for example a whole-disk `find` or a path a document planted, but it is not a sandbox. `--full-access` removes the confinement.
 
 ### Documents
 
@@ -158,6 +158,8 @@ gaiacpp --prompt-file prompt.txt
 | `cancelled` | Ctrl+C. | 1 |
 
 `is_error` is true for every status but `success`. These are the same statuses and exit codes as `gaia -p`, which says `failed` where `gaiacpp` says `error`.
+
+A run that cannot start still ends stdout with one record: a settings file that does not parse, a prompt file that cannot be read, an MCP server that does not start and a model server that does not answer all report `status` `error` with the reason in `result`, and exit 1. A mistake on the command line is different: an unknown flag, a missing prompt, or a value that cannot be right (`--ctx-size`, `--max-tokens` and `--max-steps` take a whole number above zero, `--temperature` a number from 0 to 2) exits 2 with the reason on stderr and no record. A request far larger than the model's context window is refused before anything is sent.
 
 `peak_rss_mb` is the agent process's own peak memory; programs it ran are not counted. `cpu_s` is the CPU time that same process used, in seconds. Progress goes to stderr, so stdout carries only the answer. `--debug` turns on verbose logging.
 
@@ -250,7 +252,7 @@ printf '%s\n' '{"gaia_query": "What is in this folder?"}' | gaiacpp --stdio -m Q
 {"type":"final","answer":"…","usage":{"steps":2,"input_tokens":2100,"cached_tokens":900,"tokens":60,"tools_used":1}}
 ```
 
-**What it reads.** A line is a query: either `{"gaia_query": "text"}`, which keeps a multi-line question as one question, or any other text, taken as written. A JSON object with a `gaia_control` key is a control message instead. Controls are read on their own thread, so they take effect while a turn is running, and they never write anything to stdout.
+**What it reads.** A line is a query: either `{"gaia_query": "text"}`, which keeps a multi-line question as one question, or any other text, taken as written. A line that starts with `{` but is not valid JSON is answered with an `error` event, not asked as a question, so a cut-off control message is never sent to the model. A JSON object with a `gaia_control` key is a control message instead. Controls are read on their own thread, so they take effect while a turn is running, and they never write anything to stdout.
 
 | Control | Fields | Effect |
 |---|---|---|

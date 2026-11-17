@@ -350,7 +350,7 @@ void checkSettingsFile(const gaia::json& j, const std::string& where) {
     for (const char* key : {"contextSize", "maxTokens", "maxSteps"}) {
         if (!j.contains(key)) continue;
         const gaia::json& v = j[key];
-        const bool ok = v.is_number_integer() && v >= 1 && v <= std::numeric_limits<int>::max();
+        const bool ok = v.is_number_integer() && v >= 1 && v <= (std::numeric_limits<int>::max)();
         if (!ok) fail(key, "a whole number above 0");
     }
     for (const char* key : {"debug", "showPrompts", "streaming", "silentMode", "structuredEvents"}) {
