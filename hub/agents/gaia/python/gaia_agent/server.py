@@ -1866,6 +1866,14 @@ async def query(request: QueryRequest):
                         "Cancel that run or wait for it to finish, then retry."
                     ),
                 )
+            # MCP connectors changed in Settings since this agent was built.
+            if await _off_loop(
+                functools.partial(session.follow_settings, **kwargs),
+                on_abandon=lambda _rebuilt: _unwind_setup(),
+            ):
+                logger.info(
+                    "session %s rebuilt for changed settings", request.session_id
+                )
             target = _switch_target(session, request)
             if target is not None:
                 # Switched in place rather than refused. Rebuilding the agent

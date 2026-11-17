@@ -8,6 +8,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **An MCP connector changed in Settings reaches open chats.** A session's
+  agent registered its MCP tools once, so a connector turned off stayed
+  callable and one turned on never appeared until GAIA restarted. A session now
+  rebuilds its agent on its next turn when the server list or activations
+  changed, keeping the conversation and loaded skills. The flagship also checks
+  activation as `installed:gaia` however it is built, as Settings shows it, and
+  offers only the MCP tools it registered itself, not those another session
+  left in the process.
 - **Deleting a conversation can stop its MCP servers (contract 2.30).**
   `DELETE /v1/gaia/sessions/{session_id}` ends a session and closes its agent,
   which stops the servers it started. Until now a session's servers ran until it

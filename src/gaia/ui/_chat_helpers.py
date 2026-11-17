@@ -1716,6 +1716,17 @@ def _get_cached_agent(
                 )
                 return None
             entry["document_ids"] = list(document_ids)
+        changed = getattr(entry["agent"], "mcp_settings_changed", None)
+        # ``is True``: a stand-in agent's mock answers truthy to anything.
+        if callable(changed) and changed() is True:
+            # Its MCP tools were registered as it was built.
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
+            logger.debug(
+                "Agent cache miss (MCP settings changed) for session %s",
+                session_id[:8],
+            )
+            return None
         _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 

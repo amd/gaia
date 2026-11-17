@@ -152,6 +152,50 @@ class _AgentSession:
         self.provider = PROVIDER_CLAUDE if is_claude_model(target) else PROVIDER_LOCAL
         return display
 
+    def follow_settings(self, **config_kwargs: Any) -> bool:
+        """Rebuild the agent when settings it was built from changed since.
+
+        Its MCP tools are registered as it is built, so a connector turned on
+        or off in Settings needs a new agent. Keeps this session's model,
+        conversation and loaded skills; the old agent's pending memory work
+        finishes and its MCP servers stop before it closes. Must be called
+        with ``run_lock`` held. Returns True when it rebuilt.
+        """
+        changed = getattr(self.agent, "mcp_settings_changed", None)
+        if not callable(changed) or changed() is not True:
+            return False
+        kwargs = {
+            k: v
+            for k, v in config_kwargs.items()
+            if k not in ("model_id", "claude_model", "use_claude")
+        }
+        if self.provider == PROVIDER_CLAUDE:
+            kwargs["use_claude"] = True
+            if self.model_id:
+                kwargs["claude_model"] = self.model_id
+        elif self.model_id:
+            kwargs["model_id"] = self.model_id
+        old = self.agent
+        new = build_session_agent(**kwargs)
+        new.conversation_history = list(
+            getattr(old, "conversation_history", None) or []
+        )
+        for name in list(getattr(old, "loaded_skills", None) or {}):
+            try:
+                new.load_skill(name)
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning(
+                    "session %s: skill %r was not loaded again after its "
+                    "agent was rebuilt for changed settings (%s); the user "
+                    "can load it again",
+                    self.session_id,
+                    name,
+                    exc,
+                )
+        self.agent = new
+        close_agent(old)
+        return True
+
     def is_running(self) -> bool:
         return self.run_lock.locked()
 
