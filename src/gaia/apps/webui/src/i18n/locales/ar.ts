@@ -2537,6 +2537,8 @@ const messages: Messages = {
     'settings.connectors.noRevokeApi': 'قُطع الاتصال محليًا. لا يوفر هذا المزوّد واجهة لإلغاء الوصول عن بُعد — أزل GAIA من صفحة التطبيقات المتصلة بحسابك لإلغائه بالكامل.',
     'settings.connectors.setupRequired': 'يتطلب إعدادًا',
     'settings.connectors.paused': 'متوقف مؤقتًا',
+    'settings.connectors.turnedOn': 'مُفعَّل',
+    'settings.connectors.checkingShort': 'جارٍ التحقق…',
     'settings.connectors.notWorking': 'لا يعمل',
     'settings.connectors.disconnected': 'تم قطع الاتصال',
     'settings.connectors.deviceFailed': 'فشل تسجيل الدخول بالرمز.',
@@ -2648,6 +2650,7 @@ const messages: Messages = {
 
     // The connection banner
     'banner.serverStopped': 'خادم النماذج لا يستجيب.',
+    'server.otherServerStart': 'GAIA لا يشغّل خادم النماذج هذا، لذلك لا يستطيع بدء تشغيله. شغّله بالطريقة التي تعتادها.',
     'banner.restartHint': 'إذا استمرّ على هذه الحال، فأعد تشغيله:',
     'banner.startHint': 'لتشغيله يدويًا، نفّذ',
     'banner.finishSetup': 'أعدّ النماذج على هذا الجهاز، أو اختر نموذجًا سحابيًا من الإعدادات.',
@@ -3529,6 +3532,7 @@ const messages: Messages = {
     'resources.toggle': 'استخدام الموارد',
     'resources.show': 'إظهار استخدام الموارد',
     'resources.hide': 'إخفاء استخدام الموارد',
+    'resources.hiddenNote': 'استخدام الموارد مخفي الآن في كل المحادثات. تعيده أيقونة النبض أعلى المحادثة، وكذلك الإعدادات › عام.',
     'resources.cpu': 'CPU',
     'resources.memory': 'الذاكرة',
     'resources.gpu': 'GPU',

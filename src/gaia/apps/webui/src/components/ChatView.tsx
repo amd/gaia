@@ -121,6 +121,9 @@ interface SendOptions {
     opening?: boolean;
 }
 
+/** How long the note about the closed resource strip stays up. */
+export const RESOURCES_NOTE_MS = 12_000;
+
 export function ChatView({ sessionId }: ChatViewProps) {
     const t = useT();
     const {
@@ -425,11 +428,20 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const showResources = useResourceMonitorStore((s) => s.visible);
     const setShowResources = useResourceMonitorStore((s) => s.setVisible);
     const resourcesToggleRef = useRef<HTMLButtonElement>(null);
+    // Closing with the ✕ hides the strip in every chat; say how it comes back.
+    const [resourcesClosedNote, setResourcesClosedNote] = useState(false);
     const closeResources = useCallback(() => {
         setShowResources(false);
+        setResourcesClosedNote(true);
         // The close button unmounts with the strip; keep keyboard focus nearby.
         resourcesToggleRef.current?.focus();
     }, [setShowResources]);
+    useEffect(() => {
+        if (!resourcesClosedNote) return undefined;
+        if (showResources) { setResourcesClosedNote(false); return undefined; }
+        const timer = window.setTimeout(() => setResourcesClosedNote(false), RESOURCES_NOTE_MS);
+        return () => window.clearTimeout(timer);
+    }, [resourcesClosedNote, showResources]);
 
     const jumpToMessage = useJumpToMessage(messagesScrollRef, isNearBottomRef);
 
@@ -1669,6 +1681,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
             </header>
 
             {showResources && <ResourceMonitor onClose={closeResources} />}
+            {!showResources && resourcesClosedNote && (
+                <div className="resource-strip resource-hidden-note" role="status">
+                    <span>{t('resources.hiddenNote')}</span>
+                    <button type="button" className="resource-hidden-undo" onClick={() => setShowResources(true)}>
+                        {t('resources.show')}
+                    </button>
+                </div>
+            )}
 
             <SessionDocsBar sessionId={sessionId} onDetachFailed={handleDetachFailed} />
 

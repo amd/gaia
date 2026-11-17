@@ -1507,6 +1507,17 @@ test('resource usage strip', async ({ page }) => {
     await page.screenshot({ path: 'visual/test-results/resource-strip-ar.png' });
 });
 
+test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`);
+    await page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' }).getByRole('button').click();
+    const note = page.locator('.resource-hidden-note');
+    await expect(note).toContainText('أيقونة النبض');
+    await expect(note.getByRole('button')).toBeVisible();
+    await expectClearOfPanel(page);
+    expect(await audit(page)).toEqual([]);
+    await page.screenshot({ path: 'visual/test-results/resource-strip-ar-closed.png' });
+});
+
 test('resource usage strip with no GPU counters keeps CPU and memory', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`, 'ar', async (p) => {
         await p.route('**/api/system/resources', (route) =>
@@ -2066,6 +2077,18 @@ test.describe('English', () => {
         await expectClearOfPanel(page);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: 'visual/test-results/resource-strip-en.png' });
+    });
+
+    test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await page.getByRole('button', { name: 'Hide resource usage' }).click();
+        const note = page.locator('.resource-hidden-note');
+        await expect(note).toContainText('pulse icon');
+        await expectClearOfPanel(page);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en-closed.png' });
+        await note.getByRole('button', { name: 'Show resource usage' }).click();
+        await expect(page.getByRole('region', { name: 'Resource usage on this PC' })).toBeVisible();
     });
 
     test('resource usage strip on a wide window is one row', async ({ page }) => {
@@ -3815,6 +3838,11 @@ for (const locale of ['ar', 'en']) {
         const row = page.locator('.status-row--has-hint').first();
         await expect(row).toBeVisible();
         await expect(row).not.toContainText(/gaia init|Cloud providers still work/);
+        // The backend's sentence is worded in the app's language, in the row and in the banner.
+        if (locale === 'ar') {
+            await expect(row).toContainText('لا يشغّل خادم النماذج هذا');
+            await expect(page.locator('.connection-banner')).toContainText('لا يشغّل خادم النماذج هذا');
+        }
         await expect(page.getByRole('dialog').locator('.settings-card .btn-primary')).toHaveCount(0);
         await expect(page.locator('.connection-banner')).not.toContainText('gaia init');
         await shot(page, `advanced-${locale}-server-down`);

@@ -2379,8 +2379,8 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   </Accordion>
 
   <Accordion title="POST /api/connectors/{connector_id}/enable">
-    Re-enable a previously-disabled `mcp_server` connector. Its tools
-    materialize live.
+    Re-enable a previously-disabled `mcp_server` connector. Chats already
+    open get its tools with their next message.
   </Accordion>
 
   <Accordion title="POST /api/connectors/{connector_id}/disable">
@@ -2718,6 +2718,15 @@ plan and make one set of choices.
     its downloads aren't GAIA's. Loads and downloads
     nothing. **403** without `X-Gaia-UI: 1`; **503** when the plan can't be
     worked out.
+
+    While chat runs on a cloud model, the plan leaves the local chat model
+    (and the image model setup pairs with it) out of `models`, `selected` and
+    `download_gb`, so Settings arms no download nobody chose. The query
+    `skip_chat_model=false` asks for what a local setup downloads instead, and
+    `true` for what a cloud setup downloads; the setup screen and the TUI pass
+    `false`. `POST /api/setup/chat-model`, `/vision-model`, `/models/skip` and
+    `/models/remove` take the same query for the plan they return, and
+    `/models/skip` checks the model against that plan.
 
     Each `catalog` entry says `support` (`verified`, `untested`, or null for an
     optional model), `reads_images`, `feature_tier` and `source`. `components`
