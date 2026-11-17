@@ -436,7 +436,7 @@ def effective_skill_body(agent, skill) -> str:
         # runs, with nothing to show it happened.
         rows = store.search_deltas(
             base_name=skill.name,
-            scope=agent.learned_skill_scope(),
+            scope=agent.learned_skill_scopes(),
             status=STATUS_ACTIVE,
             limit=None,
         )
@@ -6187,6 +6187,16 @@ Do NOT wrap conversational replies in JSON.
         name, which is stable across sessions and distinct between agents.
         """
         return self._namespaced_agent_id() or type(self).__name__
+
+    def learned_skill_scopes(self) -> Tuple[str, ...]:
+        """Every scope this agent's learned changes may sit under, current first.
+
+        An agent built outside the registry stored them under its class name
+        before it carried an id, so those still apply.
+        """
+        current = self.learned_skill_scope()
+        legacy = type(self).__name__
+        return (current,) if legacy == current else (current, legacy)
 
     def _effective_skill_body(self, skill) -> str:
         """This agent's view of *skill* with its approved learned changes applied.

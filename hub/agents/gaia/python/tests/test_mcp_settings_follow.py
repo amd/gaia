@@ -166,3 +166,23 @@ def test_a_new_agent_does_not_inherit_another_agents_mcp_tools(home):
     finally:
         close_agent(second)
         close_agent(first)
+
+
+def test_a_rebuilt_chat_keeps_what_the_user_set_in_it(chat, home, tmp_path):
+    """An offline or private chat stays so; granted folders stay granted."""
+    first, _ = chat()
+    granted = tmp_path / "granted"
+    granted.mkdir()
+    first.internet_off = True
+    first._incognito = True
+    first._incognito_reason = "private"
+    first.path_validator.add_allowed_path(str(granted))
+    first.config.working_directory = str(granted)
+
+    home.set(enabled=False)
+    agent, rebuilt = chat()
+    assert rebuilt and agent is not first
+    assert agent.internet_off is True
+    assert (agent._incognito, agent._incognito_reason) == (True, "private")
+    assert agent.path_validator.is_path_allowed(str(granted), prompt_user=False)
+    assert agent.config.working_directory == str(granted)

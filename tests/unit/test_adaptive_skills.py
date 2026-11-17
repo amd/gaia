@@ -1954,3 +1954,48 @@ def test_the_undo_notice_says_it_applies_on_the_next_start(store):
 
     assert "takes effect when GAIA next starts" in result["message"]
     assert result["undo_command"] in result["message"]
+
+
+def test_changes_stored_under_an_agents_old_scope_still_apply(store):
+    """An agent that gained a registry id still reads what it learned without one."""
+    old = store.put_delta(
+        base_name="github-triage",
+        scope="GaiaAgent",
+        kind=KIND_REPLACE_SECTION,
+        anchor_section="procedure",
+        anchor_digest=_digest_of(BASE_SKILL, "procedure"),
+        payload={"body": "## Procedure\n\nOLD SCOPE LESSON."},
+        provenance=dict(TRUSTED),
+    )
+    store.approve_delta(old)
+    new = store.put_delta(
+        base_name="github-triage",
+        scope="installed:gaia",
+        kind=KIND_REPLACE_SECTION,
+        anchor_section="rules",
+        anchor_digest=_digest_of(BASE_SKILL, "rules"),
+        payload={"body": "## Rules\n\nNEW SCOPE LESSON."},
+        provenance=dict(TRUSTED),
+    )
+    store.approve_delta(new)
+
+    rows = store.search_deltas(
+        base_name="github-triage",
+        scope=("installed:gaia", "GaiaAgent"),
+        status=STATUS_ACTIVE,
+        limit=None,
+    )
+    assert [r["id"] for r in rows] == [old, new]
+    assert [r["id"] for r in store.search_deltas(scope="GaiaAgent")] == [old]
+
+
+def test_an_agent_reads_its_id_scope_then_its_class_scope():
+    class FlagshipLike(Agent):
+        def _register_tools(self):
+            pass
+
+    agent = FlagshipLike.__new__(FlagshipLike)
+    agent._gaia_namespaced_agent_id = "installed:gaia"
+    assert agent.learned_skill_scopes() == ("installed:gaia", "FlagshipLike")
+    del agent._gaia_namespaced_agent_id
+    assert agent.learned_skill_scopes() == ("FlagshipLike",)

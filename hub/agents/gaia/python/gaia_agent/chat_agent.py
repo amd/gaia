@@ -540,10 +540,10 @@ _AGENT_UI_SCHEDULE_LINE = (
 
 def _mcp_settings_fingerprint() -> str:
     """Hash of the files that decide which MCP servers' tools an agent offers."""
-    from gaia.connectors.activations import _activations_path
+    from gaia.connectors.activations import activations_path
 
     digest = hashlib.sha256()
-    for path in (gaia_home() / "mcp_servers.json", _activations_path()):
+    for path in (gaia_home() / "mcp_servers.json", activations_path()):
         try:
             digest.update(path.read_bytes())
         except FileNotFoundError:
