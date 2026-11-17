@@ -7,6 +7,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DevicesSettings } from '../DevicesSettings';
 import { useDeviceStore } from '../../../stores/deviceStore';
+import { useChatStore } from '../../../stores/chatStore';
 import { pairingLink } from '../../../utils/pairingLink';
 import type { DeviceAccessStatus, DevicePairingOffer } from '../../../services/devicesApi';
 
@@ -73,5 +74,18 @@ describe('DevicesSettings', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'Copied' }));
         expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't copy the link");
+    });
+
+    it('glosses the paired-at line once in Arabic, with no nested gloss', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        const created_at = new Date(Date.now() - 60_000).toISOString();
+        replies['GET /devices'] = { body: { devices: [{ id: 'd1', name: 'Phone', platform: 'ios', status: 'pending', created_at, expires_at: null }] } };
+        render(<DevicesSettings />);
+        await screen.findByText('Phone');
+        const line = document.querySelector('.devices-row .settings-hint')!.textContent!;
+        expect(line).not.toContain('((');
+        expect(line.match(/iPhone/g)).toHaveLength(2);
+        expect(line.match(/Paired/g)).toHaveLength(1);
+        useChatStore.setState({ locale: 'en' });
     });
 });
