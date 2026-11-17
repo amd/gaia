@@ -1246,3 +1246,43 @@ def test_a_broken_hybrid_key_is_logged_once_with_its_fix(tmp_path, caplog):
     ]
     assert len(warned) == 1
     assert "gaia config set hybrid_classifier_timeout 15" in warned[0]
+
+
+def _no_gateway_settings_reasons(resp):
+    body = resp.json()
+    return [m["reason"] for m in body["models"] if m["reason"]]
+
+
+@pytest.mark.parametrize(
+    "mount,want,never",
+    [
+        ("agent_ui", "in Settings › Models", "/gateway"),
+        ("daemon", "with /gateway", "Settings ›"),
+    ],
+)
+def test_each_mount_words_set_up_advice_for_its_own_app(
+    client, daemon, gateway, mount, want, never
+):
+    gateway["models"] = []
+    _write_config({"hybrid_cheap_model": DEFAULT_CHEAP_MODEL})
+    if mount == "agent_ui":
+        resp = client.get("/api/hybrid/entry")
+    else:
+        resp = daemon.get(
+            "/api/hybrid/entry", headers={"Authorization": f"Bearer {DAEMON_TOKEN}"}
+        )
+    reason = resp.json()["reason"]
+    assert want in reason and never not in reason and "`gaia " not in reason
+
+
+def test_tui_wording_names_its_screens_never_a_command():
+    from gaia.llm.hybrid_templates import SETUP_HINTS, tui_text
+
+    for hint in SETUP_HINTS.values():
+        assert "`gaia " not in tui_text(hint)
+    assert tui_text("Download Qwen3.6-35B-A3B-GGUF in Settings › Models") == (
+        "Download Qwen3.6-35B-A3B-GGUF with /setup"
+    )
+    assert tui_text("choose another strong model in Settings › Models › Hybrid") == (
+        "choose another strong model in /hybrid"
+    )

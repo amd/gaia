@@ -9,10 +9,12 @@ chat database, opened here on first use.
 
 from __future__ import annotations
 
+import json
 import threading
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 
 from gaia.logger import get_logger
 
@@ -27,6 +29,38 @@ def build_hybrid_router(token: str) -> APIRouter:
     router = APIRouter(dependencies=[Depends(build_require_token(token))])
     router.include_router(hybrid.router)
     return router
+
+
+#: The paths whose answers the TUI shows as sent.
+HYBRID_PREFIX = "/api/hybrid"
+
+
+def _tui_words(value: Any) -> Any:
+    from gaia.llm.hybrid_templates import tui_text
+
+    if isinstance(value, str):
+        return tui_text(value)
+    if isinstance(value, list):
+        return [_tui_words(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _tui_words(v) for k, v in value.items()}
+    return value
+
+
+async def tui_wording(request: Request, call_next):
+    """The hybrid routes' advice in the TUI's words: its screens, not Settings."""
+    response = await call_next(request)
+    if not request.url.path.startswith(HYBRID_PREFIX):
+        return response
+    if response.headers.get("content-type", "").split(";")[0] != "application/json":
+        return response
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    headers = {
+        k: v for k, v in response.headers.items() if k.lower() != "content-length"
+    }
+    return JSONResponse(
+        _tui_words(json.loads(body)), status_code=response.status_code, headers=headers
+    )
 
 
 class ChatDatabaseOpener:

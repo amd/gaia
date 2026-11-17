@@ -47,6 +47,26 @@ CLI_SETUP_HINTS = {
     SETUP_HINTS[FIREWORKS]: "Add a Fireworks key with /provider in `gaia-cli`",
 }
 _DOWNLOAD_IN_SETTINGS = re.compile(r"Download (\S+) in Settings › Models(?! ›)")
+#: The TUI's words for each set-up hint above: its own screens, never a command.
+TUI_SETUP_HINTS = {
+    SETUP_HINTS[LOCAL]: "Download a model with /setup",
+    SETUP_HINTS[AMD]: "Connect the AMD LLM Gateway with /gateway",
+    SETUP_HINTS[FIREWORKS]: "Add a Fireworks key with /provider",
+}
+TUI_SETTINGS_SCREEN = "/hybrid"
+
+
+def tui_text(text: str) -> str:
+    """*text* worded for the Agent UI, reworded for the TUI's screens."""
+    from gaia.llm.surface_hints import agent_ui_to_tui
+
+    if not text:
+        return text
+    text = agent_ui_to_tui(text)
+    for app, tui in TUI_SETUP_HINTS.items():
+        text = text.replace(app, tui)
+    text = _DOWNLOAD_IN_SETTINGS.sub(lambda m: f"Download {m[1]} with /setup", text)
+    return text.replace(SETTINGS_SCREEN, TUI_SETTINGS_SCREEN)
 
 
 def _pull_hint(model: str) -> str:
