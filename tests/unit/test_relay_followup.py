@@ -26,6 +26,7 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.registry import AgentRegistry
 from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.hub.installer import register_installed_sidecars
+from gaia.security import PathValidator
 from gaia.ui import followups
 from gaia.ui import permissions as session_permissions
 from gaia.ui._chat_helpers import _stream_chat_impl
@@ -209,6 +210,7 @@ class _FollowUpAgent:
         # The sidecar syncs attached documents against these every turn.
         self.indexed_files: set = set()
         self.rag = None
+        self.path_validator = PathValidator([])
 
     def process_query(self, query, max_steps=None):
         deadline = time.monotonic() + 10
