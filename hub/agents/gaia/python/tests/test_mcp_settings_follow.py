@@ -307,3 +307,39 @@ def test_the_sidecar_query_route_follows_a_connector_change(home, monkeypatch):
         sr.registry.clear()
         server_mod._registry = server_mod._RunRegistry()
         caller_auth.reset()
+
+
+@pytest.mark.parametrize(
+    "router, model, expected",
+    [
+        (object(), "Gemma-4-E4B-it-GGUF", "hybrid"),
+        (None, "Gemma-4-E4B-it-GGUF", "Gemma-4-E4B-it-GGUF"),
+    ],
+)
+def test_a_terminal_ui_rebuild_keeps_a_hybrid_session_hybrid(
+    monkeypatch, router, model, expected
+):
+    """The routed turn's model is not the session's: a hybrid chat stays hybrid."""
+    from types import SimpleNamespace
+
+    import gaia_agent.agent as agent_mod
+    import gaia_agent.session_registry as sr
+    from gaia_agent import stdio
+
+    built = {}
+
+    class _Built:
+        def __init__(self, config):
+            built["model_id"] = config.model_id
+
+    monkeypatch.setattr(agent_mod, "GaiaAgent", _Built)
+    monkeypatch.setattr(sr, "_carry_session_state", lambda old, new, sid: None)
+    monkeypatch.setattr(sr, "close_agent", lambda agent: None)
+    old = SimpleNamespace(
+        built_settings_changed=lambda: True,
+        hybrid_router=router,
+        model_id=model,
+        conversation_history=[],
+    )
+    stdio.follow_settings(old, {"silent_mode": True})
+    assert built["model_id"] == expected

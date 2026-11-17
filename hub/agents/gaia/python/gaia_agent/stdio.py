@@ -1441,7 +1441,12 @@ def follow_settings(agent: Any, config_kwargs: Dict[str, Any]) -> Any:
         for k, v in config_kwargs.items()
         if k not in ("model_id", "claude_model", "use_claude")
     }
-    if getattr(agent, "_use_claude", False):
+    if getattr(agent, "hybrid_router", None) is not None:
+        # model_id is the turn's routed model; the session runs on hybrid.
+        from gaia.llm.hybrid import HYBRID_MODEL_ID
+
+        kwargs["model_id"] = HYBRID_MODEL_ID
+    elif getattr(agent, "_use_claude", False):
         kwargs["use_claude"] = True
         kwargs["claude_model"] = agent.model_id
     elif agent.model_id:
