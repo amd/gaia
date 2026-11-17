@@ -67,6 +67,11 @@ class ShellSession:
         return self._cwd
 
     @property
+    def start_cwd(self) -> str:
+        """The directory the session started in."""
+        return self._start_cwd
+
+    @property
     def closed(self) -> bool:
         return self._closed
 

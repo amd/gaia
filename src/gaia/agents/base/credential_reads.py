@@ -76,7 +76,7 @@ def python_credential_refusal(
 ) -> Optional[Dict[str, Any]]:
     """The hard refusal for a Python call that reads a credential file, or None.
 
-    No tier: neither an approval nor full access lifts it.
+    No approval lifts it; full access skips this check entirely.
     """
     key = PYTHON_TOOLS.get(tool_name)
     value = (tool_args or {}).get(key) if key else None

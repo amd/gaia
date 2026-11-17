@@ -98,7 +98,6 @@ def agent(request, tmp_path, monkeypatch):
         host = request.param(skip_lemonade=True, silent_mode=True)
     host.path_validator.allowed_paths.add(tmp_path.resolve())
     host.console.auto_approve_gated_tools = True
-    host.console.full_access = True
     return host
 
 

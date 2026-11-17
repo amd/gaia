@@ -248,10 +248,10 @@ class PermissionState:
 
         Two attributes, because they are two different grants that happen to be
         turned on together. ``auto_approve_gated_tools`` skips the confirmation
-        prompt; ``full_access`` additionally lifts the shell guardrails — the
-        operator block, the read-only binary policy and the rate limit (#3373,
-        #3374). An unattended harness that only pre-approves prompts sets the
-        first and must not inherit the second, which is what
+        prompt; ``full_access`` additionally lifts every guardrail — the shell
+        runs any line unchecked and the file tools reach any path. An
+        unattended harness that only pre-approves prompts sets the first and
+        must not inherit the second, which is what
         ``lifts_shell_gates=False`` buys the HTTP transport. ``grants_paths``
         lets an out-of-scope path through without a prompt, but only on a run
         a person is watching (``answers_confirmations``).
@@ -2181,13 +2181,13 @@ def build_parser() -> "argparse.ArgumentParser":
         dest="full_access",
         action="store_true",
         help="Start with the permission gates OFF: every gated tool runs "
-        "without asking, the shell-only operators (>, >>, <, &, `, $(), "
-        "newline) parse and run, the "
-        "read-only binary policy is replaced by the developer set (node, npm, "
-        "make, cmake, go, cargo, sed, awk, curl, python, pytest, gh, git) and "
-        "the shell rate limit is lifted. This is arbitrary code execution. Off "
-        "unless passed, and the host can toggle it at any time over the "
-        "control channel. Every shell command run this way is audit-logged.",
+        "without asking, each shell line runs whole in bash (cmd.exe on "
+        "Windows) with no command, path or syntax checks, and the file tools "
+        "read and write any path, system folders and credential files "
+        "included. This is arbitrary code execution: use it only on a machine "
+        "or container you are willing to let the agent change. Off unless "
+        "passed, and the host can toggle it at any time over the control "
+        "channel. Every shell command run this way is audit-logged.",
     )
     parser.add_argument(
         "--accept-edits",

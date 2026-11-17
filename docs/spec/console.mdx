@@ -246,8 +246,10 @@ class OutputHandler(ABC):
   `GAIA_AUTO_APPROVE_TOOLS=1` (read from the startup environment, so a `.env`
   cannot set it), and every approval taken that way is logged. Neither widens
   `run_shell_command`: a command off its read-only list is refused under them.
-  `full_access` lifts that, and only an interactive host that shows it on every
-  frame sets it (the TUI's `/full-access`, alongside `auto_approve_gated_tools`).
+  `full_access` lifts that and every other check — any command runs whole in the
+  platform shell, and the file tools reach any path — and only a host where a
+  person turned it on sets it (the TUI's `/full-access`, `gaia -p --full-access`,
+  alongside `auto_approve_gated_tools`).
 </Warning>
 
 ### TerminalConfirmationMixin

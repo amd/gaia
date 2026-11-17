@@ -15,7 +15,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, LemonadeClientError
 from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
@@ -818,6 +818,14 @@ class CodeIndexSDK:
                 if line and not line.startswith("#"):
                     patterns.append(line)
         return patterns
+
+    def follow_full_access(self, active: Callable[[], bool]) -> None:
+        """Read every file the index walks while *active* answers True.
+
+        The host passes its live full-access check, so the index never holds a
+        narrower scope than the agent's own tools.
+        """
+        self._path_validator.set_full_access(active)
 
     def _read_file_safe(self, file_path: str) -> Optional[str]:
         """Read text; return None for absent/policy-skipped files, raise I/O errors."""

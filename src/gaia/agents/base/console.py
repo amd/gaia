@@ -344,11 +344,12 @@ class OutputHandler(ABC):
     ``--bypass-permissions`` spelling), or ``gaia -p --full-access`` — never
     pre-approval: an unattended harness that merely pre-approves prompts must
     not also get an unguarded shell. In
-    exchange it lifts the shell guardrails too: the operator block, the
-    read-only binary policy (replaced by ``DEVELOPER_COMMANDS``) and the rate
-    limit, and it runs commands outside ``run_shell_command``'s no-prompt list
-    without asking. See
-    ``gaia.agents.tools.shell_tools.ShellToolsMixin.full_access_active``.
+    exchange it lifts every guardrail: each shell line runs whole through the
+    platform shell with no command, path or syntax check, and the file and
+    Python tools reach any path, system folders and credential files
+    included. Commands are still audited and timed out. See
+    ``gaia.agents.tools.shell_tools.ShellToolsMixin.full_access_active`` and
+    ``gaia.security.PathValidator.set_full_access``.
 
     Mutable for the life of the session: the host can toggle it mid-run over the
     control channel, and the next gated call sees the new value.

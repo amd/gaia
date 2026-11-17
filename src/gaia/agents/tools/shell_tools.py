@@ -1071,61 +1071,6 @@ def _call_key(command: Any, working_directory: Any) -> Tuple[Any, Any]:
     return command, _expand_home(working_directory) or None
 
 
-# The binaries a developer session needs and a read-only session must not have.
-# Active ONLY under full access; ALLOWED_COMMANDS above is
-# untouched so the read-only tier keeps claiming exactly what it claims, and
-# a sweep of it never has to reason about these entries.
-#
-# This set permits ARBITRARY CODE EXECUTION — node, make and the interpreters
-# each run whatever the working tree tells them to. That is why it is reachable
-# only from the mode the user turned on deliberately.
-#
-# python/python3/pytest and gh are listed for CONSOLIDATION, not new reach: all
-# four already have a path today (``execute_python_file`` for the
-# generic_file_ops profiles, a ``shell:execute:`` skill grant for pytest and
-# gh). Naming them here means bypass has one answer to "may this binary run"
-# instead of three. The per-skill grant path is unchanged and still works with
-# bypass off.
-#
-# `git` is here for the same reason, and its policy's outright refusals (push,
-# reset, rebase) do not survive bypass. That is not a boundary being dropped:
-# `python` and `make` above already reach git by shelling out, so refusing it
-# here would only be a tripwire — and one that made bypass STRICTER than the
-# default tier, where the read-only floor still runs `git status`.
-DEVELOPER_COMMANDS = frozenset(
-    {
-        # Interpreters and test runners
-        "python",
-        "python3",
-        "pytest",
-        "node",
-        # Build and package tooling
-        "npm",
-        "make",
-        "cmake",
-        "go",
-        "cargo",
-        # Forge
-        "gh",
-        "git",
-        # Text processing that writes
-        "sed",
-        "awk",
-        # Network
-        "curl",
-        # Process control
-        "sleep",
-        "timeout",
-        "export",
-        # File shuffling. `cp` and `mv` are in; `rm` is deliberately NOT — see
-        # docs/plans/security-model.mdx. Not a boundary (anything above can
-        # delete a file), just a tripwire against an accidental recursive
-        # delete.
-        "cp",
-        "mv",
-    }
-)
-
 # Global git options that sit BEFORE the subcommand. They have to be stepped
 # over to find what the command actually is, and each one is classified here —
 # an unlisted option is refused rather than skipped, so a future git release
@@ -1592,16 +1537,8 @@ READS_WITHOUT_A_SKILL = frozenset({"gh", "gaia"})
 def shell_granted_binaries(host: Any) -> frozenset:
     """The CLIs the shell treats as granted: *host*'s skill grants plus
     :data:`READS_WITHOUT_A_SKILL`.
-
-    Not under full access: everything is pre-approved there already, and a
-    granted CLI runs without a shell, which would break the redirects full
-    access exists to allow.
     """
-    granted = skill_granted_binaries(host)
-    full_access = getattr(host, "full_access_active", None)
-    if callable(full_access) and full_access():
-        return granted
-    return granted | READS_WITHOUT_A_SKILL
+    return skill_granted_binaries(host) | READS_WITHOUT_A_SKILL
 
 
 def _is_granted_binary(token: str, granted: frozenset) -> bool:
@@ -3909,7 +3846,7 @@ def _shares_secret(entry: os.DirEntry, linked: Optional[dict]) -> bool:
 def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]:
     """The hard refusal for a shell argument that reads a credential file.
 
-    No tier: neither an approval nor full access lifts it.
+    No approval lifts it; under full access the line is never checked.
     """
     return {
         **NOT_EXECUTED,
@@ -3931,7 +3868,7 @@ def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]
 def _search_refusal(command: str, path: str, kind: str) -> Dict[str, Any]:
     """The hard refusal for a recursive search that cannot leave credential files out.
 
-    No tier: neither an approval nor full access lifts it.
+    No approval lifts it; under full access the line is never checked.
     """
     searchers, windows_note = "grep -r, rg or git grep", ""
     if _greps_expand_arguments():
@@ -4000,12 +3937,12 @@ def _operator_check_text(command: str) -> str:
     return " ".join(outer)
 
 
-#: Tokens that end one command and begin the next, under full access only.
+#: Tokens that end one command and begin the next, in a line read as the shell reads it.
 #: The default path cuts pipes from the text (``_split_shell_pipes``), and
 #: ``DANGEROUS_SHELL_OPERATORS`` refuses the rest before tokenisation.
 _SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 
-#: Characters shlex is asked to lex as punctuation under full access. A newline is
+#: Characters shlex lexes as punctuation in a line read as the shell reads it. A newline is
 #: one of them because the shell that ultimately runs the string treats it as a
 #: command separator, so the segment walk has to as well.
 _BYPASS_PUNCTUATION = ";&|<>\n"
@@ -4392,15 +4329,6 @@ def _is_lone_granted_segment(segments: list, granted: frozenset) -> bool:
     )
 
 
-def _redirects(command: str) -> bool:
-    """Whether *command* redirects, reading ``<``/``>`` the way a shell would.
-
-    Quoting decides it: tokenisation has already dropped the quotes, so by then
-    a redirect and a literal ``">"`` operand look identical.
-    """
-    return any(char in _outside_double_quotes(command) for char in "<>")
-
-
 _ENV_ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
@@ -4409,7 +4337,7 @@ def _split_pipeline(cmd_parts: list) -> list:
 
     Every segment is validated and audited on its own, which is what keeps a
     refused binary in ``a && b`` from riding in on an allowed one — and what
-    keeps the audit record honest under bypass mode, where the separators
+    keeps the audit record honest for a line run whole, where the separators
     actually reach a shell.
     """
     segments: list = []
@@ -4486,7 +4414,7 @@ def _split_connectors(command: str, scan: Optional[str] = None) -> list:
     quote, rather than reaching cmd.exe as two commands one of them never saw.
 
     *scan* decides where operators and quotes fall; *command* supplies the
-    text each part returns. They differ only under full access, where
+    text each part returns. They differ only in a line read as the shell reads it, where
     ``_mask_heredoc_connectors`` has neutralised the operator characters
     inside a heredoc body so it cannot fracture the command that opened it —
     same length, same quotes, so an offset found in one slices the other.
@@ -5659,13 +5587,138 @@ def _cmd_exe_launch(text: str, env: Dict[str, str]) -> Tuple[str, Dict[str, Any]
     }
 
 
+def full_access_shell() -> str:
+    """The shell a full-access line runs in: bash where installed, else /bin/sh.
+
+    Windows runs it through cmd.exe instead (see :func:`_full_access_launch`).
+    """
+    bash = shutil.which("bash")
+    if bash:
+        return bash
+    if not os.path.exists("/bin/sh"):
+        raise FileNotFoundError(
+            "Neither bash nor /bin/sh was found, so there is no shell to run "
+            "the command in. Install bash, or put it on PATH."
+        )
+    return "/bin/sh"
+
+
+#: Words that move a shell's folder, for saying a move was not carried over.
+_CHANGES_FOLDER = re.compile(r"(?i)(?:^|[\s;&|(])(?:cd|chdir|pushd|popd)(?:$|[\s;&|)])")
+
+
+def _runs_as_script(command: str) -> bool:
+    """Whether *command* has more than one line for cmd.exe, which runs only the first."""
+    return os.name == "nt" and any(char in command for char in "\r\n")
+
+
+def _write_batch_script(command: str, cwd_file: Optional[str]) -> str:
+    """A temporary ``.cmd`` running every line of *command*; its path.
+
+    A batch file reads ``%%i`` where a typed line reads ``%i``, as when the
+    user saves the same lines to a script. It records the folder it ends in to
+    *cwd_file* and exits with the last command's code.
+    """
+    lines = command.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    body = ["@echo off", *lines]
+    if cwd_file is not None:
+        body += [
+            "@set __GAIA_RC=%ERRORLEVEL%",
+            f'@cd > "{cwd_file}"',
+            "@exit /b %__GAIA_RC%",
+        ]
+    handle, path = tempfile.mkstemp(prefix="gaia-line-", suffix=".cmd")
+    with os.fdopen(handle, "w", encoding="utf-8", newline="\r\n") as script:
+        script.write("\n".join(body) + "\n")
+    return path
+
+
+def _full_access_launch(
+    command: str, cwd_file: Optional[str], script: Optional[str] = None
+) -> Tuple[Any, Dict[str, Any], str]:
+    """``(popen_args, popen_kwargs, shell)`` running *command* whole, as typed.
+
+    With *cwd_file*, the shell writes the folder it ends in there, so a ``cd``
+    carries over to the next call as in the user's own terminal. *script* is
+    the batch file a multi-line Windows line runs from. The environment is the
+    user's, less GAIA's own credentials.
+    """
+    env = child_env({})
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    if os.name == "nt":
+        text = command
+        if script is not None:
+            text = f'call "{script}"'
+        elif cwd_file is not None:
+            # The parentheses keep a trailing `for`/`if` body from taking the
+            # suffix; `call` expands %^ERRORLEVEL% after the line has run.
+            text = (
+                f"({command})& call set __GAIA_RC=%^ERRORLEVEL%"
+                f'& call cd > "{cwd_file}"& call exit %^__GAIA_RC%'
+            )
+        popen_args, launch = _cmd_exe_launch(text, env)
+        return popen_args, {**launch, "shell": False}, "cmd.exe"
+    shell = full_access_shell()
+    script = command
+    if cwd_file is not None:
+        record_cwd = shlex.quote(f"pwd > {shlex.quote(cwd_file)}")
+        script = f"trap {record_cwd} EXIT\n{command}"
+    return [shell, "-c", script], {"env": env, "shell": False}, shell
+
+
+#: Said when a line that changes folder ran, but where it ended is unknown.
+UNTRACKED_CD_NOTE = (
+    "The shell's folder after this line is unknown, so the next call starts "
+    "where this one did. Repeat the cd in the next command, or pass "
+    "working_directory."
+)
+
+
+def _read_ended_in(cwd_file: str) -> str:
+    """The folder the full-access shell wrote to *cwd_file*, or "" if it wrote none."""
+    try:
+        with open(cwd_file, encoding="utf-8", errors="replace") as handle:
+            return handle.read().strip()
+    except OSError as exc:
+        logger.warning("Could not read where the shell ended: %s", exc)
+        return ""
+
+
+def _lexical_step_cwds(steps: list, cwd: str) -> list:
+    """Each step's folder, applying every ``cd`` on the line as written."""
+    cwds = []
+    for step in steps:
+        cwds.append(cwd)
+        if step.is_cd and step.cd_target:
+            cwd = os.path.join(cwd, _expand_home(step.cd_target))
+    return cwds
+
+
+def _full_access_steps(command: str) -> list:
+    """The steps a full-access line splits into, for the audit record, Undo and
+    the test summary — never a verdict. ``[]`` when the shell syntax is beyond
+    the parser; the audit record still holds the whole line."""
+    steps, error = _parse_line(command, bypass_gates=True)
+    return [] if error is not None else steps
+
+
+def _can_track_cwd(command: str) -> bool:
+    """Whether the folder *command* ends in can be read back without changing it.
+
+    cmd.exe can only report it from a suffix wrapped round the line in
+    parentheses, which a parenthesis or trailing caret in the line would break.
+    """
+    if os.name != "nt" or _runs_as_script(command):
+        return True
+    return not any(char in command for char in "()") and not command.endswith("^")
+
+
 def _run_step(
     step: _Step,
     cwd: str,
     timeout: float,
     granted: frozenset,
     waiter: Optional[Callable] = None,
-    bypass: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run one validated pipeline in *cwd*, and return what it produced.
 
@@ -5699,14 +5752,10 @@ def _run_step(
     # An environment assignment is scoped to its own segment, and cmd.exe owns
     # the whole string it is handed — so a step carrying one runs as argv here
     # too, and gives up cmd.exe's built-in resolution to keep that scope.
-    #
-    # Bypass mode needs a shell off Windows too: the operators it unblocks ARE
-    # the shell. A redirect is a token to the walk above and a file write to sh,
-    # so an argv run would pass '>' to the program as an operand.
     argv_only = step.argv_only
     use_shell = (
         not argv_only
-        and (os.name == "nt" or bypass)
+        and os.name == "nt"
         and not lone_granted_segment
         and not any(step.envs or ())
     )
@@ -5987,16 +6036,18 @@ class ShellToolsMixin:
             the command. Refusals that need runtime context (rate limit, working
             directory, path traversal) stay with the caller, so a command this
             clears may still be refused later; one it rejects never runs.
+            Under full access ``error`` is always None.
         """
-        bypass = self.full_access_active()
-        steps, error = _parse_line(command, bypass_gates=bypass)
+        if self.full_access_active():
+            return None, _full_access_steps(command)
+        steps, error = _parse_line(command)
         once_note = ""
         if error is not None:
-            if bypass or not error.get("shell_operators"):
+            if not error.get("shell_operators"):
                 # A shape the runner cannot execute is never approvable.
                 return {"tier": TIER_REFUSE, **error}, []
             # Shell operators: the line can only run as the shell reads it.
-            # Read it the way full access does, so every command on it is
+            # Read it the way the shell will, so every command on it is
             # still checked for what may never run.
             steps, reread_error = _parse_line(command, bypass_gates=True)
             if reread_error is not None:
@@ -6011,32 +6062,6 @@ class ShellToolsMixin:
 
         granted = shell_granted_binaries(self)
 
-        # A granted CLI is handed argv, never a shell, so a redirect would reach
-        # it as a literal argument. Refuse instead of answering wrongly.
-        segments = [seg for step in steps for seg in step.segments]
-        if (
-            not once_note
-            and _is_lone_granted_segment(segments, granted)
-            and _redirects(steps[0].text)
-        ):
-            return (
-                {
-                    "status": "error",
-                    "error": (
-                        f"Redirection is not supported for '{segments[0][0]}': a "
-                        "skill-granted CLI receives its arguments directly rather "
-                        "than through a shell, so '>' would be passed to it as text."
-                    ),
-                    "has_errors": True,
-                    "hint": (
-                        "Re-run the command without the redirect and use the output "
-                        "it returns, or write that output to a file with the file "
-                        "tools."
-                    ),
-                },
-                [],
-            )
-
         # Every segment is judged, and the strictest verdict stands — a
         # confirmable first command must not stand in for a later one.
         worst = _confirm_once(error, once_note) if once_note else None
@@ -6047,7 +6072,6 @@ class ShellToolsMixin:
                     segment,
                     step.text if len(step.segments) == 1 else " ".join(segment),
                     granted_binaries=granted,
-                    bypass_gates=bypass,
                 )
                 if verdict and (
                     worst is None or _tier_rank(verdict) > _tier_rank(worst)
@@ -6540,7 +6564,11 @@ class ShellToolsMixin:
         )
 
     def _call_cwd(self, working_directory: Any) -> Optional[Tuple[str, bool]]:
-        """``(folder, explicit)`` a call runs in, or None when it names no real one."""
+        """``(folder, explicit)`` a call runs in, or None when it names no real one.
+
+        A session folder a ``cd`` moved to counts as explicit: one full access
+        reached must be judged again once full access is off.
+        """
         working_directory = _expand_home(working_directory)
         if working_directory:
             if not isinstance(working_directory, str):
@@ -6549,7 +6577,9 @@ class ShellToolsMixin:
             if not os.path.isdir(working_directory):
                 return None
             return working_directory, True
-        return self._live_session_cwd(), False
+        cwd = self._live_session_cwd()
+        moved = os.path.normcase(cwd) != os.path.normcase(self.shell_session.start_cwd)
+        return cwd, moved
 
     def _live_session_cwd(self) -> str:
         """The session's folder, repaired if it was deleted since the last call.
@@ -6592,7 +6622,7 @@ class ShellToolsMixin:
         Reparse under the normal policy so redirections and other shell-only
         constructs still count as untracked changes.
         """
-        # Full access hands the raw line to sh, which expands $ and backticks
+        # Full access hands the raw line to the shell, which expands $ and backticks
         # even inside double quotes; the shell-less parse sees only text.
         if _pipe_dialect() == "posix" and ("$" in command or "`" in command):
             return False
@@ -6623,7 +6653,6 @@ class ShellToolsMixin:
                         segment,
                         shlex.join(segment),
                         granted_binaries=granted,
-                        bypass_gates=False,
                     )
                     is not None
                 ):
@@ -6694,7 +6723,6 @@ class ShellToolsMixin:
                         segment,
                         shlex.join(segment),
                         granted_binaries=frozenset(),
-                        bypass_gates=False,
                     )
                     is not None
                     or _folder_shadows(cwd, segment[0])
@@ -6763,12 +6791,14 @@ class ShellToolsMixin:
         prompt says where it goes and the run does not refuse what was approved.
         A credential folder, or one no approval may grant, is refused outright.
 
-        Full access keeps its own rules: its path checks run at execution.
         An install into an environment outside the project (the system Python,
-        ``npm -g``) is the exception: it is a one-time approval normally, and
-        refused under full access, where nobody is asked.
+        ``npm -g``) is a one-time approval.
+
+        Under full access nothing is judged: the line runs whole, through the
+        shell, as the user's own terminal would run it.
         """
-        # Before full access too: trusting a skill stays a terminal action.
+        if self.full_access_active():
+            return None, []
         human_only = _human_only_command(command)
         if human_only:
             logger.warning("Refusing %r: %s is the user's to run", command, human_only)
@@ -6777,11 +6807,6 @@ class ShellToolsMixin:
         if error is None or _reaches_the_prompt(error):
             install = self._system_install_block(steps, working_directory)
             if install is not None:
-                if self.full_access_active():
-                    logger.warning(
-                        "Refusing %r under full access: %s", command, install["error"]
-                    )
-                    return {**install, "tier": TIER_REFUSE, **NOT_EXECUTED}, steps
                 error = _hard_if_unofferable(
                     {
                         **_confirm_once(
@@ -6791,8 +6816,6 @@ class ShellToolsMixin:
                     },
                     command,
                 )
-        if self.full_access_active():
-            return error, steps
         if error is not None and not _reaches_the_prompt(error):
             return error, steps
         located = self._call_cwd(working_directory)
@@ -6999,6 +7022,8 @@ class ShellToolsMixin:
         mixin and every pre-validator agent already were. *prompt_user* False
         only reads the scope; the pre-flight must not raise a second prompt.
         """
+        if self.full_access_active():
+            return True
         if hasattr(self, "path_validator"):
             if prompt_user:
                 return bool(self.path_validator.is_path_allowed(path))
@@ -7465,7 +7490,6 @@ class ShellToolsMixin:
         cmd_parts: list,
         command: str,
         granted_binaries: frozenset = frozenset(),
-        bypass_gates: bool = False,
         _unwrapped: bool = False,
         _spelled: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -7479,10 +7503,6 @@ class ShellToolsMixin:
             granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
                 in rather than read from module state so the grant can never be
                 global.
-            bypass_gates: This session's ``--bypass-permissions`` state. When
-                True the read-only policy is replaced wholesale by
-                ``DEVELOPER_COMMANDS`` (#3374); the default path below is left
-                exactly as it was.
             _spelled: How the program was typed, when this call judges the
                 bare program behind a path or ``.exe`` spelling.
 
@@ -7495,9 +7515,6 @@ class ShellToolsMixin:
         would refuse a write before anyone could approve it, which is the dead
         end this tier removes.
         """
-        if bypass_gates:
-            return ShellToolsMixin._validate_bypass_command(cmd_base)
-
         # A launcher (sudo, timeout, xargs, ...) keeps the refusal of the
         # command it runs; a harmless inner command gets the launcher's prompt.
         if not _unwrapped:
@@ -7942,6 +7959,214 @@ class ShellToolsMixin:
 
         return None  # Command is allowed
 
+    def _run_full_access(
+        self,
+        command: str,
+        working_directory: Optional[str],
+        timeout: float,
+        timeout_class: str,
+    ) -> Dict[str, Any]:
+        """Run *command* under full access: the whole line, through a real shell.
+
+        Nothing about the line is checked or refused — any program, any path,
+        any shell syntax the shell supports. The line is audited, its timeout
+        applies, and a ``cd`` it makes carries over to the next call when no
+        ``working_directory`` was given.
+        """
+        if working_directory:
+            cwd = str(_workspace_target(self, working_directory))
+            if not os.path.isdir(cwd):
+                problem = "not found" if not os.path.exists(cwd) else "not a directory"
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": f"Working directory {problem}: {cwd}",
+                    "has_errors": True,
+                }
+        else:
+            cwd = self._live_session_cwd()
+            if not os.path.isdir(cwd):
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"Nothing ran: the shell's starting folder {cwd} no "
+                        "longer exists. Pass an existing working_directory."
+                    ),
+                    "has_errors": True,
+                }
+
+        steps = _full_access_steps(command)
+        segments = [seg for st in steps for seg in st.segments]
+        self._audit_shell_execution(command, cwd, segments)
+
+        if self._cancel_requested():
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "error": f"Stopped before running, so nothing was changed: {command}",
+                "command": command,
+                "has_errors": True,
+                "cancelled": True,
+                "cwd": cwd,
+            }
+
+        undo_note = ""
+        if not self._line_is_read_only(command):
+            try:
+                covered = bool(steps) and self._snapshot_shell_deletes(
+                    steps, _lexical_step_cwds(steps, cwd)
+                )
+            except SnapshotError as e:
+                # Full access runs the line anyway; Undo just can't restore it.
+                logger.warning(
+                    "Full access: running %r without a snapshot: %s", command, e
+                )
+                covered = False
+                undo_note = f"Undo can't restore what this deleted: {e}"
+            if not covered:
+                note_untracked("shell", command)
+
+        cwd_file = script = None
+        if not working_directory and _can_track_cwd(command):
+            handle, cwd_file = tempfile.mkstemp(prefix="gaia-cwd-", suffix=".txt")
+            os.close(handle)
+        try:
+            if _runs_as_script(command):
+                script = _write_batch_script(command, cwd_file)
+            result = self._spawn_full_access(
+                command,
+                cwd,
+                (not working_directory, cwd_file, script),
+                segments,
+                timeout,
+                timeout_class,
+            )
+        finally:
+            for leftover in (cwd_file, script):
+                if leftover is not None:
+                    with contextlib.suppress(FileNotFoundError):
+                        os.remove(leftover)
+        if undo_note:
+            result["note"] = " ".join(filter(None, (result.get("note"), undo_note)))
+        return result
+
+    def _spawn_full_access(
+        self,
+        command: str,
+        cwd: str,
+        session: Tuple[bool, Optional[str], Optional[str]],
+        segments: list,
+        timeout: float,
+        timeout_class: str,
+    ) -> Dict[str, Any]:
+        """Start the full-access shell, wait for it, and shape its result.
+
+        *session* is ``(moves_session, cwd_file, script)``: whether the line's
+        ``cd`` should carry over, where the shell reports the folder it ended
+        in, and the batch file a multi-line Windows line runs from.
+        """
+        moves_session, cwd_file, script = session
+        popen_args, launch, shell = _full_access_launch(command, cwd_file, script)
+        start_time = time.monotonic()
+        process = subprocess.Popen(  # pylint: disable=consider-using-with
+            popen_args,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            encoding="utf-8",
+            errors="replace",
+            start_new_session=os.name != "nt",
+            **launch,  # nosec B602 - full access: the user lets the agent run any line
+        )
+        base = {
+            "command": command,
+            "shell": shell,
+            "timeout": timeout,
+            "timeout_class": timeout_class,
+            "cwd": cwd,
+        }
+        try:
+            stdout, stderr, cancelled = self._communicate_or_cancel(process, timeout)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = terminate_process_tree(process)
+            return {
+                **base,
+                "status": "error",
+                "error": (
+                    f"Command timed out after {timeout} seconds and was killed, "
+                    f"so its work is incomplete: {command}"
+                ),
+                "stdout": _truncate(_as_text(stdout), "stdout"),
+                "stderr": _truncate(_as_text(stderr), "stderr"),
+                "has_errors": True,
+                "timed_out": True,
+                "duration_seconds": time.monotonic() - start_time,
+                "steps": [{"command": command, "return_code": None}],
+                "hint": self._timeout_hint(timeout_class, cwd),
+            }
+        except BaseException:
+            terminate_process_tree(process)
+            raise
+        duration = time.monotonic() - start_time
+        if cancelled:
+            return {
+                **base,
+                "status": "error",
+                "error": (
+                    f"Command was stopped after {duration:.1f}s and killed, so "
+                    f"its work is incomplete: {command}"
+                ),
+                "stdout": _truncate(_as_text(stdout), "stdout"),
+                "stderr": _truncate(_as_text(stderr), "stderr"),
+                "has_errors": True,
+                "cancelled": True,
+                "duration_seconds": duration,
+                "steps": [{"command": command, "return_code": None}],
+            }
+
+        from gaia.agents.base.artifacts import retain_excerpt
+
+        raw_out, raw_err = _as_text(stdout), _as_text(stderr)
+        code = process.returncode
+        check = check_from_command(command, segments, code, raw_out, raw_err)
+        if code != 0:
+            failure: Optional[str] = exit_error(command, code, raw_err or raw_out)
+        elif check is not None and not check.passed:
+            failure = f"{check.label} reported failures" + (
+                f": {check.summary}" if check.summary else ""
+            )
+        else:
+            failure = None
+        outcome = {
+            **base,
+            "status": "error" if failure else "success",
+            "stdout": retain_excerpt(self, raw_out, MAX_OUTPUT_CHARS),
+            "stderr": retain_excerpt(self, raw_err, MAX_OUTPUT_CHARS),
+            "return_code": code,
+            "has_errors": failure is not None,
+            "duration_seconds": duration,
+            "output_truncated": len(raw_out) > MAX_OUTPUT_CHARS
+            or len(raw_err) > MAX_OUTPUT_CHARS,
+            "steps": [{"command": command, "return_code": code}],
+        }
+        if failure:
+            outcome["error"] = failure
+        notes = []
+        moved = getattr(self, "_shell_cwd_note", None)
+        if moved:
+            self._shell_cwd_note = None
+            notes.append(moved)
+        if moves_session:
+            ended_in = _read_ended_in(cwd_file) if cwd_file else ""
+            moved_to = bool(ended_in) and self.shell_session.set_cwd(ended_in)
+            if not moved_to and _CHANGES_FOLDER.search(command):
+                notes.append(UNTRACKED_CD_NOTE)
+        if notes:
+            outcome["note"] = " ".join(notes)
+        return attach_check(outcome, check)
+
     def _run_approved_once(
         self,
         command: str,
@@ -8059,59 +8284,8 @@ class ShellToolsMixin:
             outcome, check_from_command(command, segments, code, raw_out, raw_err)
         )
 
-    @staticmethod
-    def _validate_bypass_command(cmd_base: str) -> Optional[Dict[str, Any]]:
-        """The whole binary policy under full access.
-
-        Membership in ``ALLOWED_COMMANDS | DEVELOPER_COMMANDS`` and nothing
-        else: the read-only sub-guards (git subcommands, PowerShell cmdlets,
-        ``find -exec``, ``sort -o``, ``uniq`` output) and the binary policies'
-        own refusals all encode "this binary may not write", which is precisely
-        the assumption full access drops.
-
-        Still a set, not an open door — ``rm`` and anything unrecognised are
-        refused, and every segment lands in the audit record either way.
-        """
-        from gaia.skills.binaries import normalize_binary
-
-        # A keyword is not a binary that happens to be missing from the set —
-        # it cannot run in any mode, so it is named the same way here.
-        if cmd_base in SHELL_KEYWORDS:
-            return {
-                "status": "error",
-                "tier": TIER_REFUSE,
-                "error": (
-                    f"'{cmd_base}' is shell control flow, and commands run "
-                    "directly rather than through a shell, so it cannot run."
-                ),
-                "has_errors": True,
-                "hint": (
-                    "Use run_python for a loop or a condition, or issue the "
-                    "commands one per call and decide between them yourself."
-                ),
-            }
-
-        candidates = {cmd_base, normalize_binary(cmd_base)}
-        if candidates & (ALLOWED_COMMANDS | DEVELOPER_COMMANDS):
-            return None
-        return {
-            "status": "error",
-            "tier": TIER_REFUSE,
-            "error": (
-                f"Command '{cmd_base}' is not in the developer command set, "
-                "even with full access active."
-            ),
-            "has_errors": True,
-            "hint": (
-                "Full access swaps the read-only allowlist for a developer set "
-                "(python, python3, pytest, node, npm, make, cmake, go, cargo, "
-                "gh, git, sed, awk, curl, sleep, timeout, export, cp, mv). "
-                "'rm' is deliberately excluded."
-            ),
-        }
-
     def _audit_shell_execution(self, command: str, cwd: str, segments: list) -> None:
-        """Record a command run under bypass mode, arguments and all.
+        """Record a command run under full access, arguments and all.
 
         Skipping the confirmation *prompt* must not mean skipping the *record*:
         consent was granted in advance, which is exactly when the audit trail is
@@ -8151,7 +8325,8 @@ class ShellToolsMixin:
             'cd <dir> && b'. One approval covers the line; every part is
             allowlist-checked. '2>&1' keeps stderr, '2>/dev/null' drops it,
             'VAR=x cmd' scopes a variable. Other redirections and
-            ` $() & newline are refused.
+            ` $() & newline are refused. Full access runs the line unchecked
+            in bash (cmd.exe on Windows).
 
             Args:
                 command: Shell command to execute
@@ -8161,13 +8336,11 @@ class ShellToolsMixin:
                     ceiling it is refused, not clamped.
 
             Returns:
-                status, output, the last exit code, 'steps' (each with its own
-                code), the applied 'timeout' and 'timeout_class'; one killed at
-                the limit carries 'timed_out'.
+                status, output, the exit code, 'steps', 'timeout' and
+                'timeout_class'; 'timed_out' on a timeout.
             """
             working_directory = _expand_home(working_directory)
             try:
-                bypass = self.full_access_active()
                 try:
                     timeout, timeout_class = resolve_timeout(command, timeout)
                 except ValueError as exc:
@@ -8179,10 +8352,13 @@ class ShellToolsMixin:
                         "has_errors": True,
                     }
 
+                if self.full_access_active():
+                    return self._run_full_access(
+                        command, working_directory, timeout, timeout_class
+                    )
+
                 # Check rate limits first to prevent DOS
-                allowed, reason, wait_time, waited = (
-                    (True, "", 0.0, 0.0) if bypass else self._pace_rate_limit()
-                )
+                allowed, reason, wait_time, waited = self._pace_rate_limit()
                 if not allowed:
                     return {
                         **NOT_EXECUTED,
@@ -8214,21 +8390,6 @@ class ShellToolsMixin:
                             "has_errors": True,
                         }
 
-                    # Outside full access the line's verdict judges the
-                    # folder, before the prompt, so it can be approved there.
-                    if bypass and not self._path_allowed(cwd):
-                        hint = (
-                            self.path_validator.scratch_hint(cwd)
-                            if hasattr(self, "path_validator")
-                            else ""
-                        )
-                        return {
-                            **NOT_EXECUTED,
-                            "status": "error",
-                            "error": f"Access denied: {cwd} is not in allowed paths.{hint}",
-                            "has_errors": True,
-                        }
-
                     session_scoped = False
                 else:
                     # An explicit working_directory is a one-shot override that
@@ -8249,8 +8410,8 @@ class ShellToolsMixin:
                             "has_errors": True,
                         }
 
-                # A folder the user removed from the chat is refused even under
-                # full access, and even as the folder a new session starts in.
+                # A folder the user removed from the chat is refused, even as
+                # the folder a new session starts in.
                 withheld = self._withheld_cwd_error(cwd)
                 if withheld is not None:
                     return withheld
@@ -8272,12 +8433,7 @@ class ShellToolsMixin:
                 error, steps = self._line_verdict(command, working_directory)
                 if error and not _reaches_the_prompt(error):
                     return error
-                # Full access permits writes; it does not make a known read
-                # untrackable. Classify the line with the ordinary policy so
-                # writes still get snapshots and the Undo warning.
-                may_write = bool(error) or (
-                    bypass and not self._line_is_read_only(command)
-                )
+                may_write = bool(error)
                 if error and unconfirmed:
                     return self._blanket_approval_refusal(error, command)
                 if error and error.get("tier") == TIER_CONFIRM_ONCE:
@@ -8332,11 +8488,6 @@ class ShellToolsMixin:
                     error = self._git_path_refusal(step.segments, step_cwd)
                     if error:
                         return error
-
-                if bypass:
-                    self._audit_shell_execution(
-                        command, cwd, [seg for st in steps for seg in st.segments]
-                    )
 
                 # Log command execution (debug mode)
                 if hasattr(self, "debug") and self.debug:
@@ -8437,7 +8588,6 @@ class ShellToolsMixin:
                                 # kill the command while it is still running,
                                 # not when its budget expires.
                                 self._communicate_or_cancel,
-                                bypass,
                             )
                     except subprocess.TimeoutExpired as exc:
                         # Truncated here too: a command killed at 30 minutes has
@@ -8553,10 +8703,8 @@ class ShellToolsMixin:
                     self.shell_session.set_cwd(ran_cwd)
 
                 # One line is one model step, so it costs one slot however many
-                # commands it chains. Skipped under bypass, where the limit is
-                # lifted and the deque _check_rate_limit creates never existed.
-                if not bypass:
-                    self._record_command_execution()
+                # commands it chains.
+                self._record_command_execution()
 
                 stdout = "".join(stdout_parts)
                 stderr = "".join(stderr_parts)
@@ -8654,7 +8802,7 @@ class ShellToolsMixin:
 
             Args:
                 command: The predicate — exits 0 once the condition holds,
-                    non-zero until then. Same allowlist as run_shell_command.
+                    non-zero until then. Same rules as run_shell_command.
                 working_directory: Directory to run the predicate in
                 timeout: Give up after this many seconds (max 600)
                 poll_interval: Seconds between checks (5-60)
@@ -8703,17 +8851,19 @@ class ShellToolsMixin:
 
             # The wait is charged as one command up front; its probes are then
             # exempt (see _check_rate_limit) rather than each tripping the limit.
-            allowed, reason, wait_time = self._check_rate_limit()
-            if not allowed:
-                return {
-                    **NOT_EXECUTED,
-                    "status": "error",
-                    "error": f"{reason}. Please wait {wait_time:.1f} seconds.",
-                    "has_errors": True,
-                    "rate_limited": True,
-                    "wait_time_seconds": wait_time,
-                }
-            self._record_command_execution()
+            # Full access has no rate limit.
+            if not self.full_access_active():
+                allowed, reason, wait_time = self._check_rate_limit()
+                if not allowed:
+                    return {
+                        **NOT_EXECUTED,
+                        "status": "error",
+                        "error": f"{reason}. Please wait {wait_time:.1f} seconds.",
+                        "has_errors": True,
+                        "rate_limited": True,
+                        "wait_time_seconds": wait_time,
+                    }
+                self._record_command_execution()
 
             start = time.monotonic()
             deadline = start + timeout

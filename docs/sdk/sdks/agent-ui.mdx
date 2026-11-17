@@ -1638,8 +1638,8 @@ agent at once, so they take effect on its next step.
   <Accordion title="POST /api/sessions/{session_id}/environment/folders/remove">
     **Request:** `{"path": "..."}`. Take a folder or file away from the chat.
     The agent's path validator then refuses everything under it, even inside a
-    wider grant and under full access, and never offers it as an approval,
-    until it is added back.
+    wider grant, and never offers it as an approval, until it is added back.
+    Full access with its guardrails off reaches every path, this one included.
   </Accordion>
 
   <Accordion title="PUT /api/sessions/{session_id}/environment/internet">

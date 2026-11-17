@@ -76,11 +76,10 @@ func (m ChatModel) armFullAccess() (tea.Model, tea.Cmd) {
 		Content: "[!] Full access would let " + m.agentName +
 			" run every tool with no prompt — shell commands, file writes, " +
 			"anything it decides to do — for the rest of this session.\n" +
-			"    It also takes the shell guardrails off: it can redirect " +
-			"output, and the read-only allowlist is replaced by a developer set " +
-			"(node, npm, make, go, cargo, python, pytest, gh, git) that can " +
-			"execute arbitrary code in this directory. git is unrestricted " +
-			"there, including push and history rewrites.\n" +
+			"    It also takes every guardrail off: it can run any command " +
+			"(rm, sudo, package managers, any program) and read or change any " +
+			"file, system folders and credential files included. Use it only " +
+			"on a machine or container you are willing to let it change.\n" +
 			"    Type /full-access confirm to turn it on, or /full-access off at any " +
 			"time to turn it back off. Once it has been on, Shift+Tab switches " +
 			"straight to it.\n" +

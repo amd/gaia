@@ -202,6 +202,10 @@ class CodeIndexToolsMixin:
                 repo_path=self._repo_path
             )
             self._code_index_sdk = CodeIndexSDK(config)
+            self._code_index_sdk.follow_full_access(
+                lambda: getattr(getattr(self, "console", None), "full_access", False)
+                is True
+            )
         return self._code_index_sdk
 
     def _code_index_build_running(self, sdk: Any) -> Optional[str]:

@@ -829,7 +829,7 @@ turn is running. A control message never writes to stdout.
 | `gaia_control` | Fields | Effect |
 |---|---|---|
 | `tool_decision` | `decision`, `confirm_id?` | Answers the pending `needs_confirmation`. `decision` is `allow`, `deny`, `always` or `timeout`; `timeout` denies but tells the agent nobody answered, so it does not report a refusal. Any other value is treated as `deny`. |
-| `full_access` | `enabled` | Turns full access on or off for the session: gated tools run unasked and the shell guardrails come off. (`bypass`, the retired name, turns it off.) |
+| `full_access` | `enabled` | Turns full access on or off for the session: gated tools run unasked, any command runs and any file can be read or written. (`bypass`, the retired name, turns it off.) |
 | `accept_edits` | `enabled` | Turns "accept edits" on or off: file edits inside the agent's starting folder run unasked; everything else still asks. |
 | `cancel` | — | Stops the running turn but keeps the process, so skills, grants and history survive. |
 | `clear_history` | — | Clears history after the current turn. The agent accepts it, but the TUI sends the `clear_conversation` sentinel instead, because only the sentinel gets an acknowledgement. |

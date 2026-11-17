@@ -476,7 +476,8 @@ def _real_path(path: Any) -> str:
 def protected_directory_of(path: Any) -> Optional[str]:
     """The system, credential or GAIA-state folder *path* resolves into, or None.
 
-    No approval or full access opens these folders to the agent.
+    No approval opens these folders to the agent; only full access, which
+    skips this check, reaches them.
     """
     real = os.path.normpath(_normalize_macos_symlinks(_real_path(path)))
     for blocked_dir in sorted(BLOCKED_DIRECTORIES):
@@ -1044,6 +1045,7 @@ class PathValidator:
         self._access_declines: Optional[Callable[[Path], bool]] = None
         # Paths whose access prompt the user answered "no" to.
         self._declined_paths: Set[Path] = set()
+        self._full_access: Optional[Callable[[], bool]] = None
 
         # Load persisted paths
         self._load_persisted_paths()
@@ -1057,6 +1059,24 @@ class PathValidator:
                 ALLOWED_PATHS_ENV,
                 sorted(str(p) for p in self.allowed_paths),
             )
+
+    def set_full_access(self, active: Optional[Callable[[], bool]]) -> None:
+        """Read *active* before every check; while it answers True, allow every path.
+
+        Full access is the user's own reach: no allowlist, protected or
+        credential folder, sensitive file, ``GAIA_ALLOWED_PATHS`` narrowing,
+        withheld folder, size limit or overwrite prompt applies. Writes are
+        still audited.
+
+        Args:
+            active: Called live, so a mid-session toggle applies at once; None
+                restores the ordinary checks.
+        """
+        self._full_access = active
+
+    def full_access_active(self) -> bool:
+        """Whether full access lifts every check on this validator right now."""
+        return self._full_access is not None and bool(self._full_access())
 
     @property
     def env_scope(self) -> Optional[List[Path]]:
@@ -1074,7 +1094,7 @@ class PathValidator:
         Returns:
             True when the narrowing setting does not exclude *path*.
         """
-        if self._env_scope is None:
+        if self._env_scope is None or self.full_access_active():
             return True
         real_path = Path(_real_path(path))
         if self.scratch_dir is not None and _path_is_within(
@@ -1095,7 +1115,7 @@ class PathValidator:
         Returns:
             The roots, each replaced by the part of it the setting allows.
         """
-        if self._env_scope is None:
+        if self._env_scope is None or self.full_access_active():
             return [Path(r) for r in roots]
         return _intersect_scopes(roots, self._env_scope, warn=False)
 
@@ -1297,7 +1317,9 @@ class PathValidator:
         self.withheld_paths.discard(Path(_real_path(path)))
 
     def withheld_root(self, path: str) -> Optional[Path]:
-        """The withheld folder *path* is in, or None."""
+        """The withheld folder *path* is in, or None (always None under full access)."""
+        if self.full_access_active():
+            return None
         real = Path(_real_path(path))
         for root in self.withheld_paths:
             if _path_is_within(real, root):
@@ -1398,6 +1420,8 @@ class PathValidator:
         Returns:
             The reason *path* stays refused whatever the user answers, else "".
         """
+        if self.full_access_active():
+            return ""
         return self._unaskable_reason(Path(_real_path(path)))
 
     def _can_prompt(self) -> bool:
@@ -1542,6 +1566,8 @@ class PathValidator:
         Returns:
             True if allowed, False otherwise
         """
+        if self.full_access_active():
+            return True
         try:
             # Resolve path using os.path.realpath to follow symlinks
             # This prevents TOCTOU attacks by resolving at check time
@@ -1688,6 +1714,8 @@ class PathValidator:
         Returns:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
+        if self.full_access_active():
+            return (False, "")
         try:
             real_path = Path(_real_path(path))
             file_name = real_path.name.lower()
@@ -1809,6 +1837,8 @@ class PathValidator:
         Returns:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
+        if self.full_access_active():
+            return (True, "")
         if self.withheld_root(path) is not None:
             return (False, self.access_denied_message(path))
         if not self._in_read_only_scope(path) and not self.is_path_allowed(
@@ -1845,6 +1875,8 @@ class PathValidator:
         Returns:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
+        if self.full_access_active():
+            return (False, "")
         try:
             # Use os.path.realpath exclusively for symlink resolution — do NOT
             # chain Path.resolve(), which re-resolves on Python <3.12 via a
@@ -1952,6 +1984,8 @@ class PathValidator:
         Returns:
             Tuple of (is_allowed, reason). If not allowed, reason explains why.
         """
+        if self.full_access_active():
+            return (True, "")
         # 1. Check allowlist
         if not self.is_path_allowed(path, prompt_user=prompt_user):
             return (False, self.access_denied_message(path))

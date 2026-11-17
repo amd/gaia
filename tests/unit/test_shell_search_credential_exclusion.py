@@ -478,9 +478,8 @@ def _run(home, command, full_access=False):
     return run(command=command, working_directory=str(home / "proj"))
 
 
-@pytest.mark.parametrize("full_access", [False, True])
-def test_the_search_runs_as_argv_with_the_exclusions(home, popen_calls, full_access):
-    result = _run(home, "grep -rl guess secrets", full_access)
+def test_the_search_runs_as_argv_with_the_exclusions(home, popen_calls):
+    result = _run(home, "grep -rl guess secrets")
 
     assert len(popen_calls) == 1, result
     args, kwargs = popen_calls[0]
@@ -493,7 +492,7 @@ def test_the_search_runs_as_argv_with_the_exclusions(home, popen_calls, full_acc
     assert result["command"] == "grep -rl guess secrets"
 
 
-@pytest.mark.parametrize("full_access", [False, True])
+@pytest.mark.parametrize("full_access", [False])
 @pytest.mark.parametrize(
     "command",
     [
@@ -528,11 +527,20 @@ def test_an_ordinary_recursive_search_still_runs(home, popen_calls):
 
 
 def test_a_refused_search_never_reaches_the_process_layer(home, popen_calls):
-    result = _run(home, "grep -rl guess -- secrets", full_access=True)
+    result = _run(home, "grep -rl guess -- secrets")
 
     assert popen_calls == []
     assert result["executed"] is False
     assert "guess-me" not in str(result)
+
+
+def test_full_access_runs_the_search_whole_through_the_shell(home, popen_calls):
+    _run(home, "grep -rl guess -- secrets", full_access=True)
+
+    assert len(popen_calls) == 1
+    args, kwargs = popen_calls[0]
+    # cmd.exe reads the line from its environment; sh gets it as an argument.
+    assert "grep -rl guess -- secrets" in str(args) + str(kwargs.get("env"))
 
 
 def test_an_ordinary_command_gets_no_note(home, popen_calls):
@@ -657,7 +665,7 @@ def test_rg_and_git_grep_still_run_excluded_where_grep_expands(
 def test_a_refused_grep_where_grep_expands_never_starts(
     home, windows_grep, popen_calls
 ):
-    result = _run(home, 'grep -rl guess . "?-"', full_access=True)
+    result = _run(home, 'grep -rl guess . "?-"')
 
     assert popen_calls == []
     assert result["executed"] is False

@@ -303,13 +303,32 @@ def run_shell(monkeypatch):
         "python -c \"print(open('.env').read())\"",
     ],
 )
-def test_full_access_does_not_lift_the_refusal(home, run_shell, command):
+def test_full_access_lifts_the_refusal(home, run_shell, command):
     run = run_shell(_Host(home, full_access=True))
 
     result = run(command, working_directory=str(home / "proj"))
 
+    assert result.get("executed", True) is not False, result
+    assert "holds credentials" not in str(result.get("error", ""))
+
+
+def test_full_access_reads_a_credential_file(home, run_shell):
+    run = run_shell(_Host(home, full_access=True))
+    command = "type .env" if os.name == "nt" else "cat .env"
+
+    result = run(command, working_directory=str(home / "proj"))
+
+    assert result["status"] == "success", result
+    assert "TOKEN=abc" in result["stdout"]
+
+
+def test_the_refusal_holds_without_full_access(home, run_shell):
+    run = run_shell(_Host(home, full_access=False))
+    command = "findstr TOKEN .env" if os.name == "nt" else "cat .env"
+
+    result = run(command, working_directory=str(home / "proj"))
+
     assert result["executed"] is False, result
-    assert "credentials" in result["error"]
     assert "TOKEN=abc" not in str(result)
 
 
