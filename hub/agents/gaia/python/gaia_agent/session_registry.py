@@ -155,13 +155,13 @@ class _AgentSession:
     def follow_settings(self, **config_kwargs: Any) -> bool:
         """Rebuild the agent when settings it was built from changed since.
 
-        Its MCP tools are registered as it is built, so a connector turned on
-        or off in Settings needs a new agent. Keeps this session's model,
+        Its model server and MCP tools are fixed as it is built, so a server
+        or connector changed in Settings needs a new agent. Keeps this session's model,
         conversation and loaded skills; the old agent's pending memory work
         finishes and its MCP servers stop before it closes. Must be called
         with ``run_lock`` held. Returns True when it rebuilt.
         """
-        changed = getattr(self.agent, "mcp_settings_changed", None)
+        changed = getattr(self.agent, "built_settings_changed", None)
         if not callable(changed) or changed() is not True:
             return False
         kwargs = {

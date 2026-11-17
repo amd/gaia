@@ -60,8 +60,8 @@ def test_mismatched_entry_is_disconnected_not_promoted(full_cache, model, agent_
 def test_an_agent_built_before_an_mcp_change_is_rebuilt(full_cache):
     """Its MCP tools were registered as it was built; Settings changed them since."""
     stale = full_cache["session-0"]
-    stale.mcp_settings_changed = Mock(return_value=True)
-    full_cache["session-1"].mcp_settings_changed = Mock(return_value=False)
+    stale.built_settings_changed = Mock(return_value=True)
+    full_cache["session-1"].built_settings_changed = Mock(return_value=False)
 
     assert helpers._get_cached_agent("session-0", "model") is None
     assert "session-0" not in helpers._agent_cache

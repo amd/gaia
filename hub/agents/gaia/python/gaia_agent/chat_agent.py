@@ -861,6 +861,8 @@ class ChatAgent(
         # centrally: an inline default here cannot see GAIA's embedded Lemonade,
         # which binds a port chosen at start time.
         effective_base_url = resolve_lemonade_base_url(config.base_url)
+        # Its clients keep this server; a change in Settings needs a new agent.
+        self._model_server_at_build = configured_lemonade_url()
 
         # Embedder is device-scoped: the NPU profile uses the FLM-native
         # embedder so chat and embeddings stay co-resident on the NPU backend
@@ -2500,6 +2502,19 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     )
         except Exception as e:
             logger.warning(f"Auto-save failed: {e}")
+
+    def built_settings_changed(self) -> bool:
+        """True when a setting this agent was built from changed since.
+
+        Its model server and MCP tools are fixed as it is built, so a chat
+        must rebuild its agent to follow Settings.
+        """
+        return self.model_server_changed() or self.mcp_settings_changed()
+
+    def model_server_changed(self) -> bool:
+        """True when the Lemonade Server chosen in Settings changed since this agent was built."""
+        built = getattr(self, "_model_server_at_build", _UNSET)
+        return built is not _UNSET and built != configured_lemonade_url()
 
     def mcp_settings_changed(self) -> bool:
         """True when MCP servers, or their activation, changed since this agent was built.
