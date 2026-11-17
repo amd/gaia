@@ -18,6 +18,11 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   machine or container you are willing to let the agent change. Commands are
   still audit-logged and stopped at their timeout; HTTP sessions are unchanged.
 
+### Fixed
+
+- A reply that goes quiet partway through is requested again, up to twice,
+  instead of ending the turn; the work done so far is kept either way.
+
 ## [0.3.6]
 
 Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.

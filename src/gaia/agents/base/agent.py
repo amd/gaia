@@ -215,6 +215,7 @@ from gaia.llm.providers.lemonade import (
     CONNECTION_FAILURE_RE,
     MODEL_SERVER_DOWN,
     LemonadeContextOverflowError,
+    LemonadeReplyStalledError,
     LemonadeStreamCutOffError,
     classify_lemonade_exception,
 )
@@ -13129,7 +13130,16 @@ Do NOT wrap conversational replies in JSON.
                                 steps_taken,
                                 steps_limit,
                             )
-                            final_answer = e.user_message
+                            if isinstance(e, LemonadeReplyStalledError):
+                                # A stall is a failed model call, not just a fragment.
+                                model_call_failed = True
+                                self._turn_model_retries["failed"] = True
+                                final_answer = self._model_call_failed_answer(
+                                    e, e.user_message, steps_taken, conversation
+                                )
+                                loop_break_answer_unprinted = True
+                            else:
+                                final_answer = e.user_message
                             break
                         logger.warning(
                             "[WORKFLOW] Reply stream ended before the model "
