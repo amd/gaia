@@ -18,10 +18,7 @@ const DEV_HTTP_HOSTS = ['10.0.2.2', '127.0.0.1', 'localhost'];
 const LOCALE_CODES = ['en', 'ar'];
 
 // One text per permission, passed to every plugin that writes it, so plugin order can't change it.
-const CAMERA_USE = 'GAIA uses the camera to scan the pairing code on your PC and to take photos you attach to a chat.';
-const MICROPHONE_USE = 'GAIA uses the microphone to record voice messages.';
-const PHOTOS_USE = 'GAIA opens your photo library so you can attach photos to a chat.';
-const PHOTOS_ADD_USE = 'GAIA saves the images you choose to your photo library.';
+const CAMERA_USE = 'GAIA uses the camera to scan the pairing code on your PC.';
 const LOCAL_NETWORK_USE = 'GAIA uses your local network to connect to GAIA on your PC.';
 const FACE_ID_USE = 'GAIA uses Face ID to protect the key that connects this phone to your PC.';
 
@@ -65,7 +62,6 @@ export default function appConfig(): ExpoConfig {
                 // Every build reaches the paired PC at its home-network address; the native transport pins its certificate.
                 NSAppTransportSecurity: { NSAllowsArbitraryLoads: false, NSAllowsLocalNetworking: true },
                 NSLocalNetworkUsageDescription: LOCAL_NETWORK_USE,
-                NSPhotoLibraryAddUsageDescription: PHOTOS_ADD_USE,
             },
         },
         android: { package: id },
@@ -73,18 +69,8 @@ export default function appConfig(): ExpoConfig {
             'expo-router',
             'expo-dev-client',
             ['expo-localization', { supportsRTL: true, supportedLocales: LOCALE_CODES }],
-            [
-                'expo-camera',
-                { cameraPermission: CAMERA_USE, microphonePermission: MICROPHONE_USE, barcodeScannerEnabled: true },
-            ],
-            [
-                'expo-image-picker',
-                { photosPermission: PHOTOS_USE, cameraPermission: CAMERA_USE, microphonePermission: MICROPHONE_USE },
-            ],
-            [
-                'expo-audio',
-                { microphonePermission: MICROPHONE_USE, enableBackgroundPlayback: true, enableBackgroundRecording: false },
-            ],
+            ['expo-camera', { cameraPermission: CAMERA_USE, microphonePermission: false, barcodeScannerEnabled: true }],
+            ['expo-audio', { microphonePermission: false, enableBackgroundPlayback: true, enableBackgroundRecording: false }],
             ['expo-secure-store', { faceIDPermission: FACE_ID_USE }],
             'expo-background-task',
             ['./plugins/withCleartextHosts', { hosts: dev ? DEV_HTTP_HOSTS : [] }],
