@@ -607,7 +607,22 @@ def test_cli_use_applies_a_template(monkeypatch, tmp_path, capsys):
     assert saved["hybrid_cheap_model"] == "Gemma-4-E4B-it-GGUF"
     assert saved["hybrid_strong_model"] == "Qwen3.6-35B-A3B-GGUF"
     assert saved["hybrid_classifier_model"] == "Gemma-4-E4B-it-GGUF"
-    assert "✅" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    # `gaia gateway use hybrid` would refuse a pair the gateway doesn't list.
+    assert "✅" in out and "gaia config set default_model hybrid" in out
+
+
+def test_cli_use_of_a_gateway_pair_points_at_gateway_use(monkeypatch, tmp_path, capsys):
+    from gaia import config as config_mod
+
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", _config_path(tmp_path))
+    monkeypatch.setattr(
+        cli, "_cli_hybrid_inventory", lambda: _inventory(amd=GATEWAY_PAIR)
+    )
+    cli.handle_hybrid_command(
+        argparse.Namespace(hybrid_action="use", template="gateway-deepseek-opus")
+    )
+    assert "gaia gateway use hybrid" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
