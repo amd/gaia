@@ -261,6 +261,21 @@ TEST(AgentResilience, ContextOverflowElidesOldOutputAndRetries) {
     EXPECT_EQ(stubs, 1) << "all but the two newest outputs are elided";
 }
 
+TEST(AgentResilience, ARequestTooLargeForTheWindowDoesNotStayInTheChat) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(R"({"error":{"message":"request exceeds the available context size"}})", 400);
+    mock.pushResponse(answer("Still here."));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    const std::string huge(50000, 'x');
+    EXPECT_EQ(agent.processQuery(huge)["status"], "error");
+    json r = agent.processQuery("are you there?");
+    EXPECT_EQ(r["result"], "Still here.");
+    const std::string second = mock.receivedBodies().back();
+    EXPECT_EQ(second.find(huge), std::string::npos) << "the oversized request was sent again";
+    EXPECT_NE(second.find("did not fit the model's context window"), std::string::npos);
+}
+
 TEST(AgentResilience, ReasoningIsStrippedFromTheAnswer) {
     bench::MockLlmServer mock;
     mock.pushResponse(answer("<think>let me see</think>\n\nThe answer is 4."));

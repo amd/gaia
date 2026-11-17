@@ -1839,6 +1839,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         messages.push_back(msg);
     }
 
+    const size_t turnStart = messages.size();
     // Append caller-supplied user messages verbatim (may contain image parts).
     for (const auto& m : userMessages) {
         messages.push_back(m);
@@ -2515,6 +2516,21 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     console_->printCompletion(stepsTaken, stepsLimit);
+
+    // Saved, a turn too large for the window would fail every later turn of the chat the same way.
+    if (failed && llmError.find("no longer fits the model's context window") != std::string::npos &&
+        turnStart <= messages.size()) {
+        messages.resize(turnStart);
+        Message dropped;
+        dropped.role = MessageRole::USER;
+        dropped.content = "[A request of " + std::to_string(userInput.size()) +
+                          " characters was left out of this chat: it did not fit the model's context window.]";
+        messages.push_back(dropped);
+        Message reply;
+        reply.role = MessageRole::ASSISTANT;
+        reply.content = "That request did not fit my context window, so nothing was done with it.";
+        messages.push_back(reply);
+    }
 
     // A budget notice is this turn's guidance; saved, the next turn opens with a stale "5 steps left".
     messages.erase(std::remove_if(messages.begin(), messages.end(),
