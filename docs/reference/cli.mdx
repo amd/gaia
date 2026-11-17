@@ -472,8 +472,8 @@ Skipping a model is allowed, and setup says what stops working:
 | `user.embeddinggemma-300m-GGUF` | GAIA can't search your documents or remember things |
 | The chat model | GAIA has no local chat model; pick another with `--use-model`, or a cloud provider |
 
-With `--plan --json`, the plan is one JSON object, the same one the Agent UI reads from
-`GET /api/setup/plan`. `catalog` lists every model you can pick: the profile's models,
+With `--plan --json`, the plan is one JSON object, the same one the Agent UI's setup
+screen reads from `GET /api/setup/plan?skip_chat_model=false`. `catalog` lists every model you can pick: the profile's models,
 GAIA's other chat models, and each chat model already downloaded in Lemonade. Each entry
 has `id`, `roles` (`chat`, `vision`, `embedding`), `purpose`, `if_skipped`,
 `size_gb` (what is left to download, partial files subtracted), `full_size_gb`,
