@@ -14,6 +14,7 @@ import platform
 import re
 import shutil
 import sqlite3
+import sys
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -364,10 +365,11 @@ def _lists_script_libraries(f):
             f"{f.__name__}'s docstring has no {SCRIPT_LIBRARIES_PLACEHOLDER} line"
         )
     names = script_libraries()
+    # Says whose Python: a project's own packages are not importable here.
     line = (
-        f"Has {', '.join(names)}; no pip."
+        f"GAIA's own Python: has {', '.join(names)}; no pip."
         if names
-        else "Has only the standard library; no pip."
+        else "GAIA's own Python: has only the standard library; no pip."
     )
     f.__doc__ = f.__doc__.replace(SCRIPT_LIBRARIES_PLACEHOLDER, line)
     return f
@@ -409,12 +411,42 @@ def _missing_library_hint(stderr_line: str) -> Optional[str]:
     )
 
 
+def system_python() -> Optional[str]:
+    """A Python on PATH other than the one running GAIA, or None."""
+    here = os.path.realpath(sys.executable)
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        # The Microsoft Store stub opens the Store instead of running Python.
+        if not found or "WindowsApps" in Path(found).parts:
+            continue
+        if os.path.realpath(found) != here:
+            return found
+    return None
+
+
+def _system_python_hint(stderr_line: str, shell_tool: bool) -> Optional[str]:
+    """Where a script can find a module GAIA's own Python lacks."""
+    match = _MISSING_MODULE_LINE.search(stderr_line or "")
+    if not match or not shell_tool:
+        return None
+    other = system_python()
+    if other is None:
+        return None
+    module = match.group(1).split(".")[0]
+    return (
+        f"This ran in GAIA's own Python, which has no {module}. The system "
+        f"Python at {other} is a separate install: save the code to a file "
+        "and run it there with run_shell_command."
+    )
+
+
 def _python_run_result(
     run: Any,
     stdout: str,
     stderr: str,
     seconds: float,
     note: Optional[str] = None,
+    shell_tool: bool = False,
 ) -> Dict[str, Any]:
     """A finished Python run as a tool result; a non-zero exit is an error.
 
@@ -440,7 +472,7 @@ def _python_run_result(
         result["error"] = f"Python exited with code {code}" + (
             f": {last[:300]}" if last else ""
         )
-        hint = _missing_library_hint(last)
+        hint = _missing_library_hint(last) or _system_python_hint(last, shell_tool)
         if hint:
             result["error"] += f". {hint}"
     return result
@@ -2829,7 +2861,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             retain_excerpt(self, r.stdout, 8000),
                             retain_excerpt(self, r.stderr, 2000),
                             time.monotonic() - start,
-                            " ".join(
+                            shell_tool="run_shell_command" in self._tools_registry,
+                            note=" ".join(
                                 n for n in (finished_job_note(job), undo_note) if n
                             )
                             or None,
@@ -2853,13 +2886,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             def run_python(code: str, timeout: int = DEFAULT_PYTHON_TIMEOUT) -> dict:
                 """Run a Python snippet and return what it prints.
 
-                Compute or check something without creating a file. Runs
+                Compute or check something without a file. Runs
                 from the project root; with no project it may run in your
                 scratch directory, so use absolute paths for user files.
                 Report numbers from its output.
 
-                No access to your tools: `from gaia import <tool>` fails —
-                call it directly as a tool.
+                No access to your tools: `from gaia import <tool>` fails;
+                call it as a tool.
 
                 {script_libraries}
 
@@ -3071,6 +3104,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     r.stderr[:2000],
                     time.monotonic() - start,
                     " ".join(n for n in notes if n) or None,
+                    shell_tool="run_shell_command" in self._tools_registry,
                 )
                 return attach_check(
                     result,

@@ -586,11 +586,14 @@ def test_an_agent_argv_falls_through_to_the_agent(project, child_env):
     assert _dispatch(["--json-events"], project, child_env).returncode == 97
 
 
+_HAS = "GAIA's own Python: has "
+
+
 def _libraries_named(tool):
     description = _TOOL_REGISTRY[tool]["description"]
-    line = next(s for s in description.split("\n\n") if s.startswith("Has "))
+    line = next(s for s in description.split("\n\n") if s.startswith(_HAS))
     assert "no pip" in line
-    named = line.removeprefix("Has ").split(";")[0].replace("\n", " ")
+    named = line.removeprefix(_HAS).split(";")[0].replace("\n", " ")
     return [n.strip() for n in named.split(",")]
 
 
