@@ -12035,29 +12035,35 @@ Do NOT wrap conversational replies in JSON.
         keeps the time to write up what was found. Unchanged with no time
         limit. 0 when under ``_MIN_CAPPED_RUN_S`` is left: start nothing.
         """
-        limit = getattr(self, "time_limit_s", None)
-        started = getattr(self, "_turn_started_at", None)
-        if not limit or limit <= 0 or started is None:
+        left = self._time_to_stop_s()
+        if left is None:
             return seconds
-        left = limit * _TIME_STOP_AT - (time.monotonic() - started)
         if left < _MIN_CAPPED_RUN_S:
             return 0
         return min(seconds, int(left))
 
-    def _time_limit_passed(self) -> bool:
-        """True once the turn is past its time limit's stop point.
+    def _time_to_stop_s(self) -> Optional[float]:
+        """Seconds until the turn's stop point, or None with no time limit.
 
         The stop point leaves room for the write-only step and the closing
         answer: a tenth of the limit, or two of the turn's slowest steps so
-        far when that is more. It is also why a stop the caller's own timer
-        forces at the limit counts as reaching it.
+        far when that is more.
         """
         limit = getattr(self, "time_limit_s", None)
         started = getattr(self, "_turn_started_at", None)
         if not limit or limit <= 0 or started is None:
-            return False
+            return None
         reserve = max(limit * (1 - _TIME_STOP_AT), 2 * self._slowest_step_s)
-        return time.monotonic() - started >= limit - reserve
+        return limit - reserve - (time.monotonic() - started)
+
+    def _time_limit_passed(self) -> bool:
+        """True once the turn is past its time limit's stop point.
+
+        See ``_time_to_stop_s`` for where that is. It is also why a stop the
+        caller's own timer forces at the limit counts as reaching it.
+        """
+        left = self._time_to_stop_s()
+        return left is not None and left <= 0
 
     def _time_is_up(self, messages: List[Dict], conversation: List[Dict]) -> bool:
         """Warn once near the turn's time limit; True once it is time to stop.

@@ -427,3 +427,6 @@ def test_a_python_run_is_cut_to_the_time_the_turn_has_left(agent_tools):
     assert time.monotonic() - started < 30
     assert result["status"] == "error"
     assert "timed out" in str(result).lower()
+    # The limit ended it, so asking for a larger timeout is not on offer.
+    assert "time limit cut this run short" in result["error"]
+    assert "larger timeout" not in result["error"]

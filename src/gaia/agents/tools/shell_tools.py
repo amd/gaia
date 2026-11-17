@@ -48,7 +48,14 @@ from gaia.agents.base.denied_effects import (
 )
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
-from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED, OUT_OF_TIME
+from gaia.agents.base.verification import (
+    EXECUTED_KEY,
+    NOT_EXECUTED,
+    OUT_OF_TIME,
+    TIME_LIMIT_CUT_RUN,
+    cut_by_time_limit,
+    time_capped,
+)
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
     TIMEOUT_CLASSES,
@@ -7392,6 +7399,8 @@ class ShellToolsMixin:
         class default usually blows a larger one too. A build or download is
         pointed at a background run instead.
         """
+        if cut_by_time_limit(self):
+            return TIME_LIMIT_CUT_RUN
         cls = TIMEOUT_CLASSES[timeout_class]
         hint = (
             f"It ran as a '{timeout_class}' command ({cls.summary}, "
@@ -8178,12 +8187,6 @@ class ShellToolsMixin:
                         "command": command,
                         "has_errors": True,
                     }
-                # Hosts that are not an Agent have no turn and no time limit.
-                cap = getattr(self, "time_capped_run_seconds", None)
-                timeout = cap(timeout) if callable(cap) else timeout
-                if not timeout:
-                    return {**OUT_OF_TIME, "command": command}
-
                 # Check rate limits first to prevent DOS
                 allowed, reason, wait_time, waited = (
                     (True, "", 0.0, 0.0) if bypass else self._pace_rate_limit()
@@ -8198,6 +8201,10 @@ class ShellToolsMixin:
                         "wait_time_seconds": wait_time,
                         "hint": "Rate limiting prevents excessive command execution",
                     }
+                # After the pacing wait, which is time the turn has also spent.
+                timeout = time_capped(self, timeout)
+                if not timeout:
+                    return {**OUT_OF_TIME, "command": command}
 
                 # Validate an explicit directory after resolving it from the
                 # chat workspace; keep the original argument for approval keys.
@@ -8705,6 +8712,10 @@ class ShellToolsMixin:
                     ),
                     "has_errors": True,
                 }
+
+            timeout = time_capped(self, timeout)
+            if not timeout:
+                return dict(OUT_OF_TIME)
 
             # The wait is charged as one command up front; its probes are then
             # exempt (see _check_rate_limit) rather than each tripping the limit.

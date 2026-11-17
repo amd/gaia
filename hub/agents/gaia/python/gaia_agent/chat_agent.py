@@ -103,7 +103,12 @@ from gaia.agents.base.tool_loader import (
     thin_tool_schema,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY
-from gaia.agents.base.verification import NOT_EXECUTED, OUT_OF_TIME
+from gaia.agents.base.verification import (
+    NOT_EXECUTED,
+    OUT_OF_TIME,
+    TIME_LIMIT_CUT_RUN,
+    cut_by_time_limit,
+)
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
@@ -407,6 +412,17 @@ def _missing_library_hint(stderr_line: str) -> Optional[str]:
         f"{module} is not installed in this Python and pip is not available. "
         f"Retry now without it, using {route}."
     )
+
+
+def _stopped_run_result(agent: Any, job: Any, timeout: int) -> Dict[str, Any]:
+    """A killed job's result; one the time limit cut short is not told to ask for longer."""
+    result = stopped_job_result(job, timeout)
+    if job.stopped == "timeout" and cut_by_time_limit(agent):
+        result["error"] = (
+            f"Timed out after {timeout}s; the script and every process it "
+            f"started were stopped. {TIME_LIMIT_CUT_RUN}"
+        )
+    return result
 
 
 def _python_run_result(
@@ -2822,7 +2838,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             may_write=bool(written) or not complete,
                         )
                     if job.stopped:
-                        return stopped_job_result(job, timeout)
+                        return _stopped_run_result(self, job, timeout)
                     r = job.run
                     from gaia.agents.base.artifacts import retain_excerpt
 
@@ -3043,7 +3059,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             may_write=bool(written) or not complete,
                         )
                     if job.stopped:
-                        return stopped_job_result(job, timeout)
+                        return _stopped_run_result(self, job, timeout)
                     r = job.run
                 except OSError as e:
                     logger.error("run_python could not start in %s: %s", run_dir, e)
