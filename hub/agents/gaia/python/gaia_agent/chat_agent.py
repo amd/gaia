@@ -2512,7 +2512,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         return self.model_server_changed() or self.mcp_settings_changed()
 
     def model_server_changed(self) -> bool:
-        """True when the Lemonade Server chosen in Settings changed since this agent was built."""
+        """True when the Lemonade Server chosen in Settings changed since this agent was built.
+
+        A cloud-model chat counts too: its embedder and documents still use Lemonade.
+        """
         built = getattr(self, "_model_server_at_build", _UNSET)
         return built is not _UNSET and built != configured_lemonade_url()
 
