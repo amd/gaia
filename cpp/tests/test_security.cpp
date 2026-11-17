@@ -238,7 +238,7 @@ TEST(ReadOnlyShellCommandTest, OnlyPlainReadersPass) {
     for (const char* ok : {"ls -la", "hostname", "echo 'a & b'", "cat a.txt | grep foo | wc -l",
                            "find . -name '*.md'", "pwd; ls -la", "cd src && ls",
                            "ls cpp 2>/dev/null || echo none", "ls \"C:/Program Files\"",
-                           "find . -name 'a;b'"}) {
+                           "find . -name 'a;b'", "grep -n 'a..b' notes.txt"}) {
         EXPECT_TRUE(isReadOnlyShellCommand(ok)) << ok;
     }
     for (const char* no : {"", "rm -rf x", "ls; rm x", "ls && rm x", "cat a > b", "echo $HOME",
@@ -257,7 +257,10 @@ TEST(ReadOnlyShellCommandTest, OnlyPlainReadersPass) {
                            "ls \\\"x", "dir C:\\Users\\x", "cat a\\ b",
                            // A quoted program name, another case, a share, a write.
                            "\"ls\" -la", "'cat' x", "LS", "ls //server/share", "cat \\\\server\\share\\x",
-                           "hostname newname", "ls 2>nul", "sort x", "awk 1 x", "sed -n p x"}) {
+                           "hostname newname", "ls 2>nul", "sort x", "awk 1 x", "sed -n p x",
+                           // A `..` step can climb out of the chat's folders.
+                           "cat ../../../home/u/.ssh/id_rsa", "grep -r key ..", "cd .. && ls", "ls src/../..",
+                           "head 'a/../../b'", "cat ..\\x"}) {
         EXPECT_FALSE(isReadOnlyShellCommand(no)) << no;
     }
 }
@@ -271,7 +274,7 @@ TEST(ReadOnlyShellCommandTest, CmdExeTrustsOnlyBuiltins) {
     for (const char* no : {"find \"x\" a.txt", "where python", "whoami", "tree", "ls", "git status",
                            // ' is an ordinary letter to cmd.exe, so this & really chains.
                            "echo 'a & del x'", "dir \\\\server\\share", "dir 2>/dev/null", "echo %USERNAME%",
-                           "echo a ^& b", "\"dir\""}) {
+                           "echo a ^& b", "\"dir\"", "type ..\\secret.txt", "dir .."}) {
         EXPECT_FALSE(isReadOnlyShellCommand(no, false)) << no;
     }
 }

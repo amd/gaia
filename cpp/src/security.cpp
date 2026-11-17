@@ -367,6 +367,11 @@ bool isReadOnlyShellCommand(const std::string& command, bool posixShell) {
             if (a.empty()) continue;
             // \\host\share and //host/share read from the network.
             if (a.rfind("//", 0) == 0 || a.rfind("\\\\", 0) == 0) return false;
+            // A `..` step can climb out of the chat's folders, which the folder check doesn't follow.
+            for (size_t dots = a.find(".."); dots != std::string::npos; dots = a.find("..", dots + 1)) {
+                const size_t next = dots + 2;
+                if (next == a.size() || a[next] == '/' || a[next] == '\\') return false;
+            }
             // hostname with a name sets it.
             if (program == "hostname" && a[0] != '-') return false;
             if (program != "find") continue;
@@ -393,12 +398,41 @@ bool urlIsLocal(const std::string& url) {
 // Longer than any real command, and std::regex recurses once per character matched.
 constexpr size_t kMaxScannedBytes = 64 * 1024;
 
+bool isAsciiLetter(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
+bool isSchemeChar(char c) { return isAsciiLetter(c) || (c >= '0' && c <= '9') || c == '+' || c == '.' || c == '-'; }
+bool endsUrl(char c) {
+    switch (c) {
+        case ' ': case '\t': case '\n': case '\v': case '\f': case '\r':
+        case '\'': case '"': case '<': case '>': case '`': case '(': case ')':
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Finds `scheme://rest` from `from` on, in linear time: a backtracking regex
+// is quadratic on a long word and MSVC throws error_complexity on one.
+bool nextUrl(const std::string& text, size_t from, size_t& begin, size_t& end) {
+    for (size_t sep = text.find("://", from); sep != std::string::npos; sep = text.find("://", sep + 1)) {
+        size_t start = sep;
+        while (start > from && isSchemeChar(text[start - 1])) --start;
+        while (start < sep && !isAsciiLetter(text[start])) ++start;
+        size_t stop = sep + 3;
+        while (stop < text.size() && !endsUrl(text[stop])) ++stop;
+        if (start == sep || stop == sep + 3) continue;
+        begin = start;
+        end = stop;
+        return true;
+    }
+    return false;
+}
+
 // Every URL in free text that leaves this PC.
 bool mentionsRemoteUrl(const std::string& text) {
     if (text.size() > kMaxScannedBytes) return true;  // too long to scan, so not known to stay local
-    static const std::regex url(R"([A-Za-z][A-Za-z0-9+.\-]*://[^\s'"<>`()]+)");
-    for (std::sregex_iterator it(text.begin(), text.end(), url), end; it != end; ++it) {
-        if (!urlIsLocal(it->str())) return true;
+    size_t begin = 0;
+    for (size_t at = 0, end = 0; nextUrl(text, at, begin, end); at = end) {
+        if (!urlIsLocal(text.substr(begin, end - begin))) return true;
     }
     return false;
 }
@@ -453,12 +487,12 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
         }
         // A fetch stays local only when every destination it names is this PC.
         if (std::regex_search(command, fetch)) {
-            static const std::regex anyUrl(R"([A-Za-z][A-Za-z0-9+.\-]*://)");
             // A proxy or a pinned address sends a "localhost" request elsewhere.
             static const std::regex reroute(
                 R"((?:^|\s)(?:-x|--proxy|--preproxy|--socks\S*|--resolve|--connect-to|-e|--execute)(?:[\s=]|$))");
             if (std::regex_search(command, reroute)) return why + "`" + command.substr(0, 80) + "`, which goes online.";
-            if (!std::regex_search(command, anyUrl) || command.find("$(") != std::string::npos ||
+            size_t urlBegin = 0, urlEnd = 0;
+            if (!nextUrl(command, 0, urlBegin, urlEnd) || command.find("$(") != std::string::npos ||
                 command.find('`') != std::string::npos || command.find("${") != std::string::npos) {
                 return why + "`" + command.substr(0, 80) + "`, which goes online.";
             }
