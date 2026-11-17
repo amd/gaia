@@ -141,7 +141,11 @@ export function ChatScreen({ sessionId }: { sessionId: string }) {
                             />
                         </Stack>
                     ) : null}
-                    {permission ? <PermissionPrompt key={permission.prompt.id} {...permission} /> : null}
+                    {permission ? (
+                        <Stack paddingX="gutter">
+                            <PermissionPrompt key={permission.prompt.id} {...permission} />
+                        </Stack>
+                    ) : null}
                     <QueuedMessages items={queue.held} replying={busy} onRemove={queue.remove} onRetry={queue.retry} />
                     <Composer
                         value={queue.draft}
