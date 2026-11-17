@@ -225,3 +225,37 @@ def test_a_withheld_path_stays_refused_after_a_rebuild(chat, home, tmp_path):
     assert rebuilt
     assert agent.path_validator.is_path_allowed(str(folder), prompt_user=False)
     assert not agent.path_validator.is_path_allowed(str(removed), prompt_user=False)
+
+
+def test_a_terminal_ui_chat_follows_a_connector_change(home, tmp_path):
+    """The TUI keeps one agent per session; it is rebuilt with its transcript."""
+    from gaia_agent import stdio
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    from gaia_agent.session_registry import close_agent
+
+    from gaia.agents.base.history import SessionHistory
+    from gaia.connectors.activations import activate_agent
+
+    home.set()
+    activate_agent("toy", FLAGSHIP)
+    config_kwargs = {"silent_mode": True, "streaming": True}
+    agent = GaiaAgent(config=GaiaAgentConfig(**config_kwargs))
+    history = SessionHistory(str(tmp_path / "history.sqlite3"))
+    agent.conversation_history = history
+    history.append({"role": "user", "content": "use echo"})
+    agent.internet_off = True
+    try:
+        assert stdio.follow_settings(agent, config_kwargs) is agent
+        assert _mcp_tools(agent) == [TOOL]
+
+        home.set(enabled=False)
+        new = stdio.follow_settings(agent, config_kwargs)
+        assert new is not agent
+        assert _mcp_tools(new) == []
+        assert new.conversation_history is history
+        assert list(history)[-1]["content"] == "use echo"
+        assert new.internet_off is True
+        assert new.model_id == agent.model_id
+        agent = new
+    finally:
+        close_agent(agent)

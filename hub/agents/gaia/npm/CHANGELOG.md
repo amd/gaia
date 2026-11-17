@@ -8,6 +8,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A terminal UI chat follows Settings too.** Its one long-lived agent now
+  rebuilds before a message when the model server or an MCP connector changed,
+  keeping its transcript and what the session set, as Agent UI chats do.
 - **Skills added or removed reach open chats.** The skill list in an agent's
   prompt came from a cached scan, so a skill added in Settings › Skills was
   missing from chats already open, and a removed one stayed listed. Each turn
