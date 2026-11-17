@@ -575,3 +575,90 @@ describe('HybridSettings: end-to-end findings', () => {
         expect(within(item).getByRole('button', { name: /This PC \+ cloud/ })).toBeDisabled();
     });
 });
+
+
+describe('HybridSettings: review findings', () => {
+    it('keeps the section usable when a saved custom table misses a kind', async () => {
+        const partial = { ...QUALITY } as Partial<HybridRules>;
+        delete partial.other;
+        mockedApi.getHybridSettings.mockResolvedValue({
+            ...SETTINGS, policy: 'custom', rules: partial as HybridRules, config_error: 'hybrid_rules is missing "other".',
+        });
+        const form = await renderPanel();
+        expect(within(form).getByRole('switch', { name: 'Other: allow high-stakes requests on the cheap model' })).not.toBeChecked();
+        // Saving sends a whole table, so the broken one is repaired.
+        fireEvent.click(within(form).getByRole('switch', { name: 'Writing: allow high-stakes requests on the cheap model' }));
+        fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
+        await waitFor(() => expect(mockedApi.updateHybridSettings).toHaveBeenCalled());
+        const sent = mockedApi.updateHybridSettings.mock.calls[0][0].rules!;
+        expect(Object.keys(sent).sort()).toEqual(Object.keys(QUALITY).sort());
+        expect(sent.other).toEqual(QUALITY.other);
+    });
+
+    it('keeps the section usable when a saved rule is not an object', async () => {
+        mockedApi.getHybridSettings.mockResolvedValue({
+            ...SETTINGS, policy: 'custom',
+            rules: { ...QUALITY, write_prose: 7 as unknown as HybridRules['write_prose'], change_code: { cheap_max_difficulty: 'x', allow_high_stakes: 1 } as unknown as HybridRules['change_code'] },
+            config_error: 'hybrid_rules is invalid.',
+        });
+        const form = await renderPanel();
+        expect(within(form).getByRole('table')).toBeInTheDocument();
+        expect(within(form).getByRole('switch', { name: 'Writing: allow high-stakes requests on the cheap model' })).not.toBeChecked();
+    });
+
+    it('runs one preview at a time and shows only the latest answer', async () => {
+        let finish: (v: unknown) => void = () => {};
+        mockedApi.previewHybridRoute.mockImplementation(() => new Promise((resolve) => { finish = resolve; }) as never);
+        render(<HybridSettings />);
+        await screen.findByRole('form', { name: 'Hybrid' });
+        const box = screen.getByLabelText('Try a request');
+        fireEvent.change(box, { target: { value: 'Fix the typo' } });
+        fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+        fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true });
+        expect(mockedApi.previewHybridRoute).toHaveBeenCalledTimes(1);
+        finish({
+            model: 'amd.DeepSeek-V4.1-Flash', kind: 'change_code', difficulty: 1, stakes: 'low',
+            reason: 'r', fix: '', tier: 'cheap', classified: true, seconds: 0.5, policy: null,
+        });
+        expect(await screen.findByRole('status', { name: 'Route for this request' })).toBeInTheDocument();
+    });
+
+    it('asks before a template replaces unsaved edits, and can keep them', async () => {
+        const form = await renderPanel();
+        fireEvent.change(within(form).getByLabelText('Classifier time limit (seconds)'), { target: { value: '30' } });
+        const card = screen.getByRole('listitem', { name: 'Gateway: DeepSeek + Sonnet' });
+        fireEvent.click(within(card).getByRole('button', { name: 'Use the Gateway: DeepSeek + Sonnet template' }));
+        expect(mockedApi.applyHybridTemplate).not.toHaveBeenCalled();
+        expect(within(card).getByText('This replaces your unsaved changes.')).toBeInTheDocument();
+        fireEvent.click(within(card).getByRole('button', { name: 'Keep editing' }));
+        expect(within(form).getByLabelText('Classifier time limit (seconds)')).toHaveValue(30);
+        fireEvent.click(within(card).getByRole('button', { name: 'Use the Gateway: DeepSeek + Sonnet template' }));
+        mockedApi.applyHybridTemplate.mockResolvedValue(SETTINGS);
+        fireEvent.click(within(card).getByRole('button', { name: 'Discard and use' }));
+        await waitFor(() => expect(mockedApi.applyHybridTemplate).toHaveBeenCalledWith('gateway-deepseek-sonnet'));
+    });
+
+    it('disables Save while a template applies', async () => {
+        mockedApi.applyHybridTemplate.mockImplementation(() => new Promise(() => {}) as never);
+        const form = await renderPanel();
+        const card = screen.getByRole('listitem', { name: 'Gateway: DeepSeek + Sonnet' });
+        fireEvent.click(within(card).getByRole('button', { name: 'Use the Gateway: DeepSeek + Sonnet template' }));
+        fireEvent.change(within(form).getByLabelText('Classifier time limit (seconds)'), { target: { value: '30' } });
+        expect(within(form).getByRole('button', { name: 'Save' })).toBeDisabled();
+    });
+
+    it('refuses a fractional time limit', async () => {
+        const form = await renderPanel();
+        fireEvent.change(within(form).getByLabelText('Classifier time limit (seconds)'), { target: { value: '20.5' } });
+        expect(within(form).getByRole('button', { name: 'Save' })).toBeDisabled();
+    });
+
+    it('puts a bare-field 422 under its field', async () => {
+        mockedApi.updateHybridSettings.mockRejectedValue(new Error('cheap_model: amd.Gone needs the AMD LLM Gateway.'));
+        const form = await renderPanel();
+        fireEvent.change(within(form).getByLabelText('Classifier time limit (seconds)'), { target: { value: '30' } });
+        fireEvent.click(within(form).getByRole('button', { name: 'Save' }));
+        const alert = await within(form).findByText(/amd.Gone needs the AMD LLM Gateway/);
+        expect(alert.id).toContain('cheap_model');
+    });
+});

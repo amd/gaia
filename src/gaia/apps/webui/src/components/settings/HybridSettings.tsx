@@ -36,6 +36,24 @@ interface Draft {
     rules: HybridRules;
 }
 
+function wellFormedRule(rule: unknown): boolean {
+    const r = rule as { cheap_max_difficulty?: unknown; allow_high_stakes?: unknown } | null;
+    if (!r || typeof r !== 'object') return false;
+    const d = r.cheap_max_difficulty;
+    return Number.isInteger(d) && (d as number) >= 0 && (d as number) <= 5 && typeof r.allow_high_stakes === 'boolean';
+}
+
+/** Saved rules over Quality, kind by kind: a hand-edited table may miss a kind or hold junk. */
+function editableRules(s: Settings): HybridRules {
+    const base = s.presets.quality;
+    const saved = (s.rules && typeof s.rules === 'object' ? s.rules : {}) as Record<string, unknown>;
+    const out = { ...base };
+    for (const kind of Object.keys(base) as HybridKind[]) {
+        if (wellFormedRule(saved[kind])) out[kind] = saved[kind] as HybridRules[HybridKind];
+    }
+    return out;
+}
+
 function draftOf(s: Settings): Draft {
     return {
         cheap_model: s.cheap_model,
@@ -43,8 +61,8 @@ function draftOf(s: Settings): Draft {
         classifier_model: s.classifier_model,
         classifier_timeout: String(s.classifier_timeout),
         policy: s.policy,
-        // A custom policy saved without rules starts from Quality; config_error says what's wrong.
-        rules: s.rules ?? s.presets.quality,
+        // Missing or broken rules start from Quality; config_error says what's wrong.
+        rules: editableRules(s),
     };
 }
 
@@ -59,7 +77,10 @@ function fieldOf(err: unknown): Field | null {
     const fromLoc = FIELDS.find((f) => fields.includes(f));
     if (fromLoc) return fromLoc;
     const text = `${typeof e?.detail === 'string' ? e.detail : ''} ${typeof e?.message === 'string' ? e.message : ''}`;
-    return FIELDS.find((f) => text.includes(`hybrid_${f}`)) ?? null;
+    // The backend names a field `hybrid_<field>`, or bare at the start (`cheap_model: ...`).
+    return FIELDS.find((f) => text.includes(`hybrid_${f}`))
+        ?? FIELDS.find((f) => text.trim().startsWith(`${f}:`) || text.trim().startsWith(`${f} `))
+        ?? null;
 }
 
 function messageOf(err: unknown): string {
@@ -73,7 +94,7 @@ function pendingUpdate(saved: Settings, draft: Draft): { update: HybridSettingsU
     if (draft.strong_model !== saved.strong_model) update.strong_model = draft.strong_model;
     if (draft.classifier_model !== saved.classifier_model) update.classifier_model = draft.classifier_model;
     const timeout = draft.classifier_timeout.trim() === '' ? NaN : Number(draft.classifier_timeout);
-    const timeoutValid = Number.isFinite(timeout) && timeout >= MIN_TIMEOUT && timeout <= MAX_TIMEOUT;
+    const timeoutValid = Number.isInteger(timeout) && timeout >= MIN_TIMEOUT && timeout <= MAX_TIMEOUT;
     if (timeoutValid && timeout !== saved.classifier_timeout) update.classifier_timeout = timeout;
     if (draft.policy !== saved.policy) update.policy = draft.policy;
     // Custom needs its whole table; the presets carry their own.
@@ -113,6 +134,8 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
     const [applyError, setApplyError] = useState<{ id: string; message: string } | null>(null);
     const [applied, setApplied] = useState<string | null>(null);
     const onLoadedRef = useRef(onLoaded);
+    const previewSeq = useRef(0);
+    const [confirmTemplate, setConfirmTemplate] = useState<string | null>(null);
     onLoadedRef.current = onLoaded;
 
     const show = useCallback((s: Settings) => {
@@ -155,6 +178,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
     }, [load, loadTemplates, loadStats]);
 
     const applyTemplate = useCallback(async (tpl: HybridTemplate) => {
+        setConfirmTemplate(null);
         setApplying(tpl.id);
         setApplyError(null);
         setApplied(null);
@@ -199,18 +223,20 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
 
     const tryRequest = useCallback(async () => {
         const text = request.trim();
-        if (!text) return;
+        if (!text || previewing) return;
+        const seq = ++previewSeq.current;
         setPreviewing(true);
         setPreviewError(null);
         setPreview(null);
         try {
-            setPreview(await api.previewHybridRoute(text));
+            const answer = await api.previewHybridRoute(text);
+            if (seq === previewSeq.current) setPreview(answer);
         } catch (err) {
-            setPreviewError(messageOf(err));
+            if (seq === previewSeq.current) setPreviewError(messageOf(err));
         } finally {
-            setPreviewing(false);
+            if (seq === previewSeq.current) setPreviewing(false);
         }
-    }, [request]);
+    }, [previewing, request]);
 
     if (!saved || !draft) {
         return loadError
@@ -330,7 +356,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                                             disabled={!tpl.available || applying !== null || saving}
                                             aria-describedby={!tpl.available && tpl.reason ? `${titleId}-why` : undefined}
                                             aria-label={t.bare('settings.hybrid.useTemplateAria', { name: tpl.name })}
-                                            onClick={() => void applyTemplate(tpl)}
+                                            onClick={() => (edited ? setConfirmTemplate(tpl.id) : void applyTemplate(tpl))}
                                         >
                                             {applying === tpl.id ? <Loader2 size={13} className="spin" /> : null} {t('settings.hybrid.useTemplate')}
                                         </button>
@@ -341,6 +367,13 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                                             </button>
                                         ))}
                                     </div>
+                                    {confirmTemplate === tpl.id && (
+                                        <div className="settings-row" role="alert">
+                                            <span className="settings-hint">{t('settings.hybrid.discardForTemplate')}</span>
+                                            <button type="button" className="btn-secondary" onClick={() => void applyTemplate(tpl)}>{t('settings.hybrid.discardAndUse')}</button>
+                                            <button type="button" className="link-btn" onClick={() => setConfirmTemplate(null)}>{t('settings.hybrid.keepEditing')}</button>
+                                        </div>
+                                    )}
                                     {applyError?.id === tpl.id && <p className="settings-error" role="alert">{applyError.message}</p>}
                                 </li>
                             );
@@ -479,7 +512,7 @@ export function HybridSettings({ onSaved, onLoaded, onShowProvider }: Props) {
                 <p className="settings-note">{t('settings.hybrid.failClosed')}</p>
 
                 <div className="settings-row">
-                    <button type="submit" className="btn-primary" disabled={saving || !dirty || !pending?.timeoutValid}>
+                    <button type="submit" className="btn-primary" disabled={saving || applying !== null || !dirty || !pending?.timeoutValid}>
                         {saving ? <Loader2 size={13} className="spin" /> : null} {t('settings.advanced.save')}
                     </button>
                     {edited && (

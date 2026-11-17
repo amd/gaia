@@ -582,7 +582,8 @@ export function ModelSettings() {
                     onLoaded={(s) => {
                         // A hybrid chat opens on the tab of the model that runs its hard turns.
                         const strong = s.models.find((m) => m.id === s.strong_model)?.provider;
-                        if (hybridInUse && !tabPicked.current && strong && strong !== 'claude') setChosen(strong);
+                        const tab = strong === 'local' || strong === 'amd' || strong === 'fireworks' ? strong : null;
+                        if (hybridInUse && !tabPicked.current && tab) setChosen(tab);
                     }}
                     onShowProvider={(p) => { tabPicked.current = true; setChosen(p); }}
                 />

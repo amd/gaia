@@ -263,7 +263,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /hybrid/stats': {
         since: null, turns: 0, cheap_turns: 0, strong_turns: 0, failed_closed: 0, cost: 0, cost_if_all_strong: 0, saving_pct: null,
         unpriced_turns: 0, prices_fetched_at: null, prices_error: null, scope: 'agent_ui_chats',
-        scope_label: "Agent UI chats only; turns from the terminal UI and `gaia -p` aren't counted yet",
+        scope_label: "Agent UI chats only; turns from the terminal UI and one-off command-line prompts aren't counted yet",
     },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
 };

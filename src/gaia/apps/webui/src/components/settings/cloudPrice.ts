@@ -27,7 +27,10 @@ export function formatPerMillion(
 
 /** A cost that keeps a sub-cent amount readable: "$0.0028", not "$0.00". */
 export function formatCost(n: number): string {
-    return n > 0 && n < 0.01 ? `$${n.toPrecision(2)}` : formatTotal(n);
+    if (!(n > 0 && n < 0.01)) return formatTotal(n);
+    // Two significant digits in plain decimals, never "1.2e-7".
+    const decimals = Math.min(20, 1 - Math.floor(Math.log10(n)));
+    return `$${n.toFixed(decimals)}`;
 }
 
 /** "$1.23" for a running total. */

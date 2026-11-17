@@ -171,6 +171,13 @@ describe('ModelChip: hybrid', () => {
         expect(within(dialog).queryByRole('group', { name: 'Hybrid' })).not.toBeInTheDocument();
     });
 
+    it('leaves hybrid out while the model server cannot list models (503)', async () => {
+        mockedApi.getHybridEntry.mockRejectedValue(Object.assign(new Error('not ready'), { httpStatus: 503 }));
+        const dialog = await openPicker();
+        await waitFor(() => expect(mockedApi.getHybridEntry).toHaveBeenCalled());
+        expect(within(dialog).queryByRole('group', { name: 'Hybrid' })).not.toBeInTheDocument();
+    });
+
     it('says why when the entry cannot be read', async () => {
         mockedApi.getHybridEntry.mockRejectedValue(new Error('Couldn’t list the models hybrid can use: the model server is not running.'));
         const dialog = await openPicker();

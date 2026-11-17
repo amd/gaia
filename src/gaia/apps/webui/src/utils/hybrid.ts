@@ -8,8 +8,12 @@ import type { Translate } from '../i18n/useT';
 /** The backend's provider order for hybrid's model list. */
 export const HYBRID_PROVIDERS: HybridProvider[] = ['local', 'amd', 'fireworks', 'claude'];
 
+const NAMED_PROVIDERS = new Set(['local', 'amd', 'fireworks', 'claude']);
+
+/** A provider's name; a cloud prefix GAIA has no name for is shown as sent. */
 export function hybridProviderName(t: Translate, provider: HybridProvider): string {
-    return t.bare(`settings.hybrid.provider.${provider}`);
+    if (!NAMED_PROVIDERS.has(provider)) return provider;
+    return t.bare(`settings.hybrid.provider.${provider as 'local' | 'amd' | 'fireworks' | 'claude'}`);
 }
 
 /** The provider a model id belongs to, by its prefix, as the backend's provider_of. */

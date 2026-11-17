@@ -27,8 +27,9 @@ export interface HybridRule {
 
 export type HybridRules = Record<HybridKind, HybridRule>;
 
-/** Where a hybrid member model runs. `claude` is Anthropic's API, used directly. */
-export type HybridProvider = 'local' | 'amd' | 'fireworks' | 'claude';
+/** Where a hybrid member model runs: `local`, `claude` (Anthropic's API, used
+ * directly), or a cloud provider's prefix (`amd`, `fireworks`, or another). */
+export type HybridProvider = string;
 
 /** A model a set-up provider offers (or a configured one none offers), grouped by `provider`. */
 export interface HybridModelOption {
@@ -134,7 +135,8 @@ export interface HybridPreview {
     /** False when the classifier failed and the strong model was picked. */
     classified: boolean;
     seconds: number;
-    policy: HybridPolicy;
+    /** Null when the saved settings named no usable policy. */
+    policy: HybridPolicy | null;
 }
 
 /** GET /api/hybrid/stats: routed turns and what they cost against all-strong. */

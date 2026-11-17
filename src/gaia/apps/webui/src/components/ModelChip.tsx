@@ -181,7 +181,9 @@ export function ModelChip() {
                         const entry = await api.getHybridEntry();
                         setHybrid(entry?.id ? { entry } : { error: t.bare('modelMenu.hybridEmpty') });
                     } catch (err) {
-                        setHybrid({ error: requestErrorText(err) });
+                        // 503: the server can't list models yet; the provider groups say so.
+                        if ((err as { httpStatus?: unknown })?.httpStatus === 503) setHybrid(null);
+                        else setHybrid({ error: requestErrorText(err) });
                     }
                 })();
             }
