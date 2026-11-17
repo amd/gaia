@@ -154,7 +154,7 @@ func TestTheWindowsSetupKeepsOnlyItsVerifiedFile(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	r := Release{Tag: "v0.26.0", Assets: []Asset{
-		{Name: setup, URL: srv.URL + "/" + setup}, {Name: installerSums, URL: srv.URL + "/sums"},
+		{Name: setup, URL: srv.URL + "/" + setup}, {Name: installerSums, URL: srv.URL + "/sums"}, {Name: tuiBinary()},
 	}}
 	plan := Plan{Tag: "v0.26.0", Kind: KindWindowsSetup, Release: r}
 	if err := runPackage(context.Background(), plan, io.Discard, io.Discard); err != nil {
