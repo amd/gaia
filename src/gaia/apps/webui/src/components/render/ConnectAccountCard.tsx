@@ -10,6 +10,11 @@ import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
 import { log } from '../../utils/logger';
 import type { ConnectorListEntry, Message } from '../../types';
 import { UnsupportedCard } from './UnsupportedCard';
+import {
+    CONNECT_ACCOUNT_RENDER,
+    isConnectAccountPayload,
+    type ConnectAccountPayload,
+} from '../../utils/connectCards';
 
 /**
  * ConnectAccountCard — the `connect_account` surface.
@@ -21,28 +26,7 @@ import { UnsupportedCard } from './UnsupportedCard';
  * step. A card that names no access asks for what the agent declares.
  */
 
-export const CONNECT_ACCOUNT_RENDER = 'connect_account';
-
-interface ConnectAccountPayload {
-    kind: typeof CONNECT_ACCOUNT_RENDER;
-    providers: string[];
-    agent_id?: string;
-    /** Providers connected already, whose fault is something signing in again fixes. */
-    reconnect?: string[];
-    /** Per provider, the access the failed call needs. */
-    scopes?: Record<string, string[]>;
-}
-
-function isScopeMap(value: unknown, providers: unknown[]): boolean {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    return Object.entries(value as Record<string, unknown>).every(
-        ([p, s]) =>
-            providers.includes(p)
-            && Array.isArray(s)
-            && s.length > 0
-            && s.every((x) => typeof x === 'string' && x.length > 0),
-    );
-}
+export { CONNECT_ACCOUNT_RENDER, isConnectAccountPayload };
 
 /**
  * What a Connect press asks for: what the call needs, plus what the connection
@@ -52,21 +36,6 @@ function isScopeMap(value: unknown, providers: unknown[]): boolean {
 export function requestScopes(needed: string[] | undefined, held: string[] | undefined): string[] {
     if (!needed?.length) return [];
     return [...new Set([...(held ?? []), ...needed])];
-}
-
-export function isConnectAccountPayload(value: unknown): value is ConnectAccountPayload {
-    if (!value || typeof value !== 'object') return false;
-    const v = value as Record<string, unknown>;
-    return (
-        v.kind === CONNECT_ACCOUNT_RENDER &&
-        Array.isArray(v.providers) &&
-        v.providers.length > 0 &&
-        v.providers.every((p) => typeof p === 'string' && p.length > 0) &&
-        (v.agent_id === undefined || typeof v.agent_id === 'string') &&
-        (v.reconnect === undefined
-            || (Array.isArray(v.reconnect) && v.reconnect.every((p) => typeof p === 'string'))) &&
-        (v.scopes === undefined || isScopeMap(v.scopes, v.providers))
-    );
 }
 
 /** The providers whose becoming connected is the fix: those not connected when the tool ran. */

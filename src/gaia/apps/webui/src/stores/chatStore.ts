@@ -8,6 +8,7 @@ import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, S
 import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { addCard } from '../utils/connectCards';
 import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
@@ -636,7 +637,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Streaming cards (#2108)
     cards: [],
     appendCard: (card) =>
-        set((state) => ({ cards: [...state.cards, card] })),
+        set((state) => ({ cards: addCard(state.cards, card) })),
     clearCards: () => set({ cards: [] }),
 
     // Documents

@@ -50,28 +50,28 @@ Signing in is a hand-off, not something GAIA does for you:
 |---|---|---|
 | `browser_open(url)` | Open a page, return its elements | no |
 | `browser_snapshot()` | Re-read the current page | no (in the browser pane: other sites, and frames from sites not yet approved) |
-| `browser_click(ref)` | Click an element; `ref` is a snapshot ref like `g2e5`, or `p1` for an element the user [picked in the pane](/guides/agent-ui#send-page-elements-to-the-chat) | only when signed in |
+| `browser_click(ref)` | Click an element; `ref` is a snapshot ref like `g2e5`, or `p1` for an element the user [picked in the pane](/guides/agent-ui/desktop#send-page-elements-to-the-chat) | only when signed in |
 | `browser_type(ref, text, press_enter)` | Fill a field or pick an option | only when signed in |
 | `browser_login(url)` | Hand over for sign-in, then save the session | always |
 | `browser_sessions()` | List sites with a saved sign-in | no |
 | `browser_back()` | Go back a page | no |
 | `browser_find(text)` | Search the whole page for text | no |
-| `browser-pane/browser_screenshot(ref)` | Picture of the page or one element ([browser pane](/guides/agent-ui#gaia-uses-the-pane) only) | other sites |
-| `browser-pane/browser_logs(kind, errors_only, contains, new_only)` | Console messages or network requests ([browser pane](/guides/agent-ui#gaia-uses-the-pane) only) | other sites |
+| `browser-pane/browser_screenshot(ref)` | Picture of the page or one element ([browser pane](/guides/agent-ui/desktop#gaia-uses-the-pane) only) | other sites |
+| `browser-pane/browser_logs(kind, errors_only, contains, new_only)` | Console messages or network requests ([browser pane](/guides/agent-ui/desktop#gaia-uses-the-pane) only) | other sites |
 | `browser-pane/browser_press(key, ref)` | Press one key such as Escape, Enter or PageDown (browser pane only) | other sites |
 | `browser-pane/browser_viewport(preset, width, height, color_scheme)` | Show the page at a phone, tablet or desktop size, or in dark mode (browser pane only) | no |
 | `browser-pane/browser_tabs(switch_to)` | List this chat's tabs in the pane, or switch to one; other chats' tabs and private tabs are never listed (browser pane only) | no |
 | `browser-pane/browser_batch(steps)` | Run several of the steps above in one call (browser pane only) | each step as if run alone |
 | `browser-pane/browser_dialog(accept)` | Answer the page's alert, confirm or "leave this page?" box: OK or Cancel (browser pane only; a page's `prompt()` can't open in the desktop app) | OK on another site's box, or on one that names an action that can't be undone |
 | `browser-pane/browser_eval(expression)` | Run one JavaScript expression in the page and get its value as JSON, to check app state or storage the page doesn't show (browser pane only, pages on this PC only) | every time, showing the whole script (at most 500 characters); refused on any site not on this PC |
-| `browser-pane/dev_server(action, name, project, errors_only, contains)` | Serve a folder of HTML with no setup, or start, list, stop or read the logs of a dev server from the project's [`.gaia/launch.json`](/guides/agent-ui#dev-servers); start shows it in the pane (browser pane only) | starting one, once per exact command |
+| `browser-pane/dev_server(action, name, project, errors_only, contains)` | Serve a folder of HTML with no setup, or start, list, stop or read the logs of a dev server from the project's [`.gaia/launch.json`](/guides/agent-ui/desktop#dev-servers); start shows it in the pane (browser pane only) | starting one, once per exact command |
 
 The `browser-pane/` tools come with the bundled `browser-pane` skill, which the
 agent loads when it needs them, so they add nothing to a chat's prompt until
 then. The skill is offered only in a chat open in GAIA desktop with the browser
 pane; anywhere else its tools refuse and change nothing.
 
-In GAIA desktop, a chat open in the window uses the [browser pane](/guides/agent-ui#gaia-uses-the-pane)
+In GAIA desktop, a chat open in the window uses the [browser pane](/guides/agent-ui/desktop#gaia-uses-the-pane)
 instead of the headless browser, and asks before reading or acting on any site
 except the dev servers it started for that chat, `localhost` included. Clicks and typing land in the pane as real input you
 can watch, and stop the moment you press **Pause** or click in the page

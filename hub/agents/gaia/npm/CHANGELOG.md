@@ -8,6 +8,36 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+### Changed
+
+- **A command or snippet that starts a never-ending server is refused before it
+  runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
+  wait on it until the turn timed out; they now return an error that says so and
+  how to serve the folder instead. Code that only writes a server to a file still
+  runs. Each live-browser result now starts with where it ran, such as
+  `(headless browser)`.
+- **A chat in GAIA desktop can drive the browser pane beside it.** A new bundled
+  skill, `browser-pane`, adds nine tools that take a picture of the page, read
+  its console and network logs, press keys, answer page boxes, change screen
+  size, switch tabs, run several steps at once, run a short script on a
+  localhost page, and start a project's dev server on 127.0.0.1
+  (`browser-pane/dev_server`). The skill is offered only in a chat open in GAIA
+  desktop with the pane, and its tools join the list only once it loads, so the
+  registered tool count stays 105. `browser-pane/browser_eval` asks every time
+  and shows the whole script; the others ask before a site not yet approved, a
+  control that may not be undoable, or starting a server. Full access does not
+  skip the script or a new server: a person still approves them, and a run with
+  nobody to ask refuses them.
+
+## [0.3.6]
+
+Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+
+- **Deleting a conversation can stop its MCP servers (contract 2.30).**
+  `DELETE /v1/gaia/sessions/{session_id}` ends a session and closes its agent,
+  which stops the servers it started. Until now a session's servers ran until it
+  idled out, up to 4 hours, so a host that deleted chats kept every chat's
+  servers running. An unknown session is a `404`; one running a turn is a `409`.
 - **Closing an agent stops the MCP servers it started.** Each server is a
   process tree (`uvx`, `uv`, the server), and it used to outlive the agent:
   an agent built for one request left its servers running for good.
@@ -97,6 +127,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `documents` and this turn leaves out (the user detached it, or deleted it from
   the library) is dropped from the session's index, so answers stop quoting it.
   An empty `documents` list drops them all.
+- **A detached document can no longer be read either.** The agent dropped it
+  from the index but kept its permission to read the file, so asking about it
+  by name indexed it again from disk. The permission now goes with it, and a
+  copy kept in GAIA's own documents folder is refused until it is attached
+  again. A folder the caller granted still covers the files inside it.
 - **A turn the output limit keeps cutting off says what to do next.** It told
   the user to "retry with a higher output-token limit (max_tokens)", a setting
   the apps don't have, dropped what the turn had done, and sent no token counts,
@@ -263,24 +298,6 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Changed
 
-- **A command or snippet that starts a never-ending server is refused before it
-  runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
-  wait on it until the turn timed out; they now return an error that says so and
-  how to serve the folder instead. Code that only writes a server to a file still
-  runs. Each live-browser result now starts with where it ran, such as
-  `(headless browser)`.
-- **A chat in GAIA desktop can drive the browser pane beside it.** A new bundled
-  skill, `browser-pane`, adds nine tools that take a picture of the page, read
-  its console and network logs, press keys, answer page boxes, change screen
-  size, switch tabs, run several steps at once, run a short script on a
-  localhost page, and start a project's dev server on 127.0.0.1
-  (`browser-pane/dev_server`). The skill is offered only in a chat open in GAIA
-  desktop with the pane, and its tools join the list only once it loads, so the
-  registered tool count stays 105. `browser-pane/browser_eval` asks every time
-  and shows the whole script; the others ask before a site not yet approved, a
-  control that may not be undoable, or starting a server. Full access does not
-  skip the script or a new server: a person still approves them, and a run with
-  nobody to ask refuses them.
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,
