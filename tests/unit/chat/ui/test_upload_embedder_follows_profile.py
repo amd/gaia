@@ -96,7 +96,7 @@ def test_an_unreadable_config_fails_the_upload_instead_of_guessing(
     """Guessing GGUF on an NPU PC is the eviction this guards against."""
     _pc(monkeypatch, tmp_path, "{not json")
 
-    with pytest.raises(RuntimeError, match="default_device") as exc:
+    with pytest.raises(RuntimeError, match="embedder this PC uses") as exc:
         asyncio.run(helpers._index_document(_doc(tmp_path)))
     assert isinstance(exc.value.__cause__, GaiaConfigError)
     assert fake_rag.configs == []

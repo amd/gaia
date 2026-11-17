@@ -410,9 +410,7 @@ def machine_embedding_device() -> str:
         config = GaiaConfig.load()
     except GaiaConfigError as e:
         raise GaiaConfigError(
-            f"Cannot tell which embedder this PC uses for documents and memory: "
-            f"{e}. Fix or delete {GaiaConfig.config_path()}, or run `gaia config "
-            "set default_device gpu`."
+            f"Cannot tell which embedder this PC uses for documents and memory: {e}"
         ) from e
     return config.embedding_device or (
         "npu" if config.default_device == "npu" else "gpu"
