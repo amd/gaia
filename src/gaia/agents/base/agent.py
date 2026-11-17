@@ -1487,6 +1487,21 @@ _CUT_OFF_ALL_THINKING_PROMPT = (
     "small step and make one tool call now: run an experiment, or write a "
     "rough first version to a file and improve it from there."
 )
+
+
+def _was_all_thinking(
+    response: str, reasoning: Optional[str], stats: Optional[Dict[str, Any]]
+) -> bool:
+    """True when a cut-off reply holds no text because thinking used the limit.
+
+    An empty reply alone is not enough: a full context window also ends a
+    reply empty at ``finish_reason=length``, with no thinking behind it.
+    """
+    if response.strip():
+        return False
+    return bool(reasoning or (stats or {}).get("reasoning_tokens"))
+
+
 _CUT_OFF_FAILURE_ANSWER = (
     "I couldn't finish this: my reply kept growing longer than the model can "
     "send at once, so it was cut off before I could carry out the next step."
@@ -13397,9 +13412,9 @@ Do NOT wrap conversational replies in JSON.
                     {
                         "role": "user",
                         "content": (
-                            _CUT_OFF_CONTINUE_PROMPT
-                            if response.strip()
-                            else _CUT_OFF_ALL_THINKING_PROMPT
+                            _CUT_OFF_ALL_THINKING_PROMPT
+                            if _was_all_thinking(response, reasoning, response_stats)
+                            else _CUT_OFF_CONTINUE_PROMPT
                         ),
                     }
                 )
