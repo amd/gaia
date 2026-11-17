@@ -367,7 +367,7 @@ def test_the_request_after_an_all_thinking_cut_off_asks_for_the_least_thinking(
     assert efforts == ["unset", "none", "unset"]
 
 
-def test_a_model_with_no_known_lowest_effort_is_sent_none(agent):
+def test_a_model_with_no_known_lowest_effort_is_sent_no_effort(agent):
     agent.model_id = "fireworks.some-other-model"
     efforts = _stub_effort_chat(agent, _ALL_THINKING, _DONE)
 
