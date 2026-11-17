@@ -1413,3 +1413,22 @@ def test_a_model_server_the_installer_carries_is_marked_bundled(
     assert server["id"] == "server"
     assert server["bundled"] is bundled
     assert "included" not in server["source"]
+
+
+def test_a_release_candidates_plan_names_its_own_pre_release_for_the_agent(
+    running, monkeypatch
+):
+    from gaia.hub import prerelease
+
+    running(BIG_GPU)
+    monkeypatch.delenv(prerelease.ASSETS_URL_ENV, raising=False)
+
+    def agent_source():
+        return next(c for c in sp.build_plan()["components"] if c["id"] == "agent")[
+            "source"
+        ]
+
+    monkeypatch.setattr(prerelease, "CORE_VERSION", "0.26.0")
+    assert agent_source() == "hub.amd-gaia.ai"
+    monkeypatch.setattr(prerelease, "CORE_VERSION", "0.26.0rc32")
+    assert agent_source() == "github.com/amd/gaia/releases/tag/v0.26.0-rc32"
