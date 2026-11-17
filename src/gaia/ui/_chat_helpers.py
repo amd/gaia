@@ -2539,7 +2539,27 @@ def _withdrawn_reply(content: str) -> Optional[str]:
             if not kept:
                 return _CUT_OFF_REPLY_FOR_MODEL
             return f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+    # A relayed agent that crashed ends the reply with its own note and log folder.
+    kept, _, last = text.rpartition("\n\n")
+    if any(last.startswith(note) for note in _agent_crash_notes()):
+        kept = kept.rstrip()
+        return (
+            f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+            if kept
+            else _CUT_OFF_REPLY_FOR_MODEL
+        )
     return None
+
+
+def _agent_crash_notes() -> tuple:
+    """What each relayed agent's reply ends with when the agent crashed mid-answer."""
+    from .email_sidecar.profiles import EMAIL_PROFILE, GAIA_PROFILE
+
+    return tuple(
+        p.stream_ended_message
+        for p in (GAIA_PROFILE, EMAIL_PROFILE)
+        if p.stream_ended_message
+    )
 
 
 def _with_final_reply(model_messages: Optional[list], reply: str) -> Optional[list]:
