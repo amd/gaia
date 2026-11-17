@@ -308,7 +308,7 @@ private final class Pairing: @unchecked Sendable {
       var body = data
       if var other = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
         other.removeValue(forKey: "token")
-        body = (try? JSONSerialization.data(withJSONObject: other)) ?? data
+        body = (try? JSONSerialization.data(withJSONObject: other)) ?? Data()
       }
       promise.resolve(["status": status, "origin": origin, "body": String(decoding: body, as: UTF8.self)])
       return
