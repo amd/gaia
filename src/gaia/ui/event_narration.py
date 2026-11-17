@@ -189,6 +189,7 @@ _NARRATION_OVERRIDES = {
     "run_python": "Running Python",
     "execute_python_file": "Running a Python file",
     "bookmark": "Bookmarking a folder",
+    "delegate_task": "Handing work to helpers",
     "tree": "Listing folder tree",
     "file_info": "Getting file info",
     "browser_back": "Going back in the browser",

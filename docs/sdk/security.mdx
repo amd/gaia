@@ -107,6 +107,17 @@ v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
   `AllowedPathsEnvError` (a `ValueError`) when the validator is built. The Agent UI
   server and the flagship sidecar check it before they start serving.
 
+### Helpers
+
+A `delegate_task` helper ([Helpers](/guides/gaia#helpers)) gets a copy of its
+parent's validator: the same allowed, read-only and withheld paths and the same
+declined paths, never wider, and an access prompt that always refuses. Its
+console denies every confirmation and ignores `GAIA_AUTO_APPROVE_TOOLS`, the
+parent's pre-approval, Full access and "always allow" answers. It is built with
+read tools only, so a planted instruction in a file it reads has nothing to
+write with. Paths in a task are checked against the parent's validator before
+any helper starts, without prompting.
+
 <Warning>
   This confines GAIA's tools, not code they run. A `run_python` or
   `execute_python_file` script can't open, copy, move, link or delete files in

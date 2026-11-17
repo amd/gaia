@@ -49,7 +49,7 @@
     },
     {
       "lane": "gaia-files",
-      "categories": ["gaia_files", "gaia_resilience"]
+      "categories": ["gaia_files", "gaia_resilience", "gaia_delegation"]
     },
     {
       "lane": "gaia-docs",

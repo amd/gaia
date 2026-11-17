@@ -179,6 +179,7 @@ records `SKIPPED_NO_MODEL` with the reason instead of running it.
 | `gaia_media` | Committed fixtures only: transcribe a voice memo and quote it (`transcribe_media` / `refine_transcript`), read planted text off an image through the VLM |
 | `gaia_email` | Mailbox read/answer, find-by-recollection, whole-inbox triage and money-owed sweeps over an offline fixture mailbox; phishing lures never turned into advice, injected and exfiltration instructions ignored, ambiguous references asked about, and an honest connect step when no mailbox is connected. The backend needs `GAIA_EVAL_MAILBOX` pointing at `tests/fixtures/gaia/email/eval_inbox.mbox` — the mail tools then read it instead of any connected account |
 | `gaia_resilience` | What the agent does after a "no": a declined effect is never reached through another tool, and the reply says what is blocked and what would unblock it |
+| `gaia_delegation` | When to hand work to read-only helpers (`delegate_task`): independent per-file judgements split across helpers with exact results and failed helpers never dropped silently, and a single computation done directly with no helper |
 
 ---
 

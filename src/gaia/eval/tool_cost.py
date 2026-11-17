@@ -316,6 +316,8 @@ def build_full_agent_skeleton(dynamic_tools: bool = True, deterministic: bool = 
                     _enter_deterministic_env(stack)
                 agent = GaiaAgent.__new__(GaiaAgent)
                 agent.config = cfg
+                # delegate_task registers only for a host with a file scope.
+                agent.path_validator = MagicMock()
                 agent._instance_tools = None
                 agent.model_id = "Gemma-4-E4B-it-GGUF"
                 agent._memory_store = MagicMock()

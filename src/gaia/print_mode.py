@@ -82,9 +82,14 @@ def summarize(
     model: Optional[str],
     duration_s: float,
     verbose: bool = False,
+    helpers: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """The JSON record ``--output-format json`` prints for one turn."""
+    """The JSON record ``--output-format json`` prints for one turn.
+
+    *helpers* is the agent's ``helper_stats()``; it is added only when helpers ran.
+    """
     conversation = result.get("conversation") or []
+    cached = result.get("cached_tokens")
     status = result.get("status") or "error"
     record: Dict[str, Any] = {
         "type": "result",
@@ -97,13 +102,20 @@ def summarize(
             1 for m in conversation if isinstance(m, dict) and m.get("role") == "tool"
         ),
         "input_tokens": int(result.get("input_tokens") or 0),
-        "cached_tokens": _cached_tokens(conversation),
+        # The agent's own total also counts tokens a tool's model calls reported.
+        "cached_tokens": (
+            int(cached)
+            if isinstance(cached, int) and not isinstance(cached, bool)
+            else _cached_tokens(conversation)
+        ),
         "output_tokens": int(result.get("output_tokens") or 0),
         "duration_s": round(duration_s, 2),
         "error_count": int(result.get("error_count") or 0),
     }
     if result.get("time_limit_reached"):
         record["time_limit_reached"] = True
+    if helpers and helpers.get("runs"):
+        record["helpers"] = dict(helpers)
     if record["is_error"]:
         record["error"] = _turn_error(result)
     if verbose:
@@ -151,11 +163,14 @@ def run(
     base_url: Optional[str] = None,
     attempts: int = 1,
     time_limit: Optional[int] = None,
+    max_helpers: Optional[int] = None,
 ) -> int:
     """Run one headless turn and print its result. Returns the exit code.
 
     With *attempts* > 1, that many independent attempts run first, each in a
     copy of the current folder, and the turn combines their drafts.
+    *max_helpers* sets how many delegate_task helpers run at once (0 removes
+    the tool); None leaves it to ``GAIA_MAX_HELPERS``, else the model.
     """
     if output_format not in OUTPUT_FORMATS:
         raise ValueError(
@@ -179,6 +194,7 @@ def run(
             skip_permissions=skip_permissions,
             full_access=full_access,
             base_url=base_url,
+            max_helpers=max_helpers,
         )
         record = (
             _run_with_attempts(text, attempts, **turn)
@@ -245,6 +261,8 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
         flags.append("--dangerously-skip-permissions")
     if turn["base_url"]:
         flags += ["--base-url", turn["base_url"]]
+    if turn["max_helpers"] is not None:
+        flags += ["--max-helpers", str(turn["max_helpers"])]
     print(f"gaia -p: running {attempts} independent attempts…", file=sys.stderr)
     final_prompt, records, scratch = run_attempts(text, attempts, flags)
     try:
@@ -342,6 +360,7 @@ def _run_turn(
     base_url: Optional[str],
     extra_paths: Optional[List[str]] = None,
     time_limit: Optional[int] = None,
+    max_helpers: Optional[int] = None,
 ) -> Dict[str, Any]:
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.logger import configure
@@ -365,9 +384,12 @@ def _run_turn(
             base_url=base_url,
             extra_paths=extra_paths,
             time_limit=time_limit,
+            max_helpers=max_helpers,
         )
     detected_base_url = _start_server(model, base_url)
 
+    # Unset, the config reads GAIA_MAX_HELPERS.
+    helper_setting = {} if max_helpers is None else {"max_helpers": max_helpers}
     agent = GaiaAgent(
         GaiaAgentConfig(
             base_url=base_url or detected_base_url or resolve_lemonade_base_url(),
@@ -377,6 +399,7 @@ def _run_turn(
             # A long reply sent in one piece can fail at the gateway; a stream does not.
             streaming=True,
             allowed_paths=[os.getcwd(), *(extra_paths or [])],
+            **helper_setting,
         )
     )
     configure_console(agent.console, skip_permissions, full_access)
@@ -399,8 +422,13 @@ def _run_turn(
         from gaia.agents.base.memory import drain_memory_extraction
 
         drain_memory_extraction(agent)
+    stats = getattr(agent, "helper_stats", None)
     return summarize(
-        result, agent.model_id or model, time.time() - started, verbose=verbose
+        result,
+        agent.model_id or model,
+        time.time() - started,
+        verbose=verbose,
+        helpers=stats() if callable(stats) else None,
     )
 
 
@@ -441,6 +469,7 @@ def _relay_turn(
     base_url: Optional[str],
     extra_paths: Optional[List[str]] = None,
     time_limit: Optional[int] = None,
+    max_helpers: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run the turn on the GAIA agent's own binary, through the daemon.
 
@@ -451,14 +480,24 @@ def _relay_turn(
 
     from gaia.daemon.agent_query import ConsoleRenderer, run_query
 
-    if skip_permissions or full_access or base_url or time_limit:
+    if (
+        skip_permissions
+        or full_access
+        or base_url
+        or time_limit
+        or max_helpers is not None
+    ):
         flag = (
             "--full-access"
             if full_access
             else (
                 "--dangerously-skip-permissions"
                 if skip_permissions
-                else "--base-url" if base_url else "--time-limit"
+                else (
+                    "--base-url"
+                    if base_url
+                    else "--time-limit" if time_limit else "--max-helpers"
+                )
             )
         )
         raise RuntimeError(

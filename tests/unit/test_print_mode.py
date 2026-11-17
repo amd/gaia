@@ -165,6 +165,8 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
             "3",
             "--attempts",
             "2",
+            "--max-helpers",
+            "3",
             "--dangerously-skip-permissions",
             "--base-url",
             "http://h:1/api/v1",
@@ -182,6 +184,7 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
         full_access=False,
         base_url="http://h:1/api/v1",
         time_limit=None,
+        max_helpers=3,
     )
 
 
@@ -192,6 +195,7 @@ def test_main_defaults_output_format_to_text(monkeypatch):
     assert run.call_args.kwargs["output_format"] == "text"
     assert run.call_args.kwargs["skip_permissions"] is False
     assert run.call_args.kwargs["attempts"] == 1
+    assert run.call_args.kwargs["max_helpers"] is None
 
 
 @pytest.mark.parametrize(
@@ -203,6 +207,7 @@ def test_main_defaults_output_format_to_text(monkeypatch):
         ["--max-steps", "3"],
         ["--time-limit", "600"],
         ["--attempts", "2"],
+        ["--max-helpers", "2"],
         ["--dangerously-skip-permissions"],
         ["--full-access"],
         ["--model", "m", "chat"],
@@ -223,6 +228,20 @@ def test_max_steps_must_be_a_positive_integer(parser, capsys, value):
         parser.parse_args(["-p", "x", "--max-steps", value])
     assert exc.value.code == 2
     assert "--max-steps" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value, expected", [("0", 0), ("4", 4)])
+def test_max_helpers_takes_zero_or_more(parser, value, expected):
+    args = parser.parse_args(["-p", "x", "--max-helpers", value])
+    assert args.print_max_helpers == expected
+
+
+@pytest.mark.parametrize("value", ["-1", "two", "1.5"])
+def test_max_helpers_must_be_a_whole_number_of_zero_or_more(parser, capsys, value):
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["-p", "x", "--max-helpers", value])
+    assert exc.value.code == 2
+    assert "--max-helpers" in capsys.readouterr().err
 
 
 def test_main_forwards_verbose(monkeypatch):
@@ -428,6 +447,41 @@ def test_summarize_tolerates_none_values():
     assert record["input_tokens"] == 0
 
 
+_HELPERS = {
+    "runs": 3,
+    "ok": 2,
+    "partial": 0,
+    "failed": 1,
+    "width": 1,
+    "input_tokens": 900,
+    "cached_tokens": 30,
+    "output_tokens": 60,
+    "wall_s": 4.2,
+}
+
+
+def test_summarize_adds_the_helpers_block_when_helpers_ran():
+    record = print_mode.summarize({"status": "success"}, "m", 0, helpers=_HELPERS)
+    assert record["helpers"] == _HELPERS
+
+
+@pytest.mark.parametrize("helpers", [None, {**_HELPERS, "runs": 0}])
+def test_summarize_has_no_helpers_block_when_none_ran(helpers):
+    record = print_mode.summarize({"status": "success"}, "m", 0, helpers=helpers)
+    assert "helpers" not in record
+
+
+def test_summarize_takes_the_agents_cached_total_which_counts_helpers():
+    convo = [
+        {
+            "role": "system",
+            "content": {"type": "stats", "performance_stats": {"cached_tokens": 5}},
+        }
+    ]
+    result = {"status": "success", "conversation": convo, "cached_tokens": 35}
+    assert print_mode.summarize(result, "m", 0)["cached_tokens"] == 35
+
+
 @pytest.mark.parametrize("status", ["failed", "error", "incomplete", "max_steps"])
 def test_summarize_any_non_success_status_is_an_error(status):
     assert print_mode.summarize({"status": status}, "m", 0)["is_error"] is True
@@ -597,6 +651,32 @@ def test_agent_config_is_headless(stub_env):
     assert cfg.max_steps == 5
     assert cfg.model_id == "m1"
     assert cfg.base_url == "http://detected:13305/api/v1"
+
+
+def test_max_helpers_reaches_the_agent_config(stub_env):
+    print_mode.run("q", model="m", max_helpers=0)
+    assert _agent().config.max_helpers == 0
+
+
+def test_no_max_helpers_leaves_the_config_default(stub_env):
+    print_mode.run("q", model="m")
+    assert not hasattr(_agent().config, "max_helpers")
+
+
+def test_json_record_carries_the_helpers_the_agent_ran(stub_env, capsys):
+    class _Delegating(_StubAgent):
+        def helper_stats(self):
+            return dict(_HELPERS)
+
+    sys.modules["gaia_agent.agent"].GaiaAgent = _Delegating
+    assert print_mode.run("q", model="m", output_format="json") == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record["helpers"] == _HELPERS
+
+
+def test_json_record_has_no_helpers_when_none_ran(stub_env, capsys):
+    assert print_mode.run("q", model="m", output_format="json") == 0
+    assert "helpers" not in json.loads(capsys.readouterr().out)
 
 
 def test_explicit_base_url_wins_over_the_detected_one(stub_env):
@@ -822,6 +902,7 @@ def test_a_relayed_turn_that_errors_exits_1_with_the_reason(relay, capsys):
         ({"base_url": "http://h:1/api/v1"}, "--base-url"),
         # The relay has no way to stop the binary's turn at a deadline.
         ({"time_limit": 60}, "--time-limit"),
+        ({"max_helpers": 2}, "--max-helpers"),
     ],
 )
 def test_flags_the_agent_binary_cannot_honour_are_refused(relay, capsys, flags, named):
@@ -1234,6 +1315,12 @@ def test_attempts_skip_permissions_only_when_asked(monkeypatch, tmp_path):
     (tmp_path / "scratch").mkdir()
     print_mode.run("t", attempts=2, skip_permissions=True)
     assert seen["flags"] == ["--dangerously-skip-permissions"]
+
+
+def test_attempts_get_the_same_helper_setting(monkeypatch, tmp_path):
+    seen, _ = _attempt_doubles(monkeypatch, tmp_path)
+    print_mode.run("t", attempts=2, max_helpers=0)
+    assert seen["flags"] == ["--max-helpers", "0"]
 
 
 def test_drafts_are_removed_even_when_the_final_turn_fails(

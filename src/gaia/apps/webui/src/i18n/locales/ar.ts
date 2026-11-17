@@ -892,6 +892,8 @@ const messages: Messages = {
     'tool.sign_in_cli.active': 'تسجيل الدخول إلى أداة',
     'tool.sleep.done': 'انتظر',
     'tool.sleep.active': 'الانتظار',
+    'tool.delegate_task.done': 'وزّع العمل على مساعدين',
+    'tool.delegate_task.active': 'توزيع العمل على مساعدين',
     'tool.take_screenshot.done': 'التقط لقطة شاشة',
     'tool.take_screenshot.active': 'التقاط لقطة شاشة',
     'tool.text_to_speech.done': 'قرأ بصوت عالٍ',

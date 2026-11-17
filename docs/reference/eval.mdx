@@ -127,6 +127,11 @@ failures are the part worth reading.
 guides linked at the top of this page cover running it, authoring scenarios, and
 wiring it into CI.
 
+`gaia_delegation` checks when the flagship hands work to read-only helpers
+(`delegate_task`, see [Helpers](/guides/gaia#helpers)): one scenario where the job
+splits into independent reports to judge, one where a single computation on one
+CSV is the whole job and no helper should run. It runs in the `gaia-files` lane.
+
 ### When CI runs it
 
 The evals on the self-hosted AMD runners (`eval_flagship.yml`, `eval_retrieval.yml`,

@@ -8,6 +8,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
+- **The agent can hand reading to helpers (`delegate_task`).** A job with
+  several independent pieces of reading, such as one question per file, goes
+  to read-only helpers that each work in their own context, and only their
+  conclusions come back, so the agent's own context stays small. A helper can
+  only read (`read_file`, `search_file_content`, `browse_directory`,
+  `read_tool_output`) inside the agent's folders, never asks for approval and
+  inherits none of the agent's grants, and cannot start helpers of its own.
+  Each helper reports `ok`, `partial` or `failed`, and a failed one is never
+  reported as done. A cloud model runs 8 at once, a local model 1. `gaia -p
+  --max-helpers N` and `GAIA_MAX_HELPERS` set the number, and `0` removes the
+  tool; a compact model gets it only when the number is above 0. `gaia -p
+  --output-format json` adds a `helpers` block when helpers ran, and their
+  tokens count in the turn's totals once. The registered tool count is 106.
+
 ## [0.3.6]
 
 Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.

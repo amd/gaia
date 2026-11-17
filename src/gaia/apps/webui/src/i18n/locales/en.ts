@@ -892,6 +892,8 @@ export const enMessages = {
     'tool.sign_in_cli.active': 'Signing in to tool',
     'tool.sleep.done': 'Waited',
     'tool.sleep.active': 'Waiting',
+    'tool.delegate_task.done': 'Handed work to helpers',
+    'tool.delegate_task.active': 'Handing work to helpers',
     'tool.take_screenshot.done': 'Took screenshot',
     'tool.take_screenshot.active': 'Taking screenshot',
     'tool.text_to_speech.done': 'Read aloud',
