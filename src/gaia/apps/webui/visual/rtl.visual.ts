@@ -1496,7 +1496,8 @@ test('resource usage strip', async ({ page }) => {
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
     await expect(strip.locator('li')).toHaveCount(5);
     await expect(strip.getByText('45.0/63.6 GB')).toBeVisible();
-    await expect(strip.locator('li').last()).toContainText(/↑.*0.*↓.*8\.0.*Kbps/);
+    // The unit follows the Arabic figures, not only the English in brackets, which a narrow tile cuts.
+    await expect(strip.locator('li').last()).toContainText(/↑[^(]*0[^(]*↓[^(]*8\.0[^(]*Kbps/);
     // The close button sits at the row's end, which is the left in rtl.
     const closeBox = (await strip.getByRole('button').boundingBox())!;
     const firstTile = (await strip.locator('li').first().boundingBox())!;

@@ -18,6 +18,20 @@ export function isErrorContent(content: string): boolean {
     );
 }
 
+/** The answer an agent writes when a model call ends its turn (`_model_failure_answer` in agent.py). */
+const MODEL_FAILURE_RE = /^The model (?:call failed|stopped responding) at step \d+, so this request is unfinished\./;
+
+export function isModelFailure(content: string): boolean {
+    return MODEL_FAILURE_RE.test(content.trimStart());
+}
+
+/** The agent's own crash or start failure, which ends by naming its log folder (relay `stream_ended_text`). */
+const AGENT_LOG_DIR_RE = /[\\/]agents[\\/][^\\/\s]+[\\/]logs\b/;
+
+export function namesAgentLog(content: string): boolean {
+    return AGENT_LOG_DIR_RE.test(content);
+}
+
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 /**

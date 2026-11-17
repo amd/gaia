@@ -152,7 +152,7 @@ export function buildTiles(t: Translate, usage: ResourceUsage): Tile[] {
             tone: 'network',
             label: kindLabel(t, net, networks),
             value: '',
-            detail: `${t('resources.sendRecv', { send, recv })} ${unit[1]}`,
+            detail: t('resources.sendRecv', { send, recv, unit: unit[1] }),
             name: net.name,
             title: [
                 net.name,

@@ -52,6 +52,9 @@ class _ToolAgent:
         self.indexed_files: set = set()
         self.conversation_history: list = []
         self._cancel_event = None
+        # The sidecar syncs attached documents against these every turn.
+        self.indexed_files: set = set()
+        self.rag = None
         self.seen: list = []
         self.external_marks = 0
 

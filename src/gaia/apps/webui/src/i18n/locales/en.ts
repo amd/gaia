@@ -122,6 +122,7 @@ export const enMessages = {
     // The log viewer
     'logs.title': "Logs",
     'logs.serverLog': "Model server log",
+    'logs.agentLog': "Agent log",
     'logs.view': "View logs",
     'logs.settingsHint': "What GAIA, its background service, the agent, the desktop app and the model server wrote. Look here when something fails, and save them all to attach to a report.",
     'logs.close': "Close",
@@ -3683,7 +3684,7 @@ export const enMessages = {
     'resources.ethernet': 'Ethernet',
     'resources.wifi': 'Wi-Fi',
     'resources.network': 'Network',
-    'resources.sendRecv': 'S: {send} R: {recv}',
+    'resources.sendRecv': 'S: {send} R: {recv} {unit}',
     'resources.send': 'Send {rate}',
     'resources.receive': 'Receive {rate}',
     'resources.unavailable': 'Unavailable',
