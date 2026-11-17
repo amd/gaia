@@ -51,7 +51,18 @@ public:
         std::shared_ptr<std::atomic<bool>> internetOff;    // nothing that goes online runs
         std::shared_ptr<std::atomic<bool>> memoryOff;      // memory neither read nor written
         std::shared_ptr<std::atomic<bool>> memoryPrivate;  // memory read, nothing saved
+        // delegate_task: -1 = as many helpers at once as the model serves, 0 = no such tool,
+        // N = that many at once (and the tool is offered to a compact model too).
+        int maxHelpers = -1;
+        int helperMaxSteps = 30;         // one helper's step budget
+        int helperTimeoutSeconds = 600;  // one helper's wall-clock limit
     };
+
+    /// delegate_task for this agent: runs read-only helpers on stated tasks.
+    ToolInfo delegateTaskTool();
+
+    /// What this turn's helpers did and used, for the run's JSON output.
+    json helperStats() const;
 
     DocumentIndex* documents() { return docs_.get(); }
 
@@ -193,6 +204,16 @@ private:
     void registerCodeTools(std::shared_ptr<const Workspace> ws);
     std::unique_ptr<MemoryStore> memory_;
     std::unique_ptr<LemonadeClient> visionClient_;
+
+    json delegateTasks(const json& args);
+    std::shared_ptr<const Workspace> workspace_;  // null with full access
+    struct HelperTotals {
+        int runs = 0, ok = 0, partial = 0, failed = 0, width = 0;
+        UsageStats usage;
+        double wallSeconds = 0.0;
+    };
+    mutable std::mutex helperMu_;  // the totals, and the step log and console while helpers run
+    HelperTotals helperTotals_;
 
     void registerVisionTool(std::shared_ptr<const Workspace> ws);
 };

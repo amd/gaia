@@ -114,6 +114,8 @@ void GaiaAgent::registerTools() {
         reg.registerTool(std::move(sh));
         reg.registerTool(BashTools::envInspect());
     }
+    workspace_ = ws;
+    if (options_.maxHelpers != 0) toolRegistry().registerTool(delegateTaskTool());
     if (options_.webTools) WebTools::registerAll(toolRegistry());
     if (docs_) {
         docs_->registerTools(toolRegistry(), ws ? std::function<std::string(const std::string&)>(
@@ -260,7 +262,18 @@ std::string GaiaAgent::getSystemPrompt() const {
 - Remove personal data completely when asked to redact; check the result.
 
 ## Final answer
-Lead with the result. Name the files you created or changed. Cite where facts came from (file and page, sheet or line) when the user asked about documents. State plainly anything you could not do or verify. Keep it concise.)" + systemContext() +
+Lead with the result. Name the files you created or changed. Cite where facts came from (file and page, sheet or line) when the user asked about documents. State plainly anything you could not do or verify. Keep it concise.)" +
+           (tools().hasTool("delegate_task") && tools().isEnabled("delegate_task")
+                ? std::string(
+                      "\n\n## Helpers\ndelegate_task runs read-only helpers, each on one task in its own "
+                      "context, and returns their conclusions. Use it when the work is several independent "
+                      "pieces of reading or judgement, such as one per file or source. Give each helper a "
+                      "complete brief: what to find, which paths, and the exact answer format. Do the work "
+                      "yourself when one command or script covers it, when it is small, or when it writes. "
+                      "A helper can fail: read each status, then redo a failed part yourself or tell the user "
+                      "it is missing.")
+                : std::string()) +
+           systemContext() +
            (skills_ ? "\n" + skills_->renderPrompt() : std::string()) +
            (memory_ && !memoryOff() ? "\n" + memory_->promptBlock() : std::string());
 }
@@ -394,6 +407,15 @@ void GaiaAgent::onTurnStart() {
         if (toolRegistry().hasTool(name) && toolRegistry().isEnabled(name) == compact) {
             toolRegistry().setEnabled(name, !compact);
         }
+    }
+    // A compact model gets helpers only when asked for by number: its evals have not earned them.
+    if (toolRegistry().hasTool("delegate_task")) {
+        const bool offer = !compact || options_.maxHelpers > 0;
+        if (toolRegistry().isEnabled("delegate_task") != offer) toolRegistry().setEnabled("delegate_task", offer);
+    }
+    {
+        std::lock_guard<std::mutex> lock(helperMu_);
+        helperTotals_ = HelperTotals{};
     }
     std::error_code ec;
     std::string listing = folderListing(fs::current_path(ec));

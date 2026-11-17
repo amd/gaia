@@ -422,6 +422,7 @@ if(GAIA_BUILD_GAIA_AGENT)
     add_executable(gaiacpp
         agents/gaia/main.cpp
         agents/gaia/gaia_agent.cpp
+        agents/gaia/delegation.cpp
         agents/gaia/sidecar.cpp
         agents/gaia/stdio_server.cpp
         agents/bash/bash_tools.cpp
@@ -506,10 +507,12 @@ if(GAIA_BUILD_TESTS)
         tests/test_workspace.cpp
         tests/test_document_index.cpp
         tests/test_gaia_agent.cpp
+        tests/test_delegation.cpp
         tests/test_memory_store.cpp
         tests/test_skill_signing.cpp
         tests/test_media_tools.cpp
         agents/gaia/gaia_agent.cpp
+        agents/gaia/delegation.cpp
         agents/bash/bash_tools.cpp
         tests/test_console.cpp
         tests/test_http_client.cpp
