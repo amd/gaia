@@ -170,3 +170,13 @@ def test_long_chinese_document_is_summarized_in_several_sections():
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(saved)
+
+
+def test_no_overlap_repeats_nothing_between_chunks():
+    assert last_tokens("one two three four five", 0) == ""
+    sentences = [f"Sentence number {n} sits in its own place." for n in range(200)]
+    sdk = _sdk(chunk_size=40, chunk_overlap=0)
+    chunks = sdk._split_text_into_chunks(" ".join(sentences))
+    assert len(chunks) > 5
+    for sentence in sentences:
+        assert sum(sentence in chunk for chunk in chunks) == 1, sentence

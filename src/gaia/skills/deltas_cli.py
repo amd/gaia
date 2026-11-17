@@ -232,7 +232,7 @@ def handle_deltas(args: argparse.Namespace, skill) -> int:
             sys.stderr.write(
                 "gaia skill deltas: --drop-section needs --scope, so the "
                 "removal attaches to one agent rather than silently to none. "
-                "The scope is the agent id, e.g. --scope GaiaAgent.\n"
+                "The scope is the agent id, e.g. --scope installed:gaia.\n"
             )
             return EXIT_USAGE
         delta_id = store.put_delta(
