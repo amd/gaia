@@ -503,6 +503,22 @@ async def _stream_lemonade_pull(
                             logger.error(
                                 "Pull stream error for %s: %s", model_name, err_msg
                             )
+                # Only "complete" retires, so a stream that just ends must not
+                # leave the download showing as running forever.
+                current = _get_download_progress(model_name)
+                if current and current.get("state") in ("starting", "downloading"):
+                    logger.error("Pull stream ended early for %s", model_name)
+                    _set_download_progress(
+                        model_name,
+                        {
+                            **current,
+                            "state": "error",
+                            "message": (
+                                "Download stream interrupted: the model server "
+                                "ended the download before it finished"
+                            ),
+                        },
+                    )
     except LemonadeClientError as exc:
         logger.error("NPU backend not ready for %s: %s", model_name, exc)
         _set_download_progress(

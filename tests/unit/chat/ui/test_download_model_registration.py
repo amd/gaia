@@ -512,3 +512,94 @@ def test_status_uses_the_most_recent_of_two_other_downloads(monkeypatch):
     assert (
         system._surface_download_progress("other-GGUF")["model_name"] == "second-GGUF"
     )
+
+
+def _stream_of(monkeypatch, *blocks):
+    """A pull whose SSE stream yields *blocks* and then closes cleanly."""
+
+    class _Body:
+        status_code = 200
+
+        async def aiter_text(self):
+            for block in blocks:
+                yield block
+
+    class _Stream:
+        async def __aenter__(self):
+            return _Body()
+
+        async def __aexit__(self, *exc_args):
+            return False
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_args):
+            return False
+
+        def stream(self, method, url, json=None, headers=None):
+            return _Stream()
+
+        async def get(self, url, params=None, headers=None):
+            return httpx.Response(
+                200, json={"data": []}, request=httpx.Request("GET", url)
+            )
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+
+_HALFWAY = (
+    'event: progress\ndata: {"file": "a.gguf", "bytes_downloaded": 5, '
+    '"bytes_total": 10, "total_download_size": 10, "file_index": 1, '
+    '"total_files": 1}\n\n'
+)
+
+
+@pytest.mark.parametrize("blocks", [(), (_HALFWAY,)])
+def test_a_stream_that_just_ends_is_a_failure_not_a_download_forever(
+    monkeypatch, blocks
+):
+    """Only "complete" retires, so a silent close must not stay "downloading"."""
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    _stream_of(monkeypatch, *blocks)
+
+    asyncio.run(system._stream_lemonade_pull("Some-Unknown-GGUF", False))
+
+    progress = system._get_download_progress("Some-Unknown-GGUF")
+    assert progress["state"] == "error"
+    assert progress["message"] == (
+        "Download stream interrupted: the model server ended the download "
+        "before it finished"
+    )
+    assert system._surface_download_progress(None)["state"] == "error"
+
+
+def test_a_stream_that_completes_and_closes_stays_complete(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    _stream_of(
+        monkeypatch,
+        _HALFWAY,
+        'event: complete\ndata: {"file_index": 1, "total_files": 1}\n\n',
+    )
+
+    asyncio.run(system._stream_lemonade_pull("Some-Unknown-GGUF", False))
+
+    assert system._get_download_progress("Some-Unknown-GGUF")["state"] == "complete"
+
+
+def test_a_stream_error_event_keeps_its_message_after_the_close(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    monkeypatch.setattr(system, "_evict_progress_after_ttl", _keep)
+    _stream_of(monkeypatch, _HALFWAY, 'event: error\ndata: {"error": "disk full"}\n\n')
+
+    asyncio.run(system._stream_lemonade_pull("Some-Unknown-GGUF", False))
+
+    assert system._get_download_progress("Some-Unknown-GGUF")["message"] == (
+        "disk full"
+    )
