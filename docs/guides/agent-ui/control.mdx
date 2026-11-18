@@ -186,9 +186,12 @@ When the same question comes back after you allowed it once, the prompt says
 so and highlights **Always allow**. It never answers for you, and a different
 tool or a riskier call gets no hint.
 
-Pick **Full access** from the shield to stop most of these questions in a chat
-(you confirm once). It does not open the shell: a gated `run_shell_command` — a
-delete, `git add` — still asks, and runs only when you allow it.
+Pick **Full access** from the shield to stop these questions in a chat (you
+confirm once). Full access has no limits: any command runs whole in your
+system shell, and GAIA can read or change any file or folder on the PC,
+including credential files, GAIA's own settings and a folder you removed from
+the chat. Use it only for work you would let a program do unattended. Commands
+are still logged and stopped at their timeout, and Stop still works.
 **Settings → Permissions** lists every chat with full access or "always allow"
 answers and lets you revoke them. Grants end when GAIA restarts.
 

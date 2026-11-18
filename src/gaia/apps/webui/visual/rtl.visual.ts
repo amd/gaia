@@ -5809,3 +5809,42 @@ for (const locale of ['ar', 'en']) {
         if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
     });
 }
+
+for (const locale of ['ar', 'en']) {
+    for (const width of [1280, 390]) {
+        // The warning names all that full access reaches, so it wraps to several lines in a narrow menu.
+        test(`the full-access warning fits its menu (${locale}, ${width})`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 844 });
+            await open(page, '', locale);
+            await page.locator('.composer-chip:has(svg.lucide-shield-check)').first().click();
+            await page.locator('.popover-item').nth(1).click();
+            const warning = page.locator('.popover-message[role="alert"]');
+            await expect(warning).toBeVisible();
+            await shot(page, `full-access-warning-${locale}-${width}`);
+            // The menu scrolls when it is short on room: the warning and its button must be in the part shown.
+            const box = await warning.evaluate((el) => {
+                const r = el.getBoundingClientRect();
+                const menu = el.closest('.popover')!.getBoundingClientRect();
+                return { shown: r.top >= menu.top - 1 && r.bottom <= menu.bottom + 1 && menu.bottom <= innerHeight, clipped: el.scrollWidth > el.clientWidth + 1 };
+            });
+            expect(box).toEqual({ shown: true, clipped: false });
+            await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+            expect(await audit(page)).toEqual([]);
+        });
+    }
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`settings permissions: the full-access warning before it is turned on (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="permissions"]').click();
+        await page.locator('.settings-pane .toggle-track').first().click();
+        const warning = page.locator('.settings-warning[role="alert"]');
+        await expect(warning).toBeVisible();
+        await warning.scrollIntoViewIfNeeded();
+        await shot(page, `settings-full-access-warning-${locale}`);
+        expect(await warning.evaluate((el) => el.scrollWidth > el.clientWidth + 1)).toBe(false);
+        expect(await audit(page)).toEqual([]);
+    });
+}
