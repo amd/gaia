@@ -8087,6 +8087,12 @@ class ShellToolsMixin:
                         os.remove(leftover)
         if undo_note:
             result["note"] = " ".join(filter(None, (result.get("note"), undo_note)))
+        # One step only: after `a && b` the shell's code may be either one's.
+        if len(steps) == 1 and result.get("return_code") == 1:
+            answer = _answer_exit(steps[0].segments[-1], 1)
+            if answer and result.get("status") == "error":
+                result.update(status="success", has_errors=False, expected_exit=answer)
+                result.pop("error", None)
         return result
 
     def _spawn_full_access(

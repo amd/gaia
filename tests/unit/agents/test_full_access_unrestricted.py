@@ -444,3 +444,33 @@ class TestCodeIndex:
         assert sdk._read_file_safe(str(outside)) is None
         state["on"] = True
         assert "x = 1" in sdk._read_file_safe(str(outside))
+
+
+_SEARCH = "findstr" if _WINDOWS else "grep"
+
+
+def test_a_search_that_finds_nothing_is_an_answer_under_full_access(layout):
+    """Ask mode already read grep's exit 1 as "no match"; full access called it a failure."""
+    (layout["project"] / "notes.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+    agent = _Agent(layout["project"], True)
+
+    result = _shell(agent, f"{_SEARCH} gamma notes.txt", layout["project"])
+
+    assert result["status"] == "success", result
+    assert result["return_code"] == 1
+    assert "nothing matches" in result["expected_exit"]
+    assert "error" not in result
+
+
+def test_a_real_failure_is_still_a_failure_under_full_access(layout):
+    agent = _Agent(layout["project"], True)
+
+    other = _shell(
+        agent, f'"{sys.executable}" -c "raise SystemExit(1)"', layout["project"]
+    )
+    chained = _shell(
+        agent, f"echo hi && {_SEARCH} gamma notes-missing.txt", layout["project"]
+    )
+
+    assert other["status"] == "error", other
+    assert chained["status"] == "error", chained
