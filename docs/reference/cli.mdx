@@ -1760,11 +1760,12 @@ gaia connectors <subcommand> [OPTIONS]
 
 | Subcommand | Description |
 |-----------|-------------|
-| `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output) |
-| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:gaia`) in the same flow, `--device` for the device-code flow. The browser sign-in link works for 15 minutes |
+| `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output). A connector with several accounts, or one whose sign-in expired, gets a line per account underneath; the JSON row carries them in `accounts` |
+| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:gaia`) in the same flow, `--device` for the device-code flow. The browser sign-in link works for 15 minutes. `--add` connects another account beside the ones already connected (the provider shows its account picker); `--account <address>` reconnects that account. Signing in as the same account again updates it; a different account is added, never written over another |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys), or `--client-id` / `--client-secret` to store an OAuth connector's client credentials (the secret is required for Google only; cannot be combined with `--set`/`--json`) |
 | `test <id>` | Check a configured connector. An OAuth account refreshes its sign-in. An MCP server is started once, and the check reports whether it started (with its tool count) or why it didn't. Some servers, like GitHub and Tavily, only check their key when a tool runs, so they pass with a bad key |
-| `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
+| `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. With several accounts connected, name one with `--account <address>` or remove them all with `--all`; a bare `disconnect` refuses and lists them. Agent grants are kept until the last account is removed |
+| `set-default <id> <account>` | Make that account the one agents use when they don't name an account. The first account connected is the default until changed |
 | `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
 | `activations {list\|activate\|deactivate}` | Manage per-agent MCP tool visibility (`mcp_server` connectors only) |
 
@@ -1787,6 +1788,12 @@ gaia connectors connect microsoft --device
 # connectable at the same time. Its own client id env var.
 export GAIA_MICROSOFT_WORK_CLIENT_ID=<application-client-id>
 gaia connectors connect microsoft_work --device
+```
+
+```bash Add a second Google account
+gaia connectors connect google --add
+gaia connectors set-default google work@example.com
+gaia connectors disconnect google --account old@example.com
 ```
 
 ```bash Configure an MCP server token

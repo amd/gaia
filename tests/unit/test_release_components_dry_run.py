@@ -154,3 +154,27 @@ def test_a_dispatch_never_waits_hours_for_a_missing_release(workflow):
         if s.get("name") == "Attach the installers and their checksums"
     )
     assert "steps.release.outputs.exists == 'true'" in attach["if"]
+
+
+def test_windows_setup_is_skipped_without_a_github_release(workflow):
+    version = workflow["jobs"]["version"]
+    assert version["outputs"]["release_exists"] == "${{ steps.release.outputs.exists }}"
+
+    check = next(step for step in version["steps"] if step.get("id") == "release")
+    assert "gh release view" in check["run"]
+    assert "workflow_dispatch" in check["run"]
+
+    for job_id in ("windows-setup", "windows-setup-missing"):
+        condition = str(workflow["jobs"][job_id].get("if", ""))
+        assert (
+            "needs.version.outputs.release_exists == 'true'" in condition
+        ), f"{job_id} must not run before the GitHub release exists"
+
+    summary = next(
+        step
+        for step in version["steps"]
+        if step.get("name") == "Note the skipped Windows setup"
+    )
+    assert "steps.release.outputs.exists != 'true'" in summary["if"]
+    assert "GITHUB_STEP_SUMMARY" in summary["run"]
+    assert "no GitHub release" in summary["run"]

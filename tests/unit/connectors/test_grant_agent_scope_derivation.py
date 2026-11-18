@@ -301,7 +301,7 @@ class TestSharedResolverCallSites:
         monkeypatch.setattr("gaia.connectors.api.resolve_declared_scopes", spy)
         _stub_registry_chain(monkeypatch, regs=[])
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             return {"flow_id": "F1", "authorization_url": "https://auth.example"}
 
         async def _fake_complete(flow_id):
@@ -400,7 +400,7 @@ class TestFlagshipSidecarGrantDerivation:
 
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["grant_agents"] = grant_agents
             return {"flow_id": "F1", "authorization_url": "https://auth.example"}
 
