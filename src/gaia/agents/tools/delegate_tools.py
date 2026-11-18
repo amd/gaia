@@ -368,6 +368,22 @@ class _Task:
     text: str
     paths: List[str] = field(default_factory=list)
     answer_chars: int = CONCLUSION_CHARS
+    #: One group of a task that was shared out among helpers.
+    shared: bool = False
+
+    @property
+    def label(self) -> str:
+        """What the result calls this task; after a share-out the files lead."""
+        if not self.shared:
+            return self.text
+        names = ""
+        for path in self.paths:
+            name = os.path.basename(path)
+            if names and len(names) + len(name) > 70:
+                names += ", ..."
+                break
+            names += (", " if names else "") + name
+        return f"{names}: {self.text}"
 
     @property
     def brief(self) -> str:
@@ -626,7 +642,7 @@ class DelegateToolsMixin:
         started = time.monotonic()
         record: Dict[str, Any] = {
             "id": number,
-            "task": _clip(task.text.strip(), TASK_ECHO_CHARS),
+            "task": _clip(task.label.strip(), TASK_ECHO_CHARS),
         }
         usage = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0}
         answer: Optional[str] = None
@@ -700,6 +716,8 @@ class DelegateToolsMixin:
         parsed = self._parse_helper_tasks(tasks)
         if isinstance(parsed, dict):
             return parsed
+        limit = max(int(self._truncation_budget()[0]), 0)
+        parsed, shared_out = _share_out(parsed, max(2 * limit, 16000))
 
         width, source, note = helper_width(
             getattr(self, "model_id", None),
@@ -709,7 +727,6 @@ class DelegateToolsMixin:
         at_once = min(len(parsed), width)
         parent_stopped = self._parent_stop_check()
         # What one conclusion can be so all of them reach the parent unclipped.
-        limit = max(int(self._truncation_budget()[0]), 0)
         answer_chars = next(
             (
                 each
@@ -796,6 +813,12 @@ class DelegateToolsMixin:
             out["width_note"] = f"Ran one helper at a time: {note}"
         if advice:
             out["advice"] = " ".join(advice)
+        if shared_out:
+            out["shared_out"] = (
+                "A task that named many files was shared among helpers, each given "
+                "the same brief and a group of the files; each helper's task starts "
+                "with the files it had."
+            )
         if ok + partial == 0:
             out["error"] = f"{summary} {out['advice']}"
         self._fit_conclusions(out, parsed, [answer for _, _, answer in outcomes])
@@ -811,7 +834,7 @@ class DelegateToolsMixin:
         handles: Dict[int, str] = {}
         for conclusion_chars, task_chars in _RESULT_SIZES:
             for i, record in enumerate(out["helpers"]):
-                record["task"] = _clip(tasks[i].text.strip(), task_chars)
+                record["task"] = _clip(tasks[i].label.strip(), task_chars)
                 answer = answers[i]
                 if answer is None:
                     continue
@@ -833,6 +856,45 @@ class DelegateToolsMixin:
         if not hasattr(self, "_output_reader_entry"):
             self._register_output_reader()
         return store_for(self).put_result(answer)
+
+
+def _share_out(tasks: List[_Task], share: int) -> Tuple[List[_Task], int]:
+    """Share a task that names more files than one helper should read among
+    helpers, the same brief to each: a small model hands everything to one
+    helper, which then does the whole job alone. *share* is the bytes one
+    helper takes; it doubles until the groups fit one call. Returns the tasks
+    and how many were shared out.
+    """
+    while True:
+        spread: List[_Task] = []
+        shared_out = 0
+        for task in tasks:
+            sizes: List[int] = []
+            for path in task.paths:
+                if not os.path.isfile(path):
+                    sizes = []
+                    break
+                sizes.append(os.path.getsize(path))
+            if len(sizes) < 2:
+                spread.append(task)
+                continue
+            groups: List[_Task] = []
+            group, held = _Task(task.text, shared=True), 0
+            for path, size in zip(task.paths, sizes):
+                if group.paths and held + size > share:
+                    groups.append(group)
+                    group, held = _Task(task.text, shared=True), 0
+                group.paths.append(path)
+                held += size
+            groups.append(group)
+            if len(groups) > 1:
+                shared_out += 1
+                spread.extend(groups)
+            else:
+                spread.append(task)
+        if len(spread) <= MAX_HELPER_TASKS:
+            return spread, shared_out
+        share *= 2
 
 
 def _empty_totals() -> Dict[str, Any]:

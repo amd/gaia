@@ -866,3 +866,59 @@ def test_mixed_failures_at_full_width_repeated(work):
         assert (result["status"] == "success") == (ok == 16)
     alive = [t.name for t in threading.enumerate() if t.name.startswith("gaia-helper")]
     assert not alive, alive
+
+
+def test_a_task_naming_many_files_is_shared_among_helpers(work):
+    parent = _parent(work, max_helpers=8)
+    parent._truncation_budget = lambda: (8000, 5000)
+    paths = []
+    for i in range(6):
+        path = work / f"doc_{i}.md"
+        path.write_text("a" * 12000)
+        paths.append(str(path))
+    model = _Model(_echo())
+    result = _delegate(
+        parent, model, {"tasks": [{"task": "Summarise each document", "paths": paths}]}
+    )
+    assert result["status"] == "success", result
+    assert len(result["helpers"]) == 6
+    assert "shared_out" in result
+    assert result["helpers"][0]["task"] == "doc_0.md: Summarise each document"
+    seen = set()
+    for request in model.requests:
+        sent = _text(request["messages"])
+        named = [i for i in range(6) if f"doc_{i}.md" in sent]
+        assert len(named) == 1, "each helper is sent only its own file"
+        assert "Summarise each document" in sent
+        seen.update(named)
+    assert seen == set(range(6))
+
+    small = []
+    for i in range(6):
+        path = work / f"note_{i}.md"
+        path.write_text("short")
+        small.append(str(path))
+    one = _delegate(
+        parent, _Model(_echo()), {"tasks": [{"task": "Read the notes", "paths": small}]}
+    )
+    assert len(one["helpers"]) == 1
+    assert "shared_out" not in one
+    assert one["helpers"][0]["task"] == "Read the notes"
+
+    folder = _delegate(
+        parent,
+        _Model(_echo()),
+        {"tasks": [{"task": "Read the folder", "paths": [str(work), paths[0]]}]},
+    )
+    assert len(folder["helpers"]) == 1
+
+    many = []
+    for i in range(40):
+        path = work / f"big_{i}.md"
+        path.write_text("b" * 12000)
+        many.append(str(path))
+    capped = _delegate(
+        parent, _Model(_echo()), {"tasks": [{"task": "Summarise", "paths": many}]}
+    )
+    assert 8 <= len(capped["helpers"]) <= 16
+    assert capped["status"] == "success"
