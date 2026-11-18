@@ -13,6 +13,9 @@ Usage::
 
     # CI drift check — non-zero exit if the committed file is stale:
     python -m gaia.ui.export_openapi --check
+
+Run it from the repo root of the checkout ``gaia`` is imported from; it refuses
+(exit 2) elsewhere. From another worktree, prefix ``PYTHONPATH=$PWD/src``.
 """
 
 from __future__ import annotations
@@ -22,6 +25,8 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict
+
+from gaia.ui._export_checkout import require_matching_checkout
 
 ARTIFACT_PATH = (
     Path(__file__).resolve().parents[1]
@@ -58,6 +63,10 @@ def main(argv: list[str] | None = None) -> int:
         help="exit non-zero if the committed schema file is stale",
     )
     args = parser.parse_args(argv)
+
+    refused = require_matching_checkout("gaia.ui.export_openapi")
+    if refused is not None:
+        return refused
 
     rendered = render(build_schemas())
     if args.check:
