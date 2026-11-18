@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { Children, createContext, useContext, type ReactNode } from 'react';
-import { Text as RNText, View, type AccessibilityRole, type TextStyle } from 'react-native';
+import { Platform, Text as RNText, View, type AccessibilityRole, type TextStyle } from 'react-native';
 import { glossParts, stripIsolates } from '@webui/i18n/registry';
 import { useDirection } from '@/i18n/useT';
 import { metrics } from '../tokens/generated';
@@ -48,6 +48,15 @@ const InsideText = createContext(false);
 const GLOSS_MIN_SIZE = 11;
 const GLOSS_LINE_HEIGHT = 1.3;
 const LONG_GLOSS_LENGTH = 40;
+
+/** Whether a string child carries an English gloss. */
+function hasGloss(children: ReactNode): boolean {
+    let found = false;
+    Children.forEach(children, (child) => {
+        if (typeof child === 'string' && glossParts(child)) found = true;
+    });
+    return found;
+}
 
 /** A gloss that is a sentence (or several), or longer than `limit` characters, wraps badly inline, so it gets its own block. */
 export function isLongGloss(english: string, limit = LONG_GLOSS_LENGTH): boolean {
@@ -148,6 +157,8 @@ export function Text({
     }
     if (strike || underline) style.textDecorationLine = strike && underline ? 'underline line-through' : strike ? 'line-through' : 'underline';
     if (dir) style.writingDirection = dir;
+    // iOS lays a paragraph with a nested span out left to right unless told the UI direction.
+    else if (Platform.OS !== 'web' && !nested && !dirProp && !forced && hasGloss(children)) style.writingDirection = uiDir;
     // textAlign left/right are physical on native too (not swapped under forceRTL), so the start side is picked by direction.
     // A pinned-direction block (HScroll) sets `forced` for text that carries no direction of its own.
     const startsRight = (dir ?? forced ?? (rtl ? 'rtl' : 'ltr')) === 'rtl';
@@ -167,7 +178,8 @@ export function Text({
         lineHeight: Math.round(glossSize * GLOSS_LINE_HEIGHT),
         color: toneColor(colors, 'muted'),
         writingDirection: 'ltr',
-        textAlign: align === 'center' ? 'center' : 'left',
+        // The gloss sits on the same reading edge as the text it translates, though it reads left to right.
+        textAlign: style.textAlign ?? 'left',
         marginTop: space.xs,
     };
     const main = (

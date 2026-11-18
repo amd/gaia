@@ -3,7 +3,7 @@
 
 import { render, screen } from '@testing-library/react-native';
 import type { ReactNode } from 'react';
-import { Platform } from 'react-native';
+import { Platform, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { isolate } from '@webui/i18n/registry';
 
@@ -43,8 +43,25 @@ describeNative('Text with a long English gloss', () => {
         await render(<Text testID="t">{glossed('إضافة مهارات', LONG)}</Text>, { wrapper: wrap });
         const block = screen.getByTestId('t-gloss');
         expect(block.props.children).toBe(LONG);
-        expect(block.props.style).toMatchObject({ writingDirection: 'ltr', textAlign: 'left', marginTop: 4 });
+        expect(block.props.style).toMatchObject({ writingDirection: 'ltr', textAlign: 'right', marginTop: 4 });
+        expect(block.props.style.textAlign).toBe(StyleSheet.flatten(screen.getByTestId('t').props.style).textAlign);
         expect(screen.getByTestId('t')).not.toHaveTextContent('(');
+    });
+
+    it('puts the block on the start edge in English too', async () => {
+        useLocaleStore.getState().setLocale(null);
+        await render(<Text testID="t">{glossed('Add skills', LONG)}</Text>, { wrapper: wrap });
+        const main = StyleSheet.flatten(screen.getByTestId('t').props.style).textAlign;
+        expect(screen.getByTestId('t-gloss').props.style.textAlign).toBe(main);
+        expect(main).toBe('left');
+    });
+
+    it('pins an inline gloss line to the UI direction', async () => {
+        await render(<Text testID="t">{glossed('عام', 'General')}</Text>, { wrapper: wrap });
+        expect(StyleSheet.flatten(screen.getByTestId('t').props.style).writingDirection).toBe('rtl');
+        useLocaleStore.getState().setLocale(null);
+        await render(<Text testID="e">{glossed('General', 'General')}</Text>, { wrapper: wrap });
+        expect(StyleSheet.flatten(screen.getByTestId('e').props.style).writingDirection).toBe('ltr');
     });
 
     it('keeps a short gloss inline with brackets', async () => {
