@@ -275,8 +275,9 @@ Lead with the result. Name the files you created or changed. Cite where facts ca
                       "file. Otherwise give one task per piece. Make a brief complete: what to find and the "
                       "exact answer format, kept short. Do the work yourself when one command or script covers "
                       "it, when it is small, or when it writes. "
-                      "A helper can fail: read each status, then redo a failed part yourself or tell the user "
-                      "it is missing.")
+                      "When helpers come back, answer from their conclusions: do not read the same material again "
+                      "yourself. A helper can fail: read each status, then redo a failed part yourself or tell "
+                      "the user it is missing.")
                 : std::string()) +
            systemContext() +
            (skills_ ? "\n" + skills_->renderPrompt() : std::string()) +

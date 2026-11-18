@@ -113,8 +113,9 @@ std::string HelperAgent::getSystemPrompt() const {
         "3. Never invent facts, numbers or quotes. If the answer is not in the material, say exactly that.\n\n"
         "## Answer\n"
         "Give the result first, in the format the task asks for, then the evidence as file name "
-        "and line. State plainly what you could not find or read. Keep it short: the agent that "
-        "asked sees only your answer.\n\n"
+        "and line, quoting the words that prove it. Say which files you read in full, and state "
+        "plainly what you could not find or read: the agent that asked will rely on your answer "
+        "and will not read the files again. Keep it short.\n\n"
         "## Environment\n- Working directory: " +
         fs::current_path(ec).u8string() + "\n";
     if (workspace_ && !workspace_->roots().empty()) {
@@ -494,9 +495,13 @@ json GaiaAgent::delegateTasks(const json& args) {
     if (partial > 0) summary += ", " + std::to_string(partial) + " stopped short";
     if (failed > 0) summary += ", " + std::to_string(failed) + " failed";
     summary += ".";
-    std::string advice;
+    // Without this a capable model reads everything again itself, which costs far more than the helpers did.
+    std::string advice = ok > 0 ? "The helpers read this material: answer from their conclusions and do not read it "
+                                  "again yourself. Check one claim only if it looks wrong or two helpers disagree."
+                                : "";
     if (failed > 0) {
-        advice = "A FAILED helper returned nothing usable: do that work yourself or tell the user it is missing.";
+        advice += advice.empty() ? "" : " ";
+        advice += "A FAILED helper returned nothing usable: do that part yourself or tell the user it is missing.";
     }
     if (partial > 0) {
         advice += std::string(advice.empty() ? "" : " ") +
