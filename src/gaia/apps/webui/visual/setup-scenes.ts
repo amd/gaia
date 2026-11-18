@@ -244,6 +244,8 @@ interface SetupAnswers {
     theirs?: boolean;
     /** The agent programs and the gaiacpp download, when a scene isn't about the default. */
     agent?: AgentProgramsAnswers;
+    /** Continue was pressed with gaiacpp picked: setup's run waits for its download (as after a reload). */
+    agentHeld?: boolean;
 }
 
 const THEIRS_TARGET = {
@@ -253,7 +255,7 @@ const THEIRS_TARGET = {
 const THEIRS_FOUND = { found: { url: 'http://localhost:13305/api/v1', version: '2026.44.1', status: 'ok', message: null }, unchecked: [] };
 
 /** First-run setup, every call the screens make answered from the backend's shapes. */
-export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, envKey = false, localOnly = false, theirs = false, agent }: SetupAnswers = {}): Promise<void> {
+export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, envKey = false, localOnly = false, theirs = false, agent, agentHeld = false }: SetupAnswers = {}): Promise<void> {
     const prices = { provider: 'fireworks', models: [{ model: 'qwen', name: 'Qwen3.6', rank: 1, note: null, price: { input_per_million: 0.5, cached_input_per_million: 0.1, output_per_million: 3, source: 'list price' } }], source: 'Fireworks list price', note: null };
     const answers: Record<string, unknown> = {
         'GET /setup/check': { ready: false, stage: 'setup', reasons: [], steps: [{ key: 'server', label: 'Install the local model server', detail: 'about 1 minute' }] },
@@ -284,6 +286,12 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
         else await route.fallback();
     });
     if (agent) await withAgentPrograms(page, agent);
+    if (agentHeld) {
+        await page.addInitScript(() => {
+            sessionStorage.setItem('gaia.setup.agentPick', JSON.stringify({ id: 'gaiacpp', download: true, current: 'gaiapy' }));
+            sessionStorage.setItem('gaia.setup.heldRun', JSON.stringify({ acknowledgeLowDisk: false }));
+        });
+    }
 }
 
 const hero = (page: Page) => page.locator('.setup-hero').first();
@@ -638,20 +646,25 @@ export const SETUP_SCENES: SetupScene[] = [
     },
     {
         name: 'download-gaiacpp-downloading',
-        answers: { status: RUN, agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING } },
+        answers: { agentHeld: true, agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING } },
         reach: async (page) => {
             const bar = page.getByRole('progressbar', { name: /gaiacpp/ });
             await expect(bar).toHaveAttribute('aria-valuenow', '40');
-            await bar.scrollIntoViewIfNeeded();
+            // The run waits on the agent: the rest is listed as not started, with no overall bar yet.
+            await expect(page.locator('.setup-contents .setup-content.is-waiting').first()).toBeVisible();
+            await expect(page.getByRole('progressbar', { name: /Overall/ })).toHaveCount(0);
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
         },
     },
     {
         name: 'download-gaiacpp-failed',
-        answers: { status: RUN, agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING, poll: AGENT_DOWNLOAD_FAILED } },
+        answers: { agentHeld: true, agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING, poll: AGENT_DOWNLOAD_FAILED } },
         reach: async (page) => {
             const failed = page.locator('.agent-download .dl-fail');
             await expect(failed).toBeVisible();
+            // Two ways on: Retry in the row, and carrying on with gaiapy in the bottom bar.
             await expect(failed.getByRole('button')).toBeVisible();
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
             await failed.scrollIntoViewIfNeeded();
         },
     },

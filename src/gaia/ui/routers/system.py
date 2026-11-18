@@ -1191,6 +1191,18 @@ def _set_flagship_agent(choice: str) -> None:
         # Already what runs here; saving it makes the terminal UI use it too.
         GaiaConfig.save_key("flagship_agent", choice)
         return
+    from gaia.ui.setup_runner import runner as setup_runner
+
+    setup = setup_runner.status() or {}
+    if setup.get("state") in ("running", "verifying"):
+        # Setup's own test chat runs on the agent; stopping it fails setup.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "GAIA is still setting up and testing the agent. Switch once "
+                "setup has finished."
+            ),
+        )
     if run_manager.active_sessions():
         raise HTTPException(
             status_code=409,

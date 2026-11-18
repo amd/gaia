@@ -382,3 +382,22 @@ def test_the_version_a_release_candidate_prints_is_read_whole(
     binary = tmp_path / "gaiacpp"
     assert fetch.native_flagship_stamp(binary) == stamp
     assert fetch.native_flagship_version(binary) == version
+
+
+def test_a_switch_is_refused_while_setup_is_running_its_tests(
+    client, fake_gaiacpp, stops, monkeypatch
+):
+    from gaia.ui.setup_runner import runner
+
+    monkeypatch.setattr(runner, "status", lambda: {"state": "verifying"})
+    r = client.put("/api/settings", json={"flagship_agent": "gaiacpp"})
+    assert r.status_code == 409
+    assert "setting up" in r.json()["detail"]
+    assert fetch.chosen_flagship() == "gaiapy"
+    assert stops == []
+
+    monkeypatch.setattr(runner, "status", lambda: {"state": "ready"})
+    assert (
+        client.put("/api/settings", json={"flagship_agent": "gaiacpp"}).status_code
+        == 200
+    )

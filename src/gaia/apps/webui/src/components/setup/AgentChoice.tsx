@@ -26,13 +26,21 @@ const OPTIONS: Option[] = [
 
 const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+/** Setup's pick: saved on Continue, and downloaded first when `download` is set. */
+export interface AgentPick {
+    id: FlagshipAgent;
+    download: boolean;
+    /** The agent in use now, which setup carries on with if the pick can't be had. */
+    current: FlagshipAgent;
+}
+
 interface Props {
     /** In Settings: a settings card; a gaiacpp not on this PC has a Download button, and switches once that finishes. */
     inSettings?: boolean;
     disabled?: boolean;
-    /** Setup: gaiacpp picked but not downloaded yet; it downloads with the models. */
+    /** Setup: the agent picked here, held until Continue; null keeps the one in use. */
     pending?: FlagshipAgent | null;
-    onPending?: (id: FlagshipAgent | null) => void;
+    onPending?: (pick: AgentPick | null) => void;
 }
 
 /** Which program runs the GAIA agent: the Python one or the native C++ one. */
@@ -101,12 +109,13 @@ export function AgentChoice({ inSettings = false, disabled = false, pending = nu
 
     const choose = (id: FlagshipAgent) => {
         const p = program(id);
-        if (!listing || !p || disabled || saving || downloading || off(p) || needsDownload(p)) return;
-        if (!installed(p)) {
-            onPending?.(id);
+        if (!listing || !p || disabled || off(p)) return;
+        // Setup saves nothing here: Continue gets the agent and saves it before setup's own test runs.
+        if (!inSettings) {
+            onPending?.(id === listing.current ? null : { id, download: !installed(p), current: listing.current });
             return;
         }
-        onPending?.(null);
+        if (saving || downloading || needsDownload(p)) return;
         if (id !== listing.current) void save(id, listing.current);
     };
 

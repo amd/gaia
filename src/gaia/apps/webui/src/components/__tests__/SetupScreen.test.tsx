@@ -892,59 +892,31 @@ describe('SetupScreen: warnings and confirmations', () => {
 });
 
 describe('SetupScreen: agent', () => {
-    it('Customize offers the two agents and saves the one picked', async () => {
-        mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+    const running = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9 })]);
+    const job = (over: Partial<AgentDownload>): AgentDownload => ({ state: 'downloading', bytes_done: 2_720_000, bytes_total: 6_800_000, error: null, ...over });
+    const order = (fn: { mock: { invocationCallOrder: number[] } }) => fn.mock.invocationCallOrder[0];
+
+    beforeEach(() => {
+        mockedApi.startSetup.mockResolvedValue(running);
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(running);
+    });
+
+    async function pick(name: RegExp) {
         await open();
         await toModels();
         const agent = within(await screen.findByRole('region', { name: 'Agent' }));
-        expect(await agent.findByRole('radio', { name: /gaiapy/ })).toHaveAttribute('aria-checked', 'true');
-        fireEvent.click(agent.getByRole('radio', { name: /gaiacpp/ }));
-        expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
-        await waitFor(() => expect(agent.getByRole('radio', { name: /gaiacpp/ })).toHaveAttribute('aria-checked', 'true'));
-    });
+        fireEvent.click(await agent.findByRole('radio', { name }));
+        expect(agent.getByRole('radio', { name })).toHaveAttribute('aria-checked', 'true');
+    }
 
-    describe('gaiacpp not on this PC', () => {
-        const running = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9 })]);
-        const job = (over: Partial<AgentDownload>): AgentDownload => ({ state: 'downloading', bytes_done: 2_720_000, bytes_total: 6_800_000, error: null, ...over });
-
-        beforeEach(() => {
-            mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp());
-            mockedApi.startSetup.mockResolvedValue(running);
-            mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(running);
-        });
-
-        async function pickAndContinue() {
-            await open();
-            await toModels();
-            const agent = within(await screen.findByRole('region', { name: 'Agent' }));
-            fireEvent.click(await agent.findByRole('radio', { name: /gaiacpp/ }));
-            expect(agent.getByRole('radio', { name: /gaiacpp/ })).toHaveAttribute('aria-checked', 'true');
-            expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
-            clickContinue();
-            await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
-        }
-
-        it('downloads in the Download step with its own bar, then becomes the agent', async () => {
-            mockedApi.startAgentDownload.mockResolvedValue(job({}));
-            mockedApi.getAgentDownload.mockResolvedValue(job({ state: 'done', bytes_done: 6_800_000 }));
-            mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
-            await pickAndContinue();
-            await waitFor(() => expect(mockedApi.startAgentDownload).toHaveBeenCalledTimes(1));
-            expect(mockedApi.updateSettings).not.toHaveBeenCalled();
-            const bar = await screen.findByRole('progressbar', { name: /gaiacpp/ });
-            expect(bar).toHaveAttribute('aria-valuenow', '40');
-            await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' }), { timeout: 3000 });
-        });
-
-        it('a failed download says setup carries on with gaiapy, and retries', async () => {
-            mockedApi.startAgentDownload.mockResolvedValue(job({ state: 'failed', error: 'Connection reset.' }));
-            await pickAndContinue();
-            const alert = await screen.findByText("gaiacpp didn't download.");
-            expect(alert.closest('[role="alert"]')).toHaveTextContent('Setup carries on with gaiapy.');
-            expect(mockedApi.updateSettings).not.toHaveBeenCalled();
-            fireEvent.click(within(alert.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: /Retry/ }));
-            await waitFor(() => expect(mockedApi.startAgentDownload).toHaveBeenCalledTimes(2));
-        });
+    it('gaiapy: nothing about the agent is saved, and the run starts as before', async () => {
+        await open();
+        await toModels();
+        await screen.findByRole('region', { name: 'Agent' });
+        clickContinue();
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
+        expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+        expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
     });
 
     it('stays out of the plain path, which keeps the default', async () => {
@@ -952,6 +924,98 @@ describe('SetupScreen: agent', () => {
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalled());
         expect(screen.queryByRole('region', { name: 'Agent' })).toBeNull();
         expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+    });
+
+    it('gaiacpp already here: picked on Customize, saved on Continue, then the run starts', async () => {
+        mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+        await pick(/gaiacpp/);
+        expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+        clickContinue();
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
+        expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
+        expect(order(mockedApi.updateSettings)).toBeLessThan(order(mockedApi.startSetup));
+        expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
+    });
+
+    it('a refused save (busy, 409) starts no run, says why, and offers Try again or carry on', async () => {
+        const busy = 'GAIA is still setting up and testing the agent. Switch once setup has finished.';
+        mockedApi.updateSettings.mockRejectedValue(new api.ApiError(busy, 409, busy, null));
+        await pick(/gaiacpp/);
+        clickContinue();
+        expect(await screen.findByText(`Couldn't switch the agent: ${busy}`)).toBeInTheDocument();
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+        expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Carry on with gaiapy' }));
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
+        expect(mockedApi.updateSettings).toHaveBeenCalledTimes(1);
+    });
+
+    describe('gaiacpp not on this PC', () => {
+        beforeEach(() => {
+            mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp());
+        });
+
+        it('downloads first with the rest waiting, then saves it, then starts the run', async () => {
+            mockedApi.startAgentDownload.mockResolvedValue(job({}));
+            mockedApi.getAgentDownload.mockResolvedValueOnce(job({})).mockResolvedValue(job({ state: 'done', bytes_done: 6_800_000 }));
+            mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+            await pick(/gaiacpp/);
+            expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
+            clickContinue();
+            const bar = await screen.findByRole('progressbar', { name: /gaiacpp/ });
+            expect(bar).toHaveAttribute('aria-valuenow', '40');
+            expect(mockedApi.startAgentDownload).toHaveBeenCalledTimes(1);
+            expect(mockedApi.startSetup).not.toHaveBeenCalled();
+            // The rest of the step waits on the agent: its rows show as not started.
+            expect(document.querySelectorAll('.setup-contents .setup-content.is-waiting').length).toBeGreaterThan(0);
+            expect(screen.queryByRole('progressbar', { name: 'Overall download' })).toBeNull();
+            await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1), { timeout: 4000 });
+            expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
+            expect(order(mockedApi.startAgentDownload)).toBeLessThan(order(mockedApi.updateSettings));
+            expect(order(mockedApi.updateSettings)).toBeLessThan(order(mockedApi.startSetup));
+        });
+
+        it('a failed download offers Retry and carrying on with gaiapy, which starts the run without saving gaiacpp', async () => {
+            mockedApi.startAgentDownload.mockResolvedValue(job({ state: 'failed', error: 'Connection reset.' }));
+            await pick(/gaiacpp/);
+            clickContinue();
+            const failed = (await screen.findByText("gaiacpp didn't download.")).closest('[role="alert"]') as HTMLElement;
+            expect(failed).toHaveTextContent('Try again, or carry on with gaiapy');
+            expect(mockedApi.startSetup).not.toHaveBeenCalled();
+            fireEvent.click(within(failed).getByRole('button', { name: /Retry/ }));
+            await waitFor(() => expect(mockedApi.startAgentDownload).toHaveBeenCalledTimes(2));
+            fireEvent.click(await screen.findByRole('button', { name: 'Carry on with gaiapy' }));
+            await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
+            expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+        });
+
+        it('Cancel goes back to Customize with the pick kept, and starts no run', async () => {
+            mockedApi.startAgentDownload.mockResolvedValue(job({}));
+            mockedApi.getAgentDownload.mockResolvedValue(job({}));
+            await pick(/gaiacpp/);
+            clickContinue();
+            await screen.findByRole('progressbar', { name: /gaiacpp/ });
+            fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+            expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
+            const agent = within(await screen.findByRole('region', { name: 'Agent' }));
+            expect(await agent.findByRole('radio', { name: /gaiacpp/ })).toHaveAttribute('aria-checked', 'true');
+            expect(mockedApi.startSetup).not.toHaveBeenCalled();
+            expect(mockedApi.cancelSetup).not.toHaveBeenCalled();
+        });
+
+        it('a reload mid-download follows it, keeps the pick, and starts one run once it is in', async () => {
+            sessionStorage.setItem('gaia.setup.agentPick', JSON.stringify({ id: 'gaiacpp', download: true, current: 'gaiapy' }));
+            sessionStorage.setItem('gaia.setup.heldRun', JSON.stringify({ acknowledgeLowDisk: false }));
+            mockedApi.getAgentPrograms.mockResolvedValue({ ...withoutGaiacpp(), download: job({}) });
+            mockedApi.getAgentDownload.mockResolvedValueOnce(job({})).mockResolvedValue(job({ state: 'done', bytes_done: 6_800_000 }));
+            mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+            renderSetup();
+            expect(await screen.findByRole('progressbar', { name: /gaiacpp/ })).toBeInTheDocument();
+            await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1), { timeout: 4000 });
+            expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
+            expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
+            expect(order(mockedApi.updateSettings)).toBeLessThan(order(mockedApi.startSetup));
+        });
     });
 });
 
