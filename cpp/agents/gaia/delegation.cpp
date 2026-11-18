@@ -181,6 +181,21 @@ json GaiaAgent::delegateTasks(const json& args) {
     struct Task {
         std::string text;
         std::vector<std::string> paths;
+        bool shared = false;  // one group of a task that was shared out
+        // What the result calls this task: after a share-out the briefs are all alike, so the files lead.
+        std::string label() const {
+            if (!shared) return text;
+            std::string names;
+            for (const auto& p : paths) {
+                const std::string name = std::filesystem::u8path(p).filename().u8string();
+                if (!names.empty() && names.size() + name.size() > 70) {
+                    names += ", ...";
+                    break;
+                }
+                names += (names.empty() ? "" : ", ") + name;
+            }
+            return names + ": " + text;
+        }
     };
     if (!args.is_object() || !args.contains("tasks") || !args["tasks"].is_array()) {
         return refusal("Nothing ran. delegate_task takes \"tasks\": a list of {\"task\": \"...\", \"paths\": [...]}.");
@@ -223,6 +238,55 @@ json GaiaAgent::delegateTasks(const json& args) {
     }
 
     AgentConfig cfg = config();
+    // A task that names more files than one helper should read is shared out, the same brief to each:
+    // a small model hands everything to one helper, which then does the whole job alone.
+    size_t sharedOut = 0;
+    {
+        // A quarter of the window per helper, at about four bytes a token.
+        std::uintmax_t share = static_cast<std::uintmax_t>((std::max)(cfg.contextSize, 4096));
+        std::vector<Task> spread;
+        for (;; share *= 2) {
+            spread.clear();
+            sharedOut = 0;
+            for (const Task& t : tasks) {
+                std::vector<std::uintmax_t> sizes;
+                bool allFiles = t.paths.size() > 1;
+                for (const auto& p : t.paths) {
+                    std::error_code ec;
+                    const fs::path path = fs::u8path(p);
+                    if (!fs::is_regular_file(path, ec)) {
+                        allFiles = false;
+                        break;
+                    }
+                    sizes.push_back(fs::file_size(path, ec));
+                }
+                if (!allFiles) {
+                    spread.push_back(t);
+                    continue;
+                }
+                const size_t before = spread.size();
+                Task group{t.text, {}, true};
+                std::uintmax_t held = 0;
+                for (size_t i = 0; i < t.paths.size(); ++i) {
+                    if (!group.paths.empty() && held + sizes[i] > share) {
+                        spread.push_back(group);
+                        group.paths.clear();
+                        held = 0;
+                    }
+                    group.paths.push_back(t.paths[i]);
+                    held += sizes[i];
+                }
+                spread.push_back(group);
+                if (spread.size() - before > 1) {
+                    ++sharedOut;
+                } else {
+                    spread.back().shared = false;
+                }
+            }
+            if (spread.size() <= static_cast<size_t>(kMaxHelperTasks)) break;
+        }
+        tasks = std::move(spread);
+    }
     cfg.silentMode = true;
     cfg.debug = false;
     cfg.showPrompts = false;
@@ -256,7 +320,7 @@ json GaiaAgent::delegateTasks(const json& args) {
 
     auto runOne = [&](size_t i) {
         const auto t0 = std::chrono::steady_clock::now();
-        json rec = {{"id", i + 1}, {"task", clipped(trimmed(tasks[i].text), kTaskEchoChars)}};
+        json rec = {{"id", i + 1}, {"task", clipped(trimmed(tasks[i].label()), kTaskEchoChars)}};
         auto fail = [&rec](const std::string& reason, const std::string& detail) {
             rec["status"] = "failed";
             rec["reason"] = reason;
@@ -430,6 +494,10 @@ json GaiaAgent::delegateTasks(const json& args) {
                             " helper threads could be started.";
     }
     if (!advice.empty()) out["advice"] = advice;
+    if (sharedOut > 0) {
+        out["shared_out"] = "A task that named many files was shared among helpers, each given the same brief "
+                            "and a group of the files; each helper's task starts with the files it had.";
+    }
     if (ok + partial == 0) out["error"] = summary + " " + advice;
 
     // Every conclusion has to fit the one tool result the parent reads, or the middle ones are clipped away.
@@ -444,7 +512,7 @@ json GaiaAgent::delegateTasks(const json& args) {
                                    {120, 40},                          {80, 40}};
     for (const Sizes& size : kSteps) {
         for (size_t i = 0; i < records.size(); ++i) {
-            records[i]["task"] = clipped(trimmed(tasks[i].text), size.task);
+            records[i]["task"] = clipped(trimmed(tasks[i].label()), size.task);
             if (answers[i].empty()) continue;
             records[i]["conclusion"] = clipped(answers[i], size.conclusion);
             if (answers[i].size() > size.conclusion) {

@@ -832,6 +832,60 @@ TEST(DelegateTask, TheAgentIsToldHowMuchThereIsToReadAndHelpersHowLongTheirAnswe
         << "an agent with no helpers is not told";
 }
 
+TEST(DelegateTask, ATaskNamingManyFilesIsSharedAmongHelpers) {
+    Workdir w;
+    json paths = json::array();
+    for (int i = 0; i < 6; ++i) {
+        const std::string name = "doc_" + std::to_string(i) + ".md";
+        w.write(name, std::string(12000, 'a'));  // 12 KB each against a 16 KB share: one per helper
+        paths.push_back(w.str(name));
+    }
+    RoutedServer server([](const json&) { return RoutedServer::Reply{answer("done")}; });
+    GaiaAgent agent(cfgFor(server.lemonadeUrl()), optionsFor(w));
+    const json r = delegate(agent, {{"tasks", json::array({{{"task", "Summarise each document"}, {"paths", paths}}})}});
+    ASSERT_EQ(r.value("status", ""), "success") << r.dump(2);
+    ASSERT_EQ(r["helpers"].size(), 6u) << "one model call cannot read it all, so the tool shares it out";
+    EXPECT_TRUE(r.contains("shared_out"));
+    EXPECT_EQ(r["helpers"][0]["task"], "doc_0.md: Summarise each document");
+    EXPECT_EQ(r["helpers"][5]["task"], "doc_5.md: Summarise each document");
+    // Each helper was sent the brief and only its own file.
+    int withOwnFileOnly = 0;
+    for (const auto& b : server.bodies()) {
+        const std::string sent = b["messages"].dump();
+        int named = 0;
+        for (int i = 0; i < 6; ++i) named += has(sent, "doc_" + std::to_string(i) + ".md") ? 1 : 0;
+        if (named == 1 && has(sent, "Summarise each document")) ++withOwnFileOnly;
+    }
+    EXPECT_EQ(withOwnFileOnly, 6);
+
+    // Small files fit one helper and stay together; a folder is never split.
+    json small = json::array();
+    for (int i = 0; i < 6; ++i) {
+        const std::string name = "note_" + std::to_string(i) + ".md";
+        w.write(name, "short");
+        small.push_back(w.str(name));
+    }
+    json one = delegate(agent, {{"tasks", json::array({{{"task", "Read the notes"}, {"paths", small}}})}});
+    EXPECT_EQ(one["helpers"].size(), 1u);
+    EXPECT_FALSE(one.contains("shared_out"));
+    EXPECT_EQ(one["helpers"][0]["task"], "Read the notes");
+    one = delegate(agent, {{"tasks", json::array({{{"task", "Read the folder"},
+                                                    {"paths", json::array({w.path.u8string(), w.str("doc_0.md")})}}})}});
+    EXPECT_EQ(one["helpers"].size(), 1u);
+
+    // More groups than one call takes: the groups grow until they fit.
+    json many = json::array();
+    for (int i = 0; i < 40; ++i) {
+        const std::string name = "big_" + std::to_string(i) + ".md";
+        w.write(name, std::string(12000, 'b'));
+        many.push_back(w.str(name));
+    }
+    const json capped = delegate(agent, {{"tasks", json::array({{{"task", "Summarise"}, {"paths", many}}})}});
+    EXPECT_LE(capped["helpers"].size(), 16u);
+    EXPECT_GE(capped["helpers"].size(), 8u);
+    EXPECT_EQ(capped.value("status", ""), "success");
+}
+
 // ---- The whole loop ----
 
 TEST(DelegateTask, TheParentDelegatesThenAnswersFromTheConclusions) {

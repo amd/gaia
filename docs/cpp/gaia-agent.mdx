@@ -136,6 +136,8 @@ Installing from the hub, or from a folder that has a `SIGNATURE.json`, needs a b
 
 A call takes up to 16 tasks, each `{"task": "<the brief>", "paths": ["<file or folder>"]}`; a list sent as JSON text is read too. More than 16, an empty brief, or a path outside the agent's folders is refused before any helper starts.
 
+**Sizing the job.** The agent's instructions say how much text the working folder holds and how large its context window is, and tell it to size a job first: split when the work is independent pieces of reading or judgement, and above all when reading everything itself would take more than about half its window. A task that names more files than one helper should read is shared out by the tool itself: the files are grouped by size, about a quarter of the context window per helper, and each helper gets the same brief and its own group. Each helper is told how long its answer may be, so every conclusion reaches the agent whole.
+
 **A helper can only read.** It is built with `file_read`, `file_search` and `read_tool_output` and nothing else: no shell, no writes, no web, no memory and no `delegate_task` of its own, so helpers go one level deep. It reads inside the folders the agent itself is confined to. It never asks for approval and inherits none: `--dangerously-skip-permissions` and saved "always allow" answers apply to the agent, not to its helpers. Its instructions are a few hundred tokens, not the agent's full prompt.
 
 **How many run at once** follows the model:
