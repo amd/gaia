@@ -57,7 +57,7 @@ You can revoke access at any level:
 
 | Action | Effect |
 |---|---|
-| Settings → Connectors → \<connector\> → **Disconnect** | Removes token from keyring AND clears all grants AND all activations for that connector; all agent calls fail with `NOT_CONNECTED` |
+| Settings → Connectors → \<connector\> → **Disconnect** | Removes token from keyring AND clears all grants AND all activations for that connector; all agent calls fail with `NOT_CONNECTED`. An OAuth connector with several accounts asks which one to remove (or all); grants are cleared only when the last account goes |
 | `gaia connectors grants revoke <connector> <agent>` | Removes the per-agent grant; that agent's calls fail with `AGENT_NOT_GRANTED` |
 | `gaia connectors activations deactivate <mcp-server-connector> <agent>` | Removes the per-agent activation; that agent stops seeing the MCP server's tools but the grant survives so re-activation is one click. Only valid for `mcp_server` connectors |
 | Revoke the PAT/OAuth client at the provider | Invalidates the token at the source; GAIA's next API call surfaces the provider's error |
