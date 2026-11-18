@@ -10,6 +10,7 @@ import { fontFamily, type Weight } from '../theme/fonts';
 import { COMPACT_MAX_FONT_SCALE, useLargeText } from '../theme/a11y';
 import { useTheme } from '../theme/ThemeProvider';
 import { toneColor, type Tone } from '../theme/tone';
+import { ForcedDirection } from './ForcedDirection';
 import { contentDir } from './direction';
 import type { TypeRole } from '../tokens/type';
 
@@ -116,6 +117,7 @@ export function Text({
     const rtl = uiDir === 'rtl';
     const dir = dirProp === 'auto' ? (typeof children === 'string' ? contentDir(children, uiDir) : uiDir) : dirProp;
     const nested = useContext(InsideText);
+    const forced = useContext(ForcedDirection);
     const largeText = useLargeText();
     const lines = !compact && largeText && numberOfLines !== undefined && numberOfLines <= 3 ? undefined : numberOfLines;
 
@@ -147,7 +149,8 @@ export function Text({
     if (strike || underline) style.textDecorationLine = strike && underline ? 'underline line-through' : strike ? 'line-through' : 'underline';
     if (dir) style.writingDirection = dir;
     // textAlign left/right are physical on native too (not swapped under forceRTL), so the start side is picked by direction.
-    const startsRight = (dir ?? (rtl ? 'rtl' : 'ltr')) === 'rtl';
+    // A pinned-direction block (HScroll) sets `forced` for text that carries no direction of its own.
+    const startsRight = (dir ?? forced ?? (rtl ? 'rtl' : 'ltr')) === 'rtl';
     if (align === 'center') style.textAlign = 'center';
     else if (align === 'end') style.textAlign = startsRight ? 'left' : 'right';
     else if (align === 'start' || !nested) style.textAlign = startsRight ? 'right' : 'left';
