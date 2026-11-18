@@ -76,6 +76,11 @@ LOCAL_SERIAL_NOTE = (
     "local requests to one model are served one at a time in this process."
 )
 
+#: Keys of the agent loop's own reply format; a JSON reply with none is an answer.
+_PROTOCOL_KEYS = frozenset(
+    {"thought", "goal", "tool", "tool_args", "tool_calls", "answer", "plan"}
+)
+
 HELPER_FILE_TOOLS = ("read_file", "search_file_content", "browse_directory")
 #: Everything a helper is built with, in registration order.
 HELPER_TOOL_NAMES = HELPER_FILE_TOOLS + ("read_tool_output",)
@@ -329,6 +334,18 @@ class HelperAgent(Agent, FileSearchToolsMixin, FileIOToolsMixin):
                 "other locations."
             )
         return "\n".join(lines)
+
+    def _decode_llm_response(self, response: str) -> Dict[str, Any]:
+        """A reply that is a JSON object of the task's own fields is the answer.
+
+        A brief often asks for JSON. The base loop reads any JSON object as its
+        own thought/tool/answer format, finds none of those keys, and asks
+        again until the step limit.
+        """
+        parsed = super()._decode_llm_response(response)
+        if isinstance(parsed, dict) and not _PROTOCOL_KEYS.intersection(parsed):
+            return {"thought": "", "goal": "", "answer": (response or "").strip()}
+        return parsed
 
     def _conversation_request_kwargs(self) -> Dict[str, Any]:
         from gaia.llm.lemonade_client import (

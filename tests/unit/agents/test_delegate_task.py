@@ -923,3 +923,17 @@ def test_a_task_naming_many_files_is_shared_among_helpers(work):
     )
     assert len(capped["helpers"]) == 20, "two short files each, and more than sixteen"
     assert capped["status"] == "success"
+
+
+def test_a_helper_answering_in_json_is_done_not_asked_again(work):
+    """A brief that asks for JSON gets a JSON object back; that is the answer."""
+    parent = _parent(work)
+    reply = json.dumps({"notes_01.md": {"owner": "Ada", "budget": 4200}})
+    model = _Model(lambda _m, _s, _k: _answer(reply))
+    result = _delegate(parent, model, _tasks("return the owner as JSON"))
+    helper = result["helpers"][0]
+    assert helper["status"] == "ok", helper
+    assert json.loads(helper["conclusion"]) == {
+        "notes_01.md": {"owner": "Ada", "budget": 4200}
+    }
+    assert len(model.requests) <= 2, "it was not sent round again and again"
