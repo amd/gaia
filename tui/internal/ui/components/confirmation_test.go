@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -909,6 +910,32 @@ func TestTheFlagshipSkillsMailPromptsMustBeReadToTheEnd(t *testing.T) {
 		}
 		if m = pressKey(m, "y"); m.State() != ConfirmationApproved {
 			t.Fatalf("%s: state = %v after reading it all, want Approved", action, m.State())
+		}
+	}
+}
+
+func TestCalendarApprovalNamesTheAccountUnderTheTitle(t *testing.T) {
+	summary := `{
+  "calendar_account": "jane.work@example.com",
+  "end": "2030-01-10T11:00:00",
+  "start": "2030-01-10T10:00:00",
+  "title": "Planning"
+}`
+	m := NewConfirmationModel("r1", "calendar/create_calendar_event", summary, "")
+	lines := strings.Split(ansi.Strip(m.View()), "\n")
+	title := -1
+	for i, l := range lines {
+		if strings.Contains(l, ActionTitle("calendar/create_calendar_event")) {
+			title = i
+			break
+		}
+	}
+	if title < 0 || title+1 >= len(lines) || !strings.Contains(lines[title+1], "Calendar: jane.work@example.com") {
+		t.Fatalf("the account must sit right under the title, where clipping keeps it:\n%s", strings.Join(lines, "\n"))
+	}
+	for _, other := range []string{`{"command": "ls"}`, "Send this email to jane@example.com", ""} {
+		if strings.Contains(ansi.Strip(NewConfirmationModel("r2", "x", other, "").View()), "Calendar:") {
+			t.Errorf("no calendar line without a calendar_account: %q", other)
 		}
 	}
 }
