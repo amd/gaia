@@ -1115,3 +1115,73 @@ class TestListShowsActivations:
         assert rc == 5
         assert out == ""
         assert "activations.json" in err
+
+
+class TestConnectCallbackPort:
+    def test_connect_passes_explicit_callback_port(self, monkeypatch):
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **kwargs):
+            captured["connector_id"] = connector_id
+            captured["scopes"] = list(scopes)
+            captured["callback_port"] = kwargs.get("callback_port")
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": kwargs.get("callback_port"),
+            }
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, out, err = _run(
+            "connectors", "connect", "google", "--callback-port", "8912"
+        )
+        assert rc == 0, err
+        assert captured["callback_port"] == 8912
+        assert "127.0.0.1:8912" in out
+        assert "ssh -L 8912:127.0.0.1:8912 <user>@<host>" in out
+
+    def test_connect_rejects_out_of_range_callback_port(self):
+        rc, _out, err = _run("connectors", "connect", "google", "--callback-port", "0")
+        assert rc == 2
+        assert "Invalid --callback-port 0: port must be between 1 and 65535." in err
+
+        rc2, _out2, err2 = _run(
+            "connectors", "connect", "google", "--callback-port", "70000"
+        )
+        assert rc2 == 2
+        assert (
+            "Invalid --callback-port 70000: port must be between 1 and 65535." in err2
+        )
+
+    def test_connect_remote_ssh_session_prints_ready_forward_command(self, monkeypatch):
+        monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 51234 10.0.0.2 22")
+        monkeypatch.setenv("USER", "ubuntu")
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **kwargs):
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, out, err = _run(
+            "connectors", "connect", "google", "--callback-port", "8085"
+        )
+        assert rc == 0, err
+        assert "Remote session detected (SSH)" in out
+        assert "ssh -L 8085:127.0.0.1:8085 ubuntu@" in out

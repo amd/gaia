@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -791,3 +792,63 @@ class TestBrowserLaunchReporting:
         assert not any(
             "no browser could be launched" in r.message for r in caplog.records
         ), "a browser that opened fine was reported as failed"
+
+
+class TestCallbackPort:
+    @respx.mock
+    async def test_explicit_callback_port_bound_and_returned(self, google_provider):
+        _mock_token_endpoint()
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
+
+        info = await start_authorization(
+            "google", scopes=["openid"], callback_port=free_port
+        )
+        assert info["callback_port"] == free_port
+
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        assert redirect_uri == f"http://127.0.0.1:{free_port}/callback"
+
+        state = params["state"][0]
+        async with httpx.AsyncClient() as c:
+            resp = await c.get(f"{redirect_uri}?code=test-code&state={state}")
+        assert resp.status_code == 200
+
+        result = await asyncio.wait_for(
+            complete_authorization(info["flow_id"]), timeout=2.0
+        )
+        assert result["account_email"] == "alice@example.com"
+
+    @respx.mock
+    async def test_explicit_callback_port_already_in_use_fails_cleanly(
+        self, google_provider
+    ):
+        from gaia.connectors.errors import ConnectorsError
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            busy_port = s.getsockname()[1]
+
+            with pytest.raises(ConnectorsError) as exc_info:
+                await start_authorization(
+                    "google", scopes=["openid"], callback_port=busy_port
+                )
+
+            assert f"Could not bind OAuth callback to port {busy_port}" in str(
+                exc_info.value
+            )
+            assert "port is already in use" in str(exc_info.value)
+            assert "--callback-port" in str(exc_info.value)
+
+    @pytest.mark.parametrize("invalid_port", [0, -1, 65536, 100000, True, False])
+    async def test_invalid_callback_port_rejected(self, google_provider, invalid_port):
+        from gaia.connectors.errors import ConnectorsError
+
+        with pytest.raises(ConnectorsError) as exc_info:
+            await start_authorization(
+                "google", scopes=["openid"], callback_port=invalid_port
+            )
+
+        assert "Invalid callback port" in str(exc_info.value)

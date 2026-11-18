@@ -1810,6 +1810,12 @@ gaia connectors <subcommand> [OPTIONS]
 gaia connectors connect google
 ```
 
+```bash Authorize Google over SSH (remote or headless)
+# Forward port 8085 from your local browser to the remote host:
+# ssh -L 8085:127.0.0.1:8085 user@remote
+gaia connectors connect google --callback-port 8085
+```
+
 ```bash Authorize Microsoft Personal (device code, no app registration)
 # Outlook.com / Hotmail / Live. Supply a pre-registered public client id;
 # GAIA prints a code + URL.
