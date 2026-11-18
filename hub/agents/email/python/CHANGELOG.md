@@ -9,6 +9,11 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Disconnecting a provider with several accounts asks which one.**
+  `DELETE /v1/email/connectors/{provider}` used to remove every connected
+  account. With more than one it now answers 409
+  `{"error": "account_choice_required", "choices": [...]}`; pass `?all=true`
+  to remove them all.
 - **A conflict check no longer calls a slot free when it couldn't read a
   meeting's time (#8261).** Outlook's 7-digit fractional seconds, and any
   other fraction width, now parse on Python 3.10. A meeting whose time still

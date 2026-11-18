@@ -190,27 +190,46 @@ def test_start_screen_counts_only_finished_documents(monkeypatch, tmp_path):
     assert result["working_folder"]["name"] == tmp_path.name
 
 
-def test_mail_counts_as_connected_when_any_account_is(monkeypatch):
+def test_mail_counts_as_connected_when_any_account_is(monkeypatch, mock_home):
+    import gaia.connectors.accounts as store
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
 
     monkeypatch.setattr(
-        store, "peek_connection", lambda ref: {"x": 1} if ref == "microsoft" else None
+        store,
+        "peek_connection",
+        lambda ref, **_kw: {"x": 1} if ref == "microsoft" else None,
     )
     assert ss._mail_connected() is True
-    monkeypatch.setattr(store, "peek_connection", lambda ref: None)
+    monkeypatch.setattr(store, "peek_connection", lambda ref, **_kw: None)
     assert ss._mail_connected() is False
 
 
-def _refused_keyring(ref):
+def test_a_second_account_counts_once_the_first_is_removed(monkeypatch, mock_home):
+    import gaia.connectors.accounts as accounts
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+
+    accounts.record_account(
+        "google", "id:bob", account_id="bob", email="bob@example.com", state="ok"
+    )
+    monkeypatch.setattr(
+        accounts,
+        "peek_connection",
+        lambda ref, slot="default", **_kw: {"x": 1} if slot == "id:bob" else None,
+    )
+    assert ss._mail_connected() is True
+
+
+def _refused_keyring(ref, **_kw):
     from gaia.connectors.errors import ConnectorsError
 
     raise ConnectorsError("plaintext keyring backend refused")
 
 
-def test_an_unreadable_keyring_only_drops_the_inbox_card(monkeypatch, caplog):
+def test_an_unreadable_keyring_only_drops_the_inbox_card(
+    monkeypatch, caplog, mock_home
+):
+    import gaia.connectors.accounts as store
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
 
     monkeypatch.setattr(store, "peek_connection", _refused_keyring)
     with caplog.at_level("WARNING"):
@@ -218,10 +237,14 @@ def test_an_unreadable_keyring_only_drops_the_inbox_card(monkeypatch, caplog):
     assert "plaintext keyring backend refused" in caplog.text
 
 
-def test_an_unreadable_keyring_still_serves_the_start_screen(monkeypatch, tmp_path):
-    import gaia.connectors.store as store
+def test_an_unreadable_keyring_still_serves_the_start_screen(
+    monkeypatch, tmp_path, mock_home
+):
+    import gaia.connectors.accounts as store
 
-    monkeypatch.chdir(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
     monkeypatch.setattr(
         "gaia.ui.routers.skills.list_skills",
         lambda: {"skills": [{"name": n} for n in STARTER], "invalid": []},
@@ -234,22 +257,24 @@ def test_an_unreadable_keyring_still_serves_the_start_screen(monkeypatch, tmp_pa
     assert response.status_code == 200
     body = response.json()
     assert len(body["cards"]) == ss.MAX_CARDS
-    assert body["working_folder"]["name"] == tmp_path.name
+    assert body["working_folder"]["name"] == "project"
     assert not body.get("skills_error")
 
 
-def test_a_keychain_prompt_does_not_hold_the_start_screen(monkeypatch, caplog):
+def test_a_keychain_prompt_does_not_hold_the_start_screen(
+    monkeypatch, caplog, mock_home
+):
     import threading
     import time
 
+    import gaia.connectors.accounts as store
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
     from gaia.connectors import credential_wait
 
     answered = threading.Event()
     reads = []
 
-    def prompting(ref):
+    def prompting(ref, **_kw):
         reads.append(ref)
         answered.wait(timeout=30)
         return None
@@ -273,11 +298,11 @@ def test_a_keychain_prompt_does_not_hold_the_start_screen(monkeypatch, caplog):
     assert credential_wait.in_flight_count() == 0
 
 
-def test_a_non_keyring_error_still_fails_loudly(monkeypatch):
+def test_a_non_keyring_error_still_fails_loudly(monkeypatch, mock_home):
+    import gaia.connectors.accounts as store
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    import gaia.connectors.store as store
 
-    def boom(ref):
+    def boom(ref, **_kw):
         raise RuntimeError("bug")
 
     monkeypatch.setattr(store, "peek_connection", boom)

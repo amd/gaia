@@ -7,6 +7,7 @@
 // default are optional here even though the server always sends them.
 
 export interface ApiSchemas {
+  AccountUpdateRequest: AccountUpdateRequest;
   ActivationRequest: ActivationRequest;
   AdminClearRequest: AdminClearRequest;
   AdminSeedItem: AdminSeedItem;
@@ -161,6 +162,13 @@ export interface ApiSchemas {
   gaia__ui__routers__system__DownloadModelRequest: Gaia_Ui_Routers_System__DownloadModelRequest;
 }
 /**
+ * Body for ``PATCH /api/connectors/{id}/accounts/{account_id}``. Only
+ * ``true`` is accepted: to change the default, make another account it.
+ */
+export interface AccountUpdateRequest {
+  is_default: boolean;
+}
+/**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
  *
  * Valid only for ``mcp_server`` connectors — see ``_require_mcp_server``.
@@ -309,6 +317,8 @@ export interface AttachDocumentRequest {
   document_id: string;
 }
 export interface AuthorizeRequest {
+  account?: string | null;
+  add_account?: boolean;
   grant_agents?: string[];
   scopes?: string[];
 }
@@ -699,8 +709,9 @@ export interface FollowUpRequest {
  * OAuth, no consent step.
  *
  * ``refresh_token`` / ``client_secret`` are secret INPUTS — they are never
- * echoed back in any response. ``account_email`` is display-only in v1
- * (the keyring slot is single-account per provider). ``grant_agents`` is
+ * echoed back in any response. ``account_email`` picks which stored account
+ * the forward replaces (the one with that address); with other accounts
+ * stored and no match, the forward is refused. ``grant_agents`` is
  * the list of namespaced agent ids (e.g. ``installed:email``) to grant the
  * forwarded scopes so they can resolve the connection ambiently.
  */

@@ -133,10 +133,10 @@ def _fake_async_client(response: _FakeResponse, recorder: dict):
 @pytest.mark.parametrize(
     "payload, expected",
     [
-        ({"mail": "user@contoso.com"}, "user@contoso.com"),
+        ({"id": "u1", "mail": "user@contoso.com"}, "user@contoso.com"),
         # Personal accounts null `mail` and carry the address in the UPN.
         (
-            {"mail": None, "userPrincipalName": "user@outlook.com"},
+            {"id": "u1", "mail": None, "userPrincipalName": "user@outlook.com"},
             "user@outlook.com",
         ),
     ],
@@ -152,9 +152,9 @@ def test_account_email_resolves_from_graph_me_without_an_id_token(
     )
     provider = MicrosoftOAuthProvider(client_id="test-client")
 
-    resolved = asyncio.run(flow._resolve_account_email(provider, "", "access-token"))
+    resolved = asyncio.run(flow.identify_account(provider, "", "access-token"))
 
-    assert resolved == expected
+    assert resolved == flow.AccountIdentity(account_id="u1", email=expected)
     assert recorder["url"].startswith("https://graph.microsoft.com/v1.0/me")
     assert recorder["headers"]["Authorization"] == "Bearer access-token"
 
