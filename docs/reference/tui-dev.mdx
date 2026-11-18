@@ -174,6 +174,25 @@ and keep `err.Error()` (route, alternatives, log path) for a `d details` pane. I
 `--dev`, harness lines the user view hides (`Step 4/50`) show as they are, with
 no `[harness]` tag.
 
+### Delegated work in the work log
+
+`delegate_task` is drawn as one step, like any other tool
+(`internal/ui/chat/delegation.go`). It is recognised by the shape of its
+result — a `summary` string and a `helpers` list — never by its narration,
+which differs between `gaiacpp` ("Handing 4 tasks to helpers") and
+`gaia-agent` ("Handing work to helpers").
+
+| When | What is drawn |
+|---|---|
+| Running | A `status` with `phase: "helpers"` goes on the newest open tool row as a suffix, with the word "helpers" dropped: `Handing 4 tasks to helpers · 3 of 4 done, 1 failed`. The failure count is in the danger colour. It is never a status row and never replaces the spinner line, in folded, `Ctrl+O` and `--dev` views alike. With no tool row open it is shown as an ordinary status |
+| Finished, folded | The `└` line is the result's `summary`. `status: "partial"` draws it in the warning colour and leaves the step unfailed; `status: "error"` is a failed step (`failed — 0 of 4 helpers finished, 4 failed.`). When any helper is not `ok`, a faint `· Ctrl+O details` follows the summary if the row has room for all of it |
+| Finished, `Ctrl+O` | One clipped row per helper, in id order: `✓` / `~` / `✗`, the id, the task in a column of about two fifths of the row, then the first line of `conclusion`. A `partial` helper reads `stopped short (<reason>): …` and a `failed` one `failed: <reason>`, with `reason` in plain words (`step_limit` is "out of steps"). Mid-turn the list is cut to the live region's height and ends `… N more` |
+
+The result's `advice` and `error` are written for the model and are not shown
+outside the raw `out` row of `--dev`. A result the agent cut down on the wire
+(`{"truncated": true, …}`) has no `helpers`, so only the `└` line is drawn,
+from the event's `preview`.
+
 ## The control API
 
 Off by default. `--control` auto-assigns a port; `--control-port N` pins one. It

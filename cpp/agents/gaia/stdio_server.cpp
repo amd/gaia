@@ -89,6 +89,11 @@ std::string narrate(const std::string& tool, const json& args) {
 std::string previewOf(const json& result) {
     if (result.is_string()) return clip(result.get<std::string>(), 200);
     if (result.is_object()) {
+        // A delegation's "error" also carries advice meant for the model; its summary is the line for a person.
+        if (result.contains("helpers") && result["helpers"].is_array() && result.contains("summary") &&
+            result["summary"].is_string()) {
+            return clip(result["summary"].get<std::string>(), 200);
+        }
         for (const char* key : {"error", "message", "output", "stdout", "content", "summary"}) {
             if (result.contains(key) && result[key].is_string() && !result[key].get<std::string>().empty()) {
                 return clip(result[key].get<std::string>(), 200);

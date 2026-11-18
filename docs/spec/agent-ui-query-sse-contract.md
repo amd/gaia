@@ -468,6 +468,7 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 | `model_retry` | a model call failed for another reason (the model service was busy, timed out, stopped sending, or the connection dropped) and is retried: once per retry, `message` naming the trouble, the wait and the attempt ("The model service is busy — retrying in 8s (2/4)") | — |
 | `answer_restart` | a reply was cut off part-way (the model server stopped or the connection dropped) and the step starts over; carries `retracts_answer: true` | — |
 | `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
+| `helpers` | a `delegate_task` call is running and one of its helpers has just ended: once per helper, `message` counting those ended and those that failed ("2 of 4 helpers done", "3 of 4 helpers done, 1 failed"). It belongs on the running tool's own row, not on a separate status line, and is not ended by the rule below: it lasts until that tool's `tool_result` | — |
 
 `model_queue` is the one phase sent on a timer: the steady updates are what let a
 receiver tell a queued turn from a dead one. Its `queue` object has `event`

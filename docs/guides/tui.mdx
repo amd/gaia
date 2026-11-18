@@ -654,6 +654,15 @@ the answer set apart below:
 - **A confirmation** asks once, in the prompt pinned above the composer. The step
   it gated then records your answer in a word: `approved`, `denied`, or `always
   allowed '<scope>'`.
+- **Work handed to helpers** is one step. When the agent splits a job into
+  several read-only tasks, the step counts them off as they end, on its own
+  row: `Handing 4 tasks to helpers · 2 of 4 done`, with `, 1 failed` in red
+  once one has. When they are all back, the line under it says how it went:
+  `3 of 4 helpers finished, 1 failed.` That line is amber when some helpers
+  failed or stopped short but others answered, and the step reads `failed` in
+  red only when none did. `Ctrl+O` lists each helper under it — `✓` finished,
+  `~` stopped short, `✗` failed — with its task and the first line of what it
+  found, or why it stopped.
 - **The agent's narration** ("Let me check the tests first") is folded away.
   `Ctrl+O` shows it, along with each step's full command and timing. A stage or a
   narration line the agent repeats word for word — a plan's "Following the plan

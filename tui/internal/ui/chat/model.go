@@ -3252,6 +3252,11 @@ func (m ChatModel) renderLiveRegion() string {
 	kept, rows := 0, 0
 	for i := len(groups) - 1; i >= 0; i-- {
 		if rows+len(groups[i]) > budget {
+			// A long helper list is cut to the rows left, not dropped whole.
+			if left := budget - rows; kept > 0 && left >= 3 && i < len(log) && len(log[i].Helpers) > 0 {
+				groups[i] = m.renderActivityItem(log[i], i == live, elapsed, left)
+				kept++
+			}
 			break
 		}
 		rows += len(groups[i])
@@ -3356,7 +3361,12 @@ func (m ChatModel) phasePhrase() string {
 
 // renderLiveLine draws the one line that owns the spinner and the clock.
 func (m ChatModel) renderLiveLine(content string, elapsed time.Duration) string {
-	return "  " + m.spinner.View() + " " + thinkingStyle.Render(content) + "  " +
+	return m.renderLiveRow(thinkingStyle.Render(content), elapsed)
+}
+
+// renderLiveRow is renderLiveLine for text that is already styled.
+func (m ChatModel) renderLiveRow(styled string, elapsed time.Duration) string {
+	return "  " + m.spinner.View() + " " + styled + "  " +
 		activityStyle.Render(formatElapsed(elapsed))
 }
 
@@ -3376,7 +3386,7 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 			// Nor does a failed row, retried or not: folded, the next call's
 			// outcome would replace its error line. A failure folds under an
 			// earlier row only when it is a retry of that same call.
-			keep := stepFailed(*last) ||
+			keep := stepFailed(*last) || len(last.Helpers) > 0 || len(item.Helpers) > 0 ||
 				(stepFailed(item) && (item.RetryKey == "" || item.RetryKey != last.RetryKey))
 			if last.Kind == item.Kind && activityKey(*last) == activityKey(item) &&
 				last.Approval == item.Approval && !keep {
@@ -3391,6 +3401,8 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 				// which call they came from.
 				last.Detail = item.Detail
 				last.Recovery = item.Recovery
+				last.Progress = item.Progress
+				last.Partial = item.Partial
 				last.Args = item.Args
 				last.Output = item.Output
 				continue
@@ -3478,6 +3490,12 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	if item.Approval != "" {
 		suffix += " · " + clean(item.Approval)
 	}
+	failTail := ""
+	if !item.Done && item.Progress != "" {
+		var progress string
+		progress, failTail = helperProgress(item.Progress)
+		suffix += " · " + progress
+	}
 
 	// Folded, a step is one row: what it did. Its wrapped tail is detail.
 	headRows := logHeadRows
@@ -3515,14 +3533,14 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	var lines []string
 	switch {
 	case live:
-		lines = append(lines, m.renderLiveLine(rows[0], elapsed))
+		lines = append(lines, m.renderLiveRow(paintRow(rows[0], style, failTail), elapsed))
 	case glyph != "":
-		lines = append(lines, "  "+activityStyle.Render(glyph)+" "+style.Render(rows[0]))
+		lines = append(lines, "  "+activityStyle.Render(glyph)+" "+paintRow(rows[0], style, failTail))
 	default:
-		lines = append(lines, "    "+style.Render(rows[0]))
+		lines = append(lines, "    "+paintRow(rows[0], style, failTail))
 	}
 	for _, row := range rows[1:] {
-		lines = append(lines, "    "+style.Render(row))
+		lines = append(lines, "    "+paintRow(row, style, failTail))
 	}
 
 	detail := clean(item.Detail)
@@ -3561,14 +3579,27 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 		switch {
 		case failed:
 			dstyle = failStyle
-		case calm:
+		case calm, item.Partial:
 			dstyle = retryStyle
 		}
 		drows := wrapLog(detail, "", width-2, detailRows)
-		lines = append(lines, "    "+dstyle.Render(glyphDetail+" "+drows[0]))
+		first := "    " + dstyle.Render(glyphDetail+" "+drows[0])
+		// Whole or absent, like a status-bar hint: never a clipped key name.
+		if !m.expandWork && anyHelperShort(item.Helpers) && len(drows) == 1 &&
+			displayWidth(drows[0])+displayWidth(foldedHelpersHint) <= width-2 {
+			first += devPayloadStyle.Render(foldedHelpersHint)
+		}
+		lines = append(lines, first)
 		for _, row := range drows[1:] {
 			lines = append(lines, "      "+dstyle.Render(row))
 		}
+	}
+	if m.expandWork && item.Done && len(item.Helpers) > 0 && (maxRows == 0 || maxRows > len(lines)) {
+		room := 0
+		if maxRows > 0 {
+			room = maxRows - len(lines)
+		}
+		lines = append(lines, m.renderHelperLines(item, room)...)
 	}
 	// Developer mode only. Args and Output are populated nowhere else, so the
 	// user-mode log is genuinely unchanged rather than merely filtered here.
