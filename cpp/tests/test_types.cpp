@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/types.h>
 
@@ -228,7 +229,7 @@ TEST(TypesTest, AgentConfigFromJsonFileNotFound) {
 
 TEST(TypesTest, AgentConfigFromJsonFileMalformed) {
     // Write a temp file with invalid JSON
-    std::string tmpPath = (std::filesystem::temp_directory_path() / "gaia_test_malformed.json").string();
+    std::string tmpPath = (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia_test_malformed.json")).string();
     {
         std::ofstream f(tmpPath);
         f << "{ invalid json }";
@@ -238,7 +239,7 @@ TEST(TypesTest, AgentConfigFromJsonFileMalformed) {
 }
 
 TEST(TypesTest, AgentConfigFromJsonFileValid) {
-    std::string tmpPath = (std::filesystem::temp_directory_path() / "gaia_test_valid.json").string();
+    std::string tmpPath = (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia_test_valid.json")).string();
     {
         std::ofstream f(tmpPath);
         f << R"({"maxSteps": 5, "maxTokens": 1024, "temperature": 0.3})";

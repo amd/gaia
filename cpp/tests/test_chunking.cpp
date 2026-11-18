@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/chunking.h>
 
@@ -72,7 +73,7 @@ protected:
     fs::path tempDir_;
 
     void SetUp() override {
-        tempDir_ = fs::temp_directory_path() / "gaia_chunking_test";
+        tempDir_ = fs::temp_directory_path() / testsupport::perProcess("gaia_chunking_test");
         fs::create_directories(tempDir_);
     }
 

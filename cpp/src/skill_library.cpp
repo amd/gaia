@@ -382,7 +382,11 @@ std::string SkillLibrary::installFromHub(const std::string& name, const std::str
     }
 
     std::error_code ec;
-    const fs::path work = fs::temp_directory_path() / ("gaia-skill-" + name + "-" + actual.substr(0, 12));
+    // Its own folder: two installs of one skill would delete each other's files, and a name
+    // another user can predict could be filled in ahead of the signature check.
+    std::random_device entropy;
+    const fs::path work = fs::temp_directory_path() / ("gaia-skill-" + name + "-" + actual.substr(0, 12) + "-" +
+                                                       std::to_string(entropy()) + std::to_string(entropy()));
     fs::remove_all(work, ec);
     fs::create_directories(work / "x");
     const fs::path zip = work / filename;

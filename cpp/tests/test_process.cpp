@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/process.h>
 
@@ -331,7 +332,7 @@ protected:
     fs::path dirB_;
 
     void SetUp() override {
-        fs::path root = fs::temp_directory_path() / "gaia_shell_session_test";
+        fs::path root = fs::temp_directory_path() / testsupport::perProcess("gaia_shell_session_test");
         std::error_code ec;
         fs::remove_all(root, ec);
         dirA_ = root / "alpha_dir";
@@ -342,7 +343,7 @@ protected:
 
     void TearDown() override {
         std::error_code ec;
-        fs::remove_all(fs::temp_directory_path() / "gaia_shell_session_test", ec);
+        fs::remove_all(fs::temp_directory_path() / testsupport::perProcess("gaia_shell_session_test"), ec);
     }
 };
 
@@ -409,6 +410,19 @@ TEST_F(ShellSessionTest, SessionsAreIndependent) {
               std::string::npos);
     EXPECT_NE(second.run(PRINT_CWD, 10000).stdout_output.find("beta_dir"),
               std::string::npos);
+}
+
+TEST(ProcessRunnerTest, ACommandThatLeavesABackgroundProcessStillReturns) {
+#ifdef _WIN32
+    const char* command = "start /b ping -n 20 127.0.0.1 & echo started";
+#else
+    const char* command = "(sleep 20 &) ; echo started";
+#endif
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto result = ProcessRunner::run(command, 60000);
+    const auto waited = std::chrono::steady_clock::now() - t0;
+    EXPECT_NE(result.stdout_output.find("started"), std::string::npos) << result.stdout_output;
+    EXPECT_LT(waited, std::chrono::seconds(12)) << "the read waited for the process left in the background";
 }
 
 TEST_F(ShellSessionTest, ASessionWhoseFolderWasDeletedGoesBackToItsStart) {

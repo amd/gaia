@@ -6,6 +6,7 @@
 // a session id handed out on initialize and enforced afterwards, 202 for
 // notifications.
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
 #include <gaia/mcp_client.h>
@@ -598,7 +599,7 @@ TEST(MCPStdioHandshakeTest, ConnectSendsInitializedNotification) {
 #ifdef _WIN32
     GTEST_SKIP() << "POSIX-only: uses /bin/sh as the MCP server";
 #else
-    fs::path dir = fs::temp_directory_path() / "gaia_mcp_stdio_handshake";
+    fs::path dir = fs::temp_directory_path() / testsupport::perProcess("gaia_mcp_stdio_handshake");
     fs::create_directories(dir);
     fs::path out = dir / "second_line.json";
     fs::remove(out);

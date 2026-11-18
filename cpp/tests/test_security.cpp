@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/security.h>
 #include <gaia/tool_registry.h>
@@ -26,7 +27,7 @@ protected:
     fs::path tmpBase;
 
     void SetUp() override {
-        tmpBase = fs::temp_directory_path() / "gaia_pathtest";
+        tmpBase = fs::temp_directory_path() / testsupport::perProcess("gaia_pathtest");
         fs::create_directories(tmpBase);
     }
 
@@ -107,7 +108,7 @@ protected:
     std::unique_ptr<AllowedToolsStore> store;
 
     void SetUp() override {
-        storeDir = fs::temp_directory_path() / "gaia_store_test";
+        storeDir = fs::temp_directory_path() / testsupport::perProcess("gaia_store_test");
         fs::remove_all(storeDir);
         store = std::make_unique<AllowedToolsStore>(storeDir.string());
     }
@@ -208,7 +209,7 @@ TEST(ShellCommandScopeTest, ProgramOrSubcommandOrExact) {
 }
 
 TEST(ShellCommandScopeTest, AlwaysAllowCoversOnlyThatCommand) {
-    const std::string dir = (std::filesystem::temp_directory_path() / "gaia-grant-scope-test").string();
+    const std::string dir = (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia-grant-scope-test")).string();
     std::filesystem::remove_all(dir);
     auto store = std::make_shared<AllowedToolsStore>(dir);
     ToolRegistry reg;

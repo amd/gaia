@@ -113,11 +113,21 @@ struct GAIA_API HttpClientConfig {
     std::string caCertPath;
 
     /// A kept connection idle for longer than this is reopened rather than
-    /// reused, since a server may have dropped it without saying so.
-    int keepAliveIdleSec = 30;
+    /// reused, since a server may have dropped it without saying so. Shorter
+    /// than the 5 seconds many servers keep an idle connection for.
+    int keepAliveIdleSec = 4;
 
     /// Log method and URL to stderr.
     bool debug = false;
+
+    /// GET only: stop reading a response body at this many bytes and return what
+    /// arrived, so a huge or endless page can't fill memory. 0 reads it all.
+    std::size_t maxResponseBytes = 0;
+
+    /// Asked about ten times a second, from another thread, while a request is
+    /// in flight. Once it returns true the request is dropped and HttpError is
+    /// thrown, so a caller is never held for a whole read timeout.
+    std::function<bool()> cancelCheck;
 };
 
 // ---- Client ----
@@ -198,6 +208,8 @@ public:
 
     bool debug() const;
     void setDebug(bool enabled);
+    /// See HttpClientConfig::cancelCheck. Set before a request starts, not during one.
+    void setCancelCheck(std::function<bool()> check);
 
 private:
     struct Impl;

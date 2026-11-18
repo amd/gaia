@@ -58,11 +58,20 @@ std::string decodeXmlEntities(std::string s) {
 
 // Paragraph text of a .docx: <w:t> runs, <w:p> ends become newlines.
 std::string docxText(const std::string& path) {
-    ProcessResult r = ProcessRunner::run("unzip -p " + shellQuote(path) + " word/document.xml",
-                                         60000, "", {}, kMaxExtractBytes);
+#ifdef _WIN32
+    // Windows ships no unzip; its tar reads zip archives.
+    const std::string extract = "tar -xOf " + shellQuote(path) + " word/document.xml";
+    const char* tool = "tar";
+#else
+    const std::string extract = "unzip -p " + shellQuote(path) + " word/document.xml";
+    const char* tool = "unzip";
+#endif
+    ProcessResult r = ProcessRunner::run(extract, 60000, "", {}, kMaxExtractBytes);
     if (r.exitCode != 0) {
+        // 127 from a POSIX shell and 9009 from cmd.exe both mean the program was not found.
+        const bool missing = r.exitCode == 127 || r.exitCode == 9009;
         throw std::runtime_error("Can't read Word file " + path + ": " +
-                                 (r.exitCode == 127 ? std::string("unzip is not installed")
+                                 (missing ? std::string(tool) + " is not installed"
                                                     : "it is not a valid .docx (" +
                                                           r.stderr_output.substr(0, 200) + ")"));
     }

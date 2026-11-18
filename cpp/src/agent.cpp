@@ -939,6 +939,49 @@ size_t trimLongReplies(std::vector<Message>& messages) {
 
 } // namespace
 
+namespace {
+// A reply that holds a tool call nothing ran: a call with words after it, or a plan with no call
+// and no answer. Returns what to tell the model, or nullopt when the reply is an answer.
+std::optional<std::string> strandedCallNote(const std::string& reply, const ToolRegistry& tools) {
+    static const char* const kSpace = " \t\r\n";
+    const auto fenced = [&reply](size_t at) {
+        size_t fences = 0;
+        for (size_t p = reply.find("```"); p != std::string::npos && p < at; p = reply.find("```", p + 3)) ++fences;
+        return fences % 2 == 1;
+    };
+    for (size_t at = reply.find('{'); at != std::string::npos; at = reply.find('{', at + 1)) {
+        if (fenced(at)) continue;
+        const std::string candidate = extractFirstJsonObject(reply.substr(at));
+        if (candidate.empty()) continue;
+        const json call = json::parse(candidate, nullptr, false);
+        if (!call.is_object()) continue;
+        bool onlyCallKeys = true;
+        for (const auto& [key, value] : call.items()) {
+            onlyCallKeys = onlyCallKeys && (key == "tool" || key == "tool_args" || key == "thought" ||
+                                            key == "goal" || key == "plan");
+        }
+        if (!onlyCallKeys) return std::nullopt;
+        const bool whole = reply.find_first_not_of(kSpace) == at &&
+                           reply.find_first_not_of(kSpace, at + candidate.size()) == std::string::npos;
+        const bool namesTool = call.contains("tool") && call["tool"].is_string();
+        if (!namesTool) {
+            if (whole && call.contains("plan")) {
+                return "Your reply held a plan but no tool call and no answer. Send the tool call for the "
+                       "first step, or give your final answer.";
+            }
+            return std::nullopt;
+        }
+        const std::string name = call["tool"].get<std::string>();
+        const std::string after = reply.substr(at + candidate.size());
+        // A long passage after it is an answer that shows an example; a short tail is a call that was meant.
+        if (!tools.hasTool(name) || after.size() > 240 || after.find('{') != std::string::npos) return std::nullopt;
+        return "Your call to " + name + " was not run: a tool call must be the last thing in a reply, and "
+               "this one had text after it. Send the call again with nothing after it, or give your final answer.";
+    }
+    return std::nullopt;
+}
+}  // namespace
+
 std::string stripReasoning(const std::string& text) {
     std::string out = text;
     // A reasoning model may emit <think>…</think> inline; it is never the answer.
@@ -1950,6 +1993,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     };
     bool answerReviewed = false;
     bool answerSentBack = false;
+    bool strandedCallSentBack = false;
     bool claimPushed = false;
     // One chance for the agent to send a final answer back (reviewFinalAnswer), and one
     // more push when the answer after it still claims work that isn't there.
@@ -2355,6 +2399,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         ParsedResponse parsed = parseLlmResponse(response);
 
         // Tool-call text repeated from the request or from a file read this turn is a quote, not a call.
+        bool quotedCall = false;
         if (parsed.toolName.has_value()) {
             const auto squash = [](const std::string& text) {
                 std::string out;
@@ -2380,8 +2425,25 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                                                 (shownIsCall && said.find(shown) != std::string::npos));
             }
             if (quoted) {
+                quotedCall = true;
                 parsed = ParsedResponse{};
                 parsed.answer = response;
+            }
+        }
+
+        // A call the reply buried under closing words never ran; taken for the answer, the turn would
+        // end "successfully" on text like {"tool": ...}. Asked for again, once.
+        if (!strandedCallSentBack && !quotedCall && !parsed.toolName.has_value() &&
+            !parsed.malformedToolCall.has_value() && stepsTaken < stepsLimit) {
+            if (const std::optional<std::string> note = strandedCallNote(response, tools_)) {
+                strandedCallSentBack = true;
+                if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
+                console_->printWarning("Reply sent back: " + *note);
+                Message retry;
+                retry.role = MessageRole::USER;
+                retry.content = "[Not done yet] " + *note;
+                messages.push_back(retry);
+                continue;
             }
         }
 

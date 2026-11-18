@@ -926,6 +926,45 @@ TEST_F(GaiacppSidecar, CancelDuringTheModelCallEndsTheTurnEmpty) {
     EXPECT_EQ(next.events().back()["answer"], "Second turn answered.") << next.describe();
 }
 
+TEST_F(GaiacppSidecar, CancelDuringTheModelCallDoesNotWaitForTheModel) {
+    Hold& held = hold();  // the model never answers until the test is over
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn t(port_, queryBody("run-w1", "think hard", {{"session_id", "chat-wait"}}));
+    ASSERT_TRUE(waitUntil([&] { return mock().requestCount() >= 1; }, seconds(30))) << t.describe();
+    auto cancel = send("POST", "/v1/gaia/query/run-w1/cancel", bearer());
+    ASSERT_TRUE(cancel);
+    ASSERT_EQ(cancel->status, 200) << cancel->body;
+    ASSERT_TRUE(t.waitDone(seconds(10))) << "Stop waited on a model that had not answered: " << t.describe();
+    auto events = t.events();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(events, "final")) << t.describe();
+    EXPECT_EQ(events.back()["answer"], "");
+    held.release();
+}
+
+TEST_F(GaiacppSidecar, AQueuedTurnThatIsStoppedGivesItsPlaceUp) {
+    Hold& held = hold();  // the first chat's turn holds the sidecar until released
+    mock().pushResponse(answerReply("First chat answered."));
+    ASSERT_NO_FATAL_FAILURE(startSidecar());
+
+    Turn first(port_, queryBody("run-q1", "think hard", {{"session_id", "chat-first"}}));
+    ASSERT_TRUE(waitUntil([&] { return mock().requestCount() >= 1; }, seconds(30))) << first.describe();
+    Turn second(port_, queryBody("run-q2", "wait your turn", {{"session_id", "chat-second"}}));
+    ASSERT_TRUE(waitUntil([&] { return !second.raw().empty(); }, seconds(30))) << second.describe();
+
+    auto cancel = send("POST", "/v1/gaia/query/run-q2/cancel", bearer());
+    ASSERT_TRUE(cancel);
+    ASSERT_EQ(cancel->status, 200) << cancel->body;
+    ASSERT_TRUE(second.waitDone(seconds(10))) << "a stopped turn kept waiting behind another chat: " << second.describe();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(second.events(), "final")) << second.describe();
+    EXPECT_EQ(second.events().back()["answer"], "");
+    EXPECT_EQ(mock().requestCount(), 1) << "the stopped turn must not have reached the model";
+
+    held.release();
+    ASSERT_TRUE(first.waitDone()) << first.describe();
+    ASSERT_NO_FATAL_FAILURE(expectSingleTerminal(first.events(), "final")) << first.describe();
+}
+
 TEST_F(GaiacppSidecar, CancelThatArrivesBeforeItsQueryStillStopsIt) {
     ASSERT_NO_FATAL_FAILURE(startSidecar());
     auto early = send("POST", "/v1/gaia/query/run-early/cancel", bearer());

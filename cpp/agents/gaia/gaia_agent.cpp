@@ -51,6 +51,7 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
         EmbedFunction embed;
         if (!options_.embeddingModel.empty()) {
             embedClient_ = std::make_unique<LemonadeClient>();
+            embedClient_->setAbortCheck([this] { return isCancelled(); });
             // Follow the agent's endpoint and key as they are when the call is made.
             embed = [this](const std::vector<std::string>& texts) {
                 const AgentConfig c = this->config();

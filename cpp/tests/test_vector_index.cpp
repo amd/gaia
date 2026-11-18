@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/vector_index.h>
 
@@ -110,7 +111,7 @@ protected:
     fs::path tmpDir;
 
     void SetUp() override {
-        tmpDir = fs::temp_directory_path() / "gaia_vector_index_test";
+        tmpDir = fs::temp_directory_path() / testsupport::perProcess("gaia_vector_index_test");
         fs::remove_all(tmpDir);
         fs::create_directories(tmpDir);
     }

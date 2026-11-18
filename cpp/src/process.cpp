@@ -91,18 +91,23 @@ std::string readStream(FILE* stream, size_t maxBytes) {
     std::array<char, 4096> buffer;
     size_t totalRead = 0;
 
+    bool ended = false;
     while (totalRead < maxBytes) {
         size_t toRead = std::min(buffer.size(),
                                  maxBytes - totalRead);
         size_t bytesRead = std::fread(buffer.data(), 1, toRead, stream);
-        if (bytesRead == 0) break;
+        if (bytesRead == 0) {
+            ended = true;
+            break;
+        }
         output.append(buffer.data(), bytesRead);
         totalRead += bytesRead;
     }
 
-    // Drain remaining data so the process doesn't block on a full pipe,
-    // but don't store it.
-    while (std::fread(buffer.data(), 1, buffer.size(), stream) > 0) {
+    // Drain remaining data so the process doesn't block on a full pipe, but don't store it.
+    // Never after the stream ended or a read was cancelled: one more read could wait for good
+    // on a pipe a background process still holds.
+    while (!ended && std::fread(buffer.data(), 1, buffer.size(), stream) > 0) {
         // discard
     }
 
@@ -494,9 +499,11 @@ ProcessResult runWithTimeout(const std::string& command,
     // The pipes end when the last writer closes them. A background process the
     // command left behind may still hold them, so the wait for it is bounded.
     for (int waited = 0; readersDone.load() < 2 && waited < 2000; waited += 10) Sleep(10);
-    if (readersDone.load() < 2) {
+    // Again until both readers are out: a cancel only ends the read in flight at that moment.
+    while (readersDone.load() < 2) {
         CancelIoEx(stdoutReadH, nullptr);
         CancelIoEx(stderrReadH, nullptr);
+        Sleep(10);
     }
     convergentStdout.join();
     convergentStderr.join();
@@ -1286,7 +1293,16 @@ ProcessResult ShellSession::run(const std::string& command,
     std::string movedNote;
     {
         std::error_code goneEc;
-        if (impl_->cwd != impl_->startCwd && !sfs::is_directory(sfs::u8path(impl_->cwd), goneEc)) {
+        std::string native = impl_->cwd;
+        bool checkable = true;
+#ifdef _WIN32
+        // Git Bash reports /c/Users/...; other /paths (its /tmp, /home) have no Windows form to test.
+        if (!native.empty() && native[0] == '/') {
+            checkable = native.size() >= 3 && std::isalpha(static_cast<unsigned char>(native[1])) && native[2] == '/';
+            if (checkable) native = std::string(1, native[1]) + ":" + native.substr(2);
+        }
+#endif
+        if (checkable && impl_->cwd != impl_->startCwd && !sfs::is_directory(sfs::u8path(native), goneEc)) {
             movedNote = "ShellSession: the folder this session was in (" + impl_->cwd +
                         ") no longer exists, so this command ran from " + impl_->startCwd + ".";
             impl_->cwd = impl_->startCwd;

@@ -193,6 +193,7 @@ json WebTools::doWebFetch(const json& args) {
         cfg.timeoutSec = 30;
         cfg.connectTimeoutSec = 15;
         cfg.returnRedirects = true;
+        cfg.maxResponseBytes = kMaxBodyBytes;  // stops the download; a cut after it would come too late
         cfg.defaultHeaders = {{"User-Agent", "gaia-agent/1.0"},
                               {"Accept", "text/html,text/plain,application/json,*/*"}};
         try {

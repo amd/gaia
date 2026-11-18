@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
 #include <gaia/mcp_client.h>
@@ -569,7 +570,7 @@ TEST(MCPConfirmationTest, AgentLoopDoesNotExecuteDeniedMcpTool) {
     // Agent installs a store rooted at the real user profile; swap in an empty
     // one so a developer's saved "always allow" can't defeat the assertion.
     const std::string storeDir =
-        (std::filesystem::temp_directory_path() / "gaia_mcp_gate_agent_test").string();
+        (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia_mcp_gate_agent_test")).string();
     std::filesystem::remove_all(storeDir);
     agent.toolRegistry().setAllowedToolsStore(std::make_shared<AllowedToolsStore>(storeDir));
 
@@ -613,7 +614,7 @@ TEST(MCPConfirmationTest, AlwaysAllowStoreKeysOnThePrefixedName) {
     // security.mdx tells users to pre-approve "mcp_<server>_<tool>" — verify
     // that is in fact the key the registry checks.
     const std::string dir =
-        (std::filesystem::temp_directory_path() / "gaia_mcp_gate_test").string();
+        (std::filesystem::temp_directory_path() / testsupport::perProcess("gaia_mcp_gate_test")).string();
     std::filesystem::remove_all(dir);
     auto store = std::make_shared<AllowedToolsStore>(dir);
     store->addAlwaysAllowed("mcp_srv_delete_file");
@@ -762,3 +763,33 @@ TEST(MCPClientTest, ASchemaWithATypeListOrABooleanSchemaStillLoads) {
     EXPECT_NO_THROW(info = schema.toToolInfo("srv"));
     EXPECT_TRUE(info.parameters.empty());
 }
+
+TEST(MCPClientTest, AnArgumentIsQuotedSoTheServerReceivesItAsWritten) {
+    // /bin/sh
+    EXPECT_EQ(StdioTransport::quoteArgument("-y", false), "-y");
+    EXPECT_EQ(StdioTransport::quoteArgument("@scope/pkg@1.2.3", false), "@scope/pkg@1.2.3");
+    EXPECT_EQ(StdioTransport::quoteArgument("", false), "''");
+    EXPECT_EQ(StdioTransport::quoteArgument("a b", false), "'a b'");
+    EXPECT_EQ(StdioTransport::quoteArgument("$HOME;rm *", false), "'$HOME;rm *'");
+    EXPECT_EQ(StdioTransport::quoteArgument("it's", false), "'it'\\''s'");
+    EXPECT_EQ(StdioTransport::quoteArgument("{\"a\": 1}", false), "'{\"a\": 1}'");
+    // A Windows command line
+    EXPECT_EQ(StdioTransport::quoteArgument("-y", true), "-y");
+    EXPECT_EQ(StdioTransport::quoteArgument("", true), "\"\"");
+    EXPECT_EQ(StdioTransport::quoteArgument("C:\\My Docs\\", true), "\"C:\\My Docs\\\\\"");
+    EXPECT_EQ(StdioTransport::quoteArgument("say \"hi\"", true), "\"say \\\"hi\\\"\"");
+    EXPECT_EQ(StdioTransport::quoteArgument("C:\\plain\\path", true), "C:\\plain\\path");
+}
+
+#ifndef _WIN32
+TEST(MCPClientTest, AStdioServerReceivesShellCharactersInAnArgumentUntouched) {
+    const std::string odd = "a b;$HOME `id` 'q' *";
+    const std::string script =
+        "read line; printf '{\"jsonrpc\":\"2.0\",\"id\":0,\"result\":{\"arg\":\"%s\"}}\\n' \"$1\"; sleep 2";
+    StdioTransport transport("sh", {"-c", script, "sh", odd}, 5, false);
+    ASSERT_TRUE(transport.connect());
+    const json reply = transport.sendRequest("tools/list");
+    EXPECT_EQ(reply["result"]["arg"], odd);
+    transport.disconnect();
+}
+#endif

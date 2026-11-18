@@ -757,3 +757,48 @@ TEST(LemonadeErrorDecodeTest, NonStreamingNonJsonBodyIsReturnedVerbatim) {
 
     EXPECT_EQ(client.chatCompletions(kChatRequest), "not json at all");
 }
+
+TEST(HttpClientTest, ACancelCheckEndsARequestStillWaitingForItsReply) {
+    bench::MockLlmServer server;
+    std::atomic<bool> stop{false};
+    HttpClientConfig cfg;
+    cfg.baseUrl     = server.baseUrl();
+    cfg.cancelCheck = [&stop] { return stop.load(); };
+    HttpClient http(cfg);
+
+    std::thread later([&stop] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        stop = true;
+    });
+    const auto t0 = std::chrono::steady_clock::now();
+    try {
+        http.get("/test/slow");  // answers after 2 s
+        ADD_FAILURE() << "expected the request to be cancelled";
+    } catch (const HttpError& e) {
+        EXPECT_NE(std::string(e.what()).find("cancelled"), std::string::npos) << e.what();
+    }
+    const auto waited = std::chrono::steady_clock::now() - t0;
+    later.join();
+    EXPECT_LT(waited, std::chrono::milliseconds(1500));
+
+    stop = false;
+    EXPECT_TRUE(http.get("/api/v1/health").ok()) << "the client must work again after a cancel";
+}
+
+TEST(HttpClientTest, AResponseSizeLimitStopsTheDownload) {
+    bench::MockLlmServer server;
+    HttpClientConfig cfg;
+    cfg.baseUrl          = server.baseUrl();
+    cfg.maxResponseBytes = 1000;
+    HttpClient http(cfg);
+
+    HttpResponse big = http.get("/test/big");
+    EXPECT_EQ(big.status, 200);
+    EXPECT_EQ(big.body.size(), 1000u);
+    EXPECT_EQ(big.body, std::string(1000, 'x'));
+
+    HttpResponse small = http.get("/api/v1/health");
+    EXPECT_TRUE(small.ok()) << "the connection must be usable after a download was cut short";
+    EXPECT_FALSE(small.body.empty());
+    EXPECT_NE(small.body[0], 'x') << "left-over bytes of the big body were read as this reply";
+}

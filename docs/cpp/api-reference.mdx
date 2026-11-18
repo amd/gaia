@@ -735,8 +735,15 @@ Each client keeps its connection to a server open and reuses it, so an HTTPS
 server costs one TLS set-up per client rather than one per request. Keep the
 `HttpClient` for as long as you talk to the server instead of building one per
 call. A connection idle for longer than `HttpClientConfig::keepAliveIdleSec`
-(30 by default) is reopened, and a stream ended early by its callback closes
-its connection.
+(4 by default, under the 5 seconds many servers keep an idle connection) is
+reopened, and a stream ended early by its callback closes its connection.
+
+`HttpClientConfig::cancelCheck` is asked about ten times a second while a
+request is in flight; once it returns true the request is dropped and
+`HttpError` is thrown, so a caller is never held for a whole read timeout.
+`LemonadeClient::setAbortCheck` sets it, which is how Stop ends a model load or
+the wait for a first token. `maxResponseBytes` stops a GET at a byte limit and
+returns what arrived.
 
 ### VectorIndex
 

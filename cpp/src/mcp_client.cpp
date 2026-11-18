@@ -22,6 +22,8 @@
 #include <sys/select.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+extern char** environ;  // not declared by every libc's unistd.h
 #endif
 
 namespace gaia {
@@ -342,7 +344,26 @@ struct StdioTransport::Impl {
             lpEnv = envBlock.empty() ? nullptr : static_cast<LPVOID>(&envBlock[0]);
         }
 
+        // CreateProcess only adds .exe, and npx, npm and yarn ship as .cmd files.
         std::string mutableCmd(cmdLine);
+        {
+            const bool quoted = !cmdLine.empty() && cmdLine[0] == '"';
+            const size_t end = quoted ? cmdLine.find('"', 1) : cmdLine.find_first_of(" \t");
+            const std::string program =
+                cmdLine.substr(quoted ? 1 : 0, end == std::string::npos ? std::string::npos : end - (quoted ? 1 : 0));
+            const std::string rest =
+                end == std::string::npos ? std::string() : cmdLine.substr(quoted ? end + 1 : end);
+            const bool bare = !program.empty() && program.find_first_of("\\/:.") == std::string::npos;
+            char found[MAX_PATH];
+            if (bare && SearchPathA(nullptr, program.c_str(), ".exe", MAX_PATH, found, nullptr) == 0) {
+                for (const char* ext : {".cmd", ".bat"}) {
+                    const DWORD n = SearchPathA(nullptr, program.c_str(), ext, MAX_PATH, found, nullptr);
+                    if (n == 0 || n >= MAX_PATH) continue;
+                    mutableCmd = "\"" + std::string(found, n) + "\"" + rest;
+                    break;
+                }
+            }
+        }
         BOOL ok = CreateProcessA(
             nullptr,
             mutableCmd.data(),
@@ -450,6 +471,22 @@ struct StdioTransport::Impl {
             return false;
         }
 
+        // Built before fork: setenv in the child of a threaded process can wait forever on a lock
+        // another thread held when it forked.
+        std::map<std::string, std::string> merged;
+        for (char** e = environ; e != nullptr && *e != nullptr; ++e) {
+            const std::string entry(*e);
+            const size_t eq = entry.find('=');
+            if (eq != std::string::npos && eq > 0) merged[entry.substr(0, eq)] = entry.substr(eq + 1);
+        }
+        for (const auto& kv : envVars) merged[kv.first] = kv.second;
+        std::vector<std::string> envStrings;
+        for (const auto& kv : merged) envStrings.push_back(kv.first + "=" + kv.second);
+        std::vector<char*> envp;
+        for (auto& s : envStrings) envp.push_back(&s[0]);
+        envp.push_back(nullptr);
+        const long maxFd = sysconf(_SC_OPEN_MAX);
+
         pid = fork();
         if (pid < 0) {
             close(stdinPipe[0]); close(stdinPipe[1]);
@@ -461,14 +498,12 @@ struct StdioTransport::Impl {
             // Child
             dup2(stdinPipe[0], STDIN_FILENO);
             dup2(stdoutPipe[1], STDOUT_FILENO);
-            close(stdinPipe[0]); close(stdinPipe[1]);
-            close(stdoutPipe[0]); close(stdoutPipe[1]);
+            // Another server's pipe left open here would keep that server from ever seeing end-of-input.
+            for (int fd = 3; fd < (maxFd > 0 && maxFd < 65536 ? static_cast<int>(maxFd) : 1024); ++fd) close(fd);
 
-            // Apply environment overrides before exec
-            for (const auto& kv : envVars)
-                setenv(kv.first.c_str(), kv.second.c_str(), 1 /*overwrite*/);
-
-            execl("/bin/sh", "sh", "-c", cmdLine.c_str(), nullptr);
+            char* const argv[] = {const_cast<char*>("sh"), const_cast<char*>("-c"),
+                                  const_cast<char*>(cmdLine.c_str()), nullptr};
+            execve("/bin/sh", argv, envp.data());
             _exit(127);
         }
 
@@ -571,15 +606,42 @@ StdioTransport::~StdioTransport() = default;
 StdioTransport::StdioTransport(StdioTransport&& other) noexcept = default;
 StdioTransport& StdioTransport::operator=(StdioTransport&& other) noexcept = default;
 
+std::string StdioTransport::quoteArgument(const std::string& arg, bool windows) {
+    if (!windows) {
+        // /bin/sh: anything but plain characters goes in single quotes, where nothing is special.
+        const bool plain = !arg.empty() && arg.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                                                 "0123456789_@%+=:,./-") == std::string::npos;
+        if (plain) return arg;
+        std::string out = "'";
+        for (const char c : arg) out += c == '\'' ? std::string("'\\''") : std::string(1, c);
+        return out + "'";
+    }
+    // The C runtime's rules: backslashes count only before a quote, where each is doubled.
+    if (!arg.empty() && arg.find_first_of(" \t\"") == std::string::npos) return arg;
+    std::string out = "\"";
+    size_t slashes = 0;
+    for (const char c : arg) {
+        if (c == '\\') {
+            ++slashes;
+            continue;
+        }
+        out.append(c == '"' ? slashes * 2 + 1 : slashes, '\\');
+        slashes = 0;
+        out += c;
+    }
+    out.append(slashes * 2, '\\');
+    return out + "\"";
+}
+
 bool StdioTransport::connect() {
     if (impl_->running) return true;
 
-    // Build command line, quoting arguments that contain spaces
-    auto quoteArg = [](const std::string& arg) -> std::string {
-        if (arg.find(' ') != std::string::npos) {
-            return "\"" + arg + "\"";
-        }
-        return arg;
+    const auto quoteArg = [](const std::string& arg) {
+#ifdef _WIN32
+        return quoteArgument(arg, true);
+#else
+        return quoteArgument(arg, false);
+#endif
     };
     std::string cmdLine;
     if (args_.empty()) {

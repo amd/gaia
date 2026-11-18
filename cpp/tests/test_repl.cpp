@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/repl.h>
 #include <gaia/agent.h>
@@ -199,7 +200,7 @@ TEST_F(ReplRunnerTest, HistoryWithoutStore) {
 // ---------------------------------------------------------------------------
 
 TEST_F(ReplRunnerTest, HistoryWithStore) {
-    fs::path storeDir = fs::temp_directory_path() / "gaia_repl_test_history";
+    fs::path storeDir = fs::temp_directory_path() / testsupport::perProcess("gaia_repl_test_history");
     fs::remove_all(storeDir);
 
     auto store = std::make_shared<SessionStore>(storeDir.string());
@@ -278,7 +279,7 @@ TEST_F(ReplRunnerTest, CommandNoArgsPasses) {
 // ---------------------------------------------------------------------------
 
 TEST_F(ReplRunnerTest, SessionStoreSetters) {
-    fs::path storeDir = fs::temp_directory_path() / "gaia_repl_test_setters";
+    fs::path storeDir = fs::temp_directory_path() / testsupport::perProcess("gaia_repl_test_setters");
     fs::remove_all(storeDir);
 
     auto store = std::make_shared<SessionStore>(storeDir.string());
@@ -381,7 +382,7 @@ TEST_F(ReplRunnerTest, BuiltinCommandOutputGoesToTheSink) {
 }
 
 TEST_F(ReplRunnerTest, AnUnreadableSessionIsMarkedInHistoryAndRefusedOnResume) {
-    const fs::path storeDir = fs::temp_directory_path() / "gaia_repl_test_unreadable";
+    const fs::path storeDir = fs::temp_directory_path() / testsupport::perProcess("gaia_repl_test_unreadable");
     fs::remove_all(storeDir);
     auto store = std::make_shared<SessionStore>(storeDir.string());
     Message hello;
@@ -442,4 +443,13 @@ TEST_F(ReplRunnerTest, TuiIsDisabledWhenForcedOff) {
 TEST_F(ReplRunnerTest, TuiIsDisabledWhenStdoutIsNotATerminal) {
     // ctest redirects stdout, so auto-detection must decline the TUI here.
     EXPECT_FALSE(repl->willUseTui());
+}
+
+TEST(ReplInterruptDeathTest, ASecondCtrlCBeforeTheNextPromptExits) {
+    EXPECT_EXIT(
+        {
+            gaia::replHandleInterrupt();  // the first asks the turn to stop
+            gaia::replHandleInterrupt();
+        },
+        ::testing::ExitedWithCode(130), "");
 }

@@ -277,3 +277,43 @@ TEST(WorkspaceTest, ALinkToAFileNotThereYetIsJudgedByItsTarget) {
     EXPECT_EQ(ws.checkPath((d.work / "in.md").string()), "");
 }
 #endif
+
+#ifndef _WIN32
+TEST(WorkspaceTest, AWildcardOrLinkFollowingReadAsksWhenALinkLeadsOut) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const std::string cwd = d.work.string();
+    for (const char* ok : {"cat *", "grep KEY *.txt", "grep -R x .", "find -L . -name x", "ls -L sub", "cat sub/*"}) {
+        EXPECT_TRUE(staysInside(ws, ok, cwd)) << ok << " (no link in the folder yet)";
+    }
+    std::error_code ec;
+    fs::create_symlink(d.other / "secret.txt", d.work / "env", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::create_directory_symlink(d.other, d.work / "sub" / "deps", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    for (const char* asks : {"cat *", "grep KEY *", "grep -R x .", "grep -rR x sub", "find -L . -name x", "du -L",
+                             "ls -RL", "cat sub/*", "cat */notes.txt"}) {
+        EXPECT_FALSE(staysInside(ws, asks, cwd)) << asks;
+    }
+    for (const char* ok : {"cat notes.txt", "grep -rn x sub", "find . -name x", "ls -la", "grep -L x notes.txt"}) {
+        EXPECT_TRUE(staysInside(ws, ok, cwd)) << ok << " (follows no link)";
+    }
+}
+#endif
+
+TEST(WorkspaceTest, GitBashDevicePathsAreNotFiles) {
+    for (const char* device : {"/dev/clipboard", "/dev/sda1", "/dev/mem", "/proc/registry/HKEY_CURRENT_USER/x",
+                               "/proc/1/environ", "/dev/conin"}) {
+        EXPECT_TRUE(Workspace::isGitBashDevicePath(device)) << device;
+    }
+    for (const char* fine : {"/dev/null", "/dev/stdin", "/dev/fd/3", "/dev/urandom", "/c/Users/me/notes.txt",
+                             "/tmp/x", "dev/clipboard"}) {
+        EXPECT_FALSE(Workspace::isGitBashDevicePath(fine)) << fine;
+    }
+#ifdef _WIN32
+    Dirs d;
+    Workspace ws({d.work.string()});
+    EXPECT_NE(ws.checkCommand("cat /dev/clipboard"), "");
+    EXPECT_NE(ws.checkCommand("cat /proc/registry/HKEY_CURRENT_USER/Environment/PATH"), "");
+#endif
+}
