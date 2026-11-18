@@ -956,12 +956,17 @@ _AFTER_CLOSING_CALL_NOTE = (
 )
 _TIME_NOTICE = (
     "Time budget: {used} of {total} seconds used. Stop gathering context. If "
-    "the task asks for files or other deliverables, write them now from what "
-    "you already have, marking any value you could not verify as unverified; "
-    "refine afterwards if there is time. When the time is up no tool can run "
-    "and anything not already written is lost."
+    "the task asks for files or other deliverables that are not written yet, "
+    "write them now from what you already have. Leave one that is already "
+    "written and right as it is, and say what you could not verify in your "
+    "answer, not inside the file. When the time is up no tool can run and "
+    "anything not already written is lost."
 )
 _TIME_NOTICE_AT = 0.7
+# Earlier shares of the limit at which the model is only told the time used:
+# without a clock it guesses, and stops with most of the limit unspent.
+_TIME_MARKS_AT = (0.25, 0.5)
+_TIME_MARK = "Time check: {used} of {total} seconds used."
 # The stop keeps back the closing step's tool call and answer (plus the
 # write-only step while a requested file is missing), each costed at the
 # turn's typical step, never less than this share of the limit.
@@ -3662,6 +3667,7 @@ Do NOT wrap conversational replies in JSON.
         self._step_durations: List[float] = []
         self._turn_conversation: Optional[List[Dict[str, Any]]] = None
         self._time_notice_sent = False
+        self._time_marks_sent = 0
         self._budget_notices_on = budget_notices_enabled()
         # Post-edit verification bookkeeping; reset per turn below.
         self._edit_verification_rounds = 0
@@ -9672,9 +9678,11 @@ Do NOT wrap conversational replies in JSON.
             self.console.pretty_print_json(args, "Arguments")
             if index == 0:
                 self.console.start_progress(f"Executing {name}")
+                self._closing_tool_running = True
                 try:
                     result = self._execute_tool_timed(name, args)
                 finally:
+                    self._closing_tool_running = False
                     self.console.stop_progress()
             else:
                 result = {
@@ -12230,8 +12238,15 @@ Do NOT wrap conversational replies in JSON.
         A command left at its class default can outlast the whole turn; this
         keeps the time to write up what was found. Unchanged with no time
         limit. 0 when under ``_MIN_CAPPED_RUN_S`` is left: start nothing.
+
+        The closing step's own call runs past the stop point by design: it
+        gets half of what is left of the limit, and the answer the rest.
         """
-        left = self._time_to_stop_s()
+        if getattr(self, "_closing_tool_running", False):
+            whole = self._time_left_s()
+            left = None if whole is None else whole / 2
+        else:
+            left = self._time_to_stop_s()
         if left is None:
             return seconds
         if left < _MIN_CAPPED_RUN_S:
@@ -12295,6 +12310,19 @@ Do NOT wrap conversational replies in JSON.
         self._last_boundary_at = now
         used = now - started
         stop = self._time_limit_passed()
+        marks = sum(1 for share in _TIME_MARKS_AT if used >= limit * share)
+        if (
+            marks > self._time_marks_sent
+            and not stop
+            and used < limit * _TIME_NOTICE_AT
+            and getattr(self, "_budget_notices_on", False)
+        ):
+            self._time_marks_sent = marks
+            mark = _TIME_MARK.format(used=int(used), total=int(limit))
+            getattr(messages, "append_transient", messages.append)(
+                {"role": "user", "content": mark}
+            )
+            conversation.append({"role": "user", "content": mark})
         if (
             (stop or used >= limit * _TIME_NOTICE_AT)
             and not self._time_notice_sent
@@ -12653,6 +12681,7 @@ Do NOT wrap conversational replies in JSON.
         # Read by `gaia -p` when the hard limit abandons the turn mid-call.
         self._turn_conversation = conversation
         self._time_notice_sent = False
+        self._time_marks_sent = 0
         time_limit_reached = False
         # Per-turn too: a previous turn's edits are not this turn's to repair.
         # The env knob is read here, not at import, so it can be changed

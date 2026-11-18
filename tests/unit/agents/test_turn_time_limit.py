@@ -166,6 +166,66 @@ def _notices_in(sent) -> bool:
     return any("Time budget:" in str(m.get("content")) for m in sent)
 
 
+def _marks(chat) -> list:
+    seen = []
+    for sent in chat.sent:
+        for m in sent:
+            text = str(m.get("content"))
+            if m.get("role") == "user" and text.startswith("Time check:"):
+                if text not in seen:
+                    seen.append(text)
+    return seen
+
+
+def test_the_model_is_told_the_time_used_at_a_quarter_and_at_half(agent, clock):
+    """With no clock it guessed, and one turn quit a third of the way in."""
+    agent.time_limit_s = 100
+    replies = [_lookup(n) for n in range(1, 8)] + [_answer("Done.")]
+    chat = _stub_chat(agent, clock, replies, 10)
+
+    agent.process_query(_REQUEST)
+
+    assert _marks(chat) == [
+        "Time check: 30 of 100 seconds used.",
+        "Time check: 50 of 100 seconds used.",
+    ]
+
+
+def test_one_slow_step_past_both_marks_sends_one_time_check(agent, clock):
+    agent.time_limit_s = 1000
+    replies = [_lookup(n) for n in range(1, 6)] + [_answer("Done.")]
+    chat = _stub_timed_chat(agent, clock, replies, [5, 5, 5, 540, 5])
+
+    agent.process_query(_REQUEST)
+
+    assert _marks(chat) == ["Time check: 555 of 1000 seconds used."]
+
+
+def test_notices_off_sends_no_time_check(agent, clock, monkeypatch):
+    monkeypatch.setenv("GAIA_AGENT_BUDGET_NOTICES", "0")
+    agent.time_limit_s = 100
+    chat = _stub_chat(agent, clock, [_lookup(1), _lookup(2), _answer("Done.")], 30)
+
+    agent.process_query(_REQUEST)
+
+    assert _marks(chat) == []
+
+
+def test_the_notice_keeps_caveats_out_of_the_file_and_a_right_file_as_it_is(
+    agent, clock
+):
+    agent.time_limit_s = 100
+    replies = [_lookup(n) for n in range(1, 8)] + [_answer("Done.")]
+    chat = _stub_chat(agent, clock, replies, 10)
+
+    agent.process_query(_REQUEST)
+
+    notice = _notices(chat)[0]
+    assert "in your answer, not inside the file" in notice
+    assert "already written and right as it is" in notice
+    assert "refine afterwards" not in notice
+
+
 def test_one_notice_near_the_limit_names_the_missing_file(agent, clock):
     agent.time_limit_s = 100
     replies = [_lookup(n) for n in range(1, 8)] + [_answer("Done.")]
@@ -457,6 +517,36 @@ def _native_writes(*paths: str) -> str:
             "finish_reason": "tool_calls",
         }
     )
+
+
+def test_the_closing_steps_call_may_use_the_time_kept_back_for_it(agent, clock):
+    """Past the stop point every run was refused, the closing step's included."""
+    agent.time_limit_s = 3420
+    caps = []
+    run = agent._execute_tool_timed
+
+    def _recording(name, args):
+        caps.append((agent._time_to_stop_s() > 0, agent.time_capped_run_seconds(300)))
+        return run(name, args)
+
+    agent._execute_tool_timed = _recording
+    _stub_timed_chat(
+        agent,
+        clock,
+        [
+            _lookup(1),
+            _lookup(2),
+            _native_writes("verdict.md"),
+            _answer("Wrote verdict.md."),
+        ],
+        [100, 3157, 3],
+    )
+
+    agent.process_query("Is the loader in src/ right?")
+
+    # 160 s left at the closing call: past the stop point, yet half is its to use.
+    assert caps == [(True, 300), (False, 0), (False, 80)]
+    assert agent.time_capped_run_seconds(300) == 0, "only the closing call gets it"
 
 
 @pytest.mark.parametrize("form", ["text", "native"])

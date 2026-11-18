@@ -15,7 +15,10 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   write lands. Every model call is capped to what the time left allows, and a
   call still running past the limit is abandoned with the result still
   reported. Qwen's `<function=…>` tool-call text now runs as a call instead of
-  being shown as the answer.
+  being shown as the answer. The agent is told the time used at 25% and 50%,
+  its last tool call may run for half of the time left instead of being
+  refused, and the 70% warning no longer invites it to rewrite a finished file
+  or put caveats inside one.
 
 ### Fixed
 
