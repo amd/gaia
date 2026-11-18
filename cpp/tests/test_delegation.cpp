@@ -786,6 +786,52 @@ TEST(DelegateTask, TheToolDescriptionFitsTheSchemaBudgetAndNamesTheItemShape) {
     FAIL() << "delegate_task is not in the tool schemas";
 }
 
+TEST(DelegateTask, TheAgentIsToldHowMuchThereIsToReadAndHelpersHowLongTheirAnswerMayBe) {
+    Workdir w;
+    for (int i = 0; i < 8; ++i) w.write("doc_" + std::to_string(i) + ".md", std::string(40000, 'a'));
+    w.write("picture.png", std::string(900000, 'b'));
+    EXPECT_EQ(GaiaAgent::textSizeOf(w.path), "about 80,000 tokens of text in 8 files") << "the picture is not text";
+    Workdir lone;
+    lone.write("only.md", "x");
+    EXPECT_EQ(GaiaAgent::textSizeOf(lone.path), "") << "one file is not worth a line";
+
+    RoutedServer server([](const json& req) {
+        if (isHelper(req)) return RoutedServer::Reply{answer("done")};
+        if (!has(text(req), "call_delegate_task")) {
+            return RoutedServer::Reply{call("delegate_task", tasksFor({"read doc_0.md", "read doc_1.md"}))};
+        }
+        return RoutedServer::Reply{answer("all read")};
+    });
+    GaiaAgent agent(cfgFor(server.lemonadeUrl()), optionsFor(w));
+    const fs::path before = fs::current_path();
+    fs::current_path(w.path);
+    agent.processQuery("Summarise every document here.");
+    fs::current_path(before);
+
+    bool parentSawSize = false, helperSawBudget = false;
+    for (const auto& b : server.bodies()) {
+        const std::string system = b["messages"][0]["content"].get<std::string>();
+        if (isHelper(b)) {
+            EXPECT_FALSE(has(system, "How much there is to read")) << "a helper's prompt stays short";
+            if (has(b["messages"].dump(), "Keep your whole answer under 2000 characters")) helperSawBudget = true;
+        } else if (has(system, "How much there is to read: about 80,000 tokens of text in 8 files") &&
+                   has(system, "Your context window holds")) {
+            parentSawSize = true;
+        }
+    }
+    EXPECT_TRUE(parentSawSize);
+    EXPECT_TRUE(helperSawBudget);
+
+    GaiaAgent::Options off = optionsFor(w);
+    off.maxHelpers = 0;
+    GaiaAgent plain(cfgFor(server.lemonadeUrl()), off);
+    fs::current_path(w.path);
+    plain.processQuery("hello");
+    fs::current_path(before);
+    EXPECT_FALSE(has(server.bodies().back()["messages"][0]["content"].get<std::string>(), "How much there is to read"))
+        << "an agent with no helpers is not told";
+}
+
 // ---- The whole loop ----
 
 TEST(DelegateTask, TheParentDelegatesThenAnswersFromTheConclusions) {

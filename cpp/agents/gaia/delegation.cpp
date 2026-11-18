@@ -234,6 +234,16 @@ json GaiaAgent::delegateTasks(const json& args) {
     const HelperWidth width = helperWidth(cfg.modelId, cfg.baseUrl, capacity, options_.maxHelpers);
     const size_t wanted = (std::min)(tasks.size(), static_cast<size_t>(width.width));
 
+    // What one conclusion can be so that all of them reach the parent unclipped; helpers are told it.
+    const size_t resultLimit = static_cast<size_t>((std::max)(cfg.toolResultCharLimit(), 0));
+    size_t answerChars = 300;
+    for (size_t each : {size_t{2000}, size_t{1500}, size_t{1100}, size_t{800}, size_t{600}, size_t{450}}) {
+        if (500 + tasks.size() * (each + kTaskEchoChars + 300) <= resultLimit) {
+            answerChars = each;
+            break;
+        }
+    }
+
     // A helper on the NPU needs the lock this turn holds; it comes back with the next model call.
     releaseNpu();
 
@@ -283,6 +293,8 @@ json GaiaAgent::delegateTasks(const json& args) {
                     brief += "\n\nRead these:";
                     for (const auto& p : tasks[i].paths) brief += "\n- " + p;
                 }
+                brief += "\n\nKeep your whole answer under " + std::to_string(answerChars) +
+                         " characters; anything past that is cut off.";
                 const json r = helper.processQuery(brief, options_.helperMaxSteps);
                 const std::string status = r.value("status", "error");
                 // Why the helper's turn stopped short: step_limit, loop, empty or error.

@@ -266,10 +266,13 @@ Lead with the result. Name the files you created or changed. Cite where facts ca
            (tools().hasTool("delegate_task") && tools().isEnabled("delegate_task")
                 ? std::string(
                       "\n\n## Helpers\ndelegate_task runs read-only helpers, each on one task in its own "
-                      "context, and returns their conclusions. Use it when the work is several independent "
-                      "pieces of reading or judgement, such as one per file or source. Give each helper a "
-                      "complete brief: what to find, which paths, and the exact answer format. Do the work "
-                      "yourself when one command or script covers it, when it is small, or when it writes. "
+                      "context, and returns their conclusions. Size the job before you start: the Environment "
+                      "section says how much there is to read and how much your context window holds. Use "
+                      "helpers when the work is several independent pieces of reading or judgement, such as one "
+                      "per file or source, and above all when reading it all yourself would take more than about "
+                      "half your window. Give each helper a file or a small group, and a complete brief: what to "
+                      "find, which paths, and the exact answer format, kept short. Do the work yourself when one "
+                      "command or script covers it, when it is small, or when it writes. "
                       "A helper can fail: read each status, then redo a failed part yourself or tell the user "
                       "it is missing.")
                 : std::string()) +
@@ -399,6 +402,56 @@ const std::string& pythonCommand() {
 }
 }  // namespace
 
+std::string GaiaAgent::textSizeOf(const fs::path& dir) {
+    static const std::set<std::string> kText = {
+        ".md", ".mdx", ".txt", ".rst", ".csv", ".tsv", ".json", ".jsonl", ".log", ".yaml", ".yml", ".toml", ".ini",
+        ".xml", ".html", ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".h", ".cpp", ".hpp",
+        ".cs", ".rb", ".sh", ".ps1", ".sql"};
+    constexpr size_t kMaxFiles = 5000;
+    std::error_code ec;
+    const fs::path home = fs::u8path(getEnvVar("USERPROFILE", getEnvVar("HOME")));
+    if (dir.empty() || dir == dir.root_path() || (!home.empty() && fs::equivalent(dir, home, ec))) return "";
+    size_t files = 0;
+    std::uintmax_t bytes = 0;
+    auto count = [&](const fs::path& p) {
+        std::string ext = p.extension().u8string();
+        std::transform(ext.begin(), ext.end(), ext.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::error_code sized;
+        const std::uintmax_t size = fs::file_size(p, sized);
+        if (sized || !kText.count(ext)) return;
+        ++files;
+        bytes += size;
+    };
+    auto skipped = [](const fs::path& p) {
+        const std::string name = p.filename().u8string();
+        return name.empty() || name[0] == '.' || name == "node_modules" || name == "__pycache__";
+    };
+    for (fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end && files < kMaxFiles; it.increment(ec)) {
+        if (skipped(it->path())) continue;
+        std::error_code sub;
+        if (!fs::is_directory(it->path(), sub)) {
+            count(it->path());
+            continue;
+        }
+        for (fs::directory_iterator in(it->path(), fs::directory_options::skip_permission_denied, sub), last;
+             !sub && in != last && files < kMaxFiles; in.increment(sub)) {
+            std::error_code kind;
+            if (!skipped(in->path()) && !fs::is_directory(in->path(), kind)) count(in->path());
+        }
+    }
+    if (files < 2) return "";
+    // About four bytes to a token, rounded to two figures so the number reads as the estimate it is.
+    std::uintmax_t tokens = bytes / 4;
+    std::uintmax_t unit = 1;
+    while (tokens / unit >= 100) unit *= 10;
+    tokens = tokens / unit * unit;
+    std::string digits = std::to_string(tokens);
+    for (int at = static_cast<int>(digits.size()) - 3; at > 0; at -= 3) digits.insert(static_cast<size_t>(at), ",");
+    return "about " + digits + " tokens of text in " + std::to_string(files) + " files";
+}
+
 void GaiaAgent::onTurnStart() {
     // The model can change between turns, so its tier is applied per turn.
     const bool compact = config().compactFeatures();
@@ -419,9 +472,14 @@ void GaiaAgent::onTurnStart() {
     }
     std::error_code ec;
     std::string listing = folderListing(fs::current_path(ec));
+    // Only an agent that can hand work out needs to know how much reading there is.
+    std::string size = toolRegistry().hasTool("delegate_task") && toolRegistry().isEnabled("delegate_task")
+                           ? textSizeOf(fs::current_path(ec))
+                           : std::string();
     std::vector<std::string> hostile = hostileNames(options_.workspaceRoots);
     std::lock_guard<std::mutex> lock(turnListingMu_);
     turnListing_ = std::move(listing);
+    turnTextSize_ = std::move(size);
     turnHostileNames_ = std::move(hostile);
     turnTablesPointedAt_.clear();
 }
@@ -440,6 +498,15 @@ std::string GaiaAgent::systemContext() const {
     }
     if (!listing) listing = folderListing(fs::current_path(ec));
     if (!listing->empty()) out << "- In it when this turn began: " << *listing << "\n";
+    std::string textSize;
+    {
+        std::lock_guard<std::mutex> lock(turnListingMu_);
+        textSize = turnTextSize_;
+    }
+    if (!textSize.empty()) {
+        out << "- How much there is to read: " << textSize << ". Your context window holds "
+            << config().contextSize << " tokens.\n";
+    }
     const std::time_t now = std::time(nullptr);
     char date[32];
     std::strftime(date, sizeof date, "%Y-%m-%d (%A)", std::localtime(&now));

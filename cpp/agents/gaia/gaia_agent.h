@@ -134,6 +134,10 @@ public:
     /// the same output. "" otherwise.
     static std::string repeatedCommandRefusal(const std::string& command, const std::vector<CallSeen>& calls);
 
+    /// How much text `dir` holds, for the prompt: "about 86,000 tokens of text in 16 files". Counts
+    /// text and source files two levels deep; "" when there are fewer than two.
+    static std::string textSizeOf(const std::filesystem::path& dir);
+
     /// text with every path-like token (one holding a slash) blanked out.
     static std::string withoutPaths(const std::string& text);
 
@@ -196,6 +200,7 @@ private:
     Options options_;
     mutable std::mutex turnListingMu_;
     std::optional<std::string> turnListing_;  // unset until the first turn starts
+    std::string turnTextSize_;                // how much text the working folder holds, in words for the prompt
     std::set<std::string> turnTablesPointedAt_;  // CSVs a command was sent to file_read for, once each
     std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
     std::unique_ptr<SkillLibrary> skills_;
