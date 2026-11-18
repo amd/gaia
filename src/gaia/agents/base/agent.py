@@ -1548,6 +1548,9 @@ _TOOL_CALL_MARKUP_PATTERN = re.compile(
     r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
 )
 _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
+# Every field the loop reads off a decoded reply. A JSON object carrying none
+# of them is the model's data, not a protocol envelope.
+_PROTOCOL_KEYS = frozenset(_ENVELOPE_KEYS) | {"answer", "tool_calls", "needs_plan"}
 # "Index my reports folder", "please re-index ~/docs": the verb opens a clause
 # and takes a path or a folder/file object, so "index.html" or "S&P 500 index"
 # never count.
@@ -7309,6 +7312,13 @@ Do NOT wrap conversational replies in JSON.
         return parsed
 
     def _decode_llm_response(self, response: str) -> Dict[str, Any]:
+        """Decode a reply; a JSON object with no protocol field is the answer."""
+        parsed = self._decode_llm_response_fields(response)
+        if isinstance(parsed, dict) and not _PROTOCOL_KEYS.intersection(parsed):
+            return {"thought": "", "goal": "", "answer": (response or "").strip()}
+        return parsed
+
+    def _decode_llm_response_fields(self, response: str) -> Dict[str, Any]:
         """
         Parse the LLM response to extract tool calls or conversational answers.
 
