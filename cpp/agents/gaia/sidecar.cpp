@@ -916,6 +916,12 @@ private:
             const auto t0 = std::chrono::steady_clock::now();
             json terminal;
             try {
+                {
+                    // A new agent reads project skills from where the process stands: the last chat's folder.
+                    std::error_code moveEc;
+                    const std::string folder = chatFolder(*s);
+                    if (!folder.empty()) fs::current_path(folder, moveEc);
+                }
                 ensureAgent(*s);
                 {
                     std::lock_guard<std::mutex> lock(s->currentMu);
@@ -1037,7 +1043,7 @@ private:
     // Move the process and the shell to this chat's working folder: the one it
     // named, else its first folder, else home, so no chat starts in another's.
     // Returns what went wrong, or "".
-    static std::string enterWorkingDirectory(Session& s) {
+    static std::string chatFolder(const Session& s) {
         std::string dir = s.workingDirectory;
         if (dir.empty()) {
             for (const auto& r : s.roots) {
@@ -1049,6 +1055,11 @@ private:
             }
         }
         if (dir.empty()) dir = getEnvVar("USERPROFILE", getEnvVar("HOME"));
+        return dir;
+    }
+
+    static std::string enterWorkingDirectory(Session& s) {
+        const std::string dir = chatFolder(s);
         if (dir.empty()) return "";
         std::error_code ec;
         fs::current_path(dir, ec);

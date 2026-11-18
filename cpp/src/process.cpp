@@ -1282,6 +1282,17 @@ ProcessResult ShellSession::run(const std::string& command,
         return impl_->buildScript(commandFile, stateFile);
     };
 
+    // The folder the session stands in can be deleted under it; every later command would fail before it starts.
+    std::string movedNote;
+    {
+        std::error_code goneEc;
+        if (impl_->cwd != impl_->startCwd && !sfs::is_directory(sfs::u8path(impl_->cwd), goneEc)) {
+            movedNote = "ShellSession: the folder this session was in (" + impl_->cwd +
+                        ") no longer exists, so this command ran from " + impl_->startCwd + ".";
+            impl_->cwd = impl_->startCwd;
+        }
+    }
+
     if (!impl_->baselineFromShell) {
         // One empty command with nothing of the session's applied, to learn the shell's own environment.
         std::map<std::string, std::string> overrides;
@@ -1309,6 +1320,10 @@ ProcessResult ShellSession::run(const std::string& command,
     std::string state;
     result = runSessionScript(build, impl_->posixScript, impl_->shell, command, timeoutMs, maxOutputBytes, state);
     impl_->absorbState(state);
+
+    if (!movedNote.empty()) {
+        result.stderr_output += std::string(result.stderr_output.empty() ? "" : "\n") + movedNote;
+    }
 
     const std::string droppedAfter = impl_->dropUnsafeBatchValues();
     if (!droppedAfter.empty()) droppedVars += (droppedVars.empty() ? "" : ", ") + droppedAfter;

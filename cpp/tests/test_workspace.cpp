@@ -263,3 +263,17 @@ TEST(WorkspaceTest, ACommandNamingALinkOutOfTheFolderIsRefused) {
     EXPECT_EQ(ws.checkCommand("linked/python -m pytest && linked/pip list"), "") << "a linked program may be run";
     fs::remove("linked");
 }
+
+#ifndef _WIN32
+TEST(WorkspaceTest, ALinkToAFileNotThereYetIsJudgedByItsTarget) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    std::error_code ec;
+    fs::create_symlink(d.other / "new.txt", d.work / "out.md", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::create_symlink(fs::path("sub") / "new.txt", d.work / "in.md", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    EXPECT_NE(ws.checkPath((d.work / "out.md").string()), "") << "a write would land outside the folder";
+    EXPECT_EQ(ws.checkPath((d.work / "in.md").string()), "");
+}
+#endif

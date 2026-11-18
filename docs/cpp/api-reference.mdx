@@ -147,10 +147,11 @@ try {
 If an MCP server disconnects mid-session (process crash, timeout), the agent **reconnects automatically**:
 
 ```
-MCP tool call → fails → reconnect to server → retry tool call → success or return error
+server found disconnected → reconnect → send the tool call
+tool call sent → fails (timeout, unreadable reply) → reconnect → return an error, do not send it again
 ```
 
-The subprocess is re-launched and re-initialized. If reconnection fails, the tool call returns an error and the LLM is notified.
+A call that failed after it was sent is never sent a second time: the server may already have run it, and repeating a `create_issue` or `send_message` would do it twice. The error tells the model so. The subprocess is re-launched and re-initialized either way; if reconnection fails, the tool call returns an error and the LLM is notified.
 
 ### Loop Detection
 

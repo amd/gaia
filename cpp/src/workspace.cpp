@@ -17,8 +17,14 @@ namespace gaia {
 namespace {
 
 // Folders and paths are UTF-8 strings here, as a model and the UI write them.
-std::string normalized(const fs::path& p) {
+std::string normalized(const fs::path& p, int depth = 0) {
     std::error_code ec;
+    // A link to a file not there yet keeps its own name in weakly_canonical; a write lands on its target.
+    const fs::path given = fs::absolute(p, ec);
+    if (!ec && depth < 8 && fs::is_symlink(given, ec) && !fs::exists(given, ec)) {
+        const fs::path target = fs::read_symlink(given, ec);
+        if (!ec) return normalized(target.is_absolute() ? target : given.parent_path() / target, depth + 1);
+    }
     fs::path abs = fs::weakly_canonical(fs::absolute(p, ec), ec);
     if (ec) abs = fs::absolute(p).lexically_normal();
     std::string s = abs.generic_u8string();

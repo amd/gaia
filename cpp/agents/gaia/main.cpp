@@ -270,7 +270,7 @@ Cli parseArgs(int argc, char** argv) {
                            "Lemonade only. Drop the flag and pick a model with --model, or use the "
                            "Python agent (gaia-agent) for Claude.");
         }
-        else if (a == "--prompt-file") { cli.mode = Cli::Mode::Print; cli.promptFile = need(i, a); }
+        else if (a == "--prompt-file") { setMode(Cli::Mode::Print, a); cli.promptFile = need(i, a); }
         else if (a == "--output-format") cli.outputFormat = need(i, a);
         else if (a == "-m" || a == "--model") cli.model = need(i, a);
         else if (a == "--base-url") cli.baseUrl = need(i, a);

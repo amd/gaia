@@ -471,7 +471,8 @@ TEST_F(GaiacppStdio, StartupStatusCarriesTheModelPing) {
     start();
     const json status = waitFor("status");
     ASSERT_TRUE(status.is_object());
-    for (const auto& f : wireFixture()["events"]["status"]["stdio_extension"]) {
+    const json wire = wireFixture();  // a range-for over part of a temporary reads freed memory
+    for (const auto& f : wire["events"]["status"]["stdio_extension"]) {
         if (f == "lemonade_version") continue;  // only when the server reports one
         EXPECT_TRUE(status.contains(f.get<std::string>())) << f;
     }
@@ -1297,7 +1298,8 @@ TEST_F(GaiacppStdio, ModelCommandSwitchesListsAndRefuses) {
     EXPECT_EQ(ping["type"], "status") << "the ping comes right before the final";
     EXPECT_EQ(ping["model_id"], "other-model");
     EXPECT_EQ(ping["model_remote"], false);
-    for (const auto& f : wireFixture()["events"]["status"]["stdio_extension"]) {
+    const json wire = wireFixture();  // a range-for over part of a temporary reads freed memory
+    for (const auto& f : wire["events"]["status"]["stdio_extension"]) {
         if (f != "lemonade_version") EXPECT_TRUE(ping.contains(f.get<std::string>())) << f;
     }
 

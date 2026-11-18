@@ -1039,3 +1039,19 @@ TEST(SkillEncoding, NonUtf8FileIsRefusedWithTheReason) {
     EXPECT_THAT(errorFrom([&] { gaia::parseSkillFile(dir.string()); }),
                 HasSubstr("not valid UTF-8"));
 }
+
+TEST(SkillHardening, AnAbsurdlyLongVersionOrNumberDoesNotOverflowTheRegexStack) {
+    const std::string longVersion = "1.0.0-" + std::string(200000, 'a');
+    EXPECT_THAT(errorFrom([&] {
+                    gaia::parseSkill(frontmatter("name: ok\ndescription: d\nversion: \"" + longVersion + "\"\n"));
+                }),
+                HasSubstr("not valid SemVer"));
+    const std::string digits(200000, '7');
+    EXPECT_NO_THROW(gaia::parseSkill(frontmatter("name: ok\ndescription: d\nmetadata:\n  n: " + digits + "\n")));
+}
+
+TEST(SkillHardening, AnAliasThatContainsItselfIsRefusedNotFollowed) {
+    EXPECT_NE(errorFrom([] { gaia::parseSkill(frontmatter("name: ok\ndescription: d\nmetadata: &a [*a]\n")); }), "");
+    EXPECT_NE(errorFrom([] { gaia::parseSkill(frontmatter("name: ok\ndescription: d\nmetadata: &a {k: *a}\n")); }),
+              "");
+}

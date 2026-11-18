@@ -949,7 +949,8 @@ void validateSkill(const Skill& skill, const std::string& source) {
         R"((?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))"
         R"((?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?)"
         R"((?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$)");
-    if (skill.version && !std::regex_match(*skill.version, kSemver)) {
+    // std::regex recurses once per character, so an absurdly long version is refused before it is matched.
+    if (skill.version && (skill.version->size() > 256 || !std::regex_match(*skill.version, kSemver))) {
         throw SkillValidationError(
             source + ": version " + pyRepr(*skill.version) +
             " is not valid SemVer. Use MAJOR.MINOR.PATCH (e.g. '1.0.0'); omit the "

@@ -63,6 +63,13 @@ protected:
             },
             {});
         toolRegistry().registerTool(
+            "numeric_status", "Succeed with a status that is a number",
+            [this](const json&) -> json {
+                executed.push_back("numeric_status");
+                return json{{"status", 200}, {"content", "done"}};
+            },
+            {});
+        toolRegistry().registerTool(
             "soft_fail", "Fail with ok:false",
             [this](const json&) -> json {
                 executed.push_back("soft_fail");
@@ -1469,4 +1476,61 @@ TEST(AgentResilience, AReplyThatAnnouncesAStepIsSentBackUpToThreeTimes) {
     steady.initForTest();
     EXPECT_EQ(steady.processQuery("go")["result"], "All five are done.");
     EXPECT_EQ(working.receivedBodies().size(), 11u);
+}
+
+TEST(AgentTelemetry, NullUsageCountsAreReadAsZero) {
+    bench::MockLlmServer mock;
+    json body = json::parse(answer("hi"));
+    body["usage"] = {{"prompt_tokens", 50},
+                     {"completion_tokens", 5},
+                     {"total_tokens", 55},
+                     {"prompt_tokens_details", {{"cached_tokens", nullptr}}}};
+    mock.pushResponse(body.dump());
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "hi");
+    EXPECT_EQ(r["usage"]["cached_tokens"], 0);
+}
+
+TEST(AgentResilience, AToolResultWithANumericStatusIsASuccess) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer(R"({"tool": "numeric_status", "tool_args": {}})"));
+    mock.pushResponse(answer("All done."));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"numeric_status"}));
+    EXPECT_EQ(r["result"], "All done.");
+}
+
+TEST(AgentResilience, ACallThatRepeatsTheUsersQuestionIsStillRun) {
+    bench::MockLlmServer mock;
+    const std::string question = "What is the warranty period for the X200?";
+    mock.pushResponse(answer(R"({"thought": ")" + question + R"(", "tool": "add", "tool_args": {"a": 1, "b": 2}})"));
+    mock.pushResponse(answer("Two years."));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery(question);
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"add"})) << "a question passed on in a call is not a quote";
+    EXPECT_EQ(r["result"], "Two years.");
+}
+
+TEST(AgentResilience, AnAnswerCutOffAtTheReplyLimitIsMarkedIncomplete) {
+    bench::MockLlmServer mock;
+    json body = json::parse(answer("The report begins and then"));
+    body["choices"][0]["finish_reason"] = "length";
+    mock.pushResponse(body.dump());
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("write a long report");
+    EXPECT_EQ(r["status"], "incomplete");
+    const std::string text = r["result"].get<std::string>();
+    EXPECT_EQ(text.rfind("The report begins and then", 0), 0u) << text;
+    EXPECT_NE(text.find("cut off at the model's reply limit"), std::string::npos) << text;
+
+    mock.pushResponse(answer("A whole answer."));
+    r = agent.processQuery("again");
+    EXPECT_EQ(r["status"], "success");
+    EXPECT_EQ(r["result"], "A whole answer.");
 }

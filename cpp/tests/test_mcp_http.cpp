@@ -7,6 +7,7 @@
 // notifications.
 
 #include <gtest/gtest.h>
+#include <gaia/agent.h>
 #include <gaia/mcp_client.h>
 #include <gaia/mcp_registry.h>
 
@@ -626,4 +627,33 @@ TEST(MCPStdioHandshakeTest, ConnectSendsInitializedNotification) {
     EXPECT_FALSE(notification.contains("id"));
     fs::remove_all(dir);
 #endif
+}
+
+namespace {
+class McpCallingAgent : public Agent {
+public:
+    using Agent::Agent;
+    void initForTest() { init(); }
+
+protected:
+    void registerTools() override {}
+};
+}  // namespace
+
+TEST(MCPHttpAgentTest, AToolCallThatFailedAfterItWasSentIsNotSentAgain) {
+    MockMcpHttpServer server;
+    AgentConfig cfg;
+    cfg.baseUrl = "http://127.0.0.1:9";
+    cfg.silentMode = true;
+    McpCallingAgent agent(cfg);
+    agent.initForTest();
+    ASSERT_TRUE(agent.connectMcpServer("weather", httpConfig(server.url())));
+    server.failToolCalls(true);
+
+    const json result = agent.toolRegistry().executeTool("mcp_weather_get_weather", {{"city", "Austin"}});
+
+    size_t calls = 0;
+    for (const auto& seen : server.seen()) calls += seen.body.value("method", "") == "tools/call" ? 1 : 0;
+    EXPECT_EQ(calls, 1u) << "the server may have run the first call, so a second one could repeat its effect";
+    EXPECT_NE(result.dump().find("not sent again"), std::string::npos) << result.dump();
 }

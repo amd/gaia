@@ -242,3 +242,11 @@ TEST(GitToolsTest, AFailureWithoutTheWordFatalIsStillAnError) {
     ASSERT_TRUE(result.contains("error")) << result.dump();
     EXPECT_FALSE(result.contains("diff"));
 }
+
+TEST(GitToolsTest, ShowRefusesACommittedCredentialFile) {
+    for (const char* ref : {"HEAD:.env", "HEAD:config/id_rsa", "main:deploy.pem"}) {
+        json result = GitTools::gitShow().callback({{"ref", ref}});
+        ASSERT_TRUE(result.contains("error")) << ref;
+        EXPECT_NE(result["error"].get<std::string>().find("credentials"), std::string::npos) << result.dump();
+    }
+}

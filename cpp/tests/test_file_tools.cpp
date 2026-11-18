@@ -1333,3 +1333,11 @@ TEST_F(FileToolsTest, FileEdit_AFileThatHoldsTheMarkerItselfStaysEditable) {
     EXPECT_FALSE(r.contains("error")) << r.dump();
     EXPECT_EQ(readFile(notes), "Tokens show as [redacted].\n");
 }
+
+TEST_F(FileToolsHardeningTest, FileWrite_ACredentialFileIsRefusedAsAnEditIs) {
+    const fs::path env = tempDir_ / ".env";
+    json result = FileIOTools::fileWrite().callback({{"path", env.string()}, {"content", "KEY=1\n"}});
+    ASSERT_TRUE(result.contains("error")) << result.dump();
+    EXPECT_NE(result["error"].get<std::string>().find("credentials"), std::string::npos) << result.dump();
+    EXPECT_FALSE(fs::exists(env));
+}

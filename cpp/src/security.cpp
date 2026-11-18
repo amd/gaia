@@ -16,6 +16,7 @@
 #include <string>
 
 #include "gaia/clean_console.h"
+#include "gaia/secrets.h"
 
 #ifdef _WIN32
 #   include <windows.h>
@@ -372,6 +373,8 @@ bool isReadOnlyShellCommand(const std::string& command, bool posixShell) {
                 const size_t next = dots + 2;
                 if (next == a.size() || a[next] == '/' || a[next] == '\\') return false;
             }
+            // file_read refuses a key or .env file; reading one through the shell at least asks.
+            if (a[0] != '-' && isCredentialFileName(a.substr(a.find_last_of("/\\") + 1))) return false;
             // hostname with a name sets it.
             if (program == "hostname" && a[0] != '-') return false;
             if (program != "find") continue;
@@ -467,9 +470,10 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
         // Commands that go online with no URL in sight: a remote, a package index, an API.
         static const std::regex online(
             R"(\b(?:git\b.*\b(?:clone|fetch|pull|push|ls-remote|submodule\s+update)\b)"
-            R"(|(?:pip3?|uv\s+pip|python3?\s+-m\s+pip)\s+(?:install|download)\b)"
-            R"(|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|update|publish)\b|(?:npx|uvx|pipx|bunx)\s)"
-            R"(|uv\s+(?:add|sync|tool\s+install)\b|cargo\s+(?:install|fetch|update)\b)"
+            R"(|git\b.*\bremote\s+update\b)"
+            R"(|(?:pip[0-9.]*|uv\s+pip|(?:python[0-9.]*|py)\s+-m\s+pip)\s+(?:install|download)\b)"
+            R"(|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|ci|update|publish)\b|(?:npx|uvx|pipx|bunx)\s)"
+            R"(|uv\s+(?:add|sync|tool\s+install|run\s+--with)\b|cargo\s+(?:install|fetch|update)\b)"
             R"(|go\s+(?:get|install|mod\s+download)\b|docker\s+(?:pull|push|login)\b)"
             R"(|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum)\s+(?:install|upgrade|update)\b)"
             R"(|gh\s|ssh\b|scp\b|sftp\b|ftp\b|rsync\b|nc\b|ncat\b|telnet\b|socat\b)"
@@ -482,14 +486,21 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
         // bash opens a socket for a redirect to these names.
         const bool socketFile = command.find("/dev/tcp/") != std::string::npos ||
                                 command.find("/dev/udp/") != std::string::npos;
-        if (socketFile || std::regex_search(command, online) || mentionsRemoteUrl(command)) {
+        // The shell drops quotes and backslashes before it looks a program up: cu''rl runs curl.
+        std::string bare;
+        for (const char c : command) {
+            if (c != '\'' && c != '"' && c != '\\') bare.push_back(c);
+        }
+        if (socketFile || std::regex_search(command, online) || std::regex_search(bare, online) ||
+            mentionsRemoteUrl(command)) {
             return why + "`" + command.substr(0, 80) + "`, which goes online.";
         }
         // A fetch stays local only when every destination it names is this PC.
-        if (std::regex_search(command, fetch)) {
-            // A proxy or a pinned address sends a "localhost" request elsewhere.
+        if (std::regex_search(command, fetch) || std::regex_search(bare, fetch)) {
+            // A proxy or a pinned address sends a "localhost" request elsewhere; -x also rides in a
+            // flag cluster (-sx) or holds its value (-xhost).
             static const std::regex reroute(
-                R"((?:^|\s)(?:-x|--proxy|--preproxy|--socks\S*|--resolve|--connect-to|-e|--execute)(?:[\s=]|$))");
+                R"((?:^|\s)(?:-[A-Za-z]*x\S*|--proxy|--preproxy|--socks\S*|--resolve|--connect-to|-e|--execute)(?:[\s=]|$))");
             if (std::regex_search(command, reroute)) return why + "`" + command.substr(0, 80) + "`, which goes online.";
             size_t urlBegin = 0, urlEnd = 0;
             if (!nextUrl(command, 0, urlBegin, urlEnd) || command.find("$(") != std::string::npos ||
@@ -538,6 +549,13 @@ std::string shellCommandScope(const std::string& command) {
     if (plain.count(program)) {
         // A flag that runs another program or writes a file is approved only as written.
         for (std::string w; words >> w;) {
+            // A grant for a program covers work in the folder, not a path that climbs out of it or names home.
+            if (w[0] == '~') return "exact:" + cmd;
+            for (size_t dots = w.find(".."); dots != std::string::npos; dots = w.find("..", dots + 1)) {
+                const bool starts = dots == 0 || w[dots - 1] == '/' || w[dots - 1] == '\\' || w[dots - 1] == '=';
+                const size_t next = dots + 2;
+                if (starts && (next == w.size() || w[next] == '/' || w[next] == '\\')) return "exact:" + cmd;
+            }
             if (w.size() < 2) continue;
 #ifdef _WIN32
             if (program == "sort" && w[0] == '/' && (w[1] == 'o' || w[1] == 'O')) return "exact:" + cmd;

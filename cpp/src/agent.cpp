@@ -616,12 +616,17 @@ UsageStats extractUsage(const json& responseJson) {
     UsageStats usage;
     if (responseJson.contains("usage") && responseJson["usage"].is_object()) {
         const auto& u = responseJson["usage"];
-        usage.promptTokens = u.value("prompt_tokens", 0);
-        usage.completionTokens = u.value("completion_tokens", 0);
-        usage.totalTokens = u.value("total_tokens", 0);
+        // Some servers send null for a count they don't keep.
+        const auto count = [](const json& from, const char* key) {
+            const auto it = from.find(key);
+            return it != from.end() && it->is_number() ? it->get<int>() : 0;
+        };
+        usage.promptTokens = count(u, "prompt_tokens");
+        usage.completionTokens = count(u, "completion_tokens");
+        usage.totalTokens = count(u, "total_tokens");
         const auto details = u.find("prompt_tokens_details");
         if (details != u.end() && details->is_object()) {
-            usage.cachedTokens = details->value("cached_tokens", 0);
+            usage.cachedTokens = count(*details, "cached_tokens");
         }
         usage.peakContextTokens = usage.promptTokens + usage.completionTokens;
     }
@@ -1265,17 +1270,20 @@ json Agent::callMcpTool(const std::string& serverName, const std::string& toolNa
 
     MCPClient* client = it->second.get();
 
-    // First attempt — happy path
     if (client->isConnected()) {
         try {
             return client->callTool(toolName, args);
         } catch (const std::runtime_error& e) {
-            console_->printWarning("MCP tool call failed: " + std::string(e.what()) +
-                                   " -- attempting reconnect to '" + serverName + "'");
+            // The server may have run the call before the reply was lost, so it is never sent a second time.
+            const std::string what = e.what();
+            const bool back = reconnectMcpServer(serverName);
+            return json{{"error", "MCP tool call failed: " + what + " It was not sent again, because '" + serverName +
+                                      "' may already have run it. " +
+                                      (back ? "The connection is open again; check what the call did before repeating it."
+                                            : "Reconnecting to the server failed too.")}};
         }
-    } else {
-        console_->printWarning("MCP server '" + serverName + "' disconnected -- attempting reconnect");
     }
+    console_->printWarning("MCP server '" + serverName + "' disconnected -- attempting reconnect");
 
     // Reconnect once and retry
     if (!reconnectMcpServer(serverName)) {
@@ -1583,7 +1591,7 @@ std::optional<std::string> toolFailure(const json& r) {
         }
         return "the tool reported a failure without a message";
     };
-    if (r.value("status", "") == "error") return message();
+    if (r.contains("status") && r["status"].is_string() && r["status"] == "error") return message();
     if (r.contains("ok") && r["ok"].is_boolean() && !r["ok"].get<bool>()) return message();
     if (r.contains("isError") && r["isError"].is_boolean() && r["isError"].get<bool>()) {
         return message();
@@ -1933,6 +1941,13 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     constexpr size_t kMaxToolCallsPerReply = 24;
     int malformedStreak = 0;
     std::string stopReason;  // why the loop ended without an answer: loop | empty
+    // A reply that stopped at the length limit is the answer so far, not the whole of it.
+    const auto markCutOff = [&](const std::string& finishReason) {
+        if (finishReason != "length") return;
+        incomplete = true;
+        finalAnswer += "\n\n[This answer was cut off at the model's reply limit of " +
+                       std::to_string(cfg.replyTokenLimit()) + " tokens.]";
+    };
     bool answerReviewed = false;
     bool answerSentBack = false;
     bool claimPushed = false;
@@ -2356,9 +2371,13 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 const json result = json::parse(m.content, nullptr, false);
                 const bool hasText = result.is_object() && result.contains("content") && result["content"].is_string();
                 const std::string shown = squash(hasText ? result["content"].get<std::string>() : m.content);
-                // Either way round: the reply is part of what was read, or repeats all of it.
+                // Either way round: the reply is part of what was read, or repeats all of a call that was read.
+                // A question or a line of a file that a real call passes on as an argument is not a quote.
+                const bool shownIsCall = shown.find("\"tool\"") != std::string::npos ||
+                                         shown.find("<tool_call>") != std::string::npos ||
+                                         shown.find("\"arguments\"") != std::string::npos;
                 quoted = shown.size() >= 20 && (shown.find(said) != std::string::npos ||
-                                                said.find(shown) != std::string::npos);
+                                                (shownIsCall && said.find(shown) != std::string::npos));
             }
             if (quoted) {
                 parsed = ParsedResponse{};
@@ -2398,6 +2417,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 continue;
             }
             finalAnswer = withUnresolved(parsed.answer.value());
+            markCutOff(llmResult.finishReason);
             if (!cfg.streaming || cfg.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }
@@ -2494,6 +2514,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 continue;
             }
             finalAnswer = withUnresolved(response);
+            markCutOff(llmResult.finishReason);
             if (!cfg.streaming || cfg.structuredEvents) console_->printFinalAnswer(finalAnswer, totalUsage);
             break;
         }

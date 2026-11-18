@@ -210,15 +210,32 @@ ToolInfo MCPToolSchema::toToolInfo(const std::string& serverName) const {
     info.policy = requiresConfirmation() ? ToolPolicy::CONFIRM : ToolPolicy::ALLOW;
 
     // Convert JSON Schema properties to ToolParameter list
-    if (inputSchema.contains("properties")) {
+    if (inputSchema.is_object() && inputSchema.contains("properties") && inputSchema["properties"].is_object()) {
         auto required = inputSchema.value("required", json::array());
         for (auto& [paramName, paramSchema] : inputSchema["properties"].items()) {
             ToolParameter param;
             param.name = paramName;
-            param.description = paramSchema.value("description", "");
+            // A schema may be `true`, and a nullable field's type is a list such as ["string","null"].
+            std::string typeStr = "string";
+            if (paramSchema.is_object()) {
+                const auto description = paramSchema.find("description");
+                if (description != paramSchema.end() && description->is_string()) {
+                    param.description = description->get<std::string>();
+                }
+                const auto type = paramSchema.find("type");
+                if (type != paramSchema.end() && type->is_string()) {
+                    typeStr = type->get<std::string>();
+                } else if (type != paramSchema.end() && type->is_array()) {
+                    for (const auto& one : *type) {
+                        if (one.is_string() && one != "null") {
+                            typeStr = one.get<std::string>();
+                            break;
+                        }
+                    }
+                }
+            }
 
             // Map JSON Schema types to ToolParamType
-            std::string typeStr = paramSchema.value("type", "string");
             if (typeStr == "string")       param.type = ToolParamType::STRING;
             else if (typeStr == "integer") param.type = ToolParamType::INTEGER;
             else if (typeStr == "number")  param.type = ToolParamType::NUMBER;
@@ -229,7 +246,7 @@ ToolInfo MCPToolSchema::toToolInfo(const std::string& serverName) const {
             // Check if parameter is required
             param.required = false;
             for (const auto& req : required) {
-                if (req.get<std::string>() == paramName) {
+                if (req.is_string() && req.get<std::string>() == paramName) {
                     param.required = true;
                     break;
                 }

@@ -411,6 +411,21 @@ TEST_F(ShellSessionTest, SessionsAreIndependent) {
               std::string::npos);
 }
 
+TEST_F(ShellSessionTest, ASessionWhoseFolderWasDeletedGoesBackToItsStart) {
+    ShellSession session(dirB_.string());
+    ASSERT_EQ(session.run("mkdir gone_dir && cd gone_dir", 10000).exitCode, 0);
+    ASSERT_NE(session.cwd().find("gone_dir"), std::string::npos);
+    std::error_code ec;
+    fs::remove_all(dirB_ / "gone_dir", ec);
+    ASSERT_FALSE(ec) << ec.message();
+
+    auto result = session.run("echo still_works", 10000);
+    EXPECT_EQ(result.exitCode, 0) << result.stderr_output;
+    EXPECT_NE(result.stdout_output.find("still_works"), std::string::npos);
+    EXPECT_NE(result.stderr_output.find("no longer exists"), std::string::npos) << result.stderr_output;
+    EXPECT_EQ(session.run("echo again", 10000).stderr_output.find("no longer exists"), std::string::npos);
+}
+
 TEST_F(ShellSessionTest, SetCwdAndSetEnvSeedTheSession) {
     ShellSession session;
 

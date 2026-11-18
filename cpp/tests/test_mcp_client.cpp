@@ -733,3 +733,32 @@ TEST(MCPResourcesTest, ServerErrorsThrowInsteadOfLookingEmpty) {
     ASSERT_TRUE(client.connect());
     EXPECT_THROW(client.listTools(), std::runtime_error);
 }
+
+TEST(MCPClientTest, ASchemaWithATypeListOrABooleanSchemaStillLoads) {
+    MCPToolSchema schema;
+    schema.name = "search";
+    schema.description = "Search";
+    schema.inputSchema = json::parse(R"({"type": "object",
+        "properties": {"q": {"type": ["string", "null"], "description": 7},
+                       "n": {"type": ["null", "integer"], "description": "how many"},
+                       "any": true},
+        "required": ["q", 5]})");
+    ToolInfo info;
+    ASSERT_NO_THROW(info = schema.toToolInfo("srv"));
+    ASSERT_EQ(info.parameters.size(), 3u);
+    for (const auto& p : info.parameters) {
+        if (p.name == "q") {
+            EXPECT_EQ(p.type, ToolParamType::STRING);
+            EXPECT_TRUE(p.required);
+        } else if (p.name == "n") {
+            EXPECT_EQ(p.type, ToolParamType::INTEGER);
+            EXPECT_EQ(p.description, "how many");
+            EXPECT_FALSE(p.required);
+        } else {
+            EXPECT_EQ(p.type, ToolParamType::STRING);
+        }
+    }
+    schema.inputSchema = json::parse(R"({"properties": ["not", "an", "object"]})");
+    EXPECT_NO_THROW(info = schema.toToolInfo("srv"));
+    EXPECT_TRUE(info.parameters.empty());
+}
