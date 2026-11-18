@@ -423,6 +423,9 @@ private:
     /// the output store when it has to be clipped.
     std::string recordToolOutput(const json& toolResult, int maxChars);
 
+    /// The most characters of `tool`'s result that go into the conversation.
+    int resultCharLimit(const std::string& tool, const AgentConfig& cfg) const;
+
     /// Replace older tool outputs in `messages` with a pointer to the store,
     /// keeping the newest `keepRecent`. Returns the characters freed.
     size_t elideOldToolOutputs(std::vector<Message>& messages, size_t keepRecent);

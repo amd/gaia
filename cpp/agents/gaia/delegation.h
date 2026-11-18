@@ -25,6 +25,8 @@ struct HelperWidth {
 inline constexpr int kCloudHelperWidth = 8;
 inline constexpr int kLocalHelperWidth = 4;
 inline constexpr int kMaxHelperTasks = 16;
+/// The most helpers one call runs once the tool has shared a many-file task out.
+inline constexpr int kMaxSharedHelpers = 64;
 
 /// True when modelId at baseUrl is served by a hosted provider, read off the names alone.
 bool isHostedModel(const std::string& modelId, const std::string& baseUrl);

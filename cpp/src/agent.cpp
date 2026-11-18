@@ -1064,6 +1064,15 @@ std::string Agent::recordToolOutput(const json& toolResult, int maxChars) {
            full.substr(tailStart);
 }
 
+int Agent::resultCharLimit(const std::string& tool, const AgentConfig& cfg) const {
+    const auto& all = tools_.allTools();
+    const std::string resolved = tools_.resolveName(tool);
+    const auto it = all.find(resolved.empty() ? tool : resolved);
+    // A token is about four characters, so the window's token count in characters is a quarter of it.
+    if (it != all.end() && it->second.wideResult) return (std::max)(cfg.toolResultCharLimit(), cfg.contextSize);
+    return cfg.toolResultCharLimit();
+}
+
 int Agent::storeToolOutput(const std::string& text) {
     std::lock_guard<std::mutex> lock(toolOutputsMutex_);
     const int id = nextToolOutputId_++;
@@ -2282,7 +2291,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 toolMsg.role = MessageRole::TOOL;
                 toolMsg.name = tc.name;
                 toolMsg.toolCallId = tc.id;
-                toolMsg.content = recordToolOutput(toolResult, cfg.toolResultCharLimit());
+                toolMsg.content = recordToolOutput(toolResult, resultCharLimit(tc.name, cfg));
                 messages.push_back(toolMsg);
 
                 lastToolFailed = false;
@@ -2483,7 +2492,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             Message toolMsg;
             toolMsg.role = MessageRole::TOOL;
             toolMsg.name = toolName;
-            toolMsg.content = recordToolOutput(toolResult, cfg.toolResultCharLimit());
+            toolMsg.content = recordToolOutput(toolResult, resultCharLimit(toolName, cfg));
             messages.push_back(toolMsg);
 
             lastToolFailed = false;

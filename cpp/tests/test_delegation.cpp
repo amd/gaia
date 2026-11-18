@@ -602,7 +602,8 @@ TEST(DelegateTask, SixteenLongConclusionsAllFitTheParentsToolResult) {
     for (int i = 0; i < 16; ++i) briefs.push_back("task " + std::to_string(i) + " " + std::string(300, 't'));
     const json r = delegate(agent, tasksFor(briefs));
     ASSERT_EQ(r["helpers"].size(), 16u);
-    EXPECT_LE(r.dump().size(), static_cast<size_t>(cfg.toolResultCharLimit())) << "nothing is clipped out of the middle";
+    EXPECT_LE(r.dump().size(), static_cast<size_t>((std::max)(cfg.toolResultCharLimit(), cfg.contextSize)))
+        << "nothing is clipped out of the middle";
     for (const auto& h : r["helpers"]) {
         EXPECT_EQ(h["status"], "ok");
         EXPECT_GE(h["conclusion"].get<std::string>().size(), 80u);
@@ -882,9 +883,17 @@ TEST(DelegateTask, ATaskNamingManyFilesIsSharedAmongHelpers) {
         many.push_back(w.str(name));
     }
     const json capped = delegate(agent, {{"tasks", json::array({{{"task", "Summarise"}, {"paths", many}}})}});
-    EXPECT_LE(capped["helpers"].size(), 16u);
-    EXPECT_GE(capped["helpers"].size(), 8u);
+    EXPECT_EQ(capped["helpers"].size(), 40u) << "the tool may run more helpers than the sixteen tasks a call takes";
     EXPECT_EQ(capped.value("status", ""), "success");
+    json lots = json::array();
+    for (int i = 0; i < 90; ++i) {
+        const std::string name = "many_" + std::to_string(i) + ".md";
+        w.write(name, std::string(12000, 'c'));
+        lots.push_back(w.str(name));
+    }
+    const json grouped = delegate(agent, {{"tasks", json::array({{{"task", "Summarise"}, {"paths", lots}}})}});
+    EXPECT_LE(grouped["helpers"].size(), 64u) << "past sixty-four the groups grow";
+    EXPECT_GE(grouped["helpers"].size(), 40u);
 
     // A window large enough for one helper to hold everything still uses the helpers there are.
     AgentConfig wide = cfgFor(server.lemonadeUrl());

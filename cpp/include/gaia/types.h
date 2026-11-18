@@ -300,6 +300,10 @@ struct ToolInfo {
     /// For a CONFIRM tool: false lets this one call run without asking (a
     /// read-only shell command). Unset = every call asks.
     std::function<bool(const json& args)> needsConfirm;
+
+    /// True when one result may take a quarter of the context window instead of the usual cap:
+    /// for a tool whose result is already the short form of a lot of reading.
+    bool wideResult = false;
 };
 
 // ---- LLM Usage Statistics ----

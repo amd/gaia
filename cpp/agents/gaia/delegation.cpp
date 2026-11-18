@@ -146,6 +146,7 @@ ToolInfo GaiaAgent::delegateTaskTool() {
         "them among helpers. Not for work one script can do, small tasks, or writes. A helper sees "
         "only its task, so make the brief complete.";
     info.policy = ToolPolicy::ALLOW;
+    info.wideResult = true;
     ToolParameter tasks;
     tasks.name = "tasks";
     tasks.type = ToolParamType::ARRAY;
@@ -258,8 +259,9 @@ json GaiaAgent::delegateTasks(const json& args) {
     // a small model hands everything to one helper, and a large one writes the same brief sixteen times.
     size_t sharedOut = 0;
     {
-        // A quarter of the window per helper, at about four bytes a token.
-        std::uintmax_t share = static_cast<std::uintmax_t>((std::max)(cfg.contextSize, 4096));
+        // About 8,000 tokens of reading per helper, less on a small window: a helper given several
+        // long files is slower and misses more than several helpers given one each.
+        std::uintmax_t share = static_cast<std::uintmax_t>(std::clamp(cfg.contextSize, 4096, 32768));
         std::vector<Task> spread;
         bool widened = false;
         for (;;) {
@@ -308,7 +310,7 @@ json GaiaAgent::delegateTasks(const json& args) {
                     spread.back().shared = false;
                 }
             }
-            if (spread.size() > static_cast<size_t>(kMaxHelperTasks)) {
+            if (spread.size() > static_cast<size_t>(kMaxSharedHelpers)) {
                 share *= 2;
                 continue;
             }
@@ -326,7 +328,7 @@ json GaiaAgent::delegateTasks(const json& args) {
     const size_t wanted = (std::min)(tasks.size(), static_cast<size_t>(width.width));
 
     // What one conclusion can be so that all of them reach the parent unclipped; helpers are told it.
-    const size_t resultLimit = static_cast<size_t>((std::max)(cfg.toolResultCharLimit(), 0));
+    const size_t resultLimit = static_cast<size_t>((std::max)(cfg.toolResultCharLimit(), cfg.contextSize));
     size_t answerChars = 300;
     for (size_t each : {size_t{2000}, size_t{1500}, size_t{1100}, size_t{800}, size_t{600}, size_t{450}}) {
         if (500 + tasks.size() * (each + kTaskEchoChars + 300) <= resultLimit) {
@@ -437,7 +439,9 @@ json GaiaAgent::delegateTasks(const json& args) {
                      {"wall_s", records[i]["wall_s"]},
                      {"input_tokens", usages[i].promptTokens},
                      {"cached_tokens", usages[i].cachedTokens},
-                     {"output_tokens", usages[i].completionTokens}});
+                     {"output_tokens", usages[i].completionTokens},
+                     {"task", clipped(trimmed(tasks[i].label()), 120)},
+                     {"conclusion", clipped(answers[i], 300)}});
             ++finished;
             if (status == "failed") ++failedSoFar;
             std::string progress = std::to_string(finished) + " of " + std::to_string(tasks.size()) +
@@ -532,7 +536,7 @@ json GaiaAgent::delegateTasks(const json& args) {
     if (ok + partial == 0) out["error"] = summary + " " + advice;
 
     // Every conclusion has to fit the one tool result the parent reads, or the middle ones are clipped away.
-    const size_t limit = static_cast<size_t>((std::max)(cfg.toolResultCharLimit(), 0));
+    const size_t limit = resultLimit;
     std::vector<int> stored(tasks.size(), 0);
     struct Sizes {
         size_t conclusion, task;
