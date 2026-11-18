@@ -11,7 +11,7 @@ import { COMPACT_MAX_FONT_SCALE, useLargeText } from '../theme/a11y';
 import { useTheme } from '../theme/ThemeProvider';
 import { toneColor, type Tone } from '../theme/tone';
 import { ForcedDirection } from './ForcedDirection';
-import { contentDir } from './direction';
+import { contentDir, physicalAlign } from './direction';
 import type { TypeRole } from '../tokens/type';
 
 export interface TextProps {
@@ -159,12 +159,12 @@ export function Text({
     if (dir) style.writingDirection = dir;
     // iOS lays a paragraph with a nested span out left to right unless told the UI direction.
     else if (Platform.OS !== 'web' && !nested && !dirProp && !forced && hasGloss(children)) style.writingDirection = uiDir;
-    // textAlign left/right are physical on native too (not swapped under forceRTL), so the start side is picked by direction.
-    // A pinned-direction block (HScroll) sets `forced` for text that carries no direction of its own.
+    // Native flips textAlign left and right in an RTL layout, except inside a pinned-direction block (HScroll), which sets `forced`.
     const startsRight = (dir ?? forced ?? (rtl ? 'rtl' : 'ltr')) === 'rtl';
+    const side = (right: boolean): 'left' | 'right' => (forced ? (right ? 'right' : 'left') : physicalAlign(right));
     if (align === 'center') style.textAlign = 'center';
-    else if (align === 'end') style.textAlign = startsRight ? 'left' : 'right';
-    else if (align === 'start' || !nested) style.textAlign = startsRight ? 'right' : 'left';
+    else if (align === 'end') style.textAlign = side(!startsRight);
+    else if (align === 'start' || !nested) style.textAlign = side(startsRight);
     if (rtl) style.letterSpacing = 0;
 
     const blocks: string[] | null = !nested && !glossInline && !compact && numberOfLines === undefined ? [] : null;
@@ -179,7 +179,7 @@ export function Text({
         color: toneColor(colors, 'muted'),
         writingDirection: 'ltr',
         // The gloss sits on the same reading edge as the text it translates, though it reads left to right.
-        textAlign: style.textAlign ?? 'left',
+        textAlign: style.textAlign ?? side(startsRight),
         marginTop: space.xs,
     };
     const main = (
