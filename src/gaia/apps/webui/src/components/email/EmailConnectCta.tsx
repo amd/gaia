@@ -23,10 +23,16 @@
  * so the user can pick.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, ExternalLink, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
+import { useT } from '../../i18n/useT';
+import { log } from '../../utils/logger';
+import { accountRef, middleCut, reconnectOffer } from '../../utils/connectorAccounts';
+import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
+import type { ConnectorListEntry } from '../../types';
+import { ltrIn } from '../setup/format';
 import './EmailConnectCta.css';
 
 // The base agent id this CTA belongs to. The connect CTA lives in the email
@@ -162,15 +168,22 @@ function ProviderButton({
     connectorId,
     label,
     grantAgents,
-    done,
     onDone,
+    target,
+    title,
+    ready,
 }: {
     connectorId: string;
+    /** The button's whole text. */
     label: string;
     /** Namespaced agent ids to grant this connector when OAuth completes (#2117). */
     grantAgents: string[];
-    done: boolean;
     onDone: () => void;
+    /** Sign in to one stored account again, or to another account. */
+    target?: api.AuthorizeTarget;
+    title?: string;
+    /** The accounts are known; until then a click could sign in to the wrong one. */
+    ready: boolean;
 }) {
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState<string | null>(null);
@@ -186,7 +199,9 @@ function ProviderButton({
                     : connector.default_scopes;
             // Grant the connecting agent(s) in the same flow — this CTA is
             // email-initiated, so triage works right after consent with no CLI.
-            const r = await api.authorizeConnector(connectorId, scopes, grantAgents);
+            const r = target
+                ? await api.authorizeConnector(connectorId, scopes, grantAgents, target)
+                : await api.authorizeConnector(connectorId, scopes, grantAgents);
             openAuthUrl(r.authorization_url);
             onDone();
         } catch (e) {
@@ -194,22 +209,22 @@ function ProviderButton({
         } finally {
             setBusy(false);
         }
-    }, [connectorId, grantAgents, onDone]);
+    }, [connectorId, grantAgents, onDone, target]);
 
     return (
         <div className="email-connect-cta__provider-slot">
             <button
                 className="email-connect-cta__button"
                 onClick={() => void handleConnect()}
-                disabled={busy}
-                aria-label={done ? `Reopen ${label} sign-in` : `Connect ${label}`}
+                disabled={busy || !ready}
+                title={title}
             >
                 {busy ? (
                     <Loader2 size={12} className="email-connect-cta__spinner" />
                 ) : (
                     <ExternalLink size={12} />
                 )}
-                <span>{done ? `Reopen ${label} sign-in` : `Connect ${label}`}</span>
+                <span>{label}</span>
             </button>
             {err && (
                 <div className="email-connect-cta__error" role="alert">
@@ -221,6 +236,22 @@ function ProviderButton({
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
+
+// Brand names, the same in every language.
+const PROVIDERS: ReadonlyArray<[EmailProvider, string]> = [
+    ['google', 'Google'],
+    ['microsoft', 'Microsoft'],
+    ['microsoft_work', 'Microsoft 365'],
+];
+
+const ADD_ACCOUNT: api.AuthorizeTarget = { addAccount: true };
+
+/** Re-reads the accounts on every connector change. Mounted only after a sign-in
+ *  opened: every chat reply with this button would otherwise hold a connection. */
+function ConnectorWatcher({ onChange }: { onChange: () => void }) {
+    useConnectorsSSE(onChange);
+    return null;
+}
 
 export function EmailConnectCta({
     content = '',
@@ -235,9 +266,23 @@ export function EmailConnectCta({
      */
     connectorId?: string;
 }) {
-    const [googleDone, setGoogleDone] = useState(false);
-    const [microsoftDone, setMicrosoftDone] = useState(false);
-    const [microsoftWorkDone, setMicrosoftWorkDone] = useState(false);
+    const t = useT();
+    const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
+    const markOpened = useCallback((id: string) => setOpened((prev) => new Set([...prev, id])), []);
+    const [connectors, setConnectors] = useState<ConnectorListEntry[]>([]);
+    const [ready, setReady] = useState(false);
+    const refresh = useCallback(() => {
+        api.listConnectors()
+            .then((res) => setConnectors(res.connectors || []))
+            .catch((err) => log.ui.warn('EmailConnectCta: connector fetch failed', err))
+            .finally(() => setReady(true));
+    }, []);
+    // Re-read on mount and when the window comes back from a sign-in tab.
+    useEffect(() => {
+        refresh();
+        window.addEventListener('focus', refresh);
+        return () => window.removeEventListener('focus', refresh);
+    }, [refresh]);
 
     // #2117 — this CTA is email-initiated, so connecting grants ONLY the email
     // agent the moment consent completes (no follow-up CLI grant, no "no grant
@@ -258,54 +303,45 @@ export function EmailConnectCta({
             ? connectorId
             : detectProvider(content);
 
-    const showGoogle = provider === 'google' || provider === 'all';
-    const showMicrosoft = provider === 'microsoft' || provider === 'all';
-    const showMicrosoftWork = provider === 'microsoft_work' || provider === 'all';
-
-    const anyDone = googleDone || microsoftDone || microsoftWorkDone;
+    const shown = PROVIDERS.filter(([id]) => provider === id || provider === 'all');
 
     return (
         <div
             className="email-connect-cta"
             role="region"
-            aria-label="Connect email account"
+            aria-label={t('emailCta.label')}
         >
             <div className="email-connect-cta__text">
                 <AlertCircle size={14} className="email-connect-cta__icon" />
-                <span>
-                    {anyDone
-                        ? 'A browser tab opened for sign-in. Return here when finished.'
-                        : 'Connect your email account to use Email Triage.'}
-                </span>
+                <span>{t(opened.size > 0 ? 'connectCard.opened' : 'emailCta.prompt')}</span>
             </div>
+            {opened.size > 0 && <ConnectorWatcher onChange={refresh} />}
             <div className="email-connect-cta__buttons">
-                {showGoogle && (
-                    <ProviderButton
-                        connectorId="google"
-                        label="Google"
-                        grantAgents={grantAgentsFor('google')}
-                        done={googleDone}
-                        onDone={() => setGoogleDone(true)}
-                    />
-                )}
-                {showMicrosoft && (
-                    <ProviderButton
-                        connectorId="microsoft"
-                        label="Microsoft"
-                        grantAgents={grantAgentsFor('microsoft')}
-                        done={microsoftDone}
-                        onDone={() => setMicrosoftDone(true)}
-                    />
-                )}
-                {showMicrosoftWork && (
-                    <ProviderButton
-                        connectorId="microsoft_work"
-                        label="Microsoft 365"
-                        grantAgents={grantAgentsFor('microsoft_work')}
-                        done={microsoftWorkDone}
-                        onDone={() => setMicrosoftWorkDone(true)}
-                    />
-                )}
+                {shown.map(([id, name]) => {
+                    const offer = reconnectOffer(connectors.find((c) => c.id === id));
+                    const done = opened.has(id);
+                    const common = { connectorId: id, grantAgents: grantAgentsFor(id), onDone: () => markOpened(id), ready };
+                    return [
+                        offer.account ? (
+                            <ProviderButton
+                                key={`${id}:${offer.account.account_id}`}
+                                {...common}
+                                label={t('connectCard.reconnectAccount', { address: ltrIn(t.locale, middleCut(offer.account.email || offer.account.account_id)) })}
+                                title={offer.account.email || undefined}
+                                target={{ account: accountRef(offer.account) }}
+                            />
+                        ) : (
+                            <ProviderButton
+                                key={id}
+                                {...common}
+                                label={t(done ? 'emailCta.reopen' : 'connectCard.connect', { name })}
+                            />
+                        ),
+                        offer.otherAccount && (
+                            <ProviderButton key={`${id}:other`} {...common} label={t('connectCard.otherAccount')} target={ADD_ACCOUNT} />
+                        ),
+                    ];
+                })}
             </div>
         </div>
     );

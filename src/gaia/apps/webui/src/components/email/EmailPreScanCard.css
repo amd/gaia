@@ -282,3 +282,10 @@
     background: var(--bg-card);
     border-color: var(--border-light);
 }
+
+.email-pre-scan__row-account {
+    flex-shrink: 0;
+    margin-inline-start: auto;
+    font-size: 11px;
+    color: var(--text-muted);
+}
