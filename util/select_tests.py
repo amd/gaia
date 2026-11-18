@@ -40,6 +40,7 @@ everything for nearly any change.
   eagerly, and following that would make every test depend on everything.
 - Code run in a child process (``python -m gaia.daemon``), by a test or by
   shipped code, counts with all its imports, since coverage can't see inside.
+  A module named only in a docstring is not run that way: docstrings never run.
 - A test the map never ran (added since the nightly build) follows imports
   inside functions too.
 
@@ -332,6 +333,8 @@ class _Imports(ast.NodeVisitor):
         self.module_level: List[ast.AST] = []
         self.in_function: List[ast.AST] = []
         self.strings: List[str] = []
+        # Never executed, so they name modules but never a child process.
+        self.docstrings: List[str] = []
         # Pieces of a joined path: "SKILL.md" there is not a bare file name.
         self.path_pieces: List[str] = []
         self._joined: Set[int] = set()
@@ -340,9 +343,30 @@ class _Imports(ast.NodeVisitor):
         self.folder_strings: List[str] = []
         # Inner links of a `/` chain, already read with the whole chain.
         self._chained: Set[int] = set()
+        self._docstring_ids: Set[int] = set()
         self._depth = 0
 
+    def _mark_docstring(self, node: ast.AST) -> None:
+        body = getattr(node, "body", None)
+        if (
+            isinstance(body, list)
+            and body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            self._docstring_ids.add(id(body[0].value))
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._mark_docstring(node)
+        self.generic_visit(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._mark_docstring(node)
+        self.generic_visit(node)
+
     def _function(self, node: ast.AST) -> None:
+        self._mark_docstring(node)
         self._depth += 1
         self.generic_visit(node)
         self._depth -= 1
@@ -368,6 +392,8 @@ class _Imports(ast.NodeVisitor):
         if isinstance(node.value, str):
             if id(node) in self._joined:
                 self.path_pieces.append(node.value)
+            elif id(node) in self._docstring_ids:
+                self.docstrings.append(node.value)
             else:
                 self.strings.append(node.value)
 
@@ -582,9 +608,11 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
             for text in found.folder_strings:
                 folders = folder_targets([p for p in _PATH_SPLIT_RE.split(text) if p])
                 graph.folder_reads[path].update(folders)
-        for text in found.strings:
+        texts = [(s, False) for s in found.strings]
+        texts += [(s, True) for s in found.docstrings]
+        for text, docstring in texts:
             value = text.strip()
-            if package_code and spawns and "." in value:
+            if package_code and spawns and not docstring and "." in value:
                 for name in embedded.findall(value):
                     target = resolve(name)
                     if target and module_files[target] != path:
@@ -600,9 +628,9 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
                     named = embedded.findall(value)
                 for name in named:
                     link(path, name, graph.deps, parent_only=True)
-                    found = resolve(name)
-                    if spawns and found:
-                        graph.subprocess_targets[path].add(module_files[found])
+                    module = resolve(name)
+                    if spawns and module and not docstring:
+                        graph.subprocess_targets[path].add(module_files[module])
             pieces = [p for p in _PATH_SPLIT_RE.split(value) if p]
             if not pieces:
                 continue

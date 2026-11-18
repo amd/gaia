@@ -39,6 +39,14 @@ FILES = {
         "    subprocess.Popen([sys.executable, '-m', 'gaia.daemon_server'])\n"
     ),
     "src/gaia/daemon_server.py": "def main():\n    from gaia.core import consts\n",
+    # Spawns something, and names the server only where nothing runs it.
+    "src/gaia/daemon_hint.py": (
+        '"""Pairs with ``python -m gaia.daemon_server``."""\n'
+        "import subprocess\n"
+        "def open_logs():\n"
+        '    """Logs land where gaia.daemon_server:main writes them."""\n'
+        "    subprocess.run(['open', 'logs'])\n"
+    ),
     "util/check_docs.py": (
         "from pathlib import Path\n"
         "def pages():\n    return list(Path('docs').rglob('*.mdx'))\n"
@@ -349,6 +357,18 @@ def test_a_spawned_childs_lazy_imports_count_too(graph):
     }
     hit = _selected(graph, "src/gaia/core/consts.py", coverage=coverage)
     assert "tests/unit/test_daemon_start.py" in hit
+
+
+def test_a_module_named_only_in_a_docstring_is_not_a_spawned_child(graph):
+    # Both files spawn; only daemon_client starts the server.
+    coverage = {
+        "src/gaia/daemon_client.py": {"tests/unit/test_daemon_start.py"},
+        "src/gaia/daemon_hint.py": {"tests/unit/test_unrelated.py"},
+        "src/gaia/daemon_server.py": {"tests/unit/test_patch.py"},
+    }
+    hit = _selected(graph, "src/gaia/daemon_server.py", coverage=coverage)
+    assert "tests/unit/test_daemon_start.py" in hit
+    assert "tests/unit/test_unrelated.py" not in hit
 
 
 def test_a_mapped_test_that_reaches_nothing_stays_out(graph):
