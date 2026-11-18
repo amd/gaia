@@ -147,6 +147,19 @@ class TestReleaseNaming:
     def test_older_candidates_still_rebuild_theirs(self, tag):
         assert not self.PACKAGES & set(resolve.required(tag))
 
+    def test_the_raw_terminal_binaries_go_by_what_the_release_carries(self):
+        """gaia-cli-<platform>, except on a release from before that name."""
+        assert resolve.expected_assets("v1.2.3")["tui-bin-linux-x64"] == (
+            "gaia-cli-linux-amd64"
+        )
+        both = ["gaia-linux-amd64", "gaia-cli-linux-amd64"]
+        assert resolve.expected_assets("v1.2.3", both)["tui-bin-linux-x64"] == (
+            "gaia-cli-linux-amd64"
+        )
+        before = resolve.expected_assets("v0.25.0", ["gaia-windows-amd64.exe"])
+        assert before["tui-bin-win-x64"] == "gaia-windows-amd64.exe"
+        assert before["tui-bin-darwin-x64"] == "gaia-cli-darwin-amd64"
+
     def test_a_candidate_names_its_packages_with_its_own_version(self):
         names = resolve.expected_assets("v0.25.1-rc4")
         assert names["tui-deb"] == "gaia_0.25.1-rc.4_amd64.deb"
@@ -485,7 +498,7 @@ class TestJourney:
     def test_a_phase_whose_output_the_console_cannot_encode_still_passes(
         self, results, tmp_path
     ):
-        # The phase writes UTF-8 bytes, as gaia-tui does; only the relay's own
+        # The phase writes UTF-8 bytes, as gaia-cli does; only the relay's own
         # console is cp1252, as on a Windows runner.
         script = tmp_path / "utf8_phase.py"
         script.write_text(

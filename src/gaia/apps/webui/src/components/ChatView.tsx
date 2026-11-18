@@ -10,6 +10,7 @@ import { agentEventToStep } from '../utils/streamSteps';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { useModelStore } from '../stores/modelStore';
 import { useReadAloudStore } from '../stores/readAloudStore';
 import { readsAloudWhenDone } from '../utils/autoReadAloud';
 import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
@@ -120,6 +121,9 @@ interface SendOptions {
     opening?: boolean;
 }
 
+/** How long the note about the closed resource strip stays up. */
+export const RESOURCES_NOTE_MS = 12_000;
+
 export function ChatView({ sessionId }: ChatViewProps) {
     const t = useT();
     const {
@@ -217,6 +221,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     streamingRef.current = isStreaming;
     // Set briefly after a queued send found the chat still busy, so it waits before trying again.
     const queueHold = useChatStore((s) => !!s.queueHolds[sessionId]);
+    // A model picked during the reply is applied first, so the queued message runs on it.
+    const modelSwitching = useModelStore((s) => !!s.queued);
 
     // ── Streaming chunk buffer ──────────────────────────────────────
     // Buffer SSE chunks in a ref and flush to the store via rAF.
@@ -422,11 +428,20 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const showResources = useResourceMonitorStore((s) => s.visible);
     const setShowResources = useResourceMonitorStore((s) => s.setVisible);
     const resourcesToggleRef = useRef<HTMLButtonElement>(null);
+    // Closing with the ✕ hides the strip in every chat; say how it comes back.
+    const [resourcesClosedNote, setResourcesClosedNote] = useState(false);
     const closeResources = useCallback(() => {
         setShowResources(false);
+        setResourcesClosedNote(true);
         // The close button unmounts with the strip; keep keyboard focus nearby.
         resourcesToggleRef.current?.focus();
     }, [setShowResources]);
+    useEffect(() => {
+        if (!resourcesClosedNote) return undefined;
+        if (showResources) { setResourcesClosedNote(false); return undefined; }
+        const timer = window.setTimeout(() => setResourcesClosedNote(false), RESOURCES_NOTE_MS);
+        return () => window.clearTimeout(timer);
+    }, [resourcesClosedNote, showResources]);
 
     const jumpToMessage = useJumpToMessage(messagesScrollRef, isNearBottomRef);
 
@@ -1386,11 +1401,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
             return;
         }
         // The opening message goes first.
-        if (queue.length === 0 || queueHold || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || initializing) return;
+        if (queue.length === 0 || queueHold || modelSwitching || isLoadingMessages || pendingPrompt || openingRef.current || retiredAgent || initializing) return;
         // Only once this chat's turn is over: seen ending here, or reported idle by a poll since.
         if (isStale() || (!observedEndRef.current && !idleHere)) return;
         void dispatchNext(sessionId, sendQueued, () => mountedRef.current && !isStale() && !useChatStore.getState().isStreaming && !comparingRef.current);
-    }, [busy, queue, queueHold, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, initializing, sessionId, sendQueued, isStale]);
+    }, [busy, queue, queueHold, modelSwitching, idleHere, isLoadingMessages, pendingPrompt, retiredAgent, initializing, sessionId, sendQueued, isStale]);
 
     // The meter shows what the next message will carry, so re-measure after each reply.
     const wasBusyRef = useRef(false);
@@ -1555,8 +1570,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setActionError(null);
         const failures = await addDroppedFiles(sessionId, documents);
         if (failures.length > 0) {
-            setActionError(failures.map(({ name, stage, error }) => (stage === 'unreadable'
-                ? t('docsBar.failedTitle', { name })
+            setActionError(failures.map(({ name, stage, error }) => (stage === 'unreadable' || stage === 'server'
+                ? t(stage === 'server' ? 'docsBar.serverTitle' : 'docsBar.failedTitle', { name })
                 : t(
                     stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
                     { name, error: requestErrorParam(error) },
@@ -1664,6 +1679,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
             </header>
 
             {showResources && <ResourceMonitor onClose={closeResources} />}
+            {!showResources && resourcesClosedNote && (
+                <div className="resource-strip resource-hidden-note" role="status">
+                    <span>{t('resources.hiddenNote')}</span>
+                    <button type="button" className="resource-hidden-undo" onClick={() => setShowResources(true)}>
+                        {t('resources.show')}
+                    </button>
+                </div>
+            )}
 
             <SessionDocsBar sessionId={sessionId} onDetachFailed={handleDetachFailed} />
 

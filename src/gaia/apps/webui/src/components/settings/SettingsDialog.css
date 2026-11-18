@@ -15,8 +15,8 @@
 
 .settings-dialog {
     display: flex;
-    width: min(920px, 100%);
-    height: min(680px, 100%);
+    width: min(960px, 100%);
+    height: min(820px, 100%);
     overflow: hidden;
     background: var(--bg-primary);
     border: 1px solid var(--border-light);
@@ -84,7 +84,7 @@
     position: absolute;
     top: 14px;
     inset-inline-end: 14px;
-    z-index: 1;
+    z-index: 2;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -98,6 +98,22 @@
 .settings-close:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+}
+
+/* Settings > About: one link per line. */
+.settings-about-links {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    list-style: none;
+}
+
+.settings-about-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    font-size: 13.5px;
 }
 
 /* "Back to Setup" after a Setup row opened another section. */
@@ -145,6 +161,23 @@
     color: var(--text-primary);
     font-size: 18px;
     font-weight: 600;
+}
+
+/* The tab title stays in view, and rows scroll under it rather than under the close button. */
+.settings-scroll > .settings-pane > .settings-pane-title {
+    position: sticky;
+    top: -24px;
+    z-index: 1;
+    margin: -24px -28px 0;
+    padding: 24px 28px 10px;
+    background: var(--bg-primary);
+}
+
+/* Below "Back to Setup" the title must not reach up over the button. */
+.settings-scroll > .settings-back + .settings-pane > .settings-pane-title {
+    top: 0;
+    margin-top: 0;
+    padding-top: 0;
 }
 
 .settings-pane-lede {
@@ -535,6 +568,7 @@
     margin-inline-start: 0;
 }
 
+/* One fact per line, so two never run into each other. */
 .model-chips .settings-more > .model-row-meta {
     display: block;
 }
@@ -747,7 +781,7 @@
 
 .skill-row-desc {
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 1;
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
@@ -757,15 +791,24 @@
     overflow: visible;
 }
 
+.skill-row-desc.is-toggle {
+    cursor: pointer;
+}
+
 .skill-row-more {
     align-self: flex-start;
     padding: 0;
-    color: var(--text-primary);
-    font-size: 12.5px;
-    text-decoration: underline;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-decoration: none;
     background: none;
     border: 0;
     cursor: pointer;
+}
+
+.skill-row-more:hover {
+    color: var(--text-primary);
+    text-decoration: underline;
 }
 
 .model-row > button,
@@ -863,6 +906,12 @@
 
     .settings-scroll {
         padding: 18px 16px 28px;
+    }
+
+    .settings-scroll > .settings-pane > .settings-pane-title {
+        top: -18px;
+        margin: -18px -16px 0;
+        padding: 18px 16px 10px;
     }
 
     .model-in-use-field {

@@ -7,15 +7,15 @@ import * as api from '../../services/api';
 import { log } from '../../utils/logger';
 import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
+import { syncModelAfterSettingChange, useModelStore } from '../../stores/modelStore';
 import { formatGb } from '../../utils/modelLabels';
 import { useT, type Translate } from '../../i18n/useT';
 import { isolate, type MessageKey } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
-import { useModelStore } from '../../stores/modelStore';
 import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
-import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
+import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton, startInstructionText } from './ErrorNotice';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
@@ -28,7 +28,7 @@ function customModelNote(id: string, status: ModelStatus | null | undefined): Cu
     return { kind: status.checked ? 'unlisted' : 'unchecked', id };
 }
 
-/** Model server status and choice, context size, custom model id, beta flags, MCP status, version. */
+/** Model server status and choice, context size, custom model id, beta flags, MCP status. */
 export function AdvancedSettings() {
     const t = useT();
     const [status, setStatus] = useState<SystemStatus | null>(null);
@@ -102,6 +102,7 @@ export function AdvancedSettings() {
     const saveCustomModel = useCallback(async () => {
         const trimmed = customModel.trim();
         const payload = trimmed.length > 0 ? trimmed : '';
+        const modelBefore = useModelStore.getState().active?.model;
         setSavingModel(true);
         setSaveError(null);
         setSaveNote(null);
@@ -112,20 +113,22 @@ export function AdvancedSettings() {
             const nextValue = updated.custom_model ?? '';
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
-            // The chip names the model now in use, without waiting for its poll.
-            void useModelStore.getState().refresh();
+            // The chip, the picker and this pane's own status still name the old model.
+            void syncModelAfterSettingChange(modelBefore);
+            api.getSystemStatus().then(setStatus).catch((err) => log.system.error('Failed to get system status', err));
             setSaveNote(customModelNote(nextValue, updated.model_status));
             setJustSaved(true);
             if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);
             justSavedTimerRef.current = setTimeout(() => setJustSaved(false), 2200);
         } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
             log.system.error('Failed to save custom_model', err);
-            setSaveError(msg);
+            // The backend's 422 is pydantic's English; say it in the UI's language.
+            const refused = err instanceof api.ApiError && err.httpStatus === 422 && err.fields.includes('custom_model');
+            setSaveError(refused ? t('settings.advanced.customModelInvalid') : err instanceof Error ? err.message : String(err));
         } finally {
             setSavingModel(false);
         }
-    }, [customModel]);
+    }, [customModel, t]);
 
     const toggleDynamicTools = useCallback(async () => {
         if (dynamicToolsLocked || savingDynamicTools) return;
@@ -157,11 +160,11 @@ export function AdvancedSettings() {
     const modelName = status ? status.default_model_name : DEFAULT_MODEL_NAME;
     const { isLoadingModel, isDownloadingModel, downloadError, loadModel, downloadModel } = useModelActions(modelName ?? undefined);
 
-    const version = __APP_VERSION__;
 
     // A cloud model runs off this PC: no device, download, load or context to manage.
     const cloudModel   = !!status?.default_model_is_cloud;
-    const wrongModel   = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false);
+    // A model Lemonade doesn't have (e.g. a mistyped custom ID) can't be loaded, so offer no Load.
+    const wrongModel   = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false && status.model_downloaded !== false);
     const smallContext = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.context_size_sufficient === false);
     const notDownloaded = !cloudModel && !!(status?.lemonade_running && !status.model_loaded && status.model_downloaded === false);
     const needsLoad    = (wrongModel || smallContext) && modelName !== null;
@@ -187,7 +190,7 @@ export function AdvancedSettings() {
                                 hint={!status.lemonade_running
                                     ? (needsLocalSetup(status) ? t('settings.advanced.notInstalledHint')
                                         : status.lemonade_error ? t('settings.advanced.queryFailed', { reason: status.lemonade_error })
-                                        : status.start_instruction && !namesSetupCommand(status.start_instruction) ? status.start_instruction : t('settings.advanced.notRunningHint'))
+                                        : status.start_instruction && !namesSetupCommand(status.start_instruction) ? startInstructionText(t, status.start_instruction) ?? undefined : t('settings.advanced.notRunningHint'))
                                     : undefined}
                             />
                             {needsLocalSetup(status) && <SetUpLocalButton className="btn-primary" />}
@@ -196,7 +199,7 @@ export function AdvancedSettings() {
                                 value={status.model_loaded || t('settings.advanced.noneLoaded')}
                                 ok={!!status.model_loaded && (cloudModel || status.expected_model_loaded !== false)}
                                 hint={!status.model_loaded
-                                    ? t('settings.advanced.loadsFirst')
+                                    ? t(status.lemonade_running ? 'settings.advanced.loadsFirst' : 'settings.advanced.loadsWhenBack')
                                     : !cloudModel && status.expected_model_loaded === false
                                     ? t('settings.advanced.expected', { name: modelName ?? '' })
                                     : undefined}
@@ -317,7 +320,7 @@ export function AdvancedSettings() {
                 <LemonadeServerSection />
             </SettingsDisclosure>
 
-            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel ? isolate(savedCustomModel, 'ltr') : t('settings.advanced.customHint')}>
+            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel ? isolate(savedCustomModel, 'ltr') : t('settings.advanced.customHint')} targetId="custom-model">
                 <p className="model-override-desc">{t('settings.advanced.customDesc')}</p>
                 <div className="model-input-row">
                     <input
@@ -418,11 +421,6 @@ export function AdvancedSettings() {
                     </div>
                 </SettingsDisclosure>
             )}
-
-            <div className="about-info">
-                <p><bdi dir="ltr">GAIA v{version}</bdi> <span className="beta-badge">BETA</span></p>
-                <p className="about-sub">{t('settings.advanced.about')}</p>
-            </div>
         </div>
     );
 }

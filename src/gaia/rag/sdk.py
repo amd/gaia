@@ -59,7 +59,10 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.vlm_client import VLMExtractionError
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
+from gaia.rag.html_utils import HTML_EXTENSIONS, extract_html_text
 from gaia.rag.normalize import search_form
+from gaia.rag.pdf_tables import looks_tabular, tables_as_rows
+from gaia.rag.pdf_utils import pdf_parse_limits
 from gaia.rag.text_units import (
     SENTENCE_BREAK,
     estimate_tokens,
@@ -81,6 +84,7 @@ from gaia.utils.file_lock import (
     write_text_atomic,
 )
 from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.text_decoding import TRIED_ENCODINGS, decode_text
 
 _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF8, "utf-8-sig"),
@@ -88,10 +92,6 @@ _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF32_BE, "utf-32"),
     (codecs.BOM_UTF16_LE, "utf-16"),
     (codecs.BOM_UTF16_BE, "utf-16"),
-)
-_TEXT_TRIED_ENCODINGS = ", ".join(
-    list(dict.fromkeys(e for _, e in _TEXT_BOM_ENCODINGS))
-    + ["utf-8", "cp1252", "detected legacy encodings (Windows-1256, Shift-JIS, GBK…)"]
 )
 
 
@@ -193,39 +193,6 @@ def folder_index_skip_reason(file_path) -> Optional[str]:
     if not ext:
         return "no file extension, so the document type is unknown"
     return f"{ext} files are not a supported document type"
-
-
-def _decode_text_bytes(data: bytes) -> str:
-    """Decode text bytes, detecting legacy encodings; raise when none fits."""
-    for bom, encoding in _TEXT_BOM_ENCODINGS:
-        if data.startswith(bom):
-            return data.decode(encoding)
-
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        pass
-
-    from charset_normalizer import from_bytes
-
-    matches = from_bytes(data)
-    try:
-        cp1252_text = data.decode("cp1252")
-    except UnicodeDecodeError:
-        cp1252_text = None
-    # Short Western text scores as cp1250/cp775 too; keep cp1252 when it reads cleanly.
-    if cp1252_text is not None and any(str(m) == cp1252_text for m in matches):
-        return cp1252_text
-    best = matches.best()
-    if best is not None:
-        return str(best)
-    # Symbol-heavy Western text ("12€ — 15€") the detector can't place.
-    high = sum(byte >= 0x80 for byte in data)
-    if cp1252_text is not None and high <= sum(0x20 < byte < 0x80 for byte in data):
-        return cp1252_text
-    raise UnicodeDecodeError(
-        "text", data, 0, len(data), "no text encoding fits these bytes"
-    )
 
 
 # --- PDF extraction errors ---------------------------------------------------
@@ -993,6 +960,8 @@ class RAGSDK:
         self.file_content_keys = {}
         # {file_path: (_stat_key, ns it was taken)} of those same bytes
         self.file_stat_keys = {}
+        # A load pushed a document out to fit under max_total_chunks.
+        self._evicted_for_size = False
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -1827,7 +1796,49 @@ class RAGSDK:
         ext = Path(file_path).suffix.lower()
         return ext if ext else ".unknown"
 
+    def _page_tables_as_rows(self, page, page_num: int, text: str, header):
+        """``text`` with the page's tables as header-named rows (see pdf_tables)."""
+        try:
+            layout = page.extract_text(extraction_mode="layout") or ""
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            # pypdf's layout mode fails on some fonts; the plain text is still whole.
+            self.log.warning(
+                "Page %d: table rows not rebuilt, layout extraction failed: %s",
+                page_num,
+                e,
+            )
+            return text, header
+        return tables_as_rows(text, layout, header)
+
     def _extract_text_from_pdf(self, pdf_path: str) -> tuple:
+        """:meth:`_read_pdf_text` under :func:`pdf_parse_limits`.
+
+        pypdf parses lazily, so the whole read, not just the open, runs under them.
+        """
+        try:
+            from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+                LimitReachedError,
+            )
+        except ImportError:  # pragma: no cover - PyPDF2 has no such limit
+            LimitReachedError = ()  # type: ignore[assignment,misc]
+
+        try:
+            with pdf_parse_limits():
+                return self._read_pdf_text(pdf_path)
+        except LimitReachedError as e:
+            file_name = Path(pdf_path).name
+            self.log.error(f"PDF past GAIA's parsing limits {pdf_path}: {e}")
+            raise PDFExtractionError(
+                f"Could not read PDF: {file_name}\n"
+                "Reason: the file is too complex for GAIA to read safely "
+                f"(pypdf: {e}).\n"
+                "Suggestions:\n"
+                "  1. Print it to a new PDF (Print, then 'Save as PDF' or "
+                "'Microsoft Print to PDF') and index the new file\n"
+                "  2. Or split it into smaller PDFs and index those"
+            ) from e
+
+    def _read_pdf_text(self, pdf_path: str) -> tuple:
         """
         Extract text from PDF file with VLM for images (always enabled if available).
 
@@ -1966,6 +1977,7 @@ class RAGSDK:
             unavailable = self._vision_unavailable(vlm_available)
             degraded_pages = []
             page_warnings = {}
+            table_header = None
             attempts = _VisionAttempts(
                 file_name, vlm.vlm_model if vlm else self.config.vlm_model
             )
@@ -1976,6 +1988,10 @@ class RAGSDK:
 
                 # Step 1: Extract text with pypdf
                 pypdf_text = normalize_arabic_pdf_text(extract_pdf_page_text(page))
+                if looks_tabular(pypdf_text):
+                    pypdf_text, table_header = self._page_tables_as_rows(
+                        page, i, pypdf_text, table_header
+                    )
 
                 # Step 2: Check for images
                 has_imgs = False
@@ -2730,11 +2746,11 @@ These positions indicate where to split the text."""
                 data = f.read()
 
             try:
-                text = _decode_text_bytes(data)
+                text = decode_text(data)[0]
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
@@ -2765,11 +2781,11 @@ These positions indicate where to split the text."""
                 data = f.read()
 
             try:
-                decoded = _decode_text_bytes(data)
+                decoded = decode_text(data)[0]
             except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode CSV file: {csv_path}\n"
-                    f"Tried encodings: {_TEXT_TRIED_ENCODINGS}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
                     "  2. Check if the file is a valid CSV (not corrupted)\n"
@@ -3214,6 +3230,23 @@ These positions indicate where to split the text."""
         )
         return text, num_chapters
 
+    def _extract_text_from_html(self, html_path: str) -> str:
+        """A web page's readable text, without its markup, scripts or embedded JSON."""
+        try:
+            with self._safe_open(html_path, "rb") as f:
+                markup = f.read()
+            text = extract_html_text(html_path, markup)
+        except Exception as e:
+            self._log_read_failure(
+                e, html_path, f"Error reading HTML file {html_path}: {e}"
+            )
+            raise
+        self.log.info(
+            f"🌐 Extracted {len(text):,} characters of text from "
+            f"{len(markup):,} bytes of HTML"
+        )
+        return text
+
     def _extract_text_from_file(self, file_path: str) -> tuple:
         """
         Extract text from file based on type.
@@ -3283,6 +3316,10 @@ These positions indicate where to split the text."""
 
         elif file_type in UNSUPPORTED_DOCUMENTS:
             raise ValueError(unsupported_document_message(file_path, file_type))
+
+        elif file_type in HTML_EXTENSIONS:
+            metadata["html_text"] = True
+            return self._extract_text_from_html(file_path), metadata
 
         # Code files (treat as text for Q&A purposes)
         elif file_type in CODE_EXTENSIONS:
@@ -3849,6 +3886,7 @@ These positions indicate where to split the text."""
 
                 # Remove from indexed files
                 self.indexed_files.discard(file_path)
+                self._evicted_for_size = False
 
                 # Clean up LRU tracking
                 if file_path in self.file_access_times:
@@ -4063,6 +4101,8 @@ These positions indicate where to split the text."""
                 )
                 break
             evicted_files.append(path)
+        if evicted_files:
+            self._evicted_for_size = True
 
         # Check indexed files limit
         while (
@@ -4088,6 +4128,27 @@ These positions indicate where to split the text."""
             or len(self.indexed_files) <= self.config.max_indexed_files
         )
         return chunks_ok and files_ok, evicted_files
+
+    def full_by(self) -> Optional[str]:
+        """Which limit stops the index taking one more document without pushing one out.
+
+        ``"size"`` once its passages reach ``max_total_chunks``, or a load had
+        to push a document out to fit under it; ``"files"`` at
+        ``max_indexed_files`` documents; None while there is room.
+        """
+        with self._state_lock:
+            files = len(self.indexed_files)
+            chunks = len(self.chunks)
+            evicted_for_size = self._evicted_for_size
+        if evicted_for_size or 0 < self.config.max_total_chunks <= chunks:
+            return "size"
+        if 0 < self.config.max_indexed_files <= files:
+            return "files"
+        return None
+
+    def is_full(self) -> bool:
+        """True when indexing one more document would push out one already held."""
+        return self.full_by() is not None
 
     def _has_indexing_capacity(self, replacing: Optional[str] = None) -> bool:
         """Check if there is capacity to index another document.
@@ -4369,6 +4430,10 @@ These positions indicate where to split the text."""
 
                 if self._images_readable_now(cached_metadata):
                     raise _ImagesReadableNow()
+                if file_type in HTML_EXTENSIONS and not cached_metadata.get(
+                    "html_text"
+                ):
+                    raise ValueError("cached HTML was indexed as raw markup")
 
                 # Check if cache might be missing VLM content
                 # If metadata doesn't have VLM info, it's an old cache

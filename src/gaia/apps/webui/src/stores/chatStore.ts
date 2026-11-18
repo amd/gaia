@@ -8,6 +8,7 @@ import type { ActiveRuns, AwaitingUser, Session, Message, Document, AgentStep, S
 import { applyTheme, resolveTheme, syncTitleBar, type ThemePreference } from '../utils/theme';
 import { DEFAULT_CUSTOM, PALETTE_IDS, applyPalette, isHexColor, type CustomColors, type PaletteId } from '../utils/palette';
 import { log } from '../utils/logger';
+import { addCard } from '../utils/connectCards';
 import { DEFAULT_LOCALE, applyLocale, isLocaleCode } from '../i18n/registry';
 import { restore as restoreQueues, type QueuedMessage } from '../utils/messageQueue';
 
@@ -25,13 +26,15 @@ export type SettingsSection =
     | 'privacy'
     | 'notifications'
     | 'voice'
-    | 'advanced';
+    | 'advanced'
+    | 'about';
 
 export interface SettingsJump {
     section: SettingsSection;
     /** CSS selector for the setting inside that section. */
     target: string;
-    from: SettingsSection;
+    /** The tab that sent the user here, offered as the way back; none from outside Settings. */
+    from?: SettingsSection;
 }
 
 /**
@@ -237,6 +240,8 @@ interface ChatState {
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
     /** Note a skill_use event; with a step, add it before the running tool call that brought the skill in. */
     addSkillStep: (step: AgentStep | null) => void;
+    /** Add a finished step before the running tool call it happened inside, so steps stay in time order. */
+    addStepBeforeRunningCall: (step: AgentStep) => void;
     /** Counts skill_use events, so the session panel's Skills section re-reads mid-reply. */
     skillUses: number;
     clearAgentSteps: () => void;
@@ -293,6 +298,8 @@ interface ChatState {
     theme: 'light' | 'dark';
     showDocLibrary: boolean;
     showFileBrowser: boolean;
+    /** The file browser was opened from the document library, so closing it goes back there. */
+    fileBrowserFromLibrary: boolean;
     /** Open settings section, or null when settings is closed. */
     settingsSection: SettingsSection | null;
     /** Setup was asked to run again from Settings. */
@@ -339,7 +346,12 @@ interface ChatState {
     /** Re-resolve a `system` preference after the OS appearance changed. */
     syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
+    /** Closing returns to the document library when that is where it was opened from. */
     setShowFileBrowser: (show: boolean) => void;
+    /** Swap the document library for the file browser, to come back to on close. */
+    openFileBrowserFromLibrary: () => void;
+    /** Close the file browser without going back to the library, e.g. to start a chat. */
+    leaveFileBrowser: () => void;
     openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
     /** Open Settings › Connectors with *connectorId*'s tile open. */
     openConnectorSettings: (connectorId: string) => void;
@@ -367,6 +379,19 @@ interface ChatState {
 
 /** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */
 const NO_DESTINATION = { showMemoryDashboard: false, showSchedules: false, showDocLibrary: false };
+
+/** *steps* with *step* just before the last tool call if it is still running, else at the end. */
+function beforeRunningCall(steps: AgentStep[], step: AgentStep): AgentStep[] {
+    const next = [...steps];
+    let at = next.length;
+    for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].type !== 'tool') continue;
+        if (next[i].active) at = i;
+        break;
+    }
+    next.splice(at, 0, step);
+    return next;
+}
 
 export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
@@ -544,16 +569,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addSkillStep: (step) =>
         set((state) => {
             if (!step) return { skillUses: state.skillUses + 1 };
-            const steps = [...state.agentSteps];
-            let at = steps.length;
-            for (let i = steps.length - 1; i >= 0; i--) {
-                if (steps[i].type !== 'tool') continue;
-                if (steps[i].active) at = i;
-                break;
-            }
-            steps.splice(at, 0, step);
-            return { agentSteps: steps, skillUses: state.skillUses + 1 };
+            return { agentSteps: beforeRunningCall(state.agentSteps, step), skillUses: state.skillUses + 1 };
         }),
+    addStepBeforeRunningCall: (step) =>
+        set((state) => ({ agentSteps: beforeRunningCall(state.agentSteps, step) })),
     skillUses: 0,
     clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
     liveStatus: null,
@@ -608,7 +627,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Streaming cards (#2108)
     cards: [],
     appendCard: (card) =>
-        set((state) => ({ cards: [...state.cards, card] })),
+        set((state) => ({ cards: addCard(state.cards, card) })),
     clearCards: () => set({ cards: [] }),
 
     // Documents
@@ -626,6 +645,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     theme: resolveTheme(readThemePreference()),
     showDocLibrary: false,
     showFileBrowser: false,
+    fileBrowserFromLibrary: false,
     settingsSection: null,
     setupAgain: false,
     runSetupAgain: (on) => set({ setupAgain: on }),
@@ -682,7 +702,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     pendingPrompt: null,
     setShowDocLibrary: (show) =>
         set(show ? { ...NO_DESTINATION, showDocLibrary: true } : { showDocLibrary: false }),
-    setShowFileBrowser: (show) => set({ showFileBrowser: show }),
+    setShowFileBrowser: (show) => {
+        if (show) {
+            set({ showFileBrowser: true });
+            return;
+        }
+        const backToLibrary = get().fileBrowserFromLibrary;
+        set({ showFileBrowser: false, fileBrowserFromLibrary: false });
+        if (backToLibrary) get().setShowDocLibrary(true);
+    },
+    openFileBrowserFromLibrary: () => set({ showDocLibrary: false, showFileBrowser: true, fileBrowserFromLibrary: true }),
+    leaveFileBrowser: () => set({ showFileBrowser: false, fileBrowserFromLibrary: false }),
     openSettings: (section, provider) => set((s) => ({
         settingsSection: section ?? s.lastSettingsSection,
         settingsProvider: provider ?? null,

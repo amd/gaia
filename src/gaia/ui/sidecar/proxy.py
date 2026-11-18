@@ -38,6 +38,14 @@ _CANCEL_TIMEOUT = 10.0
 # sidecar must not stall the toggle (and every later flip) for the general timeout.
 _SWITCH_TIMEOUT = 10.0
 
+# End-session DELETE timeout: it runs inside a chat delete, which a hung sidecar
+# must not stall; the session still idles out on its own.
+_END_SESSION_TIMEOUT = 10.0
+
+
+class SidecarTimeoutError(SidecarError):
+    """The sidecar did not answer within a short best-effort call's timeout."""
+
 
 def _extract_detail(resp) -> str:
     """Pull the sidecar's actionable message from a non-2xx response.
@@ -263,6 +271,44 @@ class SidecarProxy:
                 f"tools: {exc}"
             ) from exc
 
+    def end_session(self, session_id: str) -> dict:
+        """End the sidecar session and close its agent (flagship, contract >= 2.30).
+
+        A 404 (no such session) or 409 (running a turn) raises; the caller
+        decides what it means.
+        """
+        import requests
+
+        path = f"{self.prefix}/sessions/{session_id}"
+        try:
+            resp = self._session.delete(
+                f"{self.base_url}{path}", timeout=_END_SESSION_TIMEOUT
+            )
+        except requests.exceptions.Timeout as exc:
+            raise SidecarTimeoutError(
+                f"the {self.agent_id} sidecar did not answer the end-session "
+                f"request within {_END_SESSION_TIMEOUT:g} s: {exc}"
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise SidecarError(
+                f"could not reach the {self.agent_id} sidecar to end the "
+                f"session: {exc}"
+            ) from exc
+        self._raise_for_status(resp, path)
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise SidecarError(
+                f"the {self.agent_id} sidecar answered the end-session request "
+                f"(HTTP {resp.status_code}) with a reply that is not JSON: {exc}"
+            ) from exc
+        if not isinstance(body, dict):
+            raise SidecarError(
+                f"the {self.agent_id} sidecar answered the end-session request "
+                f"with a {type(body).__name__}, not a JSON object"
+            )
+        return body
+
     def set_bypass(self, session_id: str, enabled: bool) -> dict:
         """Turn the sidecar session's unattended tool approval on or off.
 
@@ -377,8 +423,11 @@ class SidecarProxy:
 
         return _events()
 
-    def cancel_query(self, run_id: str) -> None:
+    def cancel_query(self, run_id: str) -> Optional[int]:
         """Cancel an in-flight ``/query`` run.
+
+        Returns the sidecar's ``documents_left``: how many of the turn's
+        attached documents the cancel left unloaded, or None when it names none.
 
         Best-effort by design: the caller's forced response close has already
         unblocked the relay's reader, so this POST uses a short dedicated
@@ -405,15 +454,28 @@ class SidecarProxy:
                 run_id,
                 exc,
             )
-            return
+            return None
         if resp.status_code == 404:
             logger.info(
                 "%s sidecar: cancel for run_id=%s: no longer in flight (404)",
                 self.agent_id,
                 run_id,
             )
-            return
+            return None
         self._raise_for_status(resp, path)
+        try:
+            left = resp.json().get("documents_left")
+        except (ValueError, AttributeError) as exc:
+            # The run is cancelled either way; only the count is unknown.
+            logger.warning(
+                "%s sidecar: cancel for run_id=%s answered without a readable "
+                "body: %s",
+                self.agent_id,
+                run_id,
+                exc,
+            )
+            return None
+        return left if isinstance(left, int) and not isinstance(left, bool) else None
 
 
-__all__ = ["SidecarProxy"]
+__all__ = ["SidecarProxy", "SidecarTimeoutError"]

@@ -285,6 +285,13 @@ def test_adding_a_removed_folder_back_releases_it(
     )
 
 
+def _accept_unprofiled_sidecar(monkeypatch):
+    """Let a session name an agent the registry doesn't know, whatever ran first."""
+    from gaia.ui.routers import sessions as sessions_router
+
+    monkeypatch.setattr(sessions_router, "_agent_type_unknown", lambda *_a: False)
+
+
 def test_unknown_session_is_404(client):
     assert client.get("/api/sessions/nope/environment").status_code == 404
 
@@ -292,9 +299,12 @@ def test_unknown_session_is_404(client):
 def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
     client, folder, monkeypatch
 ):
-    # The email sidecar runs as its own process and keeps its own network rules.
+    # A sidecar with no relay profile keeps its own file and network rules.
+    _accept_unprofiled_sidecar(monkeypatch)
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
-    session_id = client.post("/api/sessions", json={"agent_type": "email"}).json()["id"]
+    session_id = client.post(
+        "/api/sessions", json={"agent_type": "other-sidecar"}
+    ).json()["id"]
     body = client.get(f"/api/sessions/{session_id}/environment").json()
     assert body["enforced"] is False
     assert body["internet_enforced"] is False
@@ -472,9 +482,13 @@ def test_a_relayed_agent_that_cannot_start_refuses_the_folder_and_says_why(
     assert _chat_count(client) == 0
 
 
-def test_the_email_agent_cannot_start_with_a_folder(client, folder, relayed_gaia):
+def test_an_unprofiled_sidecar_cannot_start_with_a_folder(
+    client, folder, relayed_gaia, monkeypatch
+):
+    _accept_unprofiled_sidecar(monkeypatch)
     refused = client.post(
-        "/api/sessions", json={"agent_type": "email", "folders": [str(folder)]}
+        "/api/sessions",
+        json={"agent_type": "other-sidecar", "folders": [str(folder)]},
     )
     assert refused.status_code == 400
     assert "runs as its own process" in refused.text

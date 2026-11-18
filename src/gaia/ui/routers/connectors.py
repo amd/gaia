@@ -395,22 +395,44 @@ def _resolve_grant_scopes(
         ) from e
 
 
-def _widen_empty_scopes(
-    scopes: List[str], grant_map: Dict[str, List[str]]
+def _signin_scopes(
+    connector_id: str, scopes: List[str], grant_map: Dict[str, List[str]]
 ) -> List[str]:
-    """Same contract as the CLI's bare ``connect`` (#2730 D0/AC-8): an empty
-    ``scopes`` body must not silently reach ``start_authorization`` narrower
-    than what the request's own ``grant_agents`` already declare. When the
-    caller supplied scopes explicitly, or resolved no grant map at all,
-    return unchanged — ``start_authorization``'s own D0 guard decides the
-    genuinely-empty case (raise on an existing connection, fall back to
-    ``default_scopes`` on a real first connect)."""
-    if scopes or not grant_map:
+    """What a sign-in that grants agents asks for, as the CLI's ``connect
+    --grant-agent`` does: the scopes sent (or, when none, what the agents
+    declare) plus the provider's identity and refresh scopes, without which
+    the account has no address and Microsoft returns no refresh token. With
+    no grant map the request goes through unchanged, and
+    ``start_authorization``'s own D0 guard decides the empty case."""
+    if not grant_map:
         return scopes
-    union: set = set()
-    for agent_scopes in grant_map.values():
-        union.update(agent_scopes)
-    return sorted(union)
+    requested = set(scopes)
+    if not requested:
+        for agent_scopes in grant_map.values():
+            requested.update(agent_scopes)
+    try:
+        identity = REGISTRY.get(connector_id).default_scopes
+    except KeyError:
+        # Unknown connector: start_authorization names it.
+        return sorted(requested)
+    return sorted(requested | set(identity))
+
+
+# Providers whose missing OAuth client was logged; the list is polled.
+_unconfigured_logged: set = set()
+
+
+def _log_unconfigured(provider_ref: str, error: Exception) -> None:
+    """One INFO line per provider per run; the full setup text goes to DEBUG."""
+    if provider_ref in _unconfigured_logged:
+        return
+    _unconfigured_logged.add(provider_ref)
+    logger.info(
+        "connectors: provider %s has no OAuth client set up, so it cannot "
+        "connect until one is",
+        provider_ref,
+    )
+    logger.debug("connectors: provider %s not configured: %s", provider_ref, error)
 
 
 def _connector_summary(connector_id: str) -> Dict[str, Any]:
@@ -456,7 +478,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
             get_provider(provider_ref)
         except ConfigurationError as e:
             configurable = False
-            logger.info("connectors: provider %s not configured: %s", provider_ref, e)
+            _log_unconfigured(provider_ref, e)
             _pref = provider_ref.upper()
             config_error = (
                 f"OAuth credentials for {provider_ref!r} are not configured. "
@@ -850,6 +872,9 @@ async def configure_connector(
         config["grant_agents"] = _resolve_grant_scopes(
             request, connector_id, list(raw_grant_agents)
         )
+        config["scopes"] = _signin_scopes(
+            connector_id, list(config.get("scopes") or []), config["grant_agents"]
+        )
     try:
         result = await configure(connector_id, config)
     except KeyError:
@@ -966,7 +991,7 @@ async def _set_connector_enabled(connector_id: str, enabled: bool) -> Dict[str, 
 
 @router.post("/{connector_id}/enable", dependencies=[Depends(_require_ui_header)])
 async def enable_connector(connector_id: str) -> Dict[str, Any]:
-    """Enable a previously-disabled MCP connector. Tools materialize live."""
+    """Enable a previously-disabled MCP connector; open chats get it next message."""
     return await _set_connector_enabled(connector_id, True)
 
 
@@ -993,7 +1018,7 @@ async def authorize(
     try:
         return await connections.start_authorization(
             connector_id,
-            scopes=_widen_empty_scopes(body.scopes, grant_map),
+            scopes=_signin_scopes(connector_id, body.scopes, grant_map),
             grant_agents=grant_map or None,
         )
     except ConnectorsError as e:
@@ -1028,7 +1053,7 @@ async def authorize_device(
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
         info = await connections.start_device_flow(
-            connector_id, scopes=_widen_empty_scopes(body.scopes, grant_map)
+            connector_id, scopes=_signin_scopes(connector_id, body.scopes, grant_map)
         )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e

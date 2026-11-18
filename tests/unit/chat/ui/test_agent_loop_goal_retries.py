@@ -19,7 +19,12 @@ import pytest
 import gaia.ui._chat_helpers as helpers
 from gaia.agents.base.goal_store import GoalStore
 from gaia.ui import spending
-from gaia.ui.agent_loop import GOAL_MAX_TRIES, AgentLoop, AgentTrigger
+from gaia.ui.agent_loop import (
+    GOAL_MAX_CHECK_BACKS,
+    GOAL_MAX_TRIES,
+    AgentLoop,
+    AgentTrigger,
+)
 from gaia.ui.database import ChatDatabase
 
 FLASH = "fireworks.glm-5p3-flash"
@@ -166,7 +171,59 @@ def test_checking_back_later_is_not_a_failed_try(loop, monkeypatch):
 
     held = GoalStore().get_goal(goal.id)
     assert held.status == "queued" and held.attempts == 0
+    assert held.check_backs == 1
     assert time.time() + 50 < held.retry_at < time.time() + 70
+
+
+CHECK_BACK = {
+    "directive": "scheduled",
+    "wake_in_seconds": 60,
+    "reason": "the export is still running",
+}
+
+
+def test_a_goal_that_only_checks_back_is_marked_stalled(loop, monkeypatch):
+    # #8171: on a local model, or with no spending limit, only the hourly cap
+    # stopped a goal that checked back forever.
+    goal = _goal()
+    runs = _sidecar(monkeypatch, answer="Still running.", directive=CHECK_BACK)
+
+    for _ in range(GOAL_MAX_CHECK_BACKS):
+        _tick(loop)
+        _due_now(goal.id)
+    _tick(loop)
+
+    assert len(runs) == GOAL_MAX_CHECK_BACKS
+    stalled = GoalStore().get_goal(goal.id)
+    assert stalled.status == "failed"
+    assert stalled.progress_notes.startswith("Stalled:")
+    assert f"{GOAL_MAX_CHECK_BACKS} times in a row" in stalled.progress_notes
+    assert "the export is still running" in stalled.progress_notes
+
+
+def test_an_unfinished_run_ends_a_run_of_check_backs(gaia_home):
+    store = GoalStore()
+    goal = _goal()
+    for _ in range(GOAL_MAX_CHECK_BACKS - 1):
+        store.defer_goal(goal.id, 0, "waiting", max_check_backs=GOAL_MAX_CHECK_BACKS)
+
+    store.record_unfinished_run(goal.id, "no answer", max_tries=3, first_wait_s=0)
+    store.defer_goal(goal.id, 0, "waiting", max_check_backs=GOAL_MAX_CHECK_BACKS)
+
+    held = store.get_goal(goal.id)
+    assert held.status == "queued" and held.check_backs == 1
+
+
+def test_queueing_a_stalled_goal_again_gives_it_its_check_backs_back(gaia_home):
+    store = GoalStore()
+    goal = _goal()
+    for _ in range(GOAL_MAX_CHECK_BACKS):
+        store.defer_goal(goal.id, 0, "waiting", max_check_backs=GOAL_MAX_CHECK_BACKS)
+    assert store.get_goal(goal.id).status == "failed"
+
+    requeued = store.update_goal_status(goal.id, "queued")
+
+    assert requeued.check_backs == 0 and requeued.retry_at is None
 
 
 def test_a_run_that_times_out_counts_as_a_try_and_says_so(loop, monkeypatch):
@@ -244,6 +301,7 @@ def test_an_existing_goal_list_gains_the_retry_columns(gaia_home):
     [goal] = GoalStore(db_path=path).get_actionable_goals()
 
     assert goal.id == "g1" and goal.attempts == 0 and goal.retry_at is None
+    assert goal.check_backs == 0
 
 
 @pytest.mark.parametrize(

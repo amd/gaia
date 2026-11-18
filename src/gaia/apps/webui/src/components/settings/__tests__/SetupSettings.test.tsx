@@ -44,6 +44,28 @@ describe('SetupSettings', () => {
         expect(screen.queryByText(/Qwen3\.6/)).toBeNull();
     });
 
+    it('says the model server is not answering instead of Ready while it is down', async () => {
+        useModelStore.setState({
+            active: {
+                provider: 'fireworks', model: 'fireworks.deepseek-v4p1-flash', display_name: 'deepseek-v4p1-flash',
+                label: 'deepseek-v4p1-flash · Fireworks AI', remote: true, is_default: false,
+            } as ActiveModel,
+        });
+        useChatStore.getState().setSystemStatus({ lemonade_running: false, lemonade_probe: 'down', initialized: true } as never);
+        render(<SetupSettings />);
+        expect(await screen.findByText("The model server isn't answering")).toBeTruthy();
+        expect(screen.queryByText('Ready')).toBeNull();
+        expect(screen.queryByText(/^Running /)).toBeNull();
+        useChatStore.getState().setSystemStatus(null);
+    });
+
+    it('names a local model as every other screen does, not by its id', async () => {
+        useModelStore.setState({ active: { ...LOCAL, label: `${QWEN} · local` } });
+        render(<SetupSettings />);
+        expect(await screen.findByText('Running Qwen3.6 35B A3B')).toBeTruthy();
+        expect(screen.queryByText(/GGUF|· local/)).toBeNull();
+    });
+
     it('falls back to the planned model before the active model is known', async () => {
         useModelStore.setState({ active: null });
         render(<SetupSettings />);
@@ -60,6 +82,15 @@ describe('SetupSettings', () => {
         expect(useChatStore.getState().settingsProvider).toBe('local');
     });
 
+    it('shows the memory figures setup showed, saying what they mean', async () => {
+        // The OS sees less than the PC has once the GPU's share is set aside; setup never shows that figure.
+        mockedApi.getSetupPlan.mockResolvedValue({ ...plan, capacity_gb: 103.1, system: { physical_memory: '128.0 GB' } } as unknown as SetupPlan);
+        mockedApi.getOnboardingPreflight.mockResolvedValue({ gpu_name: 'Radeon', npu_detected: false, ram_gb: 68.3 } as never);
+        render(<SetupSettings />);
+        expect(await screen.findByText(/103\.1 GB of 137\.4 GB for models/)).toBeTruthy();
+        expect(screen.queryByText(/68\.3/)).toBeNull();
+    });
+
     it('offers no row whose setting this setup does not have (#7700)', async () => {
         useModelStore.setState({ active: CLOUD });
         mockedApi.getGpuMemory.mockResolvedValue({ applies: false } as never);
@@ -73,7 +104,7 @@ describe('SetupSettings', () => {
 
     it('reports what was detected without sending it to the Model server setting', async () => {
         render(<SetupSettings />);
-        const detected = await screen.findByText('Radeon · 64 GB');
+        const detected = await screen.findByText('Radeon · 64.0 GB');
         expect(detected.closest('button')).toBeNull();
         expect(screen.getAllByRole('button', { name: /Model server/ })).toHaveLength(1);
     });

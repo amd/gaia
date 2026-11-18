@@ -145,6 +145,7 @@ _GAIA_REQUIRED_CONNECTIONS = (
     ConnectorRequirement(
         connector_id="microsoft",
         scopes=(
+            "https://graph.microsoft.com/Mail.Read",
             "https://graph.microsoft.com/Mail.ReadWrite",
             "https://graph.microsoft.com/Mail.Send",
             "https://graph.microsoft.com/Calendars.ReadWrite",

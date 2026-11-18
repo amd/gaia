@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
+from gaia.llm.hybrid import is_hybrid_model
 from gaia.llm.lemonade_client import cloud_model_provider
 from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
 
@@ -387,8 +388,9 @@ async def update_session(
         existing = db.get_session(session_id)
         agent_type = request.agent_type or (existing or {}).get("agent_type") or "chat"
         resolved, _ = resolve_device_model(agent_type, request.device)
-        if resolved:
-            current_model = (existing or {}).get("model")
+        current_model = (existing or {}).get("model")
+        # A device only picks among local models; hybrid routes to its own.
+        if resolved and not is_hybrid_model(current_model):
             try:
                 configured_default = resolved_default_model()
             except Exception as e:
@@ -429,6 +431,56 @@ async def update_session(
     return await _session_response(db, session)
 
 
+def _end_sidecar_session(session_id: str, agent_type: str) -> None:
+    """End the chat's session in its running sidecar, stopping its MCP servers.
+
+    Never starts, stops or restarts a sidecar to do it. The chat is already
+    gone, so a failure is logged, not raised: the sidecar still closes the
+    session once it idles out.
+    """
+    from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
+
+    from ..sidecar import daemon_client
+    from ..sidecar.profiles import end_session_supported, profile_for
+    from ..sidecar.proxy import SidecarTimeoutError
+
+    profile = profile_for(agent_type)
+    if profile is None or profile.min_end_session_api_version is None:
+        return
+    agent = profile.display_name
+    try:
+        handle = daemon_client.running_handle(profile.agent_id)
+        if handle is None or not end_session_supported(profile, handle.api_version):
+            return
+        handle.proxy().end_session(session_id)
+    except SidecarHTTPError as e:
+        if e.status_code == 404:  # the sidecar never had this chat
+            return
+        if e.status_code == 409:  # deleted mid-answer: the turn still holds it
+            _log_unended(logger.warning, session_id, agent, "it is still answering", e)
+        elif e.status_code == 503:  # stopped or wedged after it was listed
+            _log_unended(
+                logger.warning, session_id, agent, "it is not running or answering", e
+            )
+        else:
+            _log_unended(logger.error, session_id, agent, "the agent refused", e)
+    except SidecarTimeoutError as e:
+        _log_unended(logger.warning, session_id, agent, "it did not answer", e)
+    except SidecarError as e:
+        _log_unended(logger.error, session_id, agent, "the call failed", e)
+
+
+def _log_unended(log, session_id: str, agent: str, reason: str, error) -> None:
+    log(
+        "Could not end deleted chat %s in the %s agent (%s); its MCP servers run "
+        "until the session idles out: %s",
+        session_id,
+        agent,
+        reason,
+        error,
+    )
+
+
 @router.delete("/api/sessions/{session_id}")
 async def delete_session(
     session_id: str,
@@ -441,7 +493,8 @@ async def delete_session(
     for it to finish: the turn is still using the session's agent and will
     persist its answer to the session row.
     """
-    if db.get_session(session_id) is None:
+    session = db.get_session(session_id)
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     run_manager.cancel(session_id)
     session_locks = http_request.app.state.session_locks
@@ -469,6 +522,10 @@ async def delete_session(
         followups.forget(session_id)
         answer_retry.forget(session_id)
         session_environment.forget_session(session_id)
+        if session_environment.relayed(session):
+            await asyncio.to_thread(
+                _end_sidecar_session, session_id, session.get("agent_type")
+            )
     try:
         await asyncio.to_thread(file_snapshots.delete_session, session_id)
     except OSError as e:

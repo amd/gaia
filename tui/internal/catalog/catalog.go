@@ -328,7 +328,7 @@ func MissingBinaryMessage(binary string, l Lookup) string {
 	return fmt.Sprintf(
 		"%s is the program that does the thinking, and it is not on this machine. "+
 			"Nothing runs without it.\nLooked in:  %s\n"+
-			"Fix:        re-run the GAIA installer — it ships %s alongside gaia-tui\n"+
+			"Fix:        re-run the GAIA installer — it ships %s alongside gaia-cli\n"+
 			"            %s\nlook:       %s",
 		binary, strings.Join(l.Looked, ", "), binary, InstallerURL, AgentDocsURL)
 }
@@ -583,7 +583,7 @@ func seedAgents() []Agent {
 			Transport:       TransportSubprocess,
 			BinaryPath:      "gaia-agent",
 			CanonicalEvents: true,
-			// `gaia-tui --dev` also puts the child at DEBUG in
+			// `gaia-cli --dev` also puts the child at DEBUG in
 			// ~/.gaia/logs/gaia-agent.log. Without this the TUI would go verbose
 			// while the agent kept logging errors only — and the log is where the
 			// answer usually is.

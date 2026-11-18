@@ -99,6 +99,16 @@ _GOAL_STATUSES = frozenset(get_args(GoalStatus))
 _TASK_STATUSES = frozenset(get_args(TaskStatus))
 
 
+def is_damaged_store_error(exc: BaseException) -> bool:
+    """Whether SQLite could not read the goal store file as a database at all.
+
+    "file is not a database" and "database disk image is malformed" are plain
+    ``DatabaseError``; a locked file is an ``OperationalError`` and clears once
+    the other user lets go, so it is not damage.
+    """
+    return type(exc) is sqlite3.DatabaseError  # pylint: disable=unidiomatic-typecheck
+
+
 def _require_status(status: str, allowed: frozenset, kind: str) -> None:
     """Raise when ``status`` is not one the store's state machine knows."""
     if status not in allowed:
@@ -190,6 +200,8 @@ class Goal:
     attempts: int = 0
     #: Epoch seconds before which the goal is not run again; None runs it now.
     retry_at: Optional[float] = None
+    #: Background runs in a row that ended asking to check back later.
+    check_backs: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +227,8 @@ CREATE TABLE IF NOT EXISTS goals (
     created_at        TEXT    NOT NULL,
     updated_at        TEXT    NOT NULL,
     attempts          INTEGER NOT NULL DEFAULT 0,
-    retry_at          REAL
+    retry_at          REAL,
+    check_backs       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_goals_status    ON goals(status);
@@ -244,6 +257,7 @@ _SCHEMA_VERSION = 1
 _ADDED_GOAL_COLUMNS = {
     "attempts": "ALTER TABLE goals ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
     "retry_at": "ALTER TABLE goals ADD COLUMN retry_at REAL",
+    "check_backs": "ALTER TABLE goals ADD COLUMN check_backs INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -354,6 +368,7 @@ class GoalStore:
             updated_at=row["updated_at"],
             attempts=row["attempts"],
             retry_at=row["retry_at"],
+            check_backs=row["check_backs"],
         )
         if include_tasks:
             goal.tasks = self._get_tasks_unlocked(goal.id)
@@ -483,6 +498,12 @@ class GoalStore:
     ) -> Optional[Goal]:
         """Update a goal's status and optionally append progress notes.
 
+        Moving a goal back to ``queued`` from another status starts a fresh
+        retry budget: the unfinished-run and check-back counts and any pause
+        are cleared, so a re-queued goal gets the full number of tries again.
+        A status update that leaves the goal ``queued`` (a progress note, for
+        instance) keeps the counts it has.
+
         Raises:
             ValueError: ``status`` is not a ``GoalStatus``.
         """
@@ -490,10 +511,24 @@ class GoalStore:
         now = _now_iso()
         with self._lock:
             conn = self._get_conn()
-            conn.execute(
-                "UPDATE goals SET status=?, progress_notes=COALESCE(?, progress_notes), updated_at=? WHERE id=?",
-                (status, progress_notes, now, goal_id),
-            )
+            row = conn.execute(
+                "SELECT status FROM goals WHERE id=?", (goal_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            if status == "queued" and row["status"] != "queued":
+                conn.execute(
+                    "UPDATE goals SET status=?, attempts=0, check_backs=0, "
+                    "retry_at=NULL, progress_notes=COALESCE(?, progress_notes), "
+                    "updated_at=? "
+                    "WHERE id=?",
+                    (status, progress_notes, now, goal_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE goals SET status=?, progress_notes=COALESCE(?, progress_notes), updated_at=? WHERE id=?",
+                    (status, progress_notes, now, goal_id),
+                )
             conn.commit()
         return self.get_goal(goal_id)
 
@@ -747,7 +782,8 @@ class GoalStore:
 
         The goal waits ``first_wait_s``, doubling after each run, before it is
         run again; the ``max_tries``-th such run fails it with *note* as the
-        reason. A goal no longer queued or in progress is left alone.
+        reason. It also ends a run of check-backs. A goal no longer queued or
+        in progress is left alone.
         """
         now = _now_iso()
         with self._lock:
@@ -762,8 +798,8 @@ class GoalStore:
             tries = row["attempts"] + 1
             if tries >= max_tries:
                 conn.execute(
-                    "UPDATE goals SET status='failed', attempts=?, retry_at=NULL, "
-                    "progress_notes=?, updated_at=? WHERE id=?",
+                    "UPDATE goals SET status='failed', attempts=?, check_backs=0, "
+                    "retry_at=NULL, progress_notes=?, updated_at=? WHERE id=?",
                     (
                         tries,
                         f"Stopped after {tries} tries without finishing. The "
@@ -775,8 +811,8 @@ class GoalStore:
             else:
                 wait = first_wait_s * 2 ** (tries - 1)
                 conn.execute(
-                    "UPDATE goals SET attempts=?, retry_at=?, progress_notes=?, "
-                    "updated_at=? WHERE id=?",
+                    "UPDATE goals SET attempts=?, check_backs=0, retry_at=?, "
+                    "progress_notes=?, updated_at=? WHERE id=?",
                     (
                         tries,
                         time.time() + wait,
@@ -789,15 +825,50 @@ class GoalStore:
             conn.commit()
         return self.get_goal(goal_id)
 
-    def defer_goal(self, goal_id: str, wait_s: int, note: str) -> Optional[Goal]:
-        """Hold a queued goal *wait_s* seconds without counting a try."""
+    def defer_goal(
+        self,
+        goal_id: str,
+        wait_s: int,
+        note: str,
+        *,
+        max_check_backs: Optional[int] = None,
+    ) -> Optional[Goal]:
+        """Hold a queued goal *wait_s* seconds without counting a try.
+
+        Each hold in a row is counted. With *max_check_backs*, the hold that
+        reaches it fails the goal as stalled instead, with *note* as the last
+        reason, so a goal that only ever checks back doesn't run forever. A
+        goal no longer queued or in progress is left alone.
+        """
+        now = _now_iso()
         with self._lock:
             conn = self._get_conn()
-            conn.execute(
-                "UPDATE goals SET retry_at=?, progress_notes=?, updated_at=? "
-                "WHERE id=? AND status IN ('queued', 'in_progress')",
-                (time.time() + max(0, wait_s), note, _now_iso(), goal_id),
-            )
+            row = conn.execute(
+                "SELECT check_backs FROM goals WHERE id=? "
+                "AND status IN ('queued', 'in_progress')",
+                (goal_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            check_backs = row["check_backs"] + 1
+            if max_check_backs is not None and check_backs >= max_check_backs:
+                conn.execute(
+                    "UPDATE goals SET status='failed', check_backs=?, retry_at=NULL, "
+                    "progress_notes=?, updated_at=? WHERE id=?",
+                    (
+                        check_backs,
+                        f"Stalled: checked back {check_backs} times in a row "
+                        f"without finishing. The last check said: {note}",
+                        now,
+                        goal_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    "UPDATE goals SET check_backs=?, retry_at=?, progress_notes=?, "
+                    "updated_at=? WHERE id=?",
+                    (check_backs, time.time() + max(0, wait_s), note, now, goal_id),
+                )
             conn.commit()
         return self.get_goal(goal_id)
 

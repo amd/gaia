@@ -470,14 +470,20 @@ func TestTheFlagshipAt224IsToldTheStartFolder(t *testing.T) {
 	}
 }
 
-// The start folder only says where relative paths resolve. Sending it as
-// allowed_paths too would replace the session's file scope (#3591).
-func TestTheStartFolderIsNeverSentAsTheFileScope(t *testing.T) {
+// With only working_directory the agent's prompt named the home folder as the
+// place to look first, and a read in the start folder asked for approval.
+func TestTheFlagshipAt224GetsTheStartFolderAsItsScope(t *testing.T) {
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	f := newFakeRelay(t)
-	f.contractVersion = "2.27"
+	f.contractVersion = "2.24"
 	sendOnce(t, f, "gaia")
-	if raw := f.lastRawBody(); strings.Contains(raw, "allowed_paths") {
-		t.Errorf("the start folder narrowed the session's file scope: %s", raw)
+	got := f.queries[0].AllowedPaths
+	if len(got) != 1 || got[0] != want || got[0] != f.queries[0].WorkingDirectory {
+		t.Errorf("allowed_paths = %q, want exactly the start folder [%q]: %s",
+			got, want, f.lastRawBody())
 	}
 }
 
@@ -497,6 +503,9 @@ func TestEveryTurnCarriesTheStartFolder(t *testing.T) {
 		if q.WorkingDirectory != want {
 			t.Errorf("turn %d working_directory = %q, want %q", i, q.WorkingDirectory, want)
 		}
+		if len(q.AllowedPaths) != 1 || q.AllowedPaths[0] != want {
+			t.Errorf("turn %d allowed_paths = %q, want [%q]", i, q.AllowedPaths, want)
+		}
 	}
 }
 
@@ -512,7 +521,8 @@ func TestOlderPeersAndOtherAgentsGetNoWorkingDirectory(t *testing.T) {
 			f := newFakeRelay(t)
 			f.contractVersion = tc.version
 			sendOnce(t, f, tc.agent)
-			if raw := f.lastRawBody(); strings.Contains(raw, "working_directory") {
+			raw := f.lastRawBody()
+			if strings.Contains(raw, "working_directory") || strings.Contains(raw, "allowed_paths") {
 				t.Errorf("the start folder was sent to a peer that rejects it: %s", raw)
 			}
 		})

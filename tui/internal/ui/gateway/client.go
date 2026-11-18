@@ -217,11 +217,34 @@ func httpError(resp *http.Response, method, url, base string) error {
 				"accept a different token at runtime.\nEither keep using that key, "+
 				"or unset %s and restart Lemonade.", APIKeyEnv, APIKeyEnv)
 	}
-	if resp.StatusCode == http.StatusNotFound && strings.Contains(url, "cloud") {
-		return fmt.Errorf(
-			"Lemonade at %s has no cloud-provider API, so it is older than %s, "+
-				"the oldest version GAIA supports.\n%s",
-			base, lemonade.MinExternalVersion, lemonade.UpgradeHint)
+	if resp.StatusCode == http.StatusNotFound {
+		// /install is the endpoint a Lemonade needs to register a cloud
+		// provider at all, so a 404 there means the server is older than the
+		// cloud API.
+		if strings.HasSuffix(url, "/install") {
+			return fmt.Errorf(
+				"Lemonade at %s has no cloud-provider API, so it is older than %s, "+
+					"the oldest version GAIA supports.\n%s",
+				base, lemonade.MinExternalVersion, lemonade.UpgradeHint)
+		}
+		if strings.Contains(url, "cloud") {
+			// Lemonade answers this until POST /install registers a provider:
+			// "Cloud provider 'amd' is not installed. Call POST /v1/install ..."
+			// Its type is invalid_request, so the message is the only marker.
+			if strings.Contains(env.Error.Message, "is not installed") {
+				return fmt.Errorf(
+					"Lemonade at %s has no cloud provider registered for this gateway, "+
+						"so it cannot accept a token yet.\nRun `gaia gateway install`, "+
+						"then try again.", base)
+			}
+			// An empty type is what an older server's 404 body looks like.
+			if env.Error.Type == "" || env.Error.Type == "not_found" {
+				return fmt.Errorf(
+					"Lemonade at %s has no cloud-provider API, so it is older than %s, "+
+						"the oldest version GAIA supports.\n%s",
+					base, lemonade.MinExternalVersion, lemonade.UpgradeHint)
+			}
+		}
 	}
 	if env.Error.Message != "" {
 		return fmt.Errorf("%s failed (HTTP %d): %s", method, resp.StatusCode, env.Error.Message)

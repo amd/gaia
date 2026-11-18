@@ -122,6 +122,80 @@ def acquire_handle(agent_id: str) -> SidecarHandle:
     except DaemonError as e:
         raise _wrap_daemon_error(e) from e
     _check_agents_floor(inst)
+    return _ensure(inst, agent_id)
+
+
+def running_handle(agent_id: str) -> Optional[SidecarHandle]:
+    """A handle routed through the daemon's relay if it lists *agent_id* running.
+
+    For work that only matters to a sidecar already up (ending one of its
+    sessions). It never starts, stops or restarts anything: no ``ensure``, which
+    would start a stopped agent or restart one on the wrong Lemonade under
+    other chats' turns. The relay answers 503 if the agent exits meanwhile.
+    Blocking.
+    """
+    try:
+        inst = attach()
+    except DaemonError as e:
+        raise _wrap_daemon_error(e) from e
+    if inst is None:
+        return None
+    _check_agents_floor(inst)
+    try:
+        r = requests.get(
+            f"{inst.base_url}/daemon/v1/agents",
+            headers={"Authorization": f"Bearer {inst.token}"},
+            timeout=_STOP_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as e:
+        raise SidecarError(
+            f"could not reach the daemon at {inst.base_url} to list its agents: "
+            f"{e}. {APP_RESTART_HINT} The daemon log is at {paths.log_path()}.",
+            kind=KIND_SERVICE_UNREACHABLE,
+        ) from e
+    if r.status_code != 200:
+        raise SidecarError(
+            f"the daemon could not list its agents: {_error_detail(r)}",
+            kind=r.headers.get(ERROR_KIND_HEADER, ""),
+        )
+    entry = _running_entry(r, agent_id, inst.base_url)
+    if entry is None:
+        return None
+    # The daemon token, not the sidecar's: the relay swaps in the sidecar bearer.
+    return SidecarHandle(
+        agent_id=agent_id,
+        base_url=inst.base_url,
+        token=inst.token,
+        api_version=entry.get("api_version"),
+        agent_version=entry.get("agent_version"),
+        mode=entry.get("mode"),
+        pid=entry.get("pid"),
+    )
+
+
+def _running_entry(response, agent_id: str, base_url: str) -> Optional[dict]:
+    """*agent_id*'s entry in a ``GET /daemon/v1/agents`` reply if it is running."""
+    try:
+        body = response.json()
+    except ValueError as e:
+        raise SidecarError(
+            f"the daemon at {base_url} listed its agents in a reply that is not "
+            f"JSON: {e}. The daemon log is at {paths.log_path()}."
+        ) from e
+    agents = body.get("agents") if isinstance(body, dict) else None
+    if not isinstance(agents, list) or not all(isinstance(a, dict) for a in agents):
+        raise SidecarError(
+            f"the daemon at {base_url} listed its agents in an unexpected shape "
+            f"(expected an 'agents' list of objects). The daemon log is at "
+            f"{paths.log_path()}."
+        )
+    for a in agents:
+        if a.get("agent_id") == agent_id and a.get("state") == "running":
+            return a
+    return None
+
+
+def _ensure(inst: DaemonInstance, agent_id: str) -> SidecarHandle:
     url = f"{inst.base_url}/daemon/v1/agents/{agent_id}/ensure"
     mode = resolve_caller_mode(agent_id)
     payload = {"mode": mode}
