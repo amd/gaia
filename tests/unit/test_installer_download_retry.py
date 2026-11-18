@@ -8,7 +8,9 @@ download now carries its own timeout and one retry, and the release gate names
 a cancelled job instead of calling it a failed check.
 """
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -98,6 +100,22 @@ def test_two_download_attempts_fit_beside_the_test_budget():
         )
 
 
+def _bash() -> str:
+    """The bash that can run the gate script on this platform.
+
+    On the Windows runners ``bash`` resolves to ``C:\\Windows\\System32\\bash.exe``,
+    the WSL launcher, which has no distro and exits 1 before the script starts.
+    Git for Windows is installed there, and its bash runs the script as the
+    Linux lane does.
+    """
+    if sys.platform == "win32":
+        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        git_bash = Path(program_files) / "Git" / "bin" / "bash.exe"
+        if git_bash.is_file():
+            return str(git_bash)
+    return "bash"
+
+
 def _gate(job_id: str, result: str) -> str:
     """Run the gate script with one job's result replaced by ``result``."""
     workflow = _workflow()
@@ -116,7 +134,7 @@ def _gate(job_id: str, result: str) -> str:
     assert "${{" not in script
 
     proc = subprocess.run(
-        ["bash", "-c", script], capture_output=True, text=True, check=False
+        [_bash(), "-c", script], capture_output=True, text=True, check=False
     )
     expected = 0 if result in ("success", "skipped") else 1
     assert proc.returncode == expected, proc.stdout + proc.stderr
@@ -148,3 +166,24 @@ def test_a_real_failure_still_names_the_job(job_id):
 def test_a_skipped_job_does_not_fail_the_gate():
     output = _gate("dmg-structural-smoke", "skipped")
     assert "All platform installers built and installer smoke suite passed." in output
+
+
+class TestWhichBash:
+    def test_windows_prefers_the_git_for_windows_bash(self, tmp_path, monkeypatch):
+        bash = tmp_path / "Git" / "bin" / "bash.exe"
+        bash.parent.mkdir(parents=True)
+        bash.write_text("", encoding="utf-8")
+        monkeypatch.setenv("ProgramFiles", str(tmp_path))
+        monkeypatch.setattr(sys, "platform", "win32")
+        assert _bash() == str(bash)
+
+    def test_windows_without_git_for_windows_falls_back_to_bash(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("ProgramFiles", str(tmp_path))
+        monkeypatch.setattr(sys, "platform", "win32")
+        assert _bash() == "bash"
+
+    def test_posix_uses_bash(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "darwin")
+        assert _bash() == "bash"
