@@ -852,3 +852,40 @@ class TestCallbackPort:
             )
 
         assert "Invalid callback port" in str(exc_info.value)
+
+    @respx.mock
+    async def test_explicit_callback_port_permission_denied_reports_elevated_rights(
+        self, google_provider, monkeypatch
+    ):
+        from aiohttp.web import TCPSite
+
+        from gaia.connectors.errors import ConnectorsError
+
+        async def _fake_start(self):
+            raise PermissionError("Permission denied")
+
+        monkeypatch.setattr(TCPSite, "start", _fake_start)
+
+        with pytest.raises(ConnectorsError) as exc_info:
+            await start_authorization("google", scopes=["openid"], callback_port=80)
+
+        err_msg = str(exc_info.value)
+        assert "Could not bind OAuth callback to port 80" in err_msg
+        assert "permission denied (ports below 1024 need elevated rights)" in err_msg
+        assert "Choose a free port above 1024 with --callback-port" in err_msg
+
+    @respx.mock
+    async def test_invalid_callback_port_does_not_evict_existing_pending_flow(
+        self, google_provider
+    ):
+        from gaia.connectors.errors import ConnectorsError
+        from gaia.connectors.flow import _pending
+
+        info = await start_authorization("google", scopes=["openid"])
+        flow_id = info["flow_id"]
+        assert flow_id in _pending
+
+        with pytest.raises(ConnectorsError):
+            await start_authorization("google", scopes=["openid"], callback_port=-1)
+
+        assert flow_id in _pending

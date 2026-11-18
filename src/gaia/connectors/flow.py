@@ -417,6 +417,18 @@ async def start_authorization(
     with the same id is updated in place, any other is added, and no account
     is ever overwritten by a different one.
     """
+    if callback_port is not None:
+        if (
+            not isinstance(callback_port, int)
+            or isinstance(callback_port, bool)
+            or callback_port < 1
+            or callback_port > 65535
+        ):
+            raise ConnectorsError(
+                f"Invalid callback port {callback_port!r}: "
+                "must be an integer between 1 and 65535."
+            )
+
     intent, target = _sign_in_intent(provider_id, add_account, account)
     if _pending:
         # User re-clicking Connect signals the previous flow is dead.
@@ -460,18 +472,6 @@ async def start_authorization(
     # The apps never await it; each failure also goes out as an event.
     future.add_done_callback(lambda f: f.cancelled() or f.exception())
 
-    if callback_port is not None:
-        if (
-            not isinstance(callback_port, int)
-            or isinstance(callback_port, bool)
-            or callback_port < 1
-            or callback_port > 65535
-        ):
-            raise ConnectorsError(
-                f"Invalid callback port {callback_port!r}: "
-                "must be an integer between 1 and 65535."
-            )
-
     app = web.Application()
 
     async def callback(request: web.Request) -> web.Response:
@@ -487,10 +487,14 @@ async def start_authorization(
     except OSError as e:
         await runner.cleanup()
         if callback_port is not None:
+            cause = (
+                "permission denied (ports below 1024 need elevated rights)"
+                if isinstance(e, PermissionError)
+                else f"port is already in use ({type(e).__name__})"
+            )
             raise ConnectorsError(
-                f"Could not bind OAuth callback to port {callback_port}: "
-                f"port is already in use ({type(e).__name__}). "
-                "Choose a free port with --callback-port or omit it for an ephemeral port."
+                f"Could not bind OAuth callback to port {callback_port}: {cause}. "
+                "Choose a free port above 1024 with --callback-port, or omit it for an ephemeral port."
             ) from e
         raise
 

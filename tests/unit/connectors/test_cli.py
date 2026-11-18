@@ -173,7 +173,11 @@ class TestConnectGrantAgent:
             captured["connector_id"] = connector_id
             captured["scopes"] = list(scopes)
             captured["grant_agents"] = grant_agents
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "alice@example.com"}
@@ -208,7 +212,11 @@ class TestConnectGrantAgent:
             captured["connector_id"] = connector_id
             captured["scopes"] = list(scopes)
             captured["grant_agents"] = grant_agents
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "alice@example.com"}
@@ -445,7 +453,11 @@ class TestConnectGrantAgent:
 
         async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["grant_agents"] = grant_agents
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "bob@example.com"}
@@ -487,7 +499,11 @@ class TestConnectGrantAgent:
         async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["scopes"] = sorted(scopes)
             captured["grant_agents"] = grant_agents
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "alice@example.com"}
@@ -525,7 +541,11 @@ class TestConnectGrantAgent:
 
         async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["scopes"] = list(scopes)
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "bob@example.com"}
@@ -1184,4 +1204,33 @@ class TestConnectCallbackPort:
         )
         assert rc == 0, err
         assert "Remote session detected (SSH)" in out
-        assert "ssh -L 8085:127.0.0.1:8085 ubuntu@" in out
+        assert "ssh -L 8085:127.0.0.1:8085 ubuntu@10.0.0.2" in out
+
+    def test_connect_remote_ssh_session_fallback_without_ssh_connection_ip(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.setenv("SSH_TTY", "/dev/pts/1")
+        monkeypatch.delenv("USER", raising=False)
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **kwargs):
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, out, err = _run(
+            "connectors", "connect", "google", "--callback-port", "8085"
+        )
+        assert rc == 0, err
+        assert "Remote session detected (SSH)" in out
+        assert "ssh -L 8085:127.0.0.1:8085 <user>@<host>" in out

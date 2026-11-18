@@ -573,15 +573,7 @@ def _handle_connect(args: argparse.Namespace) -> int:
             account=getattr(args, "account", None),
             **auth_kwargs,
         )
-        port = info.get("callback_port")
-        if not port:
-            import urllib.parse
-
-            parsed = urllib.parse.urlparse(info.get("authorization_url", ""))
-            query = urllib.parse.parse_qs(parsed.query)
-            redirect_uri = query.get("redirect_uri", [""])[0]
-            port = urllib.parse.urlparse(redirect_uri).port or "<port>"
-
+        port = info["callback_port"]
         is_remote = any(
             os.environ.get(var) for var in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY")
         )
@@ -591,11 +583,9 @@ def _handle_connect(args: argparse.Namespace) -> int:
             f"Sign-in completes via a callback to 127.0.0.1:{port} on this machine.\n"
         )
         if is_remote:
-            import getpass
-            import socket
-
-            user = os.environ.get("USER") or getpass.getuser()
-            host = socket.gethostname()
+            ssh_conn = os.environ.get("SSH_CONNECTION", "").split()
+            host = ssh_conn[2] if len(ssh_conn) >= 3 else "<host>"
+            user = os.environ.get("USER") or "<user>"
             sys.stdout.write(
                 f"Remote session detected (SSH). To complete sign-in from your local browser:\n"
                 f"  1. Forward the callback port from your local machine:\n"
