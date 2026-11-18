@@ -123,10 +123,12 @@ describe("each chat shows its own tabs", () => {
     host.navigate(a, `${LOCAL}/a`);
     const opener = wcOf(host, a);
 
+    opener.emit("input-event", {}, { type: "mouseDown" });
     opener.windowOpenHandler({ url: `${LOCAL}/popup-1` });
     expect(urls(host.state())).toEqual([`${LOCAL}/a`, `${LOCAL}/popup-1`]);
 
     host.setView("chat-b", true);
+    opener.emit("input-event", {}, { type: "mouseDown" });
     opener.windowOpenHandler({ url: `${LOCAL}/popup-2` });
     expect(urls(host.state())).toEqual([null]);
     host.setView("chat-a", true);

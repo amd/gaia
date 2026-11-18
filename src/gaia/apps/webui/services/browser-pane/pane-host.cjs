@@ -58,6 +58,8 @@ const USER_PAUSE_MS = 4000;
 const ACT_LINGER_MS = 10000;
 // The page reports the agent's own CDP input back as input events for a moment after it lands.
 const AGENT_ECHO_MS = 100;
+// A page may open one popup within this long of a click or keypress, as Chromium allows.
+const POPUP_GESTURE_MS = 5000;
 const USER_INPUT = new Set(["mouseDown", "rawKeyDown", "keyDown", "touchStart"]);
 const CONTROLS = new Set(["shared", "user", "private"]);
 // Electron answers a page's alert, confirm and prompt in this internal webContents
@@ -1051,6 +1053,7 @@ class PaneHost {
       async () => {
         const stop = { reason: null };
         tab.dispatching = true;
+        this.noteGesture(tab);
         let done;
         try {
           const ctx = {
@@ -1315,6 +1318,12 @@ class PaneHost {
     await tab.cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: (v && v.colorScheme) || "" }] });
   }
 
+  /** A click or keystroke, the user's or the agent's: the page may open one popup soon after. */
+  noteGesture(tab) {
+    tab.gestureAt = Date.now();
+    tab.popups = 1;
+  }
+
   /** A click or keystroke from the user: the agent waits, and mid-task it hands the tab to the user. */
   noteUserInput(tab) {
     tab.userInputAt = Date.now();
@@ -1366,6 +1375,8 @@ class PaneHost {
       actTimer: null,
       scope: null,
       userInputAt: 0,
+      gestureAt: 0,
+      popups: 0,
       dispatching: false,
       agentEchoUntil: 0,
       dialogAnswer: null,
@@ -1524,6 +1535,11 @@ class PaneHost {
     attachTabPolicy(wc, {
       blockedPorts: this.deps.blockedPorts,
       openTab: (url) => this.openTabIn(tab.chat, url),
+      allowPopup: () => {
+        if (tab.popups < 1 || Date.now() - tab.gestureAt > POPUP_GESTURE_MS) return false;
+        tab.popups -= 1;
+        return true;
+      },
       onBlocked: update((url, message) => {
         s.notice = { kind: "blocked", url, message };
       }),
@@ -1614,6 +1630,7 @@ class PaneHost {
     wc.on("devtools-opened", update(() => { s.devToolsOpen = true; }));
     wc.on("devtools-closed", update(() => { s.devToolsOpen = false; }));
     wc.on("input-event", (_event, event) => {
+      if (USER_INPUT.has(event.type)) this.noteGesture(tab);
       if (!USER_INPUT.has(event.type) || tab.dispatching || Date.now() < tab.agentEchoUntil) return;
       if (live()) this.noteUserInput(tab);
     });

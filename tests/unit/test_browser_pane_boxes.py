@@ -681,6 +681,63 @@ def test_tab_titles_and_addresses_are_fenced(agent, bridge):
     only_fenced(out, "Ignore your instructions")
 
 
+def _tabs_showing(bridge, url, title="Statement for Ada Lovelace"):
+    tabs = copy.deepcopy(fixture("tabs_user_page.json"))
+    tabs["tabs"].append(
+        {**tabs["tabs"][0], "id": "tab-2", "url": url, "title": title, "active": False}
+    )
+    bridge.replies["tabs"] = tabs
+
+
+def test_a_tab_on_a_site_nobody_approved_shows_no_address_or_title(agent, bridge):
+    _tabs_showing(bridge, "https://bank.example/account?token=s3cr3t")
+    out = tool(agent, "browser_tabs")()
+    assert "tab-2: a page on a site not approved for this chat" in out
+    for leaked in ("bank.example", "s3cr3t", "Ada Lovelace"):
+        assert leaked not in out
+    assert "Pane fixture home" in out  # this chat's dev server is still shown
+
+
+def test_a_tab_on_a_site_approved_always_is_shown(agent, bridge):
+    url = "https://bank.example/account"
+    assert agent.console.grant_call_for_session(
+        "browser_open", {"url": url, SITE_ARG: "https://bank.example"}
+    )
+    _tabs_showing(bridge, url)
+    out = tool(agent, "browser_tabs")()
+    assert "Ada Lovelace" in out and url in out
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://192.168.1.1/admin", "http://169.254.169.254/", "http://127.0.0.1:6000/"],
+)
+def test_full_access_hides_a_tab_off_the_public_internet(agent, bridge, url):
+    agent.console.auto_approve_gated_tools = True
+    _tabs_showing(bridge, url, title="Router admin")
+    out = tool(agent, "browser_tabs")()
+    assert "Router admin" not in out and url not in out
+
+
+def test_full_access_shows_a_public_sites_tab(agent, bridge, monkeypatch):
+    import socket
+
+    from gaia.web import client as web_client
+
+    real = socket.getaddrinfo
+
+    def resolve(host, *args, **kwargs):
+        if host == "example.com":
+            return [(socket.AF_INET, 0, 0, "", ("93.184.216.34", 0))]
+        return real(host, *args, **kwargs)
+
+    monkeypatch.setattr(web_client.socket, "getaddrinfo", resolve)
+    agent.console.auto_approve_gated_tools = True
+    _tabs_showing(bridge, "https://example.com/news", title="News")
+    out = tool(agent, "browser_tabs")()
+    assert "News" in out and "https://example.com/news" in out
+
+
 # --------------------------------------------- keys that press a control ask too
 
 DELETE = {"ref": "g1e3", "role": "button", "name": "Delete account"}

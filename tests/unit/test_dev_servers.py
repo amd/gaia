@@ -36,6 +36,8 @@ from gaia.browser.dev_servers import LaunchConfigError, load_specs, spec_named
 
 from .browser_pane_fake import FakeBridge, fixture
 
+STATIC_SERVER_PY = Path(dev_servers.__file__).resolve().with_name("static_server.py")
+
 pytestmark = pytest.mark.allow_network
 
 FIXTURE_APP = (
@@ -503,7 +505,7 @@ def test_a_plain_html_folder_is_served_on_loopback_with_no_setup(agent, bridge, 
     assert shown["name"] == "static"
     assert shown["folder"] == str(site)
     assert shown["command"] == shlex.join(
-        [sys.executable, "-m", "gaia.browser.static_server", "--port", str(port)]
+        [sys.executable, "-I", str(STATIC_SERVER_PY), "--port", str(port)]
         + ["--directory", str(site)]
     )
     out = run()
@@ -623,6 +625,40 @@ def test_the_static_server_answers_on_loopback_only(tmp_path):
         proc.wait(timeout=10)
     if lan is None:
         pytest.skip("no non-loopback address to check the bind against")
+
+
+def test_the_static_server_imports_nothing_from_the_folder_it_serves(tmp_path):
+    """Module names planted in the served folder are never imported by its server."""
+    site = tmp_path / "site"
+    site.mkdir()
+    (site / "index.html").write_text("<h1>served</h1>")
+    marker = tmp_path / "imported.txt"
+    plant = f"open({str(marker)!r}, 'a').write(__name__ + '\\n')\n"
+    for name in ("socketserver", "argparse", "sitecustomize", "usercustomize"):
+        (site / f"{name}.py").write_text(plant)
+    (site / "gaia").mkdir()
+    (site / "gaia" / "__init__.py").write_text(plant)
+    (site / "gaia" / "browser").mkdir()
+    (site / "gaia" / "browser" / "__init__.py").write_text(plant)
+    (site / "gaia" / "browser" / "static_server.py").write_text(plant)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    spec = dev_servers.static_spec(site, port)
+    assert spec.cwd == site.resolve()
+    proc = subprocess.Popen(
+        list(spec.argv),
+        cwd=spec.cwd,
+        env={**os.environ, "PYTHONPATH": str(site)},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        assert "<h1>served</h1>" in _fetch_when_up(f"http://127.0.0.1:{port}/")
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+    assert not marker.exists(), marker.read_text()
 
 
 def _fetch_when_up(url: str) -> str:

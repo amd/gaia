@@ -953,6 +953,103 @@ def test_full_access_with_nobody_to_ask_refuses_browser_eval(pane, tmp_path):
     assert "script" not in bridge.ops()
 
 
+def _opened(bridge):
+    return [
+        r["body"]
+        for r in bridge.requests
+        if r["op"] == "navigate"
+        or (r["op"] == "tabs" and r["body"].get("op") == "open")
+    ]
+
+
+def _resolves_publicly(monkeypatch, host="example.com"):
+    import socket as _socket
+
+    from gaia.web import client as web_client
+
+    real = _socket.getaddrinfo
+
+    def fake(name, *args, **kwargs):
+        if name == host:
+            return [(_socket.AF_INET, 0, 0, "", ("93.184.216.34", 0))]
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr(web_client.socket, "getaddrinfo", fake)
+
+
+@pytest.mark.allow_network
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://192.168.1.1/",
+        "http://10.0.0.1/admin",
+        "http://127.0.0.1:6000/",
+        "http://[::1]:6000/",
+        "http://0x7f000001:6000/",
+    ],
+)
+def test_full_access_does_not_open_an_address_off_the_public_internet(pane, url):
+    agent, handler, bridge = pane
+    _full_access(handler, watching=False)
+    bridge.serve(5000)
+    result, prompts = _drive(agent, handler, "browser_open", {"url": url})
+    assert prompts == []
+    assert "refusing to open" in result
+    assert _opened(bridge) == []
+    assert "evaluate" not in bridge.ops()
+
+
+@pytest.mark.allow_network
+def test_full_access_still_opens_this_chats_dev_server(pane):
+    agent, handler, bridge = pane
+    _full_access(handler, watching=False)
+    bridge.serve(5000)
+    result, _ = _drive(
+        agent, handler, "browser_open", {"url": "http://127.0.0.1:5000/form.html"}
+    )
+    assert result.startswith("(in the browser pane)")
+
+
+@pytest.mark.allow_network
+def test_full_access_still_opens_a_public_site(pane, monkeypatch):
+    agent, handler, bridge = pane
+    _resolves_publicly(monkeypatch)
+    _full_access(handler, watching=False)
+    result, _ = _drive(agent, handler, "browser_open", {"url": "https://example.com/"})
+    assert result.startswith("(in the browser pane)")
+    assert bridge.last("evaluate")["body"]["allowedOrigins"] == ["https://example.com"]
+
+
+@pytest.mark.allow_network
+def test_full_access_opens_a_local_address_the_user_allowed_always(pane):
+    agent, handler, bridge = pane
+    _full_access(handler, watching=False)
+    assert handler.grant_call_for_session(
+        "browser_open", {"url": "http://192.168.1.1/", SITE_ARG: "http://192.168.1.1"}
+    )
+    result, _ = _drive(agent, handler, "browser_open", {"url": "http://192.168.1.1/"})
+    assert result.startswith("(in the browser pane)")
+    assert bridge.last("evaluate")["body"]["allowedOrigins"] == ["http://192.168.1.1"]
+
+
+@pytest.mark.allow_network
+def test_full_access_does_not_read_a_local_page_the_pane_was_moved_to(pane):
+    agent, handler, bridge = pane
+    _full_access(handler, watching=False)
+    bridge.replies["origin"] = {
+        **_bridge_fixture("origin_remote.json"),
+        "url": "http://192.168.1.1/",
+        "origin": "http://192.168.1.1",
+        "frameOrigins": ["http://169.254.169.254"],
+    }
+    _drive(agent, handler, "browser_snapshot", {})
+    for r in bridge.requests:
+        allowed = r["body"].get("allowedOrigins") or []
+        assert "http://192.168.1.1" not in allowed
+        assert "http://169.254.169.254" not in allowed
+
+
 def _static_site(agent, tmp_path):
     agent._dev_allowed = lambda folder: True
     site = tmp_path / "site"

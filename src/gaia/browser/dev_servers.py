@@ -258,12 +258,13 @@ def resolve_spec(
 def static_spec(folder: Path, port: int) -> DevServerSpec:
     """Serve ``folder``'s files on 127.0.0.1 only; nothing else on the network sees it."""
     folder = folder.expanduser().resolve()
+    # Runs from ``folder``: -I and a script path keep Python from importing anything there.
     return DevServerSpec(
         name=STATIC_NAME,
         argv=(
             sys.executable,
-            "-m",
-            "gaia.browser.static_server",
+            "-I",
+            str(Path(__file__).resolve().with_name("static_server.py")),
             "--port",
             str(port),
             "--directory",

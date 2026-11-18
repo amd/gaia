@@ -310,6 +310,7 @@ class BrowserUseToolsMixin:
         driver = self._ensure_driver()
         approved = self._take_site_approval(tool_name)
         if isinstance(driver, PaneDriver):
+            approved = [o for o in approved if not self._unasked_local(tool_name, o)]
             with driver.scoped(approved, self._granted_frames(tool_name)):
                 yield driver
         else:
@@ -324,6 +325,46 @@ class BrowserUseToolsMixin:
             return True
         return bool(console.call_is_granted(tool_name, {SITE_ARG: origin}))
 
+    def _unasked_local(self, tool_name: str, origin: str) -> bool:
+        """True for a pane site off the public internet that nobody approved, only Full access.
+
+        Full access answers every prompt, so it must not reach what headless
+        refuses (LAN, link-local, local services); an "always" on the site still counts.
+        """
+        console = getattr(self, "console", None)
+        if console is None or not console.auto_approve_confirmations_enabled():
+            return False
+        if console.call_is_granted(tool_name, {SITE_ARG: origin}):
+            return False
+        return self._check_navigable(origin) is not None
+
+    def _tab_site_shown(self, driver) -> Callable[[str], bool]:
+        """Whether browser_tabs may show a tab's address and title: a dev server or an approved site."""
+        from gaia.browser._pane_bridge import origin_of
+        from gaia.browser.pane_driver import PaneDriver
+
+        if not isinstance(driver, PaneDriver):
+            return lambda url: True
+        trusted: List[frozenset] = []
+
+        def shown(url: str) -> bool:
+            origin = origin_of(url)
+            if not origin:
+                return False
+            if not trusted:
+                try:
+                    trusted.append(driver.trusted_origins())
+                except BrowserError as e:
+                    logger.warning("Could not read this chat's dev servers: %s", e)
+                    trusted.append(frozenset())
+            if origin in trusted[0]:
+                return True
+            return self._site_granted(
+                "browser_snapshot", origin
+            ) and not self._unasked_local("browser_snapshot", origin)
+
+        return shown
+
     def _granted_frames(self, tool_name: str) -> Optional[Callable[[str], bool]]:
         """The frame-origin check a read uses, or None when nothing is granted yet (saves a lookup)."""
         console = getattr(self, "console", None)
@@ -334,7 +375,9 @@ class BrowserUseToolsMixin:
             and not console.session_grants()
         ):
             return None
-        return lambda origin: self._site_granted(tool_name, origin)
+        return lambda origin: self._site_granted(
+            tool_name, origin
+        ) and not self._unasked_local(tool_name, origin)
 
     def _take_site_approval(self, tool_name: str) -> List[str]:
         """The origins this call's gate asked about, once. Only a running tool body takes them."""
@@ -1137,6 +1180,16 @@ class BrowserUseToolsMixin:
                     f"Error: invalid URL {url!r}. It must start with http:// "
                     "or https://."
                 )
+            else:
+                from gaia.browser._pane_bridge import origin_of
+
+                origin = origin_of(url)
+                if (
+                    origin
+                    and mixin._unasked_local("browser_open", origin)
+                    and origin not in pane.trusted_origins()
+                ):
+                    raise _Refused(mixin._check_navigable(url))
             with mixin._reading("browser_open") as driver:
                 snap = driver.goto(url)
             _seen(snap)
@@ -1489,7 +1542,9 @@ class BrowserUseToolsMixin:
             def _list() -> str:
                 driver = mixin._ensure_driver()
                 res = driver.select_tab(switch_to) if switch_to else driver.tabs()
-                return f"{driver.where}\n" + _render_tabs(res, switch_to)
+                return f"{driver.where}\n" + _render_tabs(
+                    res, switch_to, mixin._tab_site_shown(driver)
+                )
 
             return answer("browser_tabs", _list)
 
@@ -1935,7 +1990,16 @@ def _describe_viewport(res: dict) -> str:
     )
 
 
-def _render_tabs(res: dict, switched_to: str) -> str:
+#: What browser_tabs shows for a tab on a site this chat may not read.
+_UNAPPROVED_TAB = (
+    "a page on a site not approved for this chat; "
+    "switch to it and read it to ask the user"
+)
+
+
+def _render_tabs(
+    res: dict, switched_to: str, shown: Callable[[str], bool] = lambda url: True
+) -> str:
     tabs = res.get("tabs") or []
     lines = [f"Switched to {switched_to}." if switched_to else f"{len(tabs)} tabs:"]
     pages = []
@@ -1947,6 +2011,9 @@ def _render_tabs(res: dict, switched_to: str) -> str:
             else ""
         )
         lines.append(f"  {t.get('id')}{mark}{paused}")
+        if t.get("url") and not shown(t["url"]):
+            pages.append(f"  {t.get('id')}: {_UNAPPROVED_TAB}")
+            continue
         pages.append(
             f"  {t.get('id')}: {t.get('title') or 'New tab'}  {t.get('url') or ''}".rstrip()
         )

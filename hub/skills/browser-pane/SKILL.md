@@ -156,7 +156,9 @@ this chat's own dev servers. Pressing a control whose label may not be undoable
 every time and shows the whole script. Starting a dev server asks, showing the
 exact command, folder and port. Full access does not answer those two: a person
 still approves them, and where nobody can, such as a background goal, they are
-refused.
+refused. Under Full access the pane refuses private, loopback and link-local
+addresses that are not this chat's dev servers or an "always" site, and
+`browser_tabs` names only tabs on approved sites.
 
 ## Procedure
 

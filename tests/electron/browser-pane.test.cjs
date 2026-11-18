@@ -398,6 +398,7 @@ describe("navigation policy", () => {
     const id = host.openTab("https://a.test/");
     const wc = viewOf(host, id).webContents;
 
+    wc.emit("input-event", {}, { type: "mouseDown" });
     expect(wc.windowOpenHandler({ url: "https://a.test/popup" })).toEqual({ action: "deny" });
     expect(last().tabs.map((t) => t.url)).toContain("https://a.test/popup");
     expect(last().activeTabId).not.toBe(id);
@@ -444,6 +445,56 @@ describe("navigation policy", () => {
       permission: "media",
       origin: "https://site.test",
     });
+  });
+
+  test("a popup with no click or keypress before it is refused, and says why", () => {
+    const { host, last } = makeHost();
+    const id = host.openTab("https://a.test/");
+    const wc = viewOf(host, id).webContents;
+    const before = last().tabs.map((t) => t.id);
+    wc.emit("input-event", {}, { type: "mouseMove" });
+    expect(wc.windowOpenHandler({ url: "https://a.test/popup" })).toEqual({ action: "deny" });
+    expect(last().tabs.map((t) => t.id)).toEqual(before);
+    expect(last().activeTabId).toBe(id);
+    expect(last().tabs.find((t) => t.id === id).notice).toMatchObject({ kind: "blocked", url: "https://a.test/popup", message: expect.stringMatching(/without a click/) });
+  });
+
+  test("one click opens one popup, not a flood of them", () => {
+    const { host, last } = makeHost();
+    const id = host.openTab("https://a.test/");
+    const wc = viewOf(host, id).webContents;
+    const before = last().tabs.map((t) => t.url);
+    wc.emit("input-event", {}, { type: "mouseDown" });
+    for (let i = 0; i < 20; i++) wc.windowOpenHandler({ url: `https://a.test/popup-${i}` });
+    expect(last().tabs.map((t) => t.url)).toEqual([...before, "https://a.test/popup-0"]);
+  });
+
+  test("a click long ago does not let a page open a popup now", () => {
+    const now = jest.spyOn(Date, "now");
+    try {
+      const { host, last } = makeHost();
+      const id = host.openTab("https://a.test/");
+      const wc = viewOf(host, id).webContents;
+      const before = last().tabs.map((t) => t.url);
+      now.mockReturnValue(1_000_000);
+      wc.emit("input-event", {}, { type: "keyDown" });
+      now.mockReturnValue(1_000_000 + 5_001);
+      wc.windowOpenHandler({ url: "https://a.test/later" });
+      expect(last().tabs.map((t) => t.url)).toEqual(before);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  test("the tab policy refuses popups when it is not told how to allow one", () => {
+    const wc = new EventEmitter();
+    wc.setWindowOpenHandler = jest.fn();
+    const openTab = jest.fn();
+    const onBlocked = jest.fn();
+    attachTabPolicy(wc, { blockedPorts: () => [], openTab, onBlocked });
+    wc.setWindowOpenHandler.mock.calls[0][0]({ url: "https://a.test/" });
+    expect(openTab).not.toHaveBeenCalled();
+    expect(onBlocked).toHaveBeenCalledWith("https://a.test/", expect.stringMatching(/without a click/));
   });
 
   test("the tab policy works on a bare webContents", () => {

@@ -195,6 +195,8 @@ function installSessionPolicy(ses, { blockedPorts, onPermissionDenied, savePathF
   });
 }
 
+const POPUP_BLOCKED = "Blocked a pop-up the page opened without a click. Click the link to open it.";
+
 function originOf(rawUrl) {
   try {
     return new URL(rawUrl).origin;
@@ -204,8 +206,9 @@ function originOf(rawUrl) {
 }
 
 /**
- * Per-tab rules: popups become pane tabs, and refused navigations are
- * reported on the tab instead of failing without a word.
+ * Per-tab rules: a popup opened right after a click or keypress becomes a
+ * pane tab, any other popup is refused, and refused navigations are reported
+ * on the tab instead of failing without a word.
  *
  * @param {Electron.WebContents} webContents
  * @param {{
@@ -213,13 +216,15 @@ function originOf(rawUrl) {
  *   openTab: (url: string) => void,
  *   onBlocked: (url: string, message: string) => void,
  *   stopsAgent?: (url: string) => boolean,
+ *   allowPopup?: () => boolean,
  * }} deps
  */
-function attachTabPolicy(webContents, { blockedPorts, openTab, onBlocked, stopsAgent = () => false }) {
+function attachTabPolicy(webContents, { blockedPorts, openTab, onBlocked, stopsAgent = () => false, allowPopup = () => false }) {
   webContents.setWindowOpenHandler(({ url }) => {
     const verdict = classifyNavigation(url, { blockedPorts: blockedPorts() });
-    if (verdict.allowed) openTab(url);
-    else onBlocked(url, verdict.message);
+    if (!verdict.allowed) onBlocked(url, verdict.message);
+    else if (allowPopup()) openTab(url);
+    else onBlocked(url, POPUP_BLOCKED);
     return { action: "deny" };
   });
   const guard = (event, url) => {

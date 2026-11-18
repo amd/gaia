@@ -110,6 +110,13 @@ the page it would land on first. Everything GAIA reads from a page, its logs,
 a script's value and a dev server's output reaches the model marked as page
 data, never as instructions.
 
+Full access answers these prompts for you, so under it the pane keeps the
+headless browser's limits: it does not open or read a private, loopback,
+link-local or reserved address unless it is this chat's dev server or a site
+you chose **Always allow** for. `browser_tabs` shows a tab's address and title
+only for this chat's dev servers and approved sites. A page may open one
+pop-up tab right after a click or keypress, and none otherwise.
+
 Elements are addressed by **ref** (`e1`, `e7`) from the last snapshot, never by
 screen coordinates:
 
