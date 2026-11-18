@@ -6,7 +6,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 ### Changed
 
@@ -28,7 +28,6 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   control that may not be undoable, or starting a server. Full access does not
   skip the script or a new server: a person still approves them, and a run with
   nobody to ask refuses them.
-Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 ### Fixed
 
