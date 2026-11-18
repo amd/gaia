@@ -31,6 +31,14 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     if (m) return t('live.loadingModel', { model: m[1] });
     m = /^Reading page (\d+) of (\d+)…$/.exec(label);
     if (m) return t('live.readingPage', { page: m[1], total: m[2] });
+    // delegate_task's progress (HELPER_PROGRESS_PHASE in delegate_tools.py).
+    m = /^(\d+) of (\d+) helpers? done(?:, (\d+) failed)?$/.exec(label);
+    if (m) {
+        const total = Number(m[2]);
+        return m[3]
+            ? t.plural('live.helpersDoneFailed', total, { done: m[1], total: m[2], failed: m[3] })
+            : t.plural('live.helpersDone', total, { done: m[1], total: m[2] });
+    }
     m = /^Downloading the speech model, one time \(([\d.]+) GB\)$/.exec(label);
     if (m) return t('live.speechModelStart', { size: m[1] });
     m = /^Downloading the speech model, one time — (\d+)% of ([\d.]+) GB$/.exec(label);

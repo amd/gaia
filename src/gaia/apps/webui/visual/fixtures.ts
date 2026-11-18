@@ -707,3 +707,128 @@ export async function withMemory(page: Page, { enabled = true, empty = false, fa
         }
     });
 }
+
+// ── delegate_task: helpers, as the backend saves and streams them ─────────
+
+const NOTE_OWNERS = ['Ada Okonkwo', 'Bram Lindqvist', 'Chen Wei', 'Dara Haddad'];
+
+const helperRecord = (id: number, task: string, status: 'ok' | 'partial' | 'failed', over: Record<string, unknown> = {}) => ({
+    id, task, status, steps: 2, wall_s: 3.1, ...over,
+});
+
+const decisionTask = (n: number) => `Read notes_0${n}.md and list each decision with its owner, one per line`;
+
+const MIXED_PARTIAL_CONCLUSION =
+    'Two of the three decisions in notes_02.md, as far as I got:\n'
+    + '1. Move the Friday review to Thursdays at 10:00 (owner: Bram Lindqvist).\n'
+    + '2. Freeze the venue budget at the September figure until the vendor quotes arrive (owner: Ada Okonkwo).\n'
+    + 'The third decision is in the action-items table near the end of the file, which I did not reach before running out of steps; '
+    + 'it mentions the volunteer rota but I could not read who owns it.';
+
+/** One run of each kind the row shows: all done, some short, none usable, and the most one call takes. */
+export const HELPER_RUNS = {
+    ok: {
+        type: 'helpers', status: 'success', success: true, summary: '4 of 4 helpers finished.', width: 4,
+        helpers: [1, 2, 3, 4].map((n) => helperRecord(n, decisionTask(n), 'ok', {
+            conclusion: `1. Keep the Friday review (owner: ${NOTE_OWNERS[n - 1]}).\n2. Share the minutes by Monday (owner: ${NOTE_OWNERS[n % 4]}).`,
+            steps: [2, 3, 2, 4][n - 1], wall_s: [3.1, 4.6, 2.8, 5.2][n - 1],
+        })),
+    },
+    mixed: {
+        type: 'helpers', status: 'partial', success: true, summary: '2 of 4 helpers finished, 1 stopped short, 1 failed.', width: 1,
+        width_note: 'Ran one helper at a time: local requests to one model are served one at a time in this process.',
+        helpers: [
+            helperRecord(1, decisionTask(1), 'ok', { conclusion: '1. Keep the Friday review (owner: Ada Okonkwo).\n2. Share the minutes by Monday (owner: Chen Wei).', steps: 2, wall_s: 6.4 }),
+            helperRecord(2, decisionTask(2), 'partial', { reason: 'step_limit', conclusion: MIXED_PARTIAL_CONCLUSION, steps: 30, wall_s: 48.2 }),
+            helperRecord(3, decisionTask(3), 'failed', { reason: 'timeout', steps: 4, wall_s: 600 }),
+            helperRecord(4, decisionTask(4), 'ok', { conclusion: 'No decisions were recorded in notes_04.md; it lists two open questions for Dara Haddad.', steps: 3, wall_s: 7.9 }),
+        ],
+    },
+    failed: {
+        type: 'helpers', status: 'error', success: false, summary: '0 of 3 helpers finished, 3 failed.', width: 1,
+        width_note: 'Ran one helper at a time: local requests to one model are served one at a time in this process.',
+        helpers: [
+            helperRecord(1, decisionTask(1), 'failed', { reason: 'error', steps: 1, wall_s: 0.4 }),
+            helperRecord(2, decisionTask(2), 'failed', { reason: 'empty', steps: 1, wall_s: 2.2 }),
+            helperRecord(3, decisionTask(3), 'failed', { reason: 'timeout', steps: 5, wall_s: 600 }),
+        ],
+    },
+    sixteen: {
+        type: 'helpers', status: 'partial', success: true, summary: '14 of 16 helpers finished, 1 stopped short, 1 failed.', width: 8,
+        helpers: Array.from({ length: 16 }, (_, i) => {
+            const n = String(i + 1).padStart(2, '0');
+            const task = `Summarize chapter_${n}.md in three bullet points and name every person it mentions`;
+            if (i === 6) return helperRecord(i + 1, task, 'partial', { reason: 'loop', conclusion: '- The chapter opens at the harbour office.\n- Ada Okonkwo signs the lease.', steps: 12, wall_s: 22.5 });
+            if (i === 11) return helperRecord(i + 1, task, 'failed', { reason: 'cancelled', steps: 3, wall_s: 9.1 });
+            return helperRecord(i + 1, task, 'ok', {
+                conclusion: `- Chapter ${i + 1} follows ${NOTE_OWNERS[i % 4]} through the harbour survey.\n- People: ${NOTE_OWNERS[i % 4]}, ${NOTE_OWNERS[(i + 1) % 4]}.`,
+                steps: 2 + (i % 3), wall_s: Math.round((2.5 + (i % 5) * 1.3) * 10) / 10,
+            });
+        }),
+    },
+} as const;
+
+export type HelperRunName = keyof typeof HELPER_RUNS;
+
+export const HELPER_QUESTION = 'List the decisions in each of my meeting notes, with their owners';
+/** What the answer says after each run. */
+export const HELPER_ANSWERS: Record<HelperRunName, string> = {
+    ok: 'Here are the decisions from your four meeting notes, grouped by file.',
+    mixed: 'Here are the decisions from your meeting notes, grouped by file. One helper ran out of time on notes_03.md, so I read that file myself.',
+    failed: 'None of the helpers could read your notes, so I read them myself. Here are the decisions, grouped by file.',
+    sixteen: 'Here is a three-point summary of each chapter, with the people it mentions.',
+};
+
+/** The delegate_task step as the chat saves it. */
+export function helperStep(name: HelperRunName, id = 2) {
+    const run = HELPER_RUNS[name];
+    return {
+        id, type: 'tool', label: 'Using delegate_task', tool: 'delegate_task',
+        narration: `Handing ${run.helpers.length} tasks to helpers`, detail: `tasks: ${run.helpers.length} briefs`,
+        active: false, success: run.status !== 'error', result: run.summary, latencyMs: 61_400, timestamp: 2, helpers: run,
+    };
+}
+
+/** A saved chat whose answer handed work to helpers, after a folder listing. */
+export function helperChat(name: HelperRunName, answer = HELPER_ANSWERS[name]) {
+    return {
+        messages: [
+            { id: 1, session_id: ANSWER_SESSION, role: 'user', content: HELPER_QUESTION, created_at: iso(3), rag_sources: null },
+            {
+                id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: answer, created_at: iso(2), rag_sources: null,
+                agent_steps: [
+                    { id: 1, type: 'tool', label: 'Using browse_directory', tool: 'browse_directory', narration: 'Listing folder: notes', detail: 'path: notes', active: false, success: true, result: 'Found 4 files', latencyMs: 40, timestamp: 1 },
+                    helperStep(name),
+                ],
+            },
+        ],
+        total: 2,
+    };
+}
+
+/** GET messages answers with *chat* from here on. */
+export async function withChat(page: Page, chat: unknown): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({ json: chat }));
+}
+
+/** POST /api/chat/send starts delegate_task, reports *progress* on the helpers phase, then holds the turn open. */
+export async function holdOnHelperProgress(page: Page, progress: string | null): Promise<void> {
+    await page.addInitScript((message) => {
+        const realFetch = window.fetch.bind(window);
+        window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+            if (!url.includes('/api/chat/send')) return realFetch(input, init);
+            const events: unknown[] = [
+                { type: 'tool_start', tool: 'delegate_task', detail: '', narration: 'Handing work to helpers' },
+                { type: 'tool_args', tool: 'delegate_task', args: { tasks: [1, 2, 3, 4].map((n) => ({ task: `notes_0${n}.md` })) }, detail: 'tasks: 4 briefs', narration: 'Handing 4 tasks to helpers' },
+            ];
+            if (message) events.push({ type: 'status', status: 'working', phase: 'helpers', message });
+            const body = new ReadableStream<Uint8Array>({
+                start(controller) {
+                    for (const e of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`));
+                },
+            });
+            return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+        };
+    }, progress);
+}

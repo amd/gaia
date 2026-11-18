@@ -81,6 +81,44 @@ SAVED_STEPS = [
         "success": False,
         "timestamp": 104,
     },
+    {
+        "id": 6,
+        "type": "tool",
+        "label": "Using delegate_task",
+        "tool": "delegate_task",
+        "active": False,
+        "success": True,
+        "result": "1 of 2 helpers finished, 1 stopped short.",
+        "timestamp": 105,
+        "helpers": {
+            "type": "helpers",
+            "status": "partial",
+            "success": True,
+            "summary": "1 of 2 helpers finished, 1 stopped short.",
+            "width": 1,
+            "width_note": "Ran one helper at a time.",
+            "helpers": [
+                {
+                    "id": 1,
+                    "task": "Read notes_01.md",
+                    "status": "ok",
+                    "reason": None,
+                    "conclusion": "Keep the Friday review.",
+                    "steps": 2,
+                    "wall_s": 3.1,
+                },
+                {
+                    "id": 2,
+                    "task": "Read notes_02.md",
+                    "status": "partial",
+                    "reason": "step_limit",
+                    "conclusion": "Found two of three.",
+                    "steps": 30,
+                    "wall_s": 41.0,
+                },
+            ],
+        },
+    },
 ]
 
 

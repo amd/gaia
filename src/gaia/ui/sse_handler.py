@@ -54,6 +54,7 @@ from gaia.ui.event_narration import (
     tool_phrase,
 )
 from gaia.ui.generated_media import is_remote_or_device_path
+from gaia.ui.helper_results import DELEGATE_TOOL, helpers_view
 from gaia.ui.turn_summary import TurnLedger, search_hits
 from gaia.upload_names import display_file_name, upload_original_name
 from gaia.utils.json_string import (
@@ -1061,6 +1062,12 @@ class SSEOutputHandler(OutputHandler):
                     "source_files": data.get("source_files", []),
                     "chunks": structured_chunks,
                 }
+
+        helpers = helpers_view(data) if self._last_tool_name == DELEGATE_TOOL else None
+        if helpers is not None:
+            # The summary a person reads; the error and advice are for the model.
+            event["summary"] = helpers["summary"]
+            event["result_data"] = helpers
 
         connect = connect_card_in(data)
         if connect is not None:

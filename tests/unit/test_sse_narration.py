@@ -131,6 +131,20 @@ class TestDeriveNarration:
             derive_narration("zork_thing", {"aa": 1, "bb": 2}) == "Running zork thing"
         )
 
+    @pytest.mark.parametrize(
+        "args, expected",
+        [
+            ({"tasks": [{"task": "a"}] * 4}, "Handing 4 tasks to helpers"),
+            ({"tasks": [{"task": "a"}]}, "Handing 1 task to helpers"),
+            ({"tasks": []}, "Handing work to helpers"),
+            # A small model may send the list as its JSON text.
+            ({"tasks": '[{"task": "a"}]'}, "Handing work to helpers"),
+            ({}, "Handing work to helpers"),
+        ],
+    )
+    def test_delegate_task_counts_its_tasks(self, args, expected):
+        assert derive_narration("delegate_task", args) == expected
+
 
 # ===========================================================================
 # derive_preview

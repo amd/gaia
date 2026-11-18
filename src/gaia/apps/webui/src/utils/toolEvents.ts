@@ -4,6 +4,7 @@
 import { useNotificationStore, PATH_ACCESS_TOOL, PROJECT_TRUST_TOOL, pathAccessQuestion, pathAccessTitle, isPathAccessFollowUp } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import type { StreamEvent, AgentStep } from '../types';
+import { DELEGATE_TOOL, HELPERS_RESULT_TYPE } from './helperRun';
 
 /** Raise the prompt for a `permission_request`, or bring back the one a re-attach replays. */
 export function showPermissionRequest(event: StreamEvent, sessionId: string): void {
@@ -147,7 +148,9 @@ export function toolResultUpdates(event: StreamEvent): Partial<AgentStep> {
                 (event.result_data as any).files.length,
         };
     }
-    // A relayed result carries it inside `data`.
+    // In-process the helpers ride in result_data; a relayed result carries the tool's own in `data`.
+    if (event.result_data?.type === HELPERS_RESULT_TYPE) updates.helpers = event.result_data;
+    else if (event.tool === DELEGATE_TOOL && event.data && typeof event.data === 'object') updates.helpers = event.data;
     const relayed = event.data && typeof event.data === 'object' ? (event.data as { needs_model?: unknown }).needs_model : undefined;
     if ((event.needs_model ?? relayed) === 'vision') updates.needsModel = 'vision';
     return updates;

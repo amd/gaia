@@ -94,10 +94,13 @@ HELPER_SYSTEM_PROMPT = (
 DELEGATION_PROMPT = (
     "==== HELPERS ====\n"
     "delegate_task runs read-only helpers, each on one task in its own context, "
-    "and returns their conclusions. Use it when the work is several independent "
-    "pieces of reading or judgement, such as one per file or source. Give each "
-    "helper a complete brief: what to find, which paths, and the exact answer "
-    "format. Do the work yourself when one command or script covers it, when it "
+    "and returns their conclusions. Size the job before you start: find out how "
+    "many items there are and how large. Use helpers when the work is several "
+    "independent pieces of reading or judgement, such as one per file or source, "
+    "and above all when reading it all yourself would take more than about half "
+    "your context window. Give each helper a file or a small group, and a "
+    "complete brief: what to find, which paths, and the exact answer format, kept "
+    "short. Do the work yourself when one command or script covers it, when it "
     "is small, or when it writes. A helper can fail: read each status, then redo "
     "a failed part yourself or tell the user it is missing."
 )
@@ -364,12 +367,17 @@ class _HelperStop(TurnCancel):
 class _Task:
     text: str
     paths: List[str] = field(default_factory=list)
+    answer_chars: int = CONCLUSION_CHARS
 
     @property
     def brief(self) -> str:
-        if not self.paths:
-            return self.text
-        return self.text + "\n\nRead these:" + "".join(f"\n- {p}" for p in self.paths)
+        brief = self.text
+        if self.paths:
+            brief += "\n\nRead these:" + "".join(f"\n- {p}" for p in self.paths)
+        return (
+            f"{brief}\n\nKeep your whole answer under {self.answer_chars} "
+            "characters; anything past that is cut off."
+        )
 
 
 def _tool_calls(result: Dict[str, Any]) -> int:
@@ -700,6 +708,18 @@ class DelegateToolsMixin:
         )
         at_once = min(len(parsed), width)
         parent_stopped = self._parent_stop_check()
+        # What one conclusion can be so all of them reach the parent unclipped.
+        limit = max(int(self._truncation_budget()[0]), 0)
+        answer_chars = next(
+            (
+                each
+                for each, _ in _RESULT_SIZES[:6]
+                if 500 + len(parsed) * (each + TASK_ECHO_CHARS + 300) <= limit
+            ),
+            300,
+        )
+        for task in parsed:
+            task.answer_chars = answer_chars
 
         began = time.monotonic()
         outcomes: List[Any] = [None] * len(parsed)

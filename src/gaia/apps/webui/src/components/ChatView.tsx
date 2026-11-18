@@ -7,7 +7,7 @@ import { TurnAnnouncer } from './TurnAnnouncer';
 import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
-import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
+import { applyStatusEvent, HELPERS_PHASE, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { useModelStore } from '../stores/modelStore';
@@ -74,6 +74,9 @@ import { useChatDraft } from '../hooks/useSavedDraft';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 import { useOpeningMessage } from '../hooks/useOpeningMessage';
 import { getT, useT } from '../i18n/useT';
+
+/** Live phases that belong to the running call, so they end with it. */
+const CALL_OWN_PHASES = new Set(['tool', HELPERS_PHASE]);
 
 /** Events that only come after the agent got past a permission prompt. */
 const RESOLVES_PROMPTS = new Set(['tool_start', 'tool_end', 'tool_result']);
@@ -871,7 +874,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 // since thinking/status events may have been interleaved during execution)
                 // The call is over, so the live line must stop naming it; the model has the turn again.
                 if ((event.type === 'tool_end' || event.type === 'tool_result')
-                    && useChatStore.getState().livePhase === 'tool') {
+                    && CALL_OWN_PHASES.has(useChatStore.getState().livePhase ?? '')) {
                     useChatStore.getState().setLiveStatus(null);
                 }
                 if (event.type === 'tool_end') {

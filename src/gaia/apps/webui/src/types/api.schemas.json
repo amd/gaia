@@ -355,6 +355,16 @@
           }
         ]
       },
+      "helpers": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/HelpersRunResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "id": {
         "title": "Id",
         "type": "integer"
@@ -2144,6 +2154,144 @@
       }
     },
     "title": "HTTPValidationError",
+    "type": "object"
+  },
+  "HelperResponse": {
+    "description": "One helper of a ``delegate_task`` call, as a person sees it.",
+    "properties": {
+      "conclusion": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Conclusion"
+      },
+      "id": {
+        "title": "Id",
+        "type": "integer"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reason"
+      },
+      "status": {
+        "title": "Status",
+        "type": "string"
+      },
+      "steps": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Steps"
+      },
+      "task": {
+        "default": "",
+        "title": "Task",
+        "type": "string"
+      },
+      "wall_s": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Wall S"
+      }
+    },
+    "required": [
+      "id",
+      "status"
+    ],
+    "title": "HelperResponse",
+    "type": "object"
+  },
+  "HelpersRunResponse": {
+    "description": "A ``delegate_task`` result without its model-only text (``helper_results.py``).",
+    "properties": {
+      "helpers": {
+        "default": [],
+        "items": {
+          "$ref": "#/components/schemas/HelperResponse"
+        },
+        "title": "Helpers",
+        "type": "array"
+      },
+      "hidden": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Hidden"
+      },
+      "status": {
+        "title": "Status",
+        "type": "string"
+      },
+      "success": {
+        "default": true,
+        "title": "Success",
+        "type": "boolean"
+      },
+      "summary": {
+        "title": "Summary",
+        "type": "string"
+      },
+      "type": {
+        "default": "helpers",
+        "title": "Type",
+        "type": "string"
+      },
+      "width": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Width"
+      },
+      "width_note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Width Note"
+      }
+    },
+    "required": [
+      "status",
+      "summary"
+    ],
+    "title": "HelpersRunResponse",
     "type": "object"
   },
   "IndexFolderRequest": {

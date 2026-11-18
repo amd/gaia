@@ -215,7 +215,7 @@ A local model gets one at a time because this agent sends one request at a time 
 | `partial` | It ran out of steps and gave a closing answer from what it had (`reason: step_limit`), or it answered but a check on its turn failed (`reason: error`). |
 | `failed` | Nothing usable came back. `reason` says why: `error` (the model server failed), `empty`, `step_limit`, `timeout` or `cancelled`. |
 
-The result's own `status` is `success` only when every helper is `ok`, `partial` when some are not, and `error` when none returned anything. Its first line counts them and tells the agent to redo failed parts itself or say they are missing. Stopping the agent stops its helpers at their next step. Helper tokens count toward the turn's totals once.
+The result's own `status` is `success` only when every helper is `ok`, `partial` when some are not, and `error` when none returned anything. Its `summary` counts them in one line a person can read ("3 of 4 helpers finished, 1 failed."), and `advice` tells the agent to redo failed parts itself or say they are missing. While helpers run, the agent reports progress ("2 of 4 helpers done") as a `status` with the `helpers` phase, which the terminal UI and the Agent UI show on the running tool's row. Stopping the agent stops its helpers at their next step. Helper tokens count toward the turn's totals once.
 
 ### Tools that need your approval
 

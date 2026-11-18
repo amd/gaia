@@ -10,6 +10,9 @@ import { agentEventToStep, isProgressTick, statusText } from './streamSteps';
 /** Same as SPEECH_MODEL_DOWNLOADED_PHASE in audio_tools.py. */
 const SPEECH_MODEL_DOWNLOADED = 'speech_model_downloaded';
 
+/** delegate_task's progress ("2 of 4 helpers done"); it lives on the call's row, not as a step. */
+export const HELPERS_PHASE = 'helpers';
+
 /** Live phases that are a call's own label or the client's wait notice, not the call's progress. */
 const CALL_LABEL_PHASES = new Set(['tool', 'waiting']);
 
@@ -54,7 +57,7 @@ export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: numbe
     }
     if (event.phase && msg) store.setLiveStatus(msg, event.phase);
     // The client's own wait notice is not a step of the turn.
-    if (event.phase === 'waiting') return;
+    if (event.phase === 'waiting' || event.phase === HELPERS_PHASE) return;
     if (isProgressTick(event)) return;
     // "Executing <tool>" repeats tool_start.
     if (msg.toLowerCase().startsWith('executing ')) return;

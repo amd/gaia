@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, HELPER_QUESTION, HELPER_RUNS, helperChat, holdOnHelperProgress, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withChat, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -81,6 +81,18 @@ const audit = (page: Page): Promise<string[]> =>
             }
             return false;
         };
+        // Text a one-line row cuts with "…", like a bracketed label's English it drops:
+        // past the window's edge only inside a row that is on screen, so never seen there.
+        const clippedOnScreen = (el: Element) => {
+            for (let at = el.parentElement; at && at !== document.body; at = at.parentElement) {
+                const cut = getComputedStyle(at);
+                if (!['hidden', 'clip'].includes(cut.overflowX)) continue;
+                if (cut.textOverflow !== 'ellipsis') return false;
+                const clip = at.getBoundingClientRect();
+                return clip.left >= -1 && clip.right <= innerWidth + 1;
+            }
+            return false;
+        };
         const latin = /[A-Za-z]/;
         const arabic = /[\u0600-\u06ff]/;
 
@@ -102,7 +114,7 @@ const audit = (page: Page): Promise<string[]> =>
             const style = getComputedStyle(el);
             // Screen-reader-only text is clipped to 1px, so its unwrapped overflow is never seen.
             const srOnly = el.closest('.visually-hidden');
-            if ((box.right > innerWidth + 1 || box.left < -1) && style.position !== 'fixed' && !el.closest('svg') && !srOnly && !inSideScroller(el)) {
+            if ((box.right > innerWidth + 1 || box.left < -1) && style.position !== 'fixed' && !el.closest('svg') && !srOnly && !inSideScroller(el) && !clippedOnScreen(el)) {
                 problems.push(`off screen: ${label(el)}`);
             }
 
@@ -5808,4 +5820,170 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
     });
+}
+
+// ── delegate_task: a row that hands work to helpers ───────────────────────
+
+const HELPER_VARIANTS = [
+    { name: 'light', theme: 'light', width: 1400 },
+    { name: 'dark', theme: 'dark', width: 1400 },
+    { name: 'light-390', theme: 'light', width: 390 },
+] as const;
+
+const HELPER_PROGRESS = { en: '3 of 4 helpers done, 1 failed', ar: 'أنهى المساعدون: 3 من 4، فشل منهم: 1' } as const;
+const HELPER_SUMMARY = {
+    ok: { en: '4 of 4 helpers finished.', ar: 'أنهى المساعدون: 4 من 4.' },
+    mixed: { en: '2 of 4 helpers finished, 1 stopped short, 1 failed.', ar: 'أنهى المساعدون: 2 من 4، توقف قبل الإتمام: 1، فشل: 1.' },
+    failed: { en: '0 of 3 helpers finished, 3 failed.', ar: 'أنهى المساعدون: 0 من 3، فشل: 3.' },
+    sixteen: { en: '14 of 16 helpers finished, 1 stopped short, 1 failed.', ar: 'أنهى المساعدون: 14 من 16، توقف قبل الإتمام: 1، فشل: 1.' },
+} as const;
+
+/** The delegate_task row of the saved answer, with its run of steps opened. */
+async function helperRow(page: Page) {
+    const summary = page.locator('.flow-steps-summary').last();
+    await expect(summary).toBeVisible();
+    if ((await summary.getAttribute('aria-expanded')) === 'false') await summary.click();
+    return page.locator('.flow-tool').filter({ has: page.locator('.flow-tool-outcome, .flow-tool-failure') }).last();
+}
+
+/** Geometry of an opened helper list: inside its panel, icons at the start, meta clear of the text. */
+const helperListProblems = (page: Page): Promise<string[]> =>
+    page.evaluate(() => {
+        const problems: string[] = [];
+        const rtl = document.documentElement.dir === 'rtl';
+        const panel = document.querySelector('.helpers-view')?.closest('.flow-tool-detail');
+        if (!panel) return ['no opened helper list'];
+        const box = panel.getBoundingClientRect();
+        const items = [...document.querySelectorAll('.helper-item')];
+        if (!items.length) problems.push('the helper list is empty');
+        for (const item of items) {
+            const name = (item.querySelector('.helper-task')?.textContent ?? '').slice(0, 30);
+            const ib = item.getBoundingClientRect();
+            if (ib.left < box.left - 1 || ib.right > box.right + 1) problems.push(`helper spills out of its panel: ${name}`);
+            const icon = item.querySelector(':scope > svg')!.getBoundingClientRect();
+            const body = item.querySelector('.helper-body')!.getBoundingClientRect();
+            if (rtl ? icon.left < body.right - 1 : icon.right > body.left + 1) problems.push(`status icon is not at the start: ${name}`);
+            const meta = item.querySelector('.helper-meta');
+            if (meta) {
+                const mb = meta.getBoundingClientRect();
+                if (mb.left < ib.left - 1 || mb.right > ib.right + 1) problems.push(`meta spills out of its row: ${name}`);
+                const sameLine = mb.top < body.bottom - 2;
+                const overlaps = sameLine && mb.left < body.right - 1 && mb.right > body.left + 1;
+                if (overlaps) problems.push(`meta overlaps the task: ${name}`);
+                if (!meta.querySelector('bdi[dir="ltr"]')) problems.push(`meta numbers are not isolated: ${name}`);
+                // "3.1s" must stay whole: a bare unit beside an isolated number reads "s3.1" in rtl.
+                const walker = document.createTreeWalker(meta, NodeFilter.SHOW_TEXT);
+                for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                    if (node.parentElement?.closest('bdi')) continue;
+                    if (/\d|^\s*m?s\b/.test(node.textContent ?? '')) problems.push(`a number or unit outside its <bdi>: ${name}`);
+                }
+            }
+            const task = item.querySelector('.helper-task') as HTMLElement;
+            if (task.scrollWidth > task.clientWidth + 1 && !task.title) problems.push(`a cut task has no full text: ${name}`);
+        }
+        if ((document.body.textContent ?? '').includes('nothing usable')) problems.push("the model's advice is on screen");
+        return problems;
+    });
+
+/** The audit, minus the closed sidebar drawer that waits off screen at phone width. */
+async function helperAudit(page: Page, width: number): Promise<string[]> {
+    const problems = await audit(page);
+    return width > 400 ? problems : problems.filter((p) => /helper|flow-|agent-|msg|scrolls sideways/.test(p));
+}
+
+/** The colour a token resolves to here, as the computed `rgb(...)`. */
+const tokenColor = (page: Page, token: string): Promise<string> =>
+    page.evaluate((name) => {
+        const probe = document.createElement('span');
+        probe.style.color = `var(${name})`;
+        document.body.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+    }, token);
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const variant of HELPER_VARIANTS) {
+        const tag = `${locale}-${variant.name}`;
+
+        test(`a running delegate_task row shows its helpers' progress (${tag})`, async ({ page }) => {
+            await page.setViewportSize({ width: variant.width, height: 844 });
+            await open(page, `#${ANSWER_SESSION}`, locale, (p) => holdOnHelperProgress(p, '3 of 4 helpers done, 1 failed'), variant.theme);
+            const box = page.getByRole('textbox').first();
+            await box.fill(HELPER_QUESTION);
+            await box.press('Enter');
+            const row = page.locator('.flow-tool.active').last();
+            await expect.poll(() => shownText(row.locator('.flow-tool-label'))).toContain(HELPER_PROGRESS[locale]);
+            await expect(row.locator('.flow-tool-spinner')).toBeVisible();
+            await expect(row.locator('.flow-tool-latency')).toBeVisible();
+            expect(await row.evaluate((el) => getComputedStyle(el).direction)).toBe(locale === 'ar' ? 'rtl' : 'ltr');
+            await row.evaluate((el) => el.scrollIntoView({ block: 'center' }));
+            await shot(page, `helpers-running-${tag}`);
+            expect(await helperAudit(page, variant.width)).toEqual([]);
+        });
+
+        test(`a delegate_task row before any helper ends says it hands work out (${tag})`, async ({ page }) => {
+            await page.setViewportSize({ width: variant.width, height: 844 });
+            await open(page, `#${ANSWER_SESSION}`, locale, (p) => holdOnHelperProgress(p, null), variant.theme);
+            const box = page.getByRole('textbox').first();
+            await box.fill(HELPER_QUESTION);
+            await box.press('Enter');
+            const row = page.locator('.flow-tool.active').last();
+            await expect.poll(() => shownText(row.locator('.flow-tool-label'))).toContain(locale === 'ar' ? 'توزيع العمل على مساعدين' : 'Handing work to helpers');
+            expect(await helperAudit(page, variant.width)).toEqual([]);
+        });
+
+        for (const run of ['ok', 'mixed', 'failed', 'sixteen'] as const) {
+            test(`a finished delegate_task row lists its helpers: ${run} (${tag})`, async ({ page }) => {
+                await page.setViewportSize({ width: variant.width, height: 844 });
+                await open(page, `#${ANSWER_SESSION}`, locale, (p) => withChat(p, helperChat(run)), variant.theme);
+                const row = await helperRow(page);
+                await expect(row).toBeVisible();
+                const inline = row.locator(run === 'failed' ? '.flow-tool-failure' : '.flow-tool-outcome');
+                await expect.poll(() => shownText(inline)).toContain(HELPER_SUMMARY[run][locale]);
+
+                if (run === 'mixed' || run === 'sixteen') {
+                    // Some work came back: a warning, never the failed treatment.
+                    await expect(row).toHaveClass(/\bpartial\b/);
+                    await expect(row).not.toHaveClass(/\berror\b/);
+                    expect(await inline.evaluate((el) => getComputedStyle(el).color)).toBe(await tokenColor(page, '--accent-yellow'));
+                    expect(await row.locator('.flow-tool-warn-icon').evaluate((el) => getComputedStyle(el).color)).toBe(await tokenColor(page, '--accent-yellow'));
+                } else if (run === 'failed') {
+                    await expect(row).toHaveClass(/\berror\b/);
+                } else {
+                    await expect(row).not.toHaveClass(/\b(error|partial)\b/);
+                }
+                await row.scrollIntoViewIfNeeded();
+                await shot(page, `helpers-${run}-collapsed-${tag}`);
+                expect(await helperAudit(page, variant.width)).toEqual([]);
+
+                await row.locator('.flow-tool-header').click();
+                await expect(page.locator('.helpers-view')).toBeVisible();
+                await expect(page.locator('.helper-item')).toHaveCount(HELPER_RUNS[run].helpers.length);
+                // The list stands for the arguments and the raw result.
+                await expect(row.locator('.step-detail-args, .step-detail-result')).toHaveCount(0);
+                expect(await helperListProblems(page)).toEqual([]);
+                if (locale === 'ar') {
+                    expect(await page.locator('.helpers-list').evaluate((el) => getComputedStyle(el).direction)).toBe('rtl');
+                }
+                await row.scrollIntoViewIfNeeded();
+                await row.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+                await shot(page, `helpers-${run}-expanded-${tag}`);
+                if (run === 'sixteen') {
+                    await page.locator('.helper-item').last().evaluate((el) => el.scrollIntoView({ block: 'end' }));
+                    await shot(page, `helpers-${run}-expanded-end-${tag}`);
+                }
+                if (run === 'mixed') {
+                    const more = page.locator('.helper-item.partial .helper-more-toggle');
+                    await expect(more).toBeVisible();
+                    await more.click();
+                    await expect(page.locator('.helper-item.partial .helper-note.is-open')).toBeVisible();
+                    expect(await helperListProblems(page)).toEqual([]);
+                    await page.locator('.helper-item.partial').evaluate((el) => el.scrollIntoView({ block: 'center' }));
+                    await shot(page, `helpers-${run}-show-more-${tag}`);
+                }
+                expect(await helperAudit(page, variant.width)).toEqual([]);
+            });
+        }
+    }
 }

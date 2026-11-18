@@ -640,6 +640,32 @@ class McpOutputResponse(BaseModel):
     truncated: bool = False
 
 
+class HelperResponse(BaseModel):
+    """One helper of a ``delegate_task`` call, as a person sees it."""
+
+    id: int
+    task: str = ""
+    status: str  # 'ok' | 'partial' | 'failed'
+    reason: Optional[str] = None
+    conclusion: Optional[str] = None
+    steps: Optional[int] = None
+    wall_s: Optional[float] = None
+
+
+class HelpersRunResponse(BaseModel):
+    """A ``delegate_task`` result without its model-only text (``helper_results.py``)."""
+
+    type: str = "helpers"
+    status: str  # 'success' | 'partial' | 'error'
+    success: bool = True
+    summary: str
+    helpers: List[HelperResponse] = []
+    # Helpers past the 16 a call can run; the view shows that many more exist.
+    hidden: Optional[int] = None
+    width: Optional[int] = None
+    width_note: Optional[str] = None
+
+
 class AgentStepResponse(BaseModel):
     """A single step in the agent's execution (persisted)."""
 
@@ -687,6 +713,8 @@ class AgentStepResponse(BaseModel):
     kept: Optional[bool] = None
     # A model the call needed and didn't find; a reopened chat still offers it.
     needsModel: Optional[str] = None
+    # Each helper a delegate_task call ran; a reopened chat still lists them.
+    helpers: Optional[HelpersRunResponse] = None
 
 
 class TurnRouteResponse(BaseModel):

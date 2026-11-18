@@ -823,7 +823,9 @@ def test_dot_dot_and_links_do_not_lead_out_of_the_parents_folders(work, tmp_path
         (work / "link").symlink_to(outside, target_is_directory=True)
     except OSError:
         return  # this account may not create links
-    read = helper._execute_tool("read_file", {"file_path": str(work / "link" / "secret.txt")})
+    read = helper._execute_tool(
+        "read_file", {"file_path": str(work / "link" / "secret.txt")}
+    )
     assert "TOP-SECRET-42" not in json.dumps(read, default=str)
     found = helper._execute_tool(
         "search_file_content", {"pattern": "SECRET", "directory": str(work)}

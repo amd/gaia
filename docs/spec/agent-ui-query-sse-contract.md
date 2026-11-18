@@ -416,6 +416,27 @@ One more key is not a primitive an agent picks, but the host's own:
 |---|---|
 | `connect_account` | `{ kind: "connect_account", providers: string[], agent_id?: string, reconnect?: string[], success: boolean, status: "ok"\|"error", display_message: string }` — a tool found no usable account. `providers` are connector ids to offer a Connect button for, and only `google`, `microsoft` and `microsoft_work` are allowed: a card naming any other connector is dropped, not drawn; `agent_id` is the namespaced agent that gets access when sign-in completes; a host starts sign-in with no scopes and that agent in `grant_agents`, so consent covers only what the agent declares, and sends the user to Settings › Connectors when the agent does not declare the connector. `reconnect` lists the providers that were connected already (an expired or under-scoped connection), so a host does not read their being connected as the fix. Any tool whose result carries a `connect_card` object gets it (the mail and calendar tools add one when the caller's `surface` is `agent_ui`), so the button never depends on what the model writes. `success`, `status` and `display_message` repeat the tool's outcome for a host that derives the tool row from `data` |
 
+A `delegate_task` result carries no `render` key; its `tool_result.data` is the
+person-facing view of the run, the same shape on every path (in-process, `/query`
+and the Agent UI relay):
+
+| Field | Meaning |
+|---|---|
+| `type` | `"helpers"` |
+| `status` | `"success"` (every helper `ok`), `"partial"` (some usable work came back), `"error"` (none did) |
+| `success` | `false` only for `"error"`; a `partial` run is a success with a warning |
+| `summary` | One line for a person: `"3 of 4 helpers finished, 1 failed."` |
+| `helpers` | At most 16, in task order: `{ id: integer, task: string, status: "ok"\|"partial"\|"failed", reason?: "step_limit"\|"loop"\|"empty"\|"error"\|"timeout"\|"cancelled", conclusion?: string, steps?: integer, wall_s?: number }`; `reason` is absent when `ok` |
+| `hidden` | Helpers past the 16 shown, when there were more (omitted otherwise) |
+| `width` | How many helpers ran at once |
+| `width_note` | Present when the model served helpers one at a time; a client says so in its own words |
+
+The tool's own `advice` and `error` text, written for the model, its token counts
+and the per-helper `detail`/`error` strings never reach `data`. The tool-row
+`summary` is the run's `summary`, never the `error` line. A C++ sidecar that sends
+the tool's whole result is reduced to this view by the Agent UI relay
+(`gaia.ui.helper_results.helpers_view`).
+
 Rules every receiver implements and every producer can rely on:
 
 - **Fallback, never nothing.** An unknown `render` key renders an explicit
@@ -468,6 +489,7 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 | `model_retry` | a model call failed for another reason (the model service was busy, timed out, stopped sending, or the connection dropped) and is retried: once per retry, `message` naming the trouble, the wait and the attempt ("The model service is busy — retrying in 8s (2/4)") | — |
 | `answer_restart` | a reply was cut off part-way (the model server stopped or the connection dropped) and the step starts over; carries `retracts_answer: true` | — |
 | `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
+| `helpers` | while `delegate_task` runs, once each time a helper ends (`message` "2 of 4 helpers done", or "3 of 4 helpers done, 1 failed" once any failed; "1 of 1 helper done" for one). It belongs on the running `delegate_task` row, replacing its label, not on the live line or as a step of its own; it ends with that call's `tool_result` | — |
 
 `model_queue` is the one phase sent on a timer: the steady updates are what let a
 receiver tell a queued turn from a dead one. Its `queue` object has `event`

@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useId, useLayoutEffect, useRef, useMemo } from 'react';
 import {
     ChevronRight,
     Wrench,
@@ -32,6 +32,8 @@ import {
     Captions,
     Image as ImageIcon,
     Ban,
+    Users,
+    AlertTriangle,
     type LucideIcon,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -41,11 +43,12 @@ import type { AgentStep, CommandOutput, RetrievalChunk } from '../types';
 import * as api from '../services/api';
 import { CodeBlock } from './PermissionPrompt';
 import { log } from '../utils/logger';
-import { StepResult } from './LongContent';
-import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
+import { ExpandToggle, StepResult } from './LongContent';
+import { isMessageKey, pluralKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import { localizeLiveStatus } from '../utils/liveStatus';
 import { ensureModel } from '../stores/modelNeededStore';
+import { DELEGATE_TOOL, helperOutcome, helperRunSummary, parseHelperRun, type HelperItem, type HelperRun, type HelperState } from '../utils/helperRun';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -124,6 +127,8 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     capture_skill: Sparkles,
     remove_skill: Sparkles,
     skill_status: Sparkles,
+    // Helpers
+    delegate_task: Users,
 };
 
 // A tool added here without its labels would show a raw key; say so at load instead.
@@ -198,6 +203,8 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
     // A present-tense narration would read as if a call that never ran had run.
     if ((step.declined || step.timedOut || step.autoDeclined) && !step.active) return toolFallbackLabel(step, t);
+    // Said in the UI's language; the row's summary carries the count.
+    if (step.tool === DELEGATE_TOOL) return toolFallbackLabel(step, t);
     return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
 }
 
@@ -937,8 +944,18 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
     const notRun = (!!step.declined || !!step.timedOut || !!step.autoDeclined) && !step.active;
+    const delegated = step.tool === DELEGATE_TOOL && !step.active;
+    const run = delegated ? parseHelperRun(step.helpers) : null;
+    // Some helpers stopped short or failed, but some work came back: a warning, not a failure.
+    const partial = run?.status === 'partial' && step.success !== false;
     // A missing vision model is said by the offer under the row, not by the tool's raw error.
-    const failure = step.success === false && step.result && !notRun && !step.needsModel ? failureText(step, t) : '';
+    const failure = step.success === false && step.result && !notRun && !step.needsModel
+        ? run ? helperRunSummary(run, t) : failureText(step, t)
+        : '';
+    // A delegate_task row says how its helpers did; a result that isn't a helper list keeps its own line.
+    const outcome = delegated && step.success !== false && !notRun
+        ? run ? helperRunSummary(run, t) : step.result ?? ''
+        : '';
     const timing = waiting
         ? ''
         : step.active
@@ -946,7 +963,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
         : step.latencyMs != null ? formatToolLatency(step.latencyMs) : '';
 
     return (
-        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false && !notRun ? 'error' : ''} ${notRun ? 'declined' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
+        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false && !notRun ? 'error' : ''} ${partial ? 'partial' : ''} ${notRun ? 'declined' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
             <button
                 className="flow-tool-header"
                 onClick={onToggle}
@@ -965,6 +982,8 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                         <Ban size={13} className="flow-tool-icon" />
                     ) : step.success === false ? (
                         <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
+                    ) : partial ? (
+                        <AlertTriangle size={13} className="flow-tool-warn-icon" />
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}
@@ -974,6 +993,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                         <span className="flow-tool-count" aria-label={t('activity.identicalCalls', { n: count })}>{'×'}{count}</span>
                     )}
                     {failure && <span className="flow-tool-failure" dir="auto">{failure}</span>}
+                    {outcome && <span className={`flow-tool-outcome${partial ? ' warn' : ''}`} dir="auto">{outcome}</span>}
                 </div>
                 <div className="flow-tool-right">
                     {step.thought && (
@@ -1005,8 +1025,11 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                             <span className="flow-tool-mcp-server">{t('activity.detail.via', { server: step.mcpServer })}</span>
                         )}
                     </div>
-                    {/* Arguments (except for commands) */}
-                    {step.detail && !step.commandOutput && (
+                    {/* Helpers: the list already shows each task, so no arguments or raw result */}
+                    {run && <HelpersView run={run} />}
+
+                    {/* Arguments (except for commands and helpers) */}
+                    {step.detail && !step.commandOutput && !run && (
                         <div className="step-detail-args">
                             <span className="detail-section-label">{t('activity.detail.arguments')}</span>
                             <div className="detail-args-content">
@@ -1031,7 +1054,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     )}
 
                     {/* Generic result */}
-                    {step.result && !step.commandOutput && !step.mcpOutput && (
+                    {step.result && !step.commandOutput && !step.mcpOutput && !run && (
                         <div className={`step-detail-result ${step.success === false ? 'result-error' : 'result-success'}`}>
                             <span className="detail-section-label">
                                 {step.success === false ? t('activity.detail.error') : t('activity.detail.result')}
@@ -1048,6 +1071,120 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                         <FileListView fileList={step.fileList} />
                     )}
                 </div>
+            )}
+        </div>
+    );
+}
+
+// ── Flow: Helpers a delegate_task call ran ────────────────────────────────
+
+const HELPER_STATUS_LABEL: Record<HelperState, MessageKey> = {
+    ok: 'activity.helpers.status.ok',
+    partial: 'activity.helpers.status.partial',
+    failed: 'activity.helpers.status.failed',
+};
+
+/** Digits kept left to right inside a line of either direction. */
+function ltrNumbers(text: string): React.ReactNode {
+    const parts = text.split(/(\d+(?:[.,]\d+)*)/);
+    if (parts.length === 1) return text;
+    return parts.map((part, i) => (i % 2 ? <bdi key={i} dir="ltr">{part}</bdi> : part));
+}
+
+function HelperStatusIcon({ status, label }: { status: HelperState; label: string }) {
+    if (status === 'ok') return <CheckCircle2 size={13} className="plan-icon-done" role="img" aria-label={label} />;
+    if (status === 'partial') return <AlertTriangle size={13} className="helper-icon-partial" role="img" aria-label={label} />;
+    return <AlertCircle size={13} className="plan-icon-failed" role="img" aria-label={label} />;
+}
+
+function HelperRow({ item }: { item: HelperItem }) {
+    const t = useT();
+    const noteRef = useRef<HTMLDivElement>(null);
+    const noteId = useId();
+    const [open, setOpen] = useState(false);
+    const [cut, setCut] = useState(false);
+    const task = item.task.trim() || t.bare('activity.helpers.untitled', { n: item.id });
+    const status = t.bare(HELPER_STATUS_LABEL[item.status]);
+    const outcome = helperOutcome(item, t);
+    const conclusion = item.conclusion?.trim() ?? '';
+    const said = [outcome, conclusion].filter(Boolean).join(' · ');
+
+    useLayoutEffect(() => {
+        const el = noteRef.current;
+        if (!el || open) return;
+        const measure = () => setCut(el.scrollHeight > el.clientHeight + 1);
+        measure();
+        if (typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(measure);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [conclusion, open]);
+
+    const meta: React.ReactNode[] = [];
+    if (item.steps != null) meta.push(ltrNumbers(t.bare(pluralKey('activity.helpers.steps', item.steps), { n: item.steps })));
+    // The unit stays with its number in either direction.
+    if (item.wallS != null) meta.push(<bdi dir="ltr">{formatToolLatency(item.wallS * 1000)}</bdi>);
+
+    return (
+        <li
+            className={`helper-item ${item.status}`}
+            aria-label={said
+                ? t.bare('activity.helpers.item', { task, status, text: said })
+                : t.bare('activity.helpers.itemNoText', { task, status })}
+        >
+            <HelperStatusIcon status={item.status} label={status} />
+            <div className="helper-main">
+                <div className="helper-body">
+                    <span className="helper-task" dir="auto" title={item.task || undefined}>{task}</span>
+                    {outcome && <span className={`helper-outcome ${item.status}`}>{outcome}</span>}
+                    {conclusion && (
+                        // Its own words' direction, so a clamped line's "…" falls at their end.
+                        <div id={noteId} ref={noteRef} className={`helper-note${open ? ' is-open' : ''}`} dir="auto">
+                            {conclusion}
+                        </div>
+                    )}
+                    {(cut || open) && (
+                        <ExpandToggle
+                            expanded={open}
+                            onToggle={() => setOpen((v) => !v)}
+                            controls={noteId}
+                            collapsedLabel={t('activity.helpers.showMore')}
+                            expandedLabel={t('activity.helpers.showLess')}
+                            className="helper-more-toggle"
+                        />
+                    )}
+                </div>
+                {meta.length > 0 && (
+                    <span className="helper-meta">
+                        {meta.map((m, i) => (
+                            <span key={i}>
+                                {i > 0 && ' · '}
+                                {m}
+                            </span>
+                        ))}
+                    </span>
+                )}
+            </div>
+        </li>
+    );
+}
+
+/** Each helper's task, how it went and what it found, in the order they were asked. */
+function HelpersView({ run }: { run: HelperRun }) {
+    const t = useT();
+    return (
+        <div className="helpers-view">
+            <div className="helpers-head">
+                <span className="helpers-summary" dir="auto">{helperRunSummary(run, t)}</span>
+                {run.oneAtATime && <span className="helpers-width-note">{t('activity.helpers.oneAtATime')}</span>}
+            </div>
+            {run.helpers.length > 0 && (
+                <ol className="helpers-list" aria-label={t('activity.helpers.list')}>
+                    {run.helpers.map((item, i) => <HelperRow key={`${item.id}-${i}`} item={item} />)}
+                </ol>
+            )}
+            {run.hidden > 0 && (
+                <div className="helpers-hidden">{t.plural('activity.helpers.more', run.hidden)}</div>
             )}
         </div>
     );

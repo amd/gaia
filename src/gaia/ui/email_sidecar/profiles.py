@@ -454,6 +454,7 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "browse_directory": "Browsing folder",
     "tree": "Listing folder tree",
     "add_watch_directory": "Watching folder",
+    "delegate_task": "Handing work to helpers",
     # Web
     "search_web": "Searching the web",
     "search_documentation": "Searching documentation",

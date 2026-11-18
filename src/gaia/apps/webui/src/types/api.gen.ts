@@ -62,6 +62,8 @@ export interface ApiSchemas {
   GpuMemoryRevertRequest: GpuMemoryRevertRequest;
   GrantRequest: GrantRequest;
   HTTPValidationError: HTTPValidationError;
+  HelperResponse: HelperResponse;
+  HelpersRunResponse: HelpersRunResponse;
   IndexFolderRequest: IndexFolderRequest;
   IndexFolderResponse: IndexFolderResponse;
   InferenceCommit: InferenceCommit;
@@ -246,6 +248,7 @@ export interface AgentStepResponse {
   declined?: boolean | null;
   detail?: string | null;
   fileList?: FileListResponse | null;
+  helpers?: HelpersRunResponse | null;
   id: number;
   kept?: boolean | null;
   label: string;
@@ -290,6 +293,31 @@ export interface FileListResponse {
     [k: string]: unknown | undefined;
   }[];
   total?: number;
+}
+/**
+ * A ``delegate_task`` result without its model-only text (``helper_results.py``).
+ */
+export interface HelpersRunResponse {
+  helpers?: HelperResponse[];
+  hidden?: number | null;
+  status: string;
+  success?: boolean;
+  summary: string;
+  type?: string;
+  width?: number | null;
+  width_note?: string | null;
+}
+/**
+ * One helper of a ``delegate_task`` call, as a person sees it.
+ */
+export interface HelperResponse {
+  conclusion?: string | null;
+  id: number;
+  reason?: string | null;
+  status: string;
+  steps?: number | null;
+  task?: string;
+  wall_s?: number | null;
 }
 /**
  * The text an MCP tool returned, capped for the tool row.

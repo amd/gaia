@@ -56,6 +56,7 @@ from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.logger import get_logger
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, RelayProfile
 from gaia.ui.event_narration import derive_narration
+from gaia.ui.helper_results import DELEGATE_TOOL, helpers_view
 from gaia.ui.sse_handler import (
     SSEOutputHandler,
     _format_tool_args,
@@ -434,12 +435,20 @@ def _dispatch_one(
     elif etype == "tool_result":
         tool = str(event.get("tool") or "unknown")
         data = event.get("data")
+        # A relayed delegate_task result carries text for the model alone.
+        helpers = helpers_view(data) if tool == DELEGATE_TOOL else None
+        if helpers is not None:
+            data = helpers
         success = _derive_success(data)
         handler.record_tool_result(data, success)
         out: Dict[str, Any] = {
             "type": "tool_result",
             "tool": tool,
-            "summary": _derive_summary(tool, data, profile),
+            "summary": (
+                helpers["summary"]
+                if helpers is not None
+                else _derive_summary(tool, data, profile)
+            ),
             "success": success,
             "data": data if data is not None else {},
         }

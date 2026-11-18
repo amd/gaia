@@ -916,6 +916,8 @@ export interface AgentStep {
     data?: unknown;
     /** A model the call needed and didn't find, so the row offers it (for type='tool'). */
     needsModel?: 'vision';
+    /** Each helper a delegate_task call ran, as sent or saved; read it with parseHelperRun. */
+    helpers?: unknown;
 }
 
 /** The text an MCP tool returned, capped by the server. */

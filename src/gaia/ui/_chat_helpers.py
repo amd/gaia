@@ -88,6 +88,7 @@ from . import permissions as session_permissions
 from . import spending
 from .database import PLACEHOLDER_TITLES, SESSION_DEFAULT_MODEL, ChatDatabase
 from .generated_media import media_card
+from .helper_results import DELEGATE_TOOL, HELPERS_RESULT_TYPE, helpers_view
 from .models import ChatRequest
 from .session_environment import apply_environment, folders_refusal, held_internet_off
 from .session_environment import load as load_environment
@@ -5416,6 +5417,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             tool_step["mcpOutput"] = event["mcp_output"]
                         # Persist file list for rich file list rendering
                         result_data = event.get("result_data", {})
+                        if tool_step.get("tool") == DELEGATE_TOOL:
+                            # In-process results carry it in result_data, relayed in data.
+                            helpers = helpers_view(
+                                result_data
+                                if result_data.get("type") == HELPERS_RESULT_TYPE
+                                else event.get("data")
+                            )
+                            if helpers is not None:
+                                tool_step["helpers"] = helpers
                         if result_data.get("type") == "file_list":
                             tool_step["fileList"] = {
                                 "files": result_data.get("files", []),

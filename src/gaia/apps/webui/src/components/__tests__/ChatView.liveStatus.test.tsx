@@ -389,3 +389,37 @@ describe('mid-turn notes', () => {
         expect(useChatStore.getState().skillUses).toBe(1);
     });
 });
+
+describe('handing work to helpers', () => {
+    const emit = (e: object) => capturedCallbacks!.onAgentEvent(e as unknown as StreamEvent);
+    const progress = (message: string) => emit({ type: 'status', status: 'working', phase: 'helpers', message });
+
+    it('puts the progress on the running row, not in a step of its own, and drops it when the call ends', async () => {
+        await driveSend();
+        act(() => {
+            emit({ type: 'tool_start', tool: 'delegate_task', narration: 'Handing work to helpers' });
+            emit({ type: 'tool_args', tool: 'delegate_task', args: { tasks: [{ task: 'a' }, { task: 'b' }] }, narration: 'Handing 2 tasks to helpers' });
+        });
+        await runningRow('Handing work to helpers');
+
+        act(() => progress('1 of 2 helpers done'));
+        await runningRow('1 of 2 helpers done');
+        act(() => progress('2 of 2 helpers done, 1 failed'));
+        await runningRow('2 of 2 helpers done, 1 failed');
+        expect(useChatStore.getState().agentSteps.map((s) => s.type)).toEqual(['tool']);
+
+        act(() => emit({
+            type: 'tool_result', success: true, status: 'partial', summary: '1 of 2 helpers finished, 1 failed.',
+            result_data: {
+                type: 'helpers', status: 'partial', success: true, summary: '1 of 2 helpers finished, 1 failed.',
+                helpers: [
+                    { id: 1, task: 'a', status: 'ok', conclusion: 'Found it.', steps: 2, wall_s: 1.2 },
+                    { id: 2, task: 'b', status: 'failed', reason: 'empty', steps: 1, wall_s: 0.8 },
+                ],
+            },
+        }));
+        await waitFor(() => expect(document.querySelector('.flow-tool-outcome')?.textContent).toBe('1 of 2 helpers finished, 1 failed.'));
+        expect(useChatStore.getState().liveStatus).toBeNull();
+        expect(document.querySelector('.flow-tool.partial')).not.toBeNull();
+    });
+});

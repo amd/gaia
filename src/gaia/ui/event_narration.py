@@ -316,6 +316,14 @@ def derive_narration(tool: str, args: Optional[Mapping[str, Any]] = None) -> str
         return "Running a tool"
     if not isinstance(args, Mapping):
         args = {}
+    if name == "delegate_task":
+        # The tasks are briefs, not a detail to append; their number is.
+        tasks = args.get("tasks")
+        if not isinstance(tasks, list) or not tasks:
+            return _NARRATION_OVERRIDES[name]
+        return (
+            f"Handing {len(tasks)} {'task' if len(tasks) == 1 else 'tasks'} to helpers"
+        )
 
     detail = _salient_arg(args)
     if detail and name in _FILE_NAME_TOOLS and "://" not in detail:

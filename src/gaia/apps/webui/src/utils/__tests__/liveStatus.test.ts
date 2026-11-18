@@ -26,6 +26,9 @@ describe('localizeLiveStatus', () => {
             'The model server stopped. GAIA is restarting it…',
             'Starting the model server…',
             'Reading page 4 of 12…',
+            '2 of 4 helpers done',
+            '1 of 1 helper done',
+            '3 of 4 helpers done, 1 failed',
         ]) {
             expect(localizeLiveStatus(tEn, label)).toBe(label);
         }
@@ -100,6 +103,13 @@ describe('localizeLiveStatus', () => {
         ]) {
             expect(ar(label)).toBe(label);
         }
+    });
+
+    it("says delegate_task's helper progress in Arabic, failures included", () => {
+        expect(ar('2 of 4 helpers done')).toBe('أنهى المساعدون: 2 من 4 (2 of 4 helpers done)');
+        expect(ar('3 of 4 helpers done, 1 failed')).toBe('أنهى المساعدون: 3 من 4، فشل منهم: 1 (3 of 4 helpers done, 1 failed)');
+        // Another wording is not the progress line, so it is shown as written.
+        expect(ar('2 helpers done')).toBe('2 helpers done');
     });
 
     it('recognises the lines the UI itself writes', () => {

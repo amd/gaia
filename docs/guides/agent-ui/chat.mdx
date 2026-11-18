@@ -32,6 +32,25 @@ Type a question, send it, and watch GAIA work through it. This page covers every
   ("Read web page, read file") you can open for the detail, and reasoning
   folds to "Thought for 8s".
 
+### Work GAIA hands to helpers
+
+When a job splits into independent pieces, such as one per file, GAIA can hand
+each piece to a read-only helper. It shows as one step:
+
+- **While the helpers work**, the step says "Handing work to helpers", then
+  counts them as they end: "2 of 4 helpers done", or "3 of 4 helpers done,
+  1 failed".
+- **When they are done**, the step says how they went: "4 of 4 helpers
+  finished." A step where some helpers stopped short or failed, but some work
+  came back, is marked with a warning sign; one where no helper returned
+  anything shows as failed. GAIA reads every helper's status and redoes a missing part itself
+  or tells you it is missing.
+- **Open the step** to see each helper in the order GAIA asked: its task,
+  whether it finished, stopped short (and why: out of steps, kept repeating a
+  step, the model server failed) or failed, what it found, and how many steps
+  and seconds it took. A long answer opens with **Show more**. A chat you reopen
+  keeps the list.
+
 ## The line under an answer
 
 - **The line under an answer** says how long it took and where it ran
