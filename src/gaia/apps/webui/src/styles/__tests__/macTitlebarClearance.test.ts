@@ -13,7 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import indexCss from '../index.css?raw';
 
-/** The traffic lights end near x 68; nothing clickable may start before this. */
+/** The traffic lights end at x 68; anything beside them needs a margin past that. */
 const LIGHTS_END = 76;
 
 function decls(selector: string): string {
@@ -31,15 +31,15 @@ function px(body: string, prop: string): number {
 }
 
 describe('macOS traffic light clearance', () => {
-    it('moves the collapsed rail top row below the lights', () => {
-        const body = decls(':root[data-titlebar="mac"] .sb.is-collapsed .sb-top');
-        expect(body).toMatch(/padding-top:\s*var\(--titlebar-h\)/);
+    it('widens the collapsed rail to hold the lights, so none straddles its edge', () => {
+        const body = decls(':root[data-titlebar="mac"]:not([dir="rtl"]) .sb.is-collapsed');
+        expect(px(body, 'width')).toBeGreaterThanOrEqual(LIGHTS_END);
+        expect(px(body, 'min-width')).toBe(px(body, 'width'));
     });
 
-    it('starts the chat header after the lights when the rail is collapsed', () => {
-        const body = decls(':root[data-titlebar="mac"]:not([dir="rtl"]):has(.sb.is-collapsed) .task-header');
-        const railWidth = 56;
-        expect(railWidth + px(body, 'padding-left')).toBeGreaterThan(LIGHTS_END);
+    it('moves the collapsed rail top row below the lights', () => {
+        const body = decls(':root[data-titlebar="mac"]:not([dir="rtl"]) .sb.is-collapsed .sb-top');
+        expect(body).toMatch(/padding-top:\s*var\(--titlebar-h\)/);
     });
 
     it('puts the narrow-window sidebar button after the lights, and top rows after it', () => {
