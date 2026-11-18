@@ -7,5 +7,5 @@ import { PairedPcsScreen } from '@/features/pairing/PairedPcsScreen';
 
 export default function PairedPcs() {
     const router = useRouter();
-    return <PairedPcsScreen onAdd={() => router.push('/pair')} />;
+    return <PairedPcsScreen onAdd={() => router.push({ pathname: '/pair', params: { from: 'pcs' } })} />;
 }

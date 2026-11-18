@@ -32,12 +32,14 @@ export interface PairingFlowProps {
     onPaired?: () => void;
     /** Replaces the built-in camera step behind "Scan the code". */
     onScan?: () => void;
+    /** Where the first step goes back to when it was opened from another screen. */
+    onExit?: () => void;
     /** False while a drawer route keeps this flow mounted behind another screen, so its Android back stays out of the way. */
     backActive?: boolean;
 }
 
 /** First launch: welcome, how to pair, paste a link or code, wait for Allow, and the two ways it can fail. */
-export function PairingFlow({ initialStep = 'welcome', onPaired, onScan, backActive = true }: PairingFlowProps) {
+export function PairingFlow({ initialStep = 'welcome', onPaired, onScan, onExit, backActive = true }: PairingFlowProps) {
     const t = useT();
     const setConnection = useConnectionStore((s) => s.setConnection);
     const removedFrom = useConnectionStore((s) => s.removedFrom);
@@ -161,7 +163,7 @@ export function PairingFlow({ initialStep = 'welcome', onPaired, onScan, backAct
         setView('how');
     };
 
-    // Android's back walks the flow one step back, as its own back controls do; on the first step it leaves.
+    // Android's back walks the flow one step back, as its own back controls do; on the first step it leaves, or goes to `onExit`.
     useBackStep(() => {
         if (!backActive) return false;
         if (typeof view === 'object') {
@@ -186,6 +188,10 @@ export function PairingFlow({ initialStep = 'welcome', onPaired, onScan, backAct
         }
         if (view === 'how' && initialStep === 'welcome') {
             setView('welcome');
+            return true;
+        }
+        if (view === 'how' && onExit) {
+            onExit();
             return true;
         }
         return false;

@@ -48,6 +48,28 @@ describeNative('PairingFlow', () => {
         setPairingService(null);
     });
 
+    it('goes back to the screen it was opened from at its first step, one step per press (Android back)', async () => {
+        setPairingService(createFakePairingService());
+        const onExit = jest.fn();
+        await render(<PairingFlow initialStep="how" onExit={onExit} />, { wrapper: wrap });
+        await fireEvent.press(await screen.findByText(t('mobileApp.pairing.how.paste')));
+        await screen.findByTestId('pairing-input');
+
+        expect(await pressBack()).toBe(true);
+        expect(onExit).not.toHaveBeenCalled();
+        expect(await pressBack()).toBe(true);
+        expect(onExit).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves back unhandled while another drawer route is in front, even with an exit set', async () => {
+        setPairingService(createFakePairingService());
+        const onExit = jest.fn();
+        await render(<PairingFlow initialStep="how" onExit={onExit} backActive={false} />, { wrapper: wrap });
+        await screen.findByText(t('mobileApp.pairing.how.title'));
+        expect(await pressBack()).toBe(false);
+        expect(onExit).not.toHaveBeenCalled();
+    });
+
     it('walks back one step per press, then leaves back to the system (Android back)', async () => {
         setPairingService(createFakePairingService());
         await render(<PairingFlow />, { wrapper: wrap });
