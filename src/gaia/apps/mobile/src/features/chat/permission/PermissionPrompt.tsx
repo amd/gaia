@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Keyboard, useWindowDimensions, View } from 'react-native';
 import { useKeyboardState } from 'react-native-keyboard-controller';
-import Animated, { FadeIn, FadeInDown, FadeOut, FadeOutDown, useReducedMotion } from 'react-native-reanimated';
+import Animated, { FadeInDown, FadeOut, FadeOutDown, useReducedMotion } from 'react-native-reanimated';
 
 import { isolate, pluralKey, type Say } from '@webui/i18n/registry';
 import type { GaiaNotification } from '@webui/types/agent';
@@ -332,8 +332,9 @@ export function PermissionPrompt({
         </>
     );
 
+    // No entering under reduced motion: its single frame can be dropped on Android (Reanimated 4.7.1), leaving the view at opacity 0.
     return (
-        <Animated.View entering={reduced ? FadeIn : FadeInDown} exiting={reduced ? FadeOut : FadeOutDown}>
+        <Animated.View entering={reduced ? undefined : FadeInDown} exiting={reduced ? FadeOut : FadeOutDown}>
             <Surface tone="card" radius="lg" padding="lg" border="accent" role="alertdialog" accessibilityLabel={heading} testID="perm-card">
                 <Stack gap="md">
                     <Row gap="sm" align="start">
