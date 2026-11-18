@@ -70,6 +70,21 @@ describeNative('Text with a long English gloss', () => {
         expect(screen.getByTestId('t')).toHaveTextContent(`(${SHORT})`, { exact: false });
     });
 
+    it('keeps an inline gloss together and leaves the line direction to the paragraph', async () => {
+        await render(<Text testID="t">{glossed('إضافة مهارات', 'Show resource usage')}</Text>, { wrapper: wrap });
+        const outer = screen.getByTestId('t');
+        const span = outer.children.find((c) => typeof c !== 'string') as unknown as { props: { style: Record<string, unknown>; children: string } };
+        expect(span.props.style.writingDirection).toBeUndefined();
+        expect(outer.props.style).not.toMatchObject({ writingDirection: 'ltr' });
+        expect(span.props.children).not.toContain(' ');
+        expect(span.props.children).toContain('Show\u00A0resource\u00A0usage');
+    });
+
+    it('wraps a block gloss normally', async () => {
+        await render(<Text testID="t">{glossed('إضافة مهارات', LONG)}</Text>, { wrapper: wrap });
+        expect(screen.getByTestId('t-gloss').props.children).toContain(' ');
+    });
+
     it('stays inline in a nested span', async () => {
         await render(
             <Text testID="outer">
