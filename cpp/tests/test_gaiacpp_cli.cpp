@@ -461,6 +461,35 @@ TEST_F(GaiacppCli, ARunWithoutHelpersHasNoHelpersBlock) {
     EXPECT_FALSE(json::parse(r.stdout_output).contains("helpers"));
 }
 
+TEST_F(GaiacppCli, AHostedModelThroughLemonadeGetsTheProvidersWindowUnlessOneIsGiven) {
+    std::ofstream(dir_ / "work" / "second.txt") << "another file, so the prompt states how much there is to read";
+    auto windowIn = [](const bench::MockLlmServer& mock) {
+        const json body = json::parse(mock.receivedBodies().back());
+        const std::string system = body["messages"][0]["content"].get<std::string>();
+        const std::string marker = "Your context window holds ";
+        const size_t at = system.find(marker);
+        return at == std::string::npos ? std::string("(not stated)") : system.substr(at + marker.size(), 7);
+    };
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        ASSERT_EQ(run(mock, "", " -m fireworks.some-model").exitCode, 0);
+        EXPECT_EQ(windowIn(mock), "131072 ");
+    }
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        ASSERT_EQ(run(mock, "", " -m fireworks.some-model --ctx-size 20000").exitCode, 0);
+        EXPECT_EQ(windowIn(mock), "20000 t") << "a window that was asked for is kept";
+    }
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponse(withUsage(finalAnswer("ok"), 50, 0, 5));
+        ASSERT_EQ(run(mock, "").exitCode, 0);
+        EXPECT_EQ(windowIn(mock), "32768 t") << "a local model keeps the default";
+    }
+}
+
 TEST_F(GaiacppCli, MaxHelpersMustBeAWholeNumber) {
     bench::MockLlmServer mock;
     const gaia::ProcessResult r = run(mock, "", " --max-helpers many");

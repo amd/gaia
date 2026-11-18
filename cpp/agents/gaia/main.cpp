@@ -415,6 +415,7 @@ Settings buildSettings(const Cli& cli) {
                          {"maxSteps", 1000}};
     std::string mcpConfig;
     std::string settingsFrom = "The settings";
+    bool fileSetsWindow = false;
 
     const fs::path file = cli.configFile.empty() ? defaultConfigPath() : fs::path(cli.configFile);
     std::error_code ec;
@@ -439,6 +440,7 @@ Settings buildSettings(const Cli& cli) {
             mcpConfig = m.string();
             j.erase("mcpConfig");
         }
+        fileSetsWindow = j.contains("contextSize") || j.contains("provider");
         if (j.contains("provider")) {
             applyProvider(merged, j["provider"].get<std::string>(), "Settings file " + file.string());
             j.erase("provider");
@@ -477,6 +479,14 @@ Settings buildSettings(const Cli& cli) {
     if (!cli.embeddingModel.empty()) merged["embeddingModel"] = cli.embeddingModel;
     if (!cli.transcribeModel.empty()) merged["transcribeModel"] = cli.transcribeModel;
     if (!cli.imageModel.empty()) merged["imageModel"] = cli.imageModel;
+
+    // A hosted model reached through Lemonade has the provider's window, not a local one.
+    const bool windowGiven = fileSetsWindow || !gaia::getEnvVar("GAIA_CONTEXT_SIZE").empty() || cli.ctxSize > 0 ||
+                             !cli.provider.empty();
+    const std::string model = merged.value("modelId", "");
+    if (!windowGiven && (model.rfind("fireworks.", 0) == 0 || model.rfind("amd.", 0) == 0)) {
+        merged["contextSize"] = 131072;
+    }
 
     Settings s;
     if (merged.contains("maxHelpers")) {
