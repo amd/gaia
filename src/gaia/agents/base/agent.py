@@ -11383,7 +11383,9 @@ Do NOT wrap conversational replies in JSON.
         shown = result.get("stdout") if isinstance(result, dict) else None
         if not found or not isinstance(shown, str) or result.get("output_truncated"):
             return
-        key = evidence.key(found.group(1).strip("\"'"), args.get("working_directory"))
+        # The folder the line ran in: a relative path means that one, not the project root.
+        ran_in = result.get("cwd") or args.get("working_directory")
+        key = evidence.key(found.group(1).strip("\"'"), ran_in)
         if key.startswith(("\\\\", "//")):
             return  # a network share: no round trip from the agent loop
         target = Path(key)

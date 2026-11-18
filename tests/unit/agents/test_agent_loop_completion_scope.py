@@ -969,6 +969,28 @@ def test_a_shell_line_that_did_not_show_all_of_it_is_no_read_back(
     assert any("read back" in g for g in gaps)
 
 
+def test_a_cat_run_in_another_folder_reads_the_file_there(tmp_path):
+    """After a cd the shell is elsewhere; the path is relative to that folder."""
+    ledger = CompletionEvidence("Write the result to out/r.toml.", str(tmp_path))
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "r.toml").write_text("ok = true
+", encoding="utf-8")
+    ledger.record(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "file_path": str(out / "r.toml")},
+        True,
+    )
+    args = {"command": "cat r.toml"}
+    result = {"status": "success", "stdout": "ok = true
+", "cwd": str(out)}
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    gaps = _gaps(ledger, "The result is saved to `out/r.toml`.")
+    assert not any("read back" in g for g in gaps)
+
+
 def test_a_whole_write_the_framework_matched_needs_no_read_back(tmp_path):
     gaps = _write_and_verify(tmp_path, "report.md", "# Report\n\nAll good.\n")
     assert not any("read back" in g for g in gaps)
