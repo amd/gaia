@@ -316,7 +316,8 @@ protected:
         for (const auto& [k, v] : extra) env[k] = v;
         ASSERT_NO_THROW(spawn(env));
         // Port 0: the sidecar picks a free port and names it on its ready line.
-        static const std::regex ready(R"(sidecar \(api [0-9.]+\) on http://127\.0\.0\.1:([0-9]+))");
+        // Up to the line end, so a port caught mid-write is not read short.
+        static const std::regex ready(R"(sidecar \(api [0-9.]+\) on http://127\.0\.0\.1:([0-9]+)\r?\n)");
         std::smatch m;
         std::string log;
         const bool bound = waitUntil(
@@ -1061,7 +1062,13 @@ TEST_F(GaiacppSidecar, TurnsBeyondTheQueueBoundGet503AndApprovalsStillGetThrough
         return n;
     };
     ASSERT_TRUE(waitUntil([&] { return refused() >= kSent - kAccepted; }, seconds(60)))
-        << refused() << " of " << kSent << " turns were refused";
+        << refused() << " of " << kSent << " turns were refused; transport errors:" << [&] {
+               std::string out;
+               for (auto& t : turns) {
+                   if (!t->transportError().empty()) out += " " + t->transportError();
+               }
+               return out;
+           }();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     EXPECT_EQ(refused(), kSent - kAccepted) << "exactly the turns over the bound are refused";
     std::string openRun;
