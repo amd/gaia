@@ -192,7 +192,7 @@ export interface ConnectorRow {
     scopes: string[];
     /**
      * Per-agent MCP-tool-visibility activation snapshot (issue #1005).
-     * Keys are namespaced agent ids (``builtin:chat``,
+     * Keys are namespaced agent ids (``installed:gaia``,
      * ``custom:<hash>:<id>``, …), values are ``true`` when the agent is
      * explicitly activated. Absence means inactive — activations are
      * opt-in. Populated only for ``type === 'mcp_server'`` connectors;

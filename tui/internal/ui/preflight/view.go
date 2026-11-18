@@ -381,8 +381,13 @@ func (m Model) trailerLines(w int) []string {
 		if m.rep.Chat != "" {
 			msg = "Setup finished and the models load. Chat runs on " + m.rep.Chat + "."
 		}
-		return append([]string{""}, components.IndentAll(styleAll(noteStyle,
+		lines := append([]string{""}, components.IndentAll(styleAll(noteStyle,
 			wrap(msg+" Press enter to start "+m.cfg.AgentName+".", w-2*indentW)), indentW)...)
+		if m.note != "" {
+			// Something went wrong beside a passing check, e.g. a choice not saved.
+			lines = append(lines, components.IndentAll(wrap(m.note, w-2*indentW), indentW)...)
+		}
+		return lines
 	case m.note != "":
 		return append([]string{""}, components.IndentAll(wrap(m.note, w-2*indentW), indentW)...)
 	case m.phase == phaseDone:

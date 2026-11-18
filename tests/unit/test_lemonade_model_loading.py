@@ -443,20 +443,19 @@ class TestLoadModelCorruptNonInteractive:
     @patch.object(LemonadeClient, "delete_model")
     @patch.object(LemonadeClient, "pull_model_stream")
     @patch.object(LemonadeClient, "_send_request")
-    def test_resume_failure_triggers_single_delete_and_redownload(
+    def test_still_corrupt_after_resume_triggers_single_delete_and_redownload(
         self, mock_send, mock_pull, mock_delete_model, mock_repair, mock_delete_prompt
     ):
-        """Resume fails -> exactly ONE delete + ONE fresh re-download, then a
-        successful reload. No prompts, bounded recovery.
+        """Resume completes but the reload is still corrupt -> exactly ONE
+        delete + ONE fresh re-download, then a successful reload.
         """
-        # send_request: initial load fails corrupt, then final reload succeeds.
         mock_send.side_effect = [
+            Exception(_CORRUPT_ERROR_MESSAGE),
             Exception(_CORRUPT_ERROR_MESSAGE),
             {"status": "loaded"},
         ]
-        # pull_model_stream: first call (resume) errors, second (fresh) completes.
         mock_pull.side_effect = [
-            iter([{"event": "error", "error": "resume broke"}]),
+            iter([{"event": "complete"}]),
             iter([{"event": "progress", "percent": 50}, {"event": "complete"}]),
         ]
 
@@ -478,15 +477,13 @@ class TestLoadModelCorruptNonInteractive:
     def test_unrecoverable_raises_actionable_error_no_eoferror(
         self, mock_send, mock_pull, mock_delete_model, mock_repair, mock_delete_prompt
     ):
-        """Both resume and the single fresh re-download fail -> a single loud,
-        actionable ``LemonadeClientError`` naming the recovery action and the
-        Lemonade server log. No ``EOFError``, no hang, no silent swallow.
+        """Still corrupt after the resume, and the single fresh re-download
+        fails -> a single loud, actionable ``LemonadeClientError`` naming the
+        recovery action and the Lemonade server log.
         """
-        # Initial load fails corrupt; no successful reload ever happens.
         mock_send.side_effect = Exception(_CORRUPT_ERROR_MESSAGE)
-        # Both pull attempts error out.
         mock_pull.side_effect = [
-            iter([{"event": "error", "error": "resume broke"}]),
+            iter([{"event": "complete"}]),
             iter([{"event": "error", "error": "fresh broke"}]),
         ]
 
@@ -504,6 +501,86 @@ class TestLoadModelCorruptNonInteractive:
         mock_delete_prompt.assert_not_called()
         assert mock_delete_model.call_count == 1
         assert mock_pull.call_count == 2
+
+    @pytest.mark.parametrize(
+        "failed_resume",
+        [
+            pytest.param(
+                LemonadeClientError(
+                    "Failed to install Qwen3-0.6B-GGUF: connection lost (reset)"
+                ),
+                id="connection-lost",
+            ),
+            pytest.param(
+                [{"event": "error", "error": "resume broke"}], id="error-event"
+            ),
+        ],
+    )
+    @patch.object(LemonadeClient, "delete_model")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
+    def test_an_interrupted_resume_keeps_the_partial_download(
+        self, mock_send, mock_pull, mock_delete_model, failed_resume
+    ):
+        """A resume that drops mid-download is not proof of corruption: the
+        partial download must survive so the next try resumes it."""
+        mock_send.side_effect = [Exception(_CORRUPT_ERROR_MESSAGE)]
+        if isinstance(failed_resume, Exception):
+            mock_pull.side_effect = failed_resume
+        else:
+            mock_pull.return_value = iter(failed_resume)
+
+        client = _make_client()
+        with pytest.raises(LemonadeClientError) as exc_info:
+            client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+
+        message = str(exc_info.value)
+        assert "Qwen3-0.6B-GGUF" in message
+        assert "interrupted" in message
+        assert "partial download was kept" in message
+        assert "lemonade-server" not in message
+        assert exc_info.value.__cause__ is not None
+        mock_delete_model.assert_not_called()
+        assert mock_pull.call_count == 1
+        assert mock_send.call_count == 1
+
+    @patch.object(LemonadeClient, "delete_model")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
+    def test_a_completed_resume_that_loads_never_deletes(
+        self, mock_send, mock_pull, mock_delete_model
+    ):
+        mock_send.side_effect = [
+            Exception(_CORRUPT_ERROR_MESSAGE),
+            {"status": "loaded"},
+        ]
+        mock_pull.return_value = iter([{"event": "complete"}])
+
+        client = _make_client()
+        result = client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+
+        assert result == {"status": "loaded"}
+        mock_delete_model.assert_not_called()
+        assert mock_pull.call_count == 1
+
+    @patch.object(LemonadeClient, "delete_model")
+    @patch.object(LemonadeClient, "pull_model_stream")
+    @patch.object(LemonadeClient, "_send_request")
+    def test_a_non_corrupt_reload_failure_never_deletes(
+        self, mock_send, mock_pull, mock_delete_model
+    ):
+        """The resume finished; a reload that fails for another reason is
+        that failure, not a reason to throw the model away."""
+        mock_send.side_effect = [
+            Exception(_CORRUPT_ERROR_MESSAGE),
+            LemonadeClientError("out of memory while loading"),
+        ]
+        mock_pull.return_value = iter([{"event": "complete"}])
+
+        client = _make_client()
+        with pytest.raises(LemonadeClientError, match="out of memory"):
+            client.load_model("Qwen3-0.6B-GGUF", prompt=False)
+        mock_delete_model.assert_not_called()
 
     @patch("gaia.llm.lemonade_client._prompt_user_for_delete")
     @patch("gaia.llm.lemonade_client._prompt_user_for_repair")
@@ -622,13 +699,13 @@ class TestStopNeverDeletes:
     @patch.object(LemonadeClient, "pull_model_stream")
     @patch.object(LemonadeClient, "_send_request")
     def test_stop_during_the_fresh_download(self, mock_send, mock_pull, mock_delete):
-        """The resume fails on its own; Stop lands during the fresh download.
+        """Still corrupt after the resume; Stop lands during the fresh download.
         That is a cancellation, not a "failed to repair" error."""
         from gaia.llm.retry import model_retry_notices
 
-        mock_send.side_effect = [Exception(_CORRUPT_ERROR_MESSAGE)]
+        mock_send.side_effect = Exception(_CORRUPT_ERROR_MESSAGE)
         mock_pull.side_effect = [
-            iter([{"event": "error", "error": "resume broke"}]),
+            iter([{"event": "complete"}]),
             iter([{"event": "progress", "percent": p} for p in (10, 20, 30)]),
         ]
         client = _make_client()
@@ -637,7 +714,7 @@ class TestStopNeverDeletes:
         ):
             with pytest.raises(ModelDownloadCancelledError):
                 client.load_model("Qwen3-0.6B-GGUF", prompt=False)
-        assert mock_delete.call_count == 1  # the resume really failed first
+        assert mock_delete.call_count == 1  # still corrupt after the resume
 
 
 @pytest.mark.allow_network

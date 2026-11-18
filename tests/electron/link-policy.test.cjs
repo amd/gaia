@@ -13,6 +13,8 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeUnopenableUrl,
+  openExternalLink,
 } = require("../../src/gaia/apps/webui/services/link-policy.cjs");
 
 const APP_URL =
@@ -81,5 +83,54 @@ describe("describeBlockedUrl", () => {
     expect(msg).toContain("calc.exe");
     expect(msg).toContain("file");
     expect(msg).toMatch(/http, https and mailto/);
+  });
+});
+
+describe("openExternalLink", () => {
+  test("reports a rejection instead of letting it escape", async () => {
+    const shell = {
+      openExternal: jest.fn(() => Promise.reject(new Error("No application is associated"))),
+    };
+    const reportFailure = jest.fn();
+
+    const opened = await openExternalLink(shell, "mailto:someone@example.com", reportFailure);
+
+    expect(opened).toBe(false);
+    expect(shell.openExternal).toHaveBeenCalledWith("mailto:someone@example.com");
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+    const message = reportFailure.mock.calls[0][0];
+    expect(message).toContain("mailto:someone@example.com");
+    expect(message).toContain("No application is associated");
+    expect(message).toMatch(/default email app/);
+  });
+
+  test("reports a synchronous throw from openExternal", async () => {
+    const shell = {
+      openExternal: jest.fn(() => {
+        throw new Error("boom");
+      }),
+    };
+    const reportFailure = jest.fn();
+
+    await expect(openExternalLink(shell, "https://amd-gaia.ai", reportFailure)).resolves.toBe(
+      false
+    );
+    expect(reportFailure.mock.calls[0][0]).toMatch(/default web browser/);
+  });
+
+  test("stays quiet when the OS accepts the URL", async () => {
+    const shell = { openExternal: jest.fn(() => Promise.resolve()) };
+    const reportFailure = jest.fn();
+
+    await expect(openExternalLink(shell, "https://amd-gaia.ai", reportFailure)).resolves.toBe(true);
+    expect(reportFailure).not.toHaveBeenCalled();
+  });
+});
+
+describe("describeUnopenableUrl", () => {
+  test("names the URL and the OS reason", () => {
+    const msg = describeUnopenableUrl("https://amd-gaia.ai", new Error("denied"));
+    expect(msg).toContain("https://amd-gaia.ai");
+    expect(msg).toContain("denied");
   });
 });

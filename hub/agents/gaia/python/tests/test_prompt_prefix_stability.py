@@ -32,12 +32,10 @@ from gaia.agents.base.history import (
     HIDDEN_TURNS_NOTE,
     SESSION_CONTEXT_FOOTER,
     SESSION_CONTEXT_HEADER,
-    SessionHistory,
     history_budget,
     with_session_context,
 )
 from gaia.agents.base.memory import MemoryMixin
-from gaia.agents.base.skill_synthesis import DistilledProcedure, load_synthesis_config
 from gaia.agents.base.tool_loader import THIN_DESCRIPTION_CHARS, thin_tool_schema
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.base.turn_metrics import count_tokens

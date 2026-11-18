@@ -9,7 +9,7 @@ icon: "wifi"
 </Info>
 
 <Note>
-**Platform:** Windows (PowerShell network commands). Compiles on Linux for CI but tools require Windows to return real data.
+**Platform:** Windows only — the target is built only on Windows (PowerShell network commands).
 **Prerequisite:** [Lemonade Server](https://lemonade-server.ai) running with a model loaded.
 </Note>
 
@@ -69,20 +69,6 @@ Full diagnostic run on a Ryzen AI PC: the agent calls 5 tools in sequence, reads
         ```bat
         cmake --build build
         ```
-      </Tab>
-      <Tab title="Linux">
-        ```bash
-        cd cpp
-        ```
-        ```bash
-        cmake -B build -DCMAKE_BUILD_TYPE=Release
-        ```
-        ```bash
-        cmake --build build
-        ```
-        <Note>
-        Compiles on Linux for CI purposes, but the PowerShell-based tools require Windows to return meaningful results.
-        </Note>
       </Tab>
     </Tabs>
   </Step>

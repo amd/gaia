@@ -9,7 +9,7 @@ with Tailwind CSS based on product descriptions. Perfect for rapid prototyping
 and visualizing product ideas.
 
 Requirements:
-- Python 3.12+
+- Python 3.10+
 - Lemonade server running for LLM reasoning
 
 Run:

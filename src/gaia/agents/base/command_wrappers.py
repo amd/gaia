@@ -166,14 +166,6 @@ def _program(token: str) -> str:
     return name.removesuffix(".exe")
 
 
-def _matches_flag(token: str, flags: frozenset[str]) -> Optional[str]:
-    """Return the matching flag, supporting ``--flag=value`` spellings."""
-    name = token.split("=", 1)[0]
-    if name in flags:
-        return name
-    return None
-
-
 def _skip_env(argv: Sequence[str], index: int) -> Optional[int]:
     while index < len(argv):
         token = argv[index]

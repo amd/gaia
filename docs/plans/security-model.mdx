@@ -906,7 +906,7 @@ The following security measures are already implemented in the codebase:
 |---------|----------|-------------|
 | Shell command whitelist | `src/gaia/agents/tools/shell_tools.py` | `ALLOWED_COMMANDS` set restricts CLI tool to read-only commands |
 | Git command whitelist | `src/gaia/agents/tools/shell_tools.py` | Only read-only git subcommands (`status`, `log`, `diff`, etc.) |
-| Localhost-only MCP bridge | `src/gaia/mcp/mcp.json` | `GAIA_MCP_HOST` defaults to `localhost` |
+| Localhost-only MCP bridge | `src/gaia/mcp/mcp_bridge.py` | `resolve_bind_host` keeps `localhost` on loopback |
 | Subprocess timeout | `src/gaia/mcp/external_services.py` | `timeout=30` on MCP subprocess calls |
 | Tool registry validation | `src/gaia/agents/base/agent.py` | Rejects unregistered tool names |
 | Required argument checking | `src/gaia/agents/base/agent.py` | Validates tool arguments before execution |

@@ -1421,6 +1421,21 @@ func TestProvisionOutcomeComesFromTheFinalLine(t *testing.T) {
 	}
 }
 
+// What a failed pull printed is what `d details` shows, so the fix hands it on.
+func TestAFailedPullKeepsItsTranscript(t *testing.T) {
+	f := newFake()
+	f.streamBody = "Downloading Gemma-4-E4B-it-GGUF\n✗ the disk is full\n"
+
+	res := NewDaemonRunner(f).Fix(context.Background(), EmailConfig(), FixPullModel, nil)
+	if res.OK() {
+		t.Fatal("a pull that ended on ✗ reported success")
+	}
+	if got := strings.Join(res.Log, "\n"); !strings.Contains(got, "Downloading Gemma-4-E4B-it-GGUF") ||
+		!strings.Contains(got, "the disk is full") {
+		t.Fatalf("the transcript did not reach the fix result: %q", res.Log)
+	}
+}
+
 func TestProvisionSurfacesATransportFailure(t *testing.T) {
 	f := newFake()
 	f.streamErr = &daemon.RequestError{Op: "stream the download", Detail: "connection refused"}

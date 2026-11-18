@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/amd/gaia/tui/internal/gaiaslack"
 )
 
@@ -276,6 +278,27 @@ func TestCancellingStoresNothing(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Error("cancelling must not run anything")
+	}
+	if !strings.Contains(lastStatus(t, after), "nothing was stored") {
+		t.Errorf("the user must be told nothing was stored, got: %s", lastStatus(t, after))
+	}
+}
+
+// A token prompt has no Cancel option, so Esc is the way out of it.
+func TestEscLeavesATokenPrompt(t *testing.T) {
+	m := slackModel(t)
+	m.slackSetup = &slackSetupState{step: slackStepConfirmCreated}
+	updated, _ := m.handleSlackSetupAnswer(slackQuestionPrefix+"created", "yes")
+	m = updated.(ChatModel)
+	if m.question == nil {
+		t.Fatal("test setup: a token prompt must be up")
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	after := updated.(ChatModel)
+
+	if after.question != nil || after.slackSetup != nil {
+		t.Fatalf("Esc left the flow open: question=%v setup=%v", after.question != nil, after.slackSetup != nil)
 	}
 	if !strings.Contains(lastStatus(t, after), "nothing was stored") {
 		t.Errorf("the user must be told nothing was stored, got: %s", lastStatus(t, after))

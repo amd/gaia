@@ -975,7 +975,12 @@ def install_migrated(
 
     with tempfile.TemporaryDirectory(prefix="gaia-skill-migrate-") as tmp:
         staged = Path(tmp) / skill.name
-        if copy_support_files and source_dir is not None:
+        # A standalone OTHER.md's folder is not its bundle, so nothing beside it ships.
+        if (
+            copy_support_files
+            and source_dir is not None
+            and outcome.source.name == SKILL_FILENAME
+        ):
             # Staging copies follow links, so refuse them here, before the copy.
             _refuse_symlinks(source_dir, name=skill.name, action="Migration")
             shutil.copytree(

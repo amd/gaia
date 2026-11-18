@@ -175,15 +175,11 @@ def enforce_tier_ceiling(
 
     declared = ", ".join(str(p) for p in over)
     higher = _lowest_tier_allowing(over)
-    remedy = (
-        f"Install a copy signed at '{higher}' or higher from the hub instead"
-        if higher
-        else "Drop those permissions"
-    )
     raise SkillPermissionError(
         f"Skill '{skill_name}' declares permission(s) above the '{tier}' ceiling: "
         f"{declared}. A '{tier}' skill may declare only: "
-        f"{', '.join(sorted(allowed)) or '(nothing)'}. {remedy} — a skill cannot "
+        f"{', '.join(sorted(allowed)) or '(nothing)'}. Install a copy signed at "
+        f"'{higher}' or higher from the hub instead — a skill cannot "
         f"install above its tier's ceiling. See {FORMAT_DOCS_URL}#security-tiers"
     )
 

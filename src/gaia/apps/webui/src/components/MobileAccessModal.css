@@ -75,6 +75,14 @@
     /* Preserve \n newlines from backend hint messages (e.g. the
        multi-line authtoken-setup instructions). */
     white-space: pre-line;
+    /* The server's English keeps its punctuation at its end in an Arabic window. */
+    unicode-bidi: plaintext;
+}
+.tunnel-error:dir(rtl) {
+    text-align: right;
+}
+.tunnel-url-area .tunnel-error {
+    margin-top: 8px;
 }
 
 .tunnel-error a {
@@ -262,7 +270,7 @@ button.copy-url-btn.copied {
 
 .mobile-instructions ol {
     margin: 0;
-    padding-left: 20px;
+    padding-inline-start: 20px;
 }
 
 .mobile-instructions li {

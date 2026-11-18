@@ -21,11 +21,11 @@ icon: "messages"
 
 ## Overview
 
-AgentSDK provides a unified interface for text-based chat interactions with automatic conversation history management. It supports local LLMs (via Lemonade Server), Claude API, and ChatGPT/OpenAI API, with model-specific prompt formatting through the Prompts class.
+AgentSDK provides a unified interface for text-based chat interactions with automatic conversation history management. It supports local LLMs (via Lemonade Server) and the Claude API, with model-specific prompt formatting through the Prompts class.
 
 **Key Features:**
 - Automatic conversation history tracking
-- Multi-model support (14+ models via Prompts)
+- Multi-model support (10 model families plus a generic default via Prompts)
 - Streaming and non-streaming responses
 - RAG (Retrieval-Augmented Generation) integration
 - Session management
@@ -52,13 +52,14 @@ class AgentConfig:
     model: str = DEFAULT_MODEL_NAME
     max_tokens: int = 512
     temperature: Optional[float] = None
+    top_p: Optional[float] = None  # None = the provider's default
     system_prompt: Optional[str] = None
     max_history_length: int = 4  # Number of conversation pairs to keep
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False  # Use Claude API
     use_local_llm: bool = True  # Use local LLM (computed automatically)
-    claude_model: str = "claude-sonnet-4-20250514"
+    claude_model: str = "claude-sonnet-5"
     base_url: Optional[str] = None  # Lemonade server base URL (None = use LEMONADE_BASE_URL env var)
     assistant_name: str = "gaia"  # Name to use for assistant in conversations
 ```
@@ -94,12 +95,13 @@ class AgentSDK:
         """Initialize the AgentSDK."""
         ...
 
-    def send(self, message: str, **kwargs) -> AgentResponse:
+    def send(self, message: str, *, no_history: bool = False, **kwargs) -> AgentResponse:
         """
         Send a message and get a complete response with conversation history.
 
         Args:
             message: The message to send
+            no_history: When True, bypass stored chat history and send only this prompt
             **kwargs: Additional arguments for LLM generation
 
         Returns:
@@ -124,6 +126,8 @@ class AgentSDK:
         self,
         messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
+        cancel: Optional[threading.Event] = None,
         **kwargs,
     ) -> AgentResponse:
         """
@@ -132,6 +136,8 @@ class AgentSDK:
         Args:
             messages: List of message dicts with 'role' and 'content' keys
             system_prompt: Optional system prompt to use (overrides config)
+            tools: Optional tool schemas to offer the model
+            cancel: Optional event; set it to abandon the call (raises LLMCallCancelled)
             **kwargs: Additional arguments for LLM generation
 
         Returns:
@@ -143,6 +149,7 @@ class AgentSDK:
         self,
         messages: List[Dict[str, Any]],
         system_prompt: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
         **kwargs,
     ):
         """
@@ -183,13 +190,21 @@ class AgentSDK:
         """Set the system prompt for future conversations."""
         ...
 
-    def enable_rag(self, documents: Optional[List[str]] = None, **rag_kwargs):
+    def get_system_prompt(self) -> Optional[str]:
+        """Get the current system prompt."""
+        ...
+
+    def enable_rag(self, documents: Optional[List[str]] = None, **rag_kwargs) -> bool:
         """
         Enable RAG (Retrieval-Augmented Generation) for document-based chat.
 
         Args:
             documents: List of PDF file paths to index
             **rag_kwargs: Additional RAG configuration options
+
+        Returns:
+            True when RAG is enabled and every requested document was indexed;
+            False when one or more documents could not be indexed.
         """
         ...
 
@@ -380,7 +395,8 @@ def test_rag_integration():
 ```toml
 [project]
 dependencies = [
-    "gaia.llm.llm_client",
+    "gaia.llm (create_client)",
+    "gaia.llm.lemonade_client",
     "gaia.chat.prompts",
 ]
 

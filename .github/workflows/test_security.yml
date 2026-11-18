@@ -8,7 +8,6 @@
 name: Security Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:

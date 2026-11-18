@@ -166,6 +166,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /setup/check': { ready: true, steps: [] },
     'GET /setup/status': { state: 'idle' },
     'GET /setup/needs/chat': { job: 'chat', needed: false, model: null, disk_free_gb: null },
+    'GET /setup/needs/embedding': { job: 'embedding', needed: false, model: null, disk_free_gb: null },
     'GET /settings': { custom_model: null, model_status: null, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false },
     'GET /providers': {
         providers: [
@@ -616,7 +617,7 @@ const memoryItem = (id: string, category: string, content: string, over: Record<
     last_used: null, due_at: null, reminded_at: null, superseded_by: null, has_embedding: true, ...over,
 });
 
-const MEMORY_ITEMS = [
+export const MEMORY_ITEMS = [
     memoryItem('k1', 'preference', 'Prefers short answers with the numbers first', { source: 'tool' }),
     memoryItem('k2', 'fact', 'Lives in Calgary and works at a hospital', { entity: 'place:calgary', source: 'user' }),
     memoryItem('k3', 'reminder', 'Dentist appointment', { due_at: '2026-10-23', context: 'personal' }),

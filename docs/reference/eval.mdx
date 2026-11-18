@@ -24,7 +24,7 @@ used to document was removed in v0.18.0; git history has it if you need it.
 - [Scenario Authoring](/guides/eval-scenarios) — write custom YAML scenarios
 - [CI/CD Integration](/guides/eval-ci) — regression detection in GitHub Actions
 - [CLI Reference](/reference/cli#agent-eval) — full `gaia eval agent` command reference
-- [Eval Scorecard](/reference/eval-scorecard) — the per-agent release scorecard; the **flagship gaia agent** is scored by `gaia eval agent --agent-type gaia` over the 13-category `eval/scenarios/gaia_*` corpus (aggregate = judged pass rate), published at `hub/agents/gaia/npm/SCORECARD.md` and gated at release
+- [Eval Scorecard](/reference/eval-scorecard) — the per-agent release scorecard; the **flagship gaia agent** is scored by `gaia eval agent --agent-type gaia` over the 19-category `eval/scenarios/gaia_*` corpus (aggregate = judged pass rate), published at `hub/agents/gaia/npm/SCORECARD.md` and gated at release
 
 ## Session Replay: scoring against real Claude Code sessions
 
@@ -47,7 +47,7 @@ session, so the whole run is visible on screen as it happens.
 
 ```bash
 # Terminal 1 — the agent under test
-gaia-drive run gaia --control-port 8817 --use-claude
+gaia-tui run gaia --control-port 8817 --use-claude
 
 # Terminal 2 — the eval
 gaia eval sessions --control ~/.gaia/tui/control.json --limit 10
@@ -647,8 +647,8 @@ the run starts:
   from the Hugging Face dataset `SWE-bench/SWE-bench_Verified` — the `datasets`
   package when it is installed, the datasets-server REST API otherwise — and
   cached as `<work root>/swebench/<instance_id>.json`. The judge and the grader
-  read the same cache. The cache holds the gold patch, so the fence denies it
-  along with the rest of the work root.
+  read the same cache. The cache never holds the gold patch (the answer), so
+  an agent that can read any file finds nothing there; the judge fetches it again when it needs it.
 - The agent gets the repository at `base_commit`, built as the TheRock checkout
   is: a bare cache per repository fetched by commit to depth 200 (never the fix),
   a single-branch `file://` clone of it, detached, remote removed, and `git fsck
@@ -676,8 +676,8 @@ the run starts:
   the harness writes under `<out>/swebench/logs/run_evaluation/` is read back
   into the scorecard: `resolved`, whether the patch applied, and the
   `FAIL_TO_PASS` / `PASS_TO_PASS` counts.
-- The judge grades a SWE-bench attempt's quality against the gold patch, read
-  from the cache only in the `judge` step, but it never decides the pass: that
+- The judge grades a SWE-bench attempt's quality against the gold patch, fetched
+  in the `judge` step and never written to disk, but it never decides the pass: that
   is the harness's verdict alone.
 
 **In CI.** `.github/workflows/eval_swebench.yml` runs the flagship on fixed

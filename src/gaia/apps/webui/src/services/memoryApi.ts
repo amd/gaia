@@ -101,11 +101,12 @@ export function createKnowledge(body: KnowledgeCreateBody) {
 export interface KnowledgeUpdateBody {
     content?: string;
     category?: string;
-    domain?: string;
+    /** `null` clears domain, entity or due_at; omit a field to leave it unchanged. */
+    domain?: string | null;
     context?: string;
-    entity?: string;
+    entity?: string | null;
     sensitive?: boolean;
-    due_at?: string;
+    due_at?: string | null;
     reminded_at?: string;
 }
 

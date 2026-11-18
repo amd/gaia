@@ -18,10 +18,6 @@ Workflow:
 5. mcp_windows_Wait - Wait for Notepad to open
 6. mcp_windows_Shortcut - Paste with Ctrl+V
 
-Compare with mcp_windows_system_health_demo.py:
-- Demo: Scripted workflow, calls methods directly, no LLM reasoning
-- Agent: LLM decides tool calls, shows reasoning, outputs to Notepad
-
 Requirements:
 - Windows 11
 - Python 3.12+
@@ -55,7 +51,7 @@ class WindowsSystemHealthAgent(Agent, MCPClientMixin):
             **kwargs: Additional arguments passed to Agent
         """
         # Initialize Agent
-        Agent.__init__(self, max_steps=55)
+        Agent.__init__(self, max_steps=55, **kwargs)
 
         # Initialize MCPClientMixin (creates _mcp_manager)
         MCPClientMixin.__init__(self, auto_load_config=False)

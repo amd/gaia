@@ -9,7 +9,6 @@
 name: C++ Build & Test
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
@@ -220,6 +219,7 @@ jobs:
   # Integration tests on STX hardware: LLM + MCP + WiFi + Health
   integration-test:
     name: C++ Integration Tests (STX)
+    timeout-minutes: 60
     runs-on:
       - self-hosted
       - Windows

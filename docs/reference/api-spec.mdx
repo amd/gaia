@@ -27,7 +27,7 @@ External Client → FastAPI Server → GAIA Agents → Lemonade LLM Backend
 ### Health Check
 
 <Card title="GET /health" icon="heart-pulse">
-  Check API, Lemonade LLM, and RAG component status
+  Check API and Lemonade LLM status
 </Card>
 
 **Response:**
@@ -111,9 +111,9 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
 | `model` | string | ✅ Yes | - | - | Model ID — an id registered in `AGENT_MODELS` |
 | `messages` | array | ✅ Yes | - | - | Array of message objects |
 | `stream` | boolean | No | `false` | - | Enable Server-Sent Events streaming |
-| `temperature` | number | No | `0.7` | 0.0 - 2.0 | Sampling temperature |
+| `temperature` | number | No | agent default | 0.0 - 2.0 | Sampling temperature |
 | `max_tokens` | integer | No | - | > 0 | Maximum tokens to generate |
-| `top_p` | number | No | `1.0` | 0.0 - 1.0 | Nucleus sampling parameter |
+| `top_p` | number | No | agent default | 0.0 - 1.0 | Nucleus sampling parameter |
 
 #### Message Object
 
@@ -134,7 +134,7 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
     curl -X POST http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
-        "model": "your-agent-id",
+        "model": "gaia",
         "messages": [{"role": "user", "content": "Write a hello function"}],
         "stream": false
       }'
@@ -147,7 +147,7 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
       "id": "chatcmpl-abc123",
       "object": "chat.completion",
       "created": 1677652288,
-      "model": "your-agent-id",
+      "model": "gaia",
       "choices": [
         {
           "index": 0,
@@ -178,7 +178,7 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
     curl -X POST http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
-        "model": "your-agent-id",
+        "model": "gaia",
         "messages": [{"role": "user", "content": "Write a hello function"}],
         "stream": true
       }'
@@ -187,13 +187,13 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
 
   <Tab title="Response (SSE)">
     ```
-    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"your-agent-id","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"gaia","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
 
-    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"your-agent-id","choices":[{"index":0,"delta":{"content":"Here"},"finish_reason":null}]}
+    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"gaia","choices":[{"index":0,"delta":{"content":"Here"},"finish_reason":null}]}
 
-    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"your-agent-id","choices":[{"index":0,"delta":{"content":"'s"},"finish_reason":null}]}
+    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"gaia","choices":[{"index":0,"delta":{"content":"'s"},"finish_reason":null}]}
 
-    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"your-agent-id","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"gaia","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
     data: [DONE]
     ```
@@ -210,17 +210,13 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
 
 ## Error Responses
 
-All errors follow OpenAI's error format.
+Request errors use FastAPI's `{"detail": ...}` body.
 
 ### 400 - Bad Request
 
 ```json
 {
-  "error": {
-    "message": "messages is required",
-    "type": "invalid_request_error",
-    "code": "invalid_request"
-  }
+  "detail": "No user message found in messages array"
 }
 ```
 
@@ -228,22 +224,20 @@ All errors follow OpenAI's error format.
 
 ```json
 {
-  "error": {
-    "message": "Model 'gaia-invalid' not found. Available models: <none registered>",
-    "type": "invalid_request_error",
-    "code": "model_not_found"
-  }
+  "detail": "Model 'gaia-invalid' not found"
 }
 ```
 
-### 500 - Internal Server Error
+### 500 - Agent Failure
+
+A failure while the agent runs returns a plain HTTP 500. In a streaming request the
+headers are already sent, so the stream ends with an `error` chunk and `data: [DONE]`:
 
 ```json
 {
   "error": {
-    "message": "Agent processing failed: <details>",
-    "type": "internal_error",
-    "code": "agent_error"
+    "message": "<details>",
+    "type": "server_error"
   }
 }
 ```

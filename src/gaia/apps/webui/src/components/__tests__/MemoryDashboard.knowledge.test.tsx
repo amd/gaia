@@ -121,6 +121,26 @@ describe('MemoryDashboard knowledge rows', () => {
         expect(screen.queryByText('Memory updated')).not.toBeInTheDocument();
     });
 
+    it('sends null for a due date and entity the user cleared, keeping the domain', async () => {
+        const user = userEvent.setup();
+        mockedApi.getKnowledge.mockResolvedValue({
+            items: [{ ...ENTRY, category: 'reminder', domain: 'health', entity: 'person:me', due_at: '2026-10-08T15:30:00-07:00' }],
+            total: 1, offset: 0, limit: 25,
+        });
+        mockedApi.editKnowledge.mockResolvedValue({ status: 'updated', knowledge_id: 'k1' });
+        const row = await renderTable();
+
+        await user.click(within(row).getByTitle('Edit'));
+        await user.clear(screen.getByPlaceholderText(/^ISO 8601/));
+        await user.clear(screen.getByPlaceholderText('e.g., person:sarah_chen'));
+        await user.click(screen.getByRole('button', { name: 'Update' }));
+
+        await waitFor(() => expect(mockedApi.editKnowledge).toHaveBeenCalledTimes(1));
+        expect(mockedApi.editKnowledge).toHaveBeenCalledWith('k1', expect.objectContaining({
+            due_at: null, entity: null, domain: 'health',
+        }));
+    });
+
     it('labels tool stats as excluding memory tools', async () => {
         await renderTable();
         await waitFor(() => expect(screen.getByText('excludes memory tools')).toBeInTheDocument());

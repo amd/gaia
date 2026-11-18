@@ -538,3 +538,20 @@ class TestSDOutputLocation:
 
         assert health["status"] == "unavailable"
         assert "socket closed" in health["error"]
+
+
+def test_a_zero_history_limit_returns_no_generations(mock_lemonade_client):
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        mixin = SDToolsMixin()
+        mixin.init_sd()
+        mixin.sd_generations.extend([{"n": 1}, {"n": 2}, {"n": 3}])
+        history = _TOOL_REGISTRY["get_generation_history"]["function"]
+
+        assert history(limit=0)["generations"] == []
+        assert history(limit=2)["generations"] == [{"n": 2}, {"n": 3}]
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)

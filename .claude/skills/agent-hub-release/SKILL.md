@@ -121,8 +121,7 @@ matching `CHANGELOG.md` entry too if the agent keeps one (recommended, not requi
    until a maintainer approves; the publish token isn't readable until then.
 6. **Publish stage** (atomic): POST every binary to `/publish` → regenerate
    `binaries.lock.json` with the **real** hashes → **fetch-verify every published
-   object** against the lock → `npm publish` via OIDC (provenance) → trigger
-   `deploy_website.yml` so the home page's download links pick up the new build.
+   object** against the lock → `npm publish` via OIDC (provenance).
 7. **Flagship (`gaia`) only — merge the lock PR.** Its `pin-lock` job opens a PR
    committing the verified lock to main (branch `flagship-lock/v<version>`),
    because the installer build and the final core release read the committed copy.
@@ -200,9 +199,7 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
 - **Fetch-verify is the real gate.** After `/publish`, CI re-fetches every object via
   the npm `fetch` CLI and checks bytes-hash-to-lock (bounded retry for Cloudflare
   edge propagation) before `npm publish`.
-- **Website is rebuilt, not patched.** The home page's download links are resolved
-  from the published manifests at build time; the publish job triggers
-  `deploy_website.yml` on `main`.
+- **The website is not redeployed.** It lists skills only, and `release_skills.yml` redeploys it for those.
 - **Manual fallback:** `hub/agents/<id>/python/packaging/HUB-UPLOAD.md` documents the
   by-hand rclone path to the `gaia-hub` bucket — identical objects + lock as CI.
 - **Write the CHANGELOG entry, PR body, and your status reports** per [CLAUDE.md → How You

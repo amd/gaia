@@ -546,7 +546,8 @@ class TestKokoroPlayer:
             patch("gaia.agents.install_hints.editable_gaia_root", return_value=None),
         ):
             tts = KokoroTTS(client=MagicMock())  # file output needs no device
-            with pytest.raises(ImportError, match=r"amd-gaia\[talk\]"):
+            # A source checkout names its own path, a wheel names amd-gaia.
+            with pytest.raises(ImportError, match=r"\[talk\]"):
                 tts.generate_speech_streaming(queue.Queue())
 
 

@@ -82,9 +82,48 @@ function describeBlockedUrl(rawUrl) {
   );
 }
 
+/**
+ * A one-line, user-facing reason an allowed URL could not be opened.
+ *
+ * @param {string} rawUrl
+ * @param {unknown} err The rejection from `shell.openExternal`.
+ * @returns {string}
+ */
+function describeUnopenableUrl(rawUrl, err) {
+  const shown = typeof rawUrl === "string" && rawUrl ? rawUrl : String(rawUrl);
+  const reason = err && err.message ? err.message : String(err);
+  const hint = shown.toLowerCase().startsWith("mailto:")
+    ? "Set a default email app in your system settings, then try again."
+    : "Set a default web browser in your system settings, then try again.";
+  return `GAIA could not open "${shown.slice(0, 300)}": ${reason}. ${hint}`;
+}
+
+/**
+ * Hand an allowed URL to the OS without letting a rejection escape: an
+ * unhandled rejection in main is fatal (main-safety-net.cjs).
+ *
+ * @param {{ openExternal: (url: string) => Promise<void> }} shell
+ * @param {string} url
+ * @param {(message: string) => void} reportFailure Logs and shows `message`.
+ * @returns {Promise<boolean>} True when the OS accepted the URL.
+ */
+function openExternalLink(shell, url, reportFailure) {
+  return Promise.resolve()
+    .then(() => shell.openExternal(url))
+    .then(
+      () => true,
+      (err) => {
+        reportFailure(describeUnopenableUrl(url, err));
+        return false;
+      }
+    );
+}
+
 module.exports = {
   ALLOWED_EXTERNAL_SCHEMES,
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  describeUnopenableUrl,
+  openExternalLink,
 };

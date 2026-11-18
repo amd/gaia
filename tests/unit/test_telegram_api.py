@@ -282,10 +282,10 @@ async def test_document_downloads_and_is_indexed(
     ]
     ingested = []
 
-    def fake_rag(path):
+    def fake_rag(path, session):
         with open(path, "rb") as handle:
             ingested.append((path, handle.read()))
-        return {"success": True}
+        return True
 
     monkeypatch.setattr(telegram.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(telegram, "ingest_document_to_rag", fake_rag)
@@ -793,3 +793,18 @@ def test_stop_before_start_reports_it_never_started(caplog):
     with caplog.at_level(logging.ERROR, logger="gaia.messaging.telegram"):
         assert adapter.stop() is False
     assert "never started" in caplog.text
+
+
+def test_a_caption_is_read_as_the_message_text():
+    from gaia.messaging.telegram_api import TelegramMessage
+
+    message = TelegramMessage(
+        None,
+        {
+            "message_id": 1,
+            "chat": {"id": 7},
+            "caption": "what is this?",
+            "photo": [],
+        },
+    )
+    assert message.text == "what is this?"

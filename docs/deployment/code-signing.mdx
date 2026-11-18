@@ -17,7 +17,7 @@ Every GAIA Agent UI release ships installers for Windows (NSIS `.exe`), macOS (D
 
 Both of these are **the leading cause of install abandonment** for unsigned consumer apps. Code signing eliminates them.
 
-Linux artifacts (DEB + AppImage) are GPG-signed via electron-builder's standard mechanism — no extra setup beyond the GitHub-managed signing key.
+Linux artifacts (DEB + AppImage) are not signed today.
 
 ## Architecture
 
@@ -37,8 +37,8 @@ Linux artifacts (DEB + AppImage) are GPG-signed via electron-builder's standard 
              │               │               │
              ▼               ▼               ▼
         ┌──────────┐    ┌──────────────┐  ┌──────────┐
-        │ SignPath │    │ Apple        │  │ GPG      │
-        │   OSS    │    │ Developer ID │  │ key      │
+        │ SignPath │    │ Apple        │  │ unsigned │
+        │   OSS    │    │ Developer ID │  │          │
         │  (free)  │    │ + notarize   │  │          │
         └──────────┘    └──────────────┘  └──────────┘
 ```
@@ -47,8 +47,6 @@ Linux artifacts (DEB + AppImage) are GPG-signed via electron-builder's standard 
 |---|---|---|---|
 | **Windows** | [SignPath OSS Foundation](https://signpath.io/solutions/open-source-community) | API token | **Free** for OSS |
 | **macOS** | Apple Developer ID + notarytool | `.p12` cert + Apple ID | $99/yr (Apple Developer Program) |
-| **Linux DEB** | electron-builder GPG | GPG private key | Free |
-| **Linux AppImage** | electron-builder GPG | GPG private key | Free |
 
 ## Windows: SignPath setup
 
@@ -145,7 +143,7 @@ In repository settings → Secrets and variables → Actions, add:
 | `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password from Step 3 |
 | `APPLE_TEAM_ID` | 10-character team ID from Apple Developer dashboard |
 
-The `build-installers.yml` workflow auto-detects these via `if: env.APPLE_ID != ''`. Until they're set, the workflow ships an unsigned `.dmg` and the troubleshooting guide tells users how to bypass Gatekeeper.
+The `build-installers.yml` workflow auto-detects these via `if: env.APPLE_ID != ''`. Until they're set, the workflow ships an ad-hoc-signed, un-notarized `.dmg` and the troubleshooting guide tells users how to bypass Gatekeeper.
 
 ### Step 5: Enable notarization
 
@@ -167,7 +165,7 @@ When `notarize` is `true` (or unset) and the Apple credentials are present, elec
 ### Step 6: Test the integration
 
 1. Push a release candidate tag
-2. Watch the macOS job — look for `notarytool history` and the staple step
+2. Watch the macOS job — watch the electron-builder output of the macOS build step for notarization
 3. Download the signed `.dmg`
 4. Verify it's signed and notarized:
    ```bash
@@ -176,18 +174,9 @@ When `notarize` is `true` (or unset) and the Apple credentials are present, elec
    #               source=Notarized Developer ID
    ```
 
-## Linux: GPG signing
+## Linux
 
-`electron-builder` signs `.deb` packages with a GPG key automatically. The Linux runner needs:
-
-| Secret name | Value |
-|---|---|
-| `GPG_PRIVATE_KEY` | ASCII-armored private key block |
-| `GPG_KEY_PASSPHRASE` | Passphrase for the key |
-
-These are picked up by electron-builder via env vars. The corresponding public key should be published to a keyserver and listed in the docs so users can verify the signatures.
-
-For AppImages, signing is GPG-based via `appimagetool --sign`. Same key works for both.
+The DEB and AppImage are not signed today. `build-installers.yml` and `electron-builder.yml` have no signing step for them.
 
 ## Troubleshooting
 

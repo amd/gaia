@@ -116,9 +116,12 @@ jobs:
       - name: Pick the instances
         id: pick
         if: steps.model.outputs.ready == 'true'
+        env:
+          # Free text from the dispatch form; never paste it into the script.
+          INSTANCES: ${{ github.event.inputs.instances }}
         run: |
-          if [ -n "${{ github.event.inputs.instances }}" ]; then
-            ids="${{ github.event.inputs.instances }}"
+          if [ -n "$INSTANCES" ]; then
+            ids="$INSTANCES"
           else
             ids=$(python -c "import json,sys; print(','.join(t['id'] for t in json.load(open('eval/tasks/swebench_subsets.json'))[sys.argv[1]]))" "$SUBSET")
           fi
@@ -129,10 +132,12 @@ jobs:
         if: steps.model.outputs.ready == 'true'
         # One task at a time; each image is pulled before its run and removed
         # after, which keeps the hosted runner's disk under its limit.
+        env:
+          IDS: ${{ steps.pick.outputs.ids }}
         run: |
           . "$HOME/.gaia/lemonade/env.sh"
           gaia eval tasks run --suite swebench --model "$SWE_MODEL" \
-            --instances "${{ steps.pick.outputs.ids }}" \
+            --instances "$IDS" \
             --no-judge --run-timeout 2400 --out "$OUT"
 
       - name: Summarize

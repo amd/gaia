@@ -165,21 +165,21 @@ def _get_download_progress(model_name: str) -> Optional[Dict[str, Any]]:
         return dict(entry) if entry else None
 
 
-def _clear_download_progress(model_name: str) -> None:
-    with _download_progress_lock:
-        _download_progress.pop(model_name, None)
-
-
 async def _evict_progress_after_ttl(model_name: str) -> None:
     """Delay-evict a terminal progress entry so the frontend's poll cycle
     has a chance to observe the ``complete`` / ``error`` state once.
     Without this, a fast download finishes between two polls and the UI
     misses the "complete" beat entirely.
     """
+    with _download_progress_lock:
+        terminal = _download_progress.get(model_name)
     try:
         await asyncio.sleep(_DOWNLOAD_PROGRESS_TTL)
     finally:
-        _clear_download_progress(model_name)
+        # A retry within the TTL owns a fresh entry; leave it alone.
+        with _download_progress_lock:
+            if _download_progress.get(model_name) is terminal:
+                _download_progress.pop(model_name, None)
 
 
 def _parse_pull_event_block(block: str) -> Optional[Dict[str, Any]]:

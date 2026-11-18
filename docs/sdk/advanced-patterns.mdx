@@ -36,14 +36,12 @@ class MultiToolAgent(
 
         Choose the right tool for each task."""
 
-    def _create_console(self):
-        from gaia.agents.base.console import AgentConsole
-        return AgentConsole()
-
     def _register_tools(self):
-        # Tools from all mixins are available
-        # Add custom tools here if needed
-        pass
+        # Each mixin registers its own tools; add custom tools here if needed
+        self.register_file_tools()
+        self.register_file_search_tools()
+        self.register_rag_tools()
+        self.register_shell_tools()
 
     # API integration
     def get_model_id(self) -> str:

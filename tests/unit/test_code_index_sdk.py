@@ -965,6 +965,21 @@ class TestAbandonedBuild:
         assert calls == [25]
 
 
+class TestIndexedExtensions:
+    def test_every_cpp_extension_the_parser_knows_is_discovered(self, tmp_path):
+        skip_if_unavailable()
+        names = ["a.cpp", "b.cc", "c.cxx", "d.hpp", "e.hxx"]
+        for name in names:
+            (tmp_path / name).write_text("int f() { return 0; }\n", encoding="utf-8")
+
+        sdk = CodeIndexSDK(
+            CodeIndexConfig(repo_path=str(tmp_path), cache_dir=str(tmp_path / "c"))
+        )
+        files, _ = sdk._discover_files()
+
+        assert sorted(Path(f).name for f in files) == names
+
+
 class TestGitignoreDirectoryPatterns:
     """Directory entries written the usual way (``dir/``, ``/dir``) are honored."""
 

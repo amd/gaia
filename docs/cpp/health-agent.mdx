@@ -112,7 +112,7 @@ graph TB
     User("User query")
     Agent("WindowsSystemHealthAgent<br/>gaia::Agent subclass")
     LLM("LLM<br/>http://localhost:13305")
-    MCP("Windows MCP Server<br/>uvx windows-mcp")
+    MCP("Windows MCP Server<br/>uvx windows-mcp@0.8.2 serve")
 
     User --> Agent
     Agent -->|"chat/completions"| LLM
@@ -159,7 +159,7 @@ public:
         // All tools come from the Windows MCP server
         connectMcpServer("windows", {
             {"command", "uvx"},
-            {"args", {"windows-mcp"}}
+            {"args", {"windows-mcp@0.8.2", "serve"}}
         });
     }
 

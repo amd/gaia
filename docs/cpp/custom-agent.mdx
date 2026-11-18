@@ -371,7 +371,8 @@ By default the agent prints to the terminal using `TerminalConsole`. You can rep
 ### Silent Mode (JSON result only)
 
 ```cpp
-// Option A: set in config (suppresses all output including final answer)
+// Option A: cfg.silentMode = true — suppresses progress output; the final answer is still
+// printed to stdout. For full silence use Option C.
 cfg.silentMode = true;
 
 // Option B: SilentConsole — suppresses progress but still prints the final answer
@@ -460,16 +461,17 @@ When integrating the agent into a desktop application (WPF, Qt, Electron), you n
 
 ### Headless Pattern
 
-Use `SilentConsole` to suppress all terminal output. The only interface is the JSON return value from `processQuery()`:
+Use `SilentConsole(/*silenceFinalAnswer=*/true)` to suppress all terminal output. The only interface is the JSON return value from `processQuery()`:
 
 ```cpp
 #include <gaia/agent.h>
 #include <gaia/console.h>
 
 gaia::AgentConfig cfg;
-cfg.silentMode = true;  // uses SilentConsole automatically
+cfg.silentMode = true;  // progress output off; the final answer still prints
 
-MyAgent agent;
+MyAgent agent(cfg);  // MyAgent passes cfg to gaia::Agent
+agent.setOutputHandler(std::make_unique<gaia::SilentConsole>(/*silenceFinalAnswer=*/true));
 // No terminal output — agent runs silently
 gaia::json result = agent.processQuery("diagnose network issues");
 
@@ -716,6 +718,7 @@ private:
         gaia::AgentConfig cfg;
         cfg.baseUrl              = "http://localhost:13305/api/v1";
         cfg.modelId              = "Qwen3.6-35B-A3B-GGUF";
+        cfg.nativeToolCalls      = gaia::NativeToolCalls::Always;  // this model id is not in the C++ registry
         cfg.maxSteps             = 15;
         cfg.maxPlanIterations    = 3;
         cfg.maxConsecutiveRepeats = 4;

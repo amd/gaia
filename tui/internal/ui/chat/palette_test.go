@@ -234,6 +234,19 @@ func TestPaletteEnterMidTurnQueuesLikeAnyOtherLine(t *testing.T) {
 	}
 }
 
+// Copying, reading aloud and the voice picker are local, so picking one from
+// the palette mid-turn runs it now, as typing it does.
+func TestPaletteRunsLocalCommandsMidTurn(t *testing.T) {
+	for _, name := range []string{copyCommand, readAloudCommand, voiceCommand} {
+		m, _ := newTestModel(t)
+		m.streaming = true
+		updated, _ := m.runPaletteRow(name)
+		if q := updated.(ChatModel).queued; len(q) != 0 {
+			t.Errorf("%s was queued behind the running turn: %v", name, q)
+		}
+	}
+}
+
 // --- Esc closes without quitting or touching the turn -------------------------
 
 func TestPaletteEscClosesWithoutQuittingOrCancelling(t *testing.T) {

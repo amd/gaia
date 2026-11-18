@@ -77,6 +77,16 @@ def get_or_create_session(user_id: int) -> AgentSDK:
         return sdk
 
 
+def _remove_download(path: str) -> None:
+    """Delete an upload's temp copy once it has been ingested."""
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log.warning("Could not delete Telegram download %s: %s", path, e)
+
+
 UNAUTHORIZED_REPLY = "Sorry — you're not authorized to use this bot."
 
 #: Text of the refusal. One string so the CLI and the exception agree.
@@ -223,19 +233,22 @@ class TelegramAdapter:
         user = update.effective_user
         text = update.message.text or ""
 
-        # If the user sent media, note it and download to tmp for later ingestion
+        # Ingestion blocks on the model, so it runs off the event loop.
+        loop = asyncio.get_running_loop()
         media_note = ""
         if update.message.photo:
-            media_note = "[photo uploaded]"
             file = await update.message.photo[-1].get_file()
             tmp_dir = tempfile.gettempdir()
             tmp_path = os.path.join(tmp_dir, f"gaia_telegram_{file.file_id}.jpg")
-            await file.download_to_drive(tmp_path)
-            # Hand tmp_path to VLM ingestion pipeline (async-safe wrapper)
-            vlm_result = ingest_image_to_vlm(tmp_path)
+            try:
+                await file.download_to_drive(tmp_path)
+                vlm_result = await loop.run_in_executor(
+                    None, ingest_image_to_vlm, tmp_path
+                )
+            finally:
+                _remove_download(tmp_path)
             if vlm_result.get("status") == "success":
                 media_note = "[photo uploaded and processed]"
-                # Optionally include a short excerpt in the conversation
                 excerpt = vlm_result.get("text", "").strip()
                 if excerpt:
                     media_note += " - " + (
@@ -244,17 +257,25 @@ class TelegramAdapter:
             else:
                 media_note = "[photo uploaded - VLM failed]"
         elif update.message.document:
-            media_note = f"[file uploaded: {update.message.document.file_name}]"
+            file_name = update.message.document.file_name
             file = await update.message.document.get_file()
             tmp_dir = tempfile.gettempdir()
             tmp_path = os.path.join(tmp_dir, f"gaia_telegram_{file.file_id}")
-            await file.download_to_drive(tmp_path)
-            # Hand tmp_path to RAG ingestion pipeline
-            rag_result = ingest_document_to_rag(tmp_path)
-            if rag_result.get("success"):
-                media_note = f"[file indexed: {update.message.document.file_name}]"
+            try:
+                await file.download_to_drive(tmp_path)
+                chat = await loop.run_in_executor(None, get_or_create_session, user.id)
+                indexed = await loop.run_in_executor(
+                    None, ingest_document_to_rag, tmp_path, chat
+                )
+            except Exception:
+                log.exception("Could not index %s for user %s", file_name, user.id)
+                indexed = False
+            finally:
+                _remove_download(tmp_path)
+            if indexed:
+                media_note = f"[file indexed: {file_name}]"
             else:
-                media_note = f"[file uploaded: {update.message.document.file_name} - index failed]"
+                media_note = f"[file uploaded: {file_name} - index failed]"
         elif any(
             getattr(update.message, media_type, None)
             for media_type in (
@@ -282,8 +303,6 @@ class TelegramAdapter:
         # The session this turn sends on, once it has one; guarded by
         # _SESSIONS_LOCK together with `stopped`.
         used: Dict[str, AgentSDK] = {}
-
-        loop = asyncio.get_running_loop()
 
         def run_generation():
             stream = None

@@ -59,6 +59,7 @@ from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
 from gaia.connectors.prior_state import resolve_or_reject_empty_scopes
 from gaia.connectors.providers import get as get_provider
 from gaia.connectors.store import DEFAULT_ACCOUNT, peek_connection
+from gaia.connectors.tokens import invalidate_cached_tokens
 
 if TYPE_CHECKING:
     from gaia.connectors.accounts import Account
@@ -1041,6 +1042,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         account_type,
         add_account=flow.intent.add_account,
     )
+    invalidate_cached_tokens(flow.provider_id)
     if flow.intent.reconnect:
         # Lets the caller say so when a different account came back.
         saved["requested_account_id"] = flow.intent.reconnect
@@ -1294,6 +1296,7 @@ async def poll_device_flow(
         account_type,
         add_account=intent.add_account,
     )
+    invalidate_cached_tokens(provider_id)
     if intent.reconnect:
         saved["requested_account_id"] = intent.reconnect
 

@@ -453,12 +453,93 @@ class TestDownloadEdgeCases:
                     "https://example.com/download",
                     save_dir=tmpdir,
                 )
-                # The filename regex should extract the filename after the encoding prefix
-                # filename*=UTF-8''report%202024.pdf -> captured as UTF-8''report%202024.pdf
-                # or report%202024.pdf depending on regex match
-                assert result["filename"] is not None
-                assert len(result["filename"]) > 0
+                assert result["filename"] == "report_2024.pdf"
                 assert os.path.exists(result["path"])
+        mock_response.close.assert_called()
+
+    @pytest.mark.parametrize(
+        "header,expected",
+        [
+            ("attachment; filename*=UTF-8''report.pdf", "report.pdf"),
+            ("attachment; filename*=utf-8'en'na%C3%AFve.txt", "naïve.txt"),
+            (
+                "attachment; filename=\"fallback.pdf\"; filename*=UTF-8''real.pdf",
+                "real.pdf",
+            ),
+            ('attachment; filename="quoted name.pdf"', "quoted name.pdf"),
+            ("attachment; filename=plain.txt", "plain.txt"),
+            ("attachment", None),
+        ],
+    )
+    def test_content_disposition_filename_parsing(self, header, expected):
+        from gaia.web.client import _content_disposition_filename
+
+        assert _content_disposition_filename(header) == expected
+
+    @pytest.mark.parametrize(
+        "headers,match",
+        [
+            ({"Content-Length": "not-a-number"}, "invalid literal"),
+            ({"Content-Length": str(10**12)}, "File too large"),
+        ],
+    )
+    def test_download_closes_the_response_when_it_refuses(self, headers, match):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.headers = headers
+        mock_response.raise_for_status = MagicMock()
+        mock_response.close = MagicMock()
+
+        with (
+            patch.object(self.client, "validate_url"),
+            patch.object(self.client, "_rate_limit_wait"),
+            patch.object(self.client._session, "get", return_value=mock_response),
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                with pytest.raises(ValueError, match=match):
+                    self.client.download("https://example.com/f", save_dir=tmpdir)
+        mock_response.close.assert_called()
+
+    def test_download_closes_the_response_on_an_http_error(self):
+        import requests
+
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_response.headers = {}
+        mock_response.raise_for_status = MagicMock(
+            side_effect=requests.HTTPError("404 Not Found")
+        )
+        mock_response.close = MagicMock()
+
+        with (
+            patch.object(self.client, "validate_url"),
+            patch.object(self.client, "_rate_limit_wait"),
+            patch.object(self.client._session, "get", return_value=mock_response),
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                with pytest.raises(requests.HTTPError):
+                    self.client.download("https://example.com/f", save_dir=tmpdir)
+        mock_response.close.assert_called()
+
+    def test_download_closes_the_response_on_a_refused_redirect(self):
+        redirect_response = MagicMock()
+        redirect_response.status_code = 302
+        redirect_response.headers = {"Location": "http://169.254.169.254/x"}
+        redirect_response.close = MagicMock()
+
+        def _validate(url):
+            if "169.254" in url:
+                raise ValueError("blocked address")
+
+        with (
+            patch.object(self.client, "validate_url", side_effect=_validate),
+            patch.object(self.client, "_rate_limit_wait"),
+            patch.object(self.client._session, "get", return_value=redirect_response),
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                with pytest.raises(ValueError, match="blocked address"):
+                    self.client.download("https://example.com/f", save_dir=tmpdir)
+        redirect_response.close.assert_called()
 
     def test_download_redirect_no_location_header(self):
         """Download with redirect status but no Location header returns as-is."""

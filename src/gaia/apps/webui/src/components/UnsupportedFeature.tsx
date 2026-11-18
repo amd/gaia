@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react';
 import { AlertTriangle, X, AlertCircle, Bug } from 'lucide-react';
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
 import { useT } from '../i18n/useT';
+import type { MessageKey } from '../i18n/registry';
 import { serverFailureText } from '../utils/documentFailure';
 import './UnsupportedFeature.css';
 
@@ -19,7 +20,11 @@ interface FileTypeCategory {
     extensions: Set<string>;
     message: string;
     alternatives: string[];
-    featureTitle: string;
+    /** Null when the file already works another way, so there is nothing to request. */
+    featureTitle: string | null;
+    /** The toast's title and what-to-do line, in the UI language. */
+    titleKey: MessageKey;
+    hintKey: MessageKey;
 }
 
 const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
@@ -31,6 +36,8 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
             'Convert it to PNG or JPEG — GAIA reads the text in those images',
         ],
         featureTitle: 'Support HEIC and ICO image indexing',
+        titleKey: 'docs.refused.image',
+        hintKey: 'docs.refused.imageHint',
     },
     {
         label: 'Video',
@@ -39,7 +46,9 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
         alternatives: [
             'Attach the video to a chat, and GAIA will transcribe it',
         ],
-        featureTitle: 'Support video files in the document library',
+        featureTitle: null,
+        titleKey: 'docs.refused.video',
+        hintKey: 'docs.refused.videoHint',
     },
     {
         label: 'Audio',
@@ -48,7 +57,9 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
         alternatives: [
             'Attach the recording to a chat, and GAIA will transcribe it',
         ],
-        featureTitle: 'Support audio files in the document library',
+        featureTitle: null,
+        titleKey: 'docs.refused.audio',
+        hintKey: 'docs.refused.audioHint',
     },
     {
         label: 'Archive',
@@ -59,6 +70,8 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
             'Then index the folder or individual files from the Document Library',
         ],
         featureTitle: 'Support automatic archive extraction for indexing',
+        titleKey: 'docs.refused.archive',
+        hintKey: 'docs.refused.archiveHint',
     },
     {
         label: 'Executable',
@@ -69,6 +82,8 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
             'Index documentation or README files from the project',
         ],
         featureTitle: 'Support binary file analysis',
+        titleKey: 'docs.refused.executable',
+        hintKey: 'docs.refused.executableHint',
     },
     {
         label: 'Database',
@@ -79,6 +94,8 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
             'Use SQL queries to extract relevant data to a text file',
         ],
         featureTitle: 'Support database file indexing',
+        titleKey: 'docs.refused.database',
+        hintKey: 'docs.refused.databaseHint',
     },
     {
         label: 'Microsoft Office',
@@ -94,6 +111,8 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
             'Re-save legacy .xls workbooks as .xlsx — GAIA supports modern Excel files',
         ],
         featureTitle: 'Support legacy Microsoft Office (doc, ppt, xls) indexing',
+        titleKey: 'docs.refused.office',
+        hintKey: 'docs.refused.officeHint',
     },
 ];
 
@@ -310,9 +329,9 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
         issueUrl = null;
         Icon = AlertTriangle;
     } else if (isFileTypeError && category) {
-        title = `${category.label} files not supported`;
-        detail = category.message;
-        issueUrl = featureRequestUrl(category.featureTitle);
+        title = t(category.titleKey);
+        detail = t(category.hintKey);
+        issueUrl = category.featureTitle ? featureRequestUrl(category.featureTitle) : null;
         Icon = AlertTriangle;
     } else if (isFileTypeError && !ext) {
         title = `"${filename}" has no file extension`;
@@ -346,7 +365,7 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
                     {issueUrl && ' '}
                     {issueUrl === null ? null : isFileTypeError ? (
                         <a href={issueUrl} target="_blank" rel="noopener noreferrer">
-                            Request this feature →
+                            {t('docs.refused.request')}
                         </a>
                     ) : (
                         <a href={issueUrl} target="_blank" rel="noopener noreferrer">
@@ -355,7 +374,7 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
                     )}
                 </div>
             </div>
-            <button className="upload-error-dismiss" onClick={onDismiss} aria-label="Dismiss">
+            <button className="upload-error-dismiss" onClick={onDismiss} aria-label={t('banner.dismiss')}>
                 <X size={14} />
             </button>
         </div>

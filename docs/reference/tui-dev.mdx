@@ -141,10 +141,12 @@ All under `/control/v1/`.
 | `status` | GET | — | view, agent, streaming, size, pid, frame_seq |
 | `screen` | GET | `?format=plain\|ansi` | rendered frame |
 | `keys` | POST | `{"keys": ["p"]}` | `{sent, seq, settled}` |
+| `mouse` | POST | `{"events": [{"action": "...", "x": 0, "y": 0}], "delay_ms": 0}` | gestures at absolute screen cells, the same coordinates `screen` reports |
 | `text` | POST | `{"text": "..."}` | `{sent_runes, seq, settled}` |
 | `wait` | POST | see below | blocks server-side |
 | `resize` | POST | `{"cols": 160, "rows": 50}` | — |
 | `frames` | GET | — | frame history |
+| `recording` | GET | `?since=N&limit=60` | the kept frame history as one looping animated SVG (404 `no_frames` before anything is drawn) |
 
 <Warning>
 **`keys` takes an array of strings, not a string.** `{"keys": "p"}` is rejected

@@ -200,6 +200,31 @@ function startBackend(gaiaBin, port, exit = process.exit) {
 }
 
 /**
+ * Stop the backend and exit as soon as it is gone; SIGKILL it if it lingers.
+ */
+function stopBackend(child, exit = process.exit, killAfterMs = 3000) {
+  shuttingDown = true;
+  console.log("\nShutting down GAIA...");
+  if (child.exitCode !== null || child.signalCode !== null) {
+    exit(0);
+    return;
+  }
+  const killTimer = setTimeout(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch (err) {
+      console.error(`Could not force-stop the backend: ${err.message}`);
+    }
+    exit(0);
+  }, killAfterMs);
+  child.once("exit", () => {
+    clearTimeout(killTimer);
+    exit(0);
+  });
+  child.kill("SIGTERM");
+}
+
+/**
  * Serve the pre-built frontend with a lightweight Node.js HTTP server.
  */
 async function serveFrontend(port) {
@@ -277,6 +302,15 @@ async function serveFrontend(port) {
     }
   });
 
+  server.on("error", (err) => {
+    const reason =
+      err.code === "EADDRINUSE" ? "another program is using it" : err.message;
+    console.error(
+      `Could not serve the GAIA Agent UI on port ${port}: ${reason}. ` +
+        "Choose another port with --port.",
+    );
+    process.exit(1);
+  });
   server.listen(port, () => {
     console.log(`GAIA Agent UI serving at http://localhost:${port}`);
   });
@@ -369,19 +403,10 @@ async function main() {
 
   // Graceful shutdown
   function cleanup() {
-    shuttingDown = true;
     if (backendProcess) {
-      console.log("\nShutting down GAIA...");
-      backendProcess.kill("SIGTERM");
-      setTimeout(() => {
-        try {
-          backendProcess.kill("SIGKILL");
-        } catch {
-          // Already dead
-        }
-        process.exit(0);
-      }, 3000);
+      stopBackend(backendProcess);
     } else {
+      shuttingDown = true;
       process.exit(0);
     }
   }
@@ -397,4 +422,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { npmDistTag, helpText, startBackend, browserCommand, openBrowser };
+module.exports = {
+  npmDistTag,
+  helpText,
+  startBackend,
+  stopBackend,
+  browserCommand,
+  openBrowser,
+};

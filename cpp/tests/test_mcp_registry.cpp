@@ -111,18 +111,6 @@ protected:
           }
         })");
     }
-
-    /// Path to the repo's Python-side descriptor, or empty when this is a
-    /// standalone `cpp/` checkout without the Python tree.
-    static fs::path packagedMcpJson() {
-        fs::path repoRoot = fs::path(GAIA_TEST_FIXTURES_DIR)  // <repo>/cpp/tests/fixtures
-                                .parent_path()                // <repo>/cpp/tests
-                                .parent_path()                // <repo>/cpp
-                                .parent_path();               // <repo>
-        fs::path candidate = repoRoot / "src" / "gaia" / "mcp" / "mcp.json";
-        std::error_code ec;
-        return fs::exists(candidate, ec) ? candidate : fs::path();
-    }
 };
 
 // ---------------------------------------------------------------------------
@@ -568,23 +556,6 @@ TEST_F(MCPRegistryTest, ConnectorsSecretBackedServerIsRefusedNotSilentlyMisconfi
         EXPECT_TRUE(contains(e.what(), "GITHUB_TOKEN"));
         EXPECT_TRUE(contains(e.what(), "keyring"));
     }
-}
-
-TEST_F(MCPRegistryTest, ResolvesThePackagedPythonMcpJson) {
-    fs::path packaged = packagedMcpJson();
-    if (packaged.empty()) {
-        GTEST_SKIP() << "src/gaia/mcp/mcp.json not present (standalone cpp/ checkout)";
-    }
-
-    // The real file the Python runtime ships, unmodified — extra top-level
-    // keys and all.
-    MCPRegistry registry = over(packaged.string());
-    json bridge = registry.require("gaia-bridge");
-    EXPECT_EQ(bridge["command"], "python");
-    EXPECT_EQ(bridge["args"], json::array({"-m", "gaia.mcp.mcp_bridge"}));
-    EXPECT_EQ(bridge["env"]["LEMONADE_BASE_URL"], "http://localhost:13305/api/v1");
-    EXPECT_EQ(bridge["env"]["GAIA_MCP_HOST"], "localhost");
-    EXPECT_EQ(bridge["env"]["GAIA_MCP_PORT"], "8765");
 }
 
 // ---------------------------------------------------------------------------

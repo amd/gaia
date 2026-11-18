@@ -340,7 +340,11 @@ async def create_chat_completion(request: ChatCompletionRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    _prepare_agent(agent, request, history, system_text)
+    try:
+        _prepare_agent(agent, request, history, system_text)
+    except BaseException:
+        _close_agent(agent)
+        raise
 
     # Handle streaming vs non-streaming
     if request.stream:
@@ -348,6 +352,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         if _api_debug_enabled():
             logger.debug("🌊 Using STREAMING mode")
 
+        # The stream's generator closes the agent once it finishes.
         return StreamingResponse(
             create_sse_stream(agent, user_message, request.model),
             media_type="text/event-stream",
@@ -364,7 +369,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
         # Keep synchronous agent work from blocking health checks and other
         # requests handled by the event loop.
-        result = await asyncio.to_thread(agent.process_query, user_message)
+        result = await asyncio.to_thread(_run_query_then_close, agent, user_message)
 
         # Debug logging: show what agent returned
         if _api_debug_enabled():
@@ -434,6 +439,29 @@ async def create_chat_completion(request: ChatCompletionRequest):
                 total_tokens=prompt_tokens + completion_tokens,
             ),
         )
+
+
+def _close_agent(agent) -> None:
+    """Release a per-request agent's watchers, sessions and DB handles."""
+    close = getattr(agent, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception as e:  # noqa: BLE001 - teardown must not mask the reply
+        logger.error("Closing agent %s failed: %s", type(agent).__name__, e)
+
+
+def _run_query_then_close(agent, query: str):
+    """Run *query* and close the agent on the same worker thread.
+
+    A disconnected caller abandons the worker rather than stopping it, so the
+    close must wait for the query, not for the request.
+    """
+    try:
+        return agent.process_query(query)
+    finally:
+        _close_agent(agent)
 
 
 def _drain_content_chunks(
@@ -522,7 +550,6 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
     }
     if _api_debug_enabled():
         logger.debug(f"📤 Sending first chunk: {json.dumps(first_chunk)}")
-    yield f"data: {json.dumps(first_chunk)}\n\n"
 
     # Debug logging
     if _api_debug_enabled():
@@ -542,8 +569,10 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
     failure = None
 
     try:
+        yield f"data: {json.dumps(first_chunk)}\n\n"
+
         # Start processing in background
-        task = loop.run_in_executor(None, lambda: agent.process_query(query))
+        task = loop.run_in_executor(None, lambda: _run_query_then_close(agent, query))
 
         # Stream events as they are generated
         while not task.done():
@@ -595,6 +624,9 @@ async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str
         logger.error(f"❌ Agent query processing failed: {e}", exc_info=True)
         failure = e
     finally:
+        # The worker closes the agent once it has run; without one, close here.
+        if task is None:
+            _close_agent(agent)
         # A client disconnect cancels this generator; the worker thread keeps
         # running unless told to stop.
         if task is not None and not task.done():

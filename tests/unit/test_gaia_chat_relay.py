@@ -48,7 +48,8 @@ def test_the_repl_keeps_one_session_across_turns(calls, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "key, flag", [("index", "--index"), ("use_claude", "--use-claude")]
+    "key, flag",
+    [("index", "--index"), ("use_claude", "--use-claude"), ("device", "--device")],
 )
 def test_options_only_an_in_process_agent_has_are_refused(calls, capsys, key, flag):
     assert cli._gaia_chat_relay({"query": "hi", key: ["x"]}) == 1

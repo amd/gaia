@@ -66,9 +66,6 @@ _ARG_VALUE_CAP = 500
 _ARG_SUMMARY_CAP = 300
 _STEP_TEXT_CAP = 500
 
-#: The tool summary ``tool_start`` falls back to in the UI.
-_PATH_ACCESS_TOOL = "request_path_access"
-
 
 def err(detail: str, **extra: Any) -> Dict[str, Any]:
     return {"status": "error", "detail": detail, **extra}

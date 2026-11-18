@@ -55,9 +55,9 @@ func canAutoStart(l launcher) bool {
 
 // startLemonade spawns the resolved launcher and waits for the server to answer.
 //
-// The child is deliberately not waited on: Lemonade is a long-running server, so
-// the process this starts outlives the readiness check and must outlive the TUI
-// too. Its output goes nowhere — it writes its own log, and inheriting the TUI's
+// The child is deliberately not waited for here: Lemonade is a long-running
+// server, so the process this starts outlives the readiness check and must
+// outlive the TUI too. Its output goes nowhere — it writes its own log, and inheriting the TUI's
 // stdout would paint the alt-screen with server chatter.
 func startLemonade(ctx context.Context, l launcher, probe func(context.Context) bool) error {
 	if !canAutoStart(l) {
@@ -79,6 +79,7 @@ func startLemonade(ctx context.Context, l launcher, probe func(context.Context) 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("could not run %s: %w", strings.Join(l.Argv, " "), err)
 	}
+	reapLauncher(cmd)
 
 	if waitForLemonade(ctx, probe) {
 		return nil
@@ -86,6 +87,13 @@ func startLemonade(ctx context.Context, l launcher, probe func(context.Context) 
 	return fmt.Errorf(
 		"ran %s, but nothing was answering %ds later",
 		strings.Join(l.Argv, " "), int(autoStartWindow.Seconds()))
+}
+
+// reapLauncher collects the launcher when it exits, so one that hands off to a
+// service and returns is not left a zombie for the rest of the session. Whether
+// the server came up is the probe's answer, not this exit code. A var for tests.
+var reapLauncher = func(cmd *exec.Cmd) {
+	go func() { _ = cmd.Wait() }()
 }
 
 // waitForLemonade polls until the server answers or the window closes.

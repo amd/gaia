@@ -668,27 +668,10 @@ class CodeIndexSDK:
             ".ruff_cache",
         }
 
-        # Supported code extensions
-        code_extensions = {
-            ".py",
-            ".pyw",
-            ".js",
-            ".jsx",
-            ".ts",
-            ".tsx",
-            ".go",
-            ".rs",
-            ".java",
-            ".c",
-            ".h",
-            ".cpp",
-            ".hpp",
-            ".v",
-            ".vh",
-            ".sv",
-            ".svh",
-            ".vhd",
-            ".vhdl",
+        from gaia.code_index.parsers import _EXT_TO_LANG
+
+        # Every extension the parsers know, plus text-chunked extras.
+        code_extensions = set(_EXT_TO_LANG) | {
             ".cs",
             ".rb",
             ".php",

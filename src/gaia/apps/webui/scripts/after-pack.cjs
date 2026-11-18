@@ -253,7 +253,7 @@ module.exports = async function afterPack(context) {
         `[after-pack] deleted chrome-sandbox at ${sandboxPath} (issue #782; Chromium will use userns sandbox)`,
       );
     } catch (err) {
-      console.warn(
+      throw new Error(
         `[after-pack] failed to delete chrome-sandbox at ${sandboxPath}: ${err.message}`,
       );
     }
@@ -278,23 +278,23 @@ module.exports = async function afterPack(context) {
     const binaryPath = path.join(root, execName);
     const realBinaryName = `.${execName}-bin`;
     const realBinaryPath = path.join(root, realBinaryName);
+    // A package without the wrapper has no working launcher: fail the build.
+    if (!fs.existsSync(binaryPath)) {
+      throw new Error(
+        `[after-pack] binary not found at ${binaryPath}; cannot add the --no-sandbox wrapper`,
+      );
+    }
     try {
-      if (fs.existsSync(binaryPath)) {
-        fs.renameSync(binaryPath, realBinaryPath);
-        fs.writeFileSync(binaryPath, launchWrapper(realBinaryName));
-        fs.chmodSync(binaryPath, 0o755);
-        console.log(
-          `[after-pack] wrapped ${execName} → ${realBinaryName} with --no-sandbox in argv`,
-        );
-      } else {
-        console.warn(
-          `[after-pack] binary not found at ${binaryPath} — skipping --no-sandbox wrapper`,
-        );
-      }
+      fs.renameSync(binaryPath, realBinaryPath);
+      fs.writeFileSync(binaryPath, launchWrapper(realBinaryName));
+      fs.chmodSync(binaryPath, 0o755);
     } catch (err) {
-      console.warn(
+      throw new Error(
         `[after-pack] failed to create --no-sandbox wrapper: ${err.message}`,
       );
     }
+    console.log(
+      `[after-pack] wrapped ${execName} → ${realBinaryName} with --no-sandbox in argv`,
+    );
   }
 };

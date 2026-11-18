@@ -113,7 +113,9 @@ class MyAgent(DatabaseAgent, RAGToolsMixin, FileToolsMixin):
         return "You can query databases, search documents, and manage files."
 
     def _register_tools(self):
-        pass  # All tools auto-registered from parent classes
+        # DatabaseAgent registers its db_* tools itself; each mixin needs its own call
+        self.register_rag_tools()
+        self.register_file_tools()
 ```
 
 ### 2. DatabaseMixin (Recommended for production)

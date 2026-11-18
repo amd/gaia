@@ -71,6 +71,7 @@ def join_pieces(pieces: Sequence[str]) -> str:
 
 def last_tokens(text: str, n_tokens: int) -> str:
     """About the last ``n_tokens`` of ``text``, starting at a word or sentence."""
+    # text[-0:] is the whole string, so no overlap must return nothing.
     if n_tokens <= 0:
         return ""
     total = estimate_tokens(text)

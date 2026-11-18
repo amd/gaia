@@ -184,6 +184,9 @@ class AdminSeedRequest(BaseModel):
     items: List[AdminSeedItem]
 
 
+_CLEARABLE_FIELDS = frozenset({"domain", "entity", "due_at"})
+
+
 class KnowledgeUpdate(BaseModel):
     content: Optional[str] = None
     category: Optional[str] = None
@@ -484,7 +487,16 @@ def create_knowledge(body: KnowledgeCreate) -> Dict:
 @router.put("/api/memory/knowledge/{knowledge_id}")
 def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
     """Edit a knowledge entry from the dashboard; re-embed changed content."""
-    kwargs = {k: v for k, v in body.model_dump().items() if v is not None}
+    kwargs = body.model_dump(exclude_unset=True)
+    not_clearable = sorted(
+        k for k, v in kwargs.items() if v is None and k not in _CLEARABLE_FIELDS
+    )
+    if not_clearable:
+        raise HTTPException(
+            422,
+            f"{', '.join(not_clearable)} cannot be null; only "
+            f"{', '.join(sorted(_CLEARABLE_FIELDS))} can be cleared",
+        )
     if not kwargs:
         raise HTTPException(400, "No fields to update")
     store = _get_store()

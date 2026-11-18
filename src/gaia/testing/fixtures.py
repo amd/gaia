@@ -125,7 +125,7 @@ def create_test_agent(
             )
 
             result = agent.process_query("Find customer John")
-            assert "John" in result["answer"]
+            assert "John" in result["result"]
 
     Note:
         The agent is created with `skip_lemonade=True` and `silent_mode=True`
@@ -180,7 +180,7 @@ class AgentTestContext:
 
                 # Verify
                 assert ctx.mock_llm.was_called
-                assert "John" in result["answer"]
+                assert "John" in result["result"]
     """
 
     def __init__(

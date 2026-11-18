@@ -19,7 +19,7 @@ Both suites use [Google Test](https://github.com/google/googletest) (fetched aut
 
 ## Unit Tests
 
-Unit tests are built by default and run without an LLM server. They cover all twenty core modules:
+Unit tests are built by default and run without an LLM server. They cover 29 core modules:
 
 | Module | Test file | What it covers |
 |--------|-----------|----------------|
@@ -45,6 +45,13 @@ Unit tests are built by default and run without an LLM server. They cover all tw
 | Git tools | `test_git_tools.cpp` | `git_status`/`git_diff`/`git_log`/`git_show` |
 | Session store | `test_session.cpp` | Session persistence (save/list/resume) |
 | REPL | `test_repl.cpp` | Interactive REPL loop and slash-command parsing |
+| MCP registry | `test_mcp_registry.cpp` | `MCPRegistry` config lookup and error cases |
+| Native tool calls | `test_native_tool_calls.cpp` | OpenAI-style tool calling: request schemas, `tool_calls` parsing |
+| Vector index | `test_vector_index.cpp` | `VectorIndex` add/search/persistence |
+| Chunking | `test_chunking.cpp` | Text extraction and chunking |
+| Skills | `test_skill.cpp` | `SKILL.md` parsing and validation |
+| Skill sets | `test_skill_sets.cpp` | Skill-set resolution from the agent manifest |
+| Database | `test_database.cpp` | `gaia::Database` statements, transactions, migrations, FTS5 |
 
 <Note>
   Three additional modules — `test_tui_markdown.cpp` (markdown renderer), `test_tui_transcript.cpp` (transcript model), and `test_tui_app.cpp` (event loop, streaming, confirmation modal) — are compiled into `tests_mock` only when `GAIA_BUILD_TUI=ON` (the default). They assert against real rendered frames via `ftxui::Screen::Create()` + `Render()` + `ToString()`, so a change that stops output reaching the screen fails the suite.
@@ -121,10 +128,10 @@ Google Test supports test filtering via `--gtest_filter`:
 tests_mock --gtest_filter="AgentTest.*"
 
 # Run only JSON utility tests
-tests_mock --gtest_filter="JsonUtils.*"
+tests_mock --gtest_filter="JsonUtilsTest.*"
 
 # Run a specific test
-tests_mock --gtest_filter="ToolRegistryTest.RegisterAndExecute"
+tests_mock --gtest_filter="ToolRegistryTest.RegisterAndFind"
 ```
 
 ---
@@ -144,6 +151,7 @@ Integration tests exercise the full stack — real LLM inference, live MCP serve
 | `test_integration_wifi.cpp` | Wi-Fi agent end-to-end diagnostic flow |
 | `test_integration_health.cpp` | Health agent MCP-based system diagnostics |
 | `test_integration_vlm.cpp` | Vision-language inference against a real VLM model |
+| `test_integration_tool_calls.cpp` | Native tool calling against a real LLM |
 
 ### Building Integration Tests
 

@@ -18,10 +18,10 @@ icon: "book-open"
 
 ## Overview
 
-RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmented Generation (RAG). It supports PDF, text, CSV, JSON, and code files with intelligent chunking, VLM-enhanced image extraction, and vector search via FAISS.
+RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmented Generation (RAG). It supports PDF, Word, PowerPoint, Excel, EPUB, images, text, CSV, JSON, and code files with intelligent chunking, VLM-enhanced image extraction, and vector search via FAISS.
 
 **Key Features:**
-- Multi-format support (PDF, TXT, MD, CSV, JSON, code files)
+- Multi-format support (PDF, DOCX, PPTX, XLSX, EPUB, images, TXT, MD, CSV, JSON, code files)
 - VLM-based image text extraction from PDFs, on pages with under 200 characters of their own text, so scans are read and logos and photos on text pages aren't
 - Intelligent semantic chunking
 - Hardware-accelerated embeddings (NPU/GPU via Lemonade)
@@ -64,7 +64,7 @@ class RAGConfig:
     use_llm_chunking: bool = False
 
     # VLM settings
-    vlm_model: str = "Gemma-4-E4B-it-GGUF"
+    vlm_model: Optional[str] = field(default_factory=resolve_default_vision_model)  # None while chat runs on the NPU
     use_vlm: bool = True  # False: never read PDF/PPTX images, even if the VLM is installed; image files then fail to index
 
     # Security
@@ -105,7 +105,7 @@ class RAGSDK:
     Simple RAG SDK for PDF document Q&A following GAIA patterns.
 
     Supports:
-    - Documents: PDF, TXT, MD, CSV, JSON
+    - Documents: PDF, DOCX, PPTX, XLSX, EPUB, images, TXT, MD, CSV, JSON
     - Backend Code: Python, Java, C/C++, Go, Rust, Ruby, PHP, Swift, Kotlin, Scala
     - Web Code: JavaScript/TypeScript, HTML, CSS/SCSS/SASS/LESS, Vue, Svelte, Astro
     - Config: YAML, XML, TOML, INI, ENV, Properties
@@ -113,16 +113,31 @@ class RAGSDK:
     - Database: SQL
     """
 
-    def __init__(self, config: Optional[RAGConfig] = None):
+    def __init__(
+        self,
+        config: Optional[RAGConfig] = None,
+        path_validator: Optional[PathValidator] = None,
+    ):
         """Initialize RAG SDK."""
         ...
 
-    def index_document(self, file_path: str) -> Dict[str, Any]:
+    def index_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
+        heartbeat: Optional[Callable[[], None]] = None,
+        display_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Index a document for retrieval.
 
         Args:
             file_path: Path to document or code file
+            progress_callback: Called with (done, total) as embedding proceeds
+            wait_callback: Called with the seconds waited while the embedder is slow
+            heartbeat: Called once per extracted PDF page; raise IndexingStopped to stop
+            display_name: Name the user knows the file by, when file_path is a copy
 
         Returns:
             Dict with indexing results and statistics:
@@ -219,8 +234,8 @@ class RAGSDK:
         ...
 
     def clear_cache(self):
-        """Delete only files the cache wrote (hash-named *.json / *.json.sig
-        and *_extracted.md). Raises ValueError if cache_dir is $HOME or ~/.gaia."""
+        """Delete only files the cache wrote (hash-named *.json / *.json.sig,
+        vectors_<hash>.npy and *_extracted.md). Raises ValueError if cache_dir is $HOME or ~/.gaia."""
         ...
 
     def get_status(self) -> Dict[str, Any]:
@@ -394,11 +409,20 @@ def test_remove_document():
 ## Dependencies
 
 ```toml
-[project]
-dependencies = [
-    "pypdf>=3.0",
-    "faiss-cpu",  # Vector search
-    "numpy",
+# The `rag` extra in setup.py
+rag = [
+    "faiss-cpu>=1.7.0",       # Vector search
+    "numpy>=1.24.0",
+    "pypdfium2>=5.0.0,<6",    # PDF rendering and image extraction
+    "pypdf>=6.20.0",
+    "python-pptx>=0.6.21",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+    "reportlab>=4.0.0",
+]
+
+# Internal GAIA modules it relies on
+gaia_modules = [
     "gaia.chat.sdk",
     "gaia.llm.vlm_client",  # For VLM image extraction
 ]

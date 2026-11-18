@@ -61,6 +61,10 @@ class MyMCPAgent(MCPAgent):
 
         return {"error": f"Unknown tool: {tool_name}"}
 
+    def _register_tools(self):
+        # Required by Agent; MCP tools come from get_mcp_tool_definitions()
+        pass
+
     # Optional: Provide prompts
     def get_mcp_prompts(self) -> List[Dict]:
         return [
@@ -102,15 +106,30 @@ server = AgentMCPServer(
     port=8080,
     host="localhost",
     verbose=True,
-    agent_params={"custom_param": "value"}
+    agent_params={"silent_mode": True}  # passed to MyMCPAgent(**agent_params)
 )
 
-# Start server
+# Start server (streamable HTTP at http://localhost:8080/mcp)
 server.start()
 
 # Now accessible via MCP protocol
 # VSCode, Claude Desktop, etc. can connect
 ```
+
+For a client that launches the server as a subprocess, pass
+`transport="stdio"` (JSON-RPC over stdin/stdout; the banner goes to stderr). Set
+`register_typed_tools=True` to register each tool with a typed signature built
+from its `inputSchema` instead of the default `**kwargs` wrapper.
+
+### Other servers GAIA ships
+
+| Command | What it serves | Default port |
+|---|---|---|
+| `gaia mcp start` | The MCP bridge (`gaia.query`, `gaia.chat`); see [MCP integration](/integrations/mcp) | 8765 |
+| `gaia mcp serve` | Agent UI control server (wraps the Agent UI backend); `--stdio` for stdio | 8766 |
+| `gaia mcp tui` | TUI control server (drives a running `gaia-tui --control`); `--stdio` for stdio | 8767 |
+| `gaia mcp code-index` | Semantic code search over stdio (below) | stdio |
+| `gaia mcp engineering` | Developer-only local coding-app context bridge (`--backend claude\|codex`; see [Harness engineering mode](/spec/harness-engineering-mode)) | not applicable |
 
 ---
 

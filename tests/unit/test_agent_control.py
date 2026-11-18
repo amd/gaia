@@ -143,6 +143,14 @@ def test_read_budget_follows_the_shared_timeout_setting(monkeypatch):
     assert seen["timeout"][1] > agent_read_timeout() >= 1200
 
 
+def test_an_infinite_timeout_setting_reaches_requests_as_no_limit(monkeypatch):
+    """requests raises OverflowError on inf; None is its "wait forever"."""
+    monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", "inf")
+    seen = _capture_timeout(monkeypatch)
+    relay_json("email", "POST", "agent/autonomy/run", json_body={})
+    assert seen["timeout"] == (10.0, None)
+
+
 @pytest.mark.parametrize("bad", ["soon", "0", "-30"])
 def test_a_bad_timeout_setting_fails_before_any_request(monkeypatch, bad):
     monkeypatch.setenv("GAIA_AGENT_TOOL_TIMEOUT", bad)

@@ -226,7 +226,7 @@ async def test_document_ingest_failure_is_visible_in_session_input(
     )
     monkeypatch.setattr(
         "gaia.messaging.telegram.ingest_document_to_rag",
-        lambda path: {"success": False},
+        lambda path, session: False,
     )
     monkeypatch.setattr(
         "gaia.messaging.telegram.get_or_create_session", lambda user_id: StubSession()
@@ -320,7 +320,7 @@ async def test_document_ingest_success_is_included_in_session_input(
     )
     monkeypatch.setattr(
         "gaia.messaging.telegram.ingest_document_to_rag",
-        lambda path: {"success": True},
+        lambda path, session: True,
     )
     monkeypatch.setattr(
         "gaia.messaging.telegram.get_or_create_session", lambda user_id: StubSession()
@@ -469,3 +469,93 @@ async def test_a_turn_stopped_before_its_thread_ran_never_sends_later(monkeypatc
 
     assert sent == ["new question"]
     assert telegram_module._USER_SESSIONS[1] is session
+
+
+@pytest.mark.asyncio
+async def test_document_is_indexed_into_the_users_own_session(monkeypatch, tmp_path):
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
+    reply_text = AsyncMock(return_value=AsyncMock())
+    download_path = tmp_path / "gaia_telegram_document-3"
+
+    async def download(path):
+        download_path.write_text("quarterly numbers")
+
+    downloaded_file = SimpleNamespace(file_id="document-3", download_to_drive=download)
+    document = SimpleNamespace(
+        file_name="q3.txt", get_file=AsyncMock(return_value=downloaded_file)
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=12345),
+        message=SimpleNamespace(
+            text="", photo=[], document=document, reply_text=reply_text
+        ),
+    )
+    indexed = []
+
+    class StubSession:
+        rag_enabled = False
+
+        def enable_rag(self, documents):
+            indexed.append((self, [open(d).read() for d in documents]))
+            return True
+
+        def send_stream(self, text):
+            return iter([SimpleNamespace(text="ok")])
+
+    session = StubSession()
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.tempfile.gettempdir", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session", lambda user_id: session
+    )
+
+    await adapter._handle_message(update, None)
+
+    assert indexed == [(session, ["quarterly numbers"])]
+    assert not download_path.exists(), "the temp download was left behind"
+
+
+@pytest.mark.asyncio
+async def test_document_index_error_is_reported_and_download_removed(
+    monkeypatch, tmp_path
+):
+    adapter = TelegramAdapter(token="fake-token", allowed_users={12345})
+    reply_text = AsyncMock(return_value=AsyncMock())
+    download_path = tmp_path / "gaia_telegram_document-4"
+
+    async def download(path):
+        download_path.write_text("x")
+
+    downloaded_file = SimpleNamespace(file_id="document-4", download_to_drive=download)
+    document = SimpleNamespace(
+        file_name="bad.pdf", get_file=AsyncMock(return_value=downloaded_file)
+    )
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=12345),
+        message=SimpleNamespace(
+            text="", photo=[], document=document, reply_text=reply_text
+        ),
+    )
+    sent_inputs = []
+
+    class StubSession:
+        def send_stream(self, text):
+            sent_inputs.append(text)
+            return iter([SimpleNamespace(text="ok")])
+
+    def boom(path, session):
+        raise ImportError("RAG dependencies not installed")
+
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.tempfile.gettempdir", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr("gaia.messaging.telegram.ingest_document_to_rag", boom)
+    monkeypatch.setattr(
+        "gaia.messaging.telegram.get_or_create_session", lambda user_id: StubSession()
+    )
+
+    await adapter._handle_message(update, None)
+
+    assert sent_inputs == ["[file uploaded: bad.pdf - index failed]"]
+    assert not download_path.exists()

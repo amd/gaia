@@ -196,6 +196,26 @@ class TestMessageToResponse:
         resp = message_to_response(base_message)
         assert resp.rag_sources is None
 
+    @pytest.mark.parametrize("raw_stats", ["not valid json {", '"a string"'])
+    def test_unreadable_inference_stats_are_logged_with_the_message_id(
+        self, base_message, monkeypatch, raw_stats
+    ):
+        from unittest.mock import MagicMock
+
+        from gaia.ui import utils as ui_utils
+
+        fake_logger = MagicMock()
+        monkeypatch.setattr(ui_utils, "logger", fake_logger)
+        base_message["inference_stats"] = raw_stats
+
+        resp = message_to_response(base_message)
+
+        assert resp.stats is None
+        fake_logger.warning.assert_called_once()
+        fmt, msg_id, _err = fake_logger.warning.call_args.args
+        assert "inference_stats" in fmt
+        assert msg_id == 1
+
     def test_rag_sources_empty_string_is_falsy(self, base_message):
         """Empty string is falsy, so rag_sources stays None."""
         base_message["rag_sources"] = ""

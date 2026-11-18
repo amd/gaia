@@ -165,7 +165,6 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         // Only show loading spinner on initial load, not poll refreshes
         const isInitial = get().schedules.length === 0 && !get().error;
         if (isInitial) set({ loading: true });
-        set({ error: null });
         try {
             const data = await api.listSchedules();
             const schedules: Schedule[] = data.schedules || [];
@@ -181,6 +180,7 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
             set({
                 schedules,
                 loading: false,
+                error: null,
                 errorCounts,
                 // Max, because Run now marks a run in flight just before counting it.
                 finishedCounts: Object.fromEntries(

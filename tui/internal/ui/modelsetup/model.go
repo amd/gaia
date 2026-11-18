@@ -140,7 +140,6 @@ type Model struct {
 	loadErr error
 	sel     selection
 	focus   int
-	scroll  int
 	showAll bool // the "already in Lemonade" group is open
 	// showVision opens the other vision models under a chat model that reads
 	// images itself.
@@ -158,8 +157,6 @@ type Model struct {
 	busy      string
 	busySince time.Time
 	note      string
-	// resume is set when a partial download was found at load.
-	resume bool
 
 	gpu       *setupapi.GPU
 	gpuErr    error
@@ -250,6 +247,8 @@ func New(api setupapi.API, opts Options) Model {
 		notChecked: map[string]bool{},
 		retests:    map[string]bool{},
 	}
+	// Skip and tick write to these before any plan has loaded.
+	m.sel = selection{ticked: map[string]bool{}, unticked: map[string]bool{}}
 	m.busy = readingModels
 	m.busySince = opts.Now()
 	// Init starts the first tick; this records that the chain is running.
@@ -288,7 +287,7 @@ func (m Model) Outcome() (kind, detail string) {
 		if m.shownState(r) == setupapi.StateFailed {
 			return "failed", m.nameOf(r.ID)
 		}
-		if r.State == setupapi.StateCancelled {
+		if r.State == setupapi.StateCancelled || r.State == setupapi.StateQueued {
 			return "failed", m.nameOf(r.ID)
 		}
 	}
@@ -299,7 +298,7 @@ func (m Model) Outcome() (kind, detail string) {
 // them can still forward their ticks and status reads.
 func IsMsg(msg tea.Msg) bool {
 	switch msg.(type) {
-	case loadedMsg, appliedMsg, startedMsg, statusMsg, tickMsg, gpuMsg, cancelledMsg, removedMsg, redownloadMsg:
+	case loadedMsg, appliedMsg, startedMsg, statusMsg, tickMsg, gpuMsg, cancelledMsg, stoppedMsg, removedMsg, redownloadMsg:
 		return true
 	}
 	return false
@@ -358,6 +357,12 @@ type gpuMsg struct {
 }
 
 type cancelledMsg struct{ err error }
+
+// stoppedMsg: one stuck pull was asked to stop, to start it again.
+type stoppedMsg struct {
+	id  string
+	err error
+}
 
 type removedMsg struct {
 	plan setupapi.Plan
@@ -443,7 +448,6 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.clampScroll()
 		return m, nil
 
 	case tickMsg:
@@ -491,6 +495,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.dl.cancelled = true
 		m.dl.queue = nil
 		return m, m.pollNow()
+
+	case stoppedMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.dl.queue = without(m.dl.queue, msg.id)
+			m.note = "Could not stop the download: " + msg.err.Error()
+			return m, nil
+		}
+		// Queued again; advance starts it once the backend says the pull stopped.
+		return m, tea.Batch(m.pollNow(), m.tickCmd())
 
 	case redownloadMsg:
 		m.busy = ""
@@ -562,6 +576,10 @@ func (m Model) loaded(msg loadedMsg) (Model, tea.Cmd) {
 			if row.State != setupapi.StateSkipped {
 				m.dl.ids = append(m.dl.ids, row.ID)
 			}
+			if !m.dl.run && m.dl.current == "" && row.State == setupapi.StateDownloading {
+				// A single pull has no run to follow: follow its row.
+				m.dl.current = row.ID
+			}
 		}
 		m.scr = scrDownload
 		m.since = m.opts.Now()
@@ -569,14 +587,21 @@ func (m Model) loaded(msg loadedMsg) (Model, tea.Cmd) {
 		return m, m.startPolling()
 	}
 	m.scr = scrModels
-	if m.opts.Mode == ModeFirstRun {
-		for _, r := range m.sel.rows {
-			if r.partial && m.sel.ticked[r.id] {
-				m.resume = true
-			}
+	return m, nil
+}
+
+// resumable reports whether setup would pick up a download an earlier visit
+// left partly done.
+func (m Model) resumable() bool {
+	if m.opts.Mode != ModeFirstRun {
+		return false
+	}
+	for _, r := range m.sel.rows {
+		if r.partial && !r.downloaded && m.sel.ticked[r.id] {
+			return true
 		}
 	}
-	return m, nil
+	return false
 }
 
 func anyDownloading(st setupapi.Status) bool {
@@ -990,7 +1015,7 @@ func (m Model) started(msg startedMsg) (Model, tea.Cmd) {
 	}
 	if msg.err != nil {
 		if msg.id == "" {
-			m.dl.active = false
+			m.dl.active, m.dl.run = false, false
 			m.note = "Could not start the download: " + msg.err.Error()
 			m.scr = scrDownload
 			return m, nil
@@ -1763,12 +1788,6 @@ func (m *Model) clampFocus() {
 	}
 	if m.focus < 0 {
 		m.focus = 0
-	}
-}
-
-func (m *Model) clampScroll() {
-	if m.scroll < 0 {
-		m.scroll = 0
 	}
 }
 

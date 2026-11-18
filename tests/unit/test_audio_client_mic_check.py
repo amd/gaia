@@ -5,7 +5,7 @@
 
 import queue
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -117,3 +117,34 @@ def test_no_speech_warning_after_10_seconds(audio_client, capsys):
 
     captured = capsys.readouterr()
     assert "No speech detected" in captured.out
+
+
+def test_no_speech_warning_is_not_shown_after_a_heard_utterance(audio_client, capsys):
+    """Once speech was transcribed and answered, the mic is evidently working."""
+    calls = {"n": 0}
+
+    def fake_queue_get(timeout=0.1):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "hello"
+        if calls["n"] >= 4:
+            audio_client.whisper_asr.is_recording = False
+        raise queue.Empty
+
+    audio_client.transcription_queue = MagicMock()
+    audio_client.transcription_queue.get.side_effect = fake_queue_get
+    audio_client.silence_threshold = 1
+
+    clock = {"t": 1000.0}
+
+    def fake_time():
+        clock["t"] += 5
+        return clock["t"]
+
+    callback = AsyncMock()
+    with patch("gaia.audio.audio_client.time") as mock_time:
+        mock_time.time.side_effect = fake_time
+        audio_client._process_audio_wrapper(callback)
+
+    callback.assert_awaited_once_with("hello")
+    assert "No speech detected" not in capsys.readouterr().out
