@@ -982,6 +982,15 @@ Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
         } catch (const std::exception& e) {
             if (cancelRequested()) throw;
             if (dynamic_cast<const PartialStreamError*>(&e)) throw;
+            // Lemonade's cloud relay answers 500 with this text when the provider's reply has no
+            // content, which is a reply cut off at the length limit while still reasoning.
+            if (const auto* http = dynamic_cast<const HttpError*>(&e);
+                http && http->status() == 500 &&
+                http->body().find("type must be string, but is null") != std::string::npos) {
+                LlmResult cut;
+                cut.finishReason = "length";
+                return cut;
+            }
             if (isContextOverflow(e)) {
                 // Free more each time: older tool output, then all of it, then long replies.
                 bool freed = false;

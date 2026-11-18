@@ -1031,6 +1031,23 @@ TEST(AgentResilience, EmptyRepliesAtTheLengthLimitNameTheLimit) {
     EXPECT_NE(lastUserText(mock.receivedBodies()[1]).find("hit the length limit"), std::string::npos);
 }
 
+TEST(AgentResilience, ACloudReplyCutOffWhileReasoningIsAskedAgainNotFailed) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "add", R"({"a":1})"));
+    // What Lemonade's cloud relay returns when the provider's reply has no content.
+    mock.pushResponse(R"({"error":"[json.exception.type_error.302] type must be string, but is null"})", 500);
+    mock.pushResponse(answer("Done after all."));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.llmRetries = 2;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "Done after all.");
+    EXPECT_EQ(r["status"], "success");
+    EXPECT_EQ(mock.requestCount(), 3) << "asked again once, not retried as a server fault";
+    EXPECT_NE(lastUserText(mock.receivedBodies()[2]).find("hit the length limit"), std::string::npos);
+}
+
 TEST(AgentResilience, FastFlowLmsFullWindowWordingIsRecoveredFrom) {
     bench::MockLlmServer mock;
     mock.pushResponse(call("c1", "big", "{}"));
