@@ -974,8 +974,7 @@ def test_a_cat_run_in_another_folder_reads_the_file_there(tmp_path):
     ledger = CompletionEvidence("Write the result to out/r.toml.", str(tmp_path))
     out = tmp_path / "out"
     out.mkdir()
-    (out / "r.toml").write_text("ok = true
-", encoding="utf-8")
+    (out / "r.toml").write_text("ok = true" + chr(10), encoding="utf-8")
     ledger.record(
         "run_python",
         {"code": "..."},
@@ -983,8 +982,7 @@ def test_a_cat_run_in_another_folder_reads_the_file_there(tmp_path):
         True,
     )
     args = {"command": "cat r.toml"}
-    result = {"status": "success", "stdout": "ok = true
-", "cwd": str(out)}
+    result = {"status": "success", "stdout": "ok = true" + chr(10), "cwd": str(out)}
     ledger.record("run_shell_command", args, result, True)
     Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
     gaps = _gaps(ledger, "The result is saved to `out/r.toml`.")
