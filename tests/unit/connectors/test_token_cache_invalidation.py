@@ -11,6 +11,7 @@ from gaia.connectors import flow as flow_mod
 from gaia.connectors import oauth_pkce as oauth_pkce_mod
 from gaia.connectors import providers, tokens
 from tests.unit.connectors.test_device_flow import (
+    _ME,
     MAIL_READ,
     _FakeResp,
     _id_token,
@@ -45,7 +46,6 @@ def _no_remote_revoke(monkeypatch):
         return {"revoke_supported": False, "revoked_remotely": False}
 
     monkeypatch.setattr(flow_mod, "revoke_provider_token", no_remote_revoke)
-    monkeypatch.setattr(oauth_pkce_mod, "revoke_provider_token", no_remote_revoke)
 
 
 async def test_revoke_connection_drops_the_cached_token(_no_remote_revoke):
@@ -89,6 +89,7 @@ async def test_a_completed_device_connect_drops_the_previous_token(
                 },
             )
         ],
+        get_responses=[_FakeResp(200, _ME)],
     )
     _seed_cached_token("microsoft")
 
@@ -120,6 +121,7 @@ async def test_a_completed_browser_connect_drops_the_previous_token(
                 },
             )
         ],
+        get_responses=[_FakeResp(200, _ME)],
     )
     _seed_cached_token("microsoft")
     flow = _PendingFlow(

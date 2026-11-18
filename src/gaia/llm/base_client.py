@@ -19,6 +19,10 @@ class LLMClient(ABC):
     #: in the request history. Strict servers reject unknown message fields.
     accepts_reasoning_history: bool = False
 
+    #: Whether the backend caches by exact prompt prefix and bills a changed
+    #: start as a fresh write, so the agent keeps mid-turn changes append-only.
+    caches_prompt_prefix: bool = False
+
     @property
     @abstractmethod
     def provider_name(self) -> str:

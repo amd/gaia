@@ -7,8 +7,9 @@ import re
 import unicodedata
 
 # Arabic Presentation Forms-A and -B: per-position glyph codes many PDF writers
-# (Word, Chrome) emit instead of base letters.
-_PRESENTATION_FORMS = re.compile("[ﭐ-﷿ﹰ-﻾]+")
+# (Word, Chrome) emit instead of base letters. Chrome also reports some kanji
+# as the CJK radical that looks the same (日 as U+2F47).
+_PRESENTATION_FORMS = re.compile("[\u2e80-\u2fdf\ufb50-\ufdff\ufe70-\ufefe]+")
 
 _ARABIC_YEH = "ي"
 _SHARED_GLYPH_LETTERS = str.maketrans({"ی": _ARABIC_YEH, "ھ": "ه"})
@@ -149,8 +150,11 @@ def _reading_order(line: list) -> str:
         previous = line[index - 1][2] if index else ""
         following = line[index + 1][2] if index + 1 < len(line) else ""
         last = parts[-1][-1] if parts else ""
+        # Only when the run so far is a bare number; after a Latin word the
+        # hyphen joins one left-to-right run.
         between_numbers = (
             piece in _RUN_SEPARATORS
+            and _NUMBER_PIECE.fullmatch(last)
             and _NUMBER_PIECE.fullmatch(previous.strip())
             and _NUMBER_PIECE.fullmatch(following.strip())
         )
@@ -191,7 +195,8 @@ def _reading_order(line: list) -> str:
 
 
 def normalize_arabic_pdf_text(text: str) -> str:
-    """Map Arabic presentation-form glyphs to base letters (U+FEFB -> "لا").
+    """Map Arabic presentation-form glyphs to base letters (U+FEFB -> "لا"),
+    and CJK radicals to the kanji they stand in for (U+2F47 -> "日").
 
     Only those code points are touched; NFKC on the whole string would also
     rewrite unrelated characters such as "²" or "ﬁ". Fonts share one glyph for

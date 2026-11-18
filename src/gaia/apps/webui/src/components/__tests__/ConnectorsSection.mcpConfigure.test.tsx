@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import type { ConnectorRow } from '../../types';
 
 vi.mock('../../services/api', () => ({
@@ -320,6 +320,28 @@ describe('MCP connector configure panel', () => {
             await screen.findByText("Slack didn't start. Check the token, then save it again."),
         ).toBeInTheDocument();
         expect(screen.getByText('Authentication failed - check your Slack tokens')).toBeInTheDocument();
+        // The header must not go on saying Connected above the failure.
+        const tile = document.querySelector('[data-connector-id="mcp-slack"]') as HTMLElement;
+        expect(within(tile).getByText('Not working')).toBeInTheDocument();
+        expect(within(tile).queryByText('Connected')).not.toBeInTheDocument();
+    });
+
+    it('says Connected only once a check has started the server (#8360)', async () => {
+        let finish: (r: { ok: boolean; detail: string }) => void = () => {};
+        mocked.testConnector.mockReturnValue(new Promise((resolve) => { finish = resolve; }) as never);
+        await openTile(mcpRow({ id: 'mcp-memory', display_name: 'Memory', configured: true }));
+        const tile = document.querySelector('[data-connector-id="mcp-memory"]') as HTMLElement;
+        const status = () => tile.querySelector('.connector-status')?.textContent;
+
+        // Turned on, but nothing has started it yet.
+        expect(status()).toBe('Turned on');
+        expect(within(tile).queryByText('Connected')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+        await waitFor(() => expect(status()).toBe('Checking…'));
+
+        finish({ ok: true, detail: 'started, 1 tool' });
+        await waitFor(() => expect(status()).toBe('Connected'));
     });
 
     it('does not blame the token when the server was only slow to start', async () => {
@@ -336,6 +358,8 @@ describe('MCP connector configure panel', () => {
 
         expect(await screen.findByText(/Slack took too long to start/)).toBeInTheDocument();
         expect(screen.queryByText(/Check the token/)).not.toBeInTheDocument();
+        // Slow is not broken: the header keeps saying Connected.
+        expect(screen.queryByText('Not working')).not.toBeInTheDocument();
     });
 
     it('clears the check result when the server is turned off', async () => {

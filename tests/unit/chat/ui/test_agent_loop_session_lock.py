@@ -36,9 +36,13 @@ class _FakeAgent:
         self._cancel_event = None
         self._mcp_manager = MagicMock()
         self.calls = []
+        self.closed = False
 
     def _register_tools(self):
         pass
+
+    def close(self):
+        self.closed = True
 
     def process_query(self, message):
         self.calls.append(message)
@@ -92,6 +96,7 @@ async def test_tick_reuses_gaia_agent_without_evicting_it(env):
 
     assert helpers._agent_cache[session["id"]]["agent"] is agent
     agent._mcp_manager.disconnect_all.assert_not_called()
+    assert not agent.closed
     assert len(agent.calls) == 1
 
 
@@ -238,6 +243,10 @@ async def test_tick_without_a_cached_agent_builds_the_flagship(env, monkeypatch)
     assert config.kwargs["ui_session_id"] == session["id"]
     assert config.kwargs["silent_mode"] is True
     assert len(agent.calls) == 1
+    # Nothing caches it, so its MCP servers would outlive the tick.
+    assert agent.closed
+    # A queued memory extraction of GAIA's own prompt would keep it alive.
+    assert agent._auto_extract_enabled is False
 
 
 async def test_cancelling_an_inflight_goal_stops_its_background_tick(env):

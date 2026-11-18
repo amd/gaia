@@ -44,7 +44,6 @@ _ALLOWLISTED_UNDOCUMENTED = _INTENTIONALLY_UNDOCUMENTED | {
     ("connectors", "activations", "activate"),
     ("connectors", "activations", "deactivate"),
     ("connectors", "activations", "list"),
-    ("connectors", "disconnect"),
     ("connectors", "grants", "list"),
     ("connectors", "grants", "revoke"),
     ("connectors", "list"),

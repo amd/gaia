@@ -24,11 +24,11 @@ same human-readable string for a given scope. A unit test in
 from __future__ import annotations
 
 import os
-import zlib
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 from urllib.parse import urlencode
 
 from gaia.connectors.errors import OAuthClientNotConfiguredError
+from gaia.connectors.providers.base import client_id_hash
 from gaia.connectors.setup_routes import get_route, render_console_steps
 
 # Plain-language descriptions for the AgentUI consent dialog (AC23). The
@@ -151,7 +151,7 @@ class GoogleOAuthProvider:
         self.client_id: str = resolved_id
         # CRC32 fingerprint for log correlation / tripwire comparison only.
         # Non-cryptographic by design — not used for security.
-        self.client_id_hash: str = format(zlib.crc32(resolved_id.encode()), "08x")
+        self.client_id_hash: str = client_id_hash(resolved_id)
         # Google requires client_secret even for Desktop-type PKCE clients.
         self.client_secret: str = (
             client_secret
@@ -183,12 +183,31 @@ class GoogleOAuthProvider:
             "include_granted_scopes": "true",
         }
 
+    def account_prompt_params(
+        self,
+        *,
+        select_account: bool,
+        login_hint: str | None,
+        account_type: str | None,
+    ) -> dict:
+        """Which account Google signs in: the picker when adding an account
+        (``prompt=consent`` stays so a refresh token is still issued), or a hint
+        when reconnecting one. Google has no account kinds to hint."""
+        del account_type
+        params: dict = {}
+        if select_account:
+            params["prompt"] = "select_account consent"
+        if login_hint:
+            params["login_hint"] = login_hint
+        return params
+
     def authorization_url(
         self,
         redirect_uri: str,
         challenge: str,
         state: str,
         scopes: Iterable[str],
+        extra_params: Mapping[str, str] | None = None,
     ) -> str:
         params = {
             "client_id": self.client_id,
@@ -200,6 +219,7 @@ class GoogleOAuthProvider:
             "scope": " ".join(scopes),
         }
         params.update(self.authorization_params())
+        params.update(extra_params or {})
         return f"{self.auth_url}?{urlencode(params)}"
 
     def token_request_body(self, code: str, verifier: str, redirect_uri: str) -> dict:

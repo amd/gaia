@@ -21,9 +21,20 @@ from typing import Iterable, List
 logger = logging.getLogger(__name__)
 
 
+def _stored_blobs(provider_id: str) -> List[dict]:
+    """The stored connection of every account of *provider_id*."""
+    from gaia.connectors.accounts import list_accounts
+    from gaia.connectors.store import peek_connection
+
+    blobs = (
+        peek_connection(provider_id, slot=a.slot) for a in list_accounts(provider_id)
+    )
+    return [b for b in blobs if b is not None]
+
+
 def has_prior_state(provider_id: str) -> bool:
-    """True when *provider_id* already has a stored connection OR any agent
-    grant.
+    """True when *provider_id* already has a stored connection (any account)
+    OR any agent grant.
 
     Either one alone is enough: a connection with no grant yet is still
     consented state a silent scope substitution would blow away, and a
@@ -31,9 +42,8 @@ def has_prior_state(provider_id: str) -> bool:
     not silently narrow either.
     """
     from gaia.connectors.grants import load_grants
-    from gaia.connectors.store import peek_connection
 
-    if peek_connection(provider_id) is not None:
+    if _stored_blobs(provider_id):
         return True
     return bool(load_grants().get(provider_id))
 
@@ -45,11 +55,9 @@ def _current_scopes_and_agents(provider_id: str) -> "tuple[set, List[str]]":
     (a printed remedy with an unfilled ``<scope>`` slot is the exact defect
     this issue exists to remove — see ``errors.py`` / ``forward.py``)."""
     from gaia.connectors.grants import load_grants
-    from gaia.connectors.store import peek_connection
 
     current: set = set()
-    conn = peek_connection(provider_id)
-    if conn:
+    for conn in _stored_blobs(provider_id):
         current.update(conn.get("scopes", []))
     grants_for_provider = load_grants().get(provider_id, {})
     for scopes in grants_for_provider.values():

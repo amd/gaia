@@ -27,7 +27,14 @@ from gaia.agents.base.completion import CompletionEvidence
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.turn_scope import TurnScopeGuard
 from gaia.chat.sdk import AgentResponse
-from gaia.llm.providers.lemonade import LemonadeProvider, LemonadeStreamCutOffError
+from gaia.llm.failure_record import failure_kind
+from gaia.llm.lemonade_client import LemonadeClientError
+from gaia.llm.providers.lemonade import (
+    LemonadeProvider,
+    LemonadeReplyStalledError,
+    LemonadeStreamCutOffError,
+)
+from gaia.llm.retry import StreamStalledError
 
 # --------------------------------------------------------------------------
 # Script-written outputs and folders named in prose
@@ -134,6 +141,8 @@ def test_a_file_from_before_the_turn_does_not_count(tmp_path):
     old.write_text("old\n")
     hour_ago = time.time() - 3600
     os.utime(old, (hour_ago, hour_ago))
+    # Created (or utime'd) before the run's clock slack, as a real old file is.
+    time.sleep(0.1)
     ledger = CompletionEvidence("Save the outputs into out/", str(tmp_path))
     _run_script(ledger, lambda: None)
     assert _missing(_gaps(ledger))
@@ -483,6 +492,68 @@ def test_a_cut_off_native_call_is_never_emitted_as_a_call():
             [_call_fragment('{"code": "print(1)"}', name="run_python")]
         ):
             assert "__tool_calls__" not in chunk
+
+
+def _stalled(before_output):
+    """The client's error for a stream gone quiet, as the provider receives it."""
+    stall = StreamStalledError(limit=120, remote=True, before_output=before_output)
+    error = LemonadeClientError(stall.describe(1))
+    error.__cause__ = stall
+    return error
+
+
+def _stalling(chunks, error):
+    yield from chunks
+    raise error
+
+
+def test_a_reply_that_stalls_partway_is_a_cut_off_keeping_its_own_message():
+    error = _stalled(before_output=False)
+    with pytest.raises(LemonadeReplyStalledError) as caught:
+        _provider_stream(_stalling([_text("Let me build the three")], error))
+    assert isinstance(caught.value, LemonadeStreamCutOffError)
+    assert "sent nothing for 120s" in caught.value.user_message
+    assert caught.value.__cause__ is error
+
+
+def test_a_model_silent_from_the_start_is_not_a_cut_off():
+    error = _stalled(before_output=True)
+    with pytest.raises(LemonadeClientError) as caught:
+        _provider_stream(_stalling([], error))
+    assert caught.value is error
+
+
+def test_a_reply_that_stalled_partway_is_requested_again(agent):
+    stalled = LemonadeReplyStalledError(_stalled(before_output=False).args[0])
+    calls = _streams(
+        agent,
+        ["Let me build it.\n", stalled],
+        call("write_file", file_path="a.md", content="real\n"),
+        {"answer": "Wrote a.md."},
+    )
+    result = agent.process_query("Write a.md with the word real.")
+    assert len(calls) == 3
+    assert result["result"].startswith("Wrote a.md.")
+    assert agent.writes == [("a.md", "real\n")]
+
+
+def test_a_reply_that_stalls_every_time_ends_the_turn_failed_with_a_report(agent):
+    def stalled():
+        error = LemonadeReplyStalledError(_stalled(before_output=False).args[0])
+        error.__cause__ = _stalled(before_output=False)
+        return ["Let me build it.", error]
+
+    calls = _streams(agent, stalled(), stalled(), stalled(), stalled())
+    saved = []
+    with patch.object(
+        agent, "_save_failure_record", lambda exc: saved.append(exc) or "GF-1"
+    ):
+        result = agent.process_query("Write a.md.")
+    assert len(calls) == 3
+    assert result["status"] == "failed"
+    assert "GF-1" in result["result"]
+    assert "Let me build it" not in result["result"]
+    assert failure_kind(saved[0]) == "timeout"
 
 
 def _provider_stream_iter(chunks):

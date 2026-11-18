@@ -26,6 +26,7 @@ import gaia.ui._chat_helpers as chat_helpers_module
 from gaia.agents.registry import AgentRegistry
 from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.hub.installer import register_installed_sidecars
+from gaia.security import PathValidator
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui import permissions as session_permissions
 from gaia.ui.database import ChatDatabase
@@ -351,6 +352,10 @@ class _WritingAgent:
         self.conversation_history = []
         self._cancel_event = None
         self._followup_queue = None
+        # The sidecar syncs attached documents against these every turn.
+        self.indexed_files: set = set()
+        self.rag = None
+        self.path_validator = PathValidator([])
 
     def process_query(self, query, max_steps=None):
         approved = self.console.confirm_tool_execution(

@@ -937,6 +937,53 @@ class TestSystemStatus:
         assert data["model_downloaded"] is True
         assert data["default_model_size_gb"] == 23.3
 
+    @patch("httpx.AsyncClient")
+    def test_system_status_sizes_match_setup(self, mock_httpx_cls, client):
+        """Lemonade's 21.7 (GiB) for Qwen3.6 reads as GAIA's 23.3 GB; a model
+        GAIA has no figure for keeps Lemonade's."""
+        mock_client = AsyncMock()
+
+        def make_response(status_code, json_data):
+            resp = MagicMock()
+            resp.status_code = status_code
+            resp.json.return_value = json_data
+            return resp
+
+        health_data = {
+            "status": "ok",
+            "model_loaded": "TinyModel-0.5B-GGUF",
+            "all_models_loaded": [
+                {
+                    "model_name": "TinyModel-0.5B-GGUF",
+                    "type": "llm",
+                    "recipe_options": {"ctx_size": 4096},
+                }
+            ],
+        }
+        catalog = {
+            "data": [
+                {"id": "TinyModel-0.5B-GGUF", "downloaded": True, "size": 0.4},
+                {"id": "Qwen3.6-35B-A3B-GGUF", "downloaded": True, "size": 21.7},
+            ]
+        }
+
+        async def mock_get(url, **kwargs):
+            if "/health" in url:
+                return make_response(200, health_data)
+            if "/models" in url:
+                return make_response(200, catalog)
+            return make_response(200, {})
+
+        mock_client.get = mock_get
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        mock_httpx_cls.return_value = mock_client
+
+        client.put("/api/settings", json={"custom_model": "Qwen3.6-35B-A3B-GGUF"})
+        data = client.get("/api/system/status").json()
+        assert data["model_size_gb"] == 0.4
+        assert data["default_model_size_gb"] == 23.3
+
     @pytest.mark.parametrize(
         "query, expected",
         [("", ("new chat", False)), ("?fresh=true", ("model pick retry", True))],
@@ -1446,6 +1493,8 @@ class TestNetworkPolicySetting:
                 "severity": "warning",
                 "url": None,
                 "reason": "server refused",
+                "cause": None,
+                "models": None,
             }
         ]
 
@@ -1468,6 +1517,8 @@ class TestNetworkPolicySetting:
                 "severity": "info",
                 "url": "http://127.0.0.1:1234",
                 "reason": None,
+                "cause": None,
+                "models": None,
             }
         ]
 

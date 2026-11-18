@@ -29,8 +29,8 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 - `run_shell_command` is confirmation-gated, so interactively every call is shown to the user
 - Read-only list (`ALLOWED_COMMANDS`): what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
 - Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval unless the console's `full_access` is on
-- `TIER_CONFIRM_ONCE` for what GAIA's own checks don't cover (`git push`, `git -c`, `python -c`, uninspectable PowerShell, shell operators, a path outside the allowed folders): the prompt shows the exact line and its full folder with a risk note, offers no "always", and an approval runs that line once through the shell. It is refused under a blanket pre-approval, and `wait_for_condition` never polls one
-- `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible or line-break characters, broken quoting), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), for a granted CLI's `never_offered_actions` (`gh issue close`, `gh pr merge`), and for any of these run through a launcher such as `sudo`, `env`, `timeout`, `nice` or `xargs` (an unfamiliar launcher option is read both ways, so it can't hide the command), and for folders no approval may open. A command refused on its text ends its hint with `NOT_APPROVABLE`, so the agent doesn't tell the user to approve it
+- `TIER_CONFIRM_ONCE` for what GAIA's own checks don't cover (`git push`, `git -c`, `python -c`, uninspectable PowerShell, shell operators, a path outside the allowed folders): the prompt shows the exact line and its full folder with a risk note, offers no "always", and an approval runs that line once through the shell. A multi-line command (a heredoc) is one of these too: the prompt shows every line, and each line is checked like the first. It is refused under a blanket pre-approval, and `wait_for_condition` never polls one
+- `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible characters or a carriage return, broken quoting, and on Windows a second line, which cmd.exe never runs), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), for a granted CLI's `never_offered_actions` (`gh issue close`, `gh pr merge`), and for any of these run through a launcher such as `sudo`, `env`, `timeout`, `nice` or `xargs` (an unfamiliar launcher option is read both ways, so it can't hide the command), and for folders no approval may open. A command refused on its text ends its hint with `NOT_APPROVABLE`, so the agent doesn't tell the user to approve it
 - Every command on a line validated before any of it runs, and the strictest segment decides the line: one `TIER_REFUSE` segment stops it, one `TIER_CONFIRM_ONCE` segment makes the whole line a one-time approval
 - Path validation for all file-like arguments
 - Git subcommand filtering (write subcommands are `TIER_CONFIRM`)
@@ -118,6 +118,10 @@ travels in it, spelled `2>nul`, because there the shell owns the pipeline. A
 step carrying an environment assignment is the exception: `cmd.exe` would apply
 it to the whole string, so that step runs as argv on Windows too, and gives up
 `cmd.exe`'s built-in resolution (`dir`, `type`) to keep the assignment scoped.
+Any step that runs as argv on Windows starts, for each segment, the program
+PATH finds, never one in the working folder; a program missing from PATH, or
+found only as a `.bat`/`.cmd` that needs `cmd.exe`, fails the step before any
+of its segments starts.
 
 ---
 
@@ -357,6 +361,16 @@ longer budget would only hold the turn longer with nothing to show.
 
 A timeout above the 3600s ceiling is **refused, not clamped** — a command killed
 at a limit its caller never chose is a failure with no visible cause.
+
+A command killed at its timeout still returns what it printed: commands run
+with `PYTHONUNBUFFERED=1` unless the command or the user's environment sets it,
+so a Python child's output isn't lost in its buffer. The result's `hint` never
+suggests a larger timeout. For a `test` or `script` command it names the files
+the turn changed and says to run the check on just those, or, with nothing
+changed, to narrow the run to one test file or the edited files: a repo-wide
+lint or test run that blew one budget usually blows a bigger one too. Any other
+class is pointed at a background run polled with `wait_for_condition`, or at
+shorter steps.
 
 ### Waiting Without Spinning
 

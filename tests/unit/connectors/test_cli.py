@@ -169,7 +169,7 @@ class TestConnectGrantAgent:
 
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["connector_id"] = connector_id
             captured["scopes"] = list(scopes)
             captured["grant_agents"] = grant_agents
@@ -204,7 +204,7 @@ class TestConnectGrantAgent:
     def test_grant_agent_passes_grant_agents_to_the_flow(self, monkeypatch):
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["connector_id"] = connector_id
             captured["scopes"] = list(scopes)
             captured["grant_agents"] = grant_agents
@@ -275,7 +275,7 @@ class TestConnectGrantAgent:
 
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes):
+        async def _fake_start(connector_id, *, scopes, **_account):
             captured["start_connector_id"] = connector_id
             captured["start_scopes"] = list(scopes)
             return {
@@ -286,6 +286,7 @@ class TestConnectGrantAgent:
                 "scopes": list(scopes),
                 "interval": 1,
                 "expires_in": 900,
+                "intent": None,
             }
 
         async def _fake_poll(
@@ -296,6 +297,7 @@ class TestConnectGrantAgent:
             interval,
             expires_in,
             grant_agents=None,
+            intent=None,
         ):
             captured["poll_connector_id"] = connector_id
             captured["device_code"] = device_code
@@ -343,7 +345,7 @@ class TestConnectGrantAgent:
             monkeypatch, requested, connector_id="microsoft"
         )
 
-        async def _fake_start(connector_id, *, scopes):
+        async def _fake_start(connector_id, *, scopes, **_account):
             return {
                 "message": "Go to https://microsoft.example and enter CODE",
                 "device_code": "device-code",
@@ -352,6 +354,7 @@ class TestConnectGrantAgent:
                 "scopes": list(scopes),
                 "interval": 1,
                 "expires_in": 900,
+                "intent": None,
             }
 
         async def _fake_poll(
@@ -362,6 +365,7 @@ class TestConnectGrantAgent:
             interval,
             expires_in,
             grant_agents=None,
+            intent=None,
         ):
             return {"account_email": "alice@example.com"}
 
@@ -392,7 +396,7 @@ class TestConnectGrantAgent:
 
     @pytest.mark.allow_network  # asyncio's Windows event loop uses a local socketpair
     def test_device_connect_describes_microsoft_graph_scopes(self, monkeypatch):
-        async def _fake_start(connector_id, *, scopes):
+        async def _fake_start(connector_id, *, scopes, **_account):
             assert connector_id == "microsoft"
             return {
                 "message": "Go to https://microsoft.example and enter CODE",
@@ -402,6 +406,7 @@ class TestConnectGrantAgent:
                 "scopes": list(scopes),
                 "interval": 1,
                 "expires_in": 900,
+                "intent": None,
             }
 
         async def _fake_poll(
@@ -412,6 +417,7 @@ class TestConnectGrantAgent:
             interval,
             expires_in,
             grant_agents=None,
+            intent=None,
         ):
             return {"account_email": "alice@example.com"}
 
@@ -437,7 +443,7 @@ class TestConnectGrantAgent:
     def test_plain_connect_passes_no_grant_agents(self, monkeypatch):
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["grant_agents"] = grant_agents
             return {"flow_id": "F1", "authorization_url": "https://auth.example"}
 
@@ -478,7 +484,7 @@ class TestConnectGrantAgent:
 
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["scopes"] = sorted(scopes)
             captured["grant_agents"] = grant_agents
             return {"flow_id": "F1", "authorization_url": "https://auth.example"}
@@ -517,7 +523,7 @@ class TestConnectGrantAgent:
         default_scopes for a genuine first-time connect)."""
         captured = {}
 
-        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+        async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["scopes"] = list(scopes)
             return {"flow_id": "F1", "authorization_url": "https://auth.example"}
 

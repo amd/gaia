@@ -83,7 +83,7 @@ delivers one binary from one lane. A `1.x`-shaped lock is likewise rejected.
 
 The TUI is **consumed, not built here**. It is the same `tui/cmd/gaia` binary the
 core release publishes as the `terminal-hub` component and a core install runs as
-`gaia-tui` — so behaviour is identical by construction rather than by convention.
+`gaia-cli` — so behaviour is identical by construction rather than by convention.
 Building a second copy under this package's lane would put the same bytes at a
 different version under a third naming convention, and the two would drift.
 
@@ -190,7 +190,7 @@ check.
 | Component | Default directory              | Executable          |
 | --------- | ------------------------------ | ------------------- |
 | `sidecar` | `~/.gaia/agents/gaia/`         | `gaia-agent[.exe]`  |
-| `tui`     | `~/.gaia/npm-cache/gaia-<agentVersion>/` | `gaia-tui[.exe]` |
+| `tui`     | `~/.gaia/npm-cache/gaia-<agentVersion>/` | `gaia-cli[.exe]` |
 
 The sidecar directory is a **cross-repo contract** with
 `gaia.daemon.sidecars.fetch.default_cache_dir("gaia")`. The daemon spawns and
@@ -239,7 +239,7 @@ filling the chat with uvicorn's startup log.
 The TUI directory is keyed by `agentVersion` — this package's version, not the
 component's — so a bump of either never reuses the previous release's executable.
 
-The TUI executable is renamed to `gaia-tui` on install, **never** `gaia`: the
+The TUI executable is renamed to `gaia-cli` on install, **never** `gaia`: the
 `terminal-hub` artifact is `gaia-<platform>` and npm installs a `gaia` bin shim on
 `PATH`, so keeping the hub's name would shadow the shim. `filename` (what is
 downloaded) and `executable` (what is written) are separate fields for exactly this
@@ -262,7 +262,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.28"`                  |
+| Contract version   | `API_VERSION = "2.30"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -284,6 +284,7 @@ the header.
 | `GET`  | `/v1/gaia/sessions/{session_id}/grants` | The session's "always" answers, `{ key, label }` each (≥ 2.26) |
 | `DELETE` | `/v1/gaia/sessions/{session_id}/grants` | Revoke one (`?key=`) or all of them (≥ 2.26) |
 | `GET`  | `/v1/gaia/sessions/{session_id}/tools` | The tools the session's agent can call now, `{ name, description, category }` each; an unknown session is a `404` (≥ 2.27) |
+| `DELETE` | `/v1/gaia/sessions/{session_id}` | End the session: close its agent and stop the MCP servers it started. An unknown session is a `404`; one running a turn is a `409` (≥ 2.30) |
 | `POST` | `/v1/gaia/query/{run_id}/followup`| Add to a run already in flight (contract ≥ 2.15) |
 
 The `/respond` body carries the answer in exactly one of `value` (preferred) or
@@ -323,7 +324,9 @@ with a note saying how many characters are missing, so its answer stays in view.
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
 runs, the agent indexes the ones it has not indexed yet, so a file attached
-mid-conversation is read on the next turn. Each path is granted as that exact
+mid-conversation is read on the next turn, and drops from the session's index
+any file an earlier turn sent that this one leaves out, so a detached or deleted
+file is no longer searched. Its grant goes with it, so it can no longer be read either, unless a folder the caller granted holds it. Send an empty list when none are attached. A conversation searches at most 100 documents or 10,000 passages at once: past that the rest are granted but not loaded, the `index_documents` step says how many and which limit was reached, and the agent loads one when asked about it by name. Each path is granted as that exact
 file, never its folder. A relative path is a `422`. A missing file, a folder, or
 a secret the path policy refuses is reported as not indexed in the turn's
 `index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
@@ -520,6 +523,10 @@ the `token` events already delivered. Answer text the model produced but the
 stream had not yet sent when the cancel landed is discarded with the
 half-written tail.
 
+A session on the `hybrid` model id gets `final.route` (contract ≥ 2.29): the
+turn's routing decision, with `model` naming the concrete model it ran on. Bill
+and label the turn by `route.model`, not by `hybrid`.
+
 `final` carries `context` (contract ≥ 2.21): what the next model call holds
 if the caller pushes this turn back as history — the same payload the Agent
 UI's Context panel shows. `window` is the model's context window in tokens,
@@ -547,8 +554,9 @@ carries none, and older binaries never send it, so read it only when present.
 A request without `turns` does not wait for timings: its `final` carries them
 only when the loop had already returned.
 
-A `final` with `failed: true` ends a turn a model call broke; its `answer` says
-what was and wasn't done. When the cause is one a front-end can fix, `failure`
+A `final` with `failed: true` ends a turn that did not do what was asked: a
+model call broke, or a confirmation-gated tool was refused on a run nobody can
+answer (§8). Its `answer` says what was and wasn't done. When the cause is one a front-end can fix, `failure`
 names it. `"model_server_down"` means the local model server took no
 connection. Cloud models go through that server too, so the provider was never
 reached; the turn fails at once instead of retrying, and its `answer` names the
@@ -562,7 +570,9 @@ ends the answer with one plain-English line, for example
 `I haven't confirmed this works — the tests didn't pass.` It appears when a
 check failed, a check was blocked before it could run, a file was changed and
 nothing checked it afterwards, or the answer claims something the tool record
-does not support. It is capped at 200 characters and added at most once per
+does not support. An answer that itself reports failed tests, and claims no
+success, gets no line for them; the turn's `verification` data still records
+the failure. It is capped at 200 characters and added at most once per
 turn. A turn where every check passed, or nothing needed checking, carries
 nothing. It is part of `final.answer` and of the streamed text, so it is also
 what you store and replay in the next turn's `context`. A client that wants the
@@ -585,6 +595,12 @@ naming the allowed characters, on `/query`, `/sessions/{session_id}/bypass`,
 `/sessions/{session_id}/tools`.
 Omitting it is a valid, explicit one-shot: nothing persists past that single
 turn, and the agent is not told otherwise.
+
+A retained session rebuilds its agent at the start of its next turn when the
+Lemonade Server chosen in Settings changed, or an MCP connector was turned on
+or off or (de)activated for GAIA, since it was built. The rebuilt agent keeps the conversation, loaded skills, the internet
+switch, the memory mode, granted folders and documents, and the working
+folder.
 
 Internal explicit deletion follows the same idle-only rule as eviction: it returns
 `False` for an absent or busy session and preserves a running agent. Successful
@@ -629,7 +645,9 @@ close an idle session) and retry. A `/query` that fails before its run starts
 because the model server is unavailable (for example GAIA's own server can't
 start) also gets `503`, with `detail` worded for the request's `surface`:
 what failed and the fix, never the raw connection error. When that fix is to
-repair GAIA's setup, retrying the same request fails the same way. A
+repair GAIA's setup, retrying the same request fails the same way. A `503`
+whose `detail` says there is no model by that name is not retryable either:
+pick another model. A
 `session_id` can also be evicted from the retention table under an idle
 timeout (**4 hours** without a turn) or an LRU cap on concurrent sessions
 (**100**) — the two knobs that decide when the `503` above can happen at all
@@ -773,6 +791,13 @@ The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models,
 grouped by provider, with `(default)` beside the configured default model;
 `/model <id>` switches the live client while preserving conversation and skills.
+A session built on the `hybrid` model id picks a cheap or strong model before
+each turn and runs the whole turn on it; once the classifier sent a turn to the
+strong model the session stays there until `/clear`. A classifier failure runs
+that one turn on the strong model without pinning the session.
+After 3 failed classifications in a row the turn prints a warning notice with
+the fix. `/model <id>` turns routing off. `process_query`'s result then carries a `route` record (see the
+gateway guide's Hybrid model section).
 The switch reply is one line naming the model, where it runs, and, for a cloud
 model, that messages and anything read from files or memory are sent there.
 Cloud IDs (`fireworks.*`, `amd.*`) route through Lemonade without local model

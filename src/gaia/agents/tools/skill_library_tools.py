@@ -375,7 +375,9 @@ class SkillLibraryToolsMixin:
             Installing does not activate it — call load_skill after. An
             unsigned skill or a dangerous permission is refused; only the user
             can approve those, in a terminal (`gaia skill install <name>
-            --allow-experimental` / `--yes`). Report that and stop.
+            --allow-experimental` / `--yes`). Report that and stop. A skill
+            that fails verification is refused for good: never get it
+            another way (capture, fetch, download, or writing a copy).
 
             Args:
                 name: Skill name exactly as search_skill_hub reported it.

@@ -7,6 +7,7 @@
 // default are optional here even though the server always sends them.
 
 export interface ApiSchemas {
+  AccountUpdateRequest: AccountUpdateRequest;
   ActivationRequest: ActivationRequest;
   AdminClearRequest: AdminClearRequest;
   AdminSeedItem: AdminSeedItem;
@@ -132,6 +133,7 @@ export interface ApiSchemas {
   TaskCreate: TaskCreate;
   TaskStatusUpdate: TaskStatusUpdate;
   ToolConfirmRequest: ToolConfirmRequest;
+  TurnRouteResponse: TurnRouteResponse;
   TurnSummaryCost: TurnSummaryCost;
   TurnSummaryDocument: TurnSummaryDocument;
   TurnSummaryFile: TurnSummaryFile;
@@ -154,6 +156,13 @@ export interface ApiSchemas {
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
   gaia__ui__routers__system__DownloadModelRequest: Gaia_Ui_Routers_System__DownloadModelRequest;
+}
+/**
+ * Body for ``PATCH /api/connectors/{id}/accounts/{account_id}``. Only
+ * ``true`` is accepted: to change the default, make another account it.
+ */
+export interface AccountUpdateRequest {
+  is_default: boolean;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -237,6 +246,7 @@ export interface AgentListResponse {
  */
 export interface AgentStepResponse {
   active?: boolean;
+  autoDeclined?: boolean | null;
   commandOutput?: CommandOutputResponse | null;
   currentStep?: number | null;
   data?: unknown;
@@ -245,6 +255,7 @@ export interface AgentStepResponse {
   detail?: string | null;
   fileList?: FileListResponse | null;
   id: number;
+  kept?: boolean | null;
   label: string;
   latencyMs?: number | null;
   mcpOutput?: McpOutputResponse | null;
@@ -252,6 +263,7 @@ export interface AgentStepResponse {
   mcpServerLabel?: string | null;
   mcpTool?: string | null;
   narration?: string | null;
+  needsModel?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
@@ -301,6 +313,8 @@ export interface AttachDocumentRequest {
   document_id: string;
 }
 export interface AuthorizeRequest {
+  account?: string | null;
+  add_account?: boolean;
   grant_agents?: string[];
   scopes?: string[];
 }
@@ -645,8 +659,9 @@ export interface FollowUpRequest {
  * OAuth, no consent step.
  *
  * ``refresh_token`` / ``client_secret`` are secret INPUTS — they are never
- * echoed back in any response. ``account_email`` is display-only in v1
- * (the keyring slot is single-account per provider). ``grant_agents`` is
+ * echoed back in any response. ``account_email`` picks which stored account
+ * the forward replaces (the one with that address); with other accounts
+ * stored and no match, the forward is refused. ``grant_agents`` is
  * the list of namespaced agent ids (e.g. ``installed:email``) to grant the
  * forwarded scopes so they can resolve the connection ambiently.
  */
@@ -713,6 +728,7 @@ export interface IndexFolderResponse {
   failed?: number;
   indexed?: number;
   skipped?: number;
+  skipped_images?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
@@ -739,10 +755,20 @@ export interface InferenceStatsResponse {
   output_tokens?: number;
   place?: string | null;
   retried?: boolean | null;
+  route?: TurnRouteResponse | null;
   seconds?: number | null;
   steps?: number | null;
   time_to_first_token?: number;
   tokens_per_second?: number;
+}
+/**
+ * The model a ``hybrid`` turn was routed to, and why.
+ */
+export interface TurnRouteResponse {
+  degraded?: boolean;
+  model: string;
+  notice?: string;
+  reason?: string;
 }
 /**
  * Summary of a boot-time initialization task (embedded in SystemStatus).
@@ -750,6 +776,7 @@ export interface InferenceStatsResponse {
 export interface InitTaskInfo {
   name: string;
   status: string;
+  step?: string | null;
 }
 /**
  * Body for ``POST /api/agents/install``.
@@ -1101,7 +1128,9 @@ export interface PermissionModeRequest {
  * Structured Local only notice translated by the Agent UI.
  */
 export interface PolicyNotice {
+  cause?: string | null;
   code: string;
+  models?: string[] | null;
   reason?: string | null;
   severity: "info" | "warning";
   url?: string | null;

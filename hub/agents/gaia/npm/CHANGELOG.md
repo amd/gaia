@@ -6,7 +6,178 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
+
+### Fixed
+
+- A reply that goes quiet partway through is requested again, up to twice,
+  instead of ending the turn; the work done so far is kept either way.
+
+## [0.3.6]
+
+Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+
+- **A terminal UI chat follows Settings too.** Its one long-lived agent now
+  rebuilds before a message when the model server or an MCP connector changed,
+  keeping its transcript and what the session set, as Agent UI chats do.
+- **Skills added or removed reach open chats.** The skill list in an agent's
+  prompt came from a cached scan, so a skill added in Settings › Skills was
+  missing from chats already open, and a removed one stayed listed. Each turn
+  now checks the skill folders and rebuilds the list only when they changed,
+  in the Agent UI and the terminal UI.
+- **A model server chosen in Settings reaches open chats.** A session's model
+  client kept the Lemonade Server it was built on, so after switching between
+  GAIA's own and yours an open chat kept asking the old one, or waited for
+  GAIA's stopped server to come back. A session now rebuilds its agent on its
+  next turn when the chosen server changed, keeping the conversation.
+- **An MCP connector changed in Settings reaches open chats.** A session's
+  agent registered its MCP tools once, so a connector turned off stayed
+  callable and one turned on never appeared until GAIA restarted. A session now
+  rebuilds its agent on its next turn when the server list or activations
+  changed, keeping the conversation and loaded skills. The flagship also checks
+  activation as `installed:gaia` however it is built, as Settings shows it, and
+  offers only the MCP tools it registered itself, not those another session
+  left in the process.
+- **Deleting a conversation can stop its MCP servers (contract 2.30).**
+  `DELETE /v1/gaia/sessions/{session_id}` ends a session and closes its agent,
+  which stops the servers it started. Until now a session's servers ran until it
+  idled out, up to 4 hours, so a host that deleted chats kept every chat's
+  servers running. An unknown session is a `404`; one running a turn is a `409`.
+- **Closing an agent stops the MCP servers it started.** Each server is a
+  process tree (`uvx`, `uv`, the server), and it used to outlive the agent:
+  an agent built for one request left its servers running for good.
+- **The agent stops when the GAIA daemon that started it is killed.** It used
+  to keep running, holding memory and a port, until the next daemon started.
+  It now notices within seconds and shuts down normally.
+- **The Agent UI no longer calls a model server GAIA doesn't run "not
+  installed".** When that server stopped answering, a run's `error` ended with
+  this machine's start instruction, which on a PC with no Lemonade of its own
+  read "Lemonade Server is not installed. Run `gaia init`". The `error` now says
+  the model server didn't answer: send the message again, and if it keeps
+  failing the server is its owner's to start. For a `/query` with `surface:
+  "agent_ui"` it names no command; the TUI and other callers still get this
+  machine's start instruction.
+- **A session switched to another model behaves like one started on it.** A
+  `/query` naming a different `model` swaps the session's client in place. The
+  swap now also moves what was chosen for the first model: image reading (off
+  on an NPU model, on again after a switch to a GPU one), the model documents
+  are summarized with, context eviction, and the `set_reasoning_effort` tool
+  for a model that grades reasoning. A failed switch still leaves the session
+  exactly as it was.
+- **`provider: "lemonade"` with no `model` uses the configured default.** A
+  session moved back from Claude went to Gemma 4 E4B even when `default_model`
+  named another model.
+- **A model name the server doesn't list fails with a plain reason.** A
+  `/query` for a model id outside the model server's catalog answered 500 with
+  the raw preload error and a restart command. It now answers 503 saying there
+  is no model by that name to download, with the caller's own way to pick
+  another. For `surface: "agent_ui"`, a start failure's detail no longer names
+  a terminal command.
+- **Cancel says how many attached documents were left unloaded.**
+  `POST /v1/gaia/query/{run_id}/cancel` now returns `documents_left` when it
+  stops the loading of the turn's attached documents, including for a cancel
+  that lands just after the run ended. A host that closes the stream on Stop
+  never read the loading step's "Stopped: N documents were not loaded" result,
+  so its user was told nothing. The field is `null` when nothing was left.
+
+- **No "I haven't confirmed this works" line under an answer that already
+  reports the failure.** An answer such as "No, the suite fails: 1 failed",
+  which claims no success, no longer ends with "… 1 of 2 pytest runs didn't
+  pass". A failed lint or build, a blocked check or an unchecked change
+  still gets the line, and `verification` still records every failure.
+- **More attached documents than one conversation searches.** A conversation
+  searches at most 100 documents or 10,000 passages at once. With more in
+  `documents`, the agent loads up to that limit instead of loading every one
+  and pushing earlier ones out, says in the `index_documents` step how many it left unloaded and
+  which limit it reached (the document count, or the passages a few long
+  documents fill), and never calls one of those "not attached": asking about
+  one by name loads it.
+
+- **A reply that is only the model's reasoning no longer ends the turn as
+  done.** A model writing JSON tool calls sometimes replied with just a
+  `thought`: a fenced one was taken as the final answer, and after a bare one
+  the agent asked again with nothing new, up to the step limit. The agent now asks once for a tool call or an
+  answer, and a second such reply in a row ends the turn as incomplete.
+- **`GAIA_AGENT_PLAN_RECAP=0` shortens what a finished plan sends back.** For a
+  model that writes tool calls as JSON text, a finished plan was followed by the
+  whole request and plan again, which every later call re-sent. With the switch
+  off it is one line saying how many plan steps ran and how many steps are
+  left. On by default, so nothing changes unless you set it.
+- **Writing the report after the tests no longer counts as an untested
+  change.** A task that ran its tests and then wrote its summary file, or a
+  changelog entry, was told its passing tests "ran before the last change" and
+  re-ran them for nothing. Prose docs (`.md`, `.rst`, a `README` or
+  `CHANGELOG`, files under `docs/`) and the output file the request asked for
+  no longer make an earlier run stale, unless they sit in a test or data
+  folder or inside a package. Every other write still does.
+- **Large files and outputs are read in fewer, larger pieces.** Reading a file
+  too large for one result returned small archived parts the agent fetched one
+  per call. It now returns the file's first lines and a line-numbered outline
+  of its definitions or headings, so the agent reads the part it needs by line
+  range. `read_tool_output` takes `to_entry` to return a run of parts in one
+  call, up to the same size limit as any tool result.
+- **A command killed at its timeout keeps what it printed, and the agent scopes
+  the retry.** A Python lint or test run that timed out came back with no
+  output at all, and the hint suggested running it again with a longer
+  timeout. Commands and `run_python` scripts now run unbuffered, so the partial
+  output survives the kill, and a timed-out lint or test command's hint names
+  the files the turn changed and says to check just those instead of the whole
+  repository.
+- **The agent knows an MCP server it set up didn't start.** The notice the
+  user sees about MCP servers that couldn't start, couldn't load or went over
+  the tool limit now also reaches the model each turn, so asked about one it
+  says it is set up but unavailable rather than that nothing by that name
+  exists. A corrupt `mcp_servers.json` is described in plain words.
+- **A detached document is no longer searched.** A file an earlier turn sent in
+  `documents` and this turn leaves out (the user detached it, or deleted it from
+  the library) is dropped from the session's index, so answers stop quoting it.
+  An empty `documents` list drops them all.
+- **A detached document can no longer be read either.** The agent dropped it
+  from the index but kept its permission to read the file, so asking about it
+  by name indexed it again from disk. The permission now goes with it, and a
+  copy kept in GAIA's own documents folder is refused until it is attached
+  again. A folder the caller granted still covers the files inside it.
+- **A turn the output limit keeps cutting off says what to do next.** It told
+  the user to "retry with a higher output-token limit (max_tokens)", a setting
+  the apps don't have, dropped what the turn had done, and sent no token counts,
+  so its cost read "Not reported". It now names the tools it ran and its last
+  findings, suggests asking for the work in smaller parts, and carries the
+  turn's token counts.
+- **`hybrid` runs each turn on a cheap or a strong model.** A session on the
+  `hybrid` model id (`gaia gateway use hybrid` or `gaia -p --model hybrid`) asks a cheap classifier about each request and runs
+  the whole turn on `amd.DeepSeek-V4.1-Flash` when it is routine and low-stakes,
+  else on `amd.Claude-Opus-5-5`. A failed classification goes strong for that
+  turn only, a session the classifier sent strong stays strong, and an
+  unavailable model fails the turn instead of running the other one, naming the
+  `hybrid_*` setting that chose it.
+  `gaia -p` JSON records the decision as `route`, and so does `/query`'s
+  `final` (contract 2.29), so a host bills and labels the turn by the model
+  that ran it. A classifier that keeps
+  failing is reported with its fix (a notice on every turn after 3 in a row),
+  one that rejects JSON mode is asked in plain text, and `/clear` starts the
+  next turn unescalated.
+- **A run stopped for an approval nobody can give reads as not done.** Its
+  `final` now carries `failed: true` and the `usage` spent before the stop, so
+  `gaia -p` reports `is_error: true` with real step and token counts instead of
+  a free, zero-step success. A stopped turn's result now carries
+  the tokens it spent too.
+
+- **Scratch folders no longer pile up in the temp folder.** A `gaia-scratch-…`
+  folder was removed only when its agent was closed, so a sidecar that was
+  killed or exited left it behind (one PC held about 2,900). The agent now
+  removes the scratch folders it holds when its process exits normally, and
+  the next agent to start clears any no agent has used for a day, including
+  ones a killed process left.
+
+- **Files a Python run writes are UTF-8.** `run_python` and
+  `execute_python_file` wrote a bare `open(path, "w")` in the Windows locale
+  codec, so a degree sign landed as the cp1252 byte `0xB0`. Scripts now run in
+  UTF-8 mode, in the packaged binary too.
+
+- **The terminal UI's executable is `gaia-cli`, not `gaia-tui`.** It is the same
+  rename a full GAIA install makes. The package writes the binary as
+  `gaia-cli[.exe]` in its cache; `npx @amd-gaia/gaia` starts it as before. A
+  `gaia-tui` left in an older cache folder is unused.
 
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
@@ -41,7 +212,7 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   (with `--history-file`) keeps a listing beside the session's transcript:
   its title, whether it is running, waiting on a permission prompt, done or
   failed, and each finished turn in readable form. `/sessions` and
-  `gaia-tui --resume` list and reopen sessions from it. Nothing changes for the
+  `gaia-cli --resume` list and reopen sessions from it. Nothing changes for the
   HTTP surface, or for a launch without the flag.
 - **One MCP server with a bad repeat-call declaration no longer takes the
   others down.** An MCP server tool can name the arguments the repeat-call
@@ -157,6 +328,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   before", so every later chat started with it in its prompt. It, and the new
   `search_tools` cap, are now marked as not run, like a permission refusal, and
   memory skips them.
+- **The integration guide says the web tools reach the internet.** Web search
+  and page fetch send their queries and URLs off the machine even with a local
+  model; the guide now says so next to the cloud-provider caveat.
 - **The package description and integration guide no longer say nothing leaves the
   machine.** Local inference is still the default; both now say a cloud provider
   receives the conversation when you pick one.
@@ -228,6 +402,25 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Fixed
 
+- **A turn that stops early still writes the file you asked for.** When the
+  agent hits its step limit or keeps repeating a call, it gets one step to
+  write a requested file that doesn't exist yet, and it can only write those
+  files in that step. If the file still isn't written, the answer says so
+  instead of claiming it was. A file written that way is read back like any
+  other edit, and if it is missing, empty or no longer parses, the answer says
+  that too. A turn the loop guard ends gets the same completion check as other
+  early stops, so a claimed write that no tool made is named too.
+- **A refused action is reported as refused, not as your decision.** When a
+  safety rule blocks a command, the agent says the command was refused, and a
+  refused delete still guards what it would have deleted.
+- **`gaia -p --time-limit SECONDS`** tells the agent how long the run may take,
+  so it wraps up and answers before the deadline instead of being cut off.
+- **`run_python` can check a project's own code.** Any `import gaia…` was
+  refused, so inside a GAIA checkout the agent copied code into the snippet by
+  hand and reported the copy's output as proof. Only reaching for one of its
+  tools through `gaia` (`from gaia import write_file`) is refused now, and a
+  `src/`-layout project has `src/` on the path so its modules import from the
+  checkout, not an installed copy. `execute_python_file` gets the same path.
 - **"Do not run anything, answer only with a plan" gets the plan.** The
   announced-step check sent a requested tool plan back as unfinished work, and
   the look-first check told the model to open the file the user had said not

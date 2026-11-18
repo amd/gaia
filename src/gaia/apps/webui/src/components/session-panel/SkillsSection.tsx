@@ -12,7 +12,7 @@ import { Sparkles } from 'lucide-react';
 import * as api from '../../services/api';
 import { expectShape } from '../../utils/responseShape';
 import { log } from '../../utils/logger';
-import { useTurnEnd } from '../../hooks/useTurnEnd';
+import { useRereadWhileStarting, useTurnEnd } from '../../hooks/useTurnEnd';
 import { useChatStore } from '../../stores/chatStore';
 import { PanelSection } from './PanelSection';
 import type { ActiveSkill, SkillOrigin } from '../../types/sessionPanel';
@@ -65,6 +65,7 @@ export function SkillsSection({ sessionId, busy }: SkillsSectionProps) {
     // skillUses: a skill picked up mid-reply shows without waiting for the reply to end.
     useEffect(load, [load, skillUses]);
     useTurnEnd(busy, load);
+    useRereadWhileStarting(busy, failure?.notRunning === true, load);
 
     // An agent that runs elsewhere doesn't report its skills, so there is nothing to show.
     if (skills === null) return null;

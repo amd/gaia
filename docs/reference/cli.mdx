@@ -117,12 +117,13 @@ echo "List the Python files here" | gaia -p --output-format json
 | Flag | Description |
 |------|-------------|
 | `-p`, `--print [prompt]` | The prompt. With no text after it, the prompt is read from stdin; an empty stdin or an interactive terminal is an error |
-| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`). Default: `default_model` from `gaia config`, else the agent's own default |
+| `--model <id>` | Model to run (local or cloud, e.g. `amd.DeepSeek-V4.1-Flash`), or `hybrid` to pick a cheap or strong model for the turn ([Hybrid model](/guides/llm-gateway#hybrid-model)). Default: `default_model` from `gaia config`, else the agent's own default |
 | `--output-format text\|json` | `text` (default) prints the answer alone; `json` prints one JSON object (below) |
 | `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
 | `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
+| `--time-limit <seconds>` | Wall-clock seconds the turn may take, at least 1. The agent is told the limit with the request, and to write a first version of any requested file early. At 70% it is told to write what was asked for. Near the limit (at 90%, or earlier when its steps are slow) it stops working, writes any requested file still missing, and answers. A shell or Python command, a wait or a sleep the agent starts gets a timeout no longer than the time left before that stop, and one with no time left is refused. A turn still busy at the limit is stopped there: a running shell or Python command ends, a model call already sent is waited for, and the answer says the time limit stopped the turn, followed by the agent's latest findings. A turn the limit ended reports `status: incomplete` and exits 1, even when it wrote its file and answered. Counted from the start of the turn, after server start-up, so give a wrapper's own timeout some headroom above it. Can't be combined with `--attempts` yet (a usage error). Default: no limit |
 | `--attempts <n>` | Run `n` (up to 4) independent attempts, then one turn that checks and combines them ([below](#independent-attempts)). Default: 1 |
-| `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking |
+| `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking. A request that only hands over quoted text to translate, reword or proofread still has them refused |
 | `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
 
@@ -154,8 +155,10 @@ subcommand instead.
 | `duration_s` | Wall-clock seconds for the turn, excluding server start-up |
 | `error_count` | Errors the agent recorded during the turn |
 | `error` | Only when `is_error`: why the turn failed |
+| `time_limit_reached` | Only when `--time-limit` ended the turn early |
 | `attempts` | Only with `--attempts` above 1: each attempt's `is_error`, `status`, `error` (why it failed), `duration_s`, steps, tool calls and tokens. The top-level counts include them |
 | `conversation` | Only with `--verbose`: the turn's messages and tool calls |
+| `route` | Only with `--model hybrid`: the model the turn ran on and why — `model`, `kind`, `difficulty`, `stakes`, `reason`, `classified` (false when the classifier gave no valid label), `seconds`, `sticky`, `policy` (the `hybrid_policy` in effect), `classifier_format` (`json_object` or `plain`), `fix` (what to change when the classifier failed), `degraded` and `notice` (true, with a message, once the classifier has failed 3 turns in a row) |
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
 than `success`), when the model server could not be started, or when no prompt was
@@ -232,11 +235,13 @@ in either mode.
 
 Agents stop after a maximum number of reasoning/tool steps. The flagship GAIA agent (`gaia chat`, the Agent UI, the TUI) defaults to **1000**: a backstop for a turn that never finishes, set high enough that long, multi-part desktop tasks do not reach it. Other agents default to **50**.
 
-When 20, 10 and 5 steps remain, the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. That summary is kept even when a requested file was never written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off.
+When 20, 10 and 5 steps remain, the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. If a file the request asked for doesn't exist yet, the agent first gets one step in which it may only write those files. The summary is kept even when a requested file still wasn't written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off.
 
-Before an agent answers, it reads back the files it edited that turn. If one is missing, empty, or no longer parses (Python and JSON), the agent gets two extra steps to fix it, on top of the step limit. This happens at most twice per turn; anything still broken after that is listed under the answer. Set `GAIA_AGENT_VERIFY_EDITS=0` to turn the read-back off.
+Before an agent answers, it reads back the files it edited that turn. If one is missing, empty, or does not parse (Python and JSON), the agent gets two extra steps to fix it, on top of the step limit. Content the user gave word for word in the request is left as written. This happens at most twice per turn; anything still broken after that is listed under the answer. A turn that stops early (step limit, time limit, a repeating call) still reads its edits back, but has no steps left to fix them, so anything broken is listed under the answer. Set `GAIA_AGENT_VERIFY_EDITS=0` to turn the read-back off.
 
-The same closing call runs when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused get the same closing call, told what failed, and the failure is reported after the answer, so research done before the loop is kept. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
+A model that writes its tool calls as JSON text can answer with a plan of several calls, which run without a model call between them. When the plan finishes, the agent restates the request and the whole plan before asking for an answer or another plan. Set `GAIA_AGENT_PLAN_RECAP=0` to send a one-line note instead (how many plan steps ran and how many steps are left): the plan and its results are already in the conversation, so this cuts what every later call re-sends. Models that call tools natively never take this path.
+
+The same closing call, and the same write step for a missing requested file, run when an agent is stopped for repeating one tool call with identical arguments (`max_consecutive_repeats`, default **4**): the model gets one correction first, and if it asks for the same call again the turn ends — a run that finished its work and then kept re-checking it reports what it did instead of a "can't confirm" notice. Repeats that failed or were refused get the same closing call, told what failed, and the failure is reported after the answer, so research done before the loop is kept. The same applies to one tool that keeps failing with different arguments, and to an agent that, having answered, starts work the request never asked for: the off-request call is not run, and a second one ends the turn with an answer to what you asked.
 
 - **Per-invocation:** pass `--max-steps <n>` to `gaia chat` (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
@@ -308,10 +313,10 @@ elsewhere:
 
 ```bash
 # Linux / macOS
-GAIA_ALLOWED_PATHS=/home/me/evals/task-17 gaia-tui
+GAIA_ALLOWED_PATHS=/home/me/evals/task-17 gaia-cli
 
 # Windows (PowerShell)
-$env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-tui
+$env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-cli
 ```
 
 - **It narrows, with one exception below.** The agent's scope becomes the overlap of its normal scope
@@ -336,7 +341,7 @@ $env:GAIA_ALLOWED_PATHS = "C:\evals\task-17"; gaia-tui
   separate OS user, in a container, or in a VM, and keep answer keys where that
   account cannot read them.
 - **It is read when the agent starts.** `gaia chat` reads it directly, and
-  `gaia-tui` passes it to the agent it launches. A flagship that runs under the
+  `gaia-cli` passes it to the agent it launches. A flagship that runs under the
   GAIA background service needs the variable set when
   `gaia daemon start` runs; restart the daemon to change it. The Agent UI
   server reads it when it starts.
@@ -426,7 +431,7 @@ canonical choices list):
 <Note>
 A bare `gaia init` runs the `gaia` profile: Lemonade, the chat model, the RAG/memory
 embedder, and the flagship [GAIA agent](/guides/gaia) itself, installed from GAIA's download server if it is missing. It does
-**not** install the terminal UI (`gaia-tui`) — get that with `npx @amd-gaia/gaia`, which
+**not** install the terminal UI (`gaia-cli`) — get that with `npx @amd-gaia/gaia`, which
 fetches and verifies both binaries with no Python required.
 
 If the download server cannot be reached, `gaia init` still finishes the other steps, then
@@ -472,8 +477,8 @@ Skipping a model is allowed, and setup says what stops working:
 | `user.embeddinggemma-300m-GGUF` | GAIA can't search your documents or remember things |
 | The chat model | GAIA has no local chat model; pick another with `--use-model`, or a cloud provider |
 
-With `--plan --json`, the plan is one JSON object, the same one the Agent UI reads from
-`GET /api/setup/plan`. `catalog` lists every model you can pick: the profile's models,
+With `--plan --json`, the plan is one JSON object, the same one the Agent UI's setup
+screen reads from `GET /api/setup/plan?skip_chat_model=false`. `catalog` lists every model you can pick: the profile's models,
 GAIA's other chat models, and each chat model already downloaded in Lemonade. Each entry
 has `id`, `roles` (`chat`, `vision`, `embedding`), `purpose`, `if_skipped`,
 `size_gb` (what is left to download, partial files subtracted), `full_size_gb`,
@@ -739,7 +744,7 @@ is removed only when it is the app's exact wrapper around this GAIA home's venv;
 <Note>
 `--purge` also undoes what the one-line installer set up. It stops a running GAIA daemon,
 and any agent sidecar it left running, before deleting its state, removes `~/.gaia/bin`
-(`gaia-tui`, `gaia-agent`, the `gaia` command links the Linux and macOS installer puts
+(`gaia-cli`, `gaia-agent`, the `gaia` command links the Linux and macOS installer puts
 there, and on Windows the frozen `gaia` the installer puts there), `~/.gaia/core` and an
 AppImage's `~/.gaia/app-core`, and
 removes the installer's PATH entries: the `# Added by GAIA installer` block in
@@ -1618,7 +1623,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `test` | Test MCP bridge functionality (optionally against a specific `--tool`) |
 | `agent` | Invoke the MCP orchestrator agent (positional `request` arg + `--domain`, `--context`) |
 | `serve` | Start the Agent UI MCP server (wraps the Agent UI backend) |
-| `tui` | Start the TUI control MCP server (drives a running `gaia-tui --control`) |
+| `tui` | Start the TUI control MCP server (drives a running `gaia-cli --control`) |
 | `code-index` | Serve semantic search over a repository's code to Claude Code, Cursor, or any MCP client (stdio) |
 | `engineering` | Developer-only local coding-app context bridge (stdio): `--backend claude\|codex` (required), `--developer-mode`, `--root <dir>`. See [Developer engineering](#developer-engineering) |
 
@@ -1750,7 +1755,7 @@ the tools that run a turn unattended.
 
 Wraps the [TUI control API](#tui-control-api) as MCP tools, so an assistant can
 navigate and type in the TUI session you are watching. The TUI must already be
-running with `gaia-tui --control`; the server finds it through
+running with `gaia-cli --control`; the server finds it through
 `~/.gaia/tui/control.json` rather than a fixed port.
 
 | Option | Default | Description |
@@ -1803,11 +1808,12 @@ gaia connectors <subcommand> [OPTIONS]
 
 | Subcommand | Description |
 |-----------|-------------|
-| `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output) |
-| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:email`) in the same flow, `--device` for the device-code flow. The browser sign-in link works for 15 minutes |
+| `list` (alias `status`) | List connectors in the catalog with their status (`--json` for machine-readable output). A connector with several accounts, or one whose sign-in expired, gets a line per account underneath; the JSON row carries them in `accounts` |
+| `connect <id>` | Authorize an OAuth connector (opens a browser); `--scopes` to request specific scopes, `--grant-agent <agent-id>` to also grant the connector to that agent (e.g. `installed:email`) in the same flow, `--device` for the device-code flow. The browser sign-in link works for 15 minutes. `--add` connects another account beside the ones already connected (the provider shows its account picker); `--account <address>` reconnects that account. Signing in as the same account again updates it; a different account is added, never written over another |
 | `configure <id>` | Configure a connector — `--set KEY=VALUE` (repeatable) or `--json '<object>'` (e.g. MCP API keys), or `--client-id` / `--client-secret` to store an OAuth connector's client credentials (the secret is required for Google only; cannot be combined with `--set`/`--json`) |
 | `test <id>` | Check a configured connector. An OAuth account refreshes its sign-in. An MCP server is started once, and the check reports whether it started (with its tool count) or why it didn't. Some servers, like GitHub and Tavily, only check their key when a tool runs, so they pass with a bad key |
-| `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. |
+| `disconnect <id>` | Remove local credentials and reset a connector's state. Also attempts a provider-side revoke when the connector supports one and owns the token — Microsoft has no revoke endpoint, and a forwarded connection's token belongs to the host app, so neither is revoked remotely; the command reports which happened. With several accounts connected, name one with `--account <address>` or remove them all with `--all`; a bare `disconnect` refuses and lists them. Agent grants are kept until the last account is removed |
+| `set-default <id> <account>` | Make that account the one agents use when they don't name an account. The first account connected is the default until changed |
 | `grants {list\|grant\|revoke}` | Manage per-agent scope grants (credential access) |
 | `activations {list\|activate\|deactivate}` | Manage per-agent MCP tool visibility (`mcp_server` connectors only) |
 
@@ -1845,6 +1851,12 @@ gaia connectors connect microsoft --device
 # connectable at the same time. Its own client id env var.
 export GAIA_MICROSOFT_WORK_CLIENT_ID=<application-client-id>
 gaia connectors connect microsoft_work --device
+```
+
+```bash Add a second Google account
+gaia connectors connect google --add
+gaia connectors set-default google work@example.com
+gaia connectors disconnect google --account old@example.com
 ```
 
 ```bash Configure an MCP server token
@@ -1887,6 +1899,7 @@ gaia gateway models                   # what the gateway offers
 gaia gateway enable amd.Claude-Opus-5 # add it to your enabled set
 gaia gateway disable amd.Claude-Opus-5 # remove it from your enabled set
 gaia gateway use amd.Claude-Opus-5    # make it the default for chat/llm/prompt
+gaia gateway use hybrid               # route each agent turn to a cheap or strong model
 gaia gateway test "Say hello"         # end-to-end round trip on the active model
 gaia gateway test --model amd.Gemma-4-31B "Say hello"  # test a specific model
 gaia gateway auth --no-remember       # ask me every restart instead
@@ -1921,6 +1934,8 @@ which caches prompts; `test` uses that route for them too. Set
 When a gateway model answers HTTP 404, GAIA records it. `status` and `models` then
 mark it unavailable, and `chat`, `llm`, and `prompt` warn when it is your saved
 default. GAIA never switches models for you; pick another with `gaia gateway use <id>`.
+The exception is `hybrid`, which you choose so that GAIA picks a cheap or strong
+model per turn — see [Hybrid model](/guides/llm-gateway#hybrid-model).
 
 [→ LLM Gateway Guide](/guides/llm-gateway)
 
@@ -1941,7 +1956,7 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, `gaia schedule` runs, `gaia telegram` sessions, the MCP bridge's `/chat` and `/llm`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, `gaia schedule` runs (when no `last_model` is set), `gaia telegram` sessions, the MCP bridge's `/chat` and `/llm`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) for commands that load without naming a model. A model always runs on the device it was built for |
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
 | `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
@@ -1949,19 +1964,24 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | `profile` | `chat` | Last `gaia init` profile |
 | `vision_model` | _(unset)_ | Model that reads scans and images, when you chose one in setup. Unset uses the chat model if it reads images, otherwise Gemma 4 E4B; when that one isn't downloaded, a tested image-reading model that is |
 | `skipped_models` | _(empty)_ | Models you chose not to download; `gaia init` and first-run setup leave them out. Comma-separated with `gaia config set`; also set by `gaia init --skip-model` and the setup screens. See [Choosing models](#choosing-models) |
-| `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
-| `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, the one GAIA has tested, or `auto` to let Lemonade choose. A value saved before this (`rocm`, `metal`, `cpu`) still loads but can't be set again. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
+| `full_access` | `false` | Launch `gaia-cli` with confirmation prompts off — see [Full access](#full-access) |
+| `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, the one GAIA has tested, or `auto` to let Lemonade choose. A value saved before this (`rocm`, `metal`, `cpu`) still loads but can't be set again. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui/settings#which-server-and-which-gpu-backend) |
+| `hybrid_cheap_model` | `amd.DeepSeek-V4.1-Flash` | Model the `hybrid` model id runs routine turns on. `""` restores the default. See [Hybrid model](/guides/llm-gateway#hybrid-model) |
+| `hybrid_strong_model` | `amd.Claude-Opus-5-5` | Model `hybrid` runs every other turn on. Must differ from the cheap model |
+| `hybrid_classifier_model` | _(the cheap model)_ | Model that labels each turn for `hybrid` |
+| `hybrid_classifier_timeout` | `15` | Seconds `hybrid` waits for the label (1-120) before running the turn on the strong model |
+| `hybrid_policy` | `quality` | How readily `hybrid` uses the cheap model: `quality` or `balanced`, which also sends medium-difficulty code changes to the cheap model — cheaper, with a measurable quality cost on harder fixes. See [Hybrid model](/guides/llm-gateway#hybrid-model) |
 | `cloud_reasoning_effort` | `off` | `off` sends cloud models no `reasoning_effort`, leaving each in its provider's default mode. `low`, `medium` or `high` probes each cloud model once and sends that effort to the ones that reason, at the cost of more tokens and slower replies. See [Reasoning](/guides/llm-gateway#reasoning) |
-| `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-tui` or the Agent UI, restored on its next launch — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
+| `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-cli` or the Agent UI, restored on its next launch and used by `gaia schedule` runs (on `hybrid`, each run's prompt is routed like a chat turn and runs on the cheap or strong model it picks) — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
 | `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA process has held it, and it has served no request, for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
 | `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
 | `lemonade_api_key_stored` | `false` | Set by `gaia lemonade connect` when your server's API key is in the OS credential store. The key is never written to this file |
 | `lemonade_env_url_ignored` | _(unset)_ | The `LEMONADE_BASE_URL` value GAIA's own server was chosen over in the Agent UI's setup. GAIA ignores that variable (and `LEMONADE_API_KEY`) while it still holds this value. `gaia config set lemonade_env_url_ignored ""` lets it apply again |
-| `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui#undo-a-turn) |
+| `undo_retention_days` | `7` | Days to keep the copies that let a turn's file changes be undone — see [Undo a turn](/guides/agent-ui/documents#undo-a-turn) |
 | `undo_max_mb` | `500` | Megabytes those copies may use; the oldest turns are removed first; the size limit never removes the newest |
 | `project_context` | _(unset = auto)_ | Whether the agent puts a repository's `CLAUDE.md`, `AGENTS.md` and `.claude/skills` in its prompt: `full`, `off`, or `auto` to decide per model (Claude gets them, other models don't), after you trust the folder when asked. `GAIA_PROJECT_CONTEXT` overrides it — see [Project instructions and skills](/guides/project-map#project-instructions-and-skills) |
-| `read_aloud_voice` | _(unset = `af_bella`)_ | The Kokoro voice the Agent UI and the TUI read replies in, such as `bm_george`; any other value is refused — see [Read aloud](/guides/agent-ui#settings) |
+| `read_aloud_voice` | _(unset = `af_bella`)_ | The Kokoro voice the Agent UI and the TUI read replies in, such as `bm_george`; any other value is refused — see [Read aloud](/guides/agent-ui/chat#read-aloud) |
 | `read_aloud_speed` | `100` | Read-aloud speed, as a percentage of normal (50–200) |
 | `read_aloud_auto` | `false` | Read each finished reply aloud without being asked |
 | `network_policy` | `cloud_allowed` | `local_ai_only` makes GAIA refuse every cloud AI model — see [Local only](#local-only). Stored in `~/.gaia/policy.json`, not in `config.json` |
@@ -1986,7 +2006,7 @@ It applies everywhere GAIA sends a prompt or a key:
   eval, benchmarks and session harvesting launch. `gaia eval agent` stops at its
   preflight check.
 - GAIA stops handing stored cloud keys to Lemonade, and takes back any it already
-  gave a running GAIA Lemonade. The Agent UI and `gaia-tui` refuse to connect a
+  gave a running GAIA Lemonade. The Agent UI and `gaia-cli` refuse to connect a
   cloud provider, enter a gateway token, or switch to a cloud model.
 - The web-search tool that answers through Perplexity's cloud AI is turned off.
 
@@ -2036,8 +2056,14 @@ commands GAIA otherwise refuses outright (a credential print such as
 Three things hold in every mode, full access included. A shell command or
 Python code that reads a file the file tools refuse (`.env`, a private key,
 `.npmrc`, `secrets.json`) is refused. Writing one, copying over one, or naming
-one as a search pattern still runs, and so does a recursive search such as
-`grep -rn TODO .`, with any lines from those files hidden in its output. Tokens
+one as a search pattern still runs. Credential files never take part in a
+recursive search. A command that is just `grep -r`, `rg` or `git grep` runs with
+them left out, so `grep -rn TODO .` still searches everything else. Any other
+recursive search (piped or chained, inside a script, `findstr /s`,
+`Select-String` over `Get-ChildItem -Recurse`, `ag`, `find -exec`) is refused
+when the folder it searches holds one, and so is a `git grep` of a credential
+file's blob (`HEAD:.env`). On Windows, use `rg` or `git grep` for this: a
+recursive `grep` there is refused when the folder holds a credential file. Tokens
 in shell and Python output, such as the one in a `git remote -v` URL, are
 masked before the model reads it. And a cloud-metadata or link-local address
 (`169.254.169.254`, `fe80::/10`, `metadata.google.internal`) the web fetcher
@@ -2049,7 +2075,7 @@ them, and the status bar shows the one that is on:
 
 | Mode | What still asks |
 |---|---|
-| `ask` (default) | Every shell command, Python run and file write |
+| `ask` (default) | Every shell command except plain reads inside the allowed folders, every Python run and file write |
 | `accept edits` | Shell commands and Python. File edits inside the folder GAIA was started in run unasked, except hidden files and folders (`.git/`, `.bashrc`, `.github/`), folders on `PATH`, and on Windows a file that shadows a program. Never the home folder or a drive root |
 | `full access` | Nothing |
 
@@ -2057,12 +2083,12 @@ Ways to turn full access on — each is deliberate:
 
 | | |
 |---|---|
-| `gaia-tui --full-access` | for this launch |
+| `gaia-cli --full-access` | for this launch |
 | `/full-access`, then `/full-access confirm` (in the TUI) | for this session; the first command only explains what it does |
 | `Shift+Tab` (in the TUI) | switches straight to it only once it has been on this session, or the launch had it; otherwise it explains and stays in `ask` |
 | `gaia config set full_access true` / `/full-access always` | every launch — see below |
 
-Turn it on every time you launch `gaia-tui` with:
+Turn it on every time you launch `gaia-cli` with:
 
 ```bash
 gaia config set full_access true
@@ -2076,7 +2102,7 @@ setting as the reason. To turn it off:
 | `gaia config set full_access false` | stop it coming back |
 | `/full-access never` (in the TUI) | same, without leaving the session |
 | `/full-access off` (in the TUI) | this session only; the setting stays |
-| `gaia-tui --full-access=false` | skip it for one launch |
+| `gaia-cli --full-access=false` | skip it for one launch |
 
 Full access needs an agent the TUI launches itself. A flagship that runs under
 the GAIA background service doesn't support it yet: `--full-access`
@@ -2275,9 +2301,9 @@ gaia lemonade embedded stop
 gaia lemonade embedded uninstall  # remove the runtime and downloaded backends
 ```
 
-The API key changes on every start, and requests without it get a 401. The port
-stays the same from one start to the next unless another program has taken it,
-in which case a free one is picked and remembered instead. `start` writes them to a file you source rather than printing the key,
+Requests without the API key get a 401. The port and the key stay the same
+from one start to the next unless another program has taken the port, in which
+case a free one is picked and remembered, and the key changes with it. `start` writes them to a file you source rather than printing the key,
 so the secret never lands in terminal scrollback, shell history or a CI log:
 
 ```
@@ -2384,6 +2410,7 @@ Everything lives under `~/.gaia/lemonade` (or `$GAIA_HOME/lemonade`):
 | `config/config.json` | Server configuration |
 | `state.json` | The running instance: pid, port, API key, owning daemon (owner-only) |
 | `last_port.json` | The port the last start used; the next start reuses it while it is free |
+| `last_key` | The API key the last start used; reused only on the same port (owner-only) |
 | `env.sh` / `env.ps1` | Sourceable credentials, removed on `stop` (owner-only) |
 | `lemond.log` | Server output — read this first when `start` fails |
 
@@ -3593,6 +3620,8 @@ A one-time schedule (`add --at`) runs once at or after its time, then shows `com
 
 Runs that never happened are not silent: the ones a sleep skipped or collapsed, and the ones due while the daemon was not running, are counted on the schedule. `gaia schedule show` prints the total, `missed: 3 runs in all while the PC was off or asleep, or the schedule daemon wasn't running (latest due …)`, and `gaia schedule list` adds `missed=3`. Runs due while a schedule was paused are not counted. The total is kept until the schedule is removed; past 100,000 in one stretch it reads "at least", and the latest due time is still exact. Times are shown in local time.
 
+A recurring run that fails is recorded on the schedule as well as in the daemon log. `gaia schedule show` prints `failing: 2 runs in a row failed since the last successful one (latest …): <error>` with the first line of the latest error, `last_run` stays the last run that succeeded, and `gaia schedule list` adds `failing=2`. The next run that succeeds clears it. A failed run is not counted as missed.
+
 Only one `gaia schedule daemon` can run per schedule store. A second one exits immediately with an error instead of firing every schedule twice. The daemon holds `~/.gaia/schedules.lock` while it runs; the OS releases it when the process exits, even after a crash. On Windows that error names no pid — Windows refuses another process's read of the locked byte, so the holder is unknowable.
 
 ```bash
@@ -3611,6 +3640,8 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 | `resume <name>` | Re-enable a paused schedule |
 | `run <name>` | Fire a schedule once now (for testing). A pending one-time schedule is used up by this; one that already ran is refused |
 | `daemon` | Run the long-lived scheduler (blocks until interrupted) |
+
+Every run answers on the model the Agent UI and TUI reopen on (`last_model`), else `default_model` from `gaia config`, else GAIA's default model. A local model that is not downloaded is refused with a message, never downloaded.
 
 ### `add` Options
 
@@ -3824,7 +3855,7 @@ so it is back after a reboot without running `gaia init`. It also frees the
 server's memory when GAIA is not in use:
 
 - **Closing the last GAIA app unloads every model.** The Agent UI (desktop app
-  or `npx @amd-gaia/agent-ui`) and `gaia-tui` register with the daemon while
+  or `npx @amd-gaia/agent-ui`) and `gaia-cli` register with the daemon while
   they run. When the last one exits, and no `gaia` command or sidecar agent is
   still using the server, the daemon unloads all of its models. The server
   stays up, so the next launch only reloads the model. An app that is killed
@@ -4011,35 +4042,35 @@ contract; every route needs `Authorization: Bearer <token>` from
 
 ---
 
-### Terminal UI (`gaia-tui`)
+### Terminal UI (`gaia-cli`)
 
-`gaia-tui` is the Go/Bubble Tea terminal client: it boots straight into the
+`gaia-cli` is the Go/Bubble Tea terminal client: it boots straight into the
 flagship `gaia` agent's chat, behind a readiness gate. Building from source the
-binary is `tui/bin/gaia-tui` (`cd tui && make build`).
+binary is `tui/bin/gaia-cli` (`cd tui && make build`).
 
 <Note>
-  The binary is `gaia-tui`; the Python `gaia` CLI rejects `gaia tui`. It still
-  accepts and drops a leading `tui` word (`gaia-tui tui status` is the same as
-  `gaia-tui status`) so older docs and scripts that spell it `gaia tui …` keep working.
+  The binary is `gaia-cli`; the Python `gaia` CLI rejects `gaia tui`. It still
+  accepts and drops a leading `tui` word (`gaia-cli tui status` is the same as
+  `gaia-cli status`) so older docs and scripts that spell it `gaia tui …` keep working.
 </Note>
 
 ```bash
-gaia-tui                                       # splash -> readiness gate -> chat
-gaia-tui run email                             # chat with another agent by id
-gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3/130
-gaia-tui status                                # background service + what is installed
+gaia-cli                                       # splash -> readiness gate -> chat
+gaia-cli run email                             # chat with another agent by id
+gaia-cli run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1/3/130
+gaia-cli status                                # background service + what is installed
 ```
 
 | Command | Description |
 |---------|-------------|
-| `gaia-tui` | Launch straight into the flagship agent's chat, behind its readiness gate. |
-| `gaia-tui --resume[=<id>]` | Reopen a past session: bare `--resume` opens the session list (sessions waiting on you first), `--resume=<id>` reopens one directly by id or unique prefix. The id must be attached with `=`, and `--resume` is refused while `GAIA_HISTORY_FILE` is set. Built-in flagship only — see [Reopening a session](/guides/tui#reopening-a-session). |
-| `gaia-tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done — and **130** when Ctrl+C, SIGTERM or SIGHUP stopped it. A stop asks the agent to end the turn and waits up to 10s for it to confirm; a second Ctrl+C quits without waiting. If the agent does not confirm, a local agent's process is killed, and one run by the background service is reported on stderr as possibly still running. |
-| `gaia-tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia-tui run --query` is, `--timeout` included. |
-| `gaia-tui status` | Whether the background service is running, which Lemonade it uses (address, version, the chat model's backend and context window), which sidecars it knows, and what is installed. |
-| `gaia-tui version` | Print the build version. |
+| `gaia-cli` | Launch straight into the flagship agent's chat, behind its readiness gate. |
+| `gaia-cli --resume[=<id>]` | Reopen a past session: bare `--resume` opens the session list (sessions waiting on you first), `--resume=<id>` reopens one directly by id or unique prefix. The id must be attached with `=`, and `--resume` is refused while `GAIA_HISTORY_FILE` is set. Built-in flagship only — see [Reopening a session](/guides/tui#reopening-a-session). |
+| `gaia-cli run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done — and **130** when Ctrl+C, SIGTERM or SIGHUP stopped it. A stop asks the agent to end the turn and waits up to 10s for it to confirm; a second Ctrl+C quits without waiting. If the agent does not confirm, a local agent's process is killed, and one run by the background service is reported on stderr as possibly still running. |
+| `gaia-cli chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia-cli run --query` is, `--timeout` included. |
+| `gaia-cli status` | Whether the background service is running, which Lemonade it uses (address, version, the chat model's backend and context window), which sidecars it knows, and what is installed. |
+| `gaia-cli version` | Print the build version. |
 
-Options accepted by every `gaia-tui` command:
+Options accepted by every `gaia-cli` command:
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -4057,11 +4088,11 @@ not install agents.
 
 `--query` does not open the alt screen. The answer goes to stdout, progress to
 stderr, and the exit code is `0` on a terminal answer, `1` on an error, and `3`
-when a confirmation gate held back a destructive action — so `gaia-tui run
+when a confirmation gate held back a destructive action — so `gaia-cli run
 email --query "…" > answer.txt` captures exactly the answer:
 
 ```bash
-gaia-tui run email --query "how many unread?" > answer.txt 2> progress.log
+gaia-cli run email --query "how many unread?" > answer.txt 2> progress.log
 echo $?   # 0
 ```
 
@@ -4084,7 +4115,7 @@ The turn itself is bounded — 15 minutes by default, `--timeout 90s` / `--timeo
 2h` to change it — so an agent that accepts the query and then stops answering is
 reported with what to read next instead of hanging a CI job until the job's own
 timeout kills it. There is no "wait forever": `--timeout 0` is refused. Interactive
-`gaia-tui run <id>` is unaffected — a person can read what arrives and press
+`gaia-cli run <id>` is unaffected — a person can read what arrives and press
 ctrl+c.
 
 #### Readiness gate keys
@@ -4122,7 +4153,7 @@ inside tmux, or in a CI log where the terminal never answers that query, force
 a mode instead of guessing:
 
 ```bash
-GAIA_TUI_THEME=light gaia-tui    # or: dark
+GAIA_TUI_THEME=light gaia-cli    # or: dark
 ```
 
 <Note>
@@ -4134,7 +4165,7 @@ GAIA_TUI_THEME=light gaia-tui    # or: dark
 
 ### TUI Control API
 
-The terminal UI (`gaia-tui`, the Go/Bubble Tea binary) can expose a loopback
+The terminal UI (`gaia-cli`, the Go/Bubble Tea binary) can expose a loopback
 HTTP API that drives **the session you are looking at** — not a headless copy.
 An assistant navigates, types, and drives the readiness gate while the frames
 render in your terminal in real time. It is how the TUI gets tested without a
@@ -4144,15 +4175,15 @@ Off by default. Bound to `127.0.0.1` only, and every request needs a bearer
 token.
 
 ```bash
-gaia-tui --control                 # auto-assign a port
-gaia-tui --control-port 8770       # explicit port (implies --control)
-gaia-tui --control --dev           # input counts, state changes, and waits; no input contents
+gaia-cli --control                 # auto-assign a port
+gaia-cli --control-port 8770       # explicit port (implies --control)
+gaia-cli --control --dev           # input counts, state changes, and waits; no input contents
 ```
 
 <Note>
   These are persistent flags on the TUI binary's root command, so they apply to
   the bare launch, `run`, and `chat` alike. Building from source, that binary is
-  `tui/bin/gaia-tui` (`cd tui && make build`).
+  `tui/bin/gaia-cli` (`cd tui && make build`).
 </Note>
 
 | Flag | Type | Default | Description |
@@ -4224,9 +4255,9 @@ tool calls carrying **their arguments** and tool results carrying **their
 payloads**.
 
 ```bash
-gaia-tui --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
-gaia-tui --trace=run.jsonl             # a path you choose
-gaia-tui --trace --dev                 # record to a file AND show it on screen
+gaia-cli --trace                       # ~/.gaia/traces/<timestamp>-<agent>.jsonl
+gaia-cli --trace=run.jsonl             # a path you choose
+gaia-cli --trace --dev                 # record to a file AND show it on screen
 ```
 
 The path is printed on startup (`trace → …`). An unwritable path is a startup
@@ -4582,5 +4613,5 @@ Both options go before the subcommand: `gaia engineering --developer-mode --root
 `gaia mcp engineering --developer-mode --backend <claude|codex>` starts its local
 stdio bridge with the pairing credential supplied through its generated MCP configuration.
 It takes the same `--developer-mode` and `--root` options; `--backend` is required.
-Normal mode cannot start this bridge. `gaia-tui --developer-mode` enables the
+Normal mode cannot start this bridge. `gaia-cli --developer-mode` enables the
 flagship skill and sharing tools; `--dev` remains diagnostic output only.

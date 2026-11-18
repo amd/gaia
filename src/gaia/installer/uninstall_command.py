@@ -309,7 +309,7 @@ def _credential_deleters() -> List[tuple]:
     # pylint: disable=import-outside-toplevel
     # Registers the providers.
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    from gaia.connectors import store
+    from gaia.connectors import accounts, store
     from gaia.connectors.registry import REGISTRY
     from gaia.llm import cloud_keys
     from gaia.llm.lemonade_choice import API_KEY_SECRET_NAME
@@ -321,7 +321,10 @@ def _credential_deleters() -> List[tuple]:
             continue
         provider = spec.id
         deleters.append(
-            (f"{provider} sign-in", lambda p=provider: store.delete_connection(p))
+            (
+                f"{provider} sign-ins",
+                lambda p=provider: accounts.remove_all_accounts(p),
+            )
         )
         deleters.append(
             (

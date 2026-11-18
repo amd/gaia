@@ -59,6 +59,36 @@ describe('removing a document', () => {
         await waitFor(() => expect(screen.queryByRole('status')).toBeNull());
     });
 
+    it('keeps the count line while Undo shows, without the removed file', async () => {
+        const second: Document = { ...NOTES, id: 'd2', filename: 'budget-memo.txt' };
+        mockedApi.listDocuments.mockResolvedValue({ documents: [NOTES, second], total: 2, total_size_bytes: 14540, total_chunks: 14 });
+        const { container } = render(<DocumentLibrary />);
+        await screen.findByText('garden-notes.txt');
+        expect(container.querySelector('.doc-stats')).toHaveTextContent('2 documents');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remove garden-notes.txt' }));
+
+        expect(screen.getByRole('button', { name: /Undo/ })).toBeInTheDocument();
+        expect(container.querySelector('.doc-stats')).toHaveTextContent('1 document');
+    });
+
+    it('replaces the last add\'s line rather than stacking under it', async () => {
+        useChatStore.setState({
+            currentSessionId: 's1',
+            sessions: [{ id: 's1', title: 'Study guide', document_ids: [] } as never],
+        });
+        mockedApi.attachDocument.mockResolvedValue(undefined as never);
+        render(<DocumentLibrary />);
+        await screen.findByText('garden-notes.txt');
+        fireEvent.click(screen.getByRole('button', { name: 'Add garden-notes.txt to “Study guide”' }));
+        await screen.findByText(/Added garden-notes\.txt to/);
+
+        fireEvent.click(screen.getByRole('button', { name: 'Remove garden-notes.txt' }));
+
+        expect(screen.queryByText(/Added garden-notes\.txt to/)).toBeNull();
+        expect(screen.getByText(/Removed garden-notes\.txt/)).toBeInTheDocument();
+    });
+
     it('puts the row back on Undo and never deletes it', async () => {
         render(<DocumentLibrary />);
         await screen.findByText('garden-notes.txt');

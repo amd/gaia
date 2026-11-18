@@ -30,6 +30,22 @@ def _empty_hub_skill_catalog(monkeypatch):
 
 
 @pytest.fixture
+def user_terminal(monkeypatch):
+    """Run the test as the user's terminal, not an agent tool or its child.
+
+    Trust-changing skill calls refuse under an agent's marker, and pytest
+    inherits it when GAIA runs this suite. Opt in per module with
+    ``pytestmark = pytest.mark.usefixtures("user_terminal")``.
+    """
+    from gaia.skills import human_only
+
+    monkeypatch.delenv(human_only.AGENT_CHILD_ENV, raising=False)
+    token = human_only._IN_AGENT_TOOL.set(False)
+    yield
+    human_only._IN_AGENT_TOOL.reset(token)
+
+
+@pytest.fixture
 def flagship(make_flagship):
     """A network-isolated flagship for the prompt-prefix contract tests."""
     return make_flagship()

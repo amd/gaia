@@ -642,7 +642,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 
 | Script | Entry Point | Purpose |
 |--------|-------------|---------|
-| `gaia` / `gaia-cli` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
+| `gaia` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge binary |
 
 `gaia` and `gaia-mcp` are the only console scripts the core wheel ships.

@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
+from gaia.agents.base.memory_privacy import memory_writes_refused
 from gaia.agents.base.skill_synthesis import (
     MIN_OUTCOMES_TO_RETIRE,
     DistilledProcedure,
@@ -400,7 +401,7 @@ class ProceduralMemoryMixin:
 
         # Stamp last_used_at so `gaia memory status` can report reuse. Telemetry
         # only — a write hiccup must not crash the turn or drop the recall.
-        if recalled_ids:
+        if recalled_ids and not memory_writes_refused(self):
             try:
                 store.touch_skills(recalled_ids)
             except Exception as e:
@@ -594,7 +595,7 @@ class ProceduralMemoryMixin:
         decisions = getattr(self, "_turn_person_decisions", None)
         self._turn_person_decisions = None
         store = getattr(self, "_memory_store", None)
-        if not decisions or store is None or getattr(self, "_incognito", False):
+        if not decisions or store is None or memory_writes_refused(self):
             return
         in_context = set(getattr(self, "_recalled_skill_ids", None) or [])
         by_outcome: Dict[bool, List[str]] = {True: [], False: []}

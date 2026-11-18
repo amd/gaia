@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from gaia.env import child_env
+from gaia.llm.surface_hints import APP_OTHER_SERVER_START_HINT
 
 log = logging.getLogger(__name__)
 
@@ -321,23 +322,18 @@ def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
     names no other, and *base_url* is unset or is the address GAIA resolves on
     its own. That server is started through the daemon, never by
     :func:`resolve_lemonade` / :func:`build_start_command`, and binds a port
-    chosen at start time -- so a caller holding the stopped-state default URL
-    must re-resolve after starting it.
+    chosen at start time -- so a caller holding its stopped-state address
+    (the port it last ran on) must re-resolve after starting it.
     """
     from gaia.llm.lemonade_client import (
         configured_lemonade_url,
         resolve_lemonade_base_url,
     )
-    from gaia.llm.lemonade_embedded import EmbeddedLemonade
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, is_gaias_to_start
 
     if configured_lemonade_url():
         return False
-    embedded = EmbeddedLemonade()
-    if not (
-        embedded.is_installed()
-        or embedded.replaces_other_install()
-        or embedded.is_incomplete()
-    ):
+    if not is_gaias_to_start(EmbeddedLemonade()):
         return False
     if base_url is None:
         return True
@@ -348,13 +344,17 @@ def server_down_advice(base_url: Optional[str] = None) -> str:
     """What an app user does about a model server that isn't answering.
 
     GAIA's own server is started by the daemon on the next message; one the
-    user runs needs this machine's start instruction.
+    user runs is theirs to start, and an app never names a terminal command.
     """
-    from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT
+    from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT, APP_SERVER_DOWN_HINT
 
     if gaia_runs_lemonade(base_url):
         return APP_SERVER_DOWN_HINT
-    return describe_start_hint().instruction
+    return APP_OTHER_SERVER_DOWN_HINT
+
+
+#: A server the user pointed GAIA at, that GAIA can't find installed here.
+OTHER_SERVER_START_HINT = f"{APP_OTHER_SERVER_START_HINT}."
 
 
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
@@ -367,11 +367,10 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     context changes also return manual configuration steps.
     """
     if gaia_runs_lemonade():
+        from gaia.llm.surface_hints import CLI_OWN_SERVER_START_HINT
+
         return StartHint(
-            instruction=(
-                "GAIA starts its Lemonade Server when it needs it. To start it "
-                "now, run: gaia lemonade embedded start"
-            ),
+            instruction=CLI_OWN_SERVER_START_HINT,
             command="gaia lemonade embedded start",
         )
 
@@ -425,6 +424,12 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
         return StartHint(
             instruction="Start the Lemonade app from Applications, then retry."
         )
+
+    from gaia.llm.lemonade_client import configured_lemonade_url
+
+    # Setup can't fix a server the user chose; installing GAIA's would not reach it.
+    if configured_lemonade_url():
+        return StartHint(instruction=OTHER_SERVER_START_HINT)
 
     return StartHint(
         instruction=(

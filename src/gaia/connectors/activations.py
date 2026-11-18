@@ -87,6 +87,11 @@ class ActivationsLedgerCorrupt(ConnectorsError):
         self.path = path
 
 
+def activations_path() -> Path:
+    """Where the activation ledger lives, resolved now."""
+    return _activations_path()
+
+
 def _activations_path() -> Path:
     """Resolve the activations path on each call so tests can monkeypatch
     ``Path.home`` after import."""
@@ -297,6 +302,7 @@ __all__ = [
     "ACTIVATIONS_FILE",
     "SCHEMA_VERSION",
     "activate_agent",
+    "activations_path",
     "deactivate_agent",
     "is_agent_active",
     "list_agent_activations",

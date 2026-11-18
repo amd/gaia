@@ -8,7 +8,10 @@ Provides shell command execution capabilities for file operations and system que
 
 import base64
 import binascii
+import contextlib
+import dataclasses
 import fnmatch
+import ipaddress
 import logging
 import os
 import re
@@ -19,10 +22,11 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import (
     DESTRUCTIVE,
@@ -32,15 +36,33 @@ from gaia.agents.base.call_risk import (
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.command_wrappers import command_starts
+from gaia.agents.base.denied_effects import (
+    COMPUTED_PATH,
+    NETWORK,
+    PATH,
+    UNATTENDED_REFUSAL,
+    creates_a_link,
+    deletes_a_path,
+    effects_of_shell_command,
+    is_cloud_metadata_host,
+)
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
-from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
+from gaia.agents.base.verification import (
+    EXECUTED_KEY,
+    NOT_EXECUTED,
+    OUT_OF_TIME,
+    TIME_LIMIT_CUT_RUN,
+    cut_by_time_limit,
+    time_capped,
+)
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
     TIMEOUT_CLASSES,
     resolve_timeout,
     terminate_process_tree,
 )
+from gaia.agents.tools.fetcher_args import destinations as fetch_destinations
 from gaia.agents.tools.package_installs import (
     install_refusal_hint,
     system_install_target,
@@ -463,6 +485,12 @@ NOTE_UNINSPECTABLE = (
 NOTE_PUSH = "Sends your commits to the remote repository."
 NOTE_CREDENTIAL = "Prints your GitHub sign-in token into the conversation."
 
+#: Told to the model whenever a search ran with credential files left out.
+SKIPPED_CREDENTIALS_NOTE = (
+    "Credential files (.env, secrets.json, *.pem, *.key and the like) are left "
+    "out of recursive searches; their contents cannot be searched."
+)
+
 
 def outside_note(path: str) -> str:
     """The risk note for a command that reaches *path*, outside the project."""
@@ -552,24 +580,51 @@ def _hard_if_unofferable(error: Dict[str, Any], command: str) -> Dict[str, Any]:
     reason = _one_time_hard_reason(command)
     if not reason:
         return error
+    hint = (
+        _FIRST_LINE_ONLY_HINT
+        if reason == _FIRST_LINE_ONLY
+        else (
+            "Tell the user the exact command and why it is blocked, so they can "
+            "run it themselves if they want to."
+        )
+    )
     return {
         **error,
         "tier": TIER_REFUSE,
         "error": f"Not offered: `{command}` cannot be approved, because {reason}.",
-        "hint": (
-            "Tell the user the exact command and why it is blocked, so they can "
-            "run it themselves if they want to."
-        ),
+        "hint": hint,
     }
 
 
-def _unreadable_reason(command: str) -> str:
-    """Why *command* would not read on a prompt the way it runs, or ""."""
-    if "\n" in command or "\r" in command or _MISLEADING_CHARS_RE.search(command):
+#: cmd.exe stops at the first line break, so the rest of the text never runs.
+_FIRST_LINE_ONLY = (
+    "it has more than one line, and Windows runs only the first line of a "
+    "command like this"
+)
+_FIRST_LINE_ONLY_HINT = (
+    "Send each line as its own command, or write the file's contents with the "
+    "file tools instead of a heredoc."
+)
+
+
+def _unreadable_reason(command: str, *, shown_whole: bool = False) -> str:
+    """Why *command* would not read on a prompt the way it runs, or "".
+
+    *shown_whole* is a prompt that shows the exact text, line breaks kept.
+    """
+    if "\r" in command or _MISLEADING_CHARS_RE.search(command):
         return (
             "it contains line breaks or invisible characters, so it would not "
             "read on screen the way it runs"
         )
+    if "\n" in command:
+        if not shown_whole:
+            return (
+                "it contains line breaks, so it would not read on screen the "
+                "way it runs"
+            )
+        if _pipe_dialect() == "cmd":
+            return _FIRST_LINE_ONLY
     return ""
 
 
@@ -579,9 +634,10 @@ def _one_time_hard_reason(command: str) -> str:
     A one-time line runs exactly as shown, so what it says is what it does —
     unless its characters display as something else, or it carries a step that
     is never offered: an encoded script, or one that deletes or discards work.
-    The text is over-read on purpose, quotes and substitutions included.
+    The text is over-read on purpose, quotes and substitutions included, and
+    every line of it is read like the first.
     """
-    unreadable = _unreadable_reason(command)
+    unreadable = _unreadable_reason(command, shown_whole=True)
     if unreadable:
         return unreadable
     lowered = command.lower()
@@ -627,6 +683,375 @@ def _confirm_once(error: Dict[str, Any], note: str) -> Dict[str, Any]:
             "they decline, do not reach the same result another way."
         ),
     }
+
+
+#: A URL anywhere on a line, a script's strings included: its scheme and host.
+#: Any scheme connects (gopher, dict, ldap, smb, sftp). The match runs to the
+#: URL's end, so a URL inside its query string is not read as a second one.
+_URL_HOST = re.compile(
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*)://(?:[^/\s'\"?#]*@)?"
+    r"(\[[^\]\s'\"]*\]|[^/\s:'\"?#]+)[^\s'\";|<>()`]*",
+    re.IGNORECASE,
+)
+_URL_SCHEME = re.compile(r"([a-z][a-z0-9+.-]*)://", re.IGNORECASE)
+
+#: Schemes that open a file on this PC instead of a connection.
+_FILE_SCHEMES = frozenset({"file"})
+
+#: curl's URL globbing: ``{a,b}`` alternatives and ``[1-20]`` ranges.
+_GLOB_SET = re.compile(r"\{([^{}]*)\}")
+_GLOB_RANGE = re.compile(r"\[(\d+|[a-z])-(\d+|[a-z])(?::\d+)?\]", re.IGNORECASE)
+_GLOB_LIMIT = 32
+
+
+def _url_hosts(text: str) -> List[str]:
+    """The host of every URL in *text* that names somewhere to connect."""
+    return [
+        match.group(2)
+        for match in _URL_HOST.finditer(text)
+        if match.group(1).lower() not in _FILE_SCHEMES
+    ]
+
+
+#: Programs whose bare operand is an address: ``curl 127.0.0.1:8000/x``.
+_FETCHERS = frozenset(
+    {"curl", "wget", "invoke-webrequest", "iwr", "invoke-restmethod", "irm"}
+)
+
+#: Name endings only a local network uses.
+_LOCAL_NAME_ENDINGS = (".local", ".lan", ".internal", ".home.arpa")
+
+
+#: Public names that always answer with this PC's own address.
+_LOOPBACK_NAMES = ("localhost", "localtest.me", "lvh.me", "vcap.me")
+
+#: Services whose names answer with the address written inside the name.
+_ADDRESS_IN_NAME_ENDINGS = (".nip.io", ".sslip.io", ".xip.io", ".traefik.me")
+
+_IPV4_PART = re.compile(r"0x[0-9a-f]+|0[0-7]*|[1-9][0-9]*")
+_DOTTED_IN_NAME = re.compile(r"(?:^|[.-])(\d{1,3}(?:[.-]\d{1,3}){3})$")
+_HEX_IN_NAME = re.compile(r"(?:^|[.-])([0-9a-f]{8})$")
+
+
+def _folded(text: str) -> str:
+    """*text* as a resolver reads it: full-width digits, letters and dots as ASCII."""
+    return unicodedata.normalize("NFKC", text).replace("\u3002", ".")
+
+
+def _numeric_ipv4(name: str) -> Optional[ipaddress.IPv4Address]:
+    """*name* read as inet_aton reads it: ``127.1``, ``0177.0.0.1``, ``0x7f000001``.
+
+    One to four parts, each decimal, octal or hex; the last fills the bytes left.
+    """
+    parts = name.lower().split(".")
+    if len(parts) > 4 or not all(_IPV4_PART.fullmatch(part) for part in parts):
+        return None
+    numbers = [
+        int(part, 16 if part.startswith("0x") else 8 if part[0] == "0" else 10)
+        for part in parts
+    ]
+    value = numbers.pop()
+    if any(number > 255 for number in numbers) or value >= 256 ** (4 - len(numbers)):
+        return None
+    for index, number in enumerate(numbers):
+        value += number << (8 * (3 - index))
+    return ipaddress.IPv4Address(value)
+
+
+def _address_in_name(name: str) -> Optional[ipaddress._BaseAddress]:
+    """The address a nip.io or sslip.io *name* answers with, read off the name."""
+    for ending in _ADDRESS_IN_NAME_ENDINGS:
+        if name.endswith(ending):
+            label = name[: -len(ending)]
+            break
+    else:
+        return None
+    try:
+        dotted = _DOTTED_IN_NAME.search(label)
+        if dotted:
+            return ipaddress.IPv4Address(dotted.group(1).replace("-", "."))
+        packed = _HEX_IN_NAME.search(label)
+        if packed:
+            return ipaddress.IPv4Address(int(packed.group(1), 16))
+        return ipaddress.IPv6Address(label.rsplit(".", 1)[-1].replace("-", ":"))
+    except ValueError:
+        return None
+
+
+def private_destination(host: str) -> str:
+    """Where *host* is, when it is on this PC or a local network; else "".
+
+    Judged from the text alone: an address in any spelling a fetcher accepts,
+    ``localhost``, a name that always answers with a local address, or a name
+    only a local network uses. No name is looked up.
+    """
+    from gaia.web.client import _is_blocked_ip
+
+    # An IPv6 zone (`%eth0`, `%25eth0`) picks the interface, not the address.
+    name = _folded(host).strip("[]").split("%", 1)[0].rstrip(".").lower()
+    if name in _LOOPBACK_NAMES or name.endswith(
+        tuple(f".{known}" for known in _LOOPBACK_NAMES)
+    ):
+        return "this PC"
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        ip = _numeric_ipv4(name) or _address_in_name(name)
+    if ip is None:
+        return "your local network" if name.endswith(_LOCAL_NAME_ENDINGS) else ""
+    carried = getattr(ip, "ipv4_mapped", None) or ip
+    if carried.is_loopback or carried.is_unspecified:
+        return "this PC"
+    return "your local network" if _is_blocked_ip(ip) else ""
+
+
+def _unglobbed(authority: str) -> List[str]:
+    """*authority* with curl's URL globs written out: each alternative, a range's ends."""
+    done, todo = [], [authority]
+    while todo and len(done) + len(todo) <= _GLOB_LIMIT:
+        text = todo.pop()
+        glob = _GLOB_SET.search(text)
+        picks = glob.group(1).split(",") if glob else []
+        if not glob:
+            glob = _GLOB_RANGE.search(text)
+            picks = [glob.group(1), glob.group(2)] if glob else []
+        if not glob:
+            done.append(text)
+            continue
+        todo.extend(text[: glob.start()] + pick + text[glob.end() :] for pick in picks)
+    return done + todo
+
+
+def _authority_host(authority: str) -> str:
+    """The host in ``user:password@host:port``; the last ``@`` ends the user part."""
+    address = authority.rsplit("@", 1)[-1]
+    if address.startswith("["):
+        return address[: address.find("]") + 1] or address
+    return address.rsplit(":", 1)[0]
+
+
+def _is_operand_address(address: str, alone: bool) -> bool:
+    """True when a fetcher reads *address*, written with no scheme, as a host.
+
+    *alone* says the address was the whole word: no port, path or user part.
+    """
+    number = _numeric_ipv4(address)
+    if number is None:
+        return "." in address or ":" in address or "localhost" in address
+    # A bare count such as `curl 3`: 0.0.0.3 is nowhere, and nobody means it.
+    return not (alone and "." not in address and 0 < int(number) < 2**24)
+
+
+def _word_hosts(word: str, globs: bool) -> List[str]:
+    """The hosts a fetcher connects to for *word*, a URL with or without a scheme.
+
+    Only the URL's own authority is read: an address in its path, query string
+    or fragment is data sent to that host, not a second destination.
+    """
+    scheme = _URL_SCHEME.match(word)
+    if scheme and scheme.group(1).lower() in _FILE_SCHEMES:
+        return []
+    rest = word[scheme.end() :] if scheme else word
+    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    hosts = []
+    for written in _unglobbed(authority) if globs else [authority]:
+        address = _authority_host(written)
+        if address and (scheme or _is_operand_address(address, address == word)):
+            hosts.append(address)
+    return hosts
+
+
+def _fetched_hosts(program: str, arguments: List[str]) -> List[str]:
+    """The hosts a fetcher's *arguments* make it connect to."""
+    hosts: List[str] = []
+    for word in fetch_destinations(program, arguments):
+        hosts.extend(_word_hosts(word, globs=program == "curl"))
+    return hosts
+
+
+#: Programs that can open a connection to an address on their line.
+_NETWORK_PROGRAMS = _FETCHERS | frozenset(
+    {
+        "python",
+        "py",
+        "node",
+        "perl",
+        "ruby",
+        "powershell",
+        "cmd",
+        "sh",
+        "bash",
+        "zsh",
+        "git",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "nc",
+        "ncat",
+        "telnet",
+        "ftp",
+        "certutil",
+        "bitsadmin",
+    }
+)
+
+
+def _private_hosts(
+    command: str, steps: list, whole_line: bool
+) -> List[Tuple[str, str]]:
+    """``(host, where)`` for each local or private address *command* reaches.
+
+    With *whole_line*, every address on the line counts; otherwise only those
+    handed to a program that can connect, so ``grep http://localhost f`` is not
+    turned into a prompt it never needed. A line of fetchers alone is read
+    argument by argument instead, so a header or body that holds an address
+    does not count.
+    """
+    programs = [
+        _interpreter_name(segment[0]) for step in steps for segment in step.segments
+    ]
+    only_fetchers = bool(programs) and all(name in _FETCHERS for name in programs)
+    hosts = _url_hosts(_folded(command)) if whole_line and not only_fetchers else []
+    for step in steps:
+        for segment in step.segments:
+            program = _interpreter_name(segment[0])
+            if program not in _NETWORK_PROGRAMS:
+                continue
+            words = [_folded(word) for word in segment[1:]]
+            if program in _FETCHERS:
+                # Only the words it connects to: not a file name, body or header.
+                hosts.extend(_fetched_hosts(program, words))
+            else:
+                hosts.extend(_url_hosts(" ".join(words)))
+    found = []
+    for host in dict.fromkeys(hosts):
+        where = private_destination(host)
+        if where:
+            found.append((host, where))
+    return found
+
+
+def web_tools_refuse(host: str) -> bool:
+    """True when GAIA's web fetcher would refuse *host*, by its own allowlist check.
+
+    Read from the text as :func:`private_destination` reads it: a name is
+    taken to answer with the address it always gives, never looked up.
+    """
+    from gaia.web.client import BlockedHostError, _assert_ip_allowed
+
+    where = private_destination(host)
+    if not where:
+        return False
+    # The fetcher matches GAIA_WEB_ALLOWED_HOSTS against the URL's hostname as written.
+    hostname = _folded(host).strip("[]").lower()
+    bare = hostname.split("%", 1)[0].rstrip(".")
+    try:
+        ip = ipaddress.ip_address(bare)
+    except ValueError:
+        ip = _numeric_ipv4(bare) or _address_in_name(bare)
+    if ip is None:
+        if where != "this PC":
+            return True
+        ip = ipaddress.IPv4Address("127.0.0.1")
+    try:
+        _assert_ip_allowed(str(ip), hostname)
+    except BlockedHostError:
+        return True
+    return False
+
+
+def private_fetch_note(found: List[Tuple[str, str]]) -> str:
+    """The card's line for a command that reaches the addresses in *found*."""
+    refused = [(host, where) for host, where in found if web_tools_refuse(host)]
+    host, where = (refused or found)[0]
+    if refused:
+        return (
+            f"Reaches {host} on {where}, an address GAIA's web tools refuse to fetch."
+        )
+    return f"Reaches {host} on {where}."
+
+
+def _command_words(command: str) -> Optional[list]:
+    """*command*'s words, its inline scripts' included; None when it won't split."""
+    try:
+        argv = _tokenize(command, bypass_gates=True)
+    except ValueError:
+        return None
+    return [word for words in _command_word_lists(argv) for word in words]
+
+
+def _hard_target(command: str) -> str:
+    """The cloud-metadata address or protected folder *command* reaches, or "".
+
+    No approval opens either, so a refusal must not offer one.
+    """
+    from gaia.security import protected_directory_of
+
+    cwd = os.getcwd()
+    paths = []
+    for effect in effects_of_shell_command(command, cwd):
+        if effect.kind == NETWORK and is_cloud_metadata_host(effect.target):
+            return f"the cloud-metadata address {effect.target}"
+        if effect.kind == PATH and effect.target != COMPUTED_PATH:
+            paths.append(effect.target)
+    words = _command_words(command) or []
+    paths += [
+        os.path.join(cwd, os.path.expanduser(path))
+        for path in read_targets_in_words(words)
+    ]
+    for path in paths:
+        try:
+            folder = protected_directory_of(path)
+        except (OSError, ValueError) as exc:
+            logger.debug(
+                "could not resolve a path to check it (%s)", type(exc).__name__
+            )
+            continue
+        if folder:
+            return f"the protected folder {folder}"
+    return ""
+
+
+def _final_even_unattended(command: str) -> bool:
+    """True when *command* deletes, links, hides what it runs, or hits a hard block.
+
+    A hard block is cloud metadata or a protected folder. Refused unattended,
+    such a line stays off every other route that turn.
+    """
+    cwd = os.getcwd()
+    if _one_time_hard_reason(command) or deletes_a_path(command, cwd):
+        return True
+    return creates_a_link(command, cwd) or bool(_hard_target(command))
+
+
+def _changes_files(command: str) -> bool:
+    """Whether *command* writes, creates, moves, copies or links a path."""
+    # ``2>&1`` and ``2>nul`` only route errors; any other ``>`` writes a file.
+    if ">" in _outside_double_quotes(_take_stderr_redirections(command)[0]):
+        return True
+    return any(
+        effect.kind == PATH for effect in effects_of_shell_command(command, os.getcwd())
+    )
+
+
+def _read_paths(words: list) -> list:
+    """The words in *words* that are read as files or are spelled like paths."""
+    found = list(read_targets_in_words(words))
+    found += [
+        word
+        for word in words[1:]
+        if not word.startswith("-")
+        and "://" not in word
+        and re.search(r"[\\/]|\.[A-Za-z0-9]{1,5}$", word)
+    ]
+    return list(dict.fromkeys(found))
+
+
+def _reads_files(command: str) -> bool:
+    """Whether *command* reads or lists a path; a line that won't split may."""
+    words = _command_words(command)
+    return words is None or bool(_read_paths(words))
 
 
 def _not_approvable(error: Dict[str, Any]) -> Dict[str, Any]:
@@ -1144,6 +1569,35 @@ _WAIT_TOOL = "wait_for_condition"
 MAX_OUTPUT_CHARS = 10_000
 
 
+# Fields of a shell result the model reads only when they say something.
+_ONLY_ON_TIMEOUT = ("timeout", "timeout_class")
+_ONLY_WHEN_SET = ("stderr", "has_errors", "output_truncated", "check_result")
+
+
+def lean_shell_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """The copy of a ``run_shell_command`` result the model reads.
+
+    The model wrote the command, so echoing it back (twice, with ``steps``) is
+    context spent on nothing; so are empty fields and the timeout it left at
+    its default. A line of several steps keeps ``steps``: each has its own
+    exit code.
+    """
+    lean = {k: v for k, v in result.items() if k not in ("command", "shell")}
+    steps = lean.get("steps")
+    if isinstance(steps, list) and len(steps) <= 1:
+        del lean["steps"]
+    if not lean.get("timed_out"):
+        for key in _ONLY_ON_TIMEOUT:
+            lean.pop(key, None)
+    for key in _ONLY_WHEN_SET:
+        if not lean.get(key):
+            lean.pop(key, None)
+    duration = lean.get("duration_seconds")
+    if isinstance(duration, float):
+        lean["duration_seconds"] = round(duration, 1)
+    return lean
+
+
 def _truncate(text: Optional[str], stream: str) -> str:
     """*text* capped at ``MAX_OUTPUT_CHARS``, saying so when it was cut."""
     text = text or ""
@@ -1248,9 +1702,10 @@ _DROP_STDERR = "2>/dev/null"
 _WINDOWS_NULL = "2>nul"
 
 #: A standalone token, whitespace or an end on either side, so ``2>&1x`` and
-#: ``2>/dev/null.bak`` are not one of these.
+#: ``2>/dev/null.bak`` are not one of these. ``2>$null`` is PowerShell's
+#: spelling of the same discard.
 _STDERR_REDIRECTION = re.compile(
-    r"(?<![^\s])(?:2>&1|2>/dev/null|2>[nN][uU][lL])(?![^\s])"
+    r"(?<![^\s])(?:2>&1|2>/dev/null|2>[nN][uU][lL]|2>\$[nN][uU][lL][lL])(?![^\s])"
 )
 
 
@@ -1713,6 +2168,45 @@ def _split_script(body: str, dialect: str) -> list:
     return words
 
 
+#: A quoted string of path separators only: '\', "/", '\\'.
+_PS_SEPARATOR_STRING = r"""(?:'[\\/]+'|"[\\/]+")"""
+#: String methods and operators whose arguments are only searched for, never
+#: part of what they return: ``.Split('\')``, ``-split '/'``.
+_PS_SEARCH_ARGUMENTS = re.compile(
+    r"\.(?:Split|Trim|TrimStart|TrimEnd|IndexOf|LastIndexOf|IndexOfAny"
+    r"|LastIndexOfAny|StartsWith|EndsWith|Contains)\s*\([^()]*\)"
+    rf"|-[ci]?split\s+{_PS_SEPARATOR_STRING}",
+    re.IGNORECASE,
+)
+#: A replace whose search text is a separator: ``.Replace('\','/')``,
+#: ``-replace '\\','/'``. The replacement is output, so it counts as text only
+#: when it swaps one separator for another.
+_PS_SEPARATOR_REPLACE = re.compile(
+    rf"(\.Replace\s*\(\s*|-[ci]?replace\s+){_PS_SEPARATOR_STRING}"
+    rf"(\s*,\s*)({_PS_SEPARATOR_STRING})?",
+    re.IGNORECASE,
+)
+
+
+def _without_separator_strings(body: str) -> str:
+    """*body* with the separator strings that are only text emptied.
+
+    ``'\\'`` handed to a string method was read as a path, the drive root, and
+    the guard refused the whole script. A separator a method can return
+    (``'x'.Replace('x','\\')``, ``-join '\\'``) stays a path.
+    """
+
+    def empty(match: re.Match) -> str:
+        return re.sub(_PS_SEPARATOR_STRING, "''", match.group(0))
+
+    def empty_swap(match: re.Match) -> str:
+        replacement = "''" if match.group(3) else ""
+        return f"{match.group(1)}''{match.group(2)}{replacement}"
+
+    body = _PS_SEPARATOR_REPLACE.sub(empty_swap, body)
+    return _PS_SEARCH_ARGUMENTS.sub(empty, body)
+
+
 def _script_words(body: str, dialect: str) -> list:
     """The words an inline script operand names, for the path check."""
     if dialect == _PS_ENCODED:
@@ -1730,6 +2224,8 @@ def _script_words(body: str, dialect: str) -> list:
         except ValueError:
             # sh refuses an unbalanced quote too; still check every word in it.
             return _split_script(body, "code")
+    if dialect == "powershell":
+        body = _without_separator_strings(body)
     words = _split_script(body, dialect)
     if dialect == "powershell":
         # '-Path:C:\x' binds its value with a colon.
@@ -2131,8 +2627,8 @@ _SEARCH_FLAVORS = {
         "known_short": "abcdefhilmnoqrsuvwxyzABCDEFGHILPRTUVZ0123456789",
         "recursive_short": "rR",
         "recursive_long": ("recursive", "dereference-recursive"),
-        "hidden_short": "hz",
-        "hidden_long": ("no-filename", "null-data"),
+        "follow_short": "R",
+        "follow_long": ("dereference-recursive",),
         "always_recursive": False,
     },
     "rg": {
@@ -2142,8 +2638,8 @@ _SEARCH_FLAVORS = {
         "known_short": "0123456789aABcCdeEfFgHhiIjlLmMnNopqrsStTuUvVwxz.",
         "recursive_short": "",
         "recursive_long": (),
-        "hidden_short": "Ip",
-        "hidden_long": ("no-filename", "heading", "pretty", "json", "null-data"),
+        "follow_short": "L",
+        "follow_long": ("follow",),
         "always_recursive": True,
     },
     "git": {
@@ -2153,8 +2649,8 @@ _SEARCH_FLAVORS = {
         "known_short": "aiIvwcElLnoqHhzefABCFGPWpOm0123456789",
         "recursive_short": "",
         "recursive_long": (),
-        "hidden_short": "h",
-        "hidden_long": ("heading",),
+        "follow_short": "",
+        "follow_long": (),
         "always_recursive": True,
     },
 }
@@ -2185,15 +2681,18 @@ def _parse_grep(args: list, flavor: str = "grep") -> dict:
     ``files`` holds the operands searched; the pattern operand is not one, so
     ``grep .env .gitignore`` searches ``.gitignore`` only. ``pattern_files``
     are the ``-f`` files the patterns come from. ``unknown`` is set when an
-    option is one this check does not know, so what it does to the output
-    is unknown too.
+    option is one this check does not know, so what it does is unknown too.
+    ``dangling`` is set when the last option still wants its value, so a word
+    added after it would become that value. ``follows`` is set when the
+    search follows the links it meets inside a folder.
     """
     spec = _SEARCH_FLAVORS[flavor]
     table = spec["long"]
     parsed: dict = {
         "recursive": spec["always_recursive"],
-        "names_hidden": False,
+        "follows": False,
         "unknown": False,
+        "dangling": False,
         "includes": [],
         "excludes": [],
         "pattern_files": [],
@@ -2215,14 +2714,17 @@ def _parse_grep(args: list, flavor: str = "grep") -> dict:
                 parsed["unknown"] = True
                 continue
             if table.get(name) and not eq:
+                parsed["dangling"] = index >= len(args)
                 value = args[index] if index < len(args) else ""
                 index += 1
             if name in spec["recursive_long"] or (
                 name == "directories" and value == "recurse"
             ):
                 parsed["recursive"] = True
-            if name in spec["hidden_long"]:
-                parsed["names_hidden"] = True
+            if name in spec["follow_long"]:
+                parsed["follows"] = True
+            elif name == "no-follow":
+                parsed["follows"] = False
             if name in ("regexp", "file"):
                 pattern_given = True
                 if name == "file":
@@ -2240,12 +2742,13 @@ def _parse_grep(args: list, flavor: str = "grep") -> dict:
                     parsed["unknown"] = True
                 if flag in spec["recursive_short"]:
                     parsed["recursive"] = True
-                if flag in spec["hidden_short"]:
-                    parsed["names_hidden"] = True
+                if flag in spec["follow_short"]:
+                    parsed["follows"] = True
                 if flag in spec["value_short"]:
                     pattern_given = pattern_given or flag in "ef"
                     value = arg[offset + 1 :]
                     if not value:
+                        parsed["dangling"] = index >= len(args)
                         value = args[index] if index < len(args) else ""
                         index += 1
                     if flag == "f":
@@ -2264,28 +2767,31 @@ def _parse_grep(args: list, flavor: str = "grep") -> dict:
     return parsed
 
 
-def _grep_roots(args: list, flavor: str = "grep") -> Tuple[list, bool]:
-    """``(roots, names_shown)`` for a recursive search; no roots when not recursive.
+def _grep_roots(
+    args: list, flavor: str = "grep", fed: bool = False
+) -> Tuple[list, dict]:
+    """``(roots, parsed)`` for a recursive search; no roots when not recursive.
 
-    Each root is ``(root, includes, excludes)``. *names_shown* is whether every
-    output line is known to start with the name of the file it came from.
+    Each root is ``(root, includes, excludes)``; *parsed* is :func:`_parse_grep`'s.
+    *fed* marks a search given its files on stdin by ``xargs``, which may be
+    any file under the folder, so it counts as recursive.
     """
     parsed = _parse_grep(args, flavor)
-    if not parsed["recursive"]:
-        return [], True
+    if not parsed["recursive"] and not fed:
+        return [], parsed
     roots = [
         (root, parsed["includes"], parsed["excludes"])
         for root in parsed["files"] or ["."]
     ]
-    return roots, not (parsed["names_hidden"] or parsed["unknown"])
+    return roots, parsed
 
 
 #: git's own options that take a value, before its subcommand.
 _GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
 
 
-def _git_grep_roots(args: list) -> Tuple[list, bool]:
-    """:func:`_grep_roots` for ``git [options] grep ...``; no roots for another subcommand."""
+def _git_grep_args(args: list) -> Optional[Tuple[str, list]]:
+    """``(base, grep_args)`` for ``git [options] grep ...``; None for another subcommand."""
     base = ""
     index = 0
     while index < len(args):
@@ -2298,13 +2804,226 @@ def _git_grep_roots(args: list) -> Tuple[list, bool]:
             continue
         if arg.startswith("-"):
             continue
-        if arg != "grep":
-            return [], True
-        roots, names_shown = _grep_roots(args[index:], "git")
-        if base:
-            roots = [(os.path.join(base, r), inc, exc) for r, inc, exc in roots]
-        return roots, names_shown
-    return [], True
+        return (base, args[index:]) if arg == "grep" else None
+    return None
+
+
+def _search_roots(command: list, fed: bool = False) -> Tuple[str, list, Optional[dict]]:
+    """``(flavor, roots, parsed)`` when *command* is a recursive grep, rg or git grep.
+
+    Each root is ``(root, includes, excludes)``. *flavor* is "" and *roots*
+    empty for any other command. *fed* is :func:`_grep_roots`'s.
+    """
+    if not command:
+        return "", [], None
+    program = _interpreter_name(command[0])
+    if program in _GREP_PROGRAMS:
+        flavor, base, args = "grep", "", command[1:]
+    elif program == "rg":
+        flavor, base, args = "rg", "", command[1:]
+    elif program == "git":
+        found = _git_grep_args(command[1:])
+        if found is None:
+            return "", [], None
+        flavor, (base, args) = "git", found
+    else:
+        return "", [], None
+    roots, parsed = _grep_roots(args, flavor, fed)
+    if not roots:
+        return "", [], None
+    if base:
+        roots = [(os.path.join(base, r), inc, exc) for r, inc, exc in roots]
+    return flavor, roots, parsed
+
+
+def _searches_in(command: list) -> list:
+    """``(flavor, roots, parsed, fed)`` for each search *command* may run.
+
+    Run directly or behind launchers (``env``, ``timeout``, ``xargs``...),
+    under every reading of their options. *fed* marks one behind ``xargs``.
+    """
+    found = []
+    for start in [0, *command_starts(command)]:
+        fed = any(_interpreter_name(word) == "xargs" for word in command[:start])
+        flavor, roots, parsed = _search_roots(command[start:], fed)
+        if roots:
+            found.append((flavor, roots, parsed, fed))
+    return found
+
+
+def _case_folded_glob(glob: str) -> str:
+    """*glob* matching any letter case: ``.env`` -> ``.[eE][nN][vV]``."""
+    return "".join(
+        f"[{char.lower()}{char.upper()}]" if char.isalpha() else char for char in glob
+    )
+
+
+def _credential_globs() -> List[str]:
+    """A glob for every credential file name and extension the read tools refuse."""
+    from gaia import security
+
+    names = sorted({name.lower() for name in security.SENSITIVE_FILE_NAMES})
+    return names + [f"*{ext}" for ext in sorted(security.SENSITIVE_EXTENSIONS)]
+
+
+def _grep_exclusion_patterns() -> List[str]:
+    """grep's exclude patterns for every credential file, one ``--exclude`` each."""
+    return [_case_folded_glob(glob) for glob in _credential_globs()]
+
+
+def _credential_exclusions(flavor: str) -> List[str]:
+    """The arguments that keep every credential file out of a *flavor* search.
+
+    They go after the user's own: in grep and rg the last matching
+    include/exclude wins, and an exclude pathspec only ever narrows git's.
+    grep gets one ``--exclude`` per pattern, which GNU and BSD (macOS) grep
+    both take; it runs as argv, so no shell expands them.
+    """
+    if flavor == "grep":
+        return [f"--exclude={pattern}" for pattern in _grep_exclusion_patterns()]
+    globs = _credential_globs()
+    if flavor == "rg":
+        return [f"--iglob=!{glob}" for glob in globs]
+    return [f":(top,exclude,icase,glob)**/{glob}" for glob in globs]
+
+
+def _rewritable_search(segment: list) -> str:
+    """The flavor of the recursive search *segment* is, if exclusions can go at its end.
+
+    "" unless *segment* is itself a grep, rg or git grep (no launcher in
+    front), and the exclusions cannot be misread: no option this check does
+    not know, no ``--`` that would make them operands, no last option still
+    waiting for its value, and no POSIX argument order, where grep stops
+    reading options at its first operand.
+    """
+    found = _searches_in(segment)
+    flavor, roots, parsed = _search_roots(segment)
+    if len(found) != 1 or not roots or parsed is None:
+        return ""
+    if parsed["unknown"] or parsed["dangling"]:
+        return ""
+    if flavor in ("grep", "rg") and "--" in segment:
+        return ""
+    if flavor == "grep" and (
+        "POSIXLY_CORRECT" in os.environ or _greps_expand_arguments()
+    ):
+        return ""
+    return flavor
+
+
+def _greps_expand_arguments() -> bool:
+    """Whether grep wildcard-expands its own arguments, quoted ones included.
+
+    Git for Windows' grep does, so a planted file name can turn any word
+    into ``--`` and the exclusions into operands. There a recursive grep is
+    refused over credential files; rg and git grep do not expand.
+    """
+    return os.name == "nt"
+
+
+#: What a POSIX shell acts on outside quotes.
+_SHELL_ACTIVE = frozenset("#$`*?[]{}~<>|&;()!\n\r")
+
+
+def _needs_shell(text: str) -> bool:
+    """Whether *text* uses anything a shell would act on, so its words are not plain argv.
+
+    Comments, expansions, globs, redirections and operators outside quotes,
+    and ``$`` or a backtick inside double quotes, all count. On Windows a
+    ``%``, a ``^`` or a backslash before a quote does too: cmd.exe and the
+    Windows argument rules read those differently from the words checked here.
+    """
+    windows = _pipe_dialect() == "cmd"
+    if windows and (re.search(r'\\"', text) or any(c in text for c in "%^")):
+        return True
+    quote = ""
+    for char in text:
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif quote == '"':
+            if char == '"':
+                quote = ""
+            elif char in "$`":
+                return True
+        elif char in "'\"":
+            quote = char
+        elif char in _SHELL_ACTIVE:
+            return True
+    return bool(quote)
+
+
+def _search_plan(command: str, steps: list) -> Optional[Tuple[list, str]]:
+    """``(argv, flavor)`` when *command* is one grep, rg or git grep to run excluded.
+
+    None for any other line. :func:`_searched_as_argv` runs it with no shell
+    and the exclusions appended, so nothing re-reads the words: a line using
+    any shell feature (a pipe, ``&&``, ``;``, a redirection, a comment, an
+    expansion, a glob, an assignment) or an ``@file`` word, which Git for
+    Windows' grep expands into more arguments, gets None, and the path check
+    refuses it when the tree it searches holds a credential file.
+    """
+    if len(steps) != 1 or len(steps[0].segments) != 1:
+        return None
+    step = steps[0]
+    if any(step.envs or ()) or any(step.stderr_modes or ()) or _needs_shell(command):
+        return None
+    segment = step.segments[0]
+    if any(word.startswith("@") for word in segment):
+        return None
+    flavor = _rewritable_search(segment)
+    if not flavor:
+        return None
+    return list(segment), flavor
+
+
+@contextlib.contextmanager
+def _searched_as_argv(step: "_Step", plan: Optional[Tuple[list, str]], cwd: str):
+    """*step* to run: as argv with the credential exclusions when *plan* says so.
+
+    A grep that follows no links, over a tree in *cwd* with no credential
+    file, gets none: the tree check does not descend linked folders.
+    """
+    if plan is None:
+        yield step
+        return
+    argv, flavor = plan
+    words = _credential_exclusions(flavor)
+    parsed = _search_roots(argv)[2]
+    if (
+        flavor == "grep"
+        and parsed is not None
+        and not parsed["follows"]
+        and _bulk_read_credential(argv, cwd) is None
+    ):
+        words = []
+    yield dataclasses.replace(step, segments=[[*argv, *words]], argv_only=True)
+
+
+#: A git object name: an abbreviated or full hash, which may name a blob.
+_GIT_OBJECT_ID = re.compile(r"[0-9a-fA-F]{4,64}")
+
+
+def _git_object_reads(command: list) -> Tuple[Optional[str], bool]:
+    """``(operand, unknown)`` for the git objects a ``git grep`` in *command* searches.
+
+    *operand* is a ``<rev>:<path>`` operand whose path names a credential
+    file: git greps that blob whole, past any exclusion. *unknown* is set
+    when an operand is an object hash or ``^{blob}``, whose content cannot
+    be judged from here.
+    """
+    unknown = False
+    for flavor, _, parsed, _ in _searches_in(command):
+        if flavor != "git" or parsed is None:
+            continue
+        for operand in parsed["files"]:
+            rev, colon, path = operand.partition(":")
+            if colon and rev and not re.fullmatch(r"[A-Za-z]", rev):
+                name = re.split(r"[\\/]", path.rstrip("\\/"))[-1]
+                if name and _credential_file_name(name):
+                    return operand, unknown
+            if _GIT_OBJECT_ID.fullmatch(operand) or "^{blob}" in operand:
+                unknown = True
+    return None, unknown
 
 
 def _findstr_parse(args: list) -> Tuple[bool, list, list]:
@@ -2384,139 +3103,106 @@ def _split_commands(words: list) -> list:
     return list(zip(commands, piped))
 
 
-#: Filters that pass each line through whole, so its file-name prefix survives.
-_LINE_KEEPERS = frozenset(
-    {"head", "tail", "sort", "wc", "less", "more", "findstr"} | _GREP_PROGRAMS
-)
+def _bulk_read_roots(words: list, rewritten: bool = False) -> list:
+    """``(spec, includes, excludes, tree, links_only)`` for each folder-wide read in *words*.
 
+    A recursive search reads every file under its root (*tree*); a reader
+    given a wildcard reads every match in one folder. Each spec is a folder
+    or a folder/glob.
 
-def _redirects_stdout(command: list) -> bool:
-    """Whether *command* sends its output to a file instead of back to the tool."""
-    return any(re.match(r"1?>", word) is not None for word in command)
-
-
-#: head's and tail's long options; both take a unique prefix of one.
-_HEAD_TAIL_LONG = {
-    "bytes": True,
-    "lines": True,
-    "follow": False,
-    "retry": False,
-    "pid": True,
-    "sleep-interval": True,
-    "max-unchanged-stats": True,
-    "quiet": False,
-    "silent": False,
-    "verbose": False,
-    "zero-terminated": False,
-    "help": False,
-    "version": False,
-}
-
-
-def _keeps_lines(command: list) -> bool:
-    """Whether *command*, fed lines on stdin, prints each one whole or not at all.
-
-    An option this check does not know could change that, so it says no.
-    """
-    if not command:
-        return False
-    program = _interpreter_name(command[0])
-    if program not in _LINE_KEEPERS or _redirects_stdout(command):
-        return False
-    args = command[1:]
-    if program in _GREP_PROGRAMS:
-        if _parse_grep(args)["unknown"]:
-            return False
-        for arg in args:
-            if arg == "--":
-                break
-            if arg.startswith("--"):
-                written = arg[2:].partition("=")[0]
-                if _long_option(written, _GREP_LONG, True) == "only-matching":
-                    return False
-            elif arg.startswith("-") and "o" in re.split(r"[efmABCdD]", arg[1:])[0]:
-                return False
-        return True
-    if program in ("head", "tail"):
-        for arg in args:
-            if arg.startswith("--"):
-                written = arg[2:].partition("=")[0]
-                name = _long_option(written, _HEAD_TAIL_LONG, True)
-                if name is None or (program == "tail" and name == "bytes"):
-                    return False
-            elif program == "tail" and re.match(r"-[a-z]*c", arg):
-                return False
-    return True
-
-
-def _bulk_read_roots(words: list, shown: bool = False) -> list:
-    """``(spec, includes, excludes, named)`` for every folder or wildcard *words* reads.
-
-    A recursive search reads every file under its root; a reader given a
-    wildcard reads every match. Each spec is a folder or a folder/glob.
-
-    *named* marks a recursive search whose every output line comes back with
-    its file name in front: lines from a credential file are masked on the
-    way back (``credential_shapes.mask_credential_file_lines``), so only a
-    link that hides one behind an ordinary name refuses it. *shown* says
-    whether what *words* prints comes back with each line whole.
+    With *rewritten*, the first command is a search that skips credential
+    files by name already, so only a link hiding one under another name
+    counts (*links_only*): in its root folder, and through its whole tree
+    when it follows links.
     """
     commands = _split_commands(words)
-    # Whether each command's output comes back: nothing after it in its
-    # pipeline but line keepers, and nothing sent to a file.
-    reaches = [False] * len(commands)
-    downstream_ok = shown
-    for index in range(len(commands) - 1, -1, -1):
-        command, piped = commands[index]
-        if not piped:
-            downstream_ok = shown
-        reaches[index] = downstream_ok and not _redirects_stdout(command)
-        downstream_ok = reaches[index] and _keeps_lines(command)
     roots: list = []
-    masked: set = set()
+    searches: set = set()
     for index, (command, _) in enumerate(commands):
         if not command:
             continue
-        program = _interpreter_name(command[0])
-        if program in _GREP_PROGRAMS:
-            found, names_shown = _grep_roots(command[1:])
-        elif program == "rg":
-            found, names_shown = _grep_roots(command[1:], "rg")
-        elif program == "git":
-            found, names_shown = _git_grep_roots(command[1:])
-        elif program == "findstr":
-            found, names_shown = _findstr_roots(command[1:]), True
-        else:
+        found = _searches_in(command)
+        found += [
+            ("findstr", _findstr_roots(command[start + 1 :]), None, False)
+            for start in [0, *command_starts(command)]
+            if _interpreter_name(command[start]) == "findstr"
+        ]
+        found = [search for search in found if search[1]]
+        if not found:
             continue
-        shown_whole = bool(found) and reaches[index] and names_shown
-        if shown_whole:
-            masked.add(index)
-        roots.extend((*root, shown_whole) for root in found)
-    search = _select_string_roots(words)
-    last = max((i for i, (c, _) in enumerate(commands) if c), default=-1)
-    tail = [w.lower() for w in commands[last][0]] if last >= 0 else []
-    if (
-        search
-        and reaches[last]
-        and any(w in _SELECT_STRING for w in tail)
-        and "-raw" not in tail
-    ):
-        # The whole pipeline feeding the search: 'gci -r | sls x'.
-        index = last
-        while index >= 0 and (index == last or commands[index][1]):
-            masked.add(index)
-            index -= 1
-        roots.extend((*root, True) for root in search)
-    else:
-        roots.extend((*root, False) for root in search)
+        searches.add(index)
+        for _, search_roots, parsed, _ in found:
+            if not (rewritten and index == 0 and parsed is not None):
+                roots.extend((*root, True, False) for root in search_roots)
+                continue
+            roots.extend((*root, False, True) for root in search_roots)
+            if parsed["follows"]:
+                roots.extend((*root, True, True) for root in search_roots)
+    for command, _ in commands:
+        if not command:
+            continue
+        roots.extend(
+            (spec, [], [], True, False) for spec in _other_search_roots(command)
+        )
+        # An @file word can add any operand, so the current folder counts too.
+        if _git_object_reads(command)[1] or (
+            any(word.startswith("@") for word in command) and _searches_in(command)
+        ):
+            roots.append((".", [], [], True, False))
+    roots.extend((*root, True, False) for root in _select_string_roots(words))
     if any(_interpreter_name(w) in _CONTENT_READERS for w in words):
         roots.extend(
-            (word, [], [], False)
+            (word, [], [], False, False)
             for index, (command, _) in enumerate(commands)
-            if index not in masked
+            if index not in searches
             for word in command
             if not word.startswith("-") and _WILDCARD.search(word)
         )
+    return roots
+
+
+#: Search tools that walk a folder tree themselves, with no exclusions from here.
+_TREE_SEARCHERS = frozenset(
+    {"rgrep", "ugrep", "ug", "ag", "ack", "ack-grep", "sift", "pt"}
+)
+
+#: find's actions that run a command on every file it finds.
+_FIND_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+
+#: fd's options that run a command on every file it finds.
+_FD_EXEC = ("-x", "-X", "--exec", "--exec-batch")
+
+
+def _other_search_roots(command: list) -> list:
+    """Folders a tree-walking tool *command* runs reads every file under.
+
+    ``rgrep``, ``ugrep``, ``ag``, ``ack``, ``sift``, ``busybox grep -r``,
+    ``fd -x``/``-X`` and ``find -exec`` cannot be given the exclusions, so
+    their trees are checked whole. Their option grammars are not parsed:
+    every operand counts as a folder, and the current folder always does.
+    """
+    roots: list = []
+    for start in [0, *command_starts(command)]:
+        program = _interpreter_name(command[start])
+        args = command[start + 1 :]
+        if (
+            program == "busybox"
+            and args
+            and _interpreter_name(args[0]) in _GREP_PROGRAMS
+        ):
+            roots.extend(root for root, _, _ in _grep_roots(args[1:])[0])
+        elif program in _TREE_SEARCHERS or (
+            program in ("fd", "fdfind")
+            and any(a.split("=")[0] in _FD_EXEC for a in args)
+        ):
+            roots.extend([".", *(a for a in args if not a.startswith("-"))])
+        elif program == "find" and _FIND_EXEC & set(args):
+            starts = []
+            for arg in args:
+                if arg.startswith("-") or arg in ("(", "!"):
+                    break
+                starts.append(arg)
+            roots.extend(starts or ["."])
     return roots
 
 
@@ -2892,12 +3578,11 @@ def _check_words(body: str, dialect: str) -> list:
     return words
 
 
-def credential_read_in_words(words: list, cwd: str) -> Optional[Tuple[str, str]]:
-    """``(word, file)`` when a command in *words* reads a credential file.
+def read_targets_in_words(words: list) -> list:
+    """The words of *words* that its commands read as files.
 
     Args:
         words: One command's words, or several joined by ``|``/``&&``/``;``.
-        cwd: The folder relative paths resolve against.
     """
     commands: list = [[]]
     for word in words:
@@ -2905,16 +3590,25 @@ def credential_read_in_words(words: list, cwd: str) -> Optional[Tuple[str, str]]
             commands.append([])
         else:
             commands[-1].append(word)
-    for command in commands:
-        for target in _read_targets(command):
-            spellings = [target]
-            # cmd.exe drops an unquoted '^' that shlex keeps.
-            if _pipe_dialect() == "cmd" and "^" in target:
-                spellings.append(re.sub(r"\^(.?)", r"\1", target))
-            for spelling in spellings:
-                found = _credential_file(spelling, cwd)
-                if found is not None:
-                    return target, found
+    return [target for command in commands for target in _read_targets(command)]
+
+
+def credential_read_in_words(words: list, cwd: str) -> Optional[Tuple[str, str]]:
+    """``(word, file)`` when a command in *words* reads a credential file.
+
+    Args:
+        words: One command's words, or several joined by ``|``/``&&``/``;``.
+        cwd: The folder relative paths resolve against.
+    """
+    for target in read_targets_in_words(words):
+        spellings = [target]
+        # cmd.exe drops an unquoted '^' that shlex keeps.
+        if _pipe_dialect() == "cmd" and "^" in target:
+            spellings.append(re.sub(r"\^(.?)", r"\1", target))
+        for spelling in spellings:
+            found = _credential_file(spelling, cwd)
+            if found is not None:
+                return target, found
     return None
 
 
@@ -2981,20 +3675,100 @@ def _command_word_lists(argv: list) -> list:
     return lists
 
 
-def _bulk_read_credential(
-    argv: list, cwd: str, downstream: Optional[list] = None
-) -> Optional[str]:
-    """A credential file directly inside a folder *argv* reads as a whole, or None.
+#: What can sit between words inside an inline script's strings and lists.
+_SCRIPT_WORD_SPLIT = re.compile(r"[\s'\",;()\[\]{}]+")
 
-    Only the folder's own entries are listed, never a whole tree, so a
-    credential file in a subfolder is not found here. *downstream* are the
-    commands *argv*'s output is piped through, which decide whether a
-    recursive search's lines come back with their file names on them.
+
+def _human_only_command(command: str) -> str:
+    """The ``gaia skill`` call *command* makes, or "": only the user runs those.
+
+    Inline scripts are over-read, their strings included, since a string there
+    may be what the script runs.
     """
-    shown = all(_keeps_lines(command) for command in downstream or ())
-    for words in _command_word_lists(argv):
-        for spec, includes, excludes, named in _bulk_read_roots(words, shown):
+    from gaia.skills.binaries import human_only_gaia_call
+    from gaia.skills.human_only import AGENT_CHILD_ENV
+
+    # Clearing the marker is the one way past the command-side refusal.
+    if AGENT_CHILD_ENV.lower() in command.lower():
+        return AGENT_CHILD_ENV
+    try:
+        argv = _tokenize(command, bypass_gates=True)
+    except ValueError:
+        return human_only_gaia_call(_SCRIPT_WORD_SPLIT.split(command))
+    return human_only_in_argv(argv)
+
+
+def human_only_in_argv(argv: list) -> str:
+    """The ``gaia skill`` call *argv* makes, inline scripts included, or ""."""
+    from gaia.skills.binaries import human_only_gaia_call, human_only_in_code_words
+
+    if not argv:
+        return ""
+    lists = _command_word_lists(list(argv))
+    script = [
+        piece
+        for words in lists[1:]
+        for word in words
+        for piece in _SCRIPT_WORD_SPLIT.split(word)
+        if piece
+    ]
+    if script:
+        found = human_only_in_code_words(script)
+        if found:
+            return found
+    return human_only_gaia_call([*lists[0], *script])
+
+
+def _human_only_refusal(command: str, spelled: str) -> Dict[str, Any]:
+    """The final refusal for a line that runs a ``gaia`` command only the user may."""
+    from gaia.skills.binaries import human_only_message
+
+    return {
+        "status": "error",
+        "tier": TIER_REFUSE,
+        "error": f"Not offered: `{command}` — {human_only_message(spelled)}.",
+        "hint": (
+            "Tell the user plainly what was asked for and the exact command, so "
+            f"they can decide whether to run it themselves. {NOT_APPROVABLE}"
+        ),
+        "has_errors": True,
+        **NOT_EXECUTED,
+    }
+
+
+#: Entries checked in a searched tree before the search is refused as too large.
+_TREE_CHECK_LIMIT = 100_000
+
+#: What :func:`_bulk_read_credential` found: a read of the file, a search over
+#: a tree holding it, or a tree too large to check.
+_BULK_READ, _BULK_SEARCH, _BULK_TOO_LARGE = "read", "search", "too_large"
+_BULK_UNKNOWN = "unknown"
+
+#: What a shell expands in a word that no check here can work out first.
+_UNRESOLVED_EXPANSION = re.compile(r"`|\$\(|\$\{|\$[A-Za-z_]|%[^%]+%")
+
+
+def _bulk_read_credential(
+    argv: list, cwd: str, rewritten: bool = False
+) -> Optional[Tuple[str, str]]:
+    """``(path, kind)`` for a credential file a folder-wide read in *argv* takes in, or None.
+
+    A recursive search's whole tree is checked; a wildcard read's folder only.
+    *rewritten* says *argv* itself runs as :func:`_search_plan`, which keeps
+    credential files out. *kind* is one of ``_BULK_*``; for
+    ``_BULK_TOO_LARGE`` and ``_BULK_UNKNOWN``, *path* is the folder that
+    could not be checked.
+    """
+    from gaia import security
+
+    linked = None  # listed on the first folder-wide read, not for every command
+    for number, words in enumerate(_command_word_lists(argv)):
+        for spec, includes, excludes, tree, links_only in _bulk_read_roots(
+            words, rewritten and number == 0
+        ):
             spec = os.path.expandvars(os.path.expanduser(spec))
+            if tree and _UNRESOLVED_EXPANSION.search(spec):
+                return spec, _BULK_UNKNOWN
             try:
                 base = Path(cwd).joinpath(spec)
                 if base.is_dir():
@@ -3003,14 +3777,112 @@ def _bulk_read_credential(
                     folder, pattern = base.parent, base.name.lower()
                 else:
                     continue
-                entries = list(os.scandir(folder))
             except (OSError, ValueError) as exc:
                 logger.debug("Cannot list %r for the credential check: %s", spec, exc)
                 continue
+            if linked is None:
+                linked = security.linked_secret_files()
+            if tree:
+                found, complete = _tree_credential(
+                    folder, pattern, includes, excludes, links_only, linked
+                )
+                if not complete:
+                    return str(folder), _BULK_TOO_LARGE
+                if found is not None:
+                    return found, _BULK_READ if links_only else _BULK_SEARCH
+                continue
+            try:
+                entries = list(os.scandir(folder))
+            except OSError as exc:
+                logger.debug("Cannot list %r for the credential check: %s", spec, exc)
+                continue
             for entry in entries:
-                if _bulk_entry_is_credential(entry, pattern, includes, excludes, named):
-                    return entry.path
+                if _bulk_entry_is_credential(
+                    entry, pattern, includes, excludes, links_only, linked
+                ):
+                    return entry.path, _BULK_READ
     return None
+
+
+def _tree_credential(
+    folder: Path,
+    pattern: Optional[str],
+    includes: list,
+    excludes: list,
+    links_only: bool,
+    linked: Optional[dict] = None,
+) -> Tuple[Optional[str], bool]:
+    """``(credential, complete)`` for a recursive search of *folder*.
+
+    *pattern* is matched against file names at every depth and against the
+    folders directly in *folder*, which covers both findstr's reading of a
+    wildcard and grep's. Links to folders are not followed. *complete* is
+    False when the tree holds more than :data:`_TREE_CHECK_LIMIT` entries.
+    """
+    # A path glob or an empty one is not read as narrowing the search.
+    usable_includes = [g.lower() for g in includes if g and not re.search(r"[\\/]", g)]
+    seen = 0
+    stack = [(str(folder), pattern is None, True)]
+    while stack:
+        current, matched, top = stack.pop()
+        try:
+            with os.scandir(current) as listing:
+                entries = list(listing)
+        except OSError as exc:
+            logger.debug("Cannot list %r for the credential check: %s", current, exc)
+            continue
+        seen += len(entries)
+        if seen > _TREE_CHECK_LIMIT:
+            return None, False
+        for entry in entries:
+            hit = matched or fnmatch.fnmatchcase(entry.name.lower(), pattern or "*")
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append((entry.path, hit if top else matched, False))
+                    continue
+            except OSError as exc:
+                logger.debug("Cannot stat %r for the credential check: %s", entry, exc)
+                continue
+            if hit and _searched_file_is_credential(
+                entry, usable_includes, excludes, links_only, linked
+            ):
+                return entry.path, True
+    return None, True
+
+
+def _searched_file_is_credential(
+    entry: os.DirEntry,
+    includes: list,
+    excludes: list,
+    links_only: bool,
+    linked: Optional[dict] = None,
+) -> bool:
+    """Whether a search that reaches *entry* reads a credential file there.
+
+    An exclude is matched case-sensitively, the way grep does, so it is never
+    read as skipping more than the search will.
+    """
+    name = entry.name
+    if includes and not any(fnmatch.fnmatchcase(name.lower(), g) for g in includes):
+        return False
+    if any(fnmatch.fnmatchcase(name, g) for g in excludes):
+        return False
+    target = ""
+    try:
+        if entry.is_symlink():
+            real = os.path.realpath(entry.path)
+            if os.path.isdir(real):
+                return False
+            target = os.path.basename(real)
+    except OSError as exc:
+        logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
+        return False
+    disguised = (bool(target) and _credential_file_name(target)) or _shares_secret(
+        entry, linked
+    )
+    if links_only:
+        return disguised and not _credential_file_name(name)
+    return disguised or _credential_file_name(name)
 
 
 def _bulk_entry_is_credential(
@@ -3018,12 +3890,13 @@ def _bulk_entry_is_credential(
     pattern: Optional[str],
     includes: list,
     excludes: list,
-    named: bool = False,
+    links_only: bool = False,
+    linked: Optional[dict] = None,
 ) -> bool:
     """Whether a folder-wide read of *entry*'s folder reads it as a credential.
 
-    With *named*, a credential file under its own name is masked in the
-    output instead, so only a link to one under another name counts.
+    With *links_only*, a credential file under its own name is skipped by the
+    read already, so only a link to one under another name counts.
     """
     name = entry.name.lower()
     if pattern and not fnmatch.fnmatchcase(name, pattern):
@@ -3039,11 +3912,34 @@ def _bulk_entry_is_credential(
     except OSError as exc:
         logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
         return False
-    if named:
-        return not _credential_file_name(name) and _credential_file_name(
-            os.path.basename(real)
-        )
-    return _credential_file_name(name) or _credential_file_name(os.path.basename(real))
+    disguised = _credential_file_name(os.path.basename(real)) or _shares_secret(
+        entry, linked
+    )
+    if links_only:
+        return not _credential_file_name(name) and disguised
+    return _credential_file_name(name) or disguised
+
+
+def _shares_secret(entry: os.DirEntry, linked: Optional[dict]) -> bool:
+    """Whether *entry* is a hard link to a file in a credential folder.
+
+    *linked* is :func:`gaia.security.linked_secret_files` for this search. A
+    second name has the same size, and the listing already knows the size, so
+    only a file of a matching size is looked up.
+    """
+    if not linked:
+        return False
+    try:
+        size = entry.stat().st_size  # a symlink's target is what gets read
+    except OSError as exc:
+        logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
+        return False
+    if size not in {secret_size for _folder, secret_size in linked.values()}:
+        return False
+    from gaia import security
+
+    identity = security.file_identity(entry.path)
+    return identity is not None and identity in linked
 
 
 def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]:
@@ -3061,9 +3957,55 @@ def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]
         ),
         "has_errors": True,
         "hint": (
-            "Ask the user to open the file themselves. A recursive search of a "
-            "folder that holds one runs when each line keeps its file name (no "
-            "-h, cut or sed after it); or name the files to search."
+            "Ask the user to open the file themselves. rg and git grep (and "
+            "grep -r outside Windows) skip credential files on their own; or "
+            "name the files to search."
+        ),
+    }
+
+
+def _search_refusal(command: str, path: str, kind: str) -> Dict[str, Any]:
+    """The hard refusal for a recursive search that cannot leave credential files out.
+
+    No tier: neither an approval nor full access lifts it.
+    """
+    searchers, windows_note = "grep -r, rg or git grep", ""
+    if _greps_expand_arguments():
+        searchers = "rg or git grep"
+        windows_note = (
+            " grep on Windows expands wildcards in its own arguments, so a "
+            "recursive grep cannot skip them: use rg or git grep instead."
+        )
+    if kind == _BULK_UNKNOWN:
+        reason = (
+            f"which folder '{path}' names is only known once a shell expands "
+            "it, so it cannot be checked for credential files"
+        )
+    elif kind == _BULK_TOO_LARGE:
+        reason = (
+            f"'{path}' holds too many files to check for credential files "
+            "(.env, *.pem, ...)"
+        )
+    else:
+        reason = (
+            f"the folder it searches holds '{path}', which holds credentials, "
+            "keys or secrets"
+        )
+    return {
+        **NOT_EXECUTED,
+        "status": "error",
+        "error": (
+            f"Access denied: '{command}' is a recursive search that cannot skip "
+            f"files holding credentials, keys or secrets, and {reason}. "
+            "Credential files never take part "
+            "in a search, even with full access or after approval."
+        ),
+        "has_errors": True,
+        "hint": (
+            f"Search specific files by name, or run {searchers} on its own: "
+            "no pipe, chaining, redirection, '--', @file or script around it, "
+            "and any wildcard or ~ quoted. Run that way, it skips credential "
+            f"files by itself.{windows_note}"
         ),
     }
 
@@ -3624,6 +4566,8 @@ class _Step:
     stderr_modes: tuple = ()
     shell_text: str = ""
     envs: tuple = ()
+    #: Run as argv with no shell, whatever the platform: see ``_search_plan``.
+    argv_only: bool = False
 
     @property
     def is_cd(self) -> bool:
@@ -4045,7 +4989,13 @@ def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
     command sets outlives it or reaches the agent. GAIA's internal credentials
     are left out (see ``gaia.env.child_env``).
     """
-    return child_env(assignments)
+    from gaia.skills.human_only import agent_child_env
+
+    # Marked last, so a command's own assignment can't clear it.
+    env = agent_child_env(child_env(assignments))
+    # A killed Python child keeps what it printed only if it never buffered it.
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    return env
 
 
 class _CommandCancelled(Exception):
@@ -4130,12 +5080,14 @@ def _run_pipeline(
             for proc in procs[:-1]:
                 proc.wait(timeout=max(deadline - time.monotonic(), 0))
         except subprocess.TimeoutExpired as exc:
-            for proc in procs:
+            for proc in procs[:-1]:
                 proc.kill()
+            # The last stage's reader holds what it printed before the kill.
+            out, _ = terminate_process_tree(procs[-1])
             for proc in procs:
                 proc.wait()
             raise subprocess.TimeoutExpired(
-                exc.cmd, timeout, output=exc.output, stderr=_read_all(errs)
+                exc.cmd, timeout, output=out or exc.output, stderr=_read_all(errs)
             ) from exc
     except BaseException:
         for proc in procs:
@@ -4244,6 +5196,385 @@ def _posix_pipe_positions(text: str) -> list:
 #: The only characters a cmd.exe line may hold and still be classified read-only.
 _CMD_PLAIN_LINE = re.compile(r"[A-Za-z0-9 ._\\/:-]*")
 
+#: What a line run with nobody asked may hold. No quote, caret, %, !, redirect
+#: or bracket, so GAIA and cmd.exe or sh cannot read it two different ways;
+#: no comma or semicolon either, which cmd's ``dir`` reads as a path separator.
+_UNASKED_LINE = re.compile(r"[A-Za-z0-9 \t._\\/:+|&-]*")
+#: Hiding or merging stderr, the one redirect such a line may carry.
+_DISCARDED_STDERR = re.compile(
+    r"(?<!\S)2>(?:/dev/null|nul|\$null|&1)(?=$|[\s;&|])", re.I
+)
+
+#: Commands that may run with nobody asked: each only prints what it reads, and
+#: none takes a flag that writes, runs a program, or reaches another machine.
+_UNASKED_COMMANDS = frozenset(
+    {
+        "ls",
+        "dir",
+        "pwd",
+        "cat",
+        "head",
+        "tail",
+        "grep",
+        "wc",
+        "stat",
+        "df",
+        "whoami",
+        "uname",
+        "which",
+        "whereis",
+        "basename",
+        "dirname",
+        "echo",
+        "git",
+    }
+)
+
+#: An option with nothing attached; a value in its own word gets the path check.
+_UNASKED_FLAG = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9-]*")
+#: A Windows switch carrying a value (``findstr /d:C:\Windows``) hides a path.
+_SWITCH_WITH_VALUE = re.compile(r"/[A-Za-z?]+:")
+#: Any Windows switch: ``/s`` hides in bundles like ``/si``, so none run unasked.
+_WINDOWS_SWITCH = re.compile(r"/[A-Za-z?]+")
+#: ``D:x`` is relative to drive D's own current folder, not to this one.
+_DRIVE_RELATIVE = re.compile(r"[A-Za-z]:(?![\\/])")
+#: ``dir`` switches that only change how the listing looks; ``/s`` walks.
+_DIR_DISPLAY_SWITCHES = frozenset({"/b", "/w", "/l", "/n", "/q"})
+
+
+#: Device names Windows opens wherever they appear, whatever the folder or suffix.
+_WINDOWS_DEVICES = frozenset(
+    {"con", "prn", "aux", "nul", "clock$", "conin$", "conout$"}
+    | {f"com{n}" for n in range(10)}
+    | {f"lpt{n}" for n in range(10)}
+)
+
+
+def _names_a_device(word: str) -> bool:
+    """Whether *word* names a Windows device (``CON``, ``nul.txt``, ``C:/x/COM1``)."""
+    last = re.split(r"[\\/]", word)[-1]
+    return last.split(".", 1)[0].rstrip(": ").lower() in _WINDOWS_DEVICES
+
+
+def _short_flags_hold(segment: list, letters: str) -> bool:
+    """Whether a short-option word of *segment* holds any of *letters*."""
+    return any(
+        word.startswith("-")
+        and not word.startswith("--")
+        and any(letter in word for letter in letters)
+        for word in segment[1:]
+    )
+
+
+#: Long options that walk a tree, follow a link, wait for more input, or read
+#: the files a list names (``wc --files0-from``).
+_ASKING_LONG_OPTIONS = frozenset(
+    {
+        "--recursive",
+        "--dereference",
+        "--dereference-recursive",
+        "--directories",
+        "--devices",
+        "--follow",
+        "--show-signature",
+        "--files0-from",
+    }
+)
+
+
+def _segment_runs_unasked(segment: list) -> bool:
+    """Whether *segment* is a listed command, by bare name, with plain options.
+
+    A walk (``-r``, ``-R``, ``/s``) reads files nobody named, so it asks, as do
+    a link followed (``-L``), a read that never ends (``tail -f``), a device
+    name, and ``git log --show-signature``, which starts gpg.
+    """
+    name = segment[0].lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    if name not in _UNASKED_COMMANDS:
+        return False
+    if _short_flags_hold(segment, "rRL"):
+        return False
+    if name == "grep" and _short_flags_hold(segment, "dD"):
+        return False
+    if name == "tail" and _short_flags_hold(segment, "fF"):
+        return False
+    for word in segment[1:]:
+        if word.startswith("-") and not _UNASKED_FLAG.fullmatch(word):
+            return False
+        # GNU tools accept any unambiguous prefix (``--recurs``, ``--files0``).
+        if word.startswith("--") and any(
+            option.startswith(word.lower()) for option in _ASKING_LONG_OPTIONS
+        ):
+            return False
+        if name == "dir" and word.lower() in _DIR_DISPLAY_SWITCHES:
+            continue
+        if _WINDOWS_SWITCH.fullmatch(word) or _SWITCH_WITH_VALUE.match(word):
+            return False
+        if _DRIVE_RELATIVE.match(word) or ".." in re.split(r"[\\/]", word):
+            # ``link/..`` climbs from where the link lands, not from here.
+            return False
+        if _names_a_device(word):
+            return False
+    return True
+
+
+#: What cmd.exe tries after a bare program name when PATHEXT is not set.
+_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+
+#: cmd.exe's own commands, which no file of the same name can replace.
+_CMD_BUILTINS = frozenset({"dir", "echo", "cd", "chdir", "type"})
+
+
+def _program_suffixes() -> List[str]:
+    """``""`` then every extension cmd.exe tries, PATHEXT's first, lower-case."""
+    listed = f"{os.environ.get('PATHEXT', '')};{_DEFAULT_PATHEXT}".split(";")
+    return ["", *dict.fromkeys(ext.strip().lower() for ext in listed if ext.strip())]
+
+
+def _folder_shadows(folder: str, token: str) -> bool:
+    """Whether *folder* holds a file cmd.exe could run for *token* before PATH."""
+    try:
+        files = {
+            entry.name.lower()
+            for entry in os.scandir(folder)
+            if not entry.is_dir(follow_symlinks=False)
+        }
+    except OSError:
+        return True
+    name = token.lower().removesuffix(".exe")
+    stems = {token.lower(), name, _UNIX_TO_WIN.get(name, name)}
+    return any(
+        f"{stem}{suffix}" in files for stem in stems for suffix in _program_suffixes()
+    )
+
+
+def _path_has_relative_entry() -> bool:
+    """Whether PATH holds an entry that means "the folder the command runs in"."""
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            # sh reads an empty entry as the current folder; cmd.exe skips it.
+            if os.name != "nt":
+                return True
+        elif not os.path.isabs(entry):
+            return True
+    return False
+
+
+#: A program spelled with a folder or a drive (``.\gh``, ``C:gh``), not a bare name.
+_PATH_SPELLING = re.compile(r"[\\/:]")
+
+
+def _program_on_path(name: str, cwd: str) -> Optional[str]:
+    """Where PATH alone finds program *name*: never *cwd*, never a relative entry."""
+    # A drive or folder in the name would make the join below ignore PATH.
+    if _PATH_SPELLING.search(name):
+        return None
+    here = os.path.normcase(os.path.realpath(cwd))
+    # cmd.exe never runs a PATH file that has no extension.
+    suffixes = _program_suffixes()[1:]
+    if os.path.splitext(name)[1].lower() in suffixes:
+        suffixes = ["", *suffixes]
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry or not os.path.isabs(entry):
+            continue
+        if os.path.normcase(os.path.realpath(entry)) == here:
+            continue
+        for suffix in suffixes:
+            candidate = os.path.join(entry, name + suffix)
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
+#: What Windows starts without a shell; a ``.bat`` or ``.cmd`` needs cmd.exe.
+_DIRECT_PROGRAM_SUFFIXES = (".exe", ".com")
+
+
+def _pin_argv_program(argv: list, cwd: str) -> list:
+    """*argv* with its bare program replaced by the file PATH alone finds.
+
+    For a Windows run with no shell, which would otherwise look in GAIA's own
+    program folder and current folder before PATH. A granted command runs the
+    program PATH finds, never one in the working folder.
+    """
+    name = argv[0]
+    # A folder or drive spelling runs as typed: no grant matches it, so it was asked.
+    if _PATH_SPELLING.search(name):
+        return argv
+    program = _program_on_path(name, cwd)
+    if program is None:
+        raise FileNotFoundError(
+            f"'{name}' was not found on PATH. Install it, or add the folder "
+            "that holds it to PATH."
+        )
+    if not program.lower().endswith(_DIRECT_PROGRAM_SUFFIXES):
+        raise FileNotFoundError(
+            f"'{name}' on PATH is {program}, which Windows starts only through "
+            "cmd.exe, and this command runs without a shell. Run it from a "
+            "terminal instead."
+        )
+    return [program, *argv[1:]]
+
+
+#: The leading program word of one cmd.exe pipe piece.
+_PIECE_PROGRAM = re.compile(r"^(\s*)([A-Za-z0-9_-]+(?:\.exe)?)(?=\s|$)", re.I)
+
+
+def _pin_listed_programs(shell_text: str, cwd: str) -> Tuple[str, bool]:
+    """*shell_text* with each listed read's program run from where PATH finds it.
+
+    cmd.exe looks in the folder it runs in before PATH. Returns the text, and
+    whether every piece is a listed read, so the child can also be told not to
+    search its folder at all.
+    """
+    pinned, all_listed = [], True
+    for piece in _split_cmd_pipes(shell_text):
+        match = _PIECE_PROGRAM.match(piece)
+        name = match.group(2).lower().removesuffix(".exe") if match else ""
+        listed = name in _UNASKED_COMMANDS or name == "where"
+        all_listed = all_listed and listed
+        if listed and name not in _CMD_BUILTINS:
+            found = _program_on_path(name, cwd)
+            if found is not None:
+                piece = f'{match.group(1)}"{found}"{piece[match.end():]}'
+        pinned.append(piece)
+    return "|".join(pinned), all_listed
+
+
+#: git reads that never start a program a repository's own config can name.
+#: ``status`` runs core.fsmonitor; anything that renders a diff can run
+#: diff.external or a textconv driver, so those still ask.
+_GIT_UNASKED_SUBCOMMANDS = frozenset(
+    {"log", "branch", "remote", "rev-parse", "shortlog", "rev-list"}
+)
+
+#: Repository-local settings that never name a program. A repo whose own
+#: config sets anything else (gpg.program, log.showSignature, core.fsmonitor,
+#: an include, an alias...) still asks before git runs in it.
+_GIT_PLAIN_CONFIG_KEY = re.compile(
+    r"^(?:core\.(?:repositoryformatversion|filemode|bare|logallrefupdates"
+    r"|symlinks|ignorecase|precomposeunicode|autocrlf|eol|longpaths)"
+    r"|remote\.[^\n]*\.(?:url|pushurl|fetch|prune|tagopt)"
+    r"|branch\.[^\n]*\.(?:remote|merge|rebase|pushremote|description"
+    r"|vscode-merge-base)"
+    r"|extensions\.worktreeconfig|lfs\.repositoryformatversion|rerere\.enabled"
+    r"|user\.(?:name|email)|init\.defaultbranch|pull\.rebase|fetch\.prune"
+    r"|gui\.wmstate|gui\.geometry)$"
+)
+_GIT_CONFIG_SECTION = re.compile(r'^\s*\[\s*([A-Za-z0-9.-]+)(?:\s+"([^"]*)")?\s*\]')
+_GIT_CONFIG_KEY = re.compile(r"^\s*([A-Za-z][A-Za-z0-9-]*)\s*(?:=|$)")
+
+
+#: What git accepts in HEAD: a ref under refs/, or a SHA-1 or SHA-256 commit id.
+_GIT_HEAD = re.compile(r"ref:\s*refs/|[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\s*$")
+
+
+def _git_head_is_valid(head: Path) -> bool:
+    """Whether git would accept *head*, so it stops looking for a repository here."""
+    if head.is_symlink() or not head.is_file():
+        return False
+    return bool(_GIT_HEAD.match(head.read_text(encoding="utf-8", errors="replace")))
+
+
+def _git_dirs(start: str) -> Optional[List[Path]]:
+    """The git dirs whose ``config`` a git run in *start* reads, or None if odd."""
+    here = Path(start).resolve()
+    for folder in (here, *here.parents):
+        dot = folder / ".git"
+        if dot.is_dir():
+            # git skips a .git that is not a repository and keeps looking up,
+            # so anything short of one git would use asks.
+            if not _git_head_is_valid(dot / "HEAD"):
+                return None
+            # git follows commondir inside a .git folder too.
+            dirs = [dot]
+            common = dot / "commondir"
+            if common.is_file():
+                dirs.append((dot / common.read_text().strip()).resolve())
+            if not all(
+                (d / part).is_dir() for d in dirs for part in ("objects", "refs")
+            ):
+                return None
+            return dirs
+        if os.path.lexists(folder / "HEAD"):
+            # git may take this folder as the repository, config and all.
+            return None
+        if dot.is_file():
+            text = dot.read_text(encoding="utf-8", errors="replace").strip()
+            if not text.startswith("gitdir:"):
+                return None
+            gitdir = (folder / text[len("gitdir:") :].strip()).resolve()
+            dirs = [gitdir]
+            common = gitdir / "commondir"
+            if common.is_file():
+                dirs.append((gitdir / common.read_text().strip()).resolve())
+            return dirs
+    return []
+
+
+def _git_repo_config_is_plain(start: str) -> bool:
+    """Whether the repository around *start* configures no program for git."""
+    dirs = _git_dirs(start)
+    if dirs is None:
+        return False
+    for gitdir in dirs:
+        for name in ("config", "config.worktree"):
+            path = gitdir / name
+            if not path.is_file():
+                continue
+            section = ""
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.split("#", 1)[0].split(";", 1)[0]
+                if not line.strip():
+                    continue
+                header = _GIT_CONFIG_SECTION.match(line)
+                if header:
+                    if line[header.end() :].strip():
+                        # `[log] showSignature = true` is one line to git.
+                        return False
+                    name_, sub = header.group(1), header.group(2)
+                    section = f"{name_}.{sub}" if sub is not None else name_
+                    continue
+                key = _GIT_CONFIG_KEY.match(line)
+                if not key or not _GIT_PLAIN_CONFIG_KEY.match(
+                    f"{section}.{key.group(1)}".lower()
+                ):
+                    return False
+    return True
+
+
+_GIT_DIFF_FLAG = re.compile(
+    r"^(?:-p|-u|-U\d*|--remerge-diff|--binary"
+    r"|-G.*|-S.*|--patch.*|--stat.*|--numstat|--shortstat|--dirstat.*"
+    r"|--summary|--ext-diff|--textconv|--word-diff.*|--color-words.*|--raw"
+    r"|--name-only|--name-status|--check|--follow|--cc|-c|-m|--diff-merges.*)$"
+)
+
+
+def _git_may_run_repo_programs(segment: list, cwd: str) -> bool:
+    """Whether this git call, run in *cwd*, could start a program a repo names."""
+    if (_program_behind(segment[0]) or segment[0]).lower() != "git":
+        return False
+    argv, _ = _git_policy_argv(segment)
+    if not argv or len(argv) < 2 or argv[1] not in _GIT_UNASKED_SUBCOMMANDS:
+        return True
+    # `git remote show` contacts the remote; only listing stays local.
+    if argv[1] == "remote" and any(w not in ("-v", "--verbose") for w in argv[2:]):
+        return True
+    if any(_GIT_DIFF_FLAG.match(token) for token in segment[1:]):
+        return True
+    # Only `-C <dir>` may sit before the subcommand; it moves the repo read.
+    globals_ = segment[1 : len(segment) - len(argv) + 1]
+    where = Path(cwd)
+    while globals_:
+        if globals_[0] != "-C" or len(globals_) < 2:
+            return True
+        where = where / globals_[1]
+        globals_ = globals_[2:]
+    return not _git_repo_config_is_plain(str(where))
+
 
 def _pipe_dialect() -> str:
     """Whose pipe rules a step follows: cmd.exe's on Windows, sh's elsewhere."""
@@ -4344,9 +5675,18 @@ def _cmd_exe_launch(text: str, env: Dict[str, str]) -> Tuple[str, Dict[str, Any]
     cmd.exe performs after parsing, so it never acts on the operators in it.
     The child gets its own hidden console so ``chcp`` cannot change the user's.
     """
-    comspec = os.environ.get("COMSPEC", "cmd.exe")
+    root = os.environ.get("SystemRoot")
+    if not root:
+        raise RuntimeError(
+            "SystemRoot is not set, so cmd.exe and chcp cannot be located. "
+            "Run GAIA from a normal Windows session."
+        )
+    comspec = os.environ.get("COMSPEC") or os.path.join(root, "System32", "cmd.exe")
+    # By path, so neither is looked up in the working folder.
+    chcp = os.path.join(root, "System32", "chcp.com")
     command_line = (
-        f'"{comspec}" /v:on /c "chcp 65001>nul && "{comspec}" /c !{_CMD_TEXT_ENV}!"'
+        f'"{comspec}" /v:on /c ""{chcp}" 65001>nul && '
+        f'"{comspec}" /c !{_CMD_TEXT_ENV}!"'
     )
     return command_line, {
         # Quoted the way shell=True quotes it, so cmd.exe strips the same quotes.
@@ -4399,13 +5739,37 @@ def _run_step(
     # Bypass mode needs a shell off Windows too: the operators it unblocks ARE
     # the shell. A redirect is a token to the walk above and a file write to sh,
     # so an argv run would pass '>' to the program as an operand.
+    argv_only = step.argv_only
     use_shell = (
-        (os.name == "nt" or bypass)
+        not argv_only
+        and (os.name == "nt" or bypass)
         and not lone_granted_segment
         and not any(step.envs or ())
     )
 
     exec_cmd = [part for segment in segments for part in segment]
+    if argv_only and os.name == "nt" and not _PATH_SPELLING.search(exec_cmd[0]):
+        # By PATH alone, never from cwd.
+        program = _program_on_path(exec_cmd[0], cwd)
+        if program is None:
+            raise FileNotFoundError(
+                f"'{exec_cmd[0]}' was not found on PATH. Install it, or search "
+                "with findstr on named files."
+            )
+        exec_cmd = [program, *exec_cmd[1:]]
+    elif not use_shell and os.name == "nt":
+        # Every segment, so a pipeline's later programs are pinned as well. A
+        # /x-switch find or sort is Windows' own, never a GNU one earlier on PATH.
+        segments = [
+            (
+                [_system32_tool(segment[0].lower().removesuffix(".exe")), *segment[1:]]
+                if _wants_windows_tool(segment)
+                else _pin_argv_program(segment, cwd)
+            )
+            for segment in segments
+        ]
+        exec_cmd = [part for segment in segments for part in segment]
+    listed_only = False
     if use_shell:
         # The step's own text, to preserve quoting (critical for PowerShell).
         # On Windows it keeps the stderr redirections, spelled cmd.exe's way:
@@ -4424,6 +5788,8 @@ def _run_step(
                     "Mapping Unix command '%s' -> Windows '%s'", cmd_base, win_cmd
                 )
                 exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
+        if os.name == "nt":
+            exec_cmd, listed_only = _pin_listed_programs(exec_cmd, cwd)
 
     if len(segments) > 1 and not use_shell:
         return _run_pipeline(
@@ -4462,6 +5828,9 @@ def _run_step(
         "shell": use_shell,
     }
     if use_shell and os.name == "nt":
+        if listed_only:
+            # cmd.exe then looks a bare name up on PATH only, never in cwd.
+            launch["env"]["NoDefaultCurrentDirectoryInExePath"] = "1"
         popen_args, cmd_launch = _cmd_exe_launch(exec_cmd, launch["env"])
         launch.update(cmd_launch, shell=False)
     process = subprocess.Popen(  # pylint: disable=consider-using-with
@@ -4515,6 +5884,19 @@ def _run_step(
         stdout=stdout,
         stderr=stderr,
     )
+
+
+#: Changed files a timeout hint names before it says "and N more".
+_HINT_MAX_FILES = 8
+
+
+def _relative_to(path: str, cwd: str) -> str:
+    """*path* relative to *cwd* when it lies under it, else as given."""
+    try:
+        rel = os.path.relpath(path, cwd)
+    except ValueError:  # another drive on Windows
+        return path
+    return path if rel == os.pardir or rel.startswith(os.pardir + os.sep) else rel
 
 
 def _as_text(raw: Any) -> str:
@@ -4874,38 +6256,132 @@ class ShellToolsMixin:
     ) -> Dict[str, Any]:
         """A confirmable command's block, re-explained for an unasked run.
 
-        Fails closed: nobody can answer the prompt this command needs. The
-        user-facing text is one plain sentence naming what they can do; which
-        switch made the run unattended goes to the log.
+        Fails closed: nobody can answer the prompt this command needs. When a
+        safe route exists the text leads with it and says plainly that nobody
+        refused the command; a run with no route falls back to offering
+        approval. Which switch made the run unattended goes to the log.
         """
         note = str(error.get("risk_note") or "").rstrip(".")
         needs = f"`{command}` needs your approval" + (f" ({note})" if note else "")
-        if getattr(self, "console", None) is None:
-            why = "this run has no console to show the confirmation prompt on"
+        hard = _hard_target(command)
+        final = _final_even_unattended(command)
+        route = "" if final else self._unattended_routes(command)
+        if hard:
+            why = "it reaches a cloud-metadata address or a protected folder"
             plain = (
-                f"Not run: {needs}, and nothing in this "
-                "run can ask you — start the request from the GAIA terminal UI "
-                "or Agent UI to approve it there."
+                f"Not run: `{command}` reaches {hard}, which stays off limits "
+                "whatever anyone approves. Tell the user it was not done."
             )
         else:
-            why = (
-                "this run pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS or "
-                "auto_approve_gated_tools), which does not extend to commands "
-                "outside the no-prompt list"
-            )
-            plain = (
-                f"Not run: {needs}, and this run "
-                "approves automatically only commands that are safe unattended "
-                "— run the request interactively to approve it, or turn on full "
-                "access."
-            )
+            if getattr(self, "console", None) is None:
+                why = "this run has no console to show the confirmation prompt on"
+                paused = "nothing in this run can ask you"
+                approve = (
+                    "start the request from the GAIA terminal UI or Agent UI "
+                    "to approve it there"
+                )
+            else:
+                why = (
+                    "this run pre-approves prompts (GAIA_AUTO_APPROVE_TOOLS or "
+                    "auto_approve_gated_tools), which does not extend to "
+                    "commands outside the no-prompt list"
+                )
+                paused = (
+                    "this run can only approve commands that are safe to run "
+                    "unattended"
+                )
+                approve = (
+                    "run the request interactively to approve it, or turn on "
+                    "full access"
+                )
+            if route:
+                plain = (
+                    f"Not run: {needs}, and {paused}. Nobody said no: this is "
+                    f"not a refusal. Finish the task with {route}."
+                )
+            elif final:
+                plain = f"Not run: {needs}, and {paused}. To run it, {approve}."
+            else:
+                plain = (
+                    f"Not run: {needs}, and {paused}. Tell the user the exact "
+                    f"command so they can run it themselves, or {approve}."
+                )
         logger.info("Refused %r because %s: %s", command, why, error.get("error"))
         # A missing-grant hint assumes a prompt; a one-time line's hint says
         # how to write it so that it needs none, which still holds here.
         once = error.get("tier") == TIER_CONFIRM_ONCE
         dropped = ("examples",) if once else ("hint", "examples")
         unasked = {key: value for key, value in error.items() if key not in dropped}
-        return {**unasked, "tier": TIER_REFUSE, "error": plain}
+        if final:
+            return {**unasked, "tier": TIER_REFUSE, "error": plain}
+        return {
+            **unasked,
+            "tier": TIER_REFUSE,
+            "error": plain,
+            UNATTENDED_REFUSAL: True,
+        }
+
+    def _unattended_routes(self, command: str) -> str:
+        """The safe route this run takes without anyone approving, if any.
+
+        Returned as a phrase for "finish the task with": the file tools for a
+        line that changes files, run_python for computation and for reads that
+        stay inside the allowed folders, and a no-prompt command. Empty when
+        no registered tool can do the job.
+        """
+        tools = getattr(self, "_tools_registry", None) or {}
+        asks = getattr(self, "_tool_requires_confirmation", None)
+        nobody = getattr(self, "console", None) is None
+
+        def runs(name: str) -> bool:
+            # With no console, a tool that asks can't run either.
+            return name in tools and not (nobody and callable(asks) and asks(name))
+
+        if _changes_files(command):
+            writers = [name for name in ("write_file", "edit_file") if runs(name)]
+            if not writers:
+                return ""
+            return f"{' or '.join(writers)} to create or change files"
+        readers = [name for name in ("read_file", "browse_directory") if runs(name)]
+        routes = [f"{' or '.join(readers)} to read or list files"] if readers else []
+        if runs("run_python") and (
+            not _reads_files(command) or self._reads_stay_inside(command)
+        ):
+            routes.append("run_python to compute")
+        shown = "`dir` or `findstr`" if os.name == "nt" else "`ls` or `grep`"
+        routes.append(f"a no-prompt command such as {shown}")
+        if len(routes) == 1:
+            return routes[0]
+        return f"{', '.join(routes[:-1])}, or {routes[-1]}"
+
+    def _reads_stay_inside(self, command: str) -> bool:
+        """Whether every path *command* reads really lies in the allowed folders.
+
+        Links are followed. A protected or credential path, a host with no
+        allowed folders, or a line that won't split counts as outside.
+        """
+        from gaia.security import protected_directory_of
+
+        validator = getattr(self, "path_validator", None)
+        if validator is None and not hasattr(self, "_is_path_allowed"):
+            return False
+        words = _command_words(command)
+        if words is None:
+            return False
+        cwd = self._live_session_cwd()
+        for word in _read_paths(words):
+            try:
+                real = os.path.realpath(os.path.join(cwd, os.path.expanduser(word)))
+                if protected_directory_of(real) or _protected_folder(real):
+                    return False
+            except (OSError, ValueError) as exc:
+                logger.debug("could not resolve %r (%s)", word, type(exc).__name__)
+                return False
+            if validator is not None and validator.is_read_blocked(real)[0]:
+                return False
+            if not self._path_allowed(real, prompt_user=False):
+                return False
+        return True
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -4946,6 +6422,9 @@ class ShellToolsMixin:
             # Every gated tool is pre-approved under full access; saying so here
             # keeps this answer aligned with the console's, rather than leaving
             # two predicates to disagree about whether the call was consented to.
+            return True
+
+        if self._read_only_line_runs_unasked(tool_args or {}):
             return True
 
         granted = shell_granted_binaries(self)
@@ -5187,6 +6666,130 @@ class ShellToolsMixin:
                     return False
         return True
 
+    def _read_only_line_runs_unasked(self, tool_args: Dict[str, Any]) -> bool:
+        """Whether this call only reads, inside the allowed folders, so nobody is asked.
+
+        Asking before ``git log`` or ``ls`` teaches people to click Allow without
+        reading. A line qualifies only when every command on it is one of
+        :data:`_UNASKED_COMMANDS` with plain options, passes the read-only
+        allowlist with nothing to confirm, ``cd`` aside, and the folders it
+        reaches pass the same path checks as any run. A line holding anything
+        a shell could read differently from GAIA (quotes, ``^``, ``%``, ``$``,
+        redirects, globs) still asks, as does one whose program a file in its
+        working folder could stand in for, or that names a protected file.
+        """
+        command = tool_args.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return False
+        bare = _DISCARDED_STDERR.sub("", command)
+        if not _UNASKED_LINE.fullmatch(bare):
+            return False
+        if re.search(r"[\\/]{2}", bare):
+            # A network path; even checking where it leads would contact that host.
+            return False
+        if os.name != "nt" and "\\" in bare:
+            # Off Windows a backslash is an escape, not a folder separator.
+            return False
+        lowered = bare.lower()
+        if "powershell" in lowered or "pwsh" in lowered:
+            return False
+        if _path_has_relative_entry():
+            return False
+        steps, parse_error = _parse_line(command, bypass_gates=False)
+        if parse_error is not None or not steps:
+            return False
+        located = self._call_cwd(tool_args.get("working_directory"))
+        if located is None:
+            return False
+        cwd = located[0]
+        for step in steps:
+            if step.is_cd:
+                target = step.segments[0][-1]
+                parts = re.split(r"[\\/]", target)
+                if len(step.segments[0]) != 2 or any(
+                    part.startswith(".") and part != "." for part in parts
+                ):
+                    return False
+                cwd = os.path.join(cwd, _expand_home(step.cd_target) or "")
+                continue
+            if (
+                _pipe_dialect() == "cmd"
+                and len(step.segments) > 1
+                and not _CMD_PLAIN_LINE.fullmatch(
+                    _take_stderr_redirections(step.text)[0]
+                )
+            ):
+                return False
+            for segment in step.segments:
+                if (
+                    not segment
+                    or not _segment_runs_unasked(segment)
+                    or _git_may_run_repo_programs(segment, cwd)
+                    or self._validate_command(
+                        segment[0].lower(),
+                        segment,
+                        shlex.join(segment),
+                        granted_binaries=frozenset(),
+                        bypass_gates=False,
+                    )
+                    is not None
+                    or _folder_shadows(cwd, segment[0])
+                    or not self._reaches_only_allowed(segment, cwd)
+                    or self._names_protected_path(segment, cwd)
+                ):
+                    return False
+        error, _ = self._line_verdict(command, tool_args.get("working_directory"))
+        return error is None
+
+    def _reaches_only_allowed(self, segment: list, cwd: str) -> bool:
+        """Whether the folder *segment* runs in and every path it names really
+        lie in the allowed folders. A link inside them can point anywhere, so
+        each is followed to where it lands."""
+        validator = getattr(self, "path_validator", None)
+        if validator is None:
+            return False
+
+        def inside(path: str) -> bool:
+            real = os.path.realpath(path)
+            return bool(validator.is_path_allowed(real, prompt_user=False))
+
+        if not inside(cwd):
+            return False
+        if (_program_behind(segment[0]) or segment[0]).lower() == "git":
+            # A .git file can point at a repository anywhere.
+            where, rest = cwd, segment[1:]
+            while len(rest) >= 2 and rest[0] == "-C":
+                where, rest = os.path.join(where, rest[1]), rest[2:]
+            dirs = _git_dirs(where)
+            if dirs is None or not all(inside(str(d)) for d in dirs):
+                return False
+        for word in segment[1:]:
+            if word.startswith("-"):
+                continue
+            path = os.path.join(cwd, word)
+            if os.path.lexists(path) and not inside(path):
+                return False
+        return True
+
+    def _names_protected_path(self, segment: list, cwd: str) -> bool:
+        """Whether *segment* runs in, or names, a file the file tools refuse to
+        read, or any dot-file (``.env.staging``, ``.git-credentials``), whose
+        names no list can keep up with."""
+        validator = getattr(self, "path_validator", None)
+        if validator is None:
+            return True
+        if validator.is_read_blocked(cwd)[0]:
+            return True
+        for word in segment[1:]:
+            if word.startswith("-"):
+                continue
+            parts = re.split(r"[\\/]", word)
+            if any(part.startswith(".") and part != "." for part in parts):
+                return True
+            if validator.is_read_blocked(os.path.join(cwd, word))[0]:
+                return True
+        return False
+
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
         """``(error, steps)`` for this call, path scope included.
 
@@ -5201,6 +6804,11 @@ class ShellToolsMixin:
         ``npm -g``) is the exception: it is a one-time approval normally, and
         refused under full access, where nobody is asked.
         """
+        # Before full access too: trusting a skill stays a terminal action.
+        human_only = _human_only_command(command)
+        if human_only:
+            logger.warning("Refusing %r: %s is the user's to run", command, human_only)
+            return _human_only_refusal(command, human_only), []
         error, steps = self._validate_shell_command(command)
         if error is None or _reaches_the_prompt(error):
             install = self._system_install_block(steps, working_directory)
@@ -5240,6 +6848,7 @@ class ShellToolsMixin:
                 outside,
             )
         granted = shell_granted_binaries(self)
+        searchable = _search_plan(command, steps) is not None
         walk_cwd = cwd
         for step in steps:
             if refusal is not None:
@@ -5252,7 +6861,7 @@ class ShellToolsMixin:
                 if refusal is not None:
                     break
             refusal = self._path_traversal_refusal(
-                step, step_cwd, granted, outside
+                step, step_cwd, granted, outside, searchable
             ) or self._git_path_refusal(step.segments, step_cwd, outside)
         if refusal is not None:
             return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
@@ -5271,13 +6880,29 @@ class ShellToolsMixin:
                 },
                 command,
             )
+        # A line that already asks names every such address; one that wouldn't
+        # asks only when a program on it can connect.
+        private = _private_hosts(command, steps, whole_line=error is not None)
+        if private:
+            note = private_fetch_note(private)
+            if error is not None and error.get("tier") == TIER_CONFIRM_ONCE:
+                error = {**error, "risk_note": f"{error['risk_note']} {note}"}
+            else:
+                block = error or {
+                    "status": "error",
+                    "error": "This command reaches a local or private network address.",
+                    "has_errors": True,
+                }
+                error = {**_confirm_once(block, note), **NOT_EXECUTED}
         if error is None or error.get("tier") != TIER_CONFIRM_ONCE:
             return error, steps
         # A one-time line runs as raw shell text, which no grant exempts from
         # the folders no approval may open.
         unscanned: list = []
         for step in steps:
-            refusal = self._path_traversal_refusal(step, cwd, frozenset(), unscanned)
+            refusal = self._path_traversal_refusal(
+                step, cwd, frozenset(), unscanned, searchable=False
+            )
             if refusal is not None:
                 return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
         return error, steps
@@ -5487,7 +7112,12 @@ class ShellToolsMixin:
         return resolved, None
 
     def _path_traversal_refusal(
-        self, step: _Step, cwd: str, granted: frozenset, outside: Optional[list] = None
+        self,
+        step: _Step,
+        cwd: str,
+        granted: frozenset,
+        outside: Optional[list] = None,
+        searchable: Optional[bool] = None,
     ) -> Optional[Dict[str, Any]]:
         """Refuse an argument that resolves outside the allowed paths.
 
@@ -5503,10 +7133,13 @@ class ShellToolsMixin:
         inside the allowed paths, and so is reading a credential file
         (``PathValidator.is_read_blocked``): a reader, copy source, upload or ``<``
         given it or a link to it, or a wildcard over the folder it sits in.
-        A recursive search of that folder runs when each line it prints comes
-        back with its file name, which is how lines from the credential file
-        are masked. ``rm``, ``mv``, ``git add``, a copy's destination, an
-        ``openssl -out`` file, a search pattern and ``sed -i`` still run.
+        A line that is one grep, rg or git grep runs as argv with credential
+        files excluded (:func:`_search_plan`); *searchable* says this step is
+        that line, and when None it is judged as if it were the whole line.
+        Any other recursive search is refused when the tree it searches holds
+        one, and so is a ``git grep`` of a credential file's blob. ``rm``,
+        ``mv``, ``git add``, a copy's destination, an ``openssl -out`` file, a
+        search pattern and ``sed -i`` still run.
 
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
@@ -5538,18 +7171,27 @@ class ShellToolsMixin:
                 )
                 if refusal:
                     return refusal
-        for position, seg in enumerate(segments):
+        if searchable is None:
+            searchable = _search_plan(step.text, [step]) is not None
+        for seg in segments:
             if not any(seg is kept for kept in scanned):
                 continue
             argv = policy_argv(seg)
             read = _credential_read(argv, cwd)
             if read is not None:
                 return _credential_refusal("Argument", read[0], read[1])
-            credential = _bulk_read_credential(
-                argv, cwd, [policy_argv(s) for s in segments[position + 1 :]]
-            )
-            if credential is not None:
-                return _credential_refusal("Command", " ".join(argv), credential)
+            for words in _command_word_lists(argv):
+                for command, _ in _split_commands(words):
+                    blob = _git_object_reads(command)[0]
+                    if blob is not None:
+                        return _credential_refusal("Argument", blob, blob)
+            found = _bulk_read_credential(argv, cwd, searchable)
+            if found is None:
+                continue
+            path, kind = found
+            if kind == _BULK_READ:
+                return _credential_refusal("Command", " ".join(argv), path)
+            return _search_refusal(" ".join(argv), path, kind)
         return None
 
     def _path_candidate_refusal(
@@ -5779,6 +7421,46 @@ class ShellToolsMixin:
             except subprocess.TimeoutExpired:
                 continue  # slice expired, not the command's own deadline
 
+    def _timeout_hint(self, timeout_class: str, cwd: str) -> str:
+        """The next step after a kill: scope the run to what this turn changed.
+
+        Never "raise the timeout": a repo-wide lint or test run that blew its
+        class default usually blows a larger one too. A build or download is
+        pointed at a background run instead.
+        """
+        if cut_by_time_limit(self):
+            return TIME_LIMIT_CUT_RUN
+        cls = TIMEOUT_CLASSES[timeout_class]
+        hint = (
+            f"It ran as a '{timeout_class}' command ({cls.summary}, "
+            f"{cls.seconds}s by default). Whatever it printed before the kill "
+            "is in 'stdout'/'stderr' above."
+        )
+        if timeout_class not in ("test", "script"):
+            return (
+                f"{hint} If it was still making progress, run it in the "
+                f"background and poll it with {_WAIT_TOOL}, or split it into "
+                "shorter steps."
+            )
+        written = getattr(self, "_files_written_this_turn", None)
+        changed = list(dict.fromkeys(written())) if callable(written) else []
+        if not changed:
+            return (
+                f"{hint} Narrow it to the change: one test file rather than the "
+                "whole suite, the linter on the edited files rather than the "
+                "whole repository."
+            )
+        shown = [_relative_to(path, cwd) for path in changed[:_HINT_MAX_FILES]]
+        more = len(changed) - len(shown)
+        listed = ", ".join(f"`{path}`" for path in shown) + (
+            f" and {more} more" if more > 0 else ""
+        )
+        return (
+            f"{hint} Files changed this turn: {listed}. Run the check on just "
+            "those (the linter on these files, the test files that cover them) "
+            "instead of the whole repository."
+        )
+
     def _record_command_execution(self):
         """Record command execution timestamp for rate limiting."""
         if getattr(self, "_shell_polling", False):
@@ -5823,6 +7505,7 @@ class ShellToolsMixin:
         granted_binaries: frozenset = frozenset(),
         bypass_gates: bool = False,
         _unwrapped: bool = False,
+        _spelled: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -5838,6 +7521,8 @@ class ShellToolsMixin:
                 True the read-only policy is replaced wholesale by
                 ``DEVELOPER_COMMANDS`` (#3374); the default path below is left
                 exactly as it was.
+            _spelled: How the program was typed, when this call judges the
+                bare program behind a path or ``.exe`` spelling.
 
         Returns None if the command is allowed, or an error dict if blocked.
 
@@ -5871,7 +7556,7 @@ class ShellToolsMixin:
             # A refusal follows the program, not its spelling; what it would
             # merely ask about still asks, as the unlisted spelling below.
             behind = ShellToolsMixin._validate_command(
-                program, [program, *cmd_parts[1:]], command
+                program, [program, *cmd_parts[1:]], command, _spelled=cmd_parts[0]
             )
             if behind is not None and behind.get("tier") != TIER_CONFIRM:
                 return behind
@@ -5937,9 +7622,24 @@ class ShellToolsMixin:
             if decision.outcome != REFUSE:
                 return None
             tier = TIER_REFUSE
-            if not granted and shutil.which(policy.binary) is None:
+            # `python -m pytest` starts python, so python is what must exist; a
+            # path spelling is not a PATH lookup, and the launch reports it.
+            runs = policy.binary
+            if policy_parts[0] != cmd_parts[0]:
+                runs = _spelled or cmd_parts[0]
+            missing = not re.search(r"[\\/]", runs) and shutil.which(runs) is None
+            if not granted and missing:
                 # Not installed is not "load the skill": reloading cannot fix it.
-                message = f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                if runs == policy.binary:
+                    message = (
+                        f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                    )
+                else:
+                    message = (
+                        f"Command '{runs}' cannot run: `{runs}` is not installed "
+                        "here (not on PATH). Use a Python that is, or name the "
+                        "interpreter by its full path."
+                    )
                 hint = "Do not retry this command or reload the skill."
             elif granted_decision.outcome == REFUSE:
                 # Outside what GAIA's checks cover, grant or no grant. The user
@@ -6348,6 +8048,7 @@ class ShellToolsMixin:
                 "duration_seconds": time.monotonic() - start_time,
                 "cwd": cwd,
                 "steps": [{"command": command, "return_code": None}],
+                "hint": self._timeout_hint(timeout_class, cwd),
             }
         except BaseException:
             terminate_process_tree(process)
@@ -6468,6 +8169,7 @@ class ShellToolsMixin:
             # build would be abandoned by the loop while the subprocess is still
             # inside its own (correct) timeout.
             timeout=MAX_COMMAND_TIMEOUT + 60,
+            model_view=lean_shell_result,
         )
         # The class table leads the docstring because the prompt renders a tool
         # by its FIRST LINE; anything below is seen only by models using native
@@ -6498,9 +8200,9 @@ class ShellToolsMixin:
                     ceiling it is refused, not clamped.
 
             Returns:
-                status, output, the last exit code, 'steps' (each with its own
-                code), the applied 'timeout' and 'timeout_class'; one killed at
-                the limit carries 'timed_out'.
+                status, output, the last exit code; several steps add
+                'steps' (each with its code); a kill at the limit adds
+                'timed_out', 'timeout' and 'timeout_class'.
             """
             working_directory = _expand_home(working_directory)
             try:
@@ -6515,7 +8217,6 @@ class ShellToolsMixin:
                         "command": command,
                         "has_errors": True,
                     }
-
                 # Check rate limits first to prevent DOS
                 allowed, reason, wait_time, waited = (
                     (True, "", 0.0, 0.0) if bypass else self._pace_rate_limit()
@@ -6530,6 +8231,10 @@ class ShellToolsMixin:
                         "wait_time_seconds": wait_time,
                         "hint": "Rate limiting prevents excessive command execution",
                     }
+                # After the pacing wait, which is time the turn has also spent.
+                timeout = time_capped(self, timeout)
+                if not timeout:
+                    return {**OUT_OF_TIME, "command": command}
 
                 # Validate an explicit directory after resolving it from the
                 # chat workspace; keep the original argument for approval keys.
@@ -6658,8 +8363,12 @@ class ShellToolsMixin:
                         if error:
                             return error
 
+                # Run with no shell, so the exclusions are words nothing re-reads.
+                search_plan = _search_plan(command, steps)
                 for step, step_cwd in zip(steps, step_cwds):
-                    error = self._path_traversal_refusal(step, step_cwd, granted)
+                    error = self._path_traversal_refusal(
+                        step, step_cwd, granted, searchable=search_plan is not None
+                    )
                     if error:
                         return error
                     error = self._git_path_refusal(step.segments, step_cwd)
@@ -6757,19 +8466,21 @@ class ShellToolsMixin:
                         )
                         continue
                     try:
-                        result = _run_step(
-                            step,
-                            step_cwd,
-                            max(deadline - time.monotonic(), 0),
-                            # A gh read runs with nobody asked, so it runs as argv
-                            # like a skill grant: cmd.exe never re-reads its line.
-                            shell_granted_binaries(self),
-                            # Waiting in short slices is what lets a Stop kill
-                            # the command while it is still running, rather
-                            # than half an hour later when its budget expires.
-                            self._communicate_or_cancel,
-                            bypass,
-                        )
+                        with _searched_as_argv(step, search_plan, step_cwd) as run_step:
+                            result = _run_step(
+                                run_step,
+                                step_cwd,
+                                max(deadline - time.monotonic(), 0),
+                                # A gh read runs with nobody asked, so it runs as
+                                # argv like a skill grant: cmd.exe never re-reads
+                                # its line.
+                                shell_granted_binaries(self),
+                                # Waiting in short slices is what lets a Stop
+                                # kill the command while it is still running,
+                                # not when its budget expires.
+                                self._communicate_or_cancel,
+                                bypass,
+                            )
                     except subprocess.TimeoutExpired as exc:
                         # Truncated here too: a command killed at 30 minutes has
                         # printed far more than one killed at 30 seconds, and
@@ -6795,16 +8506,7 @@ class ShellToolsMixin:
                                 "duration_seconds": time.monotonic() - start_time,
                                 "cwd": cwd,
                                 "steps": ran,
-                                "hint": (
-                                    f"It ran as a '{timeout_class}' command "
-                                    f"({TIMEOUT_CLASSES[timeout_class].summary}, "
-                                    f"{TIMEOUT_CLASSES[timeout_class].seconds}s by "
-                                    "default). Whatever it printed before the kill is "
-                                    "in 'stdout'/'stderr' above. Either narrow the "
-                                    "command (one test file rather than the whole "
-                                    "suite) or re-run it with a larger timeout, up to "
-                                    f"{MAX_COMMAND_TIMEOUT}s."
-                                ),
+                                "hint": self._timeout_hint(timeout_class, cwd),
                             },
                             check_from_command(
                                 command,
@@ -6945,10 +8647,15 @@ class ShellToolsMixin:
                     "output_truncated": truncated,
                     "steps": ran,
                 }
+                notes = []
                 moved = getattr(self, "_shell_cwd_note", None)
                 if moved:
                     self._shell_cwd_note = None
-                    outcome["note"] = moved
+                    notes.append(moved)
+                if search_plan is not None:
+                    notes.append(SKIPPED_CREDENTIALS_NOTE)
+                if notes:
+                    outcome["note"] = " ".join(notes)
                 if failure:
                     outcome["error"] = failure
                 elif last_answer:
@@ -7035,6 +8742,10 @@ class ShellToolsMixin:
                     ),
                     "has_errors": True,
                 }
+
+            timeout = time_capped(self, timeout)
+            if not timeout:
+                return dict(OUT_OF_TIME)
 
             # The wait is charged as one command up front; its probes are then
             # exempt (see _check_rate_limit) rather than each tripping the limit.
@@ -7167,13 +8878,14 @@ class ShellToolsMixin:
             display_label="Shell state",
         )
         def get_shell_state() -> Dict[str, Any]:
-            """Report the shell session's current working directory.
+            """Read the shell session's state: its current working directory.
 
-            Shell commands share one session, so a `cd` from an earlier command
+            This runs no command and reports no environment variables. Shell
+            commands share one session, so a `cd` from an earlier command
             (when it was not a one-shot `working_directory` override) is still
             in effect. Call this to read that directory instead of guessing it.
-            When the user asks you to run a command, `pwd` included, run it with
-            `run_shell_command`; this only reads the session's state.
+            To run a command the user asked for, `pwd` included, use
+            `run_shell_command`.
             """
             return {
                 "status": "success",
