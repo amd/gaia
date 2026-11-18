@@ -139,11 +139,17 @@ async def _pull_body(model_name: str) -> Dict[str, Any]:
 # touching callers.
 _download_progress: Dict[str, Dict[str, Any]] = {}
 _download_progress_lock = threading.Lock()
-_DOWNLOAD_PROGRESS_TTL = 30.0  # seconds to retain a terminal entry post-finish
+# A completed entry lingers this long so a poll can see 100%; a failed one
+# stays until the next pull of that model, because Settings may already be
+# closed and no poll was running when the failure arrived.
+_DOWNLOAD_PROGRESS_TTL = 30.0
 
 
 def _set_download_progress(model_name: str, payload: Dict[str, Any]) -> None:
     with _download_progress_lock:
+        # Reinsert so the map is ordered oldest to newest; the status surface
+        # takes the newest when no download belongs to the chat's model.
+        _download_progress.pop(model_name, None)
         _download_progress[model_name] = payload
 
 
@@ -165,21 +171,48 @@ def _get_download_progress(model_name: str) -> Optional[Dict[str, Any]]:
         return dict(entry) if entry else None
 
 
-def _clear_download_progress(model_name: str) -> None:
-    with _download_progress_lock:
-        _download_progress.pop(model_name, None)
-
-
 async def _evict_progress_after_ttl(model_name: str) -> None:
-    """Delay-evict a terminal progress entry so the frontend's poll cycle
-    has a chance to observe the ``complete`` / ``error`` state once.
-    Without this, a fast download finishes between two polls and the UI
-    misses the "complete" beat entirely.
+    """Retire a finished entry so a completed download doesn't linger.
+
+    A failed entry stays until the next pull of that model replaces it: the
+    failure has to outlive Settings closing and a hidden window's stopped poll,
+    and a retry then overwrites it with a fresh ``starting``. Only ``complete``
+    is retired, so an old eviction or a cancelled one can never erase a live
+    retry's progress.
     """
     try:
         await asyncio.sleep(_DOWNLOAD_PROGRESS_TTL)
     finally:
-        _clear_download_progress(model_name)
+        with _download_progress_lock:
+            entry = _download_progress.get(model_name)
+            if entry and entry.get("state") == "complete":
+                _download_progress.pop(model_name, None)
+
+
+def _surface_download_progress(
+    target_model: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """The pull the app chrome should show: one in flight, else a failure.
+
+    A download started from Settings is for a model the chat may not be using,
+    so looking only at ``target_model`` hides it and its failure. Prefer the
+    chat's own pull, then the most recent other one. A completed entry has
+    nothing to show; the model list carries that state.
+    """
+    with _download_progress_lock:
+        entries = list(_download_progress.items())
+    for states in (("starting", "downloading"), ("error",)):
+        candidates = [
+            (name, entry) for name, entry in entries if entry.get("state") in states
+        ]
+        if not candidates:
+            continue
+        if target_model:
+            for name, entry in reversed(candidates):
+                if _model_ids_match(name, target_model):
+                    return dict(entry)
+        return dict(candidates[-1][1])
+    return None
 
 
 def _parse_pull_event_block(block: str) -> Optional[Dict[str, Any]]:
@@ -232,6 +265,20 @@ def _install_npu_backend(model_name: str) -> None:
     from gaia.llm.lemonade_client import LemonadeClient
 
     LemonadeClient(verbose=False).ensure_npu_backend(model_name)
+
+
+def _interrupted_reason(exc: BaseException) -> str:
+    """A readable reason when the transport's own message is empty.
+
+    A dropped stream often raises ``ReadError`` or ``RemoteProtocolError``
+    with no text, which used to render as ``Download stream interrupted: ``.
+    """
+    detail = str(exc).strip()
+    if detail:
+        return detail
+    if type(exc).__name__ in {"ReadError", "RemoteProtocolError", "ConnectError"}:
+        return "the connection to the model server closed"
+    return type(exc).__name__
 
 
 async def _stream_lemonade_pull(
@@ -485,7 +532,7 @@ async def _stream_lemonade_pull(
                 "total_files": 0,
                 "downloaded_bytes": 0,
                 "total_bytes": 0,
-                "message": f"Download stream interrupted: {exc}",
+                "message": f"Download stream interrupted: {_interrupted_reason(exc)}",
             },
         )
     finally:
@@ -1051,11 +1098,11 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         ]
 
     # ── Live download progress ──────────────────────────────────────────
-    # Surfaced for whichever model the UI cares about (custom override
-    # wins, else the registered default). Looking up by model name keeps
-    # us decoupled from concurrent pulls of unrelated models.
+    # Surface a download the user can see anywhere: the chat's own pull when
+    # one runs, else the most recent pull, such as the one Settings started
+    # for another model. A failure stays until that model's next pull.
     target_model = db.get_setting("custom_model") or default_model
-    progress_dict = _get_download_progress(target_model)
+    progress_dict = _surface_download_progress(target_model)
     if progress_dict:
         status.download_progress = DownloadProgress(**progress_dict)
 
