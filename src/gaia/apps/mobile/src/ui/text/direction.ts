@@ -1,5 +1,6 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
+
 import { I18nManager } from 'react-native';
 
 const RTL_LETTER = /[֐-ࣿיִ-﷿ﹰ-﻿]/;

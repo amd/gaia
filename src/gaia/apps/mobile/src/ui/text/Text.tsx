@@ -48,6 +48,7 @@ const InsideText = createContext(false);
 const GLOSS_MIN_SIZE = 11;
 const GLOSS_LINE_HEIGHT = 1.3;
 const LONG_GLOSS_LENGTH = 40;
+const NBSP = '\u00A0';
 
 /** Whether a string child carries an English gloss. */
 function hasGloss(children: ReactNode): boolean {
@@ -72,7 +73,8 @@ function glossEnglish(part: string): string {
 /** Splits each string child at its English glosses and sets them small and muted, as the web's `.i18n-gloss` does; with `blocks`, long glosses are moved into it instead. */
 function withGlosses(children: ReactNode, size: number, color: string, blocks: string[] | null, limit = LONG_GLOSS_LENGTH): ReactNode {
     const gloss = Math.max(size * 0.8, GLOSS_MIN_SIZE);
-    const style = { fontSize: gloss, lineHeight: Math.round(gloss * GLOSS_LINE_HEIGHT), fontWeight: '400' as const, color, writingDirection: 'ltr' as const };
+    // Native keeps the paragraph's direction (a nested writingDirection would apply to the whole line); the gloss's own isolates keep its English run LTR.
+    const style = { fontSize: gloss, lineHeight: Math.round(gloss * GLOSS_LINE_HEIGHT), fontWeight: '400' as const, color, ...(Platform.OS === 'web' ? { writingDirection: 'ltr' as const } : null) };
     let changed = false;
     const mapped = Children.map(children, (child, i) => {
         if (typeof child !== 'string') return child;
@@ -91,7 +93,7 @@ function withGlosses(children: ReactNode, size: number, color: string, blocks: s
             }
             return (
                 <RNText key={`${i}.${j}`} style={style}>
-                    {part.text}
+                    {part.text.replace(/ /g, NBSP)}
                 </RNText>
             );
         });
