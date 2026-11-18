@@ -5,7 +5,7 @@ import { RadioGroup } from '../RadioGroup';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Cloud, Cpu, Loader2, Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
-import { useModelStore, displayModelName, distinctModelLabels, sameModelId, syncModelAfterSettingChange } from '../../stores/modelStore';
+import { useModelStore, displayModelName, distinctModelLabels, isHybridModel, providerTabOf, sameModelId, syncModelAfterSettingChange } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useT, type Translate } from '../../i18n/useT';
 import { providerName, providerNotice } from '../../utils/providerText';
@@ -20,6 +20,7 @@ import { isDownloading } from '../modelMeta';
 import { modelServerHealth } from '../../services/statusPoll';
 import '../ModelPicker.css';
 import { CloudPrices } from './CloudPrices';
+import { HybridSettings } from './HybridSettings';
 import { SpendingLimit } from './SpendingLimit';
 import './CloudSpending.css';
 import type { ProviderId, ProviderInfo, ProviderModel } from '../../types';
@@ -43,7 +44,10 @@ export function ModelSettings() {
     const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const requested = useChatStore((s) => s.settingsProvider);
-    const [chosen, setChosen] = useState<ProviderId>(requested ?? active?.provider ?? 'local');
+    const [chosen, setChosen] = useState<ProviderId>(requested ?? providerTabOf(active) ?? 'local');
+    // Set once the user picks a tab, so hybrid's settings arriving late don't move it.
+    const tabPicked = useRef(!!requested);
+    const hybridInUse = isHybridModel(active?.model);
     const [models, setModels] = useState<ProviderModel[] | null>(null);
     const [modelsError, setModelsError] = useState<string | null>(null);
     const [query, setQuery] = useState('');
@@ -120,7 +124,7 @@ export function ModelSettings() {
         const timer = setInterval(() => { void loadProviders(); }, DOWNLOAD_POLL_MS);
         return () => clearInterval(timer);
     }, [awaitingPermission, loadProviders]);
-    const activeProvider = active?.provider;
+    const activeProvider = providerTabOf(active);
     useEffect(() => { if (activeProvider && !requested) setChosen(activeProvider); }, [activeProvider, requested]);
     useEffect(() => {
         setKey('');
@@ -320,7 +324,7 @@ export function ModelSettings() {
                         role="radio"
                         aria-checked={chosen === p.id}
                         className={`provider-tab${chosen === p.id ? ' is-active' : ''}${offline(p) || blocked(p) ? ' is-disabled' : ''}`}
-                        onClick={() => setChosen(p.id)}
+                        onClick={() => { tabPicked.current = true; setChosen(p.id); }}
                         disabled={(offline(p) || blocked(p)) && chosen !== p.id}
                         title={blocked(p) ? t('settings.privacy.localOnlyBlocked') : offline(p) ? t('setup.key.gatewayOff') : undefined}
                     >
@@ -572,6 +576,19 @@ export function ModelSettings() {
                     {provider.remote && <SpendingLimit />}
                 </section>
             )}
+            <SettingsDisclosure title={t('settings.hybrid.title')} hint={t('settings.hybrid.hint')} targetId="hybrid" lazy defaultOpen={hybridInUse}>
+                <HybridSettings
+                    onSaved={() => { void refreshActive(); }}
+                    onLoaded={(s) => {
+                        // A hybrid chat opens on the tab of the model that runs its hard turns.
+                        const strong = s.models.find((m) => m.id === s.strong_model)?.provider;
+                        const tab = strong === 'local' || strong === 'amd' || strong === 'fireworks' ? strong : null;
+                        if (hybridInUse && !tabPicked.current && tab) setChosen(tab);
+                    }}
+                    onShowProvider={(p) => { tabPicked.current = true; setChosen(p); }}
+                />
+            </SettingsDisclosure>
+
             {removing && (
                 <ConfirmSheet
                     title={t('settings.models.removeTitle', { name: labels[removing.id] ?? removing.id })}

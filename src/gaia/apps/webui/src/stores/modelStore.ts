@@ -9,7 +9,7 @@ import * as api from '../services/api';
 import { useChatStore } from './chatStore';
 import { log } from '../utils/logger';
 import { tEn, useT, type Translate } from '../i18n/useT';
-import type { ActiveModel, Session, WarmUpStatus } from '../types';
+import type { ActiveModel, ProviderId, Session, WarmUpStatus } from '../types';
 
 /** Why a pick's load failed: the backend's own reason, or a translated one when GAIA lost track. */
 export interface PickLoadError {
@@ -383,9 +383,30 @@ export function selectChipModel(
     return session?.effective_model || active?.model || null;
 }
 
+/** The model id that routes each turn to a cheap or a strong model. */
+export const HYBRID_MODEL_ID = 'hybrid';
+
+export function isHybridModel(model: string | null | undefined): boolean {
+    return !!model && model.trim().toLowerCase() === HYBRID_MODEL_ID;
+}
+
+/** A model id a cloud provider answers, by its prefix ("amd." or "fireworks."). */
+export function isCloudModelId(model: string): boolean {
+    return /^(fireworks|amd)\./.test(model);
+}
+
+/**
+ * The provider tab the in-use model belongs to. None for hybrid, whose models
+ * can come from any provider, though the backend files its id under local.
+ */
+export function providerTabOf(active: ActiveModel | null | undefined): ProviderId | undefined {
+    if (!active || isHybridModel(active.model)) return undefined;
+    return active.provider;
+}
+
 /** The model id without its cloud provider prefix ("fireworks." or "amd."). */
 function stripProviderPrefix(model: string): string {
-    return /^(fireworks|amd)\./.test(model) ? model.slice(model.indexOf('.') + 1) : model;
+    return isCloudModelId(model) ? model.slice(model.indexOf('.') + 1) : model;
 }
 
 /** The model name without its provider prefix or catalogue path. */

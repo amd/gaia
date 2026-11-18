@@ -3,7 +3,7 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
+import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage, HybridSettings, HybridSettingsUpdate, HybridPreview, HybridStats, HybridTemplate, HybridEntry } from '../types';
 import type { LogReadResponse, LogSourcesResponse, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import { getApiBase } from '../utils/apiBase';
@@ -476,6 +476,40 @@ export async function setSpendingLimit(limitUsd: number | null): Promise<Spendin
 /** Let cloud chats go on past the limit until the month ends. */
 export async function allowSpendingThisMonth(): Promise<SpendingReport> {
     return apiFetch('POST', '/spending/allow-month');
+}
+
+// -- Hybrid routing (cheap model or strong model per turn) ----------------------
+
+export async function getHybridSettings(): Promise<HybridSettings> {
+    return apiFetch('GET', '/hybrid/settings');
+}
+
+/** Save the changed fields; a 422 names what is wrong and how to fix it. */
+export async function updateHybridSettings(update: HybridSettingsUpdate): Promise<HybridSettings> {
+    return apiFetch('PUT', '/hybrid/settings', update);
+}
+
+/** The model *text* would be routed to, from the real classifier and policy; runs no turn. */
+export async function previewHybridRoute(text: string): Promise<HybridPreview> {
+    return apiFetch('POST', '/hybrid/preview', { text });
+}
+
+export async function getHybridStats(): Promise<HybridStats> {
+    return apiFetch('GET', '/hybrid/stats');
+}
+
+/** Hybrid's own model-picker choice, named from the configured pair. */
+export async function getHybridEntry(): Promise<HybridEntry> {
+    return apiFetch('GET', '/hybrid/entry');
+}
+
+export async function getHybridTemplates(): Promise<HybridTemplate[]> {
+    return apiFetch('GET', '/hybrid/templates');
+}
+
+/** Use a template's models and policy; 409 says what to set up first, 404 names the known ids. */
+export async function applyHybridTemplate(id: string): Promise<HybridSettings> {
+    return apiFetch('POST', `/hybrid/templates/${encodeURIComponent(id)}/apply`);
 }
 
 // -- Skills ----------------------------------------------------------------------

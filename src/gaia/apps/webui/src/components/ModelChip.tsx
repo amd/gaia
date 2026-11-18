@@ -9,7 +9,8 @@ import * as api from '../services/api';
 import { requestErrorText } from '../utils/requestErrors';
 import { useChatStore } from '../stores/chatStore';
 import {
-    useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, sameModelId, UNKNOWN_PLACE_TITLE,
+    useModelStore, useInferencePlace, selectChipModel, displayModelName, distinctModelLabels, isHybridModel, sameModelId,
+    HYBRID_MODEL_ID, UNKNOWN_PLACE_TITLE,
 } from '../stores/modelStore';
 import { STATE_LABELS, isDownloading, modelState, placementText } from './modelMeta';
 import { InfoBubble } from './InfoBubble';
@@ -17,13 +18,19 @@ import { formatPrice } from './settings/cloudPrice';
 import { useT } from '../i18n/useT';
 import { providerName, providerNotice } from '../utils/providerText';
 import { MarkedText, markLtr } from './MarkedText';
-import type { ProviderInfo, ProviderModel } from '../types';
+import type { HybridEntry, ProviderInfo, ProviderModel } from '../types';
 
 interface ProviderModels {
     provider: ProviderInfo;
     models: ProviderModel[];
     error?: string;
 }
+
+/** Hybrid's picker entry, read when the list opens; `error` when it couldn't be. */
+type HybridState = { entry: HybridEntry; error?: undefined } | { error: string };
+
+// Hybrid asks its own consent, so `choose` is handed a provider that needs none.
+const HYBRID_PROVIDER: ProviderInfo = { id: 'local', name: 'Hybrid', remote: false, privacy_notice: '' };
 
 const DOWNLOAD_POLL_MS = 2000;
 const KEY_WAITING = 'waiting_for_os_permission';
@@ -115,6 +122,8 @@ export function ModelChip() {
     const [showAllFireworksModels, setShowAllFireworksModels] = useState(false);
     const [unavailable, setUnavailable] = useState(0);
     const [error, setError] = useState<string | null>(null);
+    const [hybrid, setHybrid] = useState<HybridState | null>(null);
+    const [pendingHybrid, setPendingHybrid] = useState(false);
     const [pendingCloud, setPendingCloud] = useState<{ model: string; provider: ProviderInfo } | null>(null);
     // A download asked for, waiting on the user's yes; `pick` switches to it once downloaded.
     const [pendingDownload, setPendingDownload] = useState<{ model: string; provider: ProviderInfo; pick: boolean } | null>(null);
@@ -165,9 +174,23 @@ export function ModelChip() {
                 }
             }));
             rememberNames(lists.flatMap((g) => g.models));
+            if (!quiet) {
+                // Read apart from the model list, so a hybrid failure can't hide the other models.
+                void (async () => {
+                    try {
+                        const entry = await api.getHybridEntry();
+                        setHybrid(entry?.id ? { entry } : { error: t.bare('modelMenu.hybridEmpty') });
+                    } catch (err) {
+                        // 503: the server can't list models yet; the provider groups say so.
+                        if ((err as { httpStatus?: unknown })?.httpStatus === 503) setHybrid(null);
+                        else setHybrid({ error: requestErrorText(err) });
+                    }
+                })();
+            }
             setUnavailable(lists.flatMap((g) => g.models).filter((m) => m.available === false).length);
             if (!quiet) focusOnLoad.current = true;
-            setGroups(lists.map((g) => ({ ...g, models: g.models.filter((m) => m.available !== false) })));
+            // Hybrid is its own entry, not a row of any provider.
+            setGroups(lists.map((g) => ({ ...g, models: g.models.filter((m) => m.available !== false && !isHybridModel(m.id)) })));
         } catch (err) {
             setError(requestErrorText(err));
         }
@@ -188,6 +211,7 @@ export function ModelChip() {
         if (open) {
             setPendingCloud(null);
             setPendingDownload(null);
+            setPendingHybrid(false);
             setShowAllFireworksModels(false);
             setActiveRow(null);
             setInfoRow(null);
@@ -220,8 +244,8 @@ export function ModelChip() {
     }, [open, groups, showAllFireworksModels, currentModel]);
 
     useEffect(() => {
-        if (pendingCloud || pendingDownload) consent.current?.scrollIntoView?.({ block: 'nearest' });
-    }, [pendingCloud, pendingDownload]);
+        if (pendingCloud || pendingDownload || pendingHybrid) consent.current?.scrollIntoView?.({ block: 'nearest' });
+    }, [pendingCloud, pendingDownload, pendingHybrid]);
 
     const onListKey = (e: KeyboardEvent<HTMLDivElement>) => {
         if (e.altKey || e.ctrlKey || e.metaKey) return;
@@ -369,13 +393,17 @@ export function ModelChip() {
     const fireworksHasHiddenModels = (provider: ProviderInfo, models: ProviderModel[]) =>
         fireworksCollapsed(provider, models)
         && models.some((m) => m.rank === null && !sameModelId(currentModel, m.id));
-    const pickable = groups?.flatMap(({ provider, models }) => [
+    // The backend offers it once its pair, or any template, can run.
+    const hybridShown = !!hybrid && (hybrid.error !== undefined || hybrid.entry.shown);
+    const hybridPickable = hybridShown && hybrid?.error === undefined && switching === null;
+    // First, as in the TUI: a long gateway list would otherwise bury it.
+    const pickable = [...(hybridPickable ? [HYBRID_MODEL_ID] : []), ...(groups?.flatMap(({ provider, models }) => [
         ...(provider.remote && !provider.models_discovered ? [`key:${provider.id}`] : []),
         ...fireworksVisibleModels(provider, models)
             .filter((m) => switching === null && !isDownloading(m))
             .map((m) => m.id),
         ...(fireworksHasHiddenModels(provider, models) ? [`showall:${provider.id}`] : []),
-    ]) ?? [];
+    ]) ?? [])];
     const tabRow = activeRow && pickable.includes(activeRow)
         ? activeRow
         : currentModel && pickable.includes(currentModel) ? currentModel : pickable[0];
@@ -408,6 +436,76 @@ export function ModelChip() {
                         // The server writes the model name as Markdown code; a tooltip shows backticks literally.
                         : place.description?.replace(/`/g, '')
                             ?? (place.remote ? t('modelStatus.runsRemote', { name: place.label }) : t('modelStatus.runsHere'));
+
+    /** Hybrid as its own group: named from its pair, labelled local or cloud from its members. */
+    function hybridGroup() {
+        if (!hybridShown || !hybrid) return null;
+        const headingId = `${listId}-hybrid`;
+        if (hybrid.error !== undefined) {
+            return (
+                <div role="group" aria-labelledby={headingId}>
+                    <div className="popover-heading" id={headingId}>{t('settings.hybrid.title')}</div>
+                    <div className="popover-message is-error">{t('modelMenu.hybridUnreadable', { reason: hybrid.error })}</div>
+                </div>
+            );
+        }
+        const { entry } = hybrid;
+        const current = isHybridModel(queued ?? active?.model);
+        const pick = () => {
+            setPickAfterDownload(null);
+            setPendingDownload(null);
+            setPendingCloud(null);
+            // Its pair can't run yet, but a template can: choosing one happens in Settings.
+            if (!entry.available) {
+                setOpen(false);
+                openSettings('model');
+                return;
+            }
+            // An all-local hybrid sends nothing off this PC, so it needs no cloud consent.
+            if (entry.remote !== false && !active?.remote && !pendingHybrid) {
+                setPendingHybrid(true);
+                return;
+            }
+            setPendingHybrid(false);
+            void choose(HYBRID_MODEL_ID, HYBRID_PROVIDER);
+        };
+        return (
+            <div role="group" aria-labelledby={headingId}>
+                <div className="popover-heading" id={headingId}>{t('settings.hybrid.title')}</div>
+                <div className="popover-row">
+                    <button
+                        type="button"
+                        className="popover-item"
+                        onClick={pick}
+                        disabled={switching !== null}
+                        {...rowProps(HYBRID_MODEL_ID)}
+                        aria-selected={current}
+                    >
+                        <span className="popover-item-check" aria-hidden="true">
+                            {switching === HYBRID_MODEL_ID ? <Loader2 size={13} className="spin" /> : current ? <Check size={13} /> : null}
+                        </span>
+                        <span className={`popover-item-body${entry.available ? ' is-inline' : ''}`}>
+                            <span className="popover-item-title is-model">{entry.display_name}</span>
+                            {entry.remote !== null && (
+                                <span className="popover-item-meta">{entry.remote ? t('settings.model.cloud') : t('modelStatus.local')}</span>
+                            )}
+                            {!entry.available && entry.reason && (
+                                <span className="popover-item-note">{t('modelMenu.hybridSetUp', { reason: entry.reason })}</span>
+                            )}
+                        </span>
+                    </button>
+                </div>
+                {pendingHybrid && (
+                    <div ref={consent} className="popover-message" role="alert">
+                        {t('modelMenu.hybridConsent')}{' '}
+                        <button type="button" className="link-btn" onClick={pick}>
+                            {t('modelMenu.useModel', { name: entry.display_name })}
+                        </button>
+                    </div>
+                )}
+            </div>
+        );
+    }
 
     return (
         <div className="composer-chip-wrap">
@@ -443,6 +541,7 @@ export function ModelChip() {
                 )}
                 {groups && (
                 <div ref={list} role="listbox" aria-label={t('modelMenu.models')} onKeyDown={onListKey}>
+                {hybridGroup()}
                 {shownGroups!.map(({ provider, models, error: groupError }) => (
                     <div key={provider.id} role="group" aria-labelledby={`${listId}-${provider.id}`}>
                         <div className="popover-heading" id={`${listId}-${provider.id}`}>{providerName(t, provider)}</div>

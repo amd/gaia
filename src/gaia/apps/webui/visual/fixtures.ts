@@ -157,6 +157,30 @@ export const SYSTEM_STATUS = {
     data_dir: 'C:\\Users\\you\\.gaia\\chat',
 };
 
+const HYBRID_RULE = (max: number) => ({ cheap_max_difficulty: max, allow_high_stakes: false });
+const HYBRID_QUALITY = {
+    write_prose: HYBRID_RULE(3), answer_question: HYBRID_RULE(3), analyze_data: HYBRID_RULE(3), operate_tools: HYBRID_RULE(3),
+    change_code: HYBRID_RULE(2), find_defects: HYBRID_RULE(0), plan_or_design: HYBRID_RULE(0), other: HYBRID_RULE(0),
+};
+// No gateway here, so the default pair can't run yet.
+const HYBRID_ENTRY = {
+    id: 'hybrid', display_name: 'Hybrid (DeepSeek V4.1 Flash + Claude Opus 5.5)', remote: true, available: false,
+    reason: 'Connect the AMD LLM Gateway in Settings › Models', shown: true,
+};
+const HYBRID_SETTINGS = {
+    cheap_model: 'amd.DeepSeek-V4.1-Flash', strong_model: 'amd.Claude-Opus-5-5', classifier_model: 'amd.DeepSeek-V4.1-Flash',
+    classifier_timeout: 15, policy: 'quality', rules: HYBRID_QUALITY,
+    presets: { quality: HYBRID_QUALITY, balanced: { ...HYBRID_QUALITY, change_code: { cheap_max_difficulty: 3, allow_high_stakes: true } } },
+    kinds: Object.keys(HYBRID_QUALITY),
+    models: [
+        { id: 'Gemma-4-E4B-it-GGUF', display_name: 'Gemma 4 E4B', provider: 'local', input_per_million: null, output_per_million: null, cache_read_per_million: null, price_source: null, available: true, reason: null },
+        { id: 'fireworks.deepseek-v4p1-flash', display_name: 'deepseek-v4p1-flash', provider: 'fireworks', input_per_million: 0.3, output_per_million: 1.2, cache_read_per_million: 0.03, price_source: 'Fireworks AI list price', available: true, reason: null },
+    ],
+    models_error: null, prices_fetched_at: null, prices_error: null,
+    measured: true, measured_note: null, classifier_note: null,
+    entry: HYBRID_ENTRY, is_active: false, config_error: null,
+};
+
 const ROUTES: Record<string, unknown> = {
     'GET /sessions': { sessions: SESSIONS, total: SESSIONS.length },
     [`GET /sessions/${ANSWER_SESSION}/messages`]: MESSAGES,
@@ -232,6 +256,14 @@ const ROUTES: Record<string, unknown> = {
             { id: 'bf_emma', name: 'Emma', accent: 'british', gender: 'female', quality: 'B-' },
             { id: 'bm_george', name: 'George', accent: 'british', gender: 'male', quality: 'C' },
         ],
+    },
+    'GET /hybrid/entry': HYBRID_ENTRY,
+    'GET /hybrid/settings': HYBRID_SETTINGS,
+    'GET /hybrid/templates': [],
+    'GET /hybrid/stats': {
+        since: null, turns: 0, cheap_turns: 0, strong_turns: 0, failed_closed: 0, cost: 0, cost_if_all_strong: 0, saving_pct: null,
+        unpriced_turns: 0, prices_fetched_at: null, prices_error: null, scope: 'agent_ui_chats',
+        scope_label: "Agent UI chats only; turns from the terminal UI and one-off command-line prompts aren't counted yet",
     },
     'GET /lemonade/target': { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: 'http://127.0.0.1:13305', saved_base_url: null, api_key_stored: false, env_override: null },
 };

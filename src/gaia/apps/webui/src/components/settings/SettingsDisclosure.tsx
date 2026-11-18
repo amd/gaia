@@ -17,12 +17,16 @@ interface Props {
     forceOpen?: boolean;
     /** Lets Settings > Setup send the user straight to this section. */
     targetId?: string;
+    /** Mount the contents on first open, so a closed section makes no requests. */
+    lazy?: boolean;
     children: ReactNode;
 }
 
 /** A collapsible section; its contents stay mounted, so their state survives closing it. */
-export function SettingsDisclosure({ title, titleId, count, hint, defaultOpen = false, forceOpen = false, targetId, children }: Props) {
+export function SettingsDisclosure({ title, titleId, count, hint, defaultOpen = false, forceOpen = false, targetId, lazy = false, children }: Props) {
     const [open, setOpen] = useState(defaultOpen);
+    const [opened, setOpened] = useState(defaultOpen || forceOpen);
+    if ((open || forceOpen) && !opened) setOpened(true);
     return (
         <details
             className="settings-disclosure"
@@ -38,7 +42,7 @@ export function SettingsDisclosure({ title, titleId, count, hint, defaultOpen = 
                 </span>
                 {count != null && <bdi dir="ltr" className="settings-disclosure-count">{count}</bdi>}
             </summary>
-            <div className="settings-disclosure-body">{children}</div>
+            <div className="settings-disclosure-body">{!lazy || opened ? children : null}</div>
         </details>
     );
 }

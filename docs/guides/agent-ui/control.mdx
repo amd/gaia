@@ -53,6 +53,34 @@ stopped, where it runs, memory in use and free, and its context window, with a
 **Restart** button. On a Lemonade you run yourself, GAIA asks before Restart
 reloads its model and never starts that server for you.
 
+### Hybrid: a cheap model for easy turns, a strong one for hard turns
+
+**Hybrid** has its own group at the top of the model list, named from its pair,
+for example **Hybrid (DeepSeek + Opus)**, and labelled local or cloud from its
+models. Picking it asks the cloud privacy question first when any of its models
+is in the cloud. A pair that can't run yet shows why and opens Settings instead.
+While the local model server is starting, the group is left out until it can say
+which models are offered.
+
+**Settings → Model → Hybrid** sets it up:
+
+- **Templates** are ready-made pairs. Each is marked **Measured** (the pair the
+  routing policies were tuned on) or **Not yet measured**, and one that can't run
+  here says what to set up, with a button for the missing provider only. Applying a
+  template over unsaved edits asks first.
+- **Models**: the cheap, strong and classifier models, from every connected
+  provider, with their prices. A small classifier on this PC may route less
+  accurately than a cloud one.
+- **Policy**: **Quality** (the default), **Balanced**, or **Custom** with a rule per
+  kind of request. A hand-edited table that misses a kind or holds a bad value
+  opens with Quality's rule in its place, and saving repairs it.
+- **Try a request** shows the route a request would get, without running a turn.
+- **Usage** shows how many turns ran cheap or strong and what they cost against
+  running every turn on the strong model, including each turn's classifier call.
+
+Hybrid's cloud turns, and its classifier's, count toward the monthly spending
+limit. See [Hybrid model](/guides/llm-gateway#hybrid-model) for how routing works.
+
 ### Cloud providers and keys
 
 [Choose an AI provider](/guides/ai-providers) explains the providers in depth.

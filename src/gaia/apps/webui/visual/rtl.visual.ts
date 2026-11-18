@@ -2591,7 +2591,10 @@ for (const locale of ['en', 'ar']) {
         });
         await page.locator('.composer-chip').filter({ hasText: 'glm-5p3-flash' }).click();
         const menu = page.getByRole('dialog');
-        await expect(menu.locator('.popover-heading').first()).toHaveText('Fireworks AI');
+        // Hybrid's own group always comes first; the provider in use leads the rest.
+        const headings = menu.locator('.popover-heading');
+        await expect(headings.first()).toHaveAttribute('id', /-hybrid$/);
+        await expect(headings.nth(1)).toHaveText('Fireworks AI');
         await expect(menu.locator('.popover-subheading')).toBeVisible();
         await shot(page, `model-menu-${locale}`);
         expect(await audit(page)).toEqual([]);
