@@ -952,6 +952,13 @@ _TIME_NOTICE = (
     "and anything not already written is lost."
 )
 _TIME_NOTICE_AT = 0.7
+# Appended to the request of a run nobody is watching, for the model only.
+_NO_ONE_TO_ASK_NOTE = (
+    "\n\n[Nobody can answer questions during this run. Where the request "
+    "leaves a choice open, settle it from the files and data you have "
+    "rather than offering to change it later, finish the whole task, and "
+    "say in your answer what you assumed.]"
+)
 # Appended to the request of a turn that has a time limit, for the model only.
 _TIME_OPENING_NOTE = (
     "\n\n[This turn has {total} seconds in all. If the task asks "
@@ -12114,6 +12121,18 @@ Do NOT wrap conversational replies in JSON.
             return notice
         return None
 
+    def _tell_no_one_to_ask(self, messages: List[Dict]) -> None:
+        """Tell the model, with its request, that nobody can reply this run.
+
+        A model that expects a reply ends on a question or an offer and
+        leaves the choice unmade. Only the copy sent this turn is changed.
+        """
+        if not getattr(self, "no_one_to_ask", False):
+            return
+        request = messages[-1]
+        if isinstance(request.get("content"), str):
+            request["content"] += _NO_ONE_TO_ASK_NOTE
+
     def _tell_time_budget(self, messages: List[Dict]) -> None:
         """Tell the model, with its request, how long the turn has.
 
@@ -12528,6 +12547,7 @@ Do NOT wrap conversational replies in JSON.
         messages.append(
             {"role": "user", "content": self._with_long_message_file(user_input)}
         )
+        self._tell_no_one_to_ask(messages)
         self._tell_time_budget(messages)
 
         # Use provided max_steps or fall back to class default

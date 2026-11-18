@@ -1084,6 +1084,11 @@ def test_main_forwards_time_limit(monkeypatch):
     assert run.call_args.kwargs["time_limit"] == 900
 
 
+def test_the_agent_is_told_nobody_can_answer(stub_env):
+    print_mode.run("q", model="m1")
+    assert _agent().no_one_to_ask is True
+
+
 def test_no_time_limit_arms_nothing(stub_env):
     print_mode.run("q", model="m1")
     agent = _agent()

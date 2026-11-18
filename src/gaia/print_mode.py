@@ -380,6 +380,7 @@ def _run_turn(
         )
     )
     configure_console(agent.console, skip_permissions, full_access)
+    agent.no_one_to_ask = True  # one shot: a question would go unanswered
     if full_access:
         log.warning("Full access ENABLED at launch (gaia -p): shell gates off")
         print(

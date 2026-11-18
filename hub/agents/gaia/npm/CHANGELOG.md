@@ -12,6 +12,9 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 - A reply that goes quiet partway through is requested again, up to twice,
   instead of ending the turn; the work done so far is kept either way.
+- In a `gaia -p` run the agent is told nobody can answer questions, so it
+  settles an open choice itself and says what it assumed instead of ending on
+  an offer to change it later.
 
 ## [0.3.6]
 
