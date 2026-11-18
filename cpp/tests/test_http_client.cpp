@@ -792,13 +792,13 @@ TEST(HttpClientTest, AResponseSizeLimitStopsTheDownload) {
     cfg.maxResponseBytes = 1000;
     HttpClient http(cfg);
 
-    HttpResponse big = http.get("/test/big");
-    EXPECT_EQ(big.status, 200);
-    EXPECT_EQ(big.body.size(), 1000u);
-    EXPECT_EQ(big.body, std::string(1000, 'x'));
+    HttpResponse capped = http.get("/test/big");
+    EXPECT_EQ(capped.status, 200);
+    EXPECT_EQ(capped.body.size(), 1000u);
+    EXPECT_EQ(capped.body, std::string(1000, 'x'));
 
-    HttpResponse small = http.get("/api/v1/health");
-    EXPECT_TRUE(small.ok()) << "the connection must be usable after a download was cut short";
-    EXPECT_FALSE(small.body.empty());
-    EXPECT_NE(small.body[0], 'x') << "left-over bytes of the big body were read as this reply";
+    HttpResponse next = http.get("/api/v1/health");
+    EXPECT_TRUE(next.ok()) << "the connection must be usable after a download was cut short";
+    EXPECT_FALSE(next.body.empty());
+    EXPECT_NE(next.body[0], 'x') << "left-over bytes of the big body were read as this reply";
 }

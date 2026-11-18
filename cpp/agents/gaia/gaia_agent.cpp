@@ -261,7 +261,7 @@ std::string GaiaAgent::getSystemPrompt() const {
 - Remove personal data completely when asked to redact; check the result.
 
 ## Final answer
-Lead with the result. Name the files you created or changed. Cite where facts came from (file and page, sheet or line) when the user asked about documents. State plainly anything you could not do or verify. Keep it concise.)" + systemContext() +
+Lead with the result. Name the files you created or changed. Cite where facts came from (file and page, sheet or line) when the user asked about documents. State plainly anything you could not do or verify. Keep it concise. When asked for a brief or short summary, give the outcome in a few sentences (the main results and decisions), not a walkthrough of every section.)" + systemContext() +
            (skills_ ? "\n" + skills_->renderPrompt() : std::string()) +
            (memory_ && !memoryOff() ? "\n" + memory_->promptBlock() : std::string());
 }
