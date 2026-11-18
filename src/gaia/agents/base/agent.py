@@ -3254,6 +3254,8 @@ class Agent(abc.ABC):
     _open_step: Optional[int] = None
     _open_step_stats: Optional[Dict[str, Any]] = None
     _step_stats_recorded: bool = False
+    # Set by a caller with nobody watching (gaia -p): the model is told so.
+    no_one_to_ask: bool = False
 
     # Skills: lazily built manager + the skills loaded into this agent.
     # Instance-level once set, so one agent's skills never leak into a sibling.
@@ -12127,7 +12129,7 @@ Do NOT wrap conversational replies in JSON.
         A model that expects a reply ends on a question or an offer and
         leaves the choice unmade. Only the copy sent this turn is changed.
         """
-        if not getattr(self, "no_one_to_ask", False):
+        if not self.no_one_to_ask:
             return
         request = messages[-1]
         if isinstance(request.get("content"), str):
