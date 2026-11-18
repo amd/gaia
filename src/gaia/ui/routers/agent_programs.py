@@ -183,12 +183,37 @@ def _require_gaiacpp(program_id: str) -> None:
         )
 
 
+def _refuse_while_agent_is_busy() -> None:
+    """An update stops the running gaiacpp; refuse while it is answering or under test."""
+    from gaia.ui.run_manager import run_manager
+    from gaia.ui.setup_runner import runner as setup_runner
+
+    if (setup_runner.status() or {}).get("state") in ("running", "verifying"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "GAIA is still setting up and testing the agent. Update gaiacpp "
+                "once setup has finished."
+            ),
+        )
+    if run_manager.active_sessions():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "GAIA is answering in a chat, and updating gaiacpp now would cut "
+                "that answer off. Let it finish or stop it, then update."
+            ),
+        )
+
+
 def _start_download() -> Dict[str, Any]:
     installed = fetch.native_flagship()
     if installed is not None and not native_fetch.update_available(installed):
         raise HTTPException(
             status_code=409, detail="gaiacpp is already installed on this PC."
         )
+    if installed is not None and fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP:
+        _refuse_while_agent_is_busy()
     with _lock:
         if _job["state"] == "downloading":
             return dict(_job)

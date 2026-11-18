@@ -221,7 +221,7 @@ func TestAgentProgramSwitchEndToEnd(t *testing.T) {
 		t.Fatalf("could not remove %s: the retired agent still holds it", nativePath)
 	}
 	tui.run("/agent")
-	tui.waitFor(map[string]any{"contains": "Unavailable: not installed. Looked in: your PATH"})
+	tui.waitFor(map[string]any{"contains": "Unavailable: not installed. Looked in:"})
 	tui.shot("5-gaiacpp-unavailable")
 
 	tui.run("/agent gaiacpp")

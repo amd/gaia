@@ -793,7 +793,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="POST /api/agent-programs/{program_id}/download">
-    Start downloading `gaiacpp` in the background (`program_id` must be `gaiacpp`). The file is checked against the release's SHA-256 list and the version it prints before it is installed in `~/.gaia/bin`. Answers `202` with the `download` object above; a second call while one is running returns the running one. `409` when it is already installed, `404` for any other id, `403` unless the request comes from the PC running GAIA.
+    Start downloading `gaiacpp` in the background (`program_id` must be `gaiacpp`). The file is checked against the release's SHA-256 list and the version it prints before it is installed in `~/.gaia/bin`. Answers `202` with the `download` object above; a second call while one is running returns the running one. `409` when it is already installed, or when it would replace the agent in use while a chat is answering or setup is still running; `404` for any other id; `403` unless the request comes from the PC running GAIA. A copy from another GAIA release can be downloaded again, and a download that fails leaves the copy in use and its record as they were.
 
     `GET /api/agent-programs/{program_id}/download` returns the same `download` object; poll it for the progress bar. Choosing the agent afterwards is `PUT /api/settings`.
   </Accordion>

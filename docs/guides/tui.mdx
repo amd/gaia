@@ -1028,9 +1028,9 @@ and `--resume` say so rather than showing an empty list. The native agent, `gaia
 GAIA's agent comes as two programs: `gaiacpp`, the native one, and `gaia-agent`,
 the Python one. The terminal installers and the one-line installers put `gaiacpp` next
 to `gaia-cli` on Windows x64, Linux x64 and Apple silicon, alongside `gaia-agent`. When
-`gaiacpp` is on the machine (on your PATH, next to `gaia-cli`, in `~/.gaia/bin`
-where the Agent UI downloads it, or in `~/.gaia/agents/gaia`), the terminal UI
-runs it, and the header says so:
+`gaiacpp` is on the machine, the terminal UI runs it. It looks in `~/.gaia/bin`
+(where the Agent UI downloads it), next to `gaia-cli`, on your PATH, then in
+`~/.gaia/agents/gaia`. The header says which program is answering:
 
 ```
  GAIA  │ agent gaia v0.25.4 (gaiacpp) │ Gemma-4-E4B-it-GGUF
@@ -1083,7 +1083,14 @@ Which program a launch runs is decided in this order:
 4. With none of those, `gaiacpp` when it is installed, and `gaia-agent` otherwise
 
 If the one named by any of the first three is not installed, `gaia-cli` stops
-and lists where it looked; it does not start the other one. A `flagship_agent`
+and lists where it looked; it does not start the other one.
+
+A `gaiacpp` the Agent UI downloaded has a record of its checksum next to it
+(`gaiacpp.install.json`), and the terminal UI checks the file against it before
+every run. If the file no longer matches, or the record is damaged, `gaia-cli`
+stops and names the file: download `gaiacpp` again in the Agent UI (Settings ›
+Agent & model), or switch to the Python agent. It does not run another copy or
+the other program instead. A `flagship_agent`
 value other than `gaiapy` or `gaiacpp` also stops the launch, naming the file
 and the key.
 

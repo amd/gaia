@@ -312,17 +312,26 @@ def download(
                 f"{info.version}. Refusing to install it; report this at "
                 "https://github.com/amd/gaia/issues."
             )
-        # Written first: a record with no binary is harmless, the reverse is unchecked.
         record = {"version": info.version, "sha256": info.sha256, "tag": info.tag}
-        (target.parent / INSTALL_RECORD_NAME).write_text(
-            json.dumps(record, indent=2) + "\n", encoding="utf-8"
-        )
+        record_path = target.parent / INSTALL_RECORD_NAME
+        record_tmp = target.parent / f"{_PART_PREFIX}record.json"
+        record_tmp.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
         try:
+            # The program first: if this fails, the copy in use keeps its own record.
             os.replace(tmp, target)
         except OSError as e:
+            record_tmp.unlink(missing_ok=True)
             raise RuntimeError(
                 f"could not put gaiacpp at {target}: {e}. If GAIA is using it, "
                 "stop the answer in progress and try again."
+            ) from e
+        try:
+            os.replace(record_tmp, record_path)
+        except OSError as e:
+            # Left as it is, the new program fails its check against the old record.
+            raise RuntimeError(
+                f"gaiacpp was installed at {target} but its record could not be "
+                f"written to {record_path}: {e}. Download it again."
             ) from e
     finally:
         tmp.unlink(missing_ok=True)

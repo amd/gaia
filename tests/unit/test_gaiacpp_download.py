@@ -341,3 +341,89 @@ def test_a_gaiacpp_from_an_older_release_can_be_downloaded_again(
 def test_a_download_cannot_be_started_from_another_computer(release):
     remote = TestClient(create_app(db_path=":memory:"), headers={"X-Gaia-UI": "1"})
     assert remote.post("/api/agent-programs/gaiacpp/download").status_code == 403
+
+
+def test_a_failed_update_leaves_the_working_copy_and_its_record_alone(
+    release, tmp_path, monkeypatch
+):
+    target = _target(tmp_path)
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"the copy in use")
+    old = {
+        "version": "0.25.9",
+        "sha256": hashlib.sha256(b"the copy in use").hexdigest(),
+        "tag": "v0.25.9",
+    }
+    record = target.parent / native_fetch.INSTALL_RECORD_NAME
+    record.write_text(json.dumps(old), encoding="utf-8")
+
+    real_replace = native_fetch.os.replace
+
+    def _locked(src, dst):
+        if str(dst) == str(target):
+            raise PermissionError("the file is in use")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(native_fetch.os, "replace", _locked)
+    with pytest.raises(RuntimeError) as e:
+        native_fetch.download(core_version="0.26.1")
+    assert "in use" in str(e.value)
+    assert target.read_bytes() == b"the copy in use"
+    assert json.loads(record.read_text(encoding="utf-8")) == old
+    monkeypatch.setattr(fetch, "native_flagship_candidates", lambda: [target])
+    assert (
+        fetch.verified_native_flagship() == target
+    ), "the old copy still passes its check"
+    assert list(target.parent.glob("gaiacpp-part-*")) == []
+
+
+def _older_gaiacpp(tmp_path):
+    target = _target(tmp_path)
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"last release")
+    (target.parent / native_fetch.INSTALL_RECORD_NAME).write_text(
+        json.dumps({"version": "0.25.9", "sha256": "0" * 64, "tag": "v0.25.9"})
+    )
+    return target
+
+
+def test_updating_the_agent_in_use_is_refused_while_a_chat_is_answering(
+    client, release, tmp_path, monkeypatch
+):
+    from gaia.config import GaiaConfig
+    from gaia.ui.run_manager import run_manager
+
+    target = _older_gaiacpp(tmp_path)
+    GaiaConfig.save_key("flagship_agent", "gaiacpp")
+    monkeypatch.setattr(run_manager, "active_sessions", lambda: ["chat-1"])
+    r = client.post("/api/agent-programs/gaiacpp/download")
+    assert r.status_code == 409
+    assert "answering" in r.json()["detail"]
+    assert target.read_bytes() == b"last release"
+
+
+def test_updating_the_agent_in_use_is_refused_while_setup_is_testing(
+    client, release, tmp_path, monkeypatch
+):
+    from gaia.config import GaiaConfig
+    from gaia.ui.setup_runner import runner
+
+    target = _older_gaiacpp(tmp_path)
+    GaiaConfig.save_key("flagship_agent", "gaiacpp")
+    monkeypatch.setattr(runner, "status", lambda: {"state": "verifying"})
+    r = client.post("/api/agent-programs/gaiacpp/download")
+    assert r.status_code == 409
+    assert "setting up" in r.json()["detail"]
+    assert target.read_bytes() == b"last release"
+
+
+def test_an_update_of_an_agent_not_in_use_goes_ahead_during_a_chat(
+    client, release, tmp_path, monkeypatch
+):
+    from gaia.ui.run_manager import run_manager
+
+    target = _older_gaiacpp(tmp_path)
+    monkeypatch.setattr(run_manager, "active_sessions", lambda: ["chat-1"])
+    assert client.post("/api/agent-programs/gaiacpp/download").status_code == 202
+    assert _wait(client, {"done", "failed"})["state"] == "done"
+    assert target.read_bytes() == PAYLOAD

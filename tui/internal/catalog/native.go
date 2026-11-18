@@ -70,9 +70,12 @@ func expandHome(dir string) string {
 	return filepath.Join(home, dir[1:])
 }
 
-// FindNative locates gaiacpp: PATH, beside this program, the bin folder of
-// GAIA's home (where the Agent UI puts it), then the flagship's install
-// directory. The in-repo build output is searched only when inRepo is
+// FindNative locates gaiacpp, in the order the Agent UI's backend uses
+// (native_flagship_candidates in src/gaia/daemon/sidecars/fetch.py): the file
+// NativePathEnv names, the bin folder of GAIA's home (where the Agent UI
+// downloads it), beside this program, PATH, then the flagship's install
+// directory. It only finds; VerifyNative checks what was found before it is
+// run. The in-repo build output is searched only when inRepo is
 // set, which is for a user who asked for gaiacpp by name: unasked, a build left
 // in whatever folder the terminal UI was started from must never be run.
 //
@@ -89,51 +92,67 @@ func FindNative(inRepo bool) Lookup {
 	if self, err := selfExecutable(); err == nil {
 		beside = filepath.Dir(self)
 	}
-	l := Lookup{Looked: []string{"your PATH"}}
-	if beside != "" {
-		l.Looked = append(l.Looked, beside)
-	}
+	explicit := strings.TrimSpace(os.Getenv(NativePathEnv))
 	homeBin := gaiaHomeBin()
+
+	var l Lookup
+	if explicit != "" {
+		l.Looked = append(l.Looked, explicit+" ("+NativePathEnv+")")
+	}
 	if homeBin != "" {
 		l.Looked = append(l.Looked, homeBin)
 	}
-	l.Looked = append(l.Looked, installDir)
+	if beside != "" {
+		l.Looked = append(l.Looked, beside)
+	}
+	l.Looked = append(l.Looked, "your PATH", installDir)
 	if inRepo {
 		l.Looked = append(l.Looked, repoBuildDir)
 	}
 
-	for _, candidate := range executableNames(NativeAgentBinary) {
-		if p, err := exec.LookPath(candidate); err == nil {
-			l.Path = absOr(p)
+	inDir := func(dir string) string {
+		if dir == "" {
+			return ""
+		}
+		for _, candidate := range executableNames(NativeAgentBinary) {
+			if p := filepath.Join(dir, candidate); isExecutableFile(p) {
+				return p
+			}
+		}
+		return ""
+	}
+	// First match wins. The places GAIA itself fills come before PATH.
+	steps := []func() string{
+		func() string {
+			if explicit != "" && isExecutableFile(explicit) {
+				return explicit
+			}
+			return ""
+		},
+		func() string { return inDir(homeBin) },
+		func() string { return inDir(beside) },
+		func() string {
+			for _, candidate := range executableNames(NativeAgentBinary) {
+				if p, err := exec.LookPath(candidate); err == nil {
+					return p
+				}
+			}
+			return ""
+		},
+		func() string { return installDirBinaryIn(InstallRoot(), FlagshipID, NativeAgentBinary) },
+		func() string {
+			if inRepo {
+				return findBinaryInRepo(NativeAgentBinary)
+			}
+			return ""
+		},
+	}
+	for _, step := range steps {
+		if found := step(); found != "" {
+			l.Path = absOr(found)
+			l.PresenceOnly = presenceOnly(l.Path)
 			return l
 		}
-	}
-	found := ""
-	if beside != "" {
-		for _, candidate := range executableNames(NativeAgentBinary) {
-			if p := filepath.Join(beside, candidate); isExecutableFile(p) {
-				found = p
-				break
-			}
-		}
-	}
-	if found == "" && homeBin != "" {
-		for _, candidate := range executableNames(NativeAgentBinary) {
-			if p := filepath.Join(homeBin, candidate); isExecutableFile(p) {
-				found = p
-				break
-			}
-		}
-	}
-	if found == "" {
-		found = installDirBinaryIn(InstallRoot(), FlagshipID, NativeAgentBinary)
-	}
-	if found == "" && inRepo {
-		found = findBinaryInRepo(NativeAgentBinary)
-	}
-	if found != "" {
-		l.Path = absOr(found)
-		l.PresenceOnly = presenceOnly(l.Path)
 	}
 	return l
 }
@@ -165,6 +184,11 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 	switch {
 	case choice == "":
 		if l := FindNative(false); l.Found() {
+			// A copy that fails its check stops the launch: neither another
+			// copy nor the Python agent is run in its place.
+			if err := VerifyNative(l.Path); err != nil {
+				return "", err
+			}
 			agent.useNative(l.Path)
 		}
 		return "", nil
@@ -173,6 +197,9 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 		l := FindNative(true)
 		if !l.Found() {
 			return "", missingChoiceError(NativeAgentBinary, l)
+		}
+		if err := VerifyNative(l.Path); err != nil {
+			return "", err
 		}
 		agent.useNative(l.Path)
 		return "", nil
@@ -200,6 +227,9 @@ func (c *Catalog) SelectFlagshipAgent(choice string) (notice string, err error) 
 		}
 		switch {
 		case IsNativeAgentBinary(choice):
+			if err := VerifyNative(absOr(choice)); err != nil {
+				return "", err
+			}
 			agent.useNative(absOr(choice))
 		case isPythonAgentBinary(choice):
 			// A path is one particular program: the terminal UI runs it

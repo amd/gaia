@@ -37,11 +37,28 @@ which is answering: `agent gaia v<x> (gaiacpp)` for the native agent, plain
 With nothing asked for, `gaiacpp` is looked for only where an install puts
 it, in this order, and the first match wins:
 
-1. `PATH`
-2. The folder `gaia-cli` itself is in
-3. `~/.gaia/bin/`, where the Agent UI downloads it. This is the `bin` folder
+1. The file `GAIA_GAIACPP_PATH` names, when it is set and is a file
+2. `~/.gaia/bin/`, where the Agent UI downloads it. This is the `bin` folder
    of GAIA's home, so `GAIA_HOME` (or, without it, `GAIA_CONFIG_DIR`) moves it
-4. `~/.gaia/agents/gaia/`, then its `bin/`
+3. The folder `gaia-cli` itself is in
+4. `PATH`
+5. `~/.gaia/agents/gaia/`, then its `bin/`
+
+The first four are the Agent UI backend's order
+(`native_flagship_candidates` in `src/gaia/daemon/sidecars/fetch.py`), so both
+apps run the same file for one saved choice. `GAIA_GAIACPP_PATH` is shared with
+the Agent UI; `GAIA_TUI_AGENT` and `--agent-program` are the terminal UI's own.
+
+The copy that is found is checked before it is run (`catalog.VerifyNative`,
+the counterpart of `verified_native_flagship`). When a `gaiacpp.install.json`
+sits beside a file named `gaiacpp` (`gaiacpp.exe` on Windows), which is what the
+Agent UI's download writes, the file's SHA-256 must equal the record's
+`sha256`. A mismatch, an unreadable record or one with no checksum is an error
+that names the file and the record; no other copy and no other program is run
+in its place. No record means no check: an installer's copy or a build of your
+own has none. A path given to `--agent-program` or `GAIA_TUI_AGENT` is checked
+the same way. `TestNativeNamesMatchTheBackend` fails when the record's file
+name or the variable's name drifts from the Python side.
 
 A build in your checkout is **not** picked up by itself: starting `gaia-cli`
 from inside a repository never runs whatever sits in its `cpp/build`.
@@ -54,7 +71,7 @@ Which program a launch runs is decided by the first of these that is set
 | 1 | `--agent-program` | A name or a path, from the table below | Pinned |
 | 2 | `GAIA_TUI_AGENT` | The same | Pinned |
 | 3 | `flagship_agent` in `~/.gaia/config.json` | `gaiapy` (runs `gaia-agent`) or `gaiacpp`; any other value stops the launch with an error naming the file and the key | Free |
-| 4 | Nothing | `gaiacpp` when found in the four places above, else `gaia-agent` | Free |
+| 4 | Nothing | `gaiacpp` when found in the five places above, else `gaia-agent` | Free |
 
 It applies to the flagship only, so `gaia-cli run email` ignores it and never
 reads the saved choice. A named or saved program that is not found is an error
@@ -78,7 +95,7 @@ a reopened one, the two cases a `gaiacpp` launch refuses on the command line.
 
 | Value | What runs |
 |---|---|
-| `gaiacpp` | The first `gaiacpp` in the four places above, then `cpp/build/Debug`, `cpp/build/Release` and `cpp/build` in the working directory and up to seven folders above it |
+| `gaiacpp` | The first `gaiacpp` in the five places above, then `cpp/build/Debug`, `cpp/build/Release` and `cpp/build` in the working directory and up to seven folders above it |
 | A path to `gaiacpp` | That file. It counts as `gaiacpp` when it is named `gaiacpp` or `gaiacpp-<platform>`, as the release assets are |
 | `gaia-agent` | The Python agent as installed: the first `gaia-agent` on `PATH`, in a finished install under `~/.gaia/agents/gaia/`, or in `cpp/build`. On an install whose record puts the flagship behind the daemon (`artifact_kind: binary`) it stays behind the daemon, and the first chat frame says so, because the `gaia-agent` file in that install is the daemon's HTTP sidecar |
 | A path to `gaia-agent` | That file, spawned by `gaia-cli` itself, even on a daemon install |
