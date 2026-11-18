@@ -844,7 +844,7 @@ TEST(DelegateTask, ATaskNamingManyFilesIsSharedAmongHelpers) {
     GaiaAgent agent(cfgFor(server.lemonadeUrl()), optionsFor(w));
     const json r = delegate(agent, {{"tasks", json::array({{{"task", "Summarise each document"}, {"paths", paths}}})}});
     ASSERT_EQ(r.value("status", ""), "success") << r.dump(2);
-    ASSERT_EQ(r["helpers"].size(), 6u) << "one model call cannot read it all, so the tool shares it out";
+    ASSERT_EQ(r["helpers"].size(), 6u) << "one helper should not read it all, so the tool shares it out";
     EXPECT_TRUE(r.contains("shared_out"));
     EXPECT_EQ(r["helpers"][0]["task"], "doc_0.md: Summarise each document");
     EXPECT_EQ(r["helpers"][5]["task"], "doc_5.md: Summarise each document");
@@ -884,6 +884,17 @@ TEST(DelegateTask, ATaskNamingManyFilesIsSharedAmongHelpers) {
     EXPECT_LE(capped["helpers"].size(), 16u);
     EXPECT_GE(capped["helpers"].size(), 8u);
     EXPECT_EQ(capped.value("status", ""), "success");
+
+    // A window large enough for one helper to hold everything still uses the helpers there are.
+    AgentConfig wide = cfgFor(server.lemonadeUrl());
+    wide.contextSize = 131072;
+    GaiaAgent::Options eight = optionsFor(w);
+    eight.maxHelpers = 8;
+    GaiaAgent roomy(wide, eight);
+    const json spreadOut = delegate(roomy, {{"tasks", json::array({{{"task", "Summarise each document"}, {"paths", paths}}})}});
+    EXPECT_EQ(spreadOut["helpers"].size(), 6u) << "six files, eight helpers free: one file each";
+    const json together = delegate(roomy, {{"tasks", json::array({{{"task", "Read the notes"}, {"paths", small}}})}});
+    EXPECT_EQ(together["helpers"].size(), 1u) << "a few short notes are not worth spreading";
 }
 
 // ---- The whole loop ----

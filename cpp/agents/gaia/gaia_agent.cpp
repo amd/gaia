@@ -270,9 +270,11 @@ Lead with the result. Name the files you created or changed. Cite where facts ca
                       "section says how much there is to read and how much your context window holds. Use "
                       "helpers when the work is several independent pieces of reading or judgement, such as one "
                       "per file or source, and above all when reading it all yourself would take more than about "
-                      "half your window. Give each helper a file or a small group, and a complete brief: what to "
-                      "find, which paths, and the exact answer format, kept short. Do the work yourself when one "
-                      "command or script covers it, when it is small, or when it writes. "
+                      "half your window. When the same brief fits many files, send one task that lists them all "
+                      "in paths: the tool shares them among helpers, so do not write the brief again for each "
+                      "file. Otherwise give one task per piece. Make a brief complete: what to find and the "
+                      "exact answer format, kept short. Do the work yourself when one command or script covers "
+                      "it, when it is small, or when it writes. "
                       "A helper can fail: read each status, then redo a failed part yourself or tell the user "
                       "it is missing.")
                 : std::string()) +

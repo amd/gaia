@@ -23,6 +23,7 @@ namespace fs = std::filesystem;
 namespace {
 constexpr size_t kConclusionChars = 2000;
 constexpr size_t kTaskEchoChars = 200;
+constexpr std::uintmax_t kWorthSpreadingBytes = 40000;  // about 10,000 tokens of reading
 
 std::string lowered(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
@@ -136,10 +137,11 @@ ToolInfo GaiaAgent::delegateTaskTool() {
     ToolInfo info;
     info.name = "delegate_task";
     info.description =
-        "Run read-only helpers side by side, one per task, each in its own context; returns each "
-        "helper's conclusion and status. For independent reading or judgement over several files "
-        "or sources. Not for work one script can do, small tasks, or anything that writes. A "
-        "helper sees only its task text, so make each brief complete.";
+        "Run read-only helpers side by side, each in its own context; returns each helper's "
+        "conclusion and status. For independent reading or judgement over several files or sources. "
+        "When one brief fits many files, send ONE task listing them all in paths: the tool shares "
+        "them among helpers. Not for work one script can do, small tasks, or writes. A helper sees "
+        "only its task, so make the brief complete.";
     info.policy = ToolPolicy::ALLOW;
     ToolParameter tasks;
     tasks.name = "tasks";
@@ -238,31 +240,49 @@ json GaiaAgent::delegateTasks(const json& args) {
     }
 
     AgentConfig cfg = config();
+    cfg.silentMode = true;
+    cfg.debug = false;
+    cfg.showPrompts = false;
+    cfg.structuredEvents = false;
+    cfg.maxSteps = options_.helperMaxSteps;
+
+    ModelCapacity capacity;
+    if (!isHostedModel(cfg.modelId, cfg.baseUrl)) capacity = lemonade().modelCapacity(cfg.modelId);
+    const HelperWidth width = helperWidth(cfg.modelId, cfg.baseUrl, capacity, options_.maxHelpers);
     // A task that names more files than one helper should read is shared out, the same brief to each:
-    // a small model hands everything to one helper, which then does the whole job alone.
+    // a small model hands everything to one helper, and a large one writes the same brief sixteen times.
     size_t sharedOut = 0;
     {
         // A quarter of the window per helper, at about four bytes a token.
         std::uintmax_t share = static_cast<std::uintmax_t>((std::max)(cfg.contextSize, 4096));
         std::vector<Task> spread;
-        for (;; share *= 2) {
+        bool widened = false;
+        for (;;) {
             spread.clear();
             sharedOut = 0;
+            std::uintmax_t largest = 0;  // the most bytes any one task names
+            size_t filesInLargest = 0;
             for (const Task& t : tasks) {
                 std::vector<std::uintmax_t> sizes;
                 bool allFiles = t.paths.size() > 1;
-                for (const auto& p : t.paths) {
+                for (const auto& path : t.paths) {
                     std::error_code ec;
-                    const fs::path path = fs::u8path(p);
-                    if (!fs::is_regular_file(path, ec)) {
+                    const fs::path file = fs::u8path(path);
+                    if (!fs::is_regular_file(file, ec)) {
                         allFiles = false;
                         break;
                     }
-                    sizes.push_back(fs::file_size(path, ec));
+                    sizes.push_back(fs::file_size(file, ec));
                 }
                 if (!allFiles) {
                     spread.push_back(t);
                     continue;
+                }
+                std::uintmax_t total = 0;
+                for (const auto size : sizes) total += size;
+                if (total > largest) {
+                    largest = total;
+                    filesInLargest = sizes.size();
                 }
                 const size_t before = spread.size();
                 Task group{t.text, {}, true};
@@ -283,19 +303,21 @@ json GaiaAgent::delegateTasks(const json& args) {
                     spread.back().shared = false;
                 }
             }
-            if (spread.size() <= static_cast<size_t>(kMaxHelperTasks)) break;
+            if (spread.size() > static_cast<size_t>(kMaxHelperTasks)) {
+                share *= 2;
+                continue;
+            }
+            // Helpers standing idle while one reads a lot is a waste: spread a sizeable task across the width.
+            const size_t room = (std::min)(static_cast<size_t>(width.width), filesInLargest);
+            if (!widened && spread.size() < room && largest > kWorthSpreadingBytes) {
+                widened = true;
+                share = largest / room > 0 ? largest / room : 1;
+                continue;
+            }
+            break;
         }
         tasks = std::move(spread);
     }
-    cfg.silentMode = true;
-    cfg.debug = false;
-    cfg.showPrompts = false;
-    cfg.structuredEvents = false;
-    cfg.maxSteps = options_.helperMaxSteps;
-
-    ModelCapacity capacity;
-    if (!isHostedModel(cfg.modelId, cfg.baseUrl)) capacity = lemonade().modelCapacity(cfg.modelId);
-    const HelperWidth width = helperWidth(cfg.modelId, cfg.baseUrl, capacity, options_.maxHelpers);
     const size_t wanted = (std::min)(tasks.size(), static_cast<size_t>(width.width));
 
     // What one conclusion can be so that all of them reach the parent unclipped; helpers are told it.
