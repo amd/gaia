@@ -27,10 +27,12 @@ func TestFlagshipAgentIsUnsetWithoutAConfigOrKey(t *testing.T) {
 func TestFlagshipAgentRoundTripKeepsOtherKeys(t *testing.T) {
 	path := useConfig(t, `{"default_model": "Gemma-4-E4B-it-GGUF", "full_access": false, "future_key": {"a": 1}}`)
 
-	for choice, program := range map[string]string{
-		FlagshipAgentNative: catalog.NativeAgentBinary,
-		FlagshipAgentPython: catalog.PythonAgentBinary,
+	// A slice, not a map: the check below needs the Python agent written last.
+	for _, c := range []struct{ choice, program string }{
+		{FlagshipAgentNative, catalog.NativeAgentBinary},
+		{FlagshipAgentPython, catalog.PythonAgentBinary},
 	} {
+		choice, program := c.choice, c.program
 		wrote, err := WriteFlagshipAgent(choice)
 		if err != nil || wrote != path {
 			t.Fatalf("write %s: path %q, %v", choice, wrote, err)
