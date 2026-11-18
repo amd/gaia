@@ -1105,6 +1105,8 @@ class _ClosingOverflow(RuntimeError):
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
+# A shell line that only prints one file: `cat path`, nothing piped or chained.
+_PLAIN_CAT = re.compile(r"""^\s*cat\s+("[^"]+"|'[^']+'|[^\s|;&<>`$()'"]+)\s*$""")
 _REPEAT_NOT_RUN_NOTE = "Not run — the same call was just repeated."
 
 #: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
@@ -11334,6 +11336,7 @@ Do NOT wrap conversational replies in JSON.
             )
             if record["ran"] and not record["failed"]:
                 self._verify_whole_write(evidence, tool_name, record["args"])
+                self._verify_shown_file(evidence, tool_name, record["args"], result)
 
     #: Above this a written file is left for the model to check in parts.
     _MAX_FRAMEWORK_READBACK = 4 * 1024 * 1024
@@ -11363,6 +11366,39 @@ Do NOT wrap conversational replies in JSON.
             logger.debug("No framework read-back of %s: %s", target, e)
             return
         if on_disk.replace("\r\n", "\n") == content.replace("\r\n", "\n"):
+            evidence.read_by_framework(key)
+
+    def _verify_shown_file(
+        self, evidence: Any, tool_name: str, args: dict, result: Any
+    ) -> None:
+        """A shell ``cat`` that printed all of one file is a full read-back of it.
+
+        Without this a file a script wrote, then shown whole with ``cat``,
+        was still reported as never read back.
+        """
+        command = args.get("command")
+        if tool_name != "run_shell_command" or not isinstance(command, str):
+            return
+        found = _PLAIN_CAT.match(command)
+        shown = result.get("stdout") if isinstance(result, dict) else None
+        if not found or not isinstance(shown, str) or result.get("output_truncated"):
+            return
+        key = evidence.key(found.group(1).strip("\"'"), args.get("working_directory"))
+        if key.startswith(("\\\\", "//")):
+            return  # a network share: no round trip from the agent loop
+        target = Path(key)
+        try:
+            if target.stat().st_size > self._MAX_FRAMEWORK_READBACK:
+                return
+            on_disk = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            logger.debug("No framework read-back of %s: %s", target, e)
+            return
+
+        def _text(value: str) -> str:
+            return value.replace("\r\n", "\n").rstrip("\n")
+
+        if _text(on_disk) == _text(shown):
             evidence.read_by_framework(key)
 
     def _verification_project_root(self) -> Optional[str]:

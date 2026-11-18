@@ -12,6 +12,9 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 - A reply that goes quiet partway through is requested again, up to twice,
   instead of ending the turn; the work done so far is kept either way.
+- A file a script wrote and the agent then showed whole with `cat` counts as
+  read back. Before, the answer still carried "has not been read back
+  completely" and the turn was marked unfinished.
 
 ## [0.3.6]
 
