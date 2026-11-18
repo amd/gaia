@@ -28,7 +28,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from gaia_agent_email.mailbox_state import PROVIDERS
 from pydantic import BaseModel, Field
 
@@ -233,13 +233,22 @@ async def complete_email_connector(
 
 
 @router.delete("/connectors/{provider}")
-async def disconnect_email_connector(provider: str) -> Dict[str, Any]:
+async def disconnect_email_connector(
+    provider: str, all_accounts: bool = Query(False, alias="all")
+) -> Dict[str, Any]:
     """Disconnect ``provider`` — removes its stored tokens AND per-agent grants,
-    so a later reconnect can't silently inherit stale consent (#1592)."""
+    so a later reconnect can't silently inherit stale consent (#1592).
+
+    With several accounts connected it answers 409 ``account_choice_required``
+    with the ``choices`` unless ``?all=true``."""
     _require_supported(provider)
+    from gaia.connectors.errors import AccountChoiceRequiredError
     from gaia.connectors.handler import disconnect
 
-    await disconnect(provider)
+    try:
+        await disconnect(provider, all_accounts=all_accounts)
+    except AccountChoiceRequiredError as e:
+        raise HTTPException(status_code=409, detail=e.http_detail()) from e
     return {"provider": provider, "connected": False}
 
 

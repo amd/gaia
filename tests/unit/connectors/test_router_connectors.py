@@ -989,7 +989,29 @@ class TestAuthorizeDeviceEndpoint:
         "expires_in": 900,
         "interval": 5,
         "message": "Go to https://microsoft.com/devicelogin and enter ABCD-EFGH",
+        "intent": None,
     }
+
+    def test_carries_the_account_choice_to_the_sign_in(
+        self, ui_api_client, monkeypatch
+    ):
+        start = AsyncMock(return_value={**self._DEVICE_INFO, "intent": "INTENT"})
+        poll = AsyncMock(return_value={"account_email": "user@example.com"})
+        monkeypatch.setattr("gaia.connectors.start_device_flow", start)
+        monkeypatch.setattr("gaia.connectors.poll_device_flow", poll)
+
+        resp = ui_api_client.post(
+            "/api/connectors/microsoft/authorize-device",
+            json={"scopes": [], "add_account": True},
+            headers=UI_HEADER,
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert start.await_args.kwargs["add_account"] is True
+        assert start.await_args.kwargs["account"] is None
+        assert "intent" not in resp.json()
+        poll.assert_awaited_once()
+        assert poll.await_args.kwargs["intent"] == "INTENT"
 
     def test_returns_display_fields_and_hides_device_code(
         self, ui_api_client, monkeypatch
@@ -1087,7 +1109,7 @@ class TestConnectorActionsLiftTheKeyringHold:
     def test_authorize_lifts_the_hold(self, ui_api_client, monkeypatch, held):
         seen = []
 
-        async def start(connector_id, scopes=None, grant_agents=None):
+        async def start(connector_id, scopes=None, grant_agents=None, **_account):
             seen.append(held.keyring_refusal())
             return {"flow_id": "f", "authorization_url": "https://x"}
 

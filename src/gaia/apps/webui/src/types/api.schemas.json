@@ -1,4 +1,18 @@
 {
+  "AccountUpdateRequest": {
+    "description": "Body for ``PATCH /api/connectors/{id}/accounts/{account_id}``. Only\n``true`` is accepted: to change the default, make another account it.",
+    "properties": {
+      "is_default": {
+        "title": "Is Default",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "is_default"
+    ],
+    "title": "AccountUpdateRequest",
+    "type": "object"
+  },
   "ActivationRequest": {
     "description": "Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.\n\nValid only for ``mcp_server`` connectors — see ``_require_mcp_server``.\n\n``scopes`` is optional: when present and no grant exists for the pair,\nit is used to auto-create the grant (one-click convenience). When the\npair already has a grant the body is ignored — see issue #1005.",
     "properties": {
@@ -614,6 +628,22 @@
   },
   "AuthorizeRequest": {
     "properties": {
+      "account": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Account"
+      },
+      "add_account": {
+        "default": false,
+        "title": "Add Account",
+        "type": "boolean"
+      },
       "grant_agents": {
         "items": {
           "type": "string"
@@ -1980,7 +2010,7 @@
     "type": "object"
   },
   "ForwardConnectionRequest": {
-    "description": "Body for ``POST /v1/connections/{provider}`` (#1292).\n\nA host app forwards the OAuth client it authenticated the user under\n(``client_id`` + ``client_secret``) plus the user's ``refresh_token``.\nGAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second\nOAuth, no consent step.\n\n``refresh_token`` / ``client_secret`` are secret INPUTS — they are never\nechoed back in any response. ``account_email`` is display-only in v1\n(the keyring slot is single-account per provider). ``grant_agents`` is\nthe list of namespaced agent ids (e.g. ``installed:email``) to grant the\nforwarded scopes so they can resolve the connection ambiently.",
+    "description": "Body for ``POST /v1/connections/{provider}`` (#1292).\n\nA host app forwards the OAuth client it authenticated the user under\n(``client_id`` + ``client_secret``) plus the user's ``refresh_token``.\nGAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second\nOAuth, no consent step.\n\n``refresh_token`` / ``client_secret`` are secret INPUTS — they are never\nechoed back in any response. ``account_email`` picks which stored account\nthe forward replaces (the one with that address); with other accounts\nstored and no match, the forward is refused. ``grant_agents`` is\nthe list of namespaced agent ids (e.g. ``installed:email``) to grant the\nforwarded scopes so they can resolve the connection ambiently.",
     "properties": {
       "account_email": {
         "default": "",

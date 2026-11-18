@@ -66,11 +66,11 @@ def _mock_token_endpoint(scope="openid"):
                 "expires_in": 3600,
                 "scope": scope,
                 "id_token": (
-                    # JWT payload {"email": "alice@example.com"}; signature
+                    # JWT payload {"email": "alice@example.com", "sub": "alice-sub"}; signature
                     # is a placeholder — flow.py decodes only the email
                     # claim, not the signature.
                     "header."
-                    "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9"
+                    "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
                     ".sig"
                 ),
             },
@@ -162,7 +162,9 @@ class TestGrantedScopesTruthfulness:
                     "scope": "openid https://www.googleapis.com/auth/gmail.modify "
                     "https://www.googleapis.com/auth/gmail.send",
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
             )
@@ -205,7 +207,9 @@ class TestGrantedScopesTruthfulness:
                     "expires_in": 3600,
                     # No "scope" key at all.
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
             )
@@ -246,7 +250,9 @@ class TestGrantedScopesTruthfulness:
                     # Calendar was granted by an earlier connect and folded in.
                     "scope": " ".join(requested + [extra]),
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
             )
@@ -296,9 +302,16 @@ class TestTenantRecordedOnConnect:
                     "expires_in": 3600,
                     "scope": "openid",
                     "id_token": (
-                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                        "header."
+                        "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSIsICJzdWIiOiAiYWxpY2Utc3ViIn0"
+                        ".sig"
                     ),
                 },
+            )
+        )
+        respx.get(url__startswith="https://graph.microsoft.com/v1.0/me").mock(
+            return_value=httpx.Response(
+                200, json={"id": "alice-oid", "mail": "alice@example.com"}
             )
         )
         respx.route(host="127.0.0.1").pass_through()
