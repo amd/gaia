@@ -315,7 +315,8 @@ def test_a_failed_helper_is_reported_as_failed_never_as_success(work):
 
     assert result["status"] == "partial", result
     assert result["summary"] == "1 of 3 helpers finished, 2 failed."
-    assert "do that work yourself or tell the user it is missing" in result["advice"]
+    assert "do that part yourself or tell the user it is missing" in result["advice"]
+    assert "do not read it again yourself" in result["advice"], "one helper answered"
     ok, boom, empty = result["helpers"]
     assert ok["status"] == "ok"
     for failed in (boom, empty):
@@ -920,5 +921,5 @@ def test_a_task_naming_many_files_is_shared_among_helpers(work):
     capped = _delegate(
         parent, _Model(_echo()), {"tasks": [{"task": "Summarise", "paths": many}]}
     )
-    assert 8 <= len(capped["helpers"]) <= 16
+    assert len(capped["helpers"]) == 20, "two short files each, and more than sixteen"
     assert capped["status"] == "success"

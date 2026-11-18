@@ -36,6 +36,13 @@ logger = get_logger(__name__)
 
 #: Most tasks one call takes.
 MAX_HELPER_TASKS = 16
+#: Most helpers one call runs once the tool has shared a many-file task out.
+MAX_SHARED_HELPERS = 64
+#: About 8,000 tokens of reading per helper: several long files in one helper
+#: is slower and misses more than several helpers with one each.
+HELPER_SHARE_BYTES = 32768
+#: A task smaller than this (about 10,000 tokens) is not worth spreading.
+WORTH_SPREADING_BYTES = 40000
 #: Helpers at once on a cloud model.
 CLOUD_HELPER_WIDTH = 8
 #: A helper's step and time limits.
@@ -87,8 +94,10 @@ HELPER_SYSTEM_PROMPT = (
     "material, say exactly that.\n\n"
     "## Answer\n"
     "Give the result first, in the format the task asks for, then the evidence as "
-    "file name and line. State plainly what you could not find or read. Keep it "
-    "short: the agent that asked sees only your answer."
+    "file name and line, quoting the words that prove it. Say which files you "
+    "read in full, and state plainly what you could not find or read: the agent "
+    "that asked will rely on your answer and will not read the files again. Keep "
+    "it short."
 )
 
 DELEGATION_PROMPT = (
@@ -98,11 +107,15 @@ DELEGATION_PROMPT = (
     "many items there are and how large. Use helpers when the work is several "
     "independent pieces of reading or judgement, such as one per file or source, "
     "and above all when reading it all yourself would take more than about half "
-    "your context window. Give each helper a file or a small group, and a "
-    "complete brief: what to find, which paths, and the exact answer format, kept "
+    "your context window. When the same brief fits many files, send one task "
+    "that lists them all in paths: the tool shares them among helpers, so do not "
+    "write the brief again for each file. Otherwise give one task per piece. "
+    "Make a brief complete: what to find and the exact answer format, kept "
     "short. Do the work yourself when one command or script covers it, when it "
-    "is small, or when it writes. A helper can fail: read each status, then redo "
-    "a failed part yourself or tell the user it is missing."
+    "is small, or when it writes. When helpers come back, answer from their "
+    "conclusions: do not read the same material again yourself. A helper can "
+    "fail: read each status, then redo a failed part yourself or tell the user "
+    "it is missing."
 )
 
 _TASK_ITEM_SCHEMA = {
@@ -492,11 +505,12 @@ class DelegateToolsMixin:
             registry=self._tool_overrides,
         )
         def delegate_task(tasks: list) -> Dict[str, Any]:
-            """Run read-only helpers side by side, one per task, each in its own
-            context; returns each helper's conclusion and status. For independent
-            reading or judgement over several files or sources. Not for work one
-            script can do, small tasks, or anything that writes. A helper sees
-            only its task text, so make each brief complete.
+            """Run read-only helpers side by side, each in its own context; returns
+            each helper's conclusion and status. For independent reading or
+            judgement over several files or sources. When one brief fits many
+            files, send ONE task listing them all in paths: the tool shares them
+            among helpers. Not for work one script can do, small tasks, or writes.
+            A helper sees only its task, so make the brief complete.
 
             Args:
                 tasks: 1 to 16 items, each {"task": "<complete brief and answer format>", "paths": ["<file or folder to read>"]}.
@@ -717,13 +731,13 @@ class DelegateToolsMixin:
         if isinstance(parsed, dict):
             return parsed
         limit = max(int(self._truncation_budget()[0]), 0)
-        parsed, shared_out = _share_out(parsed, max(2 * limit, 16000))
 
         width, source, note = helper_width(
             getattr(self, "model_id", None),
             self._max_helpers,
             use_claude=getattr(self, "_use_claude", False) is True,
         )
+        parsed, shared_out = _share_out(parsed, HELPER_SHARE_BYTES, width)
         at_once = min(len(parsed), width)
         parent_stopped = self._parent_stop_check()
         # What one conclusion can be so all of them reach the parent unclipped.
@@ -789,9 +803,16 @@ class DelegateToolsMixin:
             summary += f", {failed} failed"
         summary += "."
         advice = []
+        if ok:
+            # Without this a capable model reads everything again itself.
+            advice.append(
+                "The helpers read this material: answer from their conclusions "
+                "and do not read it again yourself. Check one claim only if it "
+                "looks wrong or two helpers disagree."
+            )
         if failed:
             advice.append(
-                "A FAILED helper returned nothing usable: do that work yourself "
+                "A FAILED helper returned nothing usable: do that part yourself "
                 "or tell the user it is missing."
             )
         if partial:
@@ -858,16 +879,19 @@ class DelegateToolsMixin:
         return store_for(self).put_result(answer)
 
 
-def _share_out(tasks: List[_Task], share: int) -> Tuple[List[_Task], int]:
+def _share_out(tasks: List[_Task], share: int, width: int) -> Tuple[List[_Task], int]:
     """Share a task that names more files than one helper should read among
     helpers, the same brief to each: a small model hands everything to one
-    helper, which then does the whole job alone. *share* is the bytes one
-    helper takes; it doubles until the groups fit one call. Returns the tasks
-    and how many were shared out.
+    helper, and a large one writes the same brief sixteen times. *share* is
+    the bytes one helper takes; it doubles until the groups fit
+    :data:`MAX_SHARED_HELPERS`, and a sizeable task is spread across the
+    *width* helpers there are. Returns the tasks and how many were shared out.
     """
+    widened = False
     while True:
         spread: List[_Task] = []
         shared_out = 0
+        largest, files_in_largest = 0, 0
         for task in tasks:
             sizes: List[int] = []
             for path in task.paths:
@@ -878,6 +902,8 @@ def _share_out(tasks: List[_Task], share: int) -> Tuple[List[_Task], int]:
             if len(sizes) < 2:
                 spread.append(task)
                 continue
+            if sum(sizes) > largest:
+                largest, files_in_largest = sum(sizes), len(sizes)
             groups: List[_Task] = []
             group, held = _Task(task.text, shared=True), 0
             for path, size in zip(task.paths, sizes):
@@ -892,9 +918,16 @@ def _share_out(tasks: List[_Task], share: int) -> Tuple[List[_Task], int]:
                 spread.extend(groups)
             else:
                 spread.append(task)
-        if len(spread) <= MAX_HELPER_TASKS:
-            return spread, shared_out
-        share *= 2
+        if len(spread) > MAX_SHARED_HELPERS:
+            share *= 2
+            continue
+        room = min(width, files_in_largest)
+        if not widened and len(spread) < room and largest > WORTH_SPREADING_BYTES:
+            # Helpers standing idle while one reads a lot is a waste.
+            widened = True
+            share = max(largest // room, 1)
+            continue
+        return spread, shared_out
 
 
 def _empty_totals() -> Dict[str, Any]:
