@@ -1,6 +1,7 @@
 package components
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -422,6 +423,9 @@ type ConfirmationModel struct {
 	// (e.g. `gh issue list`). Empty means no grant is on offer for this call.
 	alwaysScope string
 	tier        RiskTier
+	// calendarAccount is the account a calendar change lands on, shown under
+	// the title: with several accounts connected it is half of the decision.
+	calendarAccount string
 	// riskFromAgent is set when tier came from the agent reading the call,
 	// rather than this client guessing from the tool name.
 	riskFromAgent bool
@@ -449,6 +453,8 @@ func NewConfirmationModel(runID, action, summary, confirmURL string) Confirmatio
 		tier:       ClassifyActionRisk(action),
 		state:      ConfirmationPending,
 		width:      76,
+
+		calendarAccount: calendarAccountOf(summary),
 	}
 }
 
@@ -710,6 +716,18 @@ func (m ConfirmationModel) View() string {
 	return m.fullView()
 }
 
+// calendarAccountOf reads `calendar_account` from a summary that is the call's
+// arguments as JSON, which is how the calendar skill's changes arrive.
+func calendarAccountOf(summary string) string {
+	var args struct {
+		CalendarAccount string `json:"calendar_account"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(summary)), &args) != nil {
+		return ""
+	}
+	return strings.TrimSpace(ansi.Strip(args.CalendarAccount))
+}
+
 func (m ConfirmationModel) titleLine() string {
 	return m.tier.Badge() + " " + confirmationTitleStyle.Render(ActionTitle(m.action))
 }
@@ -769,6 +787,9 @@ func (m ConfirmationModel) fullView() string {
 
 	var lines []string
 	lines = append(lines, m.titleLine())
+	if m.calendarAccount != "" {
+		lines = append(lines, confirmationBodyStyle.Render(WrapText("Calendar: "+m.calendarAccount, inner)))
+	}
 
 	// The call itself, once. The title already says what kind of action it is.
 	if summary := strings.TrimSpace(m.summary); summary != "" {
