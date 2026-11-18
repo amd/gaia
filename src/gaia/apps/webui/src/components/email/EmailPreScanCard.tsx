@@ -32,6 +32,7 @@ import {
     PenSquare,
     X,
 } from 'lucide-react';
+import { AccountAddress } from '../ConnectorAccounts';
 import './EmailPreScanCard.css';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -45,6 +46,8 @@ export interface PreScanItem {
     why?: string;
     /** Same field, named ``reason`` on suggested-archive rows. */
     reason?: string;
+    /** The connected account the message arrived in. */
+    account?: string;
 }
 
 export interface PreScanPayload {
@@ -226,6 +229,12 @@ export function EmailPreScanCard({ payload }: { payload: PreScanPayload }) {
         ],
         [payload, dismissed],
     );
+    // Label each row with its account only once the card mixes two or more.
+    const showAccount = new Set(
+        [...payload.urgent, ...payload.actionable, ...payload.suggested_archives]
+            .map((i) => i.account)
+            .filter(Boolean),
+    ).size > 1;
 
     const totalVisible = sections.reduce((n, s) => n + s.items.length, 0);
     const informationalCount = payload.informational_count;
@@ -248,6 +257,7 @@ export function EmailPreScanCard({ payload }: { payload: PreScanPayload }) {
                     <Section
                         key={section.key}
                         def={section}
+                        showAccount={showAccount}
                         pendingRow={pendingRow}
                         onApproveArchive={handleApproveArchive}
                         onReply={handleReply}
@@ -273,6 +283,7 @@ export function EmailPreScanCard({ payload }: { payload: PreScanPayload }) {
 
 function Section({
     def,
+    showAccount,
     pendingRow,
     onApproveArchive,
     onReply,
@@ -280,6 +291,7 @@ function Section({
     onOpen,
 }: {
     def: SectionDef;
+    showAccount: boolean;
     pendingRow: string | null;
     onApproveArchive: (item: PreScanItem) => void;
     onReply: (item: PreScanItem) => void;
@@ -301,6 +313,7 @@ function Section({
                         key={item.message_id}
                         item={item}
                         intent={def.intent}
+                        showAccount={showAccount}
                         // Disable action buttons whenever ANY row in the
                         // card has an in-flight action. Single-flight at
                         // the card level is simpler than per-row, and
@@ -324,6 +337,7 @@ function Section({
 function Row({
     item,
     intent,
+    showAccount,
     isPending,
     onApproveArchive,
     onReply,
@@ -332,6 +346,8 @@ function Row({
 }: {
     item: PreScanItem;
     intent: SectionDef['intent'];
+    /** Several accounts appear in this card, so each row names its own. */
+    showAccount: boolean;
     isPending: boolean;
     onApproveArchive: (item: PreScanItem) => void;
     onReply: (item: PreScanItem) => void;
@@ -354,6 +370,11 @@ function Row({
                     <span className="email-pre-scan__row-subject" title={item.subject}>
                         {item.subject || '(no subject)'}
                     </span>
+                    {showAccount && item.account && (
+                        <span className="email-pre-scan__row-account">
+                            <AccountAddress email={item.account} max={24} />
+                        </span>
+                    )}
                 </div>
                 {reason && (
                     <div className="email-pre-scan__row-reason" title={reason}>
