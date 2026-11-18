@@ -453,7 +453,7 @@ def test_config_rejects_a_malformed_context_sizes():
     # Looked up at call time: test_cli_config reloads gaia.config, replacing the class.
     with pytest.raises(config_mod.GaiaConfigError, match="context_sizes"):
         config_mod.GaiaConfig.load()
-    with pytest.raises(config_mod.GaiaConfigError, match="Settings › Model"):
+    with pytest.raises(config_mod.GaiaConfigError, match="Settings › Agent & model"):
         config_mod.GaiaConfig().set("context_sizes", "{}")
 
 
@@ -537,7 +537,7 @@ def test_a_saved_size_is_not_loaded_unchecked_when_memory_is_unreadable(monkeypa
             LemonadeClientError, match="can't read this PC's memory"
         ) as e:
             resolve_ctx_size(LARGE_DEFAULT_MODEL_NAME, base_url=BASE)
-        assert "Choose Automatic in Settings › Model" in str(e.value)
+        assert "Choose Automatic in Settings › Agent & model" in str(e.value)
         assert _load_bodies() == []
     finally:
         lc._CAPACITY_CACHE.clear()

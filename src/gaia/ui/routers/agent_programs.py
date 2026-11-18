@@ -1,0 +1,216 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""The two programs that can be the GAIA agent: what each weighs, and getting gaiacpp.
+
+``GET /api/agent-programs`` lists gaiapy and gaiacpp with whether each is on
+this PC and its download size. ``POST /api/agent-programs/gaiacpp/download``
+starts the verified download in the background; ``GET`` on the same path
+reports its bytes so the UI can draw a progress bar. Choosing the agent itself
+stays ``PUT /api/settings``.
+"""
+
+import importlib.util
+import threading
+import time
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.concurrency import run_in_threadpool
+
+from gaia.daemon.sidecars import fetch, native_fetch
+from gaia.daemon.sidecars import platform as plat
+from gaia.daemon.sidecars.errors import IntegrityError, PlatformError, SidecarError
+from gaia.logger import get_logger
+from gaia.ui.security import FLAGSHIP_AGENT_ID, require_local_pc, require_ui_header
+
+logger = get_logger(__name__)
+router = APIRouter()
+
+_SIZE_TTL_S = 600.0
+_lock = threading.Lock()
+# One measurement at a time: each is up to three network calls.
+_measuring = threading.Lock()
+_sizes: Dict[str, Any] = {"at": 0.0, "values": {}, "reasons": {}}
+_job: Dict[str, Any] = {
+    "state": "idle",
+    "bytes_done": 0,
+    "bytes_total": None,
+    "error": None,
+}
+
+
+def _gaiapy_size() -> Optional[int]:
+    """This PC's download size for the Python agent, from the hub manifest."""
+    from gaia.hub import catalog, installer
+
+    manifest = catalog.fetch_manifest(FLAGSHIP_AGENT_ID)
+    return installer._artifact_size(manifest, None) or None
+
+
+def _measure() -> None:
+    values: Dict[str, Optional[int]] = {}
+    reasons: Dict[str, Optional[str]] = {}
+    lasting = True
+    try:
+        values[fetch.PYTHON_FLAGSHIP] = _gaiapy_size()
+    except Exception as e:  # noqa: BLE001 - a size is information, never a gate
+        logger.warning("agent programs: no size for gaiapy: %s", e)
+        values[fetch.PYTHON_FLAGSHIP] = None
+    try:
+        values[fetch.NATIVE_FLAGSHIP] = native_fetch.download_info().size
+        reasons[fetch.NATIVE_FLAGSHIP] = None
+    except (PlatformError, IntegrityError) as e:
+        logger.warning("agent programs: gaiacpp cannot be downloaded: %s", e)
+        values[fetch.NATIVE_FLAGSHIP] = None
+        reasons[fetch.NATIVE_FLAGSHIP] = str(e)
+    except (SidecarError, RuntimeError) as e:
+        # The network, not the release: asked again on the next request.
+        logger.warning("agent programs: gaiacpp release not reachable: %s", e)
+        values[fetch.NATIVE_FLAGSHIP] = None
+        reasons[fetch.NATIVE_FLAGSHIP] = str(e)
+        lasting = False
+    with _lock:
+        _sizes.update(
+            at=time.monotonic() if lasting else 0.0, values=values, reasons=reasons
+        )
+
+
+def _gaiapy_installed() -> bool:
+    """True when the Python agent can answer: importable, or a binary setup installed."""
+    if importlib.util.find_spec("gaia_agent") is not None:
+        return True
+    if fetch.installer_placed_flagship() is not None:
+        return True
+    try:
+        hub = fetch._hub_installed_binary(
+            fetch.default_cache_dir(FLAGSHIP_AGENT_ID), plat.current_platform_key()
+        )
+    except SidecarError as e:
+        logger.warning(
+            "agent programs: the installed Python agent failed its check: %s", e
+        )
+        return False
+    return hub is not None
+
+
+def _job_view() -> Dict[str, Any]:
+    with _lock:
+        return dict(_job)
+
+
+def _fresh() -> bool:
+    with _lock:
+        return bool(_sizes["values"]) and time.monotonic() - _sizes["at"] <= _SIZE_TTL_S
+
+
+def _listing() -> Dict[str, Any]:
+    if not _fresh():
+        with _measuring:
+            if not _fresh():
+                _measure()
+    with _lock:
+        values, reasons = dict(_sizes["values"]), dict(_sizes["reasons"])
+    native_path = fetch.native_flagship()
+    native_size = values.get(fetch.NATIVE_FLAGSHIP)
+    native_reason = reasons.get(fetch.NATIVE_FLAGSHIP)
+    update = native_path is not None and native_fetch.update_available(native_path)
+    if native_path is not None and native_size is None:
+        native_size = native_path.stat().st_size
+    return {
+        "current": fetch.chosen_flagship(),
+        "programs": [
+            {
+                "id": fetch.PYTHON_FLAGSHIP,
+                "installed": _gaiapy_installed(),
+                "size_bytes": values.get(fetch.PYTHON_FLAGSHIP),
+                "can_download": False,
+                "update_available": False,
+                "unavailable_reason": None,
+            },
+            {
+                "id": fetch.NATIVE_FLAGSHIP,
+                "installed": native_path is not None,
+                "size_bytes": native_size,
+                "can_download": (native_path is None or update)
+                and native_reason is None,
+                "update_available": update and native_reason is None,
+                "unavailable_reason": (
+                    None if native_path is not None else native_reason
+                ),
+            },
+        ],
+        "download": _job_view(),
+    }
+
+
+@router.get("/api/agent-programs")
+async def list_agent_programs():
+    """Both agent programs, with install state, size and any running download."""
+    return await run_in_threadpool(_listing)
+
+
+def _on_progress(done: int, total: Optional[int]) -> None:
+    with _lock:
+        _job.update(bytes_done=done, bytes_total=total)
+
+
+def _run_download() -> None:
+    try:
+        if fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP:
+            # An update replaces the file the running agent was started from.
+            from gaia.ui.email_sidecar import daemon_client
+
+            daemon_client.stop_sidecar(FLAGSHIP_AGENT_ID)
+        native_fetch.download(_on_progress)
+    except Exception as e:  # noqa: BLE001 - reported to the UI through the job
+        logger.warning("agent programs: gaiacpp download failed: %s", e)
+        with _lock:
+            _job.update(state="failed", error=str(e))
+        return
+    with _lock:
+        _job.update(state="done", error=None)
+        _sizes["at"] = 0.0
+
+
+def _require_gaiacpp(program_id: str) -> None:
+    if program_id != fetch.NATIVE_FLAGSHIP:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"'{program_id}' is not downloaded here. Only gaiacpp is; the "
+                "Python agent is installed by GAIA's setup."
+            ),
+        )
+
+
+def _start_download() -> Dict[str, Any]:
+    installed = fetch.native_flagship()
+    if installed is not None and not native_fetch.update_available(installed):
+        raise HTTPException(
+            status_code=409, detail="gaiacpp is already installed on this PC."
+        )
+    with _lock:
+        if _job["state"] == "downloading":
+            return dict(_job)
+        _job.update(state="downloading", bytes_done=0, bytes_total=None, error=None)
+    threading.Thread(target=_run_download, name="gaiacpp-download", daemon=True).start()
+    return _job_view()
+
+
+# Downloads and installs a program on this PC, so only someone at this PC may ask.
+@router.post(
+    "/api/agent-programs/{program_id}/download",
+    status_code=202,
+    dependencies=[Depends(require_ui_header), Depends(require_local_pc)],
+)
+async def start_agent_program_download(program_id: str):
+    """Start downloading gaiacpp in the background; poll the same path with GET."""
+    _require_gaiacpp(program_id)
+    return await run_in_threadpool(_start_download)
+
+
+@router.get("/api/agent-programs/{program_id}/download")
+async def agent_program_download_status(program_id: str):
+    """Bytes downloaded so far, the total when known, and how it ended."""
+    _require_gaiacpp(program_id)
+    return _job_view()

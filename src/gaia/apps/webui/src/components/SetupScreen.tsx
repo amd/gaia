@@ -24,6 +24,8 @@ import { tooBigText } from './setup/ModelChecklist';
 import { StageLogs } from './setup/StageLogs';
 import { SetupFooter, SetupFooterSlot } from './setup/SetupFooter';
 import { LanguagePicker } from './setup/LanguagePicker';
+import { AgentChoice } from './setup/AgentChoice';
+import { AgentDownloadRow, useAgentDownload } from './setup/AgentDownload';
 import { BackendChoice, applyTestedBackend } from './setup/BackendChoice';
 import { DetectedSummary } from './setup/DetectedSummary';
 import { SetupChecks } from './setup/SetupChecks';
@@ -35,7 +37,7 @@ import {
 } from './setup/selection';
 import type {
     GpuMemoryStatus, LemonadeFound, LemonadeTarget, PreflightReport, ProviderId, SetupCatalogEntry,
-    SetupConfirm, SetupModelProgress, SetupPlan, SetupProblem, SetupRunStatus, SetupTest, StartCard,
+    SetupConfirm, SetupModelProgress, SetupPlan, SetupProblem, SetupRunStatus, SetupTest, StartCard, FlagshipAgent,
 } from '../types';
 import './SetupScreen.css';
 import './setup/setup.css';
@@ -639,6 +641,24 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
 
     const [ackDisk, setAckDisk] = useState(false);
 
+    // gaiacpp picked on Customize but not on this PC: it downloads with the models, then becomes the agent.
+    const [agentPending, setAgentPending] = useState<FlagshipAgent | null>(null);
+    const [agentSwitchError, setAgentSwitchError] = useState<string | null>(null);
+    const agentDownload = useAgentDownload(() => {
+        setAgentSwitchError(null);
+        api.updateSettings({ flagship_agent: 'gaiacpp' })
+            .then(() => setAgentPending(null))
+            .catch((err: unknown) => setAgentSwitchError(errorText(err)));
+    });
+    const startAgentDownload = agentDownload.start;
+    const followAgentDownload = agentDownload.follow;
+    // A reload mid-setup picks the agent's download back up rather than losing its bar.
+    useEffect(() => {
+        api.getAgentPrograms()
+            .then((l) => followAgentDownload(l.download))
+            .catch((err: unknown) => console.warn('[SetupScreen] could not read the agent programs; the Agent card says so on Customize', err));
+    }, [followAgentDownload]);
+
     /** Save the choices (chat model, vision model, skips), then download. */
     const committing = useRef(false);
     const commit = useCallback(async (acknowledgeLowDisk: boolean, acknowledgeNoFit = noFitAcked) => {
@@ -686,14 +706,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 }
             }
             setPlan(latest);
-            await download(acknowledgeLowDisk, latest);
+            const started = await download(acknowledgeLowDisk, latest);
+            if (started && agentPending === 'gaiacpp') void startAgentDownload();
         } catch (err) {
             setActionError(errorText(err));
         } finally {
             committing.current = false;
             setBusy(false);
         }
-    }, [plan, selection, cloud, noFitAcked, download, t]);
+    }, [plan, selection, cloud, noFitAcked, download, agentPending, startAgentDownload, t]);
 
     const stepTo = useCallback((id: Stage) => {
         setActionError(null);
@@ -1025,6 +1046,15 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     }
     expectedTests.push('agent');
 
+    const agentJob = agentDownload.job;
+    const agentRow = agentJob && agentJob.state !== 'idle' ? (
+        <section className="setup-agent-download" aria-labelledby="setup-agent-download-title">
+            <h3 className="mc-job-title" id="setup-agent-download-title">{t('setup.agent.title')}</h3>
+            <AgentDownloadRow job={agentJob} name="gaiacpp" onRetry={() => void startAgentDownload()} failedNote={t('setup.agent.setupCarriesOn')} />
+            {agentSwitchError && <p className="setup-error" role="alert">{t('setup.agent.switchFailed', { name: 'gaiacpp', error: agentSwitchError })}</p>}
+        </section>
+    ) : null;
+
     // The key worked: say so, and which model answers, before the download list.
     const keyAccepted = cloud && keyState.done && cloudModel ? (
         <p className="setup-ok setup-key-accepted" role="status">
@@ -1239,6 +1269,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <button type="button" className="link-btn" onClick={() => openGpu('models')} disabled={busy || runGoing}>{t('setup.found.changeMemory')}</button>
                                 </p>
                             )}
+                            <AgentChoice disabled={busy || runGoing} pending={agentPending} onPending={setAgentPending} />
                             <ModelsStep
                                 plan={plan}
                                 planError={planError}
@@ -1350,6 +1381,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <p className="setup-lede">{t('setup.download.lede')}</p>
                             {keyAccepted}
                             <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.starting')}</p>
+                            {agentRow}
                         </>
                     )}
 
@@ -1359,6 +1391,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <p className="setup-lede">{t('setup.download.lede')}</p>
                             {keyAccepted}
                             {plan && <section className="setup-card" aria-label={t('setup.contents.title')}><DownloadContents plan={plan} run={fullRun} onRetry={retryRun} retryDisabled={busy} /></section>}
+                            {agentRow}
                             {(fullRun.models?.length ?? 0) > 0 ? (
                                 <div className={lostContact ? 'is-stale' : undefined}>
                                     <DownloadProgress
@@ -1497,6 +1530,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         {t('setup.ready.start')}
                                     </button>
                                 </SetupFooter>
+                                {/* A download that outlasted the models, or failed, stays in view until it settles. */}
+                                {(agentJob?.state === 'downloading' || agentJob?.state === 'failed' || agentSwitchError) && agentRow}
                                 {!cloud && finalPlan && <ReadySummary plan={finalPlan} chatModel={answering} gpu={gpu} />}
                                 {startError && <SetupAlert text={startError} />}
                                 {(fullRun?.tests ?? []).filter((r) => r.state === 'failed').map((r) => (

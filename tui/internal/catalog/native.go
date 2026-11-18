@@ -42,8 +42,37 @@ func isPythonAgentBinary(path string) bool {
 	return strings.TrimSuffix(name, ".exe") == PythonAgentBinary
 }
 
-// FindNative locates gaiacpp: PATH, beside this program, then the flagship's
-// install directory. The in-repo build output is searched only when inRepo is
+// gaiaHomeBin is the bin folder of GAIA's home, where the Agent UI downloads
+// gaiacpp. It mirrors gaia.home.gaia_home: GAIA_HOME, then GAIA_CONFIG_DIR,
+// then ~/.gaia. Empty when no home directory can be found.
+func gaiaHomeBin() string {
+	for _, name := range []string{"GAIA_HOME", "GAIA_CONFIG_DIR"} {
+		if dir := strings.TrimSpace(os.Getenv(name)); dir != "" {
+			return filepath.Join(expandHome(os.ExpandEnv(dir)), "bin")
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".gaia", "bin")
+}
+
+// expandHome replaces a leading ~ with the user's home directory.
+func expandHome(dir string) string {
+	if dir != "~" && !strings.HasPrefix(dir, "~/") && !strings.HasPrefix(dir, `~\`) {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return dir
+	}
+	return filepath.Join(home, dir[1:])
+}
+
+// FindNative locates gaiacpp: PATH, beside this program, the bin folder of
+// GAIA's home (where the Agent UI puts it), then the flagship's install
+// directory. The in-repo build output is searched only when inRepo is
 // set, which is for a user who asked for gaiacpp by name: unasked, a build left
 // in whatever folder the terminal UI was started from must never be run.
 //
@@ -64,6 +93,10 @@ func FindNative(inRepo bool) Lookup {
 	if beside != "" {
 		l.Looked = append(l.Looked, beside)
 	}
+	homeBin := gaiaHomeBin()
+	if homeBin != "" {
+		l.Looked = append(l.Looked, homeBin)
+	}
 	l.Looked = append(l.Looked, installDir)
 	if inRepo {
 		l.Looked = append(l.Looked, repoBuildDir)
@@ -79,6 +112,14 @@ func FindNative(inRepo bool) Lookup {
 	if beside != "" {
 		for _, candidate := range executableNames(NativeAgentBinary) {
 			if p := filepath.Join(beside, candidate); isExecutableFile(p) {
+				found = p
+				break
+			}
+		}
+	}
+	if found == "" && homeBin != "" {
+		for _, candidate := range executableNames(NativeAgentBinary) {
+			if p := filepath.Join(homeBin, candidate); isExecutableFile(p) {
 				found = p
 				break
 			}
@@ -187,18 +228,42 @@ const DaemonPythonNotice = "[!] " + PythonAgentBinary + " was asked for. On this
 // AgentChoiceDocsURL explains which agent program the terminal UI runs.
 const AgentChoiceDocsURL = "https://amd-gaia.ai/docs/guides/tui"
 
-func missingChoiceError(binary string, l Lookup) error {
-	if l.Unverified != "" {
-		return fmt.Errorf(
-			"%w: %s was asked for, and %s is there, but its install is unfinished (no %s), "+
+// MissingProgramError is a named agent program that is not on this machine.
+type MissingProgramError struct {
+	Binary string
+	Lookup Lookup
+}
+
+func (e *MissingProgramError) Unwrap() error { return ErrNoExecutable }
+
+func (e *MissingProgramError) Error() string {
+	if e.Lookup.Unverified != "" {
+		return fmt.Sprintf(
+			"%v: %s was asked for, and %s is there, but its install is unfinished (no %s), "+
 				"so it is not safe to run. Re-run the GAIA installer (%s), or ask for the other agent program. See %s",
-			ErrNoExecutable, binary, l.Unverified, SentinelName, InstallerURL, AgentChoiceDocsURL)
+			ErrNoExecutable, e.Binary, e.Lookup.Unverified, SentinelName, InstallerURL, AgentChoiceDocsURL)
 	}
-	return fmt.Errorf(
-		"%w: %s was asked for, but it is not on this machine.\nLooked in:  %s\n"+
+	return fmt.Sprintf(
+		"%v: %s was asked for, but it is not on this machine.\nLooked in:  %s\n"+
 			"Fix:        install it in one of those places, or drop the request to run the agent that is installed\n"+
 			"look:       %s",
-		ErrNoExecutable, binary, strings.Join(l.Looked, ", "), AgentChoiceDocsURL)
+		ErrNoExecutable, e.Binary, strings.Join(e.Lookup.Looked, ", "), AgentChoiceDocsURL)
+}
+
+func missingChoiceError(binary string, l Lookup) error {
+	return &MissingProgramError{Binary: binary, Lookup: l}
+}
+
+// ForFlagship builds the catalog from what is installed, with the flagship on
+// the agent program choice names. See SelectFlagshipAgent for choice.
+func ForFlagship(choice string) (*Catalog, string, error) {
+	cat := NewCatalog()
+	cat.DiscoverBinaries()
+	notice, err := cat.SelectFlagshipAgent(choice)
+	if err != nil {
+		return nil, "", err
+	}
+	return cat, notice, nil
 }
 
 // useNative puts the entry on gaiacpp. The transport is set too: an install

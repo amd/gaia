@@ -276,7 +276,7 @@ def test_a_reached_limit_stops_goal_runs_and_says_so(loop, monkeypatch):
     held = GoalStore().get_goal(goal.id)
     assert held.status == "queued" and held.attempts == 0
     assert "monthly limit" in held.progress_notes
-    assert "Settings › Model" in held.progress_notes
+    assert "Settings › Agent & model" in held.progress_notes
 
 
 def test_an_existing_goal_list_gains_the_retry_columns(gaia_home):

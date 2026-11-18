@@ -151,6 +151,18 @@ type FlagshipModel struct {
 	// consumed there, or if the switch is cancelled from the gate.
 	pendingTranscript []chat.Message
 
+	// agentPin names what fixed the agent program at launch (a flag or a
+	// variable); empty leaves /agent free to switch it (agentprogram.go).
+	agentPin string
+	// programSwitch is a switch of agent program waiting on the gate.
+	programSwitch *programSwitch
+	// programs, savedProgram and saveProgram stand in for the machine in tests.
+	programs     func(program string) (*catalog.Catalog, string, error)
+	savedProgram func() (preflight.FlagshipAgent, error)
+	saveProgram  func(choice string) (string, error)
+	// reopened is set while the session on screen is one that was reopened.
+	reopened bool
+
 	// sessionID is the session the chat on screen writes to (sessions.go).
 	sessionID string
 	// resumeID is the session the next launch reopens instead of starting one.
@@ -547,6 +559,9 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.switchAgent(msg.ID)
 
+	case chat.AgentProgramMsg:
+		return m.agentProgram(msg.Arg)
+
 	case status.Outcome:
 		return m.applyOutcome(msg)
 
@@ -733,6 +748,15 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 			m.activeView = viewChat
 			return m, nil
 		}
+		if m.chat != nil && m.programSwitch != nil {
+			sw := m.programSwitch
+			m.programSwitch = nil
+			m.chat.AppendStatus(fmt.Sprintf(
+				"Could not switch to %s: %v. Staying on %s. Your saved choice was not changed.",
+				sw.to, err, sw.from))
+			m.activeView = viewChat
+			return m, nil
+		}
 		if m.chat != nil {
 			m.chat.AppendStatus(fmt.Sprintf("Could not switch to %s: %v. Staying on %s.", agent.ID, err, m.agent.ID))
 			m.activeView = viewChat
@@ -756,7 +780,8 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	m.sessionID = plan.id
 
 	chatModel := chat.NewChatModelForFlagship(c, agent.ID, agent.Name, m.dev, setupVerified).
-		WithHubClient(m.hub())
+		WithHubClient(m.hub()).
+		WithAgentPrograms()
 	if len(m.pendingTranscript) > 0 {
 		// Set only on the switch path (switchAgent) — a fresh launch never
 		// has one, so this is a no-op there.
@@ -790,6 +815,8 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	m.gateChatModel = ""
 	m.chat = &chatModel
 	m.agent = agent
+	m.reopened = resuming
+	m.commitProgramSwitch(agent)
 	m.activeView = viewChat
 
 	var cmds []tea.Cmd

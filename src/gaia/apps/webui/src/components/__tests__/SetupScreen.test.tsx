@@ -7,11 +7,11 @@ import { useChatStore } from '../../stores/chatStore';
 import { SetupScreen } from '../SetupScreen';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
-import type { LemonadeFound, LemonadeTarget, PreflightReport, SetupPlan, SetupRunStatus, SetupStep, SetupTest, StartScreen } from '../../types';
+import type { AgentDownload, LemonadeFound, LemonadeTarget, PreflightReport, SetupPlan, SetupRunStatus, SetupStep, SetupTest, StartScreen } from '../../types';
 import {
     COLD_BIG, COMPONENTS, EMBED, FLM, GEMMA, GEMMA_CHAT, QWEN, QWEN_READS, WHISPER, gpuStatus, plan, progress, runStatus,
 } from '../setup/__tests__/fixtures';
-import { NO_BACKENDS, NO_GPU_SPLIT } from '../../test/setupApiMocks';
+import { AGENT_PROGRAMS, NO_BACKENDS, NO_GPU_SPLIT, SETTINGS, withoutGaiacpp } from '../../test/setupApiMocks';
 
 vi.mock('../../services/api', async (importOriginal) => {
     const real = await importOriginal<typeof api>();
@@ -84,6 +84,8 @@ beforeEach(() => {
     mockedApi.getSetupPlan.mockResolvedValue(COLD_BIG());
     mockedApi.getGpuMemory.mockResolvedValue(NO_GPU_SPLIT);
     mockedApi.getModelServer.mockResolvedValue(NO_BACKENDS);
+    mockedApi.getSettings.mockResolvedValue(SETTINGS);
+    mockedApi.getAgentPrograms.mockResolvedValue(AGENT_PROGRAMS);
     mockedApi.getStartScreen.mockResolvedValue(START);
     mockedApi.listProviders.mockResolvedValue({ providers: [], active: null, lemonade_error: null } as unknown as Awaited<ReturnType<typeof api.listProviders>>);
     mockedApi.getActiveModel.mockResolvedValue({ provider: 'local', model: QWEN.id, label: 'Qwen', remote: false, is_default: true });
@@ -128,7 +130,7 @@ async function startLocal() {
 
 async function toModels() {
     fireEvent.click(screen.getByRole('button', { name: 'Customize' }));
-    await screen.findByRole('heading', { name: 'Choose your models' });
+    await screen.findByRole('heading', { name: 'Choose your agent and models' });
 }
 
 async function toKey() {
@@ -710,7 +712,7 @@ describe('SetupScreen: the rail', () => {
         fireEvent.click(rail().getByRole('button', { name: /Check this PC/ }));
         await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ });
         fireEvent.click(rail().getByRole('button', { name: /Your setup/ }));
-        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
     });
 
     it('Back and Next walk the steps setup has reached', async () => {
@@ -850,7 +852,7 @@ describe('SetupScreen: warnings and confirmations', () => {
         await startLocal();
         const sheet = await screen.findByRole('alertdialog', { name: 'Not enough free disk space' });
         fireEvent.click(within(sheet).getByRole('button', { name: 'Change models' }));
-        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
     });
 
@@ -889,6 +891,70 @@ describe('SetupScreen: warnings and confirmations', () => {
     });
 });
 
+describe('SetupScreen: agent', () => {
+    it('Customize offers the two agents and saves the one picked', async () => {
+        mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+        await open();
+        await toModels();
+        const agent = within(await screen.findByRole('region', { name: 'Agent' }));
+        expect(await agent.findByRole('radio', { name: /gaiapy/ })).toHaveAttribute('aria-checked', 'true');
+        fireEvent.click(agent.getByRole('radio', { name: /gaiacpp/ }));
+        expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' });
+        await waitFor(() => expect(agent.getByRole('radio', { name: /gaiacpp/ })).toHaveAttribute('aria-checked', 'true'));
+    });
+
+    describe('gaiacpp not on this PC', () => {
+        const running = runStatus([progress({ id: QWEN.id, state: 'downloading', bytes_done: 7.6e9, bytes_total: 23.3e9 })]);
+        const job = (over: Partial<AgentDownload>): AgentDownload => ({ state: 'downloading', bytes_done: 2_720_000, bytes_total: 6_800_000, error: null, ...over });
+
+        beforeEach(() => {
+            mockedApi.getAgentPrograms.mockResolvedValue(withoutGaiacpp());
+            mockedApi.startSetup.mockResolvedValue(running);
+            mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(running);
+        });
+
+        async function pickAndContinue() {
+            await open();
+            await toModels();
+            const agent = within(await screen.findByRole('region', { name: 'Agent' }));
+            fireEvent.click(await agent.findByRole('radio', { name: /gaiacpp/ }));
+            expect(agent.getByRole('radio', { name: /gaiacpp/ })).toHaveAttribute('aria-checked', 'true');
+            expect(mockedApi.startAgentDownload).not.toHaveBeenCalled();
+            clickContinue();
+            await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(1));
+        }
+
+        it('downloads in the Download step with its own bar, then becomes the agent', async () => {
+            mockedApi.startAgentDownload.mockResolvedValue(job({}));
+            mockedApi.getAgentDownload.mockResolvedValue(job({ state: 'done', bytes_done: 6_800_000 }));
+            mockedApi.updateSettings.mockResolvedValue({ ...SETTINGS, flagship_agent: 'gaiacpp' });
+            await pickAndContinue();
+            await waitFor(() => expect(mockedApi.startAgentDownload).toHaveBeenCalledTimes(1));
+            expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+            const bar = await screen.findByRole('progressbar', { name: /gaiacpp/ });
+            expect(bar).toHaveAttribute('aria-valuenow', '40');
+            await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ flagship_agent: 'gaiacpp' }), { timeout: 3000 });
+        });
+
+        it('a failed download says setup carries on with gaiapy, and retries', async () => {
+            mockedApi.startAgentDownload.mockResolvedValue(job({ state: 'failed', error: 'Connection reset.' }));
+            await pickAndContinue();
+            const alert = await screen.findByText("gaiacpp didn't download.");
+            expect(alert.closest('[role="alert"]')).toHaveTextContent('Setup carries on with gaiapy.');
+            expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+            fireEvent.click(within(alert.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: /Retry/ }));
+            await waitFor(() => expect(mockedApi.startAgentDownload).toHaveBeenCalledTimes(2));
+        });
+    });
+
+    it('stays out of the plain path, which keeps the default', async () => {
+        await startLocal();
+        await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalled());
+        expect(screen.queryByRole('region', { name: 'Agent' })).toBeNull();
+        expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+    });
+});
+
 describe('SetupScreen: GPU memory', () => {
     it('is an option on Customize, not a step, and goes back to the models', async () => {
         mockedApi.getGpuMemory.mockResolvedValue(gpuStatus());
@@ -900,7 +966,7 @@ describe('SetupScreen: GPU memory', () => {
         expect(await screen.findByText('With 64.0 GB for the GPU, Qwen3.6-35B-A3B fits.')).toBeInTheDocument();
         expect(railStep('Your setup')).toHaveAttribute('aria-current', 'step');
         fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }));
-        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
     });
 
@@ -1278,7 +1344,7 @@ describe('SetupScreen: testing', () => {
         mockedApi.startSetup.mockResolvedValue(failedRun('memory'));
         await startLocal();
         fireEvent.click(await screen.findByRole('button', { name: 'Choose another model' }));
-        expect(await screen.findByRole('heading', { name: 'Choose your models' })).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: 'Choose your agent and models' })).toBeInTheDocument();
     });
 
     it('deletes a broken model and downloads it again', async () => {

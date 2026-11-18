@@ -1604,7 +1604,10 @@ def test_a_headless_caller_is_pointed_at_the_endpoint_not_the_tui(built, monkeyp
 
 @pytest.mark.parametrize(
     "surface,expected",
-    [("tui", "in the TUI provider settings"), ("agent_ui", "under Settings > Model")],
+    [
+        ("tui", "in the TUI provider settings"),
+        ("agent_ui", "under Settings > Agent & model"),
+    ],
 )
 def test_a_front_end_that_names_itself_gets_its_own_advice(
     built, monkeypatch, surface, expected

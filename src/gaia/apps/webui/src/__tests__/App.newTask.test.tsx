@@ -17,6 +17,7 @@ import * as memoryApi from '../services/memoryApi';
 import { useChatStore } from '../stores/chatStore';
 import { useModelStore } from '../stores/modelStore';
 import type { Session, SetupCheck, StartCard } from '../types';
+import { AGENT_PROGRAMS } from '../test/setupApiMocks';
 
 const mocked = vi.mocked(api);
 
@@ -78,6 +79,7 @@ beforeEach(() => {
         compatible: true, blockers: [], warnings: [], ram_gb: 32, gpu_name: null, npu_detected: false, disk_free_gb: 100,
     } as never);
     mocked.getSetupStatus.mockResolvedValue({ state: 'idle' });
+    mocked.getAgentPrograms.mockResolvedValue(AGENT_PROGRAMS);
     mocked.getLemonadeTarget.mockResolvedValue({
         mode: 'gaia', saved_mode: null, source: 'gaia', base_url: null, saved_base_url: null,
         api_key_stored: false, gaia_installed: false, offer: false, what_gaia_does: '',

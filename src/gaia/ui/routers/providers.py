@@ -201,7 +201,7 @@ def _cloud_error(
         if not install and isinstance(message, str) and "is not installed" in message:
             return ProviderError(
                 f"Lemonade has no cloud provider registered for {name}, so it "
-                "cannot accept a key yet. Open Settings > Model and connect it "
+                "cannot accept a key yet. Open Settings > Agent & model and connect it "
                 "again, then try again.",
                 409,
             )

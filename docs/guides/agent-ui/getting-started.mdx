@@ -160,7 +160,17 @@ two GAIA has tested. Picking one picks that device's chat model, and the
 chat list shows only that device's models. Setup keeps llama.cpp on Vulkan
 when it starts. On an integrated GPU, **Change how memory is split** opens GPU
 memory from there or from Check this PC. It is optional: unless you pick a
-new size, GAIA changes nothing. The models are grouped by job, and picking
+new size, GAIA changes nothing. **Agent** picks the program that runs GAIA,
+each shown with its download size: **gaiapy** (Full-featured, recommended and
+the default) has every tool and feature and is the most tested, but uses more
+memory and starts more slowly; **gaiacpp** (Fast and light, beta) starts in a
+fraction of a second and uses a few megabytes of memory, but has fewer tools
+and features so far and is less tested. **Compare the two** under the choice
+says the same. If gaiacpp isn't on the PC, picking it downloads it in the
+**Download** step, with its own progress bar beside the models, and makes it
+the agent once it is in; if that download fails, setup carries on with gaiapy
+and offers **Retry**. Where this release offers no gaiacpp, its row says
+**Not installed** and **Compare the two** says why. You can switch later in Settings › Agent & model. The models are grouped by job, and picking
 a chat model updates the jobs that depend on it:
 
 | Job | What you choose |
@@ -227,7 +237,7 @@ continue**. Your message waits until it's ready.
 you change it, and **Run setup again** goes through it once more. Your
 models, keys and chats stay.
 
-Every choice can be changed later in **Settings → Model**: the default chat
+Every choice can be changed later in **Settings → Agent & model**: the default chat
 model and the models on this PC under **Manage downloads and disk space**
 (tick a skipped model and **Apply** to download it; **Remove** deletes one
 only after you confirm), **GPU memory** on integrated-GPU PCs, and the

@@ -23,6 +23,8 @@ func isolateNative(t *testing.T) nativeFixture {
 	t.Setenv("PATH", f.path)
 	t.Setenv("HOME", f.home)
 	t.Setenv("USERPROFILE", f.home)
+	t.Setenv("GAIA_HOME", "")
+	t.Setenv("GAIA_CONFIG_DIR", "")
 	t.Chdir(f.cwd)
 	orig := selfExecutable
 	selfExecutable = func() (string, error) { return filepath.Join(f.beside, "gaia-cli"), nil }

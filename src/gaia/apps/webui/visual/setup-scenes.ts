@@ -6,7 +6,8 @@
  * is installed. Shapes follow /api/setup/plan and /api/setup/status.
  */
 
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
+import { AGENT_DOWNLOAD_FAILED, AGENT_DOWNLOADING, SETTINGS, withAgentPrograms, type AgentProgramsAnswers } from './fixtures';
 
 const entry = (over: Record<string, unknown> & { id: string }) => ({
     roles: ['chat'], purpose: 'Answers your chats', if_skipped: null, recipe: 'llamacpp', size_gb: 1, full_size_gb: 1,
@@ -241,6 +242,8 @@ interface SetupAnswers {
     localOnly?: boolean;
     /** A Lemonade the user already runs, which Check this PC offers. */
     theirs?: boolean;
+    /** The agent programs and the gaiacpp download, when a scene isn't about the default. */
+    agent?: AgentProgramsAnswers;
 }
 
 const THEIRS_TARGET = {
@@ -250,7 +253,7 @@ const THEIRS_TARGET = {
 const THEIRS_FOUND = { found: { url: 'http://localhost:13305/api/v1', version: '2026.44.1', status: 'ok', message: null }, unchecked: [] };
 
 /** First-run setup, every call the screens make answered from the backend's shapes. */
-export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, envKey = false, localOnly = false, theirs = false }: SetupAnswers = {}): Promise<void> {
+export async function withSetup(page: Page, { status = { state: 'idle' }, plan = PLAN, gpu = NO_GPU, hardware = HARDWARE, gatewayReachable = true, envKey = false, localOnly = false, theirs = false, agent }: SetupAnswers = {}): Promise<void> {
     const prices = { provider: 'fireworks', models: [{ model: 'qwen', name: 'Qwen3.6', rank: 1, note: null, price: { input_per_million: 0.5, cached_input_per_million: 0.1, output_per_million: 3, source: 'list price' } }], source: 'Fireworks list price', note: null };
     const answers: Record<string, unknown> = {
         'GET /setup/check': { ready: false, stage: 'setup', reasons: [], steps: [{ key: 'server', label: 'Install the local model server', detail: 'about 1 minute' }] },
@@ -271,6 +274,7 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
         'GET /spending/prices/fireworks': prices,
         'GET /spending/prices/amd': { provider: 'amd', models: [], source: null, note: 'Prices are set by the organization that runs the gateway.' },
         'GET /memory/settings': { enabled: true },
+        'GET /settings': SETTINGS,
         'GET /spending': { month: '2026-10', total_usd: 0, turns: 0, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit', by_model: [], price_source: 'list price' },
     };
     await page.route('**/api/**', async (route) => {
@@ -279,6 +283,7 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
         if (key in answers) await route.fulfill({ json: answers[key] });
         else await route.fallback();
     });
+    if (agent) await withAgentPrograms(page, agent);
 }
 
 const hero = (page: Page) => page.locator('.setup-hero').first();
@@ -308,6 +313,16 @@ async function toKey(page: Page): Promise<void> {
     await page.locator('.setup-where-card').nth(1).click();
     await page.locator('.setup-footer .btn-primary').click();
     await expect(page.locator('.setup-form')).toBeVisible();
+}
+
+// A tag hugs its words; a choice card stretches its spans unless told not to.
+export async function expectSnugTags(scope: Locator): Promise<void> {
+    const slack = await scope.locator('.setup-choice-tag').evaluateAll((tags) => tags.map((tag) => {
+        const range = document.createRange();
+        range.selectNodeContents(tag);
+        return Math.round(tag.getBoundingClientRect().width - range.getBoundingClientRect().width);
+    }));
+    for (const s of slack) expect(s, 'a tag is wider than its words').toBeLessThan(30);
 }
 
 export interface SetupScene {
@@ -490,6 +505,43 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.mc-row.is-off')).toBeVisible();
         },
     },
+    ...[false, true].flatMap((noGaiacpp) => [false, true].map((expanded): SetupScene => ({
+        name: `models-agent${noGaiacpp ? '-unavailable' : ''}-${expanded ? 'expanded' : 'collapsed'}`,
+        answers: noGaiacpp ? { agent: { gaiacpp: 'unavailable' } } : {},
+        reach: async (page) => {
+            await toModels(page);
+            const agent = page.locator('.agent-choice');
+            await expect(agent.locator('[role="radio"]')).toHaveCount(2);
+            await expect(agent.locator('[role="radio"][aria-checked="true"] bdi.agent-choice-name')).toHaveText('gaiapy');
+            await expect(agent.locator('[aria-disabled="true"]')).toHaveCount(noGaiacpp ? 1 : 0);
+            await expect(agent.locator('.agent-choice-size')).toHaveCount(noGaiacpp ? 1 : 2);
+            const more = agent.locator('.agent-choice-more');
+            if (expanded) await more.click();
+            await expect(more).toHaveAttribute('aria-expanded', String(expanded));
+            await expect(agent.locator('.agent-choice-detail')).toBeVisible({ visible: expanded });
+            // Each row is one line at desktop width.
+            for (const row of await agent.locator('[role="radio"]').all()) {
+                const box = await row.boundingBox();
+                if (page.viewportSize()!.width > 600) expect(box!.height).toBeLessThan(48);
+            }
+            await expectSnugTags(agent);
+            await agent.scrollIntoViewIfNeeded();
+        },
+    }))),
+    {
+        name: 'models-agent-download-picked',
+        answers: { agent: { gaiacpp: 'downloadable' } },
+        reach: async (page) => {
+            await toModels(page);
+            const agent = page.locator('.agent-choice');
+            await agent.locator('[role="radio"]').nth(1).click();
+            await expect(agent.locator('[role="radio"]').nth(1)).toHaveAttribute('aria-checked', 'true');
+            await expect(agent.locator('.agent-choice-off.is-quiet')).toBeVisible();
+            await agent.locator('.agent-choice-more').click();
+            await expectSnugTags(agent);
+            await agent.scrollIntoViewIfNeeded();
+        },
+    },
     {
         name: 'models-npu',
         reach: async (page) => {
@@ -585,6 +637,25 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        name: 'download-gaiacpp-downloading',
+        answers: { status: RUN, agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING } },
+        reach: async (page) => {
+            const bar = page.getByRole('progressbar', { name: /gaiacpp/ });
+            await expect(bar).toHaveAttribute('aria-valuenow', '40');
+            await bar.scrollIntoViewIfNeeded();
+        },
+    },
+    {
+        name: 'download-gaiacpp-failed',
+        answers: { status: RUN, agent: { gaiacpp: 'downloadable', download: AGENT_DOWNLOADING, poll: AGENT_DOWNLOAD_FAILED } },
+        reach: async (page) => {
+            const failed = page.locator('.agent-download .dl-fail');
+            await expect(failed).toBeVisible();
+            await expect(failed.getByRole('button')).toBeVisible();
+            await failed.scrollIntoViewIfNeeded();
+        },
+    },
+    {
         name: 'download-running',
         answers: { status: RUN },
         reach: async (page) => {
@@ -676,7 +747,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['check-failed', 'plan', 'check-details', 'models', 'models-agent-unavailable-collapsed', 'models-agent-unavailable-expanded', 'download-gaiacpp-failed', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

@@ -55,6 +55,7 @@ from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
     IntegrityError,
+    PlatformError,
     SidecarInhibitedError,
     SidecarNotRunningError,
     SidecarSpawnError,
@@ -386,9 +387,42 @@ class AgentSidecarManager:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.shutdown()
 
+    def _native_flagship_command(self, port: int):
+        """The command for ``gaiacpp``, the agent the user chose in Settings."""
+        try:
+            binary = fetch.verified_native_flagship()
+        except IntegrityError as e:
+            raise SidecarSpawnError(
+                f"Cannot start the GAIA agent: {e} Or switch back to the Python "
+                f"agent in Settings › Agent & model. Sidecar logs: {self.log_dir}."
+            ) from e
+        if binary is None:
+            looked = ", ".join(str(p) for p in fetch.native_flagship_candidates())
+            raise SidecarSpawnError(
+                "Cannot start the GAIA agent: gaiacpp is chosen as the agent but "
+                f"it is not installed on this PC (looked in: {looked}). Download "
+                "it in Settings › Agent & model, or switch back to the Python "
+                f"agent there. Sidecar logs: {self.log_dir}."
+            )
+        try:
+            self.installed_binary_version = fetch.native_flagship_version(binary)
+        except PlatformError as e:
+            raise SidecarSpawnError(
+                f"Cannot start the GAIA agent: {e}. Switch back to the Python "
+                f"agent in Settings › Agent & model. Sidecar logs: {self.log_dir}."
+            ) from e
+        # A binary of its own: the dev-mode source launch does not apply to it.
+        self.resolved_mode = "user"
+        return [str(binary), "--host", self.host, "--port", str(port)], {}
+
     def build_spawn_command(self, *, port: int):
         if port == RESERVED_PORT:
             raise ValueError(f"port {RESERVED_PORT} is reserved and must never be used")
+        if (
+            self.spec.agent_id == fetch.FLAGSHIP_AGENT_ID
+            and fetch.chosen_flagship() == fetch.NATIVE_FLAGSHIP
+        ):
+            return self._native_flagship_command(port)
         if self.mode == "user":
             try:
                 result = fetch.fetch_binary(
