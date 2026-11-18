@@ -747,6 +747,7 @@ class _Timed:
     _time_left_s = Agent._time_left_s
     _time_to_stop_s = Agent._time_to_stop_s
     _typical_step_s = Agent._typical_step_s
+    _closing_tool_running = False
 
     def __init__(self, limit, used, steps=()):
         self.time_limit_s = limit

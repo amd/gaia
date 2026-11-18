@@ -3274,6 +3274,8 @@ class Agent(abc.ABC):
     _open_step: Optional[int] = None
     _open_step_stats: Optional[Dict[str, Any]] = None
     _step_stats_recorded: bool = False
+    # True only while the time-limit closing step's one tool call runs.
+    _closing_tool_running: bool = False
 
     # Skills: lazily built manager + the skills loaded into this agent.
     # Instance-level once set, so one agent's skills never leak into a sibling.
@@ -12242,7 +12244,7 @@ Do NOT wrap conversational replies in JSON.
         The closing step's own call runs past the stop point by design: it
         gets half of what is left of the limit, and the answer the rest.
         """
-        if getattr(self, "_closing_tool_running", False):
+        if self._closing_tool_running:
             whole = self._time_left_s()
             left = None if whole is None else whole / 2
         else:
