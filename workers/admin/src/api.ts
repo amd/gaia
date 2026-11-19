@@ -97,12 +97,31 @@ export async function handleApi(db: D1Database, path: string, url: URL): Promise
     );
     const firstDay = (await db.prepare("SELECT MIN(day) AS day FROM asset_snapshots").first<{ day: string }>())?.day;
     const { points, negativeDays } = dailyDeltas(hist);
+    const perRelease = releaseDownloads(releases, assets);
+    // Daily installs of the newest final release since it shipped, from the snapshot before it on.
+    const last = perRelease.filter((r) => r.main && !r.rc).at(-1);
+    let latestDaily: { tag: string; daily: { day: string; install: number }[] } | null = null;
+    if (last) {
+      const from = new Date(Date.parse(last.publishedAt.slice(0, 10)) - 86_400_000).toISOString().slice(0, 10);
+      const rows = await all<{ day: string; tag: string; asset: string; downloads: number }>(
+        "SELECT day, tag, asset, downloads FROM asset_snapshots WHERE tag = ? AND day >= ?",
+        last.tag,
+        from,
+      );
+      const snapDays = (await all<{ day: string }>("SELECT DISTINCT day FROM asset_snapshots WHERE day >= ?", from)).map((r) => r.day);
+      const rel = dailyDeltas(rows, snapDays);
+      latestDaily = {
+        tag: last.tag,
+        daily: rel.points.filter((p) => !rel.negativeDays.includes(p.day)).map((p) => ({ day: p.day, install: p.install })),
+      };
+    }
     return json({
       snapshotDay: latest.day,
       firstSnapshotDay: firstDay,
-      releases: releaseDownloads(releases, assets),
+      releases: perRelease,
       daily: points,
       negativeDays,
+      latestDaily,
     });
   }
 

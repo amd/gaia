@@ -23,8 +23,24 @@ import {
   retryWaitMs,
   streamReleases,
   sumAssetDownloads,
+  sumInstallDownloads,
   type GithubRelease,
 } from './github';
+
+describe('sumInstallDownloads', () => {
+  it('leaves out update feeds, update data, checksums and signatures', () => {
+    const files = [
+      ['gaia-agent-ui-0.26.0-x64-setup.exe', 282],
+      ['gaia-0.26.0-darwin-x64.pkg', 7],
+      ['latest.yml', 706],
+      ['latest-mac.yml', 66],
+      ['gaia-agent-ui-0.26.0-x64-setup.exe.blockmap', 101],
+      ['gaia-core-SHA256SUMS.txt', 37],
+      ['amd_gaia-0.26.0.tar.gz.sigstore.json', 4],
+    ] as const;
+    expect(sumInstallDownloads(files.map(([name, download_count]) => ({ name, download_count })))).toBe(289);
+  });
+});
 
 const FIXTURE = fileURLToPath(
   new URL('../../../tests/fixtures/github/releases.json', import.meta.url),
@@ -195,6 +211,8 @@ describe('checked-in GitHub fixture', () => {
     ]);
     expect(stats.totalReleaseCount).toBe(1);
     expect(stats.totalDownloadCount).toBeGreaterThan(0);
+    expect(stats.latestRelease?.tag).toBe('v0.26.0');
+    expect(stats.latestRelease?.installDownloads).toBeGreaterThan(0);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
