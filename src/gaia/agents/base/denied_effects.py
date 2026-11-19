@@ -780,6 +780,8 @@ _PACKAGE_PROGRAMS = frozenset(
     {"pip", "pip3", "uv", "pipx", "conda", "mamba", "npm", "pnpm", "yarn", "winget"}
 )
 _VERSION_PIN = re.compile(r"[\[<>=!~;@ ]")
+#: ``git commit -am "msg"``: a cluster of git short switches ending in ``m``.
+_GIT_MESSAGE_CLUSTER = re.compile(r"-[a-z]+m")
 
 
 def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
@@ -788,13 +790,16 @@ def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
     ``git commit -m "fix bug"`` and ``git commit -m "Fix the bug"`` are one
     action: the wording of a message is not what the command acts on.
     """
-    flags = _TEXT_FLAGS | _SHORT_TEXT_FLAGS.get(family.split(" ")[0], frozenset())
+    program = family.split(" ")[0]
+    flags = _TEXT_FLAGS | _SHORT_TEXT_FLAGS.get(program, frozenset())
     kept: List[str] = []
     skip = False
     for word in rest:
         if skip:
             skip = False
-        elif word.lower() in flags:
+        elif word.lower() in flags or (
+            program == "git" and _GIT_MESSAGE_CLUSTER.fullmatch(word)
+        ):
             skip = True
         else:
             kept.append(word)
@@ -803,6 +808,8 @@ def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
 
 def _unpinned(word: str) -> str:
     """A package operand without its version, extras or markers."""
+    if "\\" in word or word.startswith((".", "/")) or re.match(r"[a-z]:", word):
+        return word
     # A leading ``@`` is an npm scope, not a pin.
     return word[:1] + _VERSION_PIN.split(word[1:], maxsplit=1)[0]
 

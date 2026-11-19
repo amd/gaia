@@ -1509,6 +1509,8 @@ def test_with_no_way_to_ask_the_policy_every_delete_is_kept(tmp_path):
             "powershell -Command \"Expand-Archive -Path 'b.zip' -DestinationPath tmp\"",
         ),
         ("dir /s reports", "dir invoices"),
+        (r'pip install "C:\My Wheels\a.whl"', r'pip install "C:\My Wheels\b.whl"'),
+        ("pip install ./pkg-a", "pip install ./pkg-b"),
     ],
 )
 def test_the_same_program_on_something_else_is_another_action(
@@ -1539,6 +1541,8 @@ def test_the_same_program_on_something_else_is_another_action(
         ('gh pr create --title "Fix" --body "one"', 'gh pr create -t "A fix" -b "two"'),
         ("pip install pandas", "pip install pandas==2.2"),
         ("pip install pandas>=2", "pip install 'pandas[excel]<3'"),
+        ('git commit -am "fix bug"', 'git commit -m "Fix the bug"'),
+        ("npm install @scope/pkg@1.0", "npm install @scope/pkg"),
     ],
 )
 def test_a_reworded_command_is_the_same_action(declined, later, tmp_path):
@@ -1580,6 +1584,12 @@ def test_a_declined_programs_new_output_can_be_made_another_way(tmp_path):
     assert ledger.conflict("write_file", report) is None
     other = "open('out/report.csv', 'w').write('a,b\\n')"
     assert ledger.conflict("run_python", {"code": other}) is None
+
+
+def test_a_declined_program_that_only_made_new_files_records_nothing(tmp_path):
+    ledger = _declined_program(tmp_path, _BUILDS_A_REPORT)
+    assert not ledger
+    assert ledger.conflict("run_python", {"code": _BUILDS_A_REPORT}) is None
 
 
 def test_a_folder_that_is_already_there_is_not_what_was_declined(tmp_path):
