@@ -859,6 +859,24 @@ textarea:focus-visible {
 :root[data-titlebar="mac"] .sb-top {
     padding-left: 84px;
 }
+/* The collapsed rail widens to hold the traffic lights, with the same 16px
+   margin on each side, and its top row moves below them. */
+:root[data-titlebar="mac"]:not([dir="rtl"]) .sb.is-collapsed {
+    width: 84px;
+    min-width: 84px;
+}
+:root[data-titlebar="mac"]:not([dir="rtl"]) .sb.is-collapsed .sb-top {
+    padding-inline: 10px;
+    padding-top: var(--titlebar-h);
+}
+/* Narrow windows: the floating sidebar button sits after the traffic lights,
+   and the top rows start after the button. */
+:root[data-titlebar="mac"]:not([dir="rtl"]) {
+    --sidebar-toggle-clearance: 138px;
+}
+:root[data-titlebar="mac"]:not([dir="rtl"]) .sidebar-toggle {
+    inset-inline-start: 84px;
+}
 /* Right to left the sidebar is on the right: it makes room for the Windows
    controls, and the chat header for the macOS ones. */
 :root[data-titlebar="overlay"][dir="rtl"] .task-header {
