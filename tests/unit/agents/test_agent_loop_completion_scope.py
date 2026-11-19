@@ -989,6 +989,20 @@ def test_a_cat_run_in_another_folder_reads_the_file_there(tmp_path):
     assert not any("read back" in g for g in gaps)
 
 
+def test_a_cat_of_a_script_output_not_yet_recorded_is_a_read_back(tmp_path):
+    """The script reported no path and the request named none: still a read."""
+    ledger = CompletionEvidence("Save the result as a TOML file.", str(tmp_path))
+    target = tmp_path / "out.toml"
+    content = "takeoff = 53\n"
+    _run_script(ledger, lambda: target.write_text(content, encoding="utf-8"))
+    args = {"command": "cat out.toml"}
+    result = {"status": "success", "stdout": content}
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    gaps = _gaps(ledger, "The result is saved to `out.toml`.")
+    assert not any("read back" in g for g in gaps)
+
+
 def test_a_whole_write_the_framework_matched_needs_no_read_back(tmp_path):
     gaps = _write_and_verify(tmp_path, "report.md", "# Report\n\nAll good.\n")
     assert not any("read back" in g for g in gaps)
