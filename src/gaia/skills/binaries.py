@@ -88,6 +88,7 @@ from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
+from gaia import program_lookup
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillPermissionError
 
 logger = logging.getLogger(__name__)
@@ -2320,7 +2321,11 @@ def resolve_binary_policies(
     declared = _declared_binaries(permissions)
     for permission in binary_permissions(permissions):
         policy = BINARY_POLICIES[(permission.scope or "").lower()]
-        if require_installed and shutil.which(policy.binary) is None:
+        # At load, a CLI installed since GAIA started must be found.
+        if (
+            require_installed
+            and program_lookup.resolve_refreshing(policy.binary) is None
+        ):
             alias = _installed_alias(policy, declared)
             if alias:
                 logger.warning(
@@ -2426,8 +2431,8 @@ def normalize_binary(token: str) -> str:
 
 
 #: ``gaia`` subcommands only a person at their own terminal may run. They decide
-#: which skills GAIA trusts, so no approval lets the agent run them.
-HUMAN_ONLY_GAIA_SUBCOMMANDS = frozenset({"skill"})
+#: which skills and folders GAIA trusts, so no approval lets the agent run them.
+HUMAN_ONLY_GAIA_SUBCOMMANDS = frozenset({"skill", "trust", "project"})
 
 #: How a refusal names the command family only the user may run.
 HUMAN_ONLY_CALL = "gaia skill"
@@ -2440,8 +2445,9 @@ def human_only_message(spelled: str) -> str:
     """The refusal for *spelled*, a ``gaia`` command only the user may run."""
     return (
         f"'{spelled}' is not permitted for GAIA: promoting, installing or "
-        "trusting a skill is the user's decision, made from their own "
-        "terminal, and no approval lets the agent run it"
+        "trusting a skill, and trusting a folder's guidance, is the user's "
+        "decision, made from their own terminal, and no approval lets the "
+        "agent run it"
     )
 
 
@@ -2465,10 +2471,10 @@ def _bare_word(token: str) -> str:
     return word
 
 
-#: Modules that run ``gaia skill`` or change skill trust when imported and called.
+#: Modules that run ``gaia skill`` or change skill or folder trust when imported and called.
 TRUST_MODULES = re.compile(
-    r"^gaia\.(?:cli|__main__|skills\.(?:cli|capture|install|signing|drift|publish|"
-    r"link|migrate|human_only))(?!\w)"
+    r"^gaia\.(?:cli|__main__|project_trust|project_trust_cli|skills\.(?:cli|capture|"
+    r"install|signing|drift|publish|link|migrate|human_only))(?!\w)"
 )
 
 

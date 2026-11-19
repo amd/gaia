@@ -1378,8 +1378,10 @@ class TestSecurityEdgeCases:
         assert resp.status_code == 200
         data = resp.json()
         assert data["original_name"] == "my file (copy) [2].txt"
-        # No special characters leak into the stored name
-        assert re.fullmatch(r"(?:[0-9a-f]{12}_)?my_file_copy_2\.txt", data["filename"])
+        # The stored name and its URL keep the user's spelling.
+        assert data["filename"] == "my file (copy) [2].txt"
+        assert data["url"] == "/api/files/uploads/my%20file%20%28copy%29%20%5B2%5D.txt"
+        assert client.get(data["url"]).content == b"data"
 
 
 # ── TestBrowseEdgeCases ──────────────────────────────────────────────────────

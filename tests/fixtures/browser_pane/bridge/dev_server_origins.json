@@ -1,0 +1,5 @@
+{
+  "_doc": "Where a dev server GAIA started answers; the pane's agent reads and acts there with no approval. bridge-server.cjs devServerOrigins and _pane_bridge.dev_server_origins both test against this.",
+  "port": 5173,
+  "origins": ["http://localhost:5173", "http://127.0.0.1:5173", "http://[::1]:5173"]
+}

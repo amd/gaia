@@ -47,13 +47,13 @@ func TestParseCanonicalToolCall(t *testing.T) {
 }
 
 func TestParseCanonicalToolResultCarriesRenderAndData(t *testing.T) {
-	line := []byte(`{"type":"tool_result","tool":"pre_scan_inbox","render":"email_pre_scan","data":{"urgent":[{"subject":"Wire transfer"}]}}`)
+	line := []byte(`{"type":"tool_result","tool":"list_inbox","render":"table","data":{"urgent":[{"subject":"Wire transfer"}]}}`)
 	e := ParseCanonicalEvent(line)
 	tr, ok := e.(CanonicalToolResultEvent)
 	if !ok {
 		t.Fatalf("expected CanonicalToolResultEvent, got %T", e)
 	}
-	if tr.Tool != "pre_scan_inbox" || tr.Render != "email_pre_scan" {
+	if tr.Tool != "list_inbox" || tr.Render != "table" {
 		t.Errorf("unexpected values: %+v", tr)
 	}
 	if !strings.Contains(string(tr.Data), "Wire transfer") {
@@ -151,7 +151,7 @@ func TestParseCanonicalNeedsInput(t *testing.T) {
 		`"question":"Which mailbox should I connect?",` +
 		`"options":[{"value":"google","label":"Gmail","description":"A gmail.com account."},` +
 		`{"value":"microsoft","label":"Outlook"}],` +
-		`"allow_free_text":false,"respond_url":"/v1/email/query/r/respond","timeout_seconds":240}`))
+		`"allow_free_text":false,"respond_url":"/v1/notes/query/r/respond","timeout_seconds":240}`))
 	ev, ok := e.(CanonicalNeedsInputEvent)
 	if !ok {
 		t.Fatalf("expected CanonicalNeedsInputEvent, got %T", e)

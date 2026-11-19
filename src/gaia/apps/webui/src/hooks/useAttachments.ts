@@ -7,9 +7,11 @@ import { useT } from '../i18n/useT';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { composeWithLinks } from '../utils/attachmentLinks';
+import { usePickedElementsStore } from '../stores/pickedElementsStore';
 import { isMediaFile } from '../utils/mediaFiles';
 import { uploadRefusalText } from '../utils/uploadErrors';
 import type { Attachment } from '../types';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 
 /** Files attached to the message being composed, uploaded as soon as they are added. */
 export interface UseAttachments {
@@ -25,6 +27,8 @@ export interface UseAttachments {
     uploading: boolean;
     /** The message text with markdown links to the uploaded files appended. */
     compose: (text: string) => string;
+    /** The chips picked in the browser pane, for the request being sent; clears them. */
+    takeElements: () => PageElementWire[] | undefined;
 }
 
 /** The upload refusal in the chosen language; a refusal this build doesn't know shows the server's own words. */
@@ -142,5 +146,6 @@ export function useAttachments(): UseAttachments {
         hasImage: attachments.some((a) => a.uploaded && a.isImage),
         uploading: attachments.some((a) => a.uploading),
         compose,
+        takeElements: usePickedElementsStore.getState().take,
     };
 }

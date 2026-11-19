@@ -160,29 +160,34 @@ func decode(path, op string, status int, data []byte, out any) (*Ack, error) {
 	return nil, &StatusError{Op: op, Status: status, Detail: detail}
 }
 
+// localPlan asks for what a local setup downloads: without it the backend leaves
+// the chat model out while chat runs on a cloud model, and these screens offer
+// cloud chat their own way (Options.Cloud).
+const localPlan = "?skip_chat_model=false"
+
 func (d *Daemon) Plan(ctx context.Context) (Plan, error) {
 	var p Plan
-	_, err := d.call(ctx, http.MethodGet, setupPath+"/plan", "read setup's model plan", nil, &p)
+	_, err := d.call(ctx, http.MethodGet, setupPath+"/plan"+localPlan, "read setup's model plan", nil, &p)
 	return p, err
 }
 
 func (d *Daemon) ChooseChat(ctx context.Context, id string, ack bool) (Plan, *Ack, error) {
 	var p Plan
-	a, err := d.call(ctx, http.MethodPost, setupPath+"/chat-model", "choose the chat model",
+	a, err := d.call(ctx, http.MethodPost, setupPath+"/chat-model"+localPlan, "choose the chat model",
 		map[string]any{"model_id": id, "acknowledge_no_fit": ack}, &p)
 	return p, a, err
 }
 
 func (d *Daemon) ChooseVision(ctx context.Context, id *string) (Plan, error) {
 	var p Plan
-	_, err := d.call(ctx, http.MethodPost, setupPath+"/vision-model", "choose the model that reads images",
+	_, err := d.call(ctx, http.MethodPost, setupPath+"/vision-model"+localPlan, "choose the model that reads images",
 		map[string]any{"model_id": id}, &p)
 	return p, err
 }
 
 func (d *Daemon) Skip(ctx context.Context, id string, skipped bool) (Plan, error) {
 	var p Plan
-	_, err := d.call(ctx, http.MethodPost, setupPath+"/models/skip", "save which models to skip",
+	_, err := d.call(ctx, http.MethodPost, setupPath+"/models/skip"+localPlan, "save which models to skip",
 		map[string]any{"model_id": id, "skipped": skipped}, &p)
 	return p, err
 }
@@ -194,7 +199,7 @@ func (d *Daemon) Download(ctx context.Context, id string, ackLowDisk, keepTrying
 
 func (d *Daemon) Remove(ctx context.Context, id string) (Plan, error) {
 	var p Plan
-	_, err := d.call(ctx, http.MethodPost, setupPath+"/models/remove", "remove "+id,
+	_, err := d.call(ctx, http.MethodPost, setupPath+"/models/remove"+localPlan, "remove "+id,
 		map[string]any{"model_id": id}, &p)
 	return p, err
 }

@@ -638,8 +638,8 @@ class _ParkingSidecar:
 
 
 def _relay_through(sidecar):
-    from gaia.ui.email_sidecar import relay
-    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
     def dispatch(sse_handler, request, *_a, **_k):
         relay.relay_query(

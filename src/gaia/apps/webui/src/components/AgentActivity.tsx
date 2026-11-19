@@ -297,7 +297,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                 >
                                     {failed
                                         ? <AlertCircle size={13} className="agent-icon-error" />
-                                        : visible.some((r) => r.type === 'tool' && (r.declined || r.autoDeclined))
+                                        : visible.some((r) => r.type === 'tool' && (r.declined || r.refused || r.autoDeclined))
                                             ? <Ban size={13} className="flow-steps-done" />
                                             : <CheckCircle2 size={13} className="flow-steps-done" />}
                                     <span className="flow-steps-text">{stepsSummary(visible, t)}</span>
@@ -529,7 +529,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const line = waiting ? t('activity.waiting') : live || toolRowText(step, t);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
-    const notRun = (!!step.declined || !!step.timedOut || !!step.autoDeclined) && !step.active;
+    const notRun = (!!step.declined || !!step.timedOut || !!step.refused || !!step.autoDeclined) && !step.active;
     // A missing vision model is said by the offer under the row, not by the tool's raw error.
     const failure = step.success === false && step.result && !notRun && !step.needsModel ? failureText(step, t) : '';
     const timing = waiting

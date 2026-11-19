@@ -7,6 +7,7 @@
 // default are optional here even though the server always sends them.
 
 export interface ApiSchemas {
+  AccountUpdateRequest: AccountUpdateRequest;
   ActivationRequest: ActivationRequest;
   ActivationSaved: ActivationSaved;
   ActiveModelResponse: ActiveModelResponse;
@@ -46,6 +47,7 @@ export interface ApiSchemas {
   ChatSpendToday: ChatSpendToday;
   CommandOutputResponse: CommandOutputResponse;
   CommitRequest: CommitRequest;
+  Component: Component;
   ConfigureRequest: ConfigureRequest;
   ConfirmToolResponse: ConfirmToolResponse;
   ConnectRequest: ConnectRequest;
@@ -88,6 +90,7 @@ export interface ApiSchemas {
   DiscordStatus: DiscordStatus;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
+  DismissDownloadRequest: DismissDownloadRequest;
   DocumentCancelResponse: DocumentCancelResponse;
   DocumentDeleteResponse: DocumentDeleteResponse;
   DocumentListResponse: DocumentListResponse;
@@ -96,6 +99,7 @@ export interface ApiSchemas {
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadModelResponse: DownloadModelResponse;
   DownloadProgress: DownloadProgress;
+  EditScheduleRequest: EditScheduleRequest;
   EstimatedTokenizer: EstimatedTokenizer;
   EvalMailboxRequest: EvalMailboxRequest;
   ExactTokenizer: ExactTokenizer;
@@ -219,6 +223,7 @@ export interface ApiSchemas {
   OpenFileRequest: OpenFileRequest;
   OpenFileResponse: OpenFileResponse;
   OutputItem: OutputItem;
+  PageElement: PageElement;
   PairedDevice: PairedDevice;
   PairedDeviceList: PairedDeviceList;
   ParseScheduleRequest: ParseScheduleRequest;
@@ -226,6 +231,7 @@ export interface ApiSchemas {
   PermissionGrantResponse: PermissionGrantResponse;
   PermissionModeRequest: PermissionModeRequest;
   PermissionsListResponse: PermissionsListResponse;
+  PickedRect: PickedRect;
   PolicyNotice: PolicyNotice;
   PreflightReport: PreflightReport;
   PriceCard: PriceCard;
@@ -328,6 +334,7 @@ export interface ApiSchemas {
   SkillsListResponse: SkillsListResponse;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
+  SourceLoc: SourceLoc;
   SpeakRequest: SpeakRequest;
   SpeechModel: SpeechModel;
   SpeechSettings: SpeechSettings;
@@ -379,6 +386,13 @@ export interface ApiSchemas {
   WorkInProgress: WorkInProgress;
   gaia__ui__routers__setup__DownloadModelRequest: Gaia_Ui_Routers_Setup__DownloadModelRequest;
   gaia__ui__routers__system__DownloadModelRequest: Gaia_Ui_Routers_System__DownloadModelRequest;
+}
+/**
+ * Body for ``PATCH /api/connectors/{id}/accounts/{account_id}``. Only
+ * ``true`` is accepted: to change the default, make another account it.
+ */
+export interface AccountUpdateRequest {
+  is_default: boolean;
 }
 /**
  * Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.
@@ -580,6 +594,7 @@ export interface AgentStepResponse {
   policyVersion?: string | null;
   reason?: string | null;
   receiptId?: string | null;
+  refused?: boolean | null;
   render?: string | null;
   result?: string | null;
   ruleIds?: string[] | null;
@@ -644,6 +659,8 @@ export interface AttachDocumentRequest {
   document_id: string;
 }
 export interface AuthorizeRequest {
+  account?: string | null;
+  add_account?: boolean;
   grant_agents?: string[];
   scopes?: string[];
 }
@@ -774,8 +791,54 @@ export interface ChatRequest {
   agent_type?: string | null;
   document_ids?: string[] | null;
   message: string;
+  page_elements?:
+    | []
+    | [PageElement]
+    | [PageElement, PageElement]
+    | [PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | null;
   session_id: string;
   stream?: boolean;
+}
+/**
+ * One composer chip as the renderer sends it. A toggle that is off sends null.
+ */
+export interface PageElement {
+  component?: Component | null;
+  cropUrl?: string | null;
+  label: string;
+  name: string;
+  outerHTML?: string | null;
+  rect: PickedRect;
+  ref: string;
+  role: string;
+  selector: string;
+  styles?: {
+    [k: string]: string | undefined;
+  } | null;
+  tag: string;
+  text: string;
+  title: string;
+  url: string;
+}
+export interface Component {
+  name: string;
+  source?: SourceLoc | null;
+}
+export interface SourceLoc {
+  file: string;
+  line: number;
+}
+export interface PickedRect {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
 }
 /**
  * Response from a chat message.
@@ -1416,6 +1479,9 @@ export interface DiscoveryCommitItem {
   entity?: string | null;
   sensitive?: boolean;
 }
+export interface DismissDownloadRequest {
+  model_name: string;
+}
 /**
  * Confirmation that a document's indexing was cancelled.
  */
@@ -1513,6 +1579,23 @@ export interface DownloadProgress {
   state: string;
   total_bytes?: number;
   total_files?: number;
+}
+/**
+ * Request to change when a scheduled task runs and what it asks.
+ */
+export interface EditScheduleRequest {
+  /**
+   * New schedule, in the words the create form accepts
+   */
+  interval: string;
+  /**
+   * New prompt to execute on each run
+   */
+  prompt: string;
+  /**
+   * IANA time zone the schedule's times are in. Defaults to the server machine's zone.
+   */
+  timezone?: string | null;
 }
 export interface EvalMailboxRequest {
   attached: boolean;
@@ -1642,8 +1725,9 @@ export interface FollowUpRequest {
  * OAuth, no consent step.
  *
  * ``refresh_token`` / ``client_secret`` are secret INPUTS — they are never
- * echoed back in any response. ``account_email`` is display-only in v1
- * (the keyring slot is single-account per provider). ``grant_agents`` is
+ * echoed back in any response. ``account_email`` picks which stored account
+ * the forward replaces (the one with that address); with other accounts
+ * stored and no match, the forward is refused. ``grant_agents`` is
  * the list of namespaced agent ids (e.g. ``installed:email``) to grant the
  * forwarded scopes so they can resolve the connection ambiently.
  */
@@ -2592,6 +2676,7 @@ export interface MessageResponse {
   failed?: boolean;
   id: number;
   library_notices?: string[] | null;
+  page_elements?: PageElement[] | null;
   rag_sources?: SourceInfo[] | null;
   role: string;
   session_id: string;

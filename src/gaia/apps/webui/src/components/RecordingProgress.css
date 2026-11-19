@@ -28,7 +28,7 @@
     color: var(--text-primary);
     font-size: 13px;
 }
-.recording-progress-row.is-running { font-weight: 600; }
+.recording-progress-row.is-running { font-weight: 500; }
 .recording-progress-row.is-waiting,
 .recording-progress-row.is-done { color: var(--text-muted); }
 
@@ -109,7 +109,7 @@
     margin: 0 0 8px;
     color: var(--text-primary);
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .recording-found-count {
