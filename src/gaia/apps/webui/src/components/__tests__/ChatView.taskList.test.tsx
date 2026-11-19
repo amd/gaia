@@ -3,7 +3,7 @@
 
 /** The agent's task list is pinned above the composer, not added to the steps. */
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
@@ -92,7 +92,7 @@ describe('ChatView task list', () => {
 
         const card = await screen.findByTestId('task-list-card');
         expect(card.closest('.input-column')).not.toBeNull();
-        expect(screen.getAllByRole('listitem').map((li) => li.textContent?.split(',')[0])).toEqual([
+        expect(within(screen.getByTestId('task-list-card')).getAllByRole('listitem').map((li) => li.textContent?.split(',')[0])).toEqual([
             'Read the config',
             'Fix the bug',
         ]);
@@ -112,7 +112,7 @@ describe('ChatView task list', () => {
             capturedCallbacks!.onAgentEvent({ type: 'task_list', items: [{ content: 7, status: 'x' }] } as unknown as StreamEvent);
         });
         await screen.findByTestId('task-list-card');
-        expect(screen.getAllByRole('listitem')).toHaveLength(2);
+        expect(within(screen.getByTestId('task-list-card')).getAllByRole('listitem')).toHaveLength(2);
     });
 
     it('takes the card down once the chat\'s list is cleared (as a resend does)', async () => {
