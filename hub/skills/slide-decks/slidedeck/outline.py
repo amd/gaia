@@ -310,6 +310,14 @@ FIELD_SYNONYMS = {
     "file": "path",
     "dates": "milestones",
     "source_note": "source",
+    "csv_path": "data_path",
+    "xlsx_path": "data_path",
+    "excel_path": "data_path",
+    "workbook_path": "data_path",
+    "data_file": "data_path",
+    "cell_range": "range",
+    "sheet_name": "sheet",
+    "worksheet": "sheet",
     "citation": "source",
 }
 
@@ -330,6 +338,21 @@ COMMON_FIELDS = {
     "heading",
     "tagline",
     "speaker_notes",
+    "takeaway",
+    "decision",
+    "ask",
+}
+
+#: Common fields that hold one line of text, never a list or an object.
+_ONE_LINE_FIELDS = {
+    "type",
+    "title",
+    "subtitle",
+    "kind",
+    "slot",
+    "headline",
+    "heading",
+    "tagline",
     "takeaway",
     "decision",
     "ask",
@@ -381,7 +404,12 @@ TYPE_FIELDS = {
         "bullets",
         "takeaways",
         "callouts",
-        "csv_path",
+        "data_path",
+        "data_problem",
+        "data_read_from",
+        "sheet",
+        "range",
+        "series_in",
         "y",
     },
     "table": {
@@ -397,7 +425,12 @@ TYPE_FIELDS = {
         "highlight_rows",
         "col_widths",
         "category_label",
-        "csv_path",
+        "data_path",
+        "data_problem",
+        "data_read_from",
+        "sheet",
+        "range",
+        "series_in",
         "bullets",
         "points",
     },
@@ -439,6 +472,8 @@ TYPE_FIELDS = {
         "links",
         "connections",
         "numbered",
+        "dimensions",
+        "rows",
     },
     "timeline": {
         "periods",
@@ -452,6 +487,12 @@ TYPE_FIELDS = {
         "highlight",
     },
 }
+
+#: The most labelled rows a process diagram draws under its steps.
+MAX_DIMENSIONS = 8
+
+#: Fields that only a diagram's boxes or steps arrive under.
+_DIAGRAM_ITEM_FIELDS = ("steps", "stages", "nodes", "levels", "quadrants")
 
 #: A corrected, minimal shape per slide type, quoted in error messages.
 EXAMPLES = {
@@ -507,6 +548,9 @@ def _unknown_fields(raw: Dict[str, Any], stype: str) -> List[Tuple[str, str]]:
         if key in known or not _carries_content(value):
             continue
         guess = difflib.get_close_matches(key, sorted(known), n=1, cutoff=0.6)
+        if guess and isinstance(value, (list, dict)) and guess[0] in _ONE_LINE_FIELDS:
+            # A list is never a misspelt title or tagline.
+            guess = []
         out.append((key, guess[0] if guess else ""))
     return out
 
@@ -653,11 +697,17 @@ def _rows_from_slide(
             problems.append(f"{where}: 'csv' holds no rows.")
             return None
         header, rows = [c.strip() for c in parsed[0]], parsed[1:]
-    elif slide.get("csv_path"):
+    elif slide.get("data_problem"):
         problems.append(
-            f"{where}: csv_path is not read by the deck builder. Extract the series first "
-            "(the chart-data tool, or pandas in run_python) and pass 'categories' + 'series', "
-            "or paste the CSV text as 'csv'."
+            f"{where}: {slide['data_problem']} Or pass the values as 'rows': "
+            '[["Period", "Series"], ["Q1", 4.1], ["Q2", 4.6]].'
+        )
+        return None
+    elif slide.get("data_path"):
+        # Files are read by the skill's tools, which check the path first.
+        problems.append(
+            f"{where}: data_path {slide['data_path']!r} was not read here. Pass "
+            "the values as 'rows' (header row first), or 'csv' text."
         )
         return None
     elif slide.get("rows") is not None:
@@ -1039,7 +1089,55 @@ def _column_index(key: Any, header: List[str]) -> Optional[int]:
     return None
 
 
+#: What one diagram item (a box, a step) reads.
+_ITEM_FIELDS = {
+    "title",
+    "label",
+    "name",
+    "heading",
+    "text",
+    "detail",
+    "description",
+    "body",
+    "bullets",
+    "points",
+    "details",
+    "id",
+    "parent",
+    "date",
+    "when",
+    "status",
+    "highlight",
+    "color",
+    "level",
+    "icon",
+    "x",
+    "y",
+    "value",
+    "size",
+    "row",
+    "col",
+    "rowspan",
+    "colspan",
+    "start",
+    "end",
+    "type",
+    "bold",
+}
+
+
+def _lines(value: Any) -> List[str]:
+    """Text of several lines as its lines, bullet marks stripped."""
+    lines = [x.strip(" -*•\t") for x in str(value).strip().splitlines()]
+    return [x for x in lines if x]
+
+
 def _items(value: Any) -> List[Dict[str, Any]]:
+    """Diagram items in one shape; every line and field sent stays on its item.
+
+    A field an item does not read is kept under ``extra`` ({label: value}) for
+    the caller to draw as a dimension row or as a labelled line.
+    """
     out = []
     for item in _as_list(value):
         if isinstance(item, dict):
@@ -1053,33 +1151,167 @@ def _items(value: Any) -> List[Dict[str, Any]]:
                 or d.get("description")
                 or d.get("body")
             )
-            d["text"] = _text(text) if not isinstance(text, list) else ""
-            d["bullets"] = normalize_bullets(
-                d.get("bullets") or (text if isinstance(text, list) else None)
-            )
+            listed = d.get("bullets") or d.get("points") or d.get("details")
+            if isinstance(text, list):
+                listed, text = [*text, *_as_list(listed)], ""
+            elif text is not None and len(_lines(text)) > 1:
+                # Several lines of detail are several points, not one run of text.
+                listed, text = [*_lines(text), *_as_list(listed)], ""
+            d["text"] = _text(text)
+            d["bullets"] = normalize_bullets(listed)
+            d["extra"] = {
+                k: v
+                for k, v in item.items()
+                if str(k).lower() not in _ITEM_FIELDS
+                and v not in (None, "", [], {})
+                and not isinstance(v, bool)
+            }
             out.append(d)
         elif isinstance(item, (list, tuple)) and item:
+            rest = [_text(x) for x in item[1:] if _text(x)]
             out.append(
                 {
                     "title": _text(item[0]),
-                    "text": " ".join(_text(x) for x in item[1:]),
-                    "bullets": [],
+                    "text": rest[0] if len(rest) == 1 else "",
+                    "bullets": normalize_bullets(rest) if len(rest) > 1 else [],
+                    "extra": {},
                 }
             )
         elif isinstance(item, str) and "\n" in item.strip():
             # "Title\n\nline\nline": the first line heads the box, the rest are its points.
-            lines = [x.strip(" -*•\t") for x in item.strip().splitlines()]
-            lines = [x for x in lines if x]
+            lines = _lines(item)
             out.append(
                 {
                     "title": _text(lines[0]),
                     "text": "",
                     "bullets": normalize_bullets(lines[1:]),
+                    "extra": {},
                 }
             )
         else:
-            out.append({"title": _text(item), "text": "", "bullets": []})
+            out.append({"title": _text(item), "text": "", "bullets": [], "extra": {}})
     return out
+
+
+def _label(key: Any) -> str:
+    """A field name as a label: 'response_time' -> 'Response time'."""
+    text = re.sub(r"[_\-]+", " ", str(key)).strip()
+    return text[:1].upper() + text[1:]
+
+
+def _cell(value: Any) -> str:
+    if isinstance(value, (list, tuple)):
+        return "; ".join(_text(v) for v in value if _text(v))
+    if isinstance(value, dict):
+        return "; ".join(f"{_label(k)}: {_text(v)}" for k, v in value.items())
+    return _text(value)
+
+
+def _listed_in_one_line(texts: List[str]) -> Optional[Tuple[str, List[str]]]:
+    """(line, its parts) for the first line that is four or more short labels in a row."""
+    for text in texts:
+        parts = [p.strip() for p in re.split(r"[,;]", str(text).split(": ", 1)[-1])]
+        if len(parts) >= 4 and all(p and len(p.split()) <= 3 for p in parts):
+            return str(text), parts
+    return None
+
+
+def normalize_dimensions(
+    raw: Any, n_items: int, where: str, warnings: List[str]
+) -> List[Dict[str, Any]]:
+    """Rows drawn under a process: ``[{"label", "values": [one per step]}]``.
+
+    Accepts ``{label: [values]}``, ``[{"label", "values"}]``, ``[[label, v1,
+    v2, ...]]`` and bare labels. A row with no values is one arrow along the
+    steps: it says the dimension grows from the first step to the last.
+    """
+    rows: List[Tuple[str, List[Any]]] = []
+    if isinstance(raw, dict):
+        rows = [(_text(k), _as_list(v)) for k, v in raw.items()]
+    else:
+        for d in _as_list(raw):
+            if isinstance(d, dict) and (d.get("label") or d.get("name")):
+                rows.append(
+                    (
+                        _text(d.get("label") or d.get("name")),
+                        _as_list(d.get("values") or d.get("cells")),
+                    )
+                )
+            elif isinstance(d, dict):
+                rows += [(_text(k), _as_list(v)) for k, v in d.items()]
+            elif isinstance(d, (list, tuple)) and d:
+                rows.append((_text(d[0]), list(d[1:])))
+            elif _text(d):
+                rows.append((_text(d), []))
+    out = []
+    for label, values in rows:
+        cells = [_cell(v) for v in values]
+        if cells and len(cells) != n_items:
+            warnings.append(
+                f"{where}: dimension {label!r} has {len(cells)} values for "
+                f"{n_items} steps; give one value per step, in step order. "
+                + (
+                    f"The last {len(cells) - n_items} were left out."
+                    if len(cells) > n_items
+                    else "The missing ones were left empty."
+                )
+            )
+            cells = (cells + [""] * n_items)[:n_items]
+        if label or any(cells):
+            out.append({"label": label, "values": cells})
+    return out
+
+
+def _item_dimensions(
+    items: List[Dict[str, Any]], layout: str, found: List[Dict[str, Any]]
+) -> List[str]:
+    """Put every item's ``extra`` fields on the slide; return how, for the notes.
+
+    On a process, a field most steps carry is a dimension row under the
+    steps. Anywhere else, and for a field only one step has, it is a
+    'Label: value' line in its own box.
+    """
+    keys: Dict[str, int] = {}
+    for it in items:
+        for k in it.get("extra") or {}:
+            keys[k] = keys.get(k, 0) + 1
+    if not keys:
+        return []
+    shared = [
+        k
+        for k, n in keys.items()
+        if layout == "process" and len(items) > 1 and n * 2 > len(items)
+    ]
+    for k in shared:
+        found.append(
+            {
+                "label": _label(k),
+                "values": [_cell((it.get("extra") or {}).get(k)) for it in items],
+            }
+        )
+    lines = [k for k in keys if k not in shared]
+    for it in items:
+        for k in lines:
+            v = (it.get("extra") or {}).get(k)
+            if v not in (None, "", [], {}):
+                it["bullets"] = [
+                    *it["bullets"],
+                    (f"{_label(k)}: {_cell(v)}", 0, False),
+                ]
+    said = []
+    if shared:
+        said.append(
+            f"each step's {', '.join(repr(k) for k in shared)} "
+            f"{'is' if len(shared) == 1 else 'are'} drawn as "
+            f"{'a row' if len(shared) == 1 else 'rows'} under the steps"
+        )
+    if lines:
+        said.append(
+            f"{', '.join(repr(k) for k in lines)} "
+            f"{'is' if len(lines) == 1 else 'are'} written as 'Label: value' "
+            "lines in the boxes"
+        )
+    return said
 
 
 def _sections_as_boxes(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -1181,6 +1413,7 @@ def normalize_slide(
         problems, found = [], []
         s = _normalize_slide(raw, index, problems, found, base_dir)
         stype = s["type"]
+    dropped: List[str] = []
     for key, guess in unknown:
         if key in typos:
             found.append(
@@ -1193,7 +1426,10 @@ def normalize_slide(
                 f"slide {index} ({stype}): unknown field '{key}' is not on the "
                 f"slide. A {stype} slide reads: {reads}."
             )
+            dropped.append(key)
     warnings += found
+    if dropped:
+        s["dropped"] = [*s.get("dropped", []), *dropped]
     if problems:
         s = _as_text_slide(s, raw)
         why = " ".join(p.split(": ", 1)[-1] for p in problems)
@@ -1220,8 +1456,19 @@ def _normalize_slide(
         str(raw.get("type") or "").strip().lower().replace("-", "_").replace(" ", "_")
     )
     if not raw_type:
+        # "layout": "diagram_process" names the type as well as a typed slide does.
+        named = str(raw.get("layout") or raw.get("diagram") or "").strip().lower()
+        named = re.sub(r"[-\s]+", "_", named)
+        for name in (named, re.sub(r"^diagram_|_diagram$", "", named)):
+            if name in SLIDE_TYPES or name in ALIASES:
+                raw_type = name
+                break
+            if name in DIAGRAM_LAYOUTS or name in DIAGRAM_LAYOUT_ALIASES:
+                raw_type = "diagram"
+                break
+    if not raw_type:
         # Infer the obvious cases rather than refuse them.
-        if raw.get("chart_type") or raw.get("series"):
+        if raw.get("chart_type") or raw.get("series") or raw.get("data_path"):
             raw_type = "chart"
         elif raw.get("rows") or raw.get("csv"):
             raw_type = "table"
@@ -1235,7 +1482,10 @@ def _normalize_slide(
             raw_type = "timeline"
         elif raw.get("path") or raw.get("image_problem"):
             raw_type = "image"
-        elif index == 1:
+        elif any(raw.get(k) for k in _DIAGRAM_ITEM_FIELDS):
+            raw_type = "diagram"
+        elif index == 1 and not _unknown_fields(raw, "title"):
+            # Fields a cover does not read are content: never drawn as a cover.
             raw_type = "title"
         else:
             raw_type = "bullets"
@@ -1409,6 +1659,7 @@ def _normalize_slide(
             .replace("-", "_")
             .replace(" ", "_")
         )
+        layout = re.sub(r"^diagram_|_diagram$", "", layout)
         layout = DIAGRAM_LAYOUT_ALIASES.get(layout, layout)
         if not layout:
             layout = ALIAS_LAYOUT.get(raw_type) or ""
@@ -1440,6 +1691,44 @@ def _normalize_slide(
             or raw.get("stages")
         )
         s["items"] = items
+        dims = normalize_dimensions(
+            raw.get("dimensions") or raw.get("rows"), len(items), where, warnings
+        )
+        said = _item_dimensions(items, layout, dims)
+        if said:
+            s["read_as"] = f"{where}: " + "; ".join(said) + "."
+        axis_in = raw.get("x_axis") or raw.get("axis")
+        if isinstance(axis_in, (list, tuple)):
+            # Several axis labels are several things that grow along the steps.
+            labels = [_cell(a) for a in axis_in if _cell(a)]
+            if len(labels) > 1:
+                dims += [{"label": a, "values": []} for a in labels]
+                raw = {**raw, "x_axis": None, "axis": None}
+            else:
+                raw = {**raw, "x_axis": labels[0] if labels else None, "axis": None}
+        if dims and layout == "boxes":
+            # Boxes cannot draw rows along them; the rows say the boxes are steps.
+            layout = s["layout"] = "process"
+        if dims and layout != "process":
+            warnings.append(
+                f"{where}: dimensions are drawn only under a process diagram, so "
+                f"this {layout} was drawn without "
+                f"{', '.join(repr(d['label']) for d in dims)}. To show them, use "
+                '"diagram": "process" (Markdown: \'Diagram: process\'), or put '
+                "what they say in the boxes."
+            )
+            s["dropped"] = [*s.get("dropped", []), "dimensions"]
+            dims = []
+        if len(dims) > MAX_DIMENSIONS:
+            warnings.append(
+                f"{where}: {len(dims)} dimensions do not fit under the steps, so "
+                f"the last {len(dims) - MAX_DIMENSIONS} were left out: "
+                f"{', '.join(repr(d['label']) for d in dims[MAX_DIMENSIONS:])}. "
+                f"Keep {MAX_DIMENSIONS} at most, or put the rest on a second slide."
+            )
+            s["dropped"] = [*s.get("dropped", []), "dimensions"]
+            dims = dims[:MAX_DIMENSIONS]
+        s["dimensions"] = dims
         s["style"] = str(raw.get("style") or "").lower()
         s["direction"] = (
             "down"
@@ -1477,6 +1766,20 @@ def _normalize_slide(
             )
         s["points"] = _as_list(raw.get("points"))
         s["paras"] = normalize_bullets(raw.get("bullets"))
+        if layout == "process" and not dims:
+            listed = _listed_in_one_line(
+                [s["subtitle"], s["footnote"], *(p[0] for p in s["paras"])]
+            )
+            if listed:
+                warnings.append(
+                    f"{where}: {listed[0]!r} lists {len(listed[1])} things in one "
+                    "line of text. If they change from step to step, draw them "
+                    'as rows under the steps: "dimensions": [{"label": '
+                    f'{json.dumps(listed[1][0])}, "values": [<one per step>]}}, '
+                    "...] (Markdown: a 'Dimension: <label> | <value for step 1> "
+                    "| <value for step 2>' line each). A label with no values "
+                    "is drawn as an arrow along the steps."
+                )
         edges = []
         for e in _as_list(
             raw.get("edges") or raw.get("links") or raw.get("connections")
@@ -1697,6 +2000,7 @@ def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str
         "require_notes": bool(data.get("require_notes", False)),
         "style": data.get("style") if isinstance(data.get("style"), dict) else {},
         "required_items": required,
+        "expect": data.get("expect") or None,
         "owner": _text(data.get("owner")),
         "figures_from_user": [
             int(i) for i in data.get("figures_from_user") or [] if str(i).isdigit()

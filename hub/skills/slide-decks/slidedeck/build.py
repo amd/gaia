@@ -52,6 +52,7 @@ from .style import (
     merge_prefs,
     mix,
     resolve_tokens,
+    style_score,
     tokens_from_theme_xml,
     validate_prefs,
 )
@@ -646,12 +647,14 @@ class DeckBuilder:
     def warn(self, msg: str) -> None:
         self.warnings.append(f"slide {self._current}: {msg}")
 
-    def issue(self, check: str, detail: str, fix: str) -> None:
+    def issue(
+        self, check: str, detail: str, fix: str, severity: str = "warning"
+    ) -> None:
         self.issues.append(
             {
                 "slide": self._current,
                 "check": check,
-                "severity": "warning",
+                "severity": severity,
                 "detail": detail,
                 "fix": fix,
             }
@@ -1163,6 +1166,19 @@ class DeckBuilder:
         getattr(self, f"_slide_{kind}")(s)
         nums = list(range(start, len(self.prs.slides) + 1))
         self.slide_map.append((s["index"], nums))
+        if s.get("read_as"):
+            self.notes.append(s["read_as"])
+        if s.get("dropped"):
+            names = ", ".join(repr(k) for k in s["dropped"])
+            self.issue(
+                "content_dropped",
+                f"what was sent as {names} is not on the slide: a {kind} slide "
+                "does not draw it.",
+                "Send it again in a field this slide type draws (see the "
+                "warning for this slide), with update_slide(deck_path=<this "
+                f"deck>, index={start}, slide={{...}}); or tell the user it "
+                "was left out.",
+            )
         if kind in ("chart", "table", "kpi") and not s.get("source"):
             self.warnings.append(
                 f"slide {start}: a {kind} slide with no 'source'; say where the numbers come from (file, sheet, period)."
@@ -2801,6 +2817,59 @@ class DeckBuilder:
             self.warn(
                 f"{n} process steps; 3-6 read at a glance (group the rest into phases)."
             )
+        dims = list(s.get("dimensions") or [])
+        if dims and n > 6:
+            labels = ", ".join(repr(d["label"]) for d in dims)
+            self.warn(
+                f"dimension rows line up under one row of steps and this process "
+                f"has {n}, drawn in two rows; left out: {labels}. Merge the "
+                "steps into 6 or fewer to show them."
+            )
+            self.issue(
+                "content_dropped",
+                f"the dimensions {labels} are not on the slide: {n} steps are "
+                "drawn in two rows and the rows cannot line up under them.",
+                "Merge the steps into 6 or fewer, or put each dimension's "
+                "values in the steps' bullets.",
+            )
+            dims = []
+        # Rows with values get a label column; a bare label is an arrow along the steps.
+        valued = any(any(d["values"]) for d in dims)
+        label_w = Inches(1.5) if valued else 0
+        dim_gap = Inches(0.07)
+        dim_hs = [Inches(0.5) if any(d["values"]) else Inches(0.38) for d in dims]
+        if dims:
+            room = int(box.h * 0.55)
+            need = sum(dim_hs) + dim_gap * (len(dims) - 1)
+            if need > room:
+                # One line of the smallest text is the least a row can be.
+                shrink = (room - dim_gap * (len(dims) - 1)) / sum(dim_hs)
+                dim_hs = [max(Inches(0.38), int(h * shrink)) for h in dim_hs]
+            keep = len(dims)
+            while keep > 1 and sum(dim_hs[:keep]) + dim_gap * (keep - 1) > room:
+                keep -= 1
+            if keep < len(dims):
+                labels = ", ".join(repr(d["label"]) for d in dims[keep:])
+                self.warn(
+                    f"{keep} dimension rows fit under these steps; left out: "
+                    f"{labels}. Shorten the steps' text, or put those rows on "
+                    "a second slide."
+                )
+                self.issue(
+                    "content_dropped",
+                    f"the dimensions {labels} are not on the slide: only {keep} "
+                    "rows fit under the steps.",
+                    "Shorten the steps' text or put those rows on a second "
+                    "slide with add_slide.",
+                )
+                dims, dim_hs = dims[:keep], dim_hs[:keep]
+            dims_h = sum(dim_hs) + dim_gap * (len(dims) - 1) + self.unit
+            box = Box(
+                box.x + label_w + (dim_gap if valued else 0),
+                box.y,
+                box.w - label_w - (dim_gap if valued else 0),
+                box.h - dims_h,
+            )
         per_row = n if n <= 6 else math.ceil(n / 2)
         rows = math.ceil(n / per_row)
         style = s.get("style") or "chevrons"
@@ -2928,6 +2997,18 @@ class DeckBuilder:
                 align=PP_ALIGN.CENTER,
                 anchor=MSO_ANCHOR.MIDDLE,
             )
+        if dims:
+            if has_detail and rows == 1:
+                dy = top + head_h + d_gap + detail_h + self.unit
+            elif draw_axis:
+                dy = box.y + box.h + self.unit
+            else:
+                dy = top + head_h + self.unit
+            if draw_axis:
+                dy += arrow_h + self.unit
+            self._dimension_rows(
+                slide, dims, dim_hs, dim_gap, dy, box, label_w, sw, gap, dw, dark
+            )
         point = int(head_h * 0.5)
         self._write_group(
             heads,
@@ -2945,6 +3026,97 @@ class DeckBuilder:
             align=PP_ALIGN.LEFT,
             inset_x=d_ix,
             inset_y=d_iy,
+        )
+
+    def _dimension_rows(
+        self, slide, dims, heights, row_gap, y, box: Box, label_w, sw, gap, dw, dark
+    ) -> None:
+        """One row per dimension under the steps of a process, a cell per step.
+
+        *box* is the steps' area; the label column is the *label_w* left of it.
+        """
+        left = box.x - label_w - (row_gap if label_w else 0)
+        fill = self.theme.panel if dark else self.theme.primary.tinted(0.82)
+        labels, cells, arrows = [], [], []
+        for r, (dim, h) in enumerate(zip(dims, heights), 1):
+            label = _plain(dim["label"])
+            if not any(dim["values"]):
+                # No values: the label on an arrow says it grows along the steps.
+                shp = self.shape(
+                    slide,
+                    MSO_SHAPE.PENTAGON,
+                    Box(left, y, box.x + box.w - left, h),
+                    f"Dimension {r} arrow",
+                    fill,
+                    round_adj=0.5,
+                )
+                arrows.append(
+                    (
+                        shp,
+                        [Para(label, level=-1, bold=True)],
+                        [dim["label"]],
+                        [self.theme.text_on(fill)],
+                    )
+                )
+            else:
+                if label:
+                    tb = self.textbox(
+                        slide, Box(left, y, label_w, h), f"Dimension {r} label"
+                    )
+                    labels.append(
+                        (
+                            tb,
+                            [Para(label, level=-1, bold=True)],
+                            [dim["label"]],
+                            [self.theme.text],
+                        )
+                    )
+                for k, value in enumerate(dim["values"]):
+                    if not value:
+                        continue
+                    shp = self.shape(
+                        slide,
+                        MSO_SHAPE.ROUNDED_RECTANGLE,
+                        Box(box.x + k * (sw + gap), y, dw, h),
+                        f"Dimension {r} step {k + 1}",
+                        self.theme.panel,
+                        round_adj=0.2,
+                    )
+                    cells.append(
+                        (
+                            shp,
+                            [Para(_plain(value), level=-1)],
+                            [value],
+                            [self.theme.text],
+                        )
+                    )
+            y += h + row_gap
+        tight = Inches(0.04)
+        self._write_group(
+            labels,
+            14,
+            "dimension labels",
+            align=PP_ALIGN.LEFT,
+            anchor=MSO_ANCHOR.MIDDLE,
+            inset_x=tight,
+            inset_y=tight,
+        )
+        self._write_group(
+            cells,
+            14,
+            "dimension rows",
+            align=PP_ALIGN.CENTER,
+            anchor=MSO_ANCHOR.MIDDLE,
+            inset_x=Inches(0.08),
+            inset_y=tight,
+        )
+        self._write_group(
+            arrows,
+            14,
+            "dimension arrows",
+            align=PP_ALIGN.CENTER,
+            anchor=MSO_ANCHOR.MIDDLE,
+            inset_y=tight,
         )
 
     def _diagram_boxes(self, slide, s, box: Box, cols: Optional[int] = None):
@@ -3908,6 +4080,12 @@ def _report_issues(result: Dict[str, Any], issues: List[Dict[str, Any]]) -> None
     summary = report.setdefault("summary", {})
     for item in issues:
         summary[item["check"]] = summary.get(item["check"], 0) + 1
+    if "style_score" in report:
+        # The check scored the saved file; what never reached the file costs too.
+        report["style_score"] = min(
+            report["style_score"],
+            style_score(report["issues"], int(result.get("slides") or 1)),
+        )
 
 
 def save_deck(prs, output: Path) -> None:
@@ -3958,12 +4136,18 @@ def _verify_summary(path: str, normalized, builder, rules_prefs) -> Dict[str, An
         render=False,
         prefs=rules_prefs,
         tokens=builder.tokens,
+        expect=normalized.get("expect"),
     )
-    return {
-        k: report[k]
-        for k in ("status", "style_score", "summary", "issues", "required_items")
-        if k in report
-    }
+    keep = (
+        "status",
+        "style_score",
+        "summary",
+        "issues",
+        "required_items",
+        "counts",
+        "expect",
+    )
+    return {k: report[k] for k in keep if k in report}
 
 
 def build_deck(
@@ -4030,6 +4214,24 @@ def build_deck(
     return result
 
 
+def slide_titles(prs) -> List[Tuple[str, str]]:
+    """(title, kind) of every slide in *prs*, in deck order."""
+    from .verify import _slide_kind, _slide_title
+
+    out = []
+    for slide in prs.slides:
+        ph, title = _slide_title(slide)
+        out.append((title or "(no title)", _slide_kind(slide, ph)))
+    return out
+
+
+def _numbered(titles: Sequence[Tuple[str, str]], limit: int = 40) -> List[str]:
+    lines = [f"{i}. {t} [{k}]" for i, (t, k) in enumerate(titles, 1)]
+    if len(lines) > limit:
+        lines = [*lines[:limit], f"... and {len(lines) - limit} more"]
+    return lines
+
+
 def _edit(
     deck_path: str,
     slide_spec: Any,
@@ -4040,6 +4242,7 @@ def _edit(
     base_dir: Optional[str],
     output_path: Optional[str] = None,
     owner: str = "",
+    replace_cover: bool = False,
 ) -> Dict[str, Any]:
     started = time.perf_counter()
     deck = Path(deck_path)
@@ -4053,13 +4256,27 @@ def _edit(
         except json.JSONDecodeError as exc:
             raise OutlineError([f"slide_spec is not valid JSON: {exc.msg}."]) from exc
     specs = slide_spec if isinstance(slide_spec, list) else [slide_spec]
-    count = len(Presentation(str(deck)).slides)
+    before = slide_titles(Presentation(str(deck)))
+    count = len(before)
+    numbered = "; ".join(_numbered(before))
     if replace_index is not None and not 1 <= replace_index <= count:
         raise OutlineError(
-            [f"index {replace_index} is outside the deck's {count} slides (1-based)."]
+            [
+                f"index {replace_index} is outside the deck's {count} slides. "
+                "Slides are numbered from 1 and the cover counts as slide 1. "
+                f"The deck's slides: {numbered}. Call update_slide again with "
+                "the number of the slide to replace, or add_slide to add one."
+            ]
         )
     if position is not None and not 1 <= position <= count + 1:
-        raise OutlineError([f"position {position} is outside 1..{count + 1}."])
+        raise OutlineError(
+            [
+                f"position {position} is outside 1..{count + 1}. Slides are "
+                f"numbered from 1 and the cover counts as slide 1: {numbered}. "
+                "Call add_slide again with position=0 to append, or the number "
+                "the new slide should have."
+            ]
+        )
     warnings: List[str] = []
     first_index = replace_index or position or count + 1
     normalized = [
@@ -4068,6 +4285,26 @@ def _edit(
         )
         for k, sp in enumerate(specs)
     ]
+    if (
+        replace_index == 1
+        and before[0][1] == "title"
+        and normalized[0]["type"] != "title"
+        and not replace_cover
+    ):
+        # index=1 meant "the first content slide" more often than "the cover".
+        second = (
+            f" The first slide after it is 2 ({before[1][0]!r})." if count > 1 else ""
+        )
+        raise OutlineError(
+            [
+                f"slide 1 is the cover ({before[0][0]!r}) and the new slide is a "
+                f"{normalized[0]['type']} slide, so nothing was changed. Slides "
+                f"are numbered from 1 and the cover counts as slide 1.{second} "
+                f"The deck's slides: {numbered}. Call update_slide again with "
+                "the number of the slide to replace; to replace the cover "
+                "itself, pass replace_cover=True."
+            ]
+        )
     builder = DeckBuilder(
         {"slides": normalized, "allow_split": False},
         prefs=prefs,
@@ -4104,6 +4341,16 @@ def _edit(
         "warnings": [*warnings, *builder.warnings],
         "notes": builder.notes,
     }
+    if replace_index is not None:
+        old_title, old_kind = before[replace_index - 1]
+        result["replaced"] = {
+            "index": replace_index,
+            "title": old_title,
+            "kind": old_kind,
+            "with": normalized[0]["title"] or "(no title)",
+        }
+    # Numbered from 1, cover included: the numbers every index and position uses.
+    result["slide_titles"] = _numbered(slide_titles(builder.prs))
     _report_issues(result, builder.issues)
     result["build_seconds"] = round(time.perf_counter() - started, 3)
     return result
@@ -4144,8 +4391,14 @@ def update_slide(
     base_dir: Optional[str] = None,
     output_path: Optional[str] = None,
     owner: str = "",
+    replace_cover: bool = False,
 ) -> Dict[str, Any]:
-    """Replace slide *index* (1-based) with the slide(s) built from *slide_spec*."""
+    """Replace slide *index* with the slide(s) built from *slide_spec*.
+
+    *index* counts from 1 and the cover is slide 1. A cover is replaced by a
+    slide of another type only with *replace_cover*; the result's ``replaced``
+    names the slide that was there.
+    """
     return _edit(
         deck_path,
         slide_spec,
@@ -4155,4 +4408,5 @@ def update_slide(
         base_dir=base_dir,
         output_path=output_path,
         owner=owner,
+        replace_cover=replace_cover,
     )

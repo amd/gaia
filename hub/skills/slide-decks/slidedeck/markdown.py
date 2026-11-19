@@ -77,7 +77,16 @@ _BLOCK_OPTIONS = {
     "intent": "intent",
     "legend": "legend",
     "footnote": "footnote",
+    "data": "data_path",
+    "data_path": "data_path",
+    "file": "data_path",
+    "range": "range",
+    "sheet": "sheet",
+    "series_in": "series_in",
 }
+
+#: Block options that say where a chart's or table's rows come from.
+_DATA_OPTIONS = ("data_path", "range", "sheet", "series_in")
 
 
 def _csv_block(title: str, lang: str, lines: List[str]) -> Dict[str, Any]:
@@ -103,26 +112,36 @@ def _csv_block(title: str, lang: str, lines: List[str]) -> Dict[str, Any]:
         elif line.strip():
             body.append(line)
     csv_text = "\n".join(body)
-    if not body:
+    from_file = bool(options.get("data_path")) and kind in ("chart", "table")
+    if not body and not from_file:
         raise OutlineError(
             [
-                f"slide {title!r}: the ```{kind} block has no rows. Put a header line, then one line per row, e.g.\nQuarter,Revenue\nQ1,4.1"
+                f"slide {title!r}: the ```{kind} block has no rows. Put a header "
+                "line, then one line per row, e.g.\nQuarter,Revenue\nQ1,4.1\n"
+                "or name a file to read them from: 'data: C:/path/file.xlsx' "
+                "and 'range: A1:D8'."
             ]
         )
+    # Rows written in the block win over a file named beside them.
+    rows_from = {"csv": csv_text} if body else {}
     if kind == "chart":
         out: Dict[str, Any] = {
             "type": "chart",
             "chart_type": (
                 parts[1].strip() if len(parts) > 1 and parts[1].strip() else "auto"
             ),
-            "csv": csv_text,
+            **rows_from,
         }
         out.update(options)
         return out
     if kind == "table":
-        out = {"type": "table", "csv": csv_text}
+        out = {"type": "table", **rows_from}
         out.update(
-            {k: v for k, v in options.items() if k in ("title", "source", "footnote")}
+            {
+                k: v
+                for k, v in options.items()
+                if k in ("title", "source", "footnote", *_DATA_OPTIONS)
+            }
         )
         return out
     from .outline import _read_csv
@@ -317,7 +336,19 @@ def _slide_from_block(
             continue
         m = re.match(r"^(?:x[\s_-]*)?axis\s*:\s*(.+)$", s, re.I)
         if m:
-            slide["x_axis"] = m.group(1).strip()
+            # A second Axis: line makes them rows of things that grow along the steps.
+            said = slide.get("x_axis")
+            slide["x_axis"] = (
+                [*(said if isinstance(said, list) else [said]), m.group(1).strip()]
+                if said
+                else m.group(1).strip()
+            )
+            continue
+        m = re.match(r"^dimensions?\s*:\s*(.+)$", s, re.I)
+        if m:
+            # "Dimension: Label | value for step 1 | value for step 2 | ..."
+            cells = [c.strip() for c in m.group(1).strip().strip("|").split("|")]
+            slide.setdefault("dimensions", []).append(cells)
             continue
         m = re.match(r"^(?:diagram|layout)\s*:\s*([\w -]+)$", s, re.I)
         if m:
@@ -451,7 +482,7 @@ def _slide_from_block(
         return slide
     if (
         diagram in ("", "boxes")
-        and slide.get("x_axis")
+        and (slide.get("x_axis") or slide.get("dimensions"))
         and (len(columns) >= 2 or bullets)
     ):
         # An Axis: line names what grows along stages, so the parts are stages;

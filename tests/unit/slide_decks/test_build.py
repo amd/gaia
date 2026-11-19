@@ -1155,7 +1155,7 @@ def test_slides_added_to_a_deck_this_skill_did_not_build_keep_their_width(out):
     prs.slides.add_slide(prs.slide_layouts[0]).shapes.title.text = "Clinic review"
     prs.save(foreign)
     assert add_slide(foreign, _LONG_BULLETS)["slides"] == 2
-    assert update_slide(foreign, 1, _LONG_BULLETS)["slides"] == 2
+    assert update_slide(foreign, 1, _LONG_BULLETS, replace_cover=True)["slides"] == 2
     boxes = _text_boxes(foreign)
     assert all(w > 0 and h > 0 for _n, w, h in boxes), boxes
     report = verify_deck(foreign, render=False)

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from slidedeck import blueprints as _bp
+from slidedeck import data as _data
 from slidedeck import markdown as _md
 from slidedeck import style as _style
 from slidedeck.outline import (
@@ -308,6 +309,9 @@ def _unsourced_numbers(slides: List[Any], call: Any, said: List[str]) -> Optiona
         if not isinstance(s, dict):
             continue
         shown: List[Tuple[str, float, str]] = []
+        if s.get("data_read_from"):
+            # Rows this tool read from the user's file are sourced by that file.
+            s = {k: v for k, v in s.items() if k != "rows"}
         _shown_numbers(s, "body", shown)
         parts = max(
             len(s.get(k) or [])
@@ -599,8 +603,69 @@ def _scoped_slides(slides: List[Any]) -> List[Any]:
                 slide["path"] = path
             else:
                 slide["image_problem"] = problem
+        _read_data_file(slide, i)
         out.append(slide)
     return out
+
+
+_DATA_TYPES = (".csv", ".tsv", ".xlsx", ".xlsm")
+
+
+def _read_data_file(slide: Dict[str, Any], i: int) -> None:
+    """Replace a chart or table slide's ``data_path`` with the rows read from it.
+
+    The file is checked against the folders this chat may read, then read
+    here, so a chart never needs another tool to get its series. A file or
+    range that cannot be read leaves ``data_problem``: the slide is built as
+    text and the warning says what to pass.
+
+    Raises:
+        SkillPermissionError: the file is outside the folders this chat may read.
+    """
+    given = slide.pop("data_path", None)
+    slide.pop("data_problem", None)
+    data = slide.get("data")
+    if (
+        not given
+        and isinstance(data, str)
+        and "\n" not in data
+        and data.strip().lower().endswith(_DATA_TYPES)
+    ):
+        given = slide.pop("data")
+    if not given:
+        return
+    slide.setdefault("type", "chart")
+    if any(slide.get(k) is not None for k in ("rows", "csv", "series", "values")):
+        # Values sent with the call win over the file they were copied from.
+        return
+    what = f"slide {i}: data_path"
+    path, problem = _usable_file(given, what)
+    if not path:
+        slide["data_problem"] = problem + "."
+        return
+    try:
+        rows = _data.read_rows(
+            path,
+            sheet=str(slide.get("sheet") or ""),
+            cell_range=str(slide.get("range") or ""),
+            series_in=str(slide.get("series_in") or ""),
+        )
+    except _data.DataError as exc:
+        slide["data_problem"] = f"{what}: {exc}"
+        return
+    except (OSError, ValueError, KeyError) as exc:
+        # openpyxl raises these for a file that is not the workbook its name says.
+        slide["data_problem"] = (
+            f"{what}: {Path(path).name} could not be read "
+            f"({type(exc).__name__}: {exc})."
+        )
+        return
+    slide["rows"] = rows
+    slide["data_read_from"] = Path(path).name
+    slide.pop("columns", None)
+    if not slide.get("source"):
+        where = [Path(path).name, slide.get("sheet"), slide.get("range")]
+        slide["source"] = ", ".join(str(x) for x in where if x)
 
 
 def _slide_specs(slide: Any) -> List[Any]:
@@ -881,15 +946,33 @@ def build_deck(
     template_path: str = "",
     prefs: Optional[dict] = None,
     expected_slides: int = 0,
+    expect: Optional[dict] = None,
 ) -> dict:
     """Build a .pptx from a JSON slide outline and check it; never hand-write python-pptx.
 
-    The outline is {"slides": [...]}, each slide a "type" plus its fields
-    (references/outline-json.md). Any outline with a slide is built: read
-    the result's `warnings` for what to fix, `path` for the file.
+    The outline is {"slides": [...]}; every slide has a "type", a "title" and:
+    - bullets: "bullets" (a nested list is a sub-level).
+    - chart: "chart_type" (column, bar, line, area, pie, scatter, combo, auto)
+      and its values as "rows" (header row, then one row per label:
+      [["Quarter", "West", "East"], ["Q1", 4.1, 3.9]]), or "categories" +
+      "series" {name: values}, or "data_path" (.csv/.xlsx) with "range"
+      "A1:D8" and optional "sheet"; plus "y_title" and "source".
+    - table: "columns" + "rows", or "data_path" + "range". kpi: "metrics"
+      [{label, value, delta}].
+    - diagram: "diagram" (process, cycle, pyramid, matrix, boxes, stack,
+      flow, tree) and "items" [{title, text, bullets}]. A process also takes
+      "axis" (one label on an arrow) and "dimensions" [{label, values: [one
+      per step]}], drawn as rows under the steps.
+    - title (cover), section, two_column (left, right), quote, image
+      (path), timeline (milestones [{date, title}]).
+    Numbers that form a series or a comparison go in a chart, not bullets.
+    Any outline with a slide is built: read the result's `warnings` for what
+    was drawn differently and the call that fixes it, `path` for the file.
 
-    Example: build_deck(outline={"slides": [{"type": "bullets", "title":
-    "Sales grew 7%", "bullets": ["North up 12%", "South flat"]}]})
+    Example: build_deck(outline={"slides": [{"type": "chart", "title":
+    "West drove the growth", "rows": [["Quarter", "West", "East"], ["Q1",
+    4.1, 3.9], ["Q2", 5.6, 4.1]], "source": "sales.xlsx"}]},
+    expect={"min_charts": 1})
 
     Args:
         outline: The slide outline object, or its JSON text.
@@ -900,9 +983,12 @@ def build_deck(
         prefs: Optional style the user asked for in this request (density, colors...).
         expected_slides: The slide count the user asked for, cover included;
             a different count is built and reported in `warnings`. 0 skips it.
+        expect: What the request asks the deck to hold, e.g. {"min_charts":
+            4, "min_tables": 1, "slides": 12}. Pass it whenever the user asks
+            for charts or tables: a deck short of it fails its check.
     """
     return _build_from(
-        outline, output_path, theme, template_path, prefs, None, expected_slides
+        outline, output_path, theme, template_path, prefs, None, expected_slides, expect
     )
 
 
@@ -919,9 +1005,10 @@ def _next_step(result: Dict[str, Any], misses: int) -> str:
             f"The deck is saved at {path}, and its check found errors "
             "(verify.issues, severity 'error'). Fix each with "
             f"update_slide(deck_path='{path}', index=<slide number>, "
-            "slide={...}), or build once more with them fixed. If you stop, "
-            "give the user the path and say which errors remain; never call "
-            "it verified."
+            "slide={...}), or build once more with them fixed. Slide numbers "
+            "are the ones in slides_built: they start at 1 and the cover "
+            "counts. If you stop, give the user the path and say which errors "
+            "remain; never call it verified."
         )
     if result.get("warnings"):
         return (
@@ -945,11 +1032,14 @@ def _build_from(
     prefs: Optional[dict],
     required_items: Optional[list] = None,
     expected_slides: Any = 0,
+    expect: Any = None,
 ) -> dict:
     warnings: List[str] = []
     notes: List[str] = []
     try:
         data = dict(load_outline(outline))
+        if expect:
+            data["expect"] = expect
         data["slides"] = _scoped_slides(data["slides"])
         slides = data["slides"]
         count = _whole(expected_slides) or _whole(data.get("expected_slides"))
@@ -1025,14 +1115,34 @@ def build_deck_from_markdown(
     prefs: Optional[dict] = None,
     required_items: Optional[list] = None,
     expected_slides: int = 0,
+    expect: Optional[dict] = None,
 ) -> dict:
     """Build and check a .pptx from Markdown: the easiest way to make a deck.
 
     Each '## Title' line starts a slide and '-' lines are its bullets; an
-    optional '# Title' line first is a cover slide. ```chart, ```table and
-    ```kpi blocks take CSV (references/markdown-format.md). Any Markdown
-    with a slide is built: read the result's `warnings` for what to fix,
-    `path` for the file.
+    optional '# Title' line first is a cover slide (it is slide 1).
+    Numbers that form a series or a comparison go in a native chart, written
+    as a fenced block of CSV under the slide's title:
+
+        ```chart column
+        y_title: Revenue ($M)
+        source: sales.xlsx, 2026
+        Quarter,West,East
+        Q1,4.1,3.9
+        Q2,5.6,4.1
+        ```
+
+    The block's first line names the type (column, bar, line, area, pie,
+    scatter, combo, auto); instead of CSV lines it may read a file with
+    'data: C:/path/file.xlsx' and 'range: A1:D8' (also 'sheet:'). ```table
+    takes the same CSV or file; ```kpi takes 'label,value,delta' rows.
+    Three or more '### ' headings on a slide are boxes; 'Diagram: process'
+    draws them as steps, each with its own lines beneath. Under a process,
+    'Axis: <label>' draws one arrow along the steps and each 'Dimension:
+    <label> | <value for step 1> | <value for step 2> | ...' line draws a
+    labelled row with one cell per step. Any Markdown with a slide is
+    built: read the result's `warnings` for what was drawn differently and
+    the call that fixes it, `path` for the file.
 
     Example (one slide): build_deck_from_markdown(markdown="## Sales grew
     7% in Q3\\n- North up 12%\\n- South flat")
@@ -1046,6 +1156,9 @@ def build_deck_from_markdown(
         required_items: Facts the request needs visible on the slides; checked.
         expected_slides: The slide count the user asked for, cover included;
             a different count is built and reported in `warnings`. 0 skips it.
+        expect: What the request asks the deck to hold, e.g. {"min_charts":
+            4, "min_tables": 1, "slides": 12}. Pass it whenever the user asks
+            for charts or tables: a deck short of it fails its check.
     """
     markdown = str(markdown or "")
     if "\n" not in markdown and "\\n" in markdown:
@@ -1058,7 +1171,9 @@ def build_deck_from_markdown(
         return _error(
             OutlineError([f"{p} For example: {_MINIMAL_CALL}" for p in exc.problems])
         )
-    return _build_from(outline, output_path, theme, "", prefs, required_items, count)
+    return _build_from(
+        outline, output_path, theme, "", prefs, required_items, count, expect
+    )
 
 
 @tool(display_label="Checking slide deck", timeout=RENDER_TIMEOUT_S + 90)
@@ -1071,14 +1186,19 @@ def verify_deck(
     render_dir: str = "",
     outline: Optional[dict] = None,
     required_items: Optional[list] = None,
+    expect: Optional[dict] = None,
 ) -> dict:
-    """Check a saved .pptx: slide count, required items, overflow, overlaps, fonts, charts, sources, notes.
+    """Check a saved .pptx: slide count, required items, charts and tables asked for, overflow, overlaps, fonts, sources, notes.
 
     Works on any deck; renders with LibreOffice when it is installed. A
     build already runs this check, so call it after add_slide or
-    update_slide, or for a deck you did not build.
+    update_slide, or for a deck you did not build. Pass `expect` when the
+    request asks for charts or tables: the check then fails a deck that has
+    too few, and `counts` says how many it has. Without it, a text slide
+    that is plainly numbers is a warning with the call that draws the chart.
 
-    Example: verify_deck(path="C:/Users/me/Documents/review.pptx")
+    Example: verify_deck(path="C:/Users/me/Documents/review.pptx",
+    expect={"min_charts": 2})
 
     Args:
         path: Absolute path of the .pptx to check.
@@ -1090,10 +1210,14 @@ def verify_deck(
         render_dir: Optional existing folder to save slide PNGs in, to look at.
         outline: The outline the deck was built from, to compare chart values.
         required_items: Facts the request needs visible on slides (not only in notes).
+        expect: What the request asks the deck to hold: {"min_charts": n,
+            "min_tables": n, "slides": n}; native charts and tables only.
 
     Returns:
         {"status": "pass"|"fail", "issues": [{slide, check, severity, fix}],
-        "slides_overview", ...}. Each issue's `fix` says what to change.
+        "counts": {slides, charts, tables}, "slides_overview", ...}. Each
+        issue's `fix` says what to change; slide numbers start at 1 and the
+        cover counts.
     """
     try:
         deck = _built_deck(path, "path")
@@ -1121,6 +1245,7 @@ def verify_deck(
             prefs=_saved_prefs(),
             renderer=renderer,
             required_items=required_items or None,
+            expect=expect,
         )
         if render and renderer is None:
             report["render"] = {
@@ -1215,6 +1340,29 @@ def export_slide_image(
         }
 
 
+def _edit_next(result: Dict[str, Any]) -> str:
+    """What to do after an edit: which slide changed, and what the edit left open."""
+    was = result.get("replaced")
+    said = (
+        f"Slide {was['index']} ({was['title']!r}, a {was['kind']} slide) was "
+        f"replaced by {was['with']!r}. If that was not the slide you meant, "
+        "slide_titles lists every slide with its number (from 1, the cover "
+        "counts): put it back with update_slide. "
+        if was
+        else "slide_titles lists every slide with its number (from 1, the "
+        "cover counts). "
+    )
+    if result.get("status") == "built_with_issues":
+        return said + (
+            "Part of what was sent is not on the slide: read `issues` and "
+            "`warnings`, and send it again in a field the slide draws."
+        )
+    return said + (
+        f"Then call verify_deck(path='{result.get('path')}') once the edits "
+        'are done; pass expect={"min_charts": n} if the request asks for charts.'
+    )
+
+
 def _edit(deck_path: str, slide: Any, run) -> dict:
     try:
         specs = _slide_specs(slide)
@@ -1228,6 +1376,7 @@ def _edit(deck_path: str, slide: Any, run) -> dict:
             *(result.get("warnings") or []),
             *_content_warnings(specs),
         ]
+        result["next"] = _edit_next(result)
         return result
     except OutlineError as exc:
         return _error(exc)
@@ -1248,10 +1397,16 @@ def add_slide(deck_path: str, slide: dict, position: int = 0) -> dict:
     Example: add_slide(deck_path="C:/Users/me/Documents/review.pptx",
     slide={"type": "bullets", "title": "Next steps", "bullets": ["Hire two", "Ship in May"]})
 
+    The result's `slide_titles` lists every slide with its number afterwards.
+
     Args:
         deck_path: Absolute path of the .pptx to change.
-        slide: One slide object, or {"slides": [...]} for several.
-        position: 1-based position to insert at; 0 appends at the end.
+        slide: One slide object, or {"slides": [...]} for several. A chart
+            takes its values as "rows" (header row, then one row per label)
+            or "data_path" + "range".
+        position: The number the new slide gets, counting from 1 with the
+            cover as slide 1 (position=2 puts it right after the cover);
+            0 appends at the end.
     """
     return _edit(
         deck_path,
@@ -1263,22 +1418,49 @@ def add_slide(deck_path: str, slide: dict, position: int = 0) -> dict:
 
 
 @tool(display_label="Replacing a slide")
-def update_slide(deck_path: str, index: int, slide: dict) -> dict:
+def update_slide(
+    deck_path: str, index: int, slide: dict, replace_cover: bool = False
+) -> dict:
     """Replace slide number `index` of an existing deck with a new slide.
 
-    Example: update_slide(deck_path="C:/Users/me/Documents/review.pptx", index=2,
-    slide={"type": "bullets", "title": "Costs fell 4%", "bullets": ["Freight down", "Rent flat"]})
+    Slides are numbered from 1 and the cover is slide 1, so the first slide
+    after a cover is index=2: use the numbers in a build's `slides_built` or
+    a check's `slides_overview`. The result's `replaced` names the slide
+    that was there. The whole slide is replaced, so send every field it
+    needs, with its "type".
+
+    Example: update_slide(deck_path="C:/Users/me/Documents/review.pptx",
+    index=2, slide={"type": "chart", "title": "Costs fell 4%", "rows":
+    [["Month", "Cost"], ["Jan", 5.2], ["Feb", 5.0]], "source": "ledger.xlsx"})
 
     Args:
         deck_path: Absolute path of the .pptx to change.
-        index: 1-based number of the slide to replace.
+        index: Number of the slide to replace, from 1; the cover is 1.
         slide: The new slide object (same fields as a build_deck outline entry).
+        replace_cover: Pass true only to replace the cover (slide 1) with a
+            slide that is not a cover; otherwise that call is refused.
     """
+    try:
+        number = int(index)
+    except (TypeError, ValueError):
+        return _error(
+            OutlineError(
+                [
+                    f"index {index!r} is not a slide number. Pass the number of "
+                    "the slide to replace, from 1 (the cover is slide 1)."
+                ]
+            )
+        )
     return _edit(
         deck_path,
         slide,
         lambda d, specs, prefs: _build_engine().update_slide(
-            d, index, specs[0] if len(specs) == 1 else specs, prefs
+            d,
+            number,
+            specs[0] if len(specs) == 1 else specs,
+            prefs,
+            replace_cover=replace_cover is True
+            or str(replace_cover).strip().lower() == "true",
         ),
     )
 

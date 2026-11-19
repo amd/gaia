@@ -11,6 +11,7 @@ the deck (LibreOffice, run by the tool layer) against the shape boxes.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import subprocess
@@ -940,6 +941,148 @@ def required_item_found(item: str, text: str) -> bool:
     return hit / len(words) >= 0.75
 
 
+#: What `expect` may ask of a deck, and the other names each is read from.
+EXPECT_KEYS = {
+    "min_charts": ("min_charts", "charts", "native_charts", "min_native_charts"),
+    "min_tables": ("min_tables", "tables"),
+    "slides": ("slides", "slide_count", "expected_slides"),
+}
+
+
+def normalize_expect(expect: Any) -> Tuple[Dict[str, int], List[str]]:
+    """``({"min_charts": n, "min_tables": n, "slides": n}, problems)`` from *expect*.
+
+    Only the keys given are returned. A key or value that cannot be checked
+    is a problem naming what can be, never a silently skipped check.
+    """
+    if expect in (None, "", {}):
+        return {}, []
+    if isinstance(expect, str):
+        try:
+            expect = json.loads(expect)
+        except json.JSONDecodeError:
+            expect = None
+    example = 'expect={"min_charts": 2, "min_tables": 1, "slides": 8}'
+    if not isinstance(expect, dict):
+        return {}, [f"expect was not checked: it must be an object, e.g. {example}."]
+    names = {alias: key for key, aliases in EXPECT_KEYS.items() for alias in aliases}
+    out: Dict[str, int] = {}
+    problems: List[str] = []
+    for raw_key, value in expect.items():
+        key = names.get(str(raw_key).strip().lower().replace("-", "_"))
+        if key is None:
+            problems.append(
+                f"expect[{raw_key!r}] was not checked: expect reads "
+                f"{', '.join(EXPECT_KEYS)}, e.g. {example}."
+            )
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            value = None
+        try:
+            number = int(float(value)) if value is not None else -1
+        except ValueError:
+            number = -1
+        if number < 0:
+            problems.append(
+                f"expect[{raw_key!r}] was not checked: its value must be a whole "
+                f"number, e.g. {example}."
+            )
+            continue
+        out[key] = number
+    return out, problems
+
+
+_VALUE = re.compile(
+    r"(?<![\w.])[-+]?[$€£¥]?\s?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:\s?(?:%|[kKmMbB]\b|bn\b|pts?\b|bps\b|x\b))?"
+)
+_YEAR = re.compile(r"^(?:19|20)\d\d$")
+_LIST_MARK = re.compile(r"^\s*\d{1,2}[.)]\s+")
+
+
+def _values_in(line: str) -> List[str]:
+    """The measured values in a line of slide text; years and list numbers are not values."""
+    line = _LIST_MARK.sub("", line)
+    out = []
+    for m in _VALUE.finditer(line):
+        token = m.group(0).strip()
+        if _YEAR.match(token) or line[m.end() : m.end() + 1].isalpha():
+            continue
+        out.append(token)
+    return out
+
+
+def _table_as_text(lines: Sequence[str]) -> List[List[str]]:
+    """Rows of a table that was written as lines of text, or [] when there is none."""
+    rows: List[List[str]] = []
+    for line in lines:
+        if "|" in line or "\t" in line:
+            cells = [c.strip() for c in re.split(r"[|\t]", line.strip().strip("|"))]
+        else:
+            # Thousands separators are not cell breaks.
+            cells = [c.strip() for c in re.split(r",(?!\d{3}\b)|;", line)]
+            if len(cells) < 3 or any(len(c.split()) > 3 for c in cells):
+                continue
+        cells = [c for c in cells if c and not re.fullmatch(r":?-{2,}:?", c)]
+        if len(cells) >= 2:
+            rows.append(cells)
+    if not rows:
+        return []
+    width = Counter(len(r) for r in rows).most_common(1)[0][0]
+    rows = [r for r in rows if len(r) == width]
+    numeric = [r for r in rows if any(_values_in(c) for c in r[1:])]
+    return rows if len(numeric) >= 2 else []
+
+
+#: Values on a text slide from which it is plainly about numbers.
+QUANT_MIN_VALUES = 5
+
+
+def quantitative_text(lines: Sequence[str]) -> Optional[Dict[str, Any]]:
+    """``{"values": n, "rows": [...]}`` when *lines* of slide text are plainly numbers.
+
+    Either a table written as text (two or more delimited rows that carry
+    numbers), or QUANT_MIN_VALUES or more measured values over two or more lines.
+    """
+    rows = _table_as_text(lines)
+    per_line = [_values_in(x) for x in lines]
+    total = sum(len(v) for v in per_line)
+    if rows:
+        return {"values": total, "rows": rows}
+    if total >= QUANT_MIN_VALUES and sum(1 for v in per_line if v) >= 2:
+        return {"values": total, "rows": []}
+    return None
+
+
+def _chart_call(path: str, idx: int, title: str, rows: Sequence[Sequence[str]]) -> str:
+    """The update_slide call that redraws slide *idx* as a native chart."""
+
+    def cell(text: str) -> Any:
+        t = text.replace(",", "").replace("$", "").rstrip("%").strip()
+        try:
+            return float(t) if "." in t else int(t)
+        except ValueError:
+            return text
+
+    if rows:
+        shown = [list(rows[0])] + [[r[0], *(cell(c) for c in r[1:])] for r in rows[1:8]]
+    else:
+        shown = [
+            ["<label>", "<series name>"],
+            ["<first label>", 0],
+            ["<next label>", 0],
+        ]
+    slide = {
+        "type": "chart",
+        "title": title or "<the slide's takeaway>",
+        "rows": shown,
+        "source": "<file, sheet, period>",
+    }
+    return (
+        f"update_slide(deck_path={json.dumps(path)}, index={idx}, "
+        f"slide={json.dumps(slide, ensure_ascii=False)})"
+    )
+
+
 def visible_text(slide) -> str:
     """Everything an audience can read on *slide*: text, table cells, chart labels and values."""
     parts: List[str] = []
@@ -1026,24 +1169,36 @@ def verify_deck(
     min_font_pt: Optional[float] = None,
     renderer: Optional[Callable[[Path], Path]] = None,
     required_items: Optional[Sequence[str]] = None,
+    expect: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Check a saved deck and return a compact report.
 
     *renderer* turns the deck into a PDF (the tool layer runs LibreOffice
     through the skill context); without one, rendering is skipped and said so.
+    *expect* is what the request asked the deck to hold: ``{"min_charts": n,
+    "min_tables": n, "slides": n}``. A deck short of it fails. Without a chart
+    or table expectation, a text slide that is plainly numbers is a warning.
     """
     p = Path(path)
     prs = Presentation(str(p))
     ctx = DeckContext(prs)
     R = rules_for(prefs, rules)
+    wanted, expect_problems = normalize_expect(expect)
+    if expected_slides is None and "slides" in wanted:
+        expected_slides = wanted["slides"]
     if min_font_pt is not None:
         R["min_font_pt"] = float(min_font_pt)
     if R.get("speaker_notes") is True:
         require_notes = True
     issues = Issues()
+    for problem in expect_problems:
+        issues.add(None, "expect_not_checked", "warning", problem)
     W, H = ctx.W, ctx.H
     slides = list(prs.slides)
     n = len(slides)
+    total_charts = total_tables = 0
+    #: (slide, values, title) of text slides that are plainly numbers.
+    numbers_as_text: List[Tuple[int, int, str]] = []
     if expected_slides is not None and n != int(expected_slides):
         issues.add(
             None,
@@ -1194,6 +1349,7 @@ def verify_deck(
         # --- per-shape checks --------------------------------------------
         body_words = 0
         bullets = 0
+        body_lines: List[str] = []
         content: List[Tuple[Any, Tuple[int, int, int, int], str]] = []
         has_chart = has_table_num = has_kpi = False
         source_text = ""
@@ -1280,6 +1436,8 @@ def verify_deck(
                     ptext = "".join(r.text for r in para.runs).strip()
                     if not ptext:
                         continue
+                    if is_body and not _SOURCE.search(text):
+                        body_lines.append(ptext)
                     for r in para.runs:
                         if not r.text.strip():
                             continue
@@ -1544,6 +1702,39 @@ def verify_deck(
             )
         n_charts = sum(1 for s in shapes if _kind(s) == "chart")
         n_tables = sum(1 for s in shapes if _kind(s) == "table")
+        total_charts += n_charts
+        total_tables += n_tables
+        quant = (
+            quantitative_text(body_lines)
+            if kind in ("text", "diagram")
+            and not (n_charts or n_tables or has_kpi or pictures_not_chart)
+            else None
+        )
+        # Bullets drawn as cards are still text; a drawn diagram's labels are not.
+        cards = any((s.name or "").startswith("Card ") for s in shapes)
+        if quant and (kind == "text" or cards or quant["rows"]):
+            numbers_as_text.append((idx, quant["values"], title))
+            if "min_charts" not in wanted and "min_tables" not in wanted:
+                issues.add(
+                    idx,
+                    "numbers_as_text",
+                    "warning",
+                    (
+                        "a table of values is written as lines of text"
+                        if quant["rows"]
+                        else f"{quant['values']} numbers are written as text"
+                    )
+                    + ", with no chart or table: the reader cannot see the "
+                    "trend or the comparison.",
+                    "If they form a series or a comparison, draw them as a "
+                    "native chart: "
+                    + _chart_call(str(p), idx, title, quant["rows"])
+                    + ' (or "data_path": "<.csv or .xlsx>", "range": "A1:D8" in '
+                    'place of "rows"; "type": "table" for a table). If they '
+                    "are separate facts, leave the slide and pass "
+                    'expect={"min_charts": <the number the request asks for>} '
+                    "so this is not asked again.",
+                )
         bits = [kind]
         if n_charts:
             bits.append(f"{n_charts} chart")
@@ -1640,6 +1831,43 @@ def verify_deck(
                     "Set the same y_min/y_max on comparable charts.",
                 )
 
+    expect_report: List[Dict[str, Any]] = []
+    found = {"min_charts": total_charts, "min_tables": total_tables, "slides": n}
+    for key, want in wanted.items():
+        ok = found[key] == want if key == "slides" else found[key] >= want
+        expect_report.append(
+            {"expect": key, "wanted": want, "found": found[key], "ok": ok}
+        )
+        if ok or key == "slides":
+            # The slide count is reported above, as expected_slides.
+            continue
+        what = "native chart" if key == "min_charts" else "table"
+        candidates = sorted(numbers_as_text, key=lambda c: -c[1])[: want - found[key]]
+        where = (
+            "Slides that show numbers as text: "
+            + ", ".join(f"{i} ({t!r})" for i, _v, t in sorted(candidates))
+            + ". Redraw one with "
+            + _chart_call(str(p), candidates[0][0], candidates[0][2], [])
+            if candidates
+            else "Add one with add_slide(deck_path="
+            + json.dumps(str(p))
+            + ', slide={"type": "chart", "title": "<takeaway>", "rows": '
+            '[["<label>", "<series name>"], ["<first label>", 0]], '
+            '"source": "<file, sheet, period>"})'
+        )
+        if key == "min_tables":
+            where = where.replace('"type": "chart"', '"type": "table"')
+        issues.add(
+            None,
+            "expected_charts" if key == "min_charts" else "expected_tables",
+            "error",
+            f"the deck has {found[key]} {what}{'s' if found[key] != 1 else ''}; "
+            f"expect asked for at least {want}. A picture of a chart, or numbers "
+            "in bullets, does not count.",
+            where + '. "rows" is a header row then one row per label; or read them '
+            'from a file with "data_path": "<.csv or .xlsx>", "range": "A1:D8".',
+        )
+
     required = list(required_items or []) + [
         x
         for x in ((outline or {}).get("required_items") or [])
@@ -1686,6 +1914,8 @@ def verify_deck(
         "style_score": style_score(items, n),
         "summary": dict(summary),
         "issues": shown,
+        "counts": {"slides": n, "charts": total_charts, "tables": total_tables},
+        **({"expect": expect_report} if expect_report else {}),
         "titles": titles,
         "slides_overview": overview,
         "limits": {

@@ -51,10 +51,13 @@ metadata:
             type: integer
             required: false
             default: 0
+          expect:
+            type: object
+            required: false
         returns:
           type: object
       - name: verify_deck
-        description: Check a saved .pptx for count, overflow, overlaps, fonts, contrast, charts, sources and style.
+        description: Check a saved .pptx for count, the charts and tables asked for, overflow, overlaps, fonts, contrast, sources and style.
         parameters:
           path:
             type: string
@@ -84,6 +87,9 @@ metadata:
             required: false
           required_items:
             type: array
+            required: false
+          expect:
+            type: object
             required: false
         returns:
           type: object
@@ -135,6 +141,9 @@ metadata:
             type: integer
             required: false
             default: 0
+          expect:
+            type: object
+            required: false
         returns:
           type: object
       - name: add_slide
@@ -153,7 +162,7 @@ metadata:
         returns:
           type: object
       - name: update_slide
-        description: Replace one slide of an existing deck.
+        description: Replace one slide of an existing deck, by its number from 1 (the cover is slide 1).
         parameters:
           deck_path:
             type: string
@@ -164,6 +173,10 @@ metadata:
           slide:
             type: object
             required: true
+          replace_cover:
+            type: boolean
+            required: false
+            default: false
         returns:
           type: object
       - name: list_blueprints
@@ -274,6 +287,11 @@ side-by-side boxes; `Diagram: process` draws them as stages (also `cycle`,
 - **Slide count.** Pass the number the user named as `expected_slides`. It
   counts every slide, the cover included: for one slide send one `## ` block
   and no `# ` cover. A different count is built and reported in `warnings`.
+- **Numbers that form a series or a comparison go in a chart**, from CSV
+  rows or a file (`data:` + `range:`). When the request asks for charts or
+  tables pass `expect={"min_charts": N}`: a deck with fewer fails its check.
+- **Slides are numbered from 1; the cover is slide 1.** Use the numbers in
+  `slides_built` for `update_slide`.
 - **Every must-show item is visible on a slide.** List each number, name,
   event and message the request asks for and pass them as `required_items`.
   Never move requested content into the notes: notes hold extra detail.
@@ -307,12 +325,8 @@ side-by-side boxes; `Diagram: process` draws them as stages (also `cycle`,
 
 ## References (paths relative to this skill's folder)
 
-- `references/markdown-format.md` - read when a slide needs a chart, table,
-  KPI tiles, image, quote, two columns or speaker notes.
-- `references/outline-json.md` - read before calling `build_deck`,
-  `add_slide` or `update_slide` with JSON.
-- `references/storyline.md` - read when picking a blueprint, writing titles,
-  or fixing density warnings.
-- `references/brief-and-sources.md` - read when unsure whether to ask the
-  user, or when building the key-facts ledger.
-- `references/without-tools.md` - read only when these tools are not offered.
+- `references/markdown-format.md` - every Markdown line and block.
+- `references/outline-json.md` - every JSON slide field.
+- `references/storyline.md` - blueprints, titles, density.
+- `references/brief-and-sources.md` - when to ask; the key-facts ledger.
+- `references/without-tools.md` - only when these tools are not offered.
