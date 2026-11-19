@@ -1,12 +1,14 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Every keyring write of a connection holds the per-provider connection lock.
+"""Every keyring write of a connection holds the provider and account locks.
 
-A token refresh compares the stored refresh token and then saves under that
-lock. A connect or disconnect that wrote without it could land between the
-compare and the write. Each writer is driven with its keyring call replaced
-by a probe that tries to take the lock from a fresh handle: the probe must
-find it held, and it must be free again afterwards.
+A token refresh compares the stored refresh token and then saves under the
+account's lock. A connect or disconnect that wrote without it could land
+between the compare and the write; one that skipped the provider lock could
+race another sign-in deciding which slot an account lands in. Each writer is
+driven with its keyring call replaced by a probe that tries to take both
+locks from a fresh handle: the probe must find them held, and they must be
+free again afterwards.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import os
 import pytest
 
 from gaia.connectors import _refresh_lock
+from gaia.connectors import accounts as accounts_mod
 from gaia.connectors import api as api_mod
 from gaia.connectors import flow as flow_mod
 from gaia.connectors import oauth_pkce as oauth_pkce_mod
@@ -31,7 +34,14 @@ from tests.unit.connectors.test_forwarded_import import FULL_SCOPES as FORWARDED
 
 
 def _lock_is_free(provider_id: str) -> bool:
-    path = _refresh_lock.lock_path(provider_id)
+    return _path_is_free(_refresh_lock.lock_path(provider_id))
+
+
+def _account_lock_is_free(provider_id: str) -> bool:
+    return _path_is_free(_refresh_lock.account_lock_path(provider_id, "default"))
+
+
+def _path_is_free(path) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -45,7 +55,7 @@ def _lock_is_free(provider_id: str) -> bool:
 
 def _probe(provider_id, real, seen):
     def wrapper(*args, **kwargs):
-        seen.append(_lock_is_free(provider_id))
+        seen.append((_lock_is_free(provider_id), _account_lock_is_free(provider_id)))
         return real(*args, **kwargs)
 
     return wrapper
@@ -59,13 +69,14 @@ async def test_revoke_connection_deletes_under_the_lock(monkeypatch):
 
     monkeypatch.setattr(flow_mod, "revoke_provider_token", no_remote_revoke)
     monkeypatch.setattr(
-        api_mod, "delete_connection", _probe("google", delete_connection, seen)
+        accounts_mod, "delete_connection", _probe("google", delete_connection, seen)
     )
+    _seed_google()
 
     await api_mod.revoke_connection_async("google")
 
-    assert seen == [False]
-    assert _lock_is_free("google")
+    assert seen == [(False, False)]
+    assert _lock_is_free("google") and _account_lock_is_free("google")
 
 
 async def test_oauth_disconnect_deletes_under_the_lock(monkeypatch):
@@ -76,15 +87,17 @@ async def test_oauth_disconnect_deletes_under_the_lock(monkeypatch):
     async def no_remote_revoke(_provider, **_kw):
         return {"revoke_supported": False, "revoked_remotely": False}
 
-    monkeypatch.setattr(oauth_pkce_mod, "revoke_provider_token", no_remote_revoke)
+    monkeypatch.setattr(flow_mod, "revoke_provider_token", no_remote_revoke)
     monkeypatch.setattr(
-        oauth_pkce_mod, "delete_connection", _probe("google", delete_connection, seen)
+        accounts_mod, "delete_connection", _probe("google", delete_connection, seen)
     )
+    _seed_google()
 
     await oauth_pkce_mod.OAuthPkceHandler().disconnect(_make_spec())
 
-    assert seen == [False]
-    assert _lock_is_free("google")
+    # Removing every account ends with an idempotent sweep of the legacy slot.
+    assert seen and set(seen) == {(False, False)}
+    assert _lock_is_free("google") and _account_lock_is_free("google")
 
 
 def test_forwarded_import_saves_under_the_lock(monkeypatch):
@@ -105,8 +118,18 @@ def test_forwarded_import_saves_under_the_lock(monkeypatch):
         account_email="alice@example.com",
     )
 
-    assert seen == [False]
-    assert _lock_is_free("google")
+    assert seen == [(False, False)]
+    assert _lock_is_free("google") and _account_lock_is_free("google")
+
+
+def _seed_google():
+    save_connection(
+        provider="google",
+        account_email="alice@example.com",
+        refresh_token="rt",
+        scopes=["openid"],
+        client_id_hash="h",
+    )
 
 
 @pytest.fixture
@@ -132,17 +155,21 @@ def _token_payload():
 
 async def test_device_flow_connect_saves_under_the_lock(monkeypatch, microsoft):
     seen = []
-    _install_responses(monkeypatch, [_FakeResp(200, _token_payload())])
+    _install_responses(
+        monkeypatch,
+        [_FakeResp(200, _token_payload())],
+        get_responses=[_FakeResp(200, {"id": "oid", "mail": "user@example.com"})],
+    )
     monkeypatch.setattr(
-        flow_mod, "save_connection", _probe("microsoft", save_connection, seen)
+        accounts_mod, "save_connection", _probe("microsoft", save_connection, seen)
     )
 
     await flow_mod.poll_device_flow(
         "microsoft", "DEV", scopes=[MAIL_READ], interval=1, expires_in=900
     )
 
-    assert seen == [False]
-    assert _lock_is_free("microsoft")
+    assert seen == [(False, False)]
+    assert _lock_is_free("microsoft") and _account_lock_is_free("microsoft")
 
 
 async def test_browser_connect_saves_under_the_lock(monkeypatch, microsoft):
@@ -151,9 +178,13 @@ async def test_browser_connect_saves_under_the_lock(monkeypatch, microsoft):
     from gaia.connectors.flow import _PendingFlow
 
     seen = []
-    _install_responses(monkeypatch, [_FakeResp(200, _token_payload())])
+    _install_responses(
+        monkeypatch,
+        [_FakeResp(200, _token_payload())],
+        get_responses=[_FakeResp(200, {"id": "oid", "mail": "user@example.com"})],
+    )
     monkeypatch.setattr(
-        flow_mod, "save_connection", _probe("microsoft", save_connection, seen)
+        accounts_mod, "save_connection", _probe("microsoft", save_connection, seen)
     )
     flow = _PendingFlow(
         flow_id="f1",
@@ -168,8 +199,8 @@ async def test_browser_connect_saves_under_the_lock(monkeypatch, microsoft):
 
     await flow_mod._exchange_code_for_tokens(flow, "code")
 
-    assert seen == [False]
-    assert _lock_is_free("microsoft")
+    assert seen == [(False, False)]
+    assert _lock_is_free("microsoft") and _account_lock_is_free("microsoft")
 
 
 async def test_forward_route_waits_for_a_holder_on_its_own_loop(monkeypatch):

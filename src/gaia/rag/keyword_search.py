@@ -11,12 +11,14 @@ from array import array
 from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from gaia.rag.normalize import search_form
+from gaia.rag.text_units import WIDE_CHARS, wide_runs
+
 _WORD = re.compile(r"[^\W_]+")
-_ARABIC_MARKS = re.compile("[\u064b-\u065f\u0670\u0640]")
+_WIDE = re.compile(f"[{WIDE_CHARS}]")
+# Hamza seats fold to bare hamza, so the two spellings of one word meet.
 _ARABIC_LETTERS = str.maketrans(
-    {"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"}
-    | {chr(0x0660 + digit): str(digit) for digit in range(10)}
-    | {chr(0x06F0 + digit): str(digit) for digit in range(10)}
+    {"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"} | {"ؤ": "ء", "ئ": "ء"}
 )
 # "and", "so", "with", "for", "like", each on "the"; the word stays whole if short.
 _ARABIC_PREFIX = re.compile("^(?:[وف]?(?:[بلك]?ال|لل)|[وف])(?=..)")
@@ -31,12 +33,23 @@ _MIN_SHARE = 0.1
 _ID_SIZE = array("I").itemsize
 
 
+def _wide_bigrams(run: str) -> List[str]:
+    # Chinese and Japanese have no spaces, so each pair of neighbours is a word.
+    return [run] if len(run) == 1 else [run[i : i + 2] for i in range(len(run) - 1)]
+
+
 def _words(text: str) -> List[str]:
-    text = _ARABIC_MARKS.sub("", text.lower()).translate(_ARABIC_LETTERS)
-    return [
-        _ARABIC_PREFIX.sub("", word) if word[0] in _PREFIX_START else word
-        for word in _WORD.findall(text)
-    ]
+    text = search_form(text).lower().translate(_ARABIC_LETTERS)
+    words = []
+    for word in _WORD.findall(text):
+        if _WIDE.search(word):
+            for run in wide_runs(word):
+                words.extend(_wide_bigrams(run) if _WIDE.match(run) else [run])
+        elif word[0] in _PREFIX_START:
+            words.append(_ARABIC_PREFIX.sub("", word))
+        else:
+            words.append(word)
+    return words
 
 
 class KeywordIndex:

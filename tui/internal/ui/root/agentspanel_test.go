@@ -22,7 +22,7 @@ type stubHubLister struct{}
 func (stubHubLister) Catalog(ctx context.Context, start, installedOnly, refresh bool) (*catalog.HubCatalog, error) {
 	return &catalog.HubCatalog{Agents: []catalog.HubEntry{
 		{ID: catalog.FlagshipID, Name: "GAIA", Installed: true},
-		{ID: "email", Name: "Email", Installed: true},
+		{ID: sampleSidecarID, Name: sampleSidecarID, Installed: true},
 	}}, nil
 }
 func (stubHubLister) Agents(ctx context.Context, start bool) ([]catalog.AgentRuntime, error) {
@@ -102,7 +102,7 @@ func TestAgentsSelectedMsgClosesThePanelBeforeTheSwitchGateCancels(t *testing.T)
 	m, _ := liveChatModel(t, catalog.FlagshipID)
 	m = openAgentsPanel(t, m)
 
-	updated, _ := m.Update(agents.SelectedMsg{ID: "email"})
+	updated, _ := m.Update(agents.SelectedMsg{ID: sampleSidecarID})
 	m = updated.(FlagshipModel)
 	if m.activeView != viewPreflight {
 		t.Fatalf("test setup: switching did not open the readiness gate: view=%v", m.activeView)

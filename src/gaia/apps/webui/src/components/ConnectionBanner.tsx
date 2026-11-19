@@ -7,7 +7,8 @@ import { useChatStore } from '../stores/chatStore';
 import { useBackendStore } from '../stores/backendStore';
 import type { BackendLifecycle } from '../types/agent';
 import { useT } from '../i18n/useT';
-import { needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
+import { isMessageKey } from '../i18n/registry';
+import { namesSetupCommand, needsLocalSetup, SetUpLocalButton, startInstructionText } from './settings/ErrorNotice';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
 import { isStarting, modelServerHealth } from '../services/statusPoll';
@@ -149,6 +150,13 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
         if (shouldReset) setDismissed(false);
     }, [systemStatus, hasActiveConversation]);
 
+    const activeProgress = systemStatus?.download_progress ?? null;
+    const isActiveDownload =
+        isDownloadingModel ||
+        activeProgress?.state === 'downloading' ||
+        activeProgress?.state === 'starting';
+    const dismissDownloadFailure = useChatStore((s) => s.dismissDownloadFailure);
+
     // A crashed backend outranks everything, even a chat in progress: nothing answers until it's back.
     if (lifecycle && lifecycle.status !== 'running') return <BackendRestartBanner lifecycle={lifecycle} />;
 
@@ -160,12 +168,14 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     // state would silently look like the app froze. Same reasoning for
     // suppressing during an active conversation: if the download fails
     // mid-chat we still want to surface the failure prominently.
-    const activeProgress = systemStatus?.download_progress ?? null;
     const downloadName = activeProgress?.model_name || modelName;
-    const isActiveDownload =
-        isDownloadingModel ||
-        activeProgress?.state === 'downloading' ||
-        activeProgress?.state === 'starting';
+    const dismissDownloadError = async () => {
+        try {
+            await dismissDownloadFailure(activeProgress?.model_name ?? downloadName);
+        } catch {
+            // The server still holds the failure; keep the warning until a retry works.
+        }
+    };
     if (isActiveDownload || activeProgress?.state === 'error') {
         const sizeHint = activeProgress?.total_bytes
             ? `${(activeProgress.total_bytes / 1e9).toFixed(1)} GB`
@@ -248,7 +258,7 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                 {isError && (
                     <button
                         className="connection-banner__dismiss"
-                        onClick={() => setDismissed(true)}
+                        onClick={() => void dismissDownloadError()}
                         aria-label="Dismiss"
                     >
                         <X size={14} />
@@ -304,8 +314,10 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     // because the system is not yet ready to serve requests. A status the backend
     // can't refresh (slow or failing) is not proof the boot is still running.
     if (isStarting(systemStatus) && !backendSlow && !backendError) {
-        const runningTask = systemStatus?.init_tasks?.find(t => t.status === 'running');
-        const label = runningTask?.name || 'Preparing AI system';
+        // The task's English `name` is a log label; only its `step` is shown, translated.
+        const step = systemStatus?.init_tasks?.find(t => t.status === 'running')?.step;
+        const stepKey = `banner.boot.${step}`;
+        const label = step && isMessageKey(stepKey) ? t(stepKey) : t('banner.boot.generic');
         return (
             <div className="connection-banner connection-banner--init" role="status">
                 <div className="connection-banner__icon">
@@ -397,25 +409,26 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     if (systemStatus && !systemStatus.lemonade_running) {
         // Listening but failing its health check is often just busy; the backend can't yet say which.
         const unresponsive = modelServerHealth(systemStatus) === 'unresponsive';
-        const setupNeeded = needsLocalSetup(systemStatus);
+        // A server that listens is installed: setup can't fix a hang, so don't offer it.
+        const setupNeeded = !unresponsive && needsLocalSetup(systemStatus);
+        const startCommand = unresponsive && namesSetupCommand(systemStatus.start_command) ? null : systemStatus.start_command;
+        const startInstruction = unresponsive && namesSetupCommand(systemStatus.start_instruction) ? null : systemStatus.start_instruction;
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    {unresponsive
-                        ? `The model server is not answering (${systemStatus.lemonade_error}). It may be busy with another app or loading a model.`
-                        : t('banner.serverStopped')}{' '}
+                    {t(unresponsive ? 'banner.serverHung' : 'banner.serverStopped')}{' '}
                     {setupNeeded ? (
                         <span className="connection-banner__hint">{t('banner.finishSetup')}</span>
-                    ) : systemStatus.start_command ? (
+                    ) : startCommand ? (
                         <span className="connection-banner__hint">
-                            {unresponsive ? 'If it stays this way, restart it: ' : 'To start it by hand, run '}
-                            <code>{systemStatus.start_command}</code>
+                            {t(unresponsive ? 'banner.restartHint' : 'banner.startHint')}{' '}
+                            <code dir="ltr">{startCommand}</code>
                         </span>
-                    ) : systemStatus.start_instruction && (
-                        <span className="connection-banner__hint">{systemStatus.start_instruction}</span>
+                    ) : startInstruction && (
+                        <span className="connection-banner__hint">{startInstructionText(t, startInstruction)}</span>
                     )}
                 </div>
                 {setupNeeded && <SetUpLocalButton className="connection-banner__retry" />}

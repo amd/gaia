@@ -9,6 +9,19 @@
     flex: 1;
     min-height: 0;
     padding: 24px 16px 18vh;
+    position: relative;
+}
+
+/* Same spot as the chat header's buttons. */
+.new-chat-actions {
+    position: absolute;
+    top: 0;
+    right: 0;
+    min-height: 52px;
+    padding-right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
 }
 
 /* Sending drops the composer to the bottom, where the chat will continue. */
@@ -51,7 +64,7 @@
 
 .new-chat-setup-failed-title {
     color: var(--danger);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .new-chat-setup-failed-error {
@@ -75,6 +88,12 @@
     line-height: 1.2;
     text-align: center;
     text-wrap: balance;
+}
+
+/* The serif has no Arabic, so the Arabic line renders small and the default gloss would out-size it. */
+.new-chat-greeting .i18n-gloss.i18n-gloss {
+    display: block;
+    font-size: 0.55em;
 }
 
 /* Holds its height before the folder arrives, so nothing below jumps. */
@@ -130,7 +149,9 @@
 
 .new-chat-folder-name {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -184,6 +205,19 @@
     list-style: none;
 }
 
+/* Opened in full, the list scrolls in its own box so the composer stays on screen. */
+.new-chat-doc-list.is-expanded {
+    max-height: min(30vh, 220px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.new-chat-doc-toggle {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
+}
+
 .new-chat-doc {
     display: inline-flex;
     align-items: center;
@@ -199,7 +233,9 @@
 
 .new-chat-doc span {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 

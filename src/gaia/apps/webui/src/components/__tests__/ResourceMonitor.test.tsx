@@ -107,6 +107,32 @@ describe('ResourceMonitor', () => {
         expect(screen.getByText('GPU 1')).toBeInTheDocument();
     });
 
+    it('hides idle network adapters and names the busy one plainly', async () => {
+        const idle = (id: string, name: string) => ({
+            id, name, description: name, kind: 'network' as const,
+            send_bps: 0, recv_bps: 0, send_history: [0, 0], recv_history: [0, 0],
+        });
+        const busy = { ...idle('en0', 'en0'), send_bps: 72900, recv_bps: 154000, recv_history: [0, 154000] };
+        responses = [json({ ...USAGE, networks: [idle('en3', 'en3'), idle('en4', 'en4'), busy] })];
+        render(<ResourceMonitor onClose={() => {}} />);
+        await screen.findByText('4.70 GHz');
+        expect(screen.queryByText(/Network \d/)).toBeNull();
+        expect(screen.getAllByText(/^Network/)).toHaveLength(1);
+        expect(tile('Network')).toHaveTextContent('S: 72.9 R: 154 Kbps');
+    });
+
+    it('still shows one network tile when every adapter is idle', async () => {
+        const idle = (id: string) => ({
+            id, name: id, description: id, kind: 'network' as const,
+            send_bps: 0, recv_bps: 0, send_history: [0, 0], recv_history: [0, 0],
+        });
+        responses = [json({ ...USAGE, networks: [idle('en3'), idle('en4')] })];
+        render(<ResourceMonitor onClose={() => {}} />);
+        await screen.findByText('4.70 GHz');
+        expect(tile('Network')).toHaveTextContent('S: 0 R: 0 Kbps');
+        expect(screen.getAllByText(/^Network/)).toHaveLength(1);
+    });
+
     it('keeps CPU and memory when only the GPU and network fail, and says which part is missing', async () => {
         responses = [json({
             ...USAGE,

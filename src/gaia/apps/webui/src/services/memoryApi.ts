@@ -247,6 +247,42 @@ export function updateMemorySettings(settings: Partial<MemorySettings>) {
     return memFetch<MemorySettingsUpdateResponse>('PUT', '/memory/settings', settings);
 }
 
+export type EmbedderDevice = 'npu' | 'gpu';
+
+/** One device the embedder may run on; `available` null while the model server is starting. */
+export interface EmbedderOption {
+    device: EmbedderDevice;
+    model: string;
+    display_name: string;
+    /** False for a device GAIA hasn't proven; it is shown but can't be chosen. */
+    proven: boolean;
+    /** Whether this PC's hardware can run it; null while the model server is starting. */
+    present: boolean | null;
+    available: boolean | null;
+    reason: string | null;
+    downloaded: boolean | null;
+}
+
+/** Where every chat embeds documents and memory. */
+export interface EmbedderView {
+    device: EmbedderDevice;
+    /** True when the user chose the device; false when it is the default. */
+    chosen: boolean;
+    default_device: EmbedderDevice;
+    options: EmbedderOption[];
+    /** Set by a change: false when the embedder stayed the same. */
+    changed?: boolean;
+}
+
+export function getEmbedder() {
+    return memFetch<EmbedderView>('GET', '/memory/embedder');
+}
+
+/** `null` returns to the PC's setup. */
+export function setEmbedder(device: EmbedderDevice | null) {
+    return memFetch<EmbedderView>('PUT', '/memory/embedder', { device });
+}
+
 export function clearAllMemory() {
     return memFetch<{ knowledge: number; tool_history: number; conversations: number }>(
         'DELETE', '/memory/all'
@@ -317,7 +353,12 @@ export interface GoalStats {
 
 /** Why the background loop could not read the goal store; null when it can. */
 export function getGoalStoreHealth() {
-    return memFetch<{ error: string | null }>('GET', '/goals/health');
+    return memFetch<{ error: string | null; damaged: boolean }>('GET', '/goals/health');
+}
+
+/** Move a damaged goal list aside and start an empty one; returns the kept file's name. */
+export function resetGoalStore() {
+    return memFetch<{ kept: string }>('POST', '/goals/store/reset');
 }
 
 export function getGoalStats() {

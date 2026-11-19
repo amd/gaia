@@ -59,9 +59,18 @@ export async function cancelSetup(modelId?: string): Promise<{ cancelled: boolea
     return apiFetch('POST', '/setup/cancel', modelId ? { model_id: modelId } : undefined);
 }
 
+/**
+ * `skipChatModel` says where chat runs for the plan these return. Unset, the
+ * server decides from the chat model in use: none is planned while it is a cloud
+ * model. The setup screen passes false, for what a local setup downloads.
+ */
+function planQuery(skipChatModel?: boolean): string {
+    return skipChatModel === undefined ? '' : `?skip_chat_model=${skipChatModel}`;
+}
+
 /** Skip one of setup's models, or take it back; returns the new plan. */
-export async function skipSetupModel(modelId: string, skipped: boolean): Promise<SetupPlan> {
-    return apiFetch('POST', '/setup/models/skip', { model_id: modelId, skipped });
+export async function skipSetupModel(modelId: string, skipped: boolean, skipChatModel?: boolean): Promise<SetupPlan> {
+    return apiFetch('POST', `/setup/models/skip${planQuery(skipChatModel)}`, { model_id: modelId, skipped });
 }
 
 /** Download one model now (retry, resume, or one skipped at setup); follow it with getSetupStatus. */
@@ -86,13 +95,13 @@ export async function getSetupStatus(): Promise<SetupRunStatus> {
 }
 
 /** The Lemonade, chat model and download setup will use. Loads nothing. */
-export async function getSetupPlan(): Promise<SetupPlan> {
-    return apiFetch('GET', '/setup/plan');
+export async function getSetupPlan(skipChatModel?: boolean): Promise<SetupPlan> {
+    return apiFetch('GET', `/setup/plan${planQuery(skipChatModel)}`);
 }
 
 /** Pick setup's chat model before it starts; returns the new plan. A 409 `no_fit` asks to confirm. */
-export async function chooseSetupChatModel(modelId: string, acknowledgeNoFit = false): Promise<SetupPlan> {
-    return apiFetch('POST', '/setup/chat-model', { model_id: modelId, acknowledge_no_fit: acknowledgeNoFit });
+export async function chooseSetupChatModel(modelId: string, acknowledgeNoFit = false, skipChatModel?: boolean): Promise<SetupPlan> {
+    return apiFetch('POST', `/setup/chat-model${planQuery(skipChatModel)}`, { model_id: modelId, acknowledge_no_fit: acknowledgeNoFit });
 }
 
 /** Read the NPU's setup afresh, after the user fixed something; returns the new plan. */
@@ -110,8 +119,8 @@ export async function fixSetupNpuMemlock(): Promise<SetupPlan> {
 }
 
 /** Pick the model that reads images, or null for GAIA's choice; returns the new plan. */
-export async function chooseSetupVisionModel(modelId: string | null): Promise<SetupPlan> {
-    return apiFetch('POST', '/setup/vision-model', { model_id: modelId });
+export async function chooseSetupVisionModel(modelId: string | null, skipChatModel?: boolean): Promise<SetupPlan> {
+    return apiFetch('POST', `/setup/vision-model${planQuery(skipChatModel)}`, { model_id: modelId });
 }
 
 /** Whether a job needs a model that isn't on this PC, and which. */

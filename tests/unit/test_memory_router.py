@@ -828,6 +828,19 @@ class TestConsolidateEndpoint:
 # ===========================================================================
 
 
+def _npu_pc(monkeypatch, tmp_path, **keys) -> None:
+    """A PC set up with ``gaia init --profile npu``, plus *keys*."""
+    import json
+
+    from gaia import config as config_mod
+
+    config_file = tmp_path / "npu-config.json"
+    config_file.write_text(
+        json.dumps({"default_device": "npu", **keys}), encoding="utf-8"
+    )
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_file)
+
+
 class TestRebuildEmbeddingsEndpoint:
     """Test POST /api/memory/rebuild-embeddings endpoint."""
 
@@ -863,14 +876,12 @@ class TestRebuildEmbeddingsEndpoint:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 500
 
-    def test_rebuild_uses_stamped_embedder_not_default(self, client, test_store):
-        """Re-embed with the stamped embedder, not the GGUF default (#1744).
-
-        On the NPU profile the agent stamps the FLM embedder. The dashboard
-        rebuild button must reuse it — embedding with the default would mix vector
-        spaces in one table and reload a Vulkan embedder that evicts the FLM
-        chat model.
-        """
+    def test_an_npu_pc_re_embeds_its_npu_vectors_on_the_gpu(
+        self, client, test_store, monkeypatch, tmp_path
+    ):
+        """Vectors from the NPU embedder are replaced: its search isn't proven,
+        and the two builds' vectors don't match (#6008)."""
+        _npu_pc(monkeypatch, tmp_path)
         test_store.set_embedder_id("embed-gemma-300m-FLM")
         mock_provider = MagicMock()
         mock_provider.embed.return_value = [[0.1] * 768]
@@ -879,7 +890,25 @@ class TestRebuildEmbeddingsEndpoint:
         ) as ctor:
             resp = client.post("/api/memory/rebuild-embeddings")
         assert resp.status_code == 200
+        ctor.assert_called_once_with(model="user.embeddinggemma-300m-GGUF")
+        assert test_store.get_embedder_id() == "user.embeddinggemma-300m-GGUF"
+
+    def test_rebuild_replaces_a_stamp_left_by_another_profile(
+        self, client, test_store, monkeypatch, tmp_path
+    ):
+        """The next agent start re-stamps the PC's embedder; rebuilding with the
+        old one would only be cleared again."""
+        _npu_pc(monkeypatch, tmp_path, embedding_device="npu")
+        test_store.set_embedder_id("user.embeddinggemma-300m-GGUF")
+        mock_provider = MagicMock()
+        mock_provider.embed.return_value = [[0.1] * 768]
+        with patch(
+            "gaia.llm.providers.lemonade.LemonadeProvider", return_value=mock_provider
+        ) as ctor:
+            resp = client.post("/api/memory/rebuild-embeddings")
+        assert resp.status_code == 200
         ctor.assert_called_once_with(model="embed-gemma-300m-FLM")
+        assert test_store.get_embedder_id() == "embed-gemma-300m-FLM"
 
     def test_rebuild_falls_back_to_default_embedder_when_unstamped(
         self, client, test_store
@@ -1481,16 +1510,18 @@ class TestDashboardWritesAreEmbedded:
             )
         )
 
-    def test_create_embeds_with_the_stored_embedder(
-        self, client, test_store, fake_embedder
+    def test_create_embeds_with_the_pcs_embedder(
+        self, client, test_store, fake_embedder, monkeypatch, tmp_path
     ):
-        test_store.set_embedder_id("embed-gemma-300m-FLM")
+        # A saved NPU choice still loads; the stamp is from before it.
+        _npu_pc(monkeypatch, tmp_path, embedding_device="npu")
+        test_store.set_embedder_id("user.embeddinggemma-300m-GGUF")
         data = _create_knowledge(client, "The gateway listens on port 8080")
 
         assert data["embedded"] is True
         assert "embed_error" not in data
         assert self._has_vector(test_store, data["knowledge_id"])
-        # Same embedder as the stored vectors, not the module default (#1744).
+        # The embedder every chat on this PC uses, not the stale stamp (#1744).
         fake_embedder.assert_called_with(model="embed-gemma-300m-FLM")
         fake_embedder.instance.embed.assert_called_with(
             ["The gateway listens on port 8080"], model="embed-gemma-300m-FLM"
@@ -1907,8 +1938,8 @@ class TestStreamDiscoveryPlatformReporting:
             return client.get("/api/memory/stream-discovery")
 
     def test_unsupported_source_is_reported_by_name(self, client, tmp_path):
-        """On darwin, windows_userassist streams an explicit unsupported log."""
-        resp = self._stream(client, tmp_path, "darwin")
+        """On linux, where nothing reads app usage, the source says so by name."""
+        resp = self._stream(client, tmp_path, "linux")
         body = resp.text
 
         assert resp.status_code == 200
@@ -1918,11 +1949,35 @@ class TestStreamDiscoveryPlatformReporting:
             if "windows_userassist" in line and "no scanner" in line
         ]
         assert skipped, (
-            "windows_userassist must be reported as unsupported on darwin, "
+            "windows_userassist must be reported as unsupported on linux, "
             f"not silently empty. Body was:\n{body}"
         )
         assert '"type": "log"' in skipped[0]
-        assert "darwin" in skipped[0]
+        assert "linux" in skipped[0]
+        assert '"type": "done"' in body
+
+    @pytest.mark.parametrize(
+        "platform,other_os_source,label",
+        [
+            ("win32", "macos_app_usage", "App usage frequency (macOS)"),
+            ("darwin", "windows_userassist", "App usage frequency (Windows)"),
+        ],
+    )
+    def test_another_os_scanner_is_not_mentioned_when_this_os_has_its_own(
+        self, client, tmp_path, platform, other_os_source, label
+    ):
+        """Windows reads app usage itself; a macOS line there is only noise."""
+        own = {
+            "win32": "scan_windows_userassist",
+            "darwin": "scan_macos_app_usage",
+        }[platform]
+        mock_own = patch(
+            f"gaia.agents.base.discovery.SystemDiscovery.{own}", return_value=[]
+        )
+        body = self._stream(client, tmp_path, platform, extra_patches=[mock_own]).text
+
+        assert other_os_source not in body
+        assert label not in body
         assert '"type": "done"' in body
 
     def test_supported_source_is_not_reported_as_unsupported(self, client, tmp_path):
@@ -1944,11 +1999,11 @@ class TestStreamDiscoveryPlatformReporting:
         assert "App usage frequency (macOS)" in body
         assert '"type": "done"' in body
 
-    def test_macos_app_usage_is_reported_as_unsupported_on_windows(
+    def test_macos_app_usage_is_reported_as_unsupported_on_linux(
         self, client, tmp_path
     ):
-        """The mirror case: the macOS-only source is named when off darwin."""
-        resp = self._stream(client, tmp_path, "win32")
+        """The mirror case: the macOS-only source is named where no twin runs."""
+        resp = self._stream(client, tmp_path, "linux")
         body = resp.text
 
         skipped = [
@@ -1956,8 +2011,8 @@ class TestStreamDiscoveryPlatformReporting:
             for line in body.splitlines()
             if "macos_app_usage" in line and "no scanner" in line
         ]
-        assert skipped, f"macos_app_usage must be named on win32. Body:\n{body}"
-        assert "win32" in skipped[0]
+        assert skipped, f"macos_app_usage must be named on linux. Body:\n{body}"
+        assert "linux" in skipped[0]
 
 
 class TestStreamInferencePlatformReporting:
@@ -1990,9 +2045,8 @@ class TestStreamInferencePlatformReporting:
     @pytest.mark.parametrize(
         "platform,source",
         [
-            ("darwin", "windows_userassist"),
             ("linux", "windows_userassist"),
-            ("win32", "macos_app_usage"),
+            ("linux", "macos_app_usage"),
         ],
     )
     def test_unsupported_source_is_reported_by_name(
@@ -2029,6 +2083,27 @@ class TestStreamInferencePlatformReporting:
         ]
         assert not skipped, f"macos_app_usage must run on darwin. Body:\n{body}"
 
+    @pytest.mark.parametrize(
+        "platform,own,other_os_source",
+        [
+            ("win32", "scan_windows_userassist", "macos_app_usage"),
+            ("darwin", "scan_macos_app_usage", "windows_userassist"),
+        ],
+    )
+    def test_another_os_scanner_is_not_mentioned_when_this_os_has_its_own(
+        self, client, tmp_path, platform, own, other_os_source
+    ):
+        """The Windows log must not print a macOS scanner line, nor the reverse."""
+        ran = []
+        mock_own = patch(
+            f"gaia.agents.base.discovery.SystemDiscovery.{own}",
+            side_effect=lambda: ran.append(own) or [],
+        )
+        body = self._stream(client, tmp_path, platform, extra_patches=[mock_own]).text
+
+        assert ran == [own]
+        assert other_os_source not in body
+
     def test_scanner_failure_is_reported_with_a_correlation_id(self, client, tmp_path):
         """A crashing scanner was swallowed whole by `except Exception: pass`."""
         boom = patch(
@@ -2057,12 +2132,22 @@ class TestCollectSignalGate:
         def _must_not_run():
             raise AssertionError("scanner ran on a platform with no branch")
 
-        with patch("sys.platform", "darwin"):
+        with patch("sys.platform", "linux"):
             result = _collect_signal("windows_userassist", _must_not_run)
 
         assert result == []
         out = capsys.readouterr().out
-        assert "windows_userassist" in out and "darwin" in out
+        assert "windows_userassist" in out and "linux" in out
+
+    def test_another_os_twin_is_skipped_without_a_line(self, capsys):
+        from gaia.cli import _collect_signal
+
+        def _must_not_run():
+            raise AssertionError("scanner ran on a platform with no branch")
+
+        with patch("sys.platform", "win32"):
+            assert _collect_signal("macos_app_usage", _must_not_run) == []
+        assert capsys.readouterr().out == ""
 
     def test_supported_source_runs(self):
         from gaia.cli import _collect_signal
@@ -2283,8 +2368,12 @@ class TestStreamInferenceModel:
         custom_model=None,
         reply="[]",
         downloaded=True,
+        picked=None,
     ):
-        """``downloaded=None`` leaves the download check to the patched catalog."""
+        """``downloaded=None`` leaves the download check to the patched catalog.
+
+        *picked* is ``last_model``: the model chat runs after a pick.
+        """
         apps = [{"content": "Installed app: Blender"}]
         fake_llm = MagicMock()
         fake_llm.chat.return_value = reply
@@ -2320,11 +2409,66 @@ class TestStreamInferenceModel:
                     ),
                 )
             )
+            stack.enter_context(
+                patch(
+                    "gaia.llm.lemonade_client.resolve_chat_model",
+                    return_value=picked or default_model,
+                )
+            )
             create = stack.enter_context(
                 patch("gaia.llm.create_client", return_value=fake_llm)
             )
             resp = client.get("/api/memory/stream-inference")
         return resp, create
+
+    def test_uses_the_local_model_chat_was_switched_to(self, client, tmp_path):
+        """The default would load a second chat model behind the one in use."""
+        resp, create = self._stream(
+            client,
+            tmp_path,
+            default_model="Gemma-4-E4B-it-GGUF",
+            picked="gemma4-it-e4b-FLM",
+        )
+
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="gemma4-it-e4b-FLM")
+
+    def test_a_hybrid_pick_runs_on_its_cheap_model(self, client, tmp_path):
+        with patch(
+            "gaia.llm.hybrid.start_model",
+            side_effect=lambda m, *a, **k: "gemma4-it-e4b-FLM" if m == "hybrid" else m,
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="Gemma-4-E4B-it-GGUF", picked="hybrid"
+            )
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="gemma4-it-e4b-FLM")
+
+    def test_a_broken_hybrid_setting_leaves_inference_on_the_default(
+        self, client, tmp_path
+    ):
+        from gaia.llm.hybrid import HybridConfigError
+
+        with patch(
+            "gaia.llm.hybrid.start_model",
+            side_effect=HybridConfigError("no cheap model"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="Gemma-4-E4B-it-GGUF", picked="hybrid"
+            )
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="Gemma-4-E4B-it-GGUF")
+
+    def test_a_cloud_pick_leaves_inference_on_the_local_default(self, client, tmp_path):
+        resp, create = self._stream(
+            client,
+            tmp_path,
+            default_model="Gemma-4-E4B-it-GGUF",
+            picked="fireworks.accounts/fireworks/models/kimi-k2",
+        )
+
+        assert resp.status_code == 200
+        create.assert_called_once_with(model="Gemma-4-E4B-it-GGUF")
 
     def test_uses_the_default_chat_model_not_the_cloud_custom_model(
         self, client, tmp_path

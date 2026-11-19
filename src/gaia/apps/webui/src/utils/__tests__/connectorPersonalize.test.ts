@@ -33,6 +33,12 @@ describe('connectorPersonalize', () => {
         expect(prompt).toMatch(/Don't create any schedules yet/);
     });
 
+    it('tells the agent to say so, not count, when it cannot read the connector (#7969)', () => {
+        const prompt = buildPersonalizePrompt({ connectorId: 'mcp-memory', displayName: 'Memory' });
+        expect(prompt).toMatch(/couldn't reach it and stop/);
+        expect(prompt).toMatch(/Never guess or count what it holds/);
+    });
+
     it('dispatches the personalize event with the request', () => {
         const handler = vi.fn();
         window.addEventListener(PERSONALIZE_EVENT, handler);

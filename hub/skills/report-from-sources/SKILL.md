@@ -1,0 +1,192 @@
+---
+name: report-from-sources
+description: "Work from a folder of the user's own documents and spreadsheets: find the newest copy of each dataset, pull named time series with cell citations, and check the finished report, deck or workbook against the sources. Use when a deliverable must be built from several source files. Pairs with office-docs and slide-decks, which write the file."
+license: MIT
+version: 1.1.0
+metadata:
+  gaia:
+    security_tier: community
+    requirements:
+      python: ">=3.10"
+      dependencies:
+        - openpyxl>=3.1
+    tools_required:
+      - list_files
+      - read_file
+      - run_python
+    tools:
+      - name: inventory_data_files
+        description: List a folder's time-series data files with sheets, units and period coverage, and name the newest copy of each dataset.
+        parameters:
+          folder:
+            type: string
+            required: true
+          recursive:
+            type: boolean
+            required: false
+            default: false
+        returns:
+          type: object
+        atomic: true
+      - name: series_from_workbook
+        description: Read named time series for chosen periods from a spreadsheet, CSV or JSON file, matched by label and cited to their cells.
+        parameters:
+          file_path:
+            type: string
+            required: true
+          labels:
+            type: array
+            required: true
+          sheet:
+            type: string
+            required: false
+            default: ""
+          periods:
+            type: string
+            required: false
+            default: last 12
+          orientation:
+            type: string
+            required: false
+            default: auto
+          filters:
+            type: string
+            required: false
+            default: ""
+        returns:
+          type: object
+        atomic: true
+      - name: chart_into_workbook
+        description: Chart named time series from a source file into an .xlsx as a native Excel chart with a source footnote, verified on reopen.
+        parameters:
+          output_path:
+            type: string
+            required: true
+          file_path:
+            type: string
+            required: true
+          labels:
+            type: array
+            required: true
+          sheet:
+            type: string
+            required: false
+            default: ""
+          periods:
+            type: string
+            required: false
+            default: last 12
+          chart_type:
+            type: string
+            required: false
+            default: line
+          title:
+            type: string
+            required: false
+            default: ""
+          y_axis_title:
+            type: string
+            required: false
+            default: ""
+          number_format:
+            type: string
+            required: false
+            default: ""
+          secondary_labels:
+            type: array
+            required: false
+          source_note:
+            type: string
+            required: false
+            default: ""
+          filters:
+            type: string
+            required: false
+            default: ""
+          orientation:
+            type: string
+            required: false
+            default: auto
+        returns:
+          type: object
+        atomic: false
+    pairs_with:
+      - office-docs
+      - slide-decks
+    provenance:
+      source: starter-pack
+---
+
+# Report From Sources
+
+A deliverable can read well and still be wrong by omission (it skips the
+headline figure the source led with, or charts last year's file when this
+year's sat beside it) or by addition (a figure no source contains). This is
+the order of work that prevents both. Use it with whatever builds the file.
+
+## Hard rules
+
+- **Every number is sourced.** Read time series with `series_from_workbook`
+  and compute other figures with `run_python`. Never retype a number from a
+  page or chart a look-alike series. Say which figures you computed. Every
+  chart and table names its source, period and units.
+- **Use the newest data vintage.** Call `inventory_data_files(folder)` first.
+  `datasets[].newest` is the file to use unless the user named a period.
+  Older copies are for comparison only, labelled so.
+- **Act on what a tool reports.** `ambiguous`, `notes` and `truncated` say
+  what to settle before you use the values. Never guess past them.
+- **Keep a key-facts ledger per source** before building: headline numbers,
+  changes the source states, notable events (a small count of rare events is
+  often the most important fact), risks, and what the source stresses.
+  Every ledger row goes into the deliverable.
+- **Nothing from outside the sources** unless it is labelled as such.
+- **Check the saved file before handing over.** Your memory of what you
+  wrote is not evidence.
+
+The tools read time series only (a value per period). For a table by
+category or row-level records, use `run_python`.
+
+## Procedure
+
+**One or two sources and a small ask: do steps 1, 3 and 5 only.**
+
+1. **Inventory.** List each file: what it covers, its period or as-of date,
+   and its use (primary, comparison, facts). A file under `not_read` needs
+   the fallback in `references/inventory.md` (`list_files`, `run_python`).
+2. **Ledger.** With `read_file`, read the sections that hold the figures you
+   need; do not page a long PDF to the end unless the ask covers the whole
+   document. Record each fact, its value, stated or computed, and where it
+   is. When two sources disagree, keep both rows.
+3. **Build answer first**: an as-of header line ("As of 30 Sep 2024; data
+   through 2024Q3"), a summary with the 3-5 figures that carry it, the
+   evidence, then a **Conflicts and gaps** section ("None found" if empty).
+   Keep the source's framing ("fell 8% to $4.2M"). For a workbook chart call
+   `chart_into_workbook`. For a slide, `chart_input` from
+   `series_from_workbook` holds the `categories`, `series` and `source` a
+   slide-decks chart slide takes.
+4. **Check coverage both ways** on the reopened file: every ledger row is in
+   it, and every number in it traces to the ledger or a named computation.
+5. **Final requirements check.** List what the user asked for (each section,
+   chart, metric, ID and file name) plus the as-of line, summary first, and
+   Conflicts and gaps. Check each line against the saved file, fix the gaps,
+   and report each line as met or not met.
+
+Ledger example:
+
+| Fact | Value | Kind | Source |
+|---|---|---|---|
+| Sites closed this year | 3 (2 in Q3) | stated | board_memo.docx, Operations |
+| Q3 sales vs Q2 | +12% | computed: 4.6 / 4.1 - 1 | sales_2024_q3.xlsx, Summary!C7:D7 |
+
+## References (paths relative to this skill's folder)
+
+- `references/inventory.md` - read when files share a dataset, the vintage
+  is unclear, the result was `truncated`, or the tool could not parse a file.
+- `references/ledger.md` - read when building the ledger, for what each row
+  records and how to handle conflicting sources.
+- `references/building.md` - read before writing the deliverable, and when
+  `series_from_workbook` returns `ambiguous`, `not_found` or an error.
+- `references/coverage-checks.md` - read at step 4 for the scripts that list
+  missing facts and untraced numbers in a saved .docx, .pptx or .xlsx.
+- `references/final-check.md` - read at step 5 for a worked checklist and
+  scripts that check IDs and workbook inputs.

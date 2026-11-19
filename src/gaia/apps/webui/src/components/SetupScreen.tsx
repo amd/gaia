@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { RadioGroup } from './RadioGroup';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronLeft, ChevronRight, Cloud, Eye, EyeOff, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
@@ -25,6 +26,7 @@ import { SetupFooter, SetupFooterSlot } from './setup/SetupFooter';
 import { LanguagePicker } from './setup/LanguagePicker';
 import { BackendChoice, applyTestedBackend } from './setup/BackendChoice';
 import { DetectedSummary } from './setup/DetectedSummary';
+import { GoBackOffer } from './setup/GoBackOffer';
 import { SetupChecks } from './setup/SetupChecks';
 import { SetupRail, type RailStep } from './setup/SetupRail';
 import { TestStep } from './setup/TestStep';
@@ -467,7 +469,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         const request = ++planRequest.current;
         setPlanError(null);
         try {
-            const p = await api.getSetupPlan();
+            // Setup's own plan: what a local setup downloads, wherever chat runs now.
+            const p = await api.getSetupPlan(false);
             if (request !== planRequest.current) return null;
             setPlan(p);
             return p;
@@ -664,7 +667,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             let latest = plan;
             if (!cloud && selection.defaultChat && selection.defaultChat !== latest.chat_model.id) {
                 try {
-                    latest = await api.chooseSetupChatModel(selection.defaultChat, acknowledgeNoFit);
+                    latest = await api.chooseSetupChatModel(selection.defaultChat, acknowledgeNoFit, false);
                 } catch (err) {
                     const detail = api.setupConfirmFrom(err);
                     if (detail) {
@@ -678,9 +681,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 // Whatever the choice, llama.cpp runs on the backend GAIA has tested.
                 await applyTestedBackend();
                 const vision = savedVision(catalog, selection);
-                if (vision !== (latest.vision_model ?? null)) latest = await api.chooseSetupVisionModel(vision);
+                if (vision !== (latest.vision_model ?? null)) latest = await api.chooseSetupVisionModel(vision, false);
                 for (const change of skipChanges(latest, selection)) {
-                    latest = await api.skipSetupModel(change.id, change.skipped);
+                    latest = await api.skipSetupModel(change.id, change.skipped, false);
                 }
             }
             setPlan(latest);
@@ -719,16 +722,21 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     // The plan screen's two ways to run GAIA; this PC is the one recommended.
     const [where, setWhere] = useState<'local' | 'cloud'>('local');
 
+    // Chat already runs in the cloud: carry on there rather than recommend a local download.
+    const inUseCloud = useModelStore((s) => (s.active?.remote && s.active.provider !== 'local' ? s.active.provider : null));
+    const inUseModel = useModelStore((s) => (s.active?.remote ? s.active.model : null));
+
     const toCloud = useCallback((provider: 'fireworks' | 'amd') => {
         if (running && viewing != null) return;
         setCustomizing(false);
         setChoice(provider);
+        // Back returns to the cloud choice, and the model in use stays picked.
+        setWhere('cloud');
+        setCloudPick(provider === inUseCloud ? inUseModel : null);
         stepTo('key');
-    }, [stepTo, running, viewing]);
+    }, [stepTo, running, viewing, inUseCloud, inUseModel]);
     const useCloud = useCallback(() => toCloud(readChoice() === 'amd' ? 'amd' : 'fireworks'), [toCloud]);
 
-    // Chat already runs in the cloud: carry on there rather than recommend a local download.
-    const inUseCloud = useModelStore((s) => (s.active?.remote && s.active.provider !== 'local' ? s.active.provider : null));
     const continueFromChecks = useCallback(() => {
         if (inUseCloud) toCloud(inUseCloud);
         else stepTo('plan');
@@ -795,7 +803,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setBusy(true);
         try {
             const entry = plan?.catalog?.find((e) => e.id === id);
-            if (entry?.planned) setPlan(await api.skipSetupModel(id, true));
+            if (entry?.planned) setPlan(await api.skipSetupModel(id, true, false));
             setRun((r) => r && { ...r, models: r.models?.map((m) => (m.id === id ? { ...m, state: 'skipped' } : m)) });
             // Finish repeats the last run, which must not fetch this one again.
             const { options } = lastRun.current;
@@ -843,10 +851,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
         setChoice(id);
-        setCloudPick(null);
+        setCloudPick(id === inUseCloud ? inUseModel : null);
         setCloudDefault(null);
         setKeyState({ busy: false, error: null, done: false });
-    }, []);
+    }, [inUseCloud, inUseModel]);
 
     // Extras added during the run: fetched and tested the same way, once it ends.
     useEffect(() => {
@@ -906,6 +914,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const catalog = catalogOf(plan);
     const pending = selection ? pendingDownloads(catalog, selection) : [];
     const short = plan && selection ? shortfall(plan, selection) : null;
+    const modelsOnPc = selection ? catalog.filter((e) => selection.ticked.has(e.id) && e.downloaded).length : 0;
+    // Settings > Setup counts every downloaded model, so step 1 must not say none are here.
+    const othersOnPc = catalog.some((e) => e.downloaded);
+    const checkLede = !checksDone ? 'setup.check.lede'
+        : modelsOnPc === 0 ? (othersOnPc ? 'setup.check.ledeOthersOnPc' : 'setup.check.ledeDone')
+            : pending.length === 0 ? 'setup.check.ledeAllOnPc' : 'setup.check.ledeSomeOnPc';
     const chatEntry = catalog.find((e) => e.id === selection?.defaultChat);
 
     const blocked = !!hardware && !hardware.compatible && hardware.blockers.length > 0;
@@ -1060,11 +1074,11 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'check' && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t(checksDone ? 'setup.check.headingDone' : 'setup.check.heading')}</h1>
-                            <p className="setup-lede">{t(checksDone ? 'setup.check.ledeDone' : 'setup.check.lede')}</p>
+                            <p className="setup-lede">{t(checkLede)}</p>
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
                             {serverRun?.state === 'running' && (
                                 <>
-                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} />
+                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} bar={false} />
                                     <SetupFooter>
                                         <button type="button" className="btn-secondary" onClick={() => void cancel()}>{t('setup.progress.cancel')}</button>
                                     </SetupFooter>
@@ -1155,7 +1169,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         ? <p className="setup-hint">{t('settings.privacy.localOnlyBlocked')}</p>
                                         : (
                                             <ul className="setup-reasons">
-                                                <li>{t('setup.plan.cloudWhy.noDownload')}</li>
+                                                <li>{t('setup.plan.cloudWhy.stillLocal')}</li>
                                                 <li>{t('setup.plan.cloudWhy.key')}</li>
                                                 <li>{t('setup.plan.cloudWhy.sent')}</li>
                                             </ul>
@@ -1163,7 +1177,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </section>
                             </div>
                             <SetupFooter>
-                                <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>
+                                {/* Both pick local models, which a cloud setup doesn't download. */}
+                                {where !== 'cloud' && <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>}
                                 {where === 'cloud' ? (
                                     <button type="button" className="btn-primary" onClick={useCloud} disabled={runGoing}>{t('setup.continue')}</button>
                                 ) : (
@@ -1188,10 +1203,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             )}
                             {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
                             {(actionError ?? startError) && <SetupAlert text={(actionError ?? startError)!} />}
-                            <details className="setup-disclosure">
-                                <summary>{t('setup.plan.whatDownloads')}</summary>
-                                <DownloadContents plan={plan} models={pending} />
-                            </details>
+                            {where !== 'cloud' && (
+                                <details className="setup-disclosure">
+                                    <summary>{t('setup.plan.whatDownloads')}</summary>
+                                    <DownloadContents plan={plan} models={pending} />
+                                </details>
+                            )}
                         </>
                     )}
 
@@ -1205,6 +1222,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 mode="setup"
                                 headingId="setup-title"
                                 names={names}
+                                cloud={choice !== 'local'}
                                 onBack={backOne}
                                 onSkip={() => stepTo(gpuFrom)}
                                 onContinue={() => stepTo(gpuFrom)}
@@ -1243,7 +1261,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'key' && (
                         <form id="setup-key-form" onSubmit={(e) => { e.preventDefault(); void connect(); }} className="setup-form">
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.key.title')}</h1>
-                            <div className="setup-choices" role="radiogroup" aria-label={t('setup.key.provider')}>
+                            <RadioGroup className="setup-choices" aria-label={t('setup.key.provider')}>
                                 {CHOICES.filter((c) => c.id !== 'local' && (c.id !== 'amd' || gatewayShown)).map((c) => (
                                     <button
                                         key={c.id}
@@ -1262,7 +1280,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         </span>
                                     </button>
                                 ))}
-                            </div>
+                            </RadioGroup>
                             {gateway?.reachable === false && gatewayShown && (
                                 <button type="button" className="link-btn setup-start" onClick={recheckGateway}>{t('setup.key.checkAgain')}</button>
                             )}
@@ -1302,7 +1320,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                             spellCheck={false}
                                             value={key}
                                             onChange={(e) => setKey(e.target.value)}
-                                            placeholder={savedKey ? t('setup.key.placeholder') : t('setup.key.placeholderNew')}
+                                            placeholder={savedKey ? t.bare('setup.key.placeholder') : t.bare('setup.key.placeholderNew')}
                                         />
                                         <button type="button" className="btn-secondary setup-key-show" aria-label={t(showKey ? 'setup.key.hide' : 'setup.key.show')} title={t(showKey ? 'setup.key.hide' : 'setup.key.show')} onClick={() => setShowKey((s) => !s)}>
                                             {showKey ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
@@ -1502,6 +1520,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         </>
                     )}
 
+                    {/* A failed run can go back to the version setup last finished on. */}
+                    {run?.state === 'failed' && <GoBackOffer />}
                 </div>
                 {onClose && !running && stage !== 'plan' && stage !== 'ready' && (
                     <div className="setup-row">

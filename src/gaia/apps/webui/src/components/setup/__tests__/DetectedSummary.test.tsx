@@ -4,7 +4,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
-import type { SetupPlan } from '../../../types';
+import type { PreflightReport, SetupPlan } from '../../../types';
 import { DetectedSummary, specText } from '../DetectedSummary';
 import { COLD_BIG } from './fixtures';
 
@@ -93,6 +93,15 @@ describe('what setup found', () => {
         expect(screen.getAllByText('Not reported').length).toBeGreaterThan(0);
         fireEvent.click(screen.getByRole('button', { name: 'All details' }));
         expect(screen.getAllByText('None found').length).toBe(2);
+    });
+
+    it('names the chip as the graphics on a Mac, where no separate GPU is listed', () => {
+        const mac = { ...PLAN(), system: { ...PLAN().system!, devices: PLAN().system!.devices.filter((d) => !d.kind.endsWith('gpu')) } };
+        render(<DetectedSummary plan={mac} hardware={{ gpu_name: 'Apple M5 Pro' } as PreflightReport} />);
+        fireEvent.click(screen.getByRole('button', { name: 'All details' }));
+        const graphics = screen.getByText('Graphics').closest('div') as HTMLElement;
+        expect(graphics).toHaveTextContent('Apple M5 Pro');
+        expect(graphics).not.toHaveTextContent('None found');
     });
 
     it('copies the whole spec as plain English text', async () => {

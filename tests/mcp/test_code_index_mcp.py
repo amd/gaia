@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -191,3 +192,35 @@ def test_repo_given_with_forward_slashes_on_windows(tmp_path, repo):
         assert client.connect(), client.last_error
     finally:
         client.disconnect()
+
+
+def test_gaia_mcp_code_index_refuses_the_home_directory_without_a_traceback(tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        **os.environ,
+        "PYTHONPATH": SRC,
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "GAIA_MEMORY_DISABLED": "1",
+    }
+
+    # No --repo, run from the home directory: the case a launcher hits.
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from gaia.cli import main; sys.exit(main())",
+            "mcp",
+            "code-index",
+        ],
+        cwd=home,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert proc.returncode == 1
+    assert "Refusing to serve a code index for your home directory" in proc.stderr
+    assert "Traceback" not in proc.stderr

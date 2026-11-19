@@ -4435,13 +4435,16 @@ class MemoryStore:
     def search_deltas(
         self,
         base_name: str | None = None,
-        scope: str | None = None,
+        scope: str | Sequence[str] | None = None,
         status: str | None = None,
         delta_id: str | None = None,
         include_superseded: bool = False,
         limit: int | None = 200,
     ) -> List[Dict]:
         """Return delta rows as dicts, oldest first.
+
+        *scope* may name several scopes; rows from any of them come back in
+        one chronological list.
 
         Chronological because resolution replays them in order: the last write
         to a section is the one that wins.
@@ -4461,9 +4464,11 @@ class MemoryStore:
         if base_name:
             clauses.append("base_name = ?")
             params.append(base_name)
+        if isinstance(scope, str):
+            scope = [scope]
         if scope:
-            clauses.append("scope = ?")
-            params.append(scope)
+            clauses.append(f"scope IN ({', '.join('?' for _ in scope)})")
+            params.extend(scope)
         if status:
             clauses.append("status = ?")
             params.append(status)
@@ -4653,8 +4658,8 @@ class MemoryStore:
             attempt_count, declined_count, started_at, last_at}``.  ``goal`` is
             None when the session has no user turn.  ``declined_count`` counts
             the calls in the window denied before they ran (a declined or
-            unanswered prompt, or an effect declined earlier in the request);
-            they are in neither count.
+            unanswered prompt, a refused folder or file access, or an effect
+            declined earlier in the request); they are in neither count.
         """
         sql = """
             WITH eligible AS (
@@ -4671,7 +4676,10 @@ class MemoryStore:
                 WHERE (:since IS NULL OR timestamp > :since)
                   AND executed = 0
                   AND (result_summary LIKE '%"status": "denied%'
-                       OR result_summary LIKE '%''status'': ''denied''%')
+                       OR result_summary LIKE '%''status'': ''denied''%'
+                       -- A refused folder or file access prompt.
+                       OR error LIKE 'Access denied: %'
+                       OR result_summary LIKE '%Access denied: %')
                 GROUP BY session_id
             )
             SELECT th.session_id, th.tool_name, th.args, th.success, th.timestamp,
