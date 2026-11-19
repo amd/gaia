@@ -105,6 +105,15 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 - In a `gaia -p` run the agent is told nobody can answer questions, so it
   settles an open choice itself and says what it assumed instead of ending on
   an offer to change it later.
+- `run_python` runs a saved script by `path` (with optional `args`), so a
+  script is written once, fixed with `edit_file` and run again instead of
+  being typed out for every run. The call is checked and approved exactly as
+  `execute_python_file` is. Every Python result now says the interpreter is
+  new for that call, a `NameError` adds that each call starts fresh, and a
+  failed run says how to fix and re-run it without sending the code again.
+- A Python that `run_shell_command` starts reads and prints UTF-8, as
+  `run_python` already did, unless the command or the environment sets an
+  encoding itself.
 - `run_python` no longer drops long output without saying so. Output past
   8,000 characters used to be cut silently, so a scan's later hits never
   reached the agent. It now gets the start and end, is told how much was left

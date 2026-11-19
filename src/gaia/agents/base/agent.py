@@ -87,6 +87,7 @@ from gaia.agents.base.context_eviction import (
 )
 from gaia.agents.base.credential_reads import (
     PYTHON_TOOLS,
+    as_script_call,
     python_credential_refusal,
 )
 from gaia.agents.base.deliverables import (
@@ -8716,6 +8717,11 @@ Do NOT wrap conversational replies in JSON.
                     "error_type": "invalid_arguments",
                     "error": str(exc),
                 }
+        # A saved script run through the snippet tool is the file tool's call
+        # to every check below; _execute_tool refuses it where that is withheld.
+        script_tool, script_args = as_script_call(bare_name, tool_args)
+        if script_tool != bare_name and script_tool in self._execution_tool_registry():
+            tool_name, tool_args = script_tool, script_args
         refused = self._refuse_inventory_hand_edit(tool_name, tool_args)
         if refused is not None:
             return refused
@@ -8986,6 +8992,20 @@ Do NOT wrap conversational replies in JSON.
                     err = "Unknown tool name. Use only the tools you were given."
                 logger.error(err)
                 return {**NOT_EXECUTED, "status": "error", "error": err}
+
+        script_tool, script_args = as_script_call(tool_name, tool_args)
+        if script_tool != tool_name:
+            if script_tool not in execution_registry:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"{tool_name} cannot run a saved script here: "
+                        f"{script_tool}, which runs it, is not available to "
+                        "this agent. Pass the code itself as `code`."
+                    ),
+                }
+            tool_name, tool_args = script_tool, script_args
 
         # A stand-in written to disk replaces the real file with that word.
         stand_in = _write_stand_in(

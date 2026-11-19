@@ -195,6 +195,8 @@ Fourteen tools mutate your machine or your accounts and are gated behind an expl
 
 The agent's own scratch folder (`gaia-scratch-…` in the system temp folder) holds no files of yours, so writing or editing a helper script there runs without asking; a write anywhere else still asks. Running a script from it asks every time, with "allow once" only, since what is in that folder changes without a prompt. The same goes for a shell command that runs there or names a path there (`cd` into it, `pytest`, `make` or `pip install` pointed at it), and for a script handed a scratch path as an argument — an earlier "always" does not cover them. Full access in the terminal UI (`/full-access`, or `--full-access`) runs all of them unasked. In an Agent UI chat, a Python script run from the scratch folder is auto-approved too (`execute_python_file`, `run_python`), but a shell command there still asks.
 
+`run_python` takes either `code` or the `path` of a saved script (with optional `args`). Run by `path`, the call is `execute_python_file` to every rule above, so approval, scope and an earlier "no" apply the same either way. Each call starts a new interpreter: nothing is kept between calls.
+
 The browser's acting tools are gated by *situation* rather than by name: clicking and typing on the open web is ungated, the same as fetching a page, but the same click **inside a session you signed in to** asks first, as does anything whose label reads irreversible. See [Driving a browser](/guides/browser-use).
 
 <Warning>
