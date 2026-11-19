@@ -296,6 +296,42 @@ export interface MemoryReinitializeResult {
     system_context: { stored: number; error?: string };
 }
 
+export type EmbedderDevice = 'npu' | 'gpu';
+
+/** One device the embedder may run on; `available` null while the model server is starting. */
+export interface EmbedderOption {
+    device: EmbedderDevice;
+    model: string;
+    display_name: string;
+    /** False for a device GAIA hasn't proven; it is shown but can't be chosen. */
+    proven: boolean;
+    /** Whether this PC's hardware can run it; null while the model server is starting. */
+    present: boolean | null;
+    available: boolean | null;
+    reason: string | null;
+    downloaded: boolean | null;
+}
+
+/** Where every chat embeds documents and memory. */
+export interface EmbedderView {
+    device: EmbedderDevice;
+    /** True when the user chose the device; false when it is the default. */
+    chosen: boolean;
+    default_device: EmbedderDevice;
+    options: EmbedderOption[];
+    /** Set by a change: false when the embedder stayed the same. */
+    changed?: boolean;
+}
+
+export function getEmbedder() {
+    return memFetch<EmbedderView>('GET', '/memory/embedder');
+}
+
+/** `null` returns to the PC's setup. */
+export function setEmbedder(device: EmbedderDevice | null) {
+    return memFetch<EmbedderView>('PUT', '/memory/embedder', { device });
+}
+
 export function clearAllMemory() {
     return memFetch<MemoryCleared>('DELETE', '/memory/all');
 }
