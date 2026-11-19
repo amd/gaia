@@ -316,23 +316,32 @@ installs the package. That lane must name the file and run the check too.
 
 <Note>
 A pull request, and its group in the merge queue, can run part of the unit
-suite, but only when every file it changes is a unit test or modified Python
-code under `src/gaia` or a hub agent package that the nightly coverage map
-records. A queue group runs no unit tests when none of its files is in the
-workflow's `paths` filter (a docs-only group, say), the same as such a PR; if
+suite. It does when every file it changes is a unit test, modified Python code
+under `src/gaia` or a hub agent package that the nightly coverage map records, or
+a file tests only read: a docs page (`.md`/`.mdx` outside `src/`, `eval/` and
+`installer/`), an Agent UI source under
+`src/gaia/apps/webui/`, a file under `tui/`, or hub data outside `hub/skills/`
+and the agents' Python packages. Such a file reaches only the tests that name it
+or scan its folder. A queue group runs no unit tests when none of its files is in
+the workflow's `paths` filter (a docs-only group, say), the same as such a PR; if
 any one is, every file in the group counts. `CLAUDE.md`, `AGENTS.md`,
 `CONTRIBUTING.md`, `REVIEW.md`, `.claude/` and `scripts/` always run the full
 suite, since the doc-path tests read them. `util/select_tests.py` then picks
 the test files that change can reach, from that map plus imports and
-patch-target strings. Any other change runs the full suite: data files, `util/`
-scripts, test helpers and fixtures, `eval/`, configs, workflows, any
-`conftest.py`, a source file the map has no entry for (such as a new one), a
-deleted or renamed file, or a missing or stale map. Tests
+patch-target strings. Any other change runs the full suite: other data files,
+lockfiles and manifests (`package.json`, `go.mod`, `binaries.lock.json`,
+`pyproject.toml`), skills, `util/` scripts, test helpers and fixtures, `eval/`,
+configs, workflows, any `conftest.py`, a source file the map has no entry for
+(such as a new one), a deleted or renamed file, or a missing or stale map. Tests
 load those by path, and neither imports nor coverage can follow what such a
-script reads. Of the last 600 merges to main, about one in five (21%) would have
-had a narrowed run; the rest run everything. Linux runs the selection; Windows
-and macOS run the part of it that touches the OS (processes, paths, locks,
-permissions). Every push to main runs the full suite on Linux. The nightly run
+script reads. Linux runs the selection; Windows runs the part of it that touches
+the OS (processes, paths, locks, permissions). On a pull request macOS runs that
+part too, but only when a changed file is OS-touching code (the daemon,
+sidecars, installer, shell and file tools, connectors and keyring, process and
+path helpers, the Lemonade launch and client code, the CLI, and every module
+that branches on macOS) or a test that makes OS calls. Every push to main runs the full
+suite on Linux, and Windows and macOS run what the changes since the last green
+push reach. The nightly run
 is the full suite on all three operating systems at the head of main, and a red
 one files an issue that the next green one closes. A final release needs a
 dispatched or nightly run on its commit, never a selected one. The check to
@@ -342,8 +351,15 @@ spot: code behind a cache or a shared fixture is credited only to the first test
 that ran it, so a test that only reaches it second can be left out until the
 nightly run.
 See what your branch will run with
-`python util/select_tests.py select --base origin/main --explain`, and dispatch
-`test_unit.yml` on the branch to run the full suite.
+`python util/select_tests.py select --base origin/main --explain`. Add the
+`ci:full` label to a pull request to run the full suite on all three operating
+systems, or dispatch `test_unit.yml` on the branch.
+
+The TUI workflow (`build_tui.yml`) narrows the same way: a pull request whose
+only files in its `paths` filter are under `src/gaia/apps/webui/` runs one job,
+"Freeze core with the UI", instead of the Go tests, six-target build and
+installers. **TUI Build & Test Result** is its one check. The `ci:full` label is
+read when the run starts, so add it and then push.
 </Note>
 
 <Note>

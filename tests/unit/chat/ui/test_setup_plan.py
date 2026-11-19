@@ -1319,6 +1319,19 @@ def test_a_pc_without_an_npu_is_not_offered_one(running):
     assert NPU_DEFAULT_MODEL_NAME not in ids
 
 
+def test_an_unread_capacity_is_an_unchecked_npu_not_no_npu(no_server):
+    """#7341: a capacity read that failed must not tell an NPU PC it has none."""
+    assert sp._npu_status(None) is None
+    assert sp.build_plan()["npu"] is None
+
+
+def test_a_read_capacity_without_an_npu_says_none(running):
+    no_npu = sp._npu_status(MachineCapacity(96, "AMD iGPU", 500))
+    assert no_npu == {"present": False, "ready": False, "problems": []}
+    running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    assert sp.build_plan()["npu"]["present"] is True
+
+
 def _flm_backend(fake, state, message=None):
     """Lemonade sees the NPU, and reports its FastFlowLM backend in *state*."""
     report = fake.get_system_info

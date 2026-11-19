@@ -6,8 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
+Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Every chat on a PC embeds with one embedder, the GPU one.** The embedder
+  was chosen per session, so a chat on the other device could clear all of
+  memory's vectors. It is now one per PC, on an NPU PC too: FastFlowLM's NPU
+  embedder (`embed-gemma-300m-FLM`) ranked text no better than chance on
+  FastFlowLM 1.0.7, so `gaia init --profile npu` downloads the GPU embedder
+  instead. A choice saved in Settings › Memory reaches open sessions on their
+  next turn, keeping the conversation and loaded skills.
 - **`gaia -p --time-limit` uses the time it is given.** One slow step made the
   agent stop with minutes left, so a found answer often never reached the
   requested file. It now stops two typical steps short of the limit, is always
@@ -21,6 +28,20 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   or put caveats inside one.
 ### Changed
 
+- **Office files are checked before they are handed over.** The bundled
+  `office-docs` skill ships two tools that never write the file.
+  `verify_workbook` recalculates a copy of an .xlsx (with LibreOffice when
+  installed) and names every cell with `#REF!`, `#VALUE!`, `#DIV/0!`,
+  `#NAME?`, a circular reference, a SUM/SUMIFS over text, or a criterion that
+  matches no row. A workbook with errors returns `status: errors_found`, and
+  one with typed totals and no formulas returns `no_formulas`. Without
+  LibreOffice nothing is computed: findings that depend on a value are
+  warnings, and the result tells the agent to compute the figures it reports
+  with pandas and to say the formulas were not recalculated. `verify_document`
+  confirms a .docx or .pptx is a real Word or PowerPoint file and counts its
+  headings, tables, pictures, slides and charts. Text saved under a .docx name
+  is an error that says how to build a real one. The skill also teaches real
+  headings and tables in Word files and native charts.
 - **The skill suggestion now tells the model which skill to load.** Local models
   ignored the old "skills that may fit this request" line: over 56 tasks one
   called `load_skill` on 3. The line now reads "Call load_skill('pdf') before
@@ -85,7 +106,9 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   completely" and the turn was marked unfinished.
 - A cloud model that spends a whole reply reasoning and returns nothing is
   asked for its lowest reasoning level on the next request, so the turn moves
-  on. A turn now ends on its third cut-off reply in a row, not its third overall.
+  on; after a second such reply in one turn, that level holds for the rest of
+  the turn. A turn now ends on its third cut-off reply in a row, not its third
+  overall.
 - In a `gaia -p` run the agent is told nobody can answer questions, so it
   settles an open choice itself and says what it assumed instead of ending on
   an offer to change it later.

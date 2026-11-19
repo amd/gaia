@@ -609,17 +609,22 @@ def resolve_default_vision_model(chat_model: Optional[str] = None) -> Optional[s
     return model if model in VISION_CHAT_MODELS else DEFAULT_MODEL_NAME
 
 
-def resident_vision_model(configured: str, base_url: Optional[str] = None) -> str:
+def resident_vision_model(
+    configured: str,
+    base_url: Optional[str] = None,
+    client: Optional["LemonadeClient"] = None,
+) -> str:
     """The already-loaded vision model to read images with, else ``configured``.
 
     Reading a scan with a model that is already resident spares a reload and
     evicting chat. Only :data:`VISION_CHAT_MODELS` count, because those have
     been tested; a model named outside that set was chosen on purpose and stays.
+    The server asked is *client*'s when given, else the one at *base_url*.
     """
     if configured not in VISION_CHAT_MODELS:
         return configured
     try:
-        loaded = LemonadeClient(base_url=base_url).health_check()
+        loaded = (client or LemonadeClient(base_url=base_url)).health_check()
     except LemonadeClientError as e:
         # VLMClient.check_availability reports the unreachable server next.
         log.warning("Could not read the loaded models from Lemonade: %s", e)
@@ -2332,14 +2337,10 @@ MODELS = {
         # Q8_0 weights; held in memory beside the chat model (CO_RESIDENT_MODELS).
         size_gb=0.33,
     ),
-    # --- NPU-native FLM embedder for the NPU profile (#1744) ---
-    # EmbeddingGemma 300M built for the FastFlowLM/NPU backend. On a shared-
-    # memory Ryzen AI APU a GGUF embedder runs on Vulkan/llama.cpp and
-    # reclaims the memory the FLM chat model holds, so loading it evicts the
-    # chat model — every chat turn then thrashes NPU<->Vulkan (#1676). Keeping
-    # the embedder on the same FLM/NPU backend as the chat model lets both stay
-    # co-resident. Built-in Lemonade *-FLM model: pull by name only (no recipe;
-    # passing recipe triggers user-model registration and 400s — #1655).
+    # --- NPU-native FLM embedder (#1744) ---
+    # EmbeddingGemma 300M built for FastFlowLM. No profile uses it: its search
+    # ranked at chance on FLM 1.0.7 (GaiaConfig.TESTED_EMBEDDING_DEVICES).
+    # Built-in Lemonade *-FLM model: pull by name only (no recipe — #1655).
     "embed-gemma-flm": ModelRequirement(
         model_type=ModelType.EMBEDDING,
         model_id="embed-gemma-300m-FLM",
@@ -7129,20 +7130,39 @@ class LemonadeClient:
                 )
                 return
 
+            def _open_chunks():
+                return self._stream_chat_chunks(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_completion_tokens=max_completion_tokens,
+                    stop=stop,
+                    timeout=timeout,
+                    logprobs=logprobs,
+                    tools=tools,
+                    **kwargs,
+                )
+
             produced = False
-            for chunk in self._stream_chat_chunks(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                max_completion_tokens=max_completion_tokens,
-                stop=stop,
-                timeout=timeout,
-                logprobs=logprobs,
-                tools=tools,
-                **kwargs,
-            ):
-                produced = True
-                yield chunk
+            try:
+                for chunk in _open_chunks():
+                    produced = True
+                    yield chunk
+            except LemonadeClientError as e:
+                if produced:
+                    raise
+
+                # A client outside the lease can evict the model after the
+                # check above; reload once, as chat_completions does.
+                def _reopen_chunks():
+                    check_cancelled(f"'{model}' to reload")
+                    return _open_chunks()
+
+                for chunk in self._execute_with_auto_download(
+                    _reopen_chunks, model, auto_download, error=e
+                ):
+                    produced = True
+                    yield chunk
 
             # A cloud model that streamed nothing has not "finished" — the
             # gateway accepted the request and sent no tokens. Falling back is

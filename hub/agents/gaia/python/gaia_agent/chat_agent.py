@@ -112,7 +112,7 @@ from gaia.agents.base.verification import (
     cut_by_time_limit,
 )
 from gaia.agents.install_hints import missing_package_hint
-from gaia.agents.registry import get_embedding_model_for_device
+from gaia.agents.registry import machine_embedding_model
 from gaia.agents.tools import FileSystemToolsMixin  # Enhanced file system navigation
 from gaia.agents.tools import ScratchpadToolsMixin  # Structured data analysis
 from gaia.agents.tools import (  # Web browsing and search; Shared tools
@@ -952,11 +952,10 @@ class ChatAgent(
         # Its clients keep this server; a change in Settings needs a new agent.
         self._model_server_at_build = configured_lemonade_url()
 
-        # Embedder is device-scoped: the NPU profile uses the FLM-native
-        # embedder so chat and embeddings stay co-resident on the NPU backend
-        # (a GGUF embedder runs on Vulkan and evicts the FLM chat model every
-        # turn — #1744). GPU/CPU use the GGUF embedder `gaia init` downloads.
-        effective_embedding_model = get_embedding_model_for_device(config.device)
+        # One per PC, not per chat device, so a chat on the other device
+        # doesn't clear Memory's vectors.
+        effective_embedding_model = machine_embedding_model()
+        self._embedder_at_build = effective_embedding_model
 
         # RAG (#2323 Increment 3): ``RAGConfig`` is cheap (no I/O) and built
         # eagerly here — every profile's allowed_paths/model/embedding wiring
@@ -2601,10 +2600,19 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def built_settings_changed(self) -> bool:
         """True when a setting this agent was built from changed since.
 
-        Its model server and MCP tools are fixed as it is built, so a chat
-        must rebuild its agent to follow Settings.
+        Its model server, embedder and MCP tools are fixed as it is built, so
+        a chat must rebuild its agent to follow Settings.
         """
-        return self.model_server_changed() or self.mcp_settings_changed()
+        return (
+            self.model_server_changed()
+            or self.embedder_changed()
+            or self.mcp_settings_changed()
+        )
+
+    def embedder_changed(self) -> bool:
+        """True when the embedder chosen in Settings › Memory changed since this agent was built."""
+        built = getattr(self, "_embedder_at_build", None)
+        return built is not None and built != machine_embedding_model()
 
     def model_server_changed(self) -> bool:
         """True when the Lemonade Server chosen in Settings changed since this agent was built.
