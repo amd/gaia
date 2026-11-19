@@ -42,15 +42,12 @@ from typing import (
     Union,
 )
 
-import openai  # For exception types
 import requests
-
-# Import OpenAI client for internal use
-from openai import OpenAI
 
 from gaia.env import child_env, load_env
 from gaia.llm import call_ledger, stream_watchdog
 from gaia.llm.degenerate_output import DegenerateOutput, DegenerateOutputGuard
+from gaia.llm.lazy_openai import OpenAI, loaded_openai_errors, openai
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -879,9 +876,13 @@ NPU_BACKEND_INSTALL_TIMEOUT = 600  # seconds; the FastFlowLM release download
 # slot over one shared KV pool keeps the conversation resident, so the RAM copy
 # buys nothing; the similarity floor keeps a short side prompt off its slot. The
 # third slot holds the full tool list primed, out of the side jobs' way.
+# llama.cpp keeps up to 32 context checkpoints per slot in host RAM (63 MB each
+# for Qwen3.6-35B); 16 halves that and re-reads no more tokens on a new chat,
+# an edit or a regenerate.
 # Args the user saved for the model in Lemonade win (users_llamacpp_args).
 CHAT_LLAMACPP_ARGS = (
-    "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5"
+    "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5 "
+    "--ctx-checkpoints 16"
 )
 #: Slots requests are pinned to (llama.cpp ``id_slot``). Left to LRU, a memory
 #: extraction landed on the conversation's slot and overwrote it, and the next
@@ -898,6 +899,7 @@ FULL_TOOLS_SLOT = 2
 _GAIA_SAVED_CHAT_ARGS = frozenset(
     {
         CHAT_LLAMACPP_ARGS,
+        "--parallel 3 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 2 --kv-unified --cache-ram 0 --slot-prompt-similarity 0.5",
         "--parallel 1",
     }
@@ -4194,7 +4196,7 @@ class UsersServerUnchangedError(LemonadeClientError):
     """
 
 
-def _cloud_error_status(error: openai.APIError) -> Optional[int]:
+def _cloud_error_status(error: "openai.APIError") -> Optional[int]:
     """Read numeric status fields; never interpret or display upstream text."""
     status = getattr(error, "status_code", None)
     if (
@@ -5382,7 +5384,7 @@ class LemonadeClient:
         except (
             LemonadeClientError,
             requests.exceptions.RequestException,
-            openai.APIError,
+            *loaded_openai_errors("APIError"),
         ) as e:
             if not self._recover_stopped_gaia_lemonade(e, model):
                 raise
@@ -5402,7 +5404,7 @@ class LemonadeClient:
         except (
             LemonadeClientError,
             requests.exceptions.RequestException,
-            openai.APIError,
+            *loaded_openai_errors("APIError"),
         ) as e:
             if yielded or not self._recover_stopped_gaia_lemonade(e, model):
                 raise

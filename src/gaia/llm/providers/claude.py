@@ -17,13 +17,6 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
-# The factory imports this module only when the claude provider is requested,
-# so the guarded import never taxes the Lemonade-only path.
-try:
-    import anthropic
-except ImportError:
-    anthropic = None  # type: ignore[assignment]
-
 from ..base_client import LLMClient
 from ..lemonade_client import is_provider_context_overflow
 from ..local_only import assert_provider_permitted
@@ -250,7 +243,29 @@ def _check_empty_reply(stop_reason: str, api_blocks: List[dict]) -> None:
     )
 
 
+_UNLOADED = object()
+
+
+def __getattr__(name: str):
+    """Load the Anthropic SDK the first time ``anthropic`` is read here.
+
+    Other modules import this one for its constants, so the SDK must not load
+    with it. ``None`` stands for "not installed", as the old guarded import did.
+    """
+    if name != "anthropic":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    try:
+        import anthropic as sdk  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        sdk = None
+    globals()["anthropic"] = sdk
+    return sdk
+
+
 def _require_anthropic():
+    anthropic = globals().get("anthropic", _UNLOADED)
+    if anthropic is _UNLOADED:
+        anthropic = __getattr__("anthropic")
     if anthropic is None:
         raise ImportError(
             "The 'anthropic' package is required for --use-claude. "
