@@ -44,7 +44,9 @@ GH = shutil.which("gh") or (
     else None
 )
 TOKEN = os.environ.get("GITHUB_TOKEN") or (
-    subprocess.run([GH, "auth", "token"], capture_output=True, text=True).stdout.strip()
+    subprocess.run(
+        [GH, "auth", "token"], capture_output=True, text=True, timeout=30
+    ).stdout.strip()
     if GH
     else ""
 )

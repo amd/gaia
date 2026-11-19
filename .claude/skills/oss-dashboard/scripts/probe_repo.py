@@ -83,6 +83,10 @@ KNOWN_EVENTS = (
 )
 
 
+class NetworkError(ConnectionError):
+    """A request that failed at the network level three times. An OSError, so registry lookups can catch it."""
+
+
 class ApiError(Exception):
     def __init__(self, status: int, url: str, body: str):
         super().__init__(f"GET {url} returned HTTP {status}: {body[:200]}")
@@ -93,7 +97,9 @@ def _token() -> str | None:
     if os.environ.get("GITHUB_TOKEN"):
         return os.environ["GITHUB_TOKEN"]
     if GH:
-        r = subprocess.run([GH, "auth", "token"], capture_output=True, text=True)
+        r = subprocess.run(
+            [GH, "auth", "token"], capture_output=True, text=True, timeout=30
+        )
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()
     return None
@@ -133,7 +139,7 @@ def get(
             if attempt < 2:
                 time.sleep(3 * (attempt + 1))
                 continue
-            raise SystemExit(
+            raise NetworkError(
                 f"probe: GET {url} failed three times ({e}); check the network or proxy and run the probe again."
             ) from e
     raise AssertionError("unreachable")
@@ -170,14 +176,28 @@ def file_text(repo: str, path: str, ref: str) -> str | None:
     return None
 
 
+# Registry checks that could not be answered; main() adds them to the report's warnings.
+REGISTRY_WARNINGS: list[str] = []
+
+
 def exists(url: str) -> bool:
+    """Whether a registry has this package; a registry that is down is a warning, not a failed probe."""
     try:
         get(url)
         return True
     except ApiError as e:
         if e.status == 404:
             return False
-        raise
+        if e.status < 500:
+            raise
+        REGISTRY_WARNINGS.append(
+            f"Could not check {url} (HTTP {e.status}); add that package to PACKAGES by hand if it exists."
+        )
+    except NetworkError as e:
+        REGISTRY_WARNINGS.append(
+            f"Could not check {url} ({e.__cause__}); add that package to PACKAGES by hand if it exists."
+        )
+    return False
 
 
 MISSING = object()
@@ -474,7 +494,7 @@ def docker_candidates(text: str, repo: str) -> tuple[set[str], bool]:
     for t in tokens:
         t = t.split("=", 1)[1] if t.startswith("name=") else t
         t = t.lower()
-        if t.startswith("ghcr.io/"):
+        if t.split("/", 1)[0] == "ghcr.io":
             ghcr = True
             continue
         t = re.sub(r"^(index\.)?docker\.io/", "", t).split("@", 1)[0]
@@ -1100,6 +1120,7 @@ def main() -> int:
 
     report["packages"] = detect_packages(repo, ref)
     report["package_candidates"] = WORKSPACE_CANDIDATES
+    report["warnings"] += REGISTRY_WARNINGS
     for reg, names in WORKSPACE_CANDIDATES.items():
         if names:
             report["warnings"].append(
@@ -1164,4 +1185,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except NetworkError as e:
+        # A GitHub call that the network kept dropping: stop with the message, not a traceback.
+        print(e, file=sys.stderr)
+        sys.exit(2)
