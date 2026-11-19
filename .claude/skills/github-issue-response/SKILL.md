@@ -83,16 +83,19 @@ yet — teach with a concrete example rather than correcting them abstractly.
 Outside contributors (anyone who isn't a maintainer or a bot) keep coming back when they feel
 seen. Do it the way a person would, not a script.
 
+- **Thank after it lands.** The thank-you comes once the contribution is complete: the PR
+  merged, or the reported bug fixed. During review, comments stay about the review.
 - **Be selective.** Engage where the work matters: a fix users will feel, a first contribution,
   someone with a run of good PRs, a sharp bug report. Routine or minor items and drafts don't
   need a thank-you.
 - **Never restate their PR or issue.** Repeating the title or description back to them is
   noise. Say something new: what it unlocks for users, a detail in the approach you liked, a
   next step they might enjoy picking up, or just a warm thanks.
-- **Sound human.** One or two short sentences in plain words. No "We appreciate the
-  contribution", no templates, no emoji walls.
-- **Stagger it.** Engage as the work happens (while reviewing, on merge, when replying), never
-  as a batch comment across every open PR. Never script bulk thank-yous.
+- **Make each one unique.** Write it for this person and this work; no two thank-yous should
+  read alike. Keep it short: one or two plain sentences, never a paragraph. No "We appreciate
+  the contribution", no templates, no emoji walls.
+- **Stagger it.** Thank each one as it lands, never as a batch comment across every open PR.
+  Never script bulk thank-yous.
 - **Reactions are a light touch.** A 🎉 on a merged community PR or a ❤️ on a great report is
   enough on its own; still selective.
 

@@ -218,9 +218,10 @@ independently is common in a big parallel batch.
 
 Third-party PRs come first in each round and get a line-by-line security review. Engage with
 their authors the way `github-issue-response` → *Community engagement* describes: selectively,
-in a human voice, staggered as work happens, and never by restating their PR. Subagents keep
-their PR comments about the review itself; the coordinator decides when a thank-you is worth
-posting (usually on merge of impactful work).
+in a human voice, and never by restating their PR. Thank only after the contribution lands
+(PR merged, reported bug fixed), with a short note unique to that person and work. Subagents
+keep their PR comments about the review itself; the coordinator posts the thank-you after the
+merge.
 
 ## Re-verifying a previously-held PR
 
