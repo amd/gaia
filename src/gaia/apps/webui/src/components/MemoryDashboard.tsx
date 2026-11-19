@@ -241,6 +241,8 @@ export function MemoryDashboard() {
     const [discLogs, setDiscLogs] = useState<LogLine[]>([]);
     const [discItems, setDiscItems] = useState<CheckedDiscoveryFinding[]>([]);
     const [discSavedCount, setDiscSavedCount] = useState<number | null>(null);
+    // Indexes of sensitive findings the user chose to show; findings have no id yet.
+    const [discRevealed, setDiscRevealed] = useState<Set<number>>(new Set());
     const discLogRef = useRef<HTMLDivElement>(null);
     const discEsRef = useRef<EventSource | null>(null);
 
@@ -847,6 +849,7 @@ export function MemoryDashboard() {
         setDiscPhase('running');
         setDiscLogs([]);
         setDiscItems([]);
+        setDiscRevealed(new Set());
         setDiscSavedCount(null);
 
         const es = memoryApi.openDiscoveryStream();
@@ -863,7 +866,10 @@ export function MemoryDashboard() {
                 } else if (data.type === 'finding') {
                     const item = data.item as memoryApi.DiscoveryFinding;
                     // Bare: a bracketed English copy would repeat the whole item on every log line.
-                    setDiscLogs(prev => [...prev, { text: t.bare('mem.log.found', { content: item.content }), kind: 'finding' }]);
+                    const text = item.sensitive
+                        ? t('mem.log.foundSensitive')
+                        : t.bare('mem.log.found', { content: item.content });
+                    setDiscLogs(prev => [...prev, { text, kind: 'finding' }]);
                     setDiscItems(prev => [...prev, { ...item, _checked: true }]);
                 } else if (data.type === 'error') {
                     setDiscLogs(prev => [...prev, { text: t.bare('mem.log.error', { message: data.message }), kind: 'error' }]);
@@ -2391,7 +2397,23 @@ export function MemoryDashboard() {
                                                             ));
                                                         }}
                                                     />
-                                                    <bdi className="mem-review-content">{item.content}</bdi>
+                                                    {/* Hidden sensitive text is never rendered, matching saved entries. */}
+                                                    {item.sensitive && !discRevealed.has(i) ? (
+                                                        <span className="mem-review-content">
+                                                            <button
+                                                                type="button"
+                                                                className="mem-about-link"
+                                                                onClick={(e) => {
+                                                                    e.preventDefault();
+                                                                    setDiscRevealed(prev => new Set(prev).add(i));
+                                                                }}
+                                                            >
+                                                                <Eye size={12} /> {t('mem.about.showSensitive')}
+                                                            </button>
+                                                        </span>
+                                                    ) : (
+                                                        <bdi className="mem-review-content">{item.content}</bdi>
+                                                    )}
                                                     <span className="mem-source-badge">
                                                         {item._source_name ? <bdi>{item._source_name}</bdi> : <Code value={item.category} keys={CATEGORY_KEYS} />}
                                                     </span>

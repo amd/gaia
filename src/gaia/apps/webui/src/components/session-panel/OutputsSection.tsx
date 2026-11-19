@@ -14,6 +14,7 @@ import { log } from '../../utils/logger';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
 import { useUndoEvents } from '../../utils/undoEvents';
 import { PanelSection } from './PanelSection';
+import { useLatestRead } from '../../hooks/useLatestRead';
 import type { OutputItem, OutputKind } from '../../types/sessionPanel';
 import { ref, type MessageKey, type Param, type Params } from '../../i18n/registry';
 import { dateLocale, tEn, useT, type Translate } from '../../i18n/useT';
@@ -62,51 +63,52 @@ interface OutputsSectionProps {
     onJumpToMessage: (messageId: number) => boolean;
 }
 
+/** Shown once the chat has made something; an empty list is no section at all. */
 export function OutputsSection({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) {
-    const t = useT();
-    return (
-        <PanelSection id="outputs" title={t('out.title')}>
-            <OutputsList sessionId={sessionId} busy={busy} onJumpToMessage={onJumpToMessage} />
-        </PanelSection>
-    );
-}
-
-function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) {
     const t = useT();
     const [items, setItems] = useState<OutputItem[] | null>(null);
     const [error, setError] = useState<Param | null>(null);
-    const [actionError, setActionError] = useState<string | null>(null);
-    const [all, setAll] = useState(false);
 
+    const begin = useLatestRead();
     const load = useCallback(() => {
-        let live = true;
+        const lands = begin();
         Promise.resolve()
             .then(() => api.getOutputs(sessionId))
             .then((res) => {
-                if (!live) return;
+                if (!lands()) return;
                 setItems(expectShape(res, (r) => Array.isArray(r.items), 'list of outputs').items);
                 setError(null);
             })
             .catch((err) => {
-                if (!live) return;
+                if (!lands()) return;
                 log.ui.warn(`Could not list what session=${sessionId} produced`, err);
                 setError(requestErrorParam(err));
             });
-        return () => { live = false; };
-    }, [sessionId]);
-    useEffect(load, [load]);
+    }, [begin, sessionId]);
+    useEffect(() => { load(); }, [load]);
     useTurnEnd(busy, load);
     // Undo elsewhere (an answer's row, Undo all) changes what is on disk.
     useUndoEvents(sessionId, load);
+
+    if (!error && (!items || items.length === 0)) return null;
+    return (
+        <PanelSection id="outputs" title={t('out.title')} summary={items && items.length > 0 ? String(items.length) : null}>
+            {error
+                ? <p className="sp-error">{t('out.listError', { error })}</p>
+                : <OutputsList items={items ?? []} onJumpToMessage={onJumpToMessage} />}
+        </PanelSection>
+    );
+}
+
+function OutputsList({ items, onJumpToMessage }: { items: OutputItem[]; onJumpToMessage: (messageId: number) => boolean }) {
+    const t = useT();
+    const [actionError, setActionError] = useState<string | null>(null);
+    const [all, setAll] = useState(false);
 
     const act = (op: Promise<unknown>, name: string) => {
         setActionError(null);
         op.catch((err) => setActionError(t('sp.couldntOpen', { name, error: requestErrorParam(err) })));
     };
-
-    if (error) return <p className="sp-error">{t('out.listError', { error })}</p>;
-    if (!items) return <p className="sp-meta">{t('sp.checking')}</p>;
-    if (items.length === 0) return <p className="sp-meta">{t('out.empty')}</p>;
 
     const shown = all ? items : items.slice(0, OUTPUTS_SHOWN);
     return (
