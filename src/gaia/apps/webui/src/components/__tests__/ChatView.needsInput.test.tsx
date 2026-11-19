@@ -38,15 +38,15 @@ const SESSION: Session = {
     agent_type: 'gaia',
 };
 
-const EMAIL_AGENT: AgentInfo = {
-    id: 'email',
-    name: 'Email Agent',
-    description: 'Triage and reply to email.',
+const GAIA_AGENT: AgentInfo = {
+    id: 'gaia',
+    name: 'GAIA',
+    description: 'The flagship agent.',
     source: 'builtin',
     conversation_starters: ['Triage my inbox'],
     models: [],
-    tags: ['email'],
-    icon: 'mail',
+    tags: [],
+    icon: 'sparkles',
     tools_count: 3,
 };
 
@@ -89,7 +89,7 @@ beforeEach(() => {
     });
 
     useChatStore.setState({
-        agents: [EMAIL_AGENT],
+        agents: [GAIA_AGENT],
         sessions: [SESSION],
         currentSessionId: SESSION.id,
         messages: [],

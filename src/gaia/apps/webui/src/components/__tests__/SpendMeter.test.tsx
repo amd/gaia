@@ -49,6 +49,7 @@ describe('formatUsd', () => {
         expect(formatUsd(0.0042)).toBe('$0.0042');
         expect(formatUsd(0.31)).toBe('$0.31');
         expect(formatUsd(12.345)).toBe('$12.35');
+        expect(formatUsd(0.02, 4)).toBe('$0.0200');
     });
 });
 
@@ -76,6 +77,20 @@ describe('SpendMeter', () => {
         expect(mockedApi.getChatSpending).toHaveBeenCalledWith('s1', expect.any(String), FLASH);
         // Amounts are isolated left-to-right, so an Arabic layout can't reverse "$0.04".
         expect(chip.querySelectorAll('bdi[dir="ltr"]')).toHaveLength(2);
+    });
+
+    it('shows this chat and today to the same number of decimals', async () => {
+        mockedApi.getChatSpending.mockResolvedValue(spending({
+            chat: { ...spending().chat, usd: 0.0083, unpriced_answers: 0 },
+            today: { ...spending().today, usd: 0.02, unpriced_answers: 0 },
+        }));
+        render(<SpendMeter sessionId="s1" busy={false} />);
+        const chip = await screen.findByRole('button', { name: /\$0\.0083 in this chat, \$0\.0200 today/ });
+        expect(chip.textContent).toContain('today $0.0200');
+        fireEvent.click(chip);
+        const panel = await screen.findByRole('dialog', { name: 'Cloud spending' });
+        const totals = panel.querySelectorAll('.context-meter-rows:not(.spend-meter-answers) dd');
+        expect(Array.from(totals).map((r) => r.textContent)).toEqual(['$0.0083', '$0.0200']);
     });
 
     it('lists each answer, newest first, in the breakdown', async () => {

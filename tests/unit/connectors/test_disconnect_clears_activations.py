@@ -145,12 +145,16 @@ async def test_oauth_pkce_disconnect_clears_activations(
 
     captured: Dict[str, Any] = {}
 
-    monkeypatch.setattr(
-        "gaia.connectors.oauth_pkce.delete_connection",
-        lambda provider_id, account_email: captured.update(
-            provider_id=provider_id, account_email=account_email
-        ),
-    )
+    async def _revoke(provider_id, account=None, *, all_accounts=False):
+        captured.update(provider_id=provider_id, all_accounts=all_accounts)
+        return {
+            "remaining_accounts": 0,
+            "revoke_supported": False,
+            "revoked_remotely": False,
+        }
+
+    # The revoke talks to the keyring and the provider; stub it out.
+    monkeypatch.setattr("gaia.connectors.api.revoke_connection_async", _revoke)
 
     from gaia.connectors.spec import ConnectorSpec
 
@@ -182,5 +186,5 @@ async def test_oauth_pkce_disconnect_clears_activations(
     assert list_agent_activations(spec.id) == {}
     assert captured == {
         "provider_id": "oauth-activation-test",
-        "account_email": "default",
+        "all_accounts": True,
     }
