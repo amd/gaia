@@ -199,7 +199,7 @@ class TestNpuProfilePick:
         with pytest.raises(ModelFitError, match="no available AMD NPU.*--profile npu"):
             lc.recommend_npu_chat_model(FakeClient(NO_NPU))
 
-    def test_init_downloads_the_pick_and_the_flm_embedder(self):
+    def test_init_downloads_the_pick_and_the_gpu_embedder(self):
         choice = resolve_init_chat_model(
             FakeClient(STRIX_HALO_128),
             reset_corrupt=False,
@@ -207,7 +207,7 @@ class TestNpuProfilePick:
             profile="npu",
         )
         ids = with_chat_model("npu", INIT_PROFILES["npu"]["models"], lambda: choice)
-        assert ids == [lc.NPU_DEFAULT_MODEL_NAME, "embed-gemma-300m-FLM"]
+        assert ids == [lc.NPU_DEFAULT_MODEL_NAME, "user.embeddinggemma-300m-GGUF"]
 
 
 class TestProfileSwitch:

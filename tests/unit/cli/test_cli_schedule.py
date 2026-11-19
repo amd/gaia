@@ -120,7 +120,8 @@ def test_add_skill_variant_is_rejected(parser, mock_store, capsys):
     err = capsys.readouterr().err
     assert "--skill is not supported yet" in err
     assert "--prompt" in err  # names the workaround
-    assert "1019" in err  # points at the tracking issue
+    assert "issues/6470" in err  # points at the open tracking issue
+    assert "1019" not in err  # the closed one sent users to a dead end
 
 
 def test_add_default_sink_without_to_has_empty_sink_args(parser, mock_store):

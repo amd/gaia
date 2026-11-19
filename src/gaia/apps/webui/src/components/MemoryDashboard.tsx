@@ -6,7 +6,7 @@ import {
     X, Search, RefreshCw, Plus, Trash2, Pencil, Copy, Clock, ArrowLeft,
     Brain, MessageSquare, Wrench, TrendingUp, ChevronLeft, ChevronRight,
     AlertTriangle, CheckCircle, Shield, ShieldOff, ChevronDown, Database,
-    Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks,
+    Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks, Eye,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useGoalHealthStore } from '../stores/goalHealthStore';
@@ -811,6 +811,11 @@ export function MemoryDashboard() {
     const handleToggleSensitive = useCallback(async (entry: KnowledgeEntry) => {
         try {
             await memoryApi.editKnowledge(entry.id, { sensitive: !entry.sensitive });
+            // Marking an entry sensitive hides it, so close an editor holding its text.
+            if (!entry.sensitive && editingId === entry.id && !revealedIds.has(entry.id)) {
+                setEditingId(null);
+                setFormData(prev => ({ ...prev, content: '' }));
+            }
             loadKnowledge();
             log.ui.info(`Toggled sensitive for ${entry.id}: ${!entry.sensitive}`);
             showToast(t(entry.sensitive ? 'mem.toast.unmarkedSensitive' : 'mem.toast.markedSensitive'), 'info');
@@ -818,9 +823,10 @@ export function MemoryDashboard() {
             log.system.error('Failed to toggle sensitive', err);
             showToast(t('mem.toast.sensitiveFailed', { error: errorText(err) }), 'error');
         }
-    }, [loadKnowledge, showToast, t]);
+    }, [loadKnowledge, showToast, t, editingId, revealedIds]);
 
     const startEdit = useCallback((entry: KnowledgeEntry) => {
+        if (entry.sensitive && !revealedIds.has(entry.id)) return;
         setEditingId(entry.id);
         setShowAddForm(false);
         setFormData({
@@ -832,7 +838,22 @@ export function MemoryDashboard() {
             sensitive: entry.sensitive,
             due_at: entry.due_at || '',
         });
-    }, []);
+    }, [revealedIds]);
+
+    const toggleReveal = useCallback((entry: KnowledgeEntry) => {
+        const hiding = revealedIds.has(entry.id);
+        setRevealedIds(prev => {
+            const next = new Set(prev);
+            if (hiding) next.delete(entry.id);
+            else next.add(entry.id);
+            return next;
+        });
+        // Re-hiding must also close an open editor, which holds the plain text.
+        if (hiding && editingId === entry.id) {
+            setEditingId(null);
+            setFormData(prev => ({ ...prev, content: '' }));
+        }
+    }, [revealedIds, editingId]);
 
     const copyId = useCallback((id: string) => {
         navigator.clipboard.writeText(id).then(
@@ -1673,6 +1694,18 @@ export function MemoryDashboard() {
                                                     {knowledge.items.map(entry => {
                                                         const isExpanded = expandedRowId === entry.id;
                                                         const hasEmbed = entry.has_embedding;
+                                                        // Hidden sensitive text is never rendered — not even blurred or in a tooltip.
+                                                        const hidden = entry.sensitive && !revealedIds.has(entry.id);
+                                                        const revealButton = (
+                                                            <button
+                                                                type="button"
+                                                                className="mem-about-link"
+                                                                onClick={(e) => { e.stopPropagation(); toggleReveal(entry); }}
+                                                                onKeyDown={(e) => e.stopPropagation()}
+                                                            >
+                                                                <Eye size={12} /> {t('mem.about.showSensitive')}
+                                                            </button>
+                                                        );
                                                         return (
                                                         <React.Fragment key={entry.id}>
                                                         <tr
@@ -1692,7 +1725,7 @@ export function MemoryDashboard() {
                                                                 </span>
                                                             </td>
                                                             <td>
-                                                                <div className="mem-content-cell" title={entry.content}>
+                                                                <div className="mem-content-cell" title={hidden ? undefined : entry.content}>
                                                                     {/* Embedding status dot — only show when backend provides the field */}
                                                                     {hasEmbed !== undefined && (
                                                                         <span
@@ -1707,24 +1740,17 @@ export function MemoryDashboard() {
                                                                             <Shield size={11} />
                                                                         </span>
                                                                     )}
-                                                                    <span className={
-                                                                        entry.sensitive && !revealedIds.has(entry.id)
-                                                                            ? 'mem-sensitive-blur'
-                                                                            : entry.superseded_by ? 'mem-superseded-text' : ''
-                                                                    }
-                                                                    onClick={(e) => {
-                                                                        if (entry.sensitive) {
-                                                                            e.stopPropagation();
-                                                                            setRevealedIds(prev => {
-                                                                                const next = new Set(prev);
-                                                                                if (next.has(entry.id)) next.delete(entry.id);
-                                                                                else next.add(entry.id);
-                                                                                return next;
-                                                                            });
-                                                                        }
-                                                                    }}>
-                                                                        <bdi>{entry.content}</bdi>
-                                                                    </span>
+                                                                    {hidden ? revealButton : (
+                                                                        <span className={entry.superseded_by ? 'mem-superseded-text' : ''}
+                                                                            onClick={(e) => {
+                                                                                if (entry.sensitive) {
+                                                                                    e.stopPropagation();
+                                                                                    toggleReveal(entry);
+                                                                                }
+                                                                            }}>
+                                                                            <bdi>{entry.content}</bdi>
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                             </td>
                                                             <td>
@@ -1775,7 +1801,9 @@ export function MemoryDashboard() {
                                                             </td>
                                                             <td className="mem-actions-cell">
                                                                 <div className="mem-row-actions" onClick={e => e.stopPropagation()}>
-                                                                    <button className="mem-row-action-btn" onClick={() => startEdit(entry)} title={t('mem.row.edit')}>
+                                                                    <button className="mem-row-action-btn" onClick={() => startEdit(entry)}
+                                                                        disabled={hidden}
+                                                                        title={t(hidden ? 'mem.about.editHidden' : 'mem.row.edit')}>
                                                                         <Pencil size={13} />
                                                                     </button>
                                                                     <button className="mem-row-action-btn" onClick={() => handleToggleSensitive(entry)}
@@ -1855,7 +1883,7 @@ export function MemoryDashboard() {
                                                                         </div>
                                                                         <div className="mem-detail-content-full">
                                                                             <span className="mem-detail-label">{t('mem.detail.fullContent')}</span>
-                                                                            <div className="mem-detail-content-text"><bdi>{entry.content}</bdi></div>
+                                                                            <div className="mem-detail-content-text">{hidden ? revealButton : <bdi>{entry.content}</bdi>}</div>
                                                                         </div>
                                                                     </div>
                                                                 </td>

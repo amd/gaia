@@ -1562,6 +1562,39 @@ def _local_unavailable(models: List[Dict[str, Any]], model_id: str) -> Optional[
     )
 
 
+def device_unavailable_reason(recipe: str) -> Optional[str]:
+    """Why this PC can't run a model with *recipe*, judged by its hardware.
+
+    For a model the chat list leaves out, such as an embedder: no NPU, an NPU
+    that isn't set up, or no backend for *recipe*. Raises
+    :class:`ProviderError` when Lemonade can't be read.
+    """
+    from gaia.installer.model_choice import backend_fit, cant_run_reason
+    from gaia.llm.model_fit import (
+        ModelFitError,
+        capacity_from_system_info,
+        npu_capacity,
+        npu_not_ready_reason,
+    )
+
+    system_info = _read_system_info()
+    if recipe == "flm":
+        try:
+            capacity = capacity_from_system_info(system_info)
+        except ModelFitError:
+            # No memory figures: the backend check below still decides.
+            capacity = None
+        if capacity is not None:
+            npu = npu_capacity(capacity)
+            if npu is None:
+                return "Lemonade reports no Ryzen AI NPU on this PC"
+            reason = npu_not_ready_reason(npu)
+            if reason:
+                return reason
+    fit = {"fits": None, "fit_reason": None, "fit_code": None}
+    return cant_run_reason(backend_fit(fit, recipe, system_info))
+
+
 def local_unavailable_reason(model_id: str) -> Optional[str]:
     """Why nothing on this PC can run local *model_id*; None if something can.
 
