@@ -49,11 +49,13 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   still one line in the user's message, with the skills in the same order.
 - **A skill that clearly fits the request can load before the turn (opt-in).**
   With `GAIA_SKILL_AUTOLOAD=1` or `skill_autoload=True`, the best match loads
-  first when it scores at least 0.55 and is 0.03 ahead of every skill it does
+  first when it scores at least 0.40 and is 0.03 ahead of every skill it does
   not pair with. The request then opens with "Loaded report-from-sources
   because it matches this request". Weaker matches are suggested as before.
-  - Skills that pair with the best match no longer block it, and the best of
-    them that also scores 0.55 loads with it. Two skills per turn at most.
+  - Skills that pair with the best match no longer block it. A paired skill
+    loads with it only when it scores 0.40 and is 0.03 ahead of every
+    remaining skill itself; otherwise the request names it as "Also
+    available". Two skills per turn at most.
   - Only trusted skills load this way: ones that ship with the agent, and hub
     installs at the `community` tier or above. A captured skill, your own
     skill and anything from a `.claude` folder stay suggestions.
@@ -64,14 +66,14 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
     model's context window (about 5,900 tokens of the default 32,768).
   - A skill unloaded earlier in the session is not auto-loaded again.
   - `GAIA_SKILL_AUTOLOAD_TAU` and `GAIA_SKILL_AUTOLOAD_MARGIN` (or
-    `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.55 and
+    `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.40 and
     0.03.
   - If you turn it on where it cannot run (catalogue or suggestions off, fast
     mode, memory off, or an embedder other than `embeddinggemma-300m`), one
     warning says it is inactive and why.
 
-  Off by default: 0.55 and 0.03 have not been re-measured on the current
-  labelled requests.
+  Off by default. On the held-out half of the labelled requests, 0.40 and
+  0.03 measured precision 0.93 and recall 0.59.
 - **Start a message with `/` and a skill's name to run that skill**, as in
   Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
   with the same checks as `load_skill` and follows it for the rest of the line.
