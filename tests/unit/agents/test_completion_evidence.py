@@ -364,8 +364,12 @@ def test_executor_mutation_invalidates_prior_readback(agent):
         {"answer": "Saved to `summary.md`."},
     )
     result = agent.process_query("Save to `summary.md`", max_steps=4)
-    assert result["status"] == "incomplete"
-    assert "read back" in result["result"]
+    # The file exists, so the turn is done; the unread change is a caveat.
+    assert result["status"] == "success"
+    assert result["completion_gaps"] == []
+    assert any("read back" in gap for gap in result["completion_caveats"])
+    assert "Not checked: `" in result["result"] and "read back" in result["result"]
+    assert "can't confirm" not in result["result"]
 
 
 def test_executor_failure_after_write_cannot_reuse_old_evidence(agent):
