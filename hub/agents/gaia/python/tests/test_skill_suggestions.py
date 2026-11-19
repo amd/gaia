@@ -23,6 +23,7 @@ from gaia.agents.base.skill_suggester import (
     DEFAULT_AUTOLOAD_MARGIN,
     DEFAULT_AUTOLOAD_THRESHOLD,
     DEFAULT_SUGGEST_THRESHOLD,
+    DOC_PROMPT,
     SkillMatches,
     SkillSuggester,
 )
@@ -238,7 +239,7 @@ def test_a_real_suggester_reaches_the_turn_context(monkeypatch):
         )
         for name in ("image-gen", "coding")
     }
-    axis = {"image-gen: does image-gen": 0, "coding: does coding": 1}
+    axis = {f"{DOC_PROMPT}does image-gen": 0, f"{DOC_PROMPT}does coding": 1}
 
     def embed(text):
         v = np.zeros(4, dtype=np.float32)
@@ -518,8 +519,10 @@ def _loading(monkeypatch, auto, *, names=(), library=None, fail=None, window=WIN
 
 
 def _suggests(context, name):
+    """The last line names *name*: as the instruction, or after an auto-load
+    as available."""
     line = context.splitlines()[-1]
-    return line.startswith("Call load_skill(") and name in line
+    return line.startswith(("Call load_skill(", "Also available: ")) and name in line
 
 
 def test_a_high_confidence_match_is_loaded_and_announced(monkeypatch):
@@ -531,8 +534,8 @@ def test_a_high_confidence_match_is_loaded_and_announced(monkeypatch):
         "Current time: now",
         "Loaded report-from-sources because it matches this request — its "
         "instructions are in the system prompt.",
-        "Call load_skill('office-docs') before you start: it covers this kind "
-        "of request.",
+        "Also available: office-docs. Call load_skill for one only if this "
+        "request needs it.",
     ]
     # Pinned, so this turn's body selection cannot hide what it was loaded for.
     assert "report-from-sources" in agent._sticky_skill_turns
@@ -695,7 +698,7 @@ def _plain(name, pairs=()):
 
 def _scoring(names, scores):
     """An embedder giving each skill in *names* its score for any request."""
-    axis = {f"{name}: does {name}": i for i, name in enumerate(names)}
+    axis = {f"{DOC_PROMPT}does {name}": i for i, name in enumerate(names)}
 
     def embed(text):
         v = np.zeros(len(names) + 1, dtype=np.float32)
@@ -709,7 +712,7 @@ def _scoring(names, scores):
     return embed
 
 
-def test_a_real_suggester_loads_the_best_match_and_one_companion(monkeypatch):
+def test_a_real_suggester_loads_the_best_match_and_names_its_companions(monkeypatch):
     names = ["slide-decks", "report-from-sources", "office-docs"]
     skills = {
         "slide-decks": _plain("slide-decks", pairs=names[1:]),
@@ -728,9 +731,36 @@ def test_a_real_suggester_loads_the_best_match_and_one_companion(monkeypatch):
         discover=lambda: skills, load=lambda name: _full_skill(name)
     )
     context = _with_turn_context(monkeypatch, agent, "turn my notes into slides")
-    assert agent.loads == ["slide-decks", "report-from-sources"]
-    assert "Loaded slide-decks and report-from-sources because they match" in context
-    assert _suggests(context, "office-docs")
+    assert agent.loads == ["slide-decks"]
+    assert context.splitlines()[-2:] == [
+        "Loaded slide-decks because it matches this request — its instructions "
+        "are in the system prompt.",
+        "Also available: report-from-sources, office-docs. Call load_skill for "
+        "one only if this request needs it.",
+    ]
+
+
+def test_a_companion_that_leads_the_rest_itself_loads_with_the_best_match(
+    monkeypatch,
+):
+    names = ["alpha", "beta", "gamma"]
+    skills = {
+        "alpha": _plain("alpha", pairs=["beta"]),
+        "beta": _plain("beta"),
+        "gamma": _plain("gamma"),
+    }
+    agent = _loading(monkeypatch, [], names=names)
+    agent.skill_suggester = SkillSuggester(
+        _scoring(names, {"alpha": 0.62, "beta": 0.60, "gamma": 0.41}),
+        autoload_threshold=DEFAULT_AUTOLOAD_THRESHOLD,
+    )
+    agent._skill_manager = SimpleNamespace(
+        discover=lambda: skills, load=lambda name: _full_skill(name)
+    )
+    context = _with_turn_context(monkeypatch, agent, "do both things")
+    assert agent.loads == ["alpha", "beta"]
+    assert "Loaded alpha and beta because they match" in context
+    assert "gamma" not in context
 
 
 # ── auto-load: trust ────────────────────────────────────────────────────────

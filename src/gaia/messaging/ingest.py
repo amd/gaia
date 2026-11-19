@@ -44,7 +44,10 @@ def ingest_document_to_rag(
 
     Returns whatever `RAGSDK.index_document` returns (a dict of stats).
     """
-    cfg = config or RAGConfig()
-    rag = RAGSDK(cfg)
+    if config is None:
+        from gaia.agents.registry import machine_embedding_model
+
+        config = RAGConfig(embedding_model=machine_embedding_model())
+    rag = RAGSDK(config)
     result = rag.index_document(file_path)
     return result

@@ -1119,7 +1119,7 @@ class GaiaAgent(
         parts = (
             super().get_memory_dynamic_context(),
             render_autoloaded(auto),
-            render_suggestion(suggested),
+            render_suggestion(suggested, after_autoload=bool(auto)),
         )
         return "\n".join(part for part in parts if part)
 

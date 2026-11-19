@@ -553,6 +553,63 @@ def test_shutdown_all_stops_every_running_manager():
     assert entries["toy-b"]["state"] == "stopped"
 
 
+def test_process_ids_names_only_running_sidecars():
+    reg = _make_registry({"toy-a": _TOY_A, "toy-b": _TOY_B})
+    a = reg.ensure("toy-a")
+    b = reg.ensure("toy-b")
+    assert reg.process_ids() == {a["pid"], b["pid"]}
+
+    reg._managers["toy-b"][0].shutdown()
+    assert reg.process_ids() == {a["pid"]}
+
+
+def test_stop_idle_stops_every_running_sidecar(monkeypatch):
+    """#8504: the app quit, so nobody is left for an agent to serve."""
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _make_registry({"toy-a": _TOY_A, "toy-b": _TOY_B})
+    reg.ensure("toy-a")
+    reg.ensure("toy-b")
+
+    assert sorted(reg.stop_idle()) == ["toy-a", "toy-b"]
+    assert reg.process_ids() == set()
+    assert reg.stop_idle() == []
+
+
+def test_stop_idle_never_waits_on_an_agent_being_started_or_installed(monkeypatch):
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _make_registry({"toy-a": _TOY_A, "toy-b": _TOY_B})
+    reg.ensure("toy-a")
+    reg.ensure("toy-b")
+    reg._managers["toy-a"][1].acquire()  # an ensure or install holds it
+    try:
+        result = []
+        worker = threading.Thread(target=lambda: result.append(reg.stop_idle()))
+        worker.start()
+        worker.join(timeout=5)
+        assert not worker.is_alive(), "stop_idle blocked on a held agent lock"
+    finally:
+        reg._managers["toy-a"][1].release()
+
+    assert result == [["toy-b"]]
+    assert reg._managers["toy-a"][0].is_running
+
+
+def test_stop_idle_reports_a_survivor_after_stopping_the_rest(monkeypatch):
+    from gaia.daemon.sidecars.errors import StopFailedError
+
+    reg = _make_registry({"toy-a": _TOY_A, "toy-b": _TOY_B})
+    survivor = reg.ensure("toy-a")["pid"]
+    reg.ensure("toy-b")
+    monkeypatch.setattr(
+        "gaia.daemon.sidecars.registry.pid_alive", lambda pid: pid == survivor
+    )
+
+    with pytest.raises(StopFailedError, match=str(survivor)):
+        reg.stop_idle()
+    assert not reg._managers["toy-b"][0].is_running
+    assert not reg._managers["toy-a"][1].locked()
+
+
 # ===========================================================================
 # sidecars/ledger.py — spawn ledger for crash-reap
 # ===========================================================================

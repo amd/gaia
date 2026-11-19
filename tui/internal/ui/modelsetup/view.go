@@ -575,7 +575,7 @@ func (m Model) marks(it item, avail int) string {
 		parts = append(parts, warnStyle.Render("[!]"))
 	}
 	rec := -1
-	if m.recommendedFor(it) && (r.fits != nil || r.planned) && !r.installed && !r.npuBlocked() {
+	if m.recommendedFor(it) && (r.fits != nil || r.planned) && !r.installed && !r.cantRunHere() {
 		rec = len(parts)
 		parts = append(parts, accentStyle.Render(markRecommended))
 	}
@@ -634,8 +634,8 @@ func (m Model) noteLines(w int) []string {
 		add(dimStyle, "Partly downloaded, "+textutil.FormatGB(*r.leftGB)+" left.")
 	}
 	switch {
-	case r.npuBlocked():
-		add(warnStyle, "[!] "+npuBlockedLine(r.fitReason))
+	case r.cantRunHere():
+		add(warnStyle, "[!] "+cantRunLine(r.fitReason))
 	case r.fits != nil && !*r.fits && r.needGB != nil && r.haveGB != nil:
 		add(warnStyle, noFitLine(*r.needGB, *r.haveGB))
 	case r.fits == nil && !r.downloaded:
