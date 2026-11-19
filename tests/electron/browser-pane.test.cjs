@@ -623,7 +623,7 @@ describe("dev QA mode", () => {
     expect(main).toContain("if (!devQa) showingInstallScreen = !backendInstaller.isBackendCurrent();");
     expect(main).toContain("const gaiaCmd = devQa ? devQa.gaiaBin : backendInstaller.findGaiaBin();");
     expect(main).toContain("if (!devQa) await cleanupOrphanedBackend();");
-    expect(main).toMatch(/if \(!devQa\) \{\r?\n\s+try \{\r?\n[^]*?backend\.pid/);
+    expect(main).toMatch(/if \(!devQa\) \{\r?\n\s+try \{\r?\n\s+const file = recordBackend\(/);
     // Seeding and the startup orphan cleanup share one dev-QA guard, before the install runs.
     const ready = main.slice(main.indexOf("app.whenReady().then("));
     const guard = ready.indexOf("if (!devQa) {");
