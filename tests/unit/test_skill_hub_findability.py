@@ -45,7 +45,10 @@ QUERIES: dict[str, list[str]] = {
     "price-watch": ["track price", "price drop"],
     "recommendations": ["what to watch", "book recommendations"],
     "office-docs": ["excel workbook", "word document"],
-    "report-from-sources": ["report from my source files", "newest copy of each dataset"],
+    "report-from-sources": [
+        "report from my source files",
+        "newest copy of each dataset",
+    ],
     "research-report": ["research report with sources", "literature scan"],
     "rss-digest": ["summarizing RSS feeds", "atom feed"],
     "send-email": ["send an email", "draft an email"],
