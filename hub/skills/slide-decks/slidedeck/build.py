@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import math
 import re
 import time
@@ -67,6 +68,8 @@ from .text import (
     parse_number,
 )
 from .theme import make_theme_presentation
+
+log = logging.getLogger(__name__)
 
 # ----------------------------------------------------------------------
 # Colours
@@ -270,6 +273,41 @@ def _plain(text: str) -> str:
     return "".join(t for t, _b in _split_bold(text))
 
 
+#: Image formats a slide can show as they are; other raster formats become PNG.
+IMAGE_FORMATS = ("PNG", "JPEG", "GIF", "BMP", "TIFF")
+
+
+def _picture_source(path: str) -> Tuple[Any, int, int, str]:
+    """``(file or PNG bytes, width, height, "")`` for an image, or why it cannot be shown.
+
+    python-pptx embeds only :data:`IMAGE_FORMATS`; WebP, ICO and the like are
+    redrawn as PNG in memory. SVG and unreadable files are not images Pillow
+    can open.
+    """
+    from PIL import Image, UnidentifiedImageError
+
+    name = Path(path).name
+    try:
+        with Image.open(path) as im:
+            width, height = im.size
+            if im.format in IMAGE_FORMATS:
+                return path, width, height, ""
+            png = io.BytesIO()
+            plain = im.mode in ("RGB", "RGBA", "L", "LA", "P")
+            (im if plain else im.convert("RGBA")).save(png, format="PNG")
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        log.warning("slide image %s could not be read: %s", name, exc)
+        return (
+            None,
+            0,
+            0,
+            f"image {name} is not a picture a slide can show "
+            f"(use {', '.join(IMAGE_FORMATS)} or WebP)",
+        )
+    png.seek(0)
+    return png, width, height, ""
+
+
 def _open_template(path: Path):
     """Open a .pptx/.potx (a template's content type is rewritten in memory)."""
     if path.suffix.lower() not in (".potx", ".potm"):
@@ -345,6 +383,8 @@ class DeckBuilder:
         self.outline = outline
         self.warnings: List[str] = []
         self.notes: List[str] = []
+        #: Content left out of a built slide, reported like a failed check.
+        self.issues: List[Dict[str, Any]] = []
         prefs = dict(prefs or {})
         style = outline.get("style") if isinstance(outline.get("style"), dict) else {}
         problems = validate_prefs(prefs) + validate_prefs(style)
@@ -605,6 +645,25 @@ class DeckBuilder:
 
     def warn(self, msg: str) -> None:
         self.warnings.append(f"slide {self._current}: {msg}")
+
+    def issue(self, check: str, detail: str, fix: str) -> None:
+        self.issues.append(
+            {
+                "slide": self._current,
+                "check": check,
+                "severity": "warning",
+                "detail": detail,
+                "fix": fix,
+            }
+        )
+
+    @staticmethod
+    def _shorten(shp, bottom: int) -> None:
+        """End *shp* at *bottom*. All four at once: a placeholder that inherits
+        its box and is given only a height is saved with the rest as 0."""
+        left, top, width = int(shp.left), int(shp.top), int(shp.width)
+        height = max(Inches(1), bottom - top)
+        shp.left, shp.top, shp.width, shp.height = left, top, width, height
 
     def _new_slide(self, kind: str):
         slide = self.prs.slides.add_slide(self._layouts[kind])
@@ -1419,7 +1478,7 @@ class DeckBuilder:
         if body:
             shp = body[0]
             if int(shp.top) + int(shp.height) > bottom:
-                shp.height = max(Inches(1), bottom - int(shp.top))
+                self._shorten(shp, bottom)
             placeholder = True
         else:
             shp = self.textbox(slide, self.content_box(bottom), "Body")
@@ -1521,7 +1580,7 @@ class DeckBuilder:
             )[:2]
         for ph in bodies:
             if int(ph.top) + int(ph.height) > bottom:
-                ph.height = max(Inches(1), bottom - int(ph.top))
+                self._shorten(ph, bottom)
         placeholder = len(bodies) == 2
         if not placeholder:
             box = self.content_box(bottom)
@@ -2562,8 +2621,6 @@ class DeckBuilder:
     # image ------------------------------------------------------------
 
     def _slide_image(self, s):
-        from PIL import Image
-
         slide, box = self._standard(s)
         cap_h = 0
         if s.get("caption"):
@@ -2589,17 +2646,29 @@ class DeckBuilder:
                 "Body",
                 SIZES["body_max"] - 2,
             )
-        with Image.open(s["path"]) as im:
-            iw, ih = im.size
-        scale = min(area.w / iw, area.h / ih)
-        w, h = int(iw * scale), int(ih * scale)
-        x = area.x + (area.w - w) // 2 if not s.get("paras") else area.x
-        y = area.y + (area.h - h) // 2
-        pic = slide.shapes.add_picture(s["path"], x, y, w, h)
-        pic.name = f"Picture: {Path(s['path']).name}"
-        pic._element.nvPicPr.cNvPr.set("descr", s.get("alt") or "")  # noqa: SLF001
-        if not s.get("alt"):
-            self.warn("image has no alt text; add 'alt' describing what it shows.")
+        picture, problem = None, s.get("image_problem") or ""
+        if not problem:
+            picture, iw, ih, problem = _picture_source(s["path"])
+        if picture is None:
+            # The slide is still built; the gap is reported, not hidden.
+            self.issue(
+                "image_missing",
+                f"{problem}, so the slide was built without it.",
+                f"Give an image this chat may read ({', '.join(IMAGE_FORMATS)} "
+                "or WebP), or tell the user the picture is missing.",
+            )
+            h = 0
+            y = area.y
+        else:
+            scale = min(area.w / iw, area.h / ih)
+            w, h = int(iw * scale), int(ih * scale)
+            x = area.x + (area.w - w) // 2 if not s.get("paras") else area.x
+            y = area.y + (area.h - h) // 2
+            pic = slide.shapes.add_picture(picture, x, y, w, h)
+            pic.name = f"Picture: {Path(s['path']).name}"
+            pic._element.nvPicPr.cNvPr.set("descr", s.get("alt") or "")  # noqa: SLF001
+            if not s.get("alt"):
+                self.warn("image has no alt text; add 'alt' describing what it shows.")
         if cap_h:
             cb = self.textbox(
                 slide, Box(area.x, y + h + Inches(0.08), area.w, cap_h), "Caption"
@@ -3824,6 +3893,21 @@ class DeckBuilder:
 # ----------------------------------------------------------------------
 
 
+def _report_issues(result: Dict[str, Any], issues: List[Dict[str, Any]]) -> None:
+    """Put what the build left out into *result*, beside the check's findings."""
+    if not issues:
+        return
+    result["status"] = "built_with_issues"
+    report = result.get("verify")
+    if report is None:
+        result["issues"] = list(issues)
+        return
+    report["issues"] = [*issues, *report.get("issues", [])]
+    summary = report.setdefault("summary", {})
+    for item in issues:
+        summary[item["check"]] = summary.get(item["check"], 0) + 1
+
+
 def save_deck(prs, output: Path) -> None:
     """Write the deck. The caller has already checked the path may be written."""
     if not output.parent.is_dir():
@@ -3935,6 +4019,7 @@ def build_deck(
         result["verify"] = _verify_summary(str(out), normalized, builder, merged)
         if result["verify"]["status"] != "pass":
             result["status"] = "built_with_issues"
+    _report_issues(result, builder.issues)
     result["build_seconds"] = round(time.perf_counter() - started, 3)
     return result
 
@@ -3947,6 +4032,8 @@ def _edit(
     replace_index: Optional[int],
     prefs: Optional[Dict[str, Any]],
     base_dir: Optional[str],
+    output_path: Optional[str] = None,
+    owner: str = "",
 ) -> Dict[str, Any]:
     started = time.perf_counter()
     deck = Path(deck_path)
@@ -3999,17 +4086,23 @@ def _edit(
             builder.prs.part.drop_rel(old.rId)
             sld_ids.remove(old)
     _renumber(builder.prs)
-    save_deck(builder.prs, deck)
+    if owner:
+        builder.prs.core_properties.identifier = owner
+    # A copy, when the caller keeps the deck it was given untouched.
+    saved = Path(output_path) if output_path else deck
+    save_deck(builder.prs, saved)
     at = target or first_new
-    return {
+    result = {
         "status": "ok",
-        "path": str(deck),
+        "path": str(saved),
         "slides": len(builder.prs.slides),
         "changed_slides": list(range(at, at + new_count)),
         "warnings": builder.warnings,
         "notes": builder.notes,
-        "build_seconds": round(time.perf_counter() - started, 3),
     }
+    _report_issues(result, builder.issues)
+    result["build_seconds"] = round(time.perf_counter() - started, 3)
+    return result
 
 
 def add_slide(
@@ -4019,8 +4112,13 @@ def add_slide(
     prefs: Optional[Dict[str, Any]] = None,
     *,
     base_dir: Optional[str] = None,
+    output_path: Optional[str] = None,
+    owner: str = "",
 ) -> Dict[str, Any]:
-    """Append (or insert at 1-based *position*) one slide spec, or a list of them."""
+    """Append (or insert at 1-based *position*) one slide spec, or a list of them.
+
+    With *output_path* the changed deck is saved there and *deck_path* is kept.
+    """
     return _edit(
         deck_path,
         slide_spec,
@@ -4028,6 +4126,8 @@ def add_slide(
         replace_index=None,
         prefs=prefs,
         base_dir=base_dir,
+        output_path=output_path,
+        owner=owner,
     )
 
 
@@ -4038,6 +4138,8 @@ def update_slide(
     prefs: Optional[Dict[str, Any]] = None,
     *,
     base_dir: Optional[str] = None,
+    output_path: Optional[str] = None,
+    owner: str = "",
 ) -> Dict[str, Any]:
     """Replace slide *index* (1-based) with the slide(s) built from *slide_spec*."""
     return _edit(
@@ -4047,4 +4149,6 @@ def update_slide(
         replace_index=int(index),
         prefs=prefs,
         base_dir=base_dir,
+        output_path=output_path,
+        owner=owner,
     )

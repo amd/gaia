@@ -62,12 +62,18 @@ def page_words(page: Any) -> List[Word]:
         box.clear()
 
     try:
+        joining = False
         for index in range(textpage.count_chars()):
             char = chr(pdfium_c.FPDFText_GetUnicode(textpage.raw, index))
-            # PDFium marks a line break it inferred with U+FFFE or U+0002.
-            if char.isspace() or char in "\x00\x02\ufffe":
-                flush()
+            # U+0002 is PDFium's soft hyphen: the word goes on after the line break.
+            if char == "\x02":
+                joining = bool(chars)
                 continue
+            if char.isspace() or char in "\x00\ufffe":
+                if not joining:
+                    flush()
+                continue
+            joining = False
             left, bottom, right, top = textpage.get_charbox(index, loose=True)
             y0, y1 = height - top, height - bottom
             if box:
@@ -86,6 +92,13 @@ def page_words(page: Any) -> List[Word]:
     return words
 
 
+def is_blank(image: Any) -> bool:
+    """True when *image* is one flat colour: nothing was drawn on the page."""
+    small = image.copy()
+    small.thumbnail((256, 256))
+    return all(low == high for low, high in small.convert("RGB").getextrema())
+
+
 def save_pages(
     pdf: Path, pages: Sequence[int], outs: Sequence[Path], fmt: str, width: int
 ) -> List[dict]:
@@ -100,9 +113,7 @@ def save_pages(
         for page_no, out in zip(pages, outs):
             page = doc[page_no - 1]
             image = page_image(page, width / page.get_width())
-            samples = image.tobytes()
-            sample = samples[:: max(1, len(samples) // 5000)]
-            if len(set(sample)) <= 1:
+            if is_blank(image):
                 raise OutlineError(
                     [
                         f"slide {page_no} rendered as a blank image, so it was not "

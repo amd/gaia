@@ -1029,3 +1029,139 @@ def test_markdown_timeline_puts_dated_milestones_on_a_line_with_readable_ends(
         if s.name.startswith("Milestone") and not s.name.endswith("marker")
     ]
     assert all(s.width > Inches(1.5) for s in labels)
+
+
+# ------------------------------------------- images and foreign templates
+
+
+def _image_deck(path):
+    return {
+        "slides": [
+            {
+                "type": "image",
+                "title": "The new depot is twice the old floor area",
+                "path": str(path),
+                "alt": "Aerial photo of the depot",
+                "caption": "Ashford depot, May 2026",
+            },
+            {"type": "bullets", "title": "Next steps", "bullets": ["Open in June"]},
+        ]
+    }
+
+
+@pytest.mark.parametrize("fmt, suffix", [("WEBP", ".webp"), ("ICO", ".ico")])
+def test_an_image_format_powerpoint_cannot_embed_is_converted(
+    fmt, suffix, out, tmp_path
+):
+    from PIL import Image
+
+    img = tmp_path / f"photo{suffix}"
+    Image.new("RGB", (64, 32), "steelblue").save(img, format=fmt)
+    r = build_deck(_image_deck(img), out())
+    assert r["status"] == "ok", r["verify"]["issues"]
+    pic = next(
+        s
+        for s in Presentation(r["path"]).slides[0].shapes
+        if s.shape_type == MSO_SHAPE_TYPE.PICTURE
+    )
+    assert pic.image.content_type == "image/png"
+    assert abs(pic.width / pic.height - 2.0) < 0.05
+
+
+@pytest.mark.parametrize(
+    "name, content",
+    [
+        ("logo.svg", b'<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>'),
+        ("broken.png", b"not an image"),
+    ],
+)
+def test_an_image_that_cannot_be_drawn_is_left_out_and_the_deck_is_built(
+    name, content, out, tmp_path
+):
+    img = tmp_path / name
+    img.write_bytes(content)
+    r = build_deck(_image_deck(img), out())
+    assert r["status"] == "built_with_issues" and r["slides"] == 2
+    (issue,) = [i for i in r["verify"]["issues"] if i["check"] == "image_missing"]
+    assert issue["slide"] == 1 and name in issue["detail"] and "PNG" in issue["fix"]
+    slide = Presentation(r["path"]).slides[0]
+    assert not [s for s in slide.shapes if s.shape_type == MSO_SHAPE_TYPE.PICTURE]
+    assert any(
+        s.has_text_frame and "Ashford depot" in s.text_frame.text for s in slide.shapes
+    )
+
+
+def test_a_missing_image_file_is_left_out_and_the_deck_is_built(out, tmp_path):
+    r = build_deck(_image_deck(tmp_path / "never-made.png"), out())
+    assert r["status"] == "built_with_issues" and Path(r["path"]).is_file()
+    assert "does not exist" in r["verify"]["issues"][0]["detail"]
+
+
+_LONG_BULLETS = {
+    "type": "bullets",
+    "title": "Visits grew while wait times fell",
+    # Five points with a sub-point: a bulleted body placeholder, not cards.
+    "bullets": [
+        "Visits up on the quarter",
+        ["Most of it on Saturdays"],
+        "Median wait down",
+        "Two clinics opened",
+        "Staff turnover steady",
+        "Budget on plan",
+    ],
+    "source": "visits.csv, Jul-Sep 2026",
+}
+
+
+def _text_boxes(path):
+    return [
+        (sh.name, sh.width, sh.height)
+        for slide in Presentation(path).slides
+        for sh in slide.shapes
+        if sh.has_text_frame and sh.text_frame.text.strip()
+    ]
+
+
+def test_placeholders_of_a_foreign_template_keep_their_width(out, tmp_path):
+    """python-pptx's own template: its body placeholder inherits its box, and
+    shortening it used to save it with width 0."""
+    tpl = tmp_path / "default.pptx"
+    Presentation().save(tpl)
+    two = {
+        "type": "two_column",
+        "title": "Before and after",
+        "left": {"title": "Before", "bullets": ["Long waits"]},
+        "right": {"title": "After", "bullets": ["Short waits"]},
+    }
+    r = build_deck({"slides": [_LONG_BULLETS, two]}, out(), template_path=str(tpl))
+    boxes = _text_boxes(r["path"])
+    assert boxes and all(w > 0 and h > 0 for _n, w, h in boxes), boxes
+    assert "zero_size" not in {i["check"] for i in r["verify"]["issues"]}
+
+
+def test_slides_added_to_a_deck_this_skill_did_not_build_keep_their_width(out):
+    from slidedeck.verify import verify_deck
+
+    foreign = out("foreign.pptx")
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[0]).shapes.title.text = "Clinic review"
+    prs.save(foreign)
+    assert add_slide(foreign, _LONG_BULLETS)["slides"] == 2
+    assert update_slide(foreign, 1, _LONG_BULLETS)["slides"] == 2
+    boxes = _text_boxes(foreign)
+    assert all(w > 0 and h > 0 for _n, w, h in boxes), boxes
+    report = verify_deck(foreign, render=False)
+    assert "zero_size" not in {i["check"] for i in report["issues"]}
+
+
+def test_an_edit_can_be_saved_as_a_copy_that_leaves_the_deck_as_it_was(out):
+    from slidedeck.build import deck_owner
+
+    first = out("first.pptx")
+    build_deck({"slides": [_LONG_BULLETS]}, first)
+    before = Path(first).read_bytes()
+    copy = out("copy.pptx")
+    r = add_slide(first, _LONG_BULLETS, output_path=copy, owner="chat-1")
+    assert r["path"] == copy and r["slides"] == 2
+    assert Path(first).read_bytes() == before
+    assert deck_owner(Path(copy)) == "chat-1" and deck_owner(Path(first)) == ""

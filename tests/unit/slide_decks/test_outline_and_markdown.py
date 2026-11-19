@@ -57,9 +57,18 @@ def test_non_json_text_points_at_markdown_tool():
         normalize_outline("# My deck")
 
 
-def test_expected_slide_count_must_match():
-    with pytest.raises(OutlineError, match="expected_slides"):
-        norm({"type": "title", "title": "a"}, expected_slides=3)
+def test_a_slide_count_that_is_off_is_reported_on_the_built_deck(out):
+    """One slide short is no reason to write no file: the check names the gap."""
+    from pathlib import Path
+
+    from slidedeck.build import build_deck
+
+    deck = {"slides": [{"type": "title", "title": "a"}], "expected_slides": 3}
+    assert normalize_outline(deck)["expected_slides"] == 3
+    built = build_deck(deck, out())
+    assert built["status"] == "built_with_issues"
+    assert Path(built["path"]).is_file()
+    assert [i["check"] for i in built["verify"]["issues"]].count("slide_count") == 1
 
 
 def test_aliases_map_to_canonical_types():
@@ -243,9 +252,14 @@ def test_roadmap_bars_must_use_known_periods():
         )
 
 
-def test_image_must_exist(tmp_path):
-    with pytest.raises(OutlineError, match="does not exist"):
-        norm({"type": "image", "title": "i", "path": str(tmp_path / "missing.png")})
+def test_a_missing_image_is_left_out_not_refused(tmp_path):
+    """Models invent image paths; the slide is built and says what is missing."""
+    slide = norm(
+        {"type": "image", "title": "i", "path": str(tmp_path / "missing.png")}
+    )["slides"][0]
+    assert slide["path"] == "" and "does not exist" in slide["image_problem"]
+    with pytest.raises(OutlineError, match="needs 'path'"):
+        norm({"type": "image", "title": "i"})
 
 
 # ---------------------------------------------------------------- markdown
@@ -354,7 +368,7 @@ Harbour to island, hourly.
 - Adds the north pier
 ### Network
 - Four piers, shared tickets
-Note: Left to right: more boats, crews and piers.
+Note: Each stage adds boats, crews and piers.
 """
 
 
@@ -374,7 +388,7 @@ def test_headed_sections_with_a_diagram_line_become_a_process_diagram(out):
         "Commuters",
         "Day trips",
     ]
-    assert slide["footnote"].startswith("Left to right")
+    assert slide["footnote"].startswith("Each stage adds")
     assert build_deck(outline, out())["slides"] == 1
 
 
@@ -415,10 +429,10 @@ def test_latex_arrows_from_the_model_become_symbols_on_the_slide():
             "slides": [
                 {
                     "type": "bullets",
-                    "title": r"Assist $\rightarrow$ Autonomy",
+                    "title": r"Draft $\rightarrow$ Final",
                     "bullets": [
                         r"Concept $\to$ draft",
-                        r"$\Downarrow \text{ Increasing Complexity}$",
+                        r"$\Downarrow \text{ Rising cost}$",
                         "Costs $5 and $10, 50\\% growth",
                     ],
                 }
@@ -426,10 +440,10 @@ def test_latex_arrows_from_the_model_become_symbols_on_the_slide():
         }
     )
     slide = out["slides"][0]
-    assert slide["title"] == "Assist → Autonomy"
+    assert slide["title"] == "Draft → Final"
     assert [p[0] for p in slide["paras"]] == [
         "Concept → draft",
-        "⇓ Increasing Complexity",
+        "⇓ Rising cost",
         "Costs $5 and $10, 50% growth",
     ]
 
@@ -440,10 +454,10 @@ def test_latex_in_a_process_axis_becomes_symbols():
 
     md = (
         "## Stages\nDiagram: process\n### A\n- one\n### B\n- two\n### C\n- three\n"
-        "Axis: Complexity $\\rightarrow$ Compute\n"
+        "Axis: Boats $\\rightarrow$ Piers\n"
     )
     slide = normalize_outline(outline_from_markdown(md))["slides"][0]
-    assert "Complexity → Compute" in str(slide)
+    assert "Boats → Piers" in str(slide)
     assert "rightarrow" not in str({k: v for k, v in slide.items() if k != "raw"})
 
 

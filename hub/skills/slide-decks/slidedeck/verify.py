@@ -11,7 +11,9 @@ the deck (LibreOffice, run by the tool layer) against the shape boxes.
 
 from __future__ import annotations
 
+import logging
 import re
+import subprocess
 import zipfile
 from collections import Counter
 from io import BytesIO
@@ -38,6 +40,8 @@ from .style import (
     tokens_from_theme_xml,
 )
 from .text import EMU_PER_PT, LINE_SPACING, MEASURER, FontSpec
+
+log = logging.getLogger(__name__)
 
 EMU_IN = 914400
 TITLE_TYPES = (
@@ -1195,6 +1199,17 @@ def verify_deck(
             k = _kind(shape)
             b = bbox(shape)
             footerish = _is_footerish(shape, H)
+            if b is not None and _has_text(shape) and (b[2] <= b[0] or b[3] <= b[1]):
+                issues.add(
+                    idx,
+                    "zero_size",
+                    "error",
+                    f"'{shape.name}' holds text but has no width or height, "
+                    "so the text is not shown.",
+                    "Rebuild the slide; if a template is used, check its layout's "
+                    "placeholders have a size.",
+                    shape.name,
+                )
             if b is not None:
                 if (
                     b[0] < -12700
@@ -1635,14 +1650,19 @@ def verify_deck(
             "no renderer was available, so slides were not rendered; the overflow checks are estimates from font metrics."
         )
     elif render:
+        # A renderer that fails or hangs costs the render check, not the report.
         try:
             pdf = renderer(p)
-        except (RuntimeError, OSError) as exc:
-            render_info["reason"] = f"rendering failed: {exc}"
-        else:
             render_info = render_check(
                 pdf, prs, ctx, issues, Path(render_dir) if render_dir else None
             )
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as exc:
+            log.warning("rendering %s failed: %s", p.name, exc)
+            render_info = {
+                "rendered": False,
+                "reason": f"rendering failed ({type(exc).__name__}: {exc}); "
+                "the overflow checks are estimates from font metrics.",
+            }
 
     items = issues.items
     errors = [i for i in items if i["severity"] == "error"]

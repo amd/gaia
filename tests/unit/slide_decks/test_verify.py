@@ -392,3 +392,142 @@ def test_without_a_renderer_the_report_says_so(out):
     r = build_deck({"slides": GOOD}, out())
     rep = verify_deck(r["path"], render=True, renderer=None)
     assert rep["render"]["rendered"] is False and "estimates" in rep["render"]["reason"]
+
+
+# ------------------------------------------- render without LibreOffice
+
+
+def _pdf_of(lines_per_page, path):
+    """A PDF with one 13.33 x 7.5 inch page per slide: (x, y from the top, text) lines."""
+    from reportlab.pdfgen import canvas
+
+    page = canvas.Canvas(str(path), pagesize=(960, 540))
+    for lines in lines_per_page:
+        page.setFont("Helvetica", 18)
+        for x, y, text in lines:
+            page.drawString(x, 540 - y, text)
+        page.showPage()
+    page.save()
+    return path
+
+
+def _one_box(text):
+    def make(s, prs, i):
+        titled(s)
+        box(s, 0.6, 1.6, 6, 0.8, text)
+
+    return make
+
+
+def test_a_renderer_that_times_out_or_fails_keeps_the_structural_report(out):
+    import subprocess
+
+    r = build_deck({"slides": GOOD}, out())
+
+    def hangs(deck_path):
+        raise subprocess.TimeoutExpired("soffice", 240)
+
+    def breaks(deck_path):
+        raise RuntimeError("LibreOffice exited with code 1 without a PDF.")
+
+    for renderer in (hangs, breaks):
+        rep = verify_deck(r["path"], expected_slides=3, renderer=renderer)
+        assert rep["render"]["rendered"] is False
+        assert "rendering failed" in rep["render"]["reason"]
+        assert rep["status"] == "pass" and rep["slides"] == 3, rep["issues"]
+
+
+def test_a_pdf_that_cannot_be_read_costs_only_the_render_check(out, tmp_path):
+    r = build_deck({"slides": GOOD}, out())
+    broken = tmp_path / "broken.pdf"
+    broken.write_bytes(b"not a pdf")
+    rep = verify_deck(r["path"], renderer=lambda deck_path: broken)
+    assert rep["render"]["rendered"] is False and rep["slides"] == 3
+
+
+def test_the_render_check_reads_a_pdf_and_writes_pngs(out, tmp_path):
+    """The pypdfium2 path, on a PDF made here: no LibreOffice needed."""
+    path = deck(_one_box("Saturday hours added"), path=out(), layout=5)
+    pdf = _pdf_of([[(50, 140, "Saturday hours added")]], tmp_path / "ok.pdf")
+    pngs = tmp_path / "png"
+    pngs.mkdir()
+    rep = verify_deck(path, renderer=lambda deck_path: pdf, render_dir=str(pngs))
+    assert rep["render"]["rendered"] is True
+    assert [Path(p).name for p in rep["render"]["pngs"]] == ["slide_01.png"]
+    assert (pngs / "slide_01.png").read_bytes()[:4] == b"\x89PNG"
+    assert "render_overflow" not in checks(rep), rep["issues"]
+
+
+def test_the_render_check_flags_text_drawn_below_its_box(out, tmp_path):
+    path = deck(_one_box("Saturday hours added today"), path=out(), layout=5)
+    # The box ends 2.4 inches (173pt) down; the last word is drawn at 300pt.
+    pdf = _pdf_of(
+        [[(50, 140, "Saturday hours added"), (50, 300, "today")]], tmp_path / "o.pdf"
+    )
+    rep = verify_deck(path, renderer=lambda deck_path: pdf)
+    assert "render_overflow" in checks(rep), rep["issues"]
+
+
+def test_a_page_count_that_differs_from_the_deck_is_reported(out, tmp_path):
+    path = deck(_one_box("Saturday hours added"), path=out(), layout=5)
+    pdf = _pdf_of([[(50, 140, "Saturday hours added")], []], tmp_path / "two.pdf")
+    rep = verify_deck(path, renderer=lambda deck_path: pdf)
+    assert "render" in checks(rep)
+
+
+def test_pdf_words_join_across_a_hyphen_at_the_line_end(tmp_path):
+    from slidedeck import image
+
+    pdf = _pdf_of(
+        [[(60, 140, "Costs fell for the well-"), (60, 170, "known northern depots")]],
+        tmp_path / "h.pdf",
+    )
+    doc = image.open_pdf(pdf)
+    try:
+        words = image.page_words(doc[0])
+    finally:
+        doc.close()
+    assert [w[4] for w in words] == [
+        "Costs",
+        "fell",
+        "for",
+        "the",
+        "wellknown",
+        "northern",
+        "depots",
+    ]
+    left, top, right, bottom, _text = words[0]
+    assert 59 < left < right < 130 and 110 < top < bottom < 150
+
+
+def test_slide_images_are_saved_and_a_blank_page_is_refused(tmp_path):
+    import pytest
+    from PIL import Image
+    from slidedeck import image
+    from slidedeck.outline import OutlineError
+
+    pdf = _pdf_of([[(60, 140, "Visits rose every month")], []], tmp_path / "s.pdf")
+    assert image.page_count(pdf) == 2
+    saved = image.save_pages(pdf, [1], [tmp_path / "one.png"], "png", 640)
+    assert saved == [
+        {"slide": 1, "path": str(tmp_path / "one.png"), "width": 640, "height": 360}
+    ]
+    image.save_pages(pdf, [1], [tmp_path / "one.jpg"], "jpeg", 640)
+    assert (tmp_path / "one.jpg").read_bytes()[:3] == b"\xff\xd8\xff"
+    with pytest.raises(OutlineError, match="blank"):
+        image.save_pages(pdf, [2], [tmp_path / "two.png"], "png", 640)
+    assert not (tmp_path / "two.png").exists()
+    assert image.is_blank(Image.new("RGB", (900, 500), "white"))
+    # A small mark between the bytes a strided sample reads is still a drawing.
+    dotted = Image.new("RGB", (900, 500), "white")
+    dotted.paste("black", (700, 333, 720, 353))
+    assert not image.is_blank(dotted)
+
+
+def test_text_in_a_shape_with_no_size_is_an_error(out):
+    def make(s, prs, i):
+        titled(s)
+        box(s, 0.6, 1.6, 0, 0.8, "Saturday hours added", name="Collapsed")
+
+    rep = verify_deck(deck(make, path=out(), layout=5), render=False)
+    assert "zero_size" in checks(rep), rep["issues"]

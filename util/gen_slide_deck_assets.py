@@ -9,7 +9,7 @@
 
 The skill builds themes in memory and reads blueprints from its own module, so
 these files are for people (open them in PowerPoint, read the blueprints) and
-for reproducibility. ``tests/unit/skills/slide_decks`` fails when they drift.
+for reproducibility. ``tests/unit/slide_decks`` fails when they drift.
 
     python util/gen_slide_deck_assets.py
 """

@@ -403,7 +403,16 @@ TYPE_FIELDS = {
     },
     "kpi": {"metrics", "items", "bullets", "takeaways"},
     "quote": {"quote", "text", "attribution", "author", "by"},
-    "image": {"path", "image", "src", "caption", "alt", "alt_text", "bullets"},
+    "image": {
+        "path",
+        "image",
+        "src",
+        "caption",
+        "alt",
+        "alt_text",
+        "bullets",
+        "image_problem",
+    },
     "diagram": {
         "diagram",
         "kind",
@@ -461,7 +470,7 @@ EXAMPLES = {
 }
 
 
-def _canonical_fields(raw: Dict[str, Any]) -> Dict[str, Any]:
+def canonical_fields(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Rename common synonym fields; a 'content' string becomes 'text'."""
     out = dict(raw)
     for key in list(out):
@@ -1123,7 +1132,7 @@ def normalize_slide(
             f"{where}: must be an object, got {type(raw).__name__}. For example: {EXAMPLES['bullets']}"
         )
         return {"type": "bullets", "index": index, "title": "", "paras": []}
-    raw = _sections_as_boxes(_plain_fields(_canonical_fields(raw)))
+    raw = _sections_as_boxes(_plain_fields(canonical_fields(raw)))
     before = len(problems)
     s = _normalize_slide(raw, index, problems, base_dir)
     for issue in _unknown_fields(raw, s["type"]):
@@ -1156,7 +1165,7 @@ def _normalize_slide(
             raw_type = "quote"
         elif raw.get("milestones") or raw.get("lanes"):
             raw_type = "timeline"
-        elif raw.get("path"):
+        elif raw.get("path") or raw.get("image_problem"):
             raw_type = "image"
         elif index == 1:
             raw_type = "title"
@@ -1308,16 +1317,19 @@ def _normalize_slide(
         path = _text(raw.get("path") or raw.get("image") or raw.get("src"))
         if path and base_dir is not None and not Path(path).is_absolute():
             path = str(base_dir / path)
-        s["path"] = path
+        # Why the picture is left out: the slide is still built, and says so.
+        problem = _text(raw.get("image_problem"))
+        if path and not problem and not Path(path).is_file():
+            problem = f"image {path} does not exist"
+        s["path"] = "" if problem else path
+        s["image_problem"] = problem
         s["caption"] = _text(raw.get("caption"))
         s["alt"] = _text(
             raw.get("alt") or raw.get("alt_text") or s["caption"] or s["title"]
         )
         s["paras"] = normalize_bullets(raw.get("bullets"))
-        if not path:
+        if not path and not problem:
             problems.append(f"{where}: needs 'path' to an image file.")
-        elif not Path(path).is_file():
-            problems.append(f"{where}: image {path} does not exist.")
     elif stype == "diagram":
         layout = (
             str(raw.get("diagram") or raw.get("kind") or raw.get("layout") or "")
@@ -1557,12 +1569,6 @@ def normalize_outline(outline: Any, base_dir: Optional[Path] = None) -> Dict[str
         except (TypeError, ValueError):
             problems.append(f"expected_slides {expected!r} is not a whole number.")
             expected = None
-    if expected is not None and expected != len(slides):
-        problems.append(
-            f"The outline has {len(slides)} slides but expected_slides is {expected}. "
-            "Add or remove slides so the count is exactly what was asked; "
-            "never change expected_slides to match the outline."
-        )
     required_raw = data.get("required_items") or data.get("must_show") or []
     if isinstance(required_raw, str):
         required_raw = [x for x in required_raw.split(";")]

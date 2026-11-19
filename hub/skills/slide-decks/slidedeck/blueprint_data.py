@@ -486,7 +486,7 @@ BLUEPRINTS = [
         ],
         "title": "Quarterly / business review",
         "description": "Periodic performance review (QBR, monthly or annual business review): results against plan and prior periods, drivers, risks, next steps.",
-        "default_slides": 12,
+        "default_slides": 10,
         "min_slides": 1,
         "max_slides": 24,
         "one_slide": "exec_summary",
