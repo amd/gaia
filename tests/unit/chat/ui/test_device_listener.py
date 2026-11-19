@@ -630,17 +630,13 @@ def test_listener_answers_with_the_os_trust_store_injected(tmp_path, monkeypatch
 def test_listener_that_cannot_finish_tls_does_not_report_listening(
     tmp_path, monkeypatch
 ):
-    import truststore
-
     from gaia.ui.devices import access as access_module
 
-    def truststore_context(identity):
-        context = truststore.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(identity.certificate_path, identity.key_path)
-        return context
+    def context_without_certificate(identity):
+        return ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 
     access = _device_access(tmp_path)
-    monkeypatch.setattr(access_module, "server_context", truststore_context)
+    monkeypatch.setattr(access_module, "server_context", context_without_certificate)
 
     async def scenario():
         try:
