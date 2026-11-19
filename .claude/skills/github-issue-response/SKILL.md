@@ -75,9 +75,31 @@ reads like a diff review — the reader wants the finding before the line number
 ## Tone
 
 Professional and friendly. Welcome first-time contributors and guide them gently; assume good
-intent even on unclear or duplicate issues; thank people for bug reports and ideas. External
-contributors won't know GAIA conventions yet — teach with a concrete example rather than
-correcting them abstractly.
+intent even on unclear or duplicate issues. External contributors won't know GAIA conventions
+yet — teach with a concrete example rather than correcting them abstractly.
+
+## Community engagement
+
+Outside contributors (anyone who isn't a maintainer or a bot) keep coming back when they feel
+seen. Do it the way a person would, not a script.
+
+- **Be selective.** Engage where the work matters: a fix users will feel, a first contribution,
+  someone with a run of good PRs, a sharp bug report. Routine or minor items and drafts don't
+  need a thank-you.
+- **Never restate their PR or issue.** Repeating the title or description back to them is
+  noise. Say something new: what it unlocks for users, a detail in the approach you liked, a
+  next step they might enjoy picking up, or just a warm thanks.
+- **Sound human.** One or two short sentences in plain words. No "We appreciate the
+  contribution", no templates, no emoji walls.
+- **Stagger it.** Engage as the work happens (while reviewing, on merge, when replying), never
+  as a batch comment across every open PR. Never script bulk thank-yous.
+- **Reactions are a light touch.** A 🎉 on a merged community PR or a ❤️ on a great report is
+  enough on its own; still selective.
+
+| ❌ | ✅ |
+|---|---|
+| "Thanks @user for this, split sentences that start with a non-ASCII capital! We appreciate the contribution." | "This makes long Russian and Greek PDFs actually answerable. Lovely fix, thank you!" |
+| "Thanks for reporting this, it helps us a lot." (on every issue) | (on a sharp repro) "That repro saved us hours. Fix is in #NNNN." |
 
 ## Where things live (for pointing users at the right place)
 

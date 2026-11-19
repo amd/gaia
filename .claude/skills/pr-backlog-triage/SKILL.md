@@ -214,6 +214,14 @@ batch. Check whether another parallel subagent already found and fixed the same
 thing before filing a duplicate — two subagents hitting the same shared-file break
 independently is common in a big parallel batch.
 
+## Community PRs
+
+Third-party PRs come first in each round and get a line-by-line security review. Engage with
+their authors the way `github-issue-response` → *Community engagement* describes: selectively,
+in a human voice, staggered as work happens, and never by restating their PR. Subagents keep
+their PR comments about the review itself; the coordinator decides when a thank-you is worth
+posting (usually on merge of impactful work).
+
 ## Re-verifying a previously-held PR
 
 When a round turns up a new commit on a PR you held last round, don't assume the
