@@ -24,6 +24,8 @@ import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
+import { eyesPhase, messageMood } from '../utils/gaiaEyes';
+import { GaiaEyes } from './GaiaEyes';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
@@ -108,6 +110,16 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
     const waitingOnModel = active && !awaitingUser && isModelWaitLabel(label);
     const modelWaitElapsed = useElapsedSeconds(waitingOnModel);
     const place = useInferencePlace();
+    const asked = useChatStore((s) => {
+        for (let i = s.messages.length - 1; i >= 0; i--) {
+            if (s.messages[i].role === 'user') return s.messages[i];
+        }
+        return undefined;
+    });
+    const reaction = useMemo(() => {
+        const mood = asked ? messageMood(asked.content) : null;
+        return asked && mood ? { mood, key: `${asked.created_at}|${asked.content}` } : null;
+    }, [asked]);
 
     if (!active) return null;
 
@@ -115,6 +127,7 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
 
     return (
         <span className={`thinking-indicator${!awaitingUser ? ' is-live' : ''}`}>
+            <GaiaEyes phase={eyesPhase(label, awaitingUser)} reaction={reaction} />
             <span className="thinking-indicator-text">{text}</span>
             {!awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
                 <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
