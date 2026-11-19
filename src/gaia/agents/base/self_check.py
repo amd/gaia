@@ -16,6 +16,7 @@ one short step.
 
 from __future__ import annotations
 
+import difflib
 import logging
 import os
 import re
@@ -174,8 +175,14 @@ def _slide_count(path: str) -> Optional[int]:
         return len(Presentation(path).slides)
     except ImportError as error:
         logger.info("%s cannot count slides: %s", SELF_CHECK_TAG, error)
-    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
-        logger.warning("%s could not open %s: %s", SELF_CHECK_TAG, path, error)
+    except Exception as error:  # a parser's own error class: the check is advisory
+        logger.warning(
+            "%s could not open %s: %s: %s",
+            SELF_CHECK_TAG,
+            path,
+            type(error).__name__,
+            error,
+        )
     return None
 
 
@@ -188,8 +195,14 @@ def _sheets(path: str) -> Optional[List[Tuple[str, bool]]]:
     except ImportError as error:
         logger.info("%s cannot list tabs: %s", SELF_CHECK_TAG, error)
         return None
-    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
-        logger.warning("%s could not open %s: %s", SELF_CHECK_TAG, path, error)
+    except Exception as error:  # a parser's own error class: the check is advisory
+        logger.warning(
+            "%s could not open %s: %s: %s",
+            SELF_CHECK_TAG,
+            path,
+            type(error).__name__,
+            error,
+        )
         return None
     try:
         return [
@@ -203,6 +216,15 @@ def _sheets(path: str) -> Optional[List[Tuple[str, bool]]]:
             )
             for sheet in book.worksheets
         ]
+    except Exception as error:  # a sheet that will not iterate
+        logger.warning(
+            "%s could not read %s: %s: %s",
+            SELF_CHECK_TAG,
+            path,
+            type(error).__name__,
+            error,
+        )
+        return None
     finally:
         book.close()
 
@@ -214,6 +236,80 @@ def _folded(name: str) -> str:
 def _same_tab(asked: str, title: str) -> bool:
     asked, title = _folded(asked), _folded(title)
     return asked == title or asked in title or title in asked
+
+
+#: Two folder names at least this alike are one name and a slip of it.
+_NEAR_MISS_RATIO = 0.8
+
+
+def _folder_key(path: str) -> str:
+    key = os.path.normcase(os.path.abspath(path)).replace("/", os.sep)
+    return key.rstrip(os.sep)
+
+
+def _inside(path: str, folder: str) -> bool:
+    return path == folder or path.startswith(folder + os.sep)
+
+
+def _slip_of(where: str, home: str) -> bool:
+    """Whether folder *where* reads as *home* with a folder name or two mistyped.
+
+    Compared name by name, so a long shared start does not make two unrelated
+    folders look alike. Only paths of the same depth compare, so a file in a
+    subfolder of the mistyped folder is not raised.
+    """
+    ours, theirs = home.split(os.sep), where.split(os.sep)
+    if len(ours) != len(theirs):
+        return False
+    differing = [(a, b) for a, b in zip(ours, theirs) if a != b]
+    return 0 < len(differing) <= 2 and all(
+        difflib.SequenceMatcher(None, a, b).ratio() >= _NEAR_MISS_RATIO
+        for a, b in differing
+    )
+
+
+def misplaced_findings(request: str, written: Sequence[str], folder: str) -> List[str]:
+    """Files written into a folder that is a slip of the working *folder*.
+
+    A long absolute path retyped from memory can lose or change a few
+    characters, and the write tool then creates the folder it names: the file
+    exists, the turn reports success, and nothing is where the user looks. So
+    a file counts only when all of these hold: it is outside *folder* and not
+    in a folder above it, its folder's path is the same but for a name or two
+    that are nearly the same text, that
+    folder holds nothing but this turn's files (the write made it), and the
+    request does not name that folder.
+    """
+    if not folder:
+        return []
+    home = _folder_key(folder)
+    asked = os.path.normcase(request or "").replace("/", os.sep)
+    by_folder: dict = {}
+    for path in written:
+        full = os.path.abspath(path)
+        by_folder.setdefault(_folder_key(os.path.dirname(full)), []).append(full)
+    findings: List[str] = []
+    for where, files in by_folder.items():
+        if _inside(where, home) or _inside(home, where):
+            continue
+        if not _slip_of(where, home):
+            continue
+        if where in asked:
+            continue
+        try:
+            held = {os.path.normcase(name) for name in os.listdir(where)}
+        except OSError:
+            continue
+        if held - {os.path.normcase(os.path.basename(path)) for path in files}:
+            continue
+        findings.append(
+            f"{_listed(files)} {'was' if len(files) == 1 else 'were'} written to "
+            f"`{os.path.dirname(files[0])}`, not the working folder "
+            f"`{os.path.abspath(folder)}`: the two paths differ by a few "
+            "characters, so the path was probably mistyped. Write it in the "
+            "working folder."
+        )
+    return findings
 
 
 _OFFICE_KINDS = {
@@ -228,6 +324,7 @@ def mechanical_findings(
     written: Sequence[str],
     pending: Sequence[str] = (),
     prose: str = "",
+    folder: str = "",
     empty_ok: Sequence[str] = (),
 ) -> List[str]:
     """What is wrong with *written* that needs no model to see.
@@ -236,9 +333,10 @@ def mechanical_findings(
     reader can tell a real miss from a request this code misread. *pending*
     are files the request names that nothing wrote; *prose* is the text of
     the one prose file among *written*, when there is exactly one; *empty_ok*
-    are files among *written* that are meant to be empty.
+    are files among *written* that are meant to be empty. *folder* is the
+    working folder, for :func:`misplaced_findings`.
     """
-    findings: List[str] = []
+    findings: List[str] = misplaced_findings(request, written, folder)
     for path in written:
         try:
             suffix = os.path.splitext(path)[1].lower()

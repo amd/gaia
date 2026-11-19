@@ -2379,14 +2379,23 @@ def _with_replaced_answer(reply: str, replaced: str) -> Optional[str]:
 _SELF_CHECK_FULL_STEPS = 3
 
 
-def _answer_after_self_check(reply: str, earlier: str) -> Tuple[str, str]:
+def _answer_after_self_check(
+    reply: str, earlier: str, worked: bool = False
+) -> Tuple[str, str]:
     """``(answer, verdict)`` once the model has replied to the self-check.
 
     A pass keeps *earlier* as it was. A miss the model could not fix is added
     to it in one plain line. Anything else is a new answer, unless it is only
-    a short acknowledgement of the check.
+    a short acknowledgement of the check. When tools ran after the check
+    (*worked*), the reply describes the fixed work and is the answer whatever
+    verdict line it ends with.
     """
     verdict = read_verdict(reply)
+    if worked and verdict.rest:
+        answer = _with_replaced_answer(verdict.rest, earlier) or verdict.rest
+        if verdict.result == "miss":
+            return f"{answer.rstrip()}\n\n{miss_note(verdict.miss)}", "miss"
+        return answer, "new answer"
     if verdict.result == "pass":
         return earlier, "pass"
     if verdict.result == "miss":
@@ -12015,6 +12024,22 @@ Do NOT wrap conversational replies in JSON.
         )
 
     def _self_check_plan(self) -> Optional[Dict[str, Any]]:
+        """:meth:`_build_self_check_plan`, which can never end the turn.
+
+        The check reads files the model just wrote, with parsers that raise
+        their own error classes on a malformed one. It is advisory: a check
+        that cannot run is logged with its traceback and the answer goes out
+        without it.
+        """
+        try:
+            return self._build_self_check_plan()
+        except Exception:  # advisory: see the docstring
+            logger.exception(
+                "%s could not run; the turn goes on without it", SELF_CHECK_TAG
+            )
+            return None
+
+    def _build_self_check_plan(self) -> Optional[Dict[str, Any]]:
         """What this turn's self-check would cover, or ``None`` when it owes none.
 
         A turn owes one when it wrote a document or data file and either read
@@ -12059,6 +12084,7 @@ Do NOT wrap conversational replies in JSON.
             written,
             self._pending_deliverables(),
             prose=next(iter(prose.values())) if len(prose) == 1 else "",
+            folder=os.getcwd(),
             # An empty file the request asks for is not a miss.
             empty_ok=[
                 path
@@ -12141,16 +12167,18 @@ Do NOT wrap conversational replies in JSON.
         out, and stays. Whatever code still sees wrong is said in the answer,
         whether or not the model agreed. Logs what the check cost.
         """
+        records = getattr(self, "_turn_tool_executions", None) or []
         if reply is None:
             answer, verdict = opened["answer"], "unanswered"
         else:
-            answer, verdict = _answer_after_self_check(reply, opened["answer"])
+            answer, verdict = _answer_after_self_check(
+                reply, opened["answer"], worked=len(records) > opened["tools"]
+            )
         left = []
         if verdict != "miss":
             left = (self._self_check_plan() or {}).get("findings") or []
         if left:
             answer = f"{answer.rstrip()}\n\n" + "\n".join(miss_note(f) for f in left)
-        records = getattr(self, "_turn_tool_executions", None) or []
         logger.info(
             "%s done verdict=%s seconds=%.1f model_steps=%d tool_calls=%d "
             "code_findings_left=%d",

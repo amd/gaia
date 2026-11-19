@@ -318,8 +318,13 @@ def read_blocks(path: str) -> List[Block]:
             return text_blocks(handle.read(MAX_TEXT_CHARS), suffix)
     except ImportError as error:
         logger.info("Not checking figures in %s: %s is not installed", path, error.name)
-    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
-        logger.warning("Could not read %s to check its figures: %s", path, error)
+    except Exception as error:  # a parser's own error class: the check is advisory
+        logger.warning(
+            "Could not read %s to check its figures: %s: %s",
+            path,
+            type(error).__name__,
+            error,
+        )
     return []
 
 
