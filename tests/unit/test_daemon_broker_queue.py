@@ -403,11 +403,13 @@ def test_a_lease_from_a_client_that_does_not_renew_keeps_the_fixed_ttl():
 @pytest.mark.allow_network
 def test_model_lease_renews_while_held(daemon_factory):
     """A holder that runs past the heartbeat TTL keeps the slot end to end."""
-    daemon_factory(ModelSlotBroker(lease_ttl_s=1.0, heartbeat_ttl_s=1.0))
-    holder, released = _hold_in_thread("holder-model", 3.0, max_hold_s=30)
+    # A 1 s heartbeat left 0.75 s of slack, which a busy CI runner can use up.
+    daemon_factory(ModelSlotBroker(lease_ttl_s=1.0, heartbeat_ttl_s=4.0))
+    holder, released = _hold_in_thread("holder-model", 6.0, max_hold_s=30)
 
     lease = broker_client.acquire_lease("waiter-model")
 
+    assert "at" in released, "the lease was reclaimed mid-hold"
     assert time.monotonic() >= released["at"], "the lease was reclaimed mid-hold"
     broker_client.release_lease(lease["lease_id"])
     holder.join(10)

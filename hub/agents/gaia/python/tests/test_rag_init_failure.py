@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """A document Q&A startup failure must not look like a missing extra.
 
-``ImportError`` (the extra is not installed) is the only failure that says to
-install ``[rag]``, and the only one cached for the session. A config or
+``ImportError`` (the extra is not installed) is the only failure reported as
+not available, and the only one cached for the session. A config or
 embedder error keeps its cause and is tried again on the next access.
 """
 
@@ -39,7 +39,7 @@ def _warnings(caplog, text):
     ]
 
 
-def test_import_error_is_cached_and_names_the_extra(caplog):
+def test_import_error_is_cached_and_relays_only_its_own_hint(caplog):
     agent = _bare_agent()
     agent._rag_config = MagicMock()
     caplog.set_level(logging.WARNING, logger="gaia_agent.chat_agent")
@@ -55,9 +55,7 @@ def test_import_error_is_cached_and_names_the_extra(caplog):
     assert agent._rag_missing is True
     assert isinstance(agent._rag_init_error, ImportError)
     messages = [record.getMessage() for record in _warnings(caplog, "no faiss")]
-    assert len(messages) == 1
-    assert "install with" in messages[0]
-    assert ".[rag]" in messages[0]
+    assert messages == ["RAG not available: no faiss"]
 
 
 def test_other_startup_failure_is_retried_and_keeps_its_cause(caplog):
@@ -156,8 +154,7 @@ def test_config_import_error_is_not_retried(caplog):
     assert agent._rag is None
     assert agent._rag_missing is True
     messages = [record.getMessage() for record in _warnings(caplog, "no faiss")]
-    assert len(messages) == 1
-    assert "install with" in messages[0]
+    assert messages == ["RAG not available: no faiss"]
 
 
 def test_error_chained_from_an_import_error_is_not_a_missing_extra(caplog):

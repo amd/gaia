@@ -89,6 +89,30 @@ def test_it_runs_a_snippet_and_returns_stdout(make_run_python, project, monkeypa
     assert result["has_errors"] is False
 
 
+def test_long_output_says_it_was_cut_and_where_the_rest_is(
+    make_run_python, project, monkeypatch
+):
+    import json
+
+    monkeypatch.chdir(project)
+    _, run_python = make_run_python(project)
+
+    result = run_python("for i in range(4000): print('line', i)")
+
+    assert result["status"] == "success"
+    shown = json.loads(result["stdout"])
+    assert shown["continuation"] == "read_tool_output" and shown["artifact"]
+    assert len(result["stdout"]) <= 8000
+    assert "line 3999" in result["stdout"], "the end of the output is kept"
+
+
+def test_short_output_is_returned_as_is(make_run_python, project, monkeypatch):
+    monkeypatch.chdir(project)
+    _, run_python = make_run_python(project)
+
+    assert run_python("print('x' * 7000)")["stdout"] == "x" * 7000 + chr(10)
+
+
 def test_relative_paths_resolve_against_the_project_root(
     make_run_python, project, monkeypatch
 ):
