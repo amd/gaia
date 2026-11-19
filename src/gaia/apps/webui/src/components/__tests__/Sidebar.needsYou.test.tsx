@@ -144,7 +144,7 @@ describe('row status', () => {
             expect(notes).toHaveLength(2);
             expect(notes[0]).toContain('رقم 1 في الدور');
             expect(notes[1]).toContain('2');
-            expect(document.querySelector('.sb-row-queue')!.getAttribute('title')).toContain(notes[1]);
+            expect(stripIsolates(document.querySelector('.sb-row-queue')!.getAttribute('title')!)).toContain(notes[1]);
         } finally {
             act(() => useChatStore.getState().setLocale('en'));
             localStorage.removeItem('gaia-chat-locale');
