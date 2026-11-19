@@ -114,24 +114,28 @@ def test_a_model_chosen_outside_the_tested_set_is_kept(server, image):
     server["backend"].health_check.assert_not_called()
 
 
-def test_an_unreadable_load_list_keeps_the_configured_model(server, image, caplog):
+def test_an_unreadable_load_list_keeps_the_configured_model(server, image):
     server["backend"] = _backend(QWEN)
     server["backend"].health_check.side_effect = lc.LemonadeClientError("busy")
 
-    with caplog.at_level("WARNING"):
+    with patch.object(lc.log, "warning") as warned:
         result = _host(GEMMA)._analyze_image(image, "all")
 
     assert result["model"] == GEMMA
-    assert "Could not read the loaded models" in caplog.text
+    assert "Could not read the loaded models" in warned.call_args.args[0]
 
 
-def test_the_switch_is_logged(server, image, caplog):
+def test_the_switch_is_logged(server, image):
     server["backend"] = _backend(QWEN)
 
-    with caplog.at_level("INFO"):
+    with patch("gaia.vlm.mixin.logger") as log:
         _host(GEMMA)._analyze_image(image, "all")
 
-    assert f"Reading the image with {QWEN}, which is already loaded" in caplog.text
+    said = log.info.call_args.args
+    assert said[0] % said[1:] == (
+        f"Reading the image with {QWEN}, which is already loaded, instead of "
+        f"{GEMMA}: loading {GEMMA} would unload it."
+    )
 
 
 def test_the_load_list_is_read_from_the_readers_own_server():

@@ -66,10 +66,10 @@ def _stream(client, streams, **kwargs):
         )
 
 
-def test_an_unloaded_model_is_reloaded_and_the_request_sent_again(client, caplog):
+def test_an_unloaded_model_is_reloaded_and_the_request_sent_again(client):
     streams = _Streams([LemonadeClientError(NOT_LOADED)], CHUNKS)
 
-    with caplog.at_level("INFO"):
+    with patch.object(client.log, "info") as said:
         chunks = _stream(client, streams)
 
     assert chunks == CHUNKS
@@ -79,7 +79,7 @@ def test_an_unloaded_model_is_reloaded_and_the_request_sent_again(client, caplog
         call(MODEL, True),
         call(MODEL, auto_download=True, force=True),
     ]
-    assert f"Model '{MODEL}' not loaded" in caplog.text
+    assert any(f"Model '{MODEL}' not loaded" in str(c.args[0]) for c in said.mock_calls)
 
 
 def test_it_reloads_once_then_reports_the_error(client):
