@@ -233,14 +233,12 @@ def test_the_request_body_cannot_ask_for_bypass(built):
     assert r.status_code == 422, r.text
 
 
-def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built):
-    """``/sessions/{id}/bypass`` grants unattended approval, not a free shell.
+def test_session_bypass_is_full_access_shell_included(built):
+    """``/sessions/{id}/bypass`` is full access, as over stdio.
 
-    The two grants ride the same ``PermissionState``, and ``attach`` writes it
-    onto each turn's fresh handler — so a session that turned bypass on would
-    otherwise overwrite the ``full_access = False`` the query path pins,
-    handing a bound socket the operator block, the read-only binary policy and
-    the rate limit. Approval is answerable over HTTP; arbitrary shell is not.
+    It rides the session's ``PermissionState``, and ``attach`` writes it onto
+    each turn's fresh handler: prompts stop and the shell runs any command.
+    Turning it off takes both away again.
     """
     client, agents = built
     session_id = f"s-{uuid.uuid4()}"
@@ -249,6 +247,7 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
         client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code
         == 200
     )
+    assert agents[0].console.full_access is False, "a session starts in ask"
 
     r = client.post(f"/v1/gaia/sessions/{session_id}/bypass", json={"enabled": True})
     assert r.status_code == 200, r.text
@@ -260,7 +259,27 @@ def test_session_bypass_stops_the_prompts_without_lifting_the_shell_gates(built)
 
     console = agents[0].console
     assert console.auto_approve_gated_tools is True, "bypass must stop the prompts"
-    assert console.full_access is False, "shell gates must stay on over HTTP"
+    assert console.full_access is True, "bypass must open the shell too"
+
+    r = client.post(f"/v1/gaia/sessions/{session_id}/bypass", json={"enabled": False})
+    assert r.status_code == 200, r.text
+    assert (
+        client.post("/v1/gaia/query", json=_body(session_id=session_id)).status_code
+        == 200
+    )
+
+    console = agents[0].console
+    assert console.auto_approve_gated_tools is False
+    assert console.full_access is False
+
+
+def test_a_query_with_no_session_never_runs_with_full_access(built):
+    """Full access belongs to a session; the query body cannot ask for it."""
+    client, agents = built
+
+    assert client.post("/v1/gaia/query", json=_body()).status_code == 200
+
+    assert agents[0].console.full_access is False
 
 
 def _served_paths(app) -> set:

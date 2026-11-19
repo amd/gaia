@@ -228,7 +228,7 @@ def test_a_relative_scope_entry_is_refused(built):
 
 
 def test_full_access_over_http_grants_paths_on_a_watched_session(built):
-    """Full access widens the file scope; the shell gates stay on."""
+    """Full access widens the file scope and opens the shell."""
     client, agents = built
     assert _query(client, session_id="s1").status_code == 200
     r = client.post("/v1/gaia/sessions/s1/bypass", json={"enabled": True})
@@ -236,7 +236,7 @@ def test_full_access_over_http_grants_paths_on_a_watched_session(built):
 
     assert _query(client, session_id="s1").status_code == 200
 
-    assert agents[0].seen[-1] == (True, False, True, True)
+    assert agents[0].seen[-1] == (True, True, True, True)
 
 
 def test_ask_mode_grants_nothing_without_a_prompt(built):

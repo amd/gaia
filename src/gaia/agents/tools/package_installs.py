@@ -4,16 +4,14 @@
 
 ``python -m pip install openpyxl`` run from a chat with no virtual environment
 installs into the user's system Python, which every other program on the
-machine shares. Full access lifts the per-binary shell policy, and ``python``
-is in its developer set, so before this check nothing stood between the agent
-and that change. An agent that hits a broken tool must not repair it by
-mutating the user's machine.
+machine shares. An agent that hits a broken tool must not repair it by
+mutating the user's machine without the user saying so.
 
 :func:`system_install_target` names what such a command would change, or
 returns ``None`` for an install that stays inside a virtual environment
 (GAIA's own included), an explicit ``--target``/``--prefix`` directory, or a
-project's ``node_modules``. The shell tool turns a hit into a one-time approval,
-and refuses it outright under full access, where no prompt is shown.
+project's ``node_modules``. The shell tool turns a hit into a one-time
+approval. Full access, which a person turns on, runs it unasked.
 """
 
 from __future__ import annotations

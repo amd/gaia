@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Full access runs any command.** It used to refuse a program outside a
+  short developer list (`pip`, `where`, `rmdir`, `gaia`, a program given by its
+  full path), a package install outside a virtual environment, a path outside
+  the allowed folders, a credential file and `gaia skill`, and one refused
+  delete then blocked later Python for the rest of the request. Now
+  `run_shell_command` and `run_python` run what they are given: any program,
+  `rm` included, any shell syntax (loops, conditions, several lines), any
+  folder. `POST /v1/gaia/sessions/{id}/bypass` gives an HTTP session the same
+  full access, so an Agent UI chat's Full access no longer asks before a gated
+  shell command. A call you declined stays declined, and calendar changes and
+  outgoing mail still wait for you. The other modes are unchanged.
 - **Every chat on a PC embeds with one embedder, the GPU one.** The embedder
   was chosen per session, so a chat on the other device could clear all of
   memory's vectors. It is now one per PC, on an NPU PC too: FastFlowLM's NPU

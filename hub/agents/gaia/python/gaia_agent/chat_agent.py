@@ -327,6 +327,17 @@ def _with_project_paths(env: Dict[str, str], project: os.PathLike | str) -> None
     )
 
 
+def _python_path_refused(agent: Any, path: str, full_access: bool) -> bool:
+    """Whether a Python tool may not run *path*, or run in it.
+
+    Full access opens every folder but one the user removed from the chat.
+    """
+    validator = agent.path_validator
+    if full_access:
+        return validator.withheld_root(path) is not None
+    return not validator.is_path_allowed(path)
+
+
 def _server_refusal(
     agent: Any, source: str, folder: Optional[str]
 ) -> Optional[Dict[str, Any]]:
@@ -2932,7 +2943,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 file_path = str(
                     _resolve_target(file_path, None, _workspace_default(self))
                 )
-                if not self.path_validator.is_path_allowed(file_path):
+                full_access = self._full_access_on()
+                if _python_path_refused(self, file_path, full_access):
                     return {
                         "status": "error",
                         "error": f"Access denied: {file_path}."
@@ -2956,7 +2968,11 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         "error": f"Could not read {file_path}: {e}",
                         "has_errors": True,
                     }
-                refused = _server_refusal(self, source, str(p.resolve().parent))
+                refused = (
+                    None
+                    if full_access
+                    else _server_refusal(self, source, str(p.resolve().parent))
+                )
                 if refused is not None:
                     return refused
                 start = time.monotonic()
@@ -2964,6 +2980,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 try:
                     project = self._script_project_root()
                     run_dir, env = _python_script_run_context(p, project)
+                    if full_access:
+                        env.pop(GUARDED_FOLDERS_ENV, None)
                     if not run_dir.is_dir():
                         # The project folder went away; the script's own
                         # folder exists, since the script was just read.
@@ -3002,6 +3020,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             should_stop=lambda: stop_requested(self),
                             watch=watch,
                             ignore=[p.resolve()],
+                            marked=not full_access,
                         )
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
@@ -3134,7 +3153,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         ),
                         "has_errors": True,
                     }
-                refused = _server_refusal(self, code, None)
+                full_access = self._full_access_on()
+                refused = None if full_access else _server_refusal(self, code, None)
                 if refused is not None:
                     return refused
 
@@ -3160,7 +3180,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 chosen_root = getattr(
                     self.config, "project_root", None
                 ) or os.environ.get(PROJECT_ROOT_ENV)
-                if chosen_root and not project:
+                if chosen_root and not project and not full_access:
                     return {
                         "status": "error",
                         "error": f"Access denied: the project root {chosen_root} "
@@ -3203,7 +3223,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except OSError as e:
                         logger.error("run_python: scratch dir unusable: %s", e)
                         return _start_failure("Python", Path(run_dir), e)
-                if not self.path_validator.is_path_allowed(str(run_dir)):
+                if _python_path_refused(self, str(run_dir), full_access):
                     return {
                         "status": "error",
                         "error": f"Access denied: {run_dir} is not in allowed "
@@ -3214,7 +3234,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 env = child_env(relaunch_self=True)
                 env["PYTHONIOENCODING"] = "utf-8"
-                env[GUARDED_FOLDERS_ENV] = _guarded_folders()
+                if not full_access:
+                    env[GUARDED_FOLDERS_ENV] = _guarded_folders()
                 env["PYTHONUTF8"] = "1"
                 env.setdefault("PYTHONUNBUFFERED", "1")
                 if project:
@@ -3258,6 +3279,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             should_stop=lambda: stop_requested(self),
                             watch=watch,
                             ignore=[snippet],
+                            marked=not full_access,
                         )
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote

@@ -413,7 +413,7 @@ def test_an_unanswered_prompt_is_denied_and_a_late_answer_reaches_nothing(
 
 
 class _GatedShellAgent(_GatedAgent):
-    """Asks for a shell call only a person may approve, once Full access is on."""
+    """Asks for a call only a person may approve, once Full access is on."""
 
     def process_query(self, query, max_steps=None):
         from gaia.agents.base.call_risk import NEEDS_PERSON_ARG
@@ -434,8 +434,9 @@ class _GatedShellAgent(_GatedAgent):
 def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
     live_gaia_sidecar, monkeypatch, approved
 ):
-    """Full access pre-approves on the sidecar, yet a gated shell call reaches
-    the Agent UI's prompt and runs only on its answer."""
+    """Full access pre-approves on the sidecar, yet a call marked for a person
+    (as an email send or a calendar change is) reaches the Agent UI's prompt
+    and runs only on its answer."""
     from gaia.ui.sidecar.proxy import SidecarProxy
 
     base_url, agents = live_gaia_sidecar
@@ -478,7 +479,7 @@ def test_full_access_relays_a_gated_shell_prompt_to_the_ui(
 
     assert not thread.is_alive()
     agent = agents[-1]
-    assert agent.console.full_access is False  # the shell gates stayed on
+    assert agent.console.full_access is True  # the same full access as stdio
     assert agent.approved is approved
     assert _answers(handler)[-1]["content"] == f"approved={approved}"
 
