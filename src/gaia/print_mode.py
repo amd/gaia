@@ -161,7 +161,7 @@ class PrintModeError(RuntimeError):
 
 
 class DownloadStopped(PrintModeError):
-    """Ctrl+C during a model download."""
+    """Ctrl+C during a model download, or at the question before it."""
 
     code = 130
 
@@ -209,6 +209,7 @@ def run(
     disallowed_tools: Sequence[str] = (),
     no_web: bool = False,
     no_skills: bool = False,
+    yes: bool = False,
 ) -> int:
     """Run one headless turn and print its result. Returns the exit code.
 
@@ -229,9 +230,11 @@ def run(
     route = settings = None
     try:
         text = read_prompt(prompt)
-        model, route, settings = _route(text, model, base_url)
+        model, route, settings = _route(text, model, base_url, yes)
         if route is not None:
-            _model_on_disk(model, base_url, setting=_routed_setting(settings, model))
+            _model_on_disk(
+                model, base_url, setting=_routed_setting(settings, model), yes=yes
+            )
         turn = dict(
             model=model,
             verbose=verbose,
@@ -242,6 +245,7 @@ def run(
             disallowed_tools=tuple(disallowed_tools),
             no_web=no_web,
             no_skills=no_skills,
+            yes=yes,
         )
         record = (
             _run_with_attempts(text, attempts, **turn)
@@ -296,7 +300,7 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
     """Independent attempts in copies of the folder, then the combining turn here."""
     from gaia.attempts import run_attempts, try_remove
 
-    model = _model_on_disk(turn["model"], turn["base_url"])
+    model = _model_on_disk(turn["model"], turn["base_url"], yes=turn["yes"])
     # Start the server once here, so parallel attempts don't race to start it.
     _start_server(model, turn["base_url"])
     flags: List[str] = []
@@ -331,7 +335,7 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
     return record
 
 
-def _route(text: str, model: Optional[str], base_url: Optional[str]):
+def _route(text: str, model: Optional[str], base_url: Optional[str], yes: bool = False):
     """``(model to run, route, settings)``: the hybrid router's pick, else
     *model* and two Nones.
 
@@ -344,7 +348,10 @@ def _route(text: str, model: Optional[str], base_url: Optional[str]):
         return model, None, None
     router = HybridRouter()
     classifier = _model_on_disk(
-        router.settings.classifier_model, base_url, setting="hybrid_classifier_model"
+        router.settings.classifier_model,
+        base_url,
+        setting="hybrid_classifier_model",
+        yes=yes,
     )
     detected = _start_server(classifier, base_url)
     route = router.decide(text, base_url=base_url or detected)
@@ -398,12 +405,17 @@ def _resolve_model(model: Optional[str]) -> Optional[str]:
 
 
 def _model_on_disk(
-    model: Optional[str], base_url: Optional[str], setting: Optional[str] = None
+    model: Optional[str],
+    base_url: Optional[str],
+    setting: Optional[str] = None,
+    yes: bool = False,
 ) -> str:
     """The model this run uses, downloaded first when it is not on disk.
 
-    Unset means the model the Agent UI and TUI reopen on. *setting* names the
-    config key that chose *model*, for the remedy when the id is unknown.
+    Unset means the model the Agent UI and TUI reopen on. A download is
+    confirmed at the terminal first, unless *yes* (``--yes``) agreed to it in
+    advance. *setting* names the config key that chose *model*, for the remedy
+    when the id is unknown.
     """
     from gaia.llm.lemonade_client import (
         LemonadeClient,
@@ -429,6 +441,7 @@ def _model_on_disk(
             f"it. {_unknown_model_remedy(model, requested, setting)}"
         )
     if not info["downloaded"]:
+        _confirm_download(model, info["size_gb"], yes)
         _download_model(client, model, info["size_gb"])
     return model
 
@@ -526,6 +539,48 @@ class _DownloadProgress:
         self.stream.flush()
 
 
+def _confirm_download(model: str, size_gb: Optional[float], yes: bool) -> None:
+    """Ask at the terminal before *model* is downloaded; refuse without a yes.
+
+    The question and its answer use stderr and stdin, so stdout stays the
+    answer's. With no terminal to ask at (stdin carries the prompt or is
+    redirected, or stderr is), nothing is downloaded: ``--yes`` says yes in
+    advance.
+    """
+    if yes:
+        return
+    size = f" ({size_gb:.1f} GB)" if size_gb else ""
+    missing = f"{model} is not downloaded{size}"
+    if not _stream_is_tty(sys.stdin) or not _stream_is_tty(sys.stderr):
+        raise PrintModeError(
+            f"{missing}, and there is no terminal to ask whether to download "
+            "it, so nothing was downloaded. Pass --yes to download it, or "
+            "--model with a model you have."
+        )
+    sys.stderr.write(f"gaia -p: {missing}. Download it now? [y/N] ")
+    sys.stderr.flush()
+    try:
+        answer = sys.stdin.readline()
+    except KeyboardInterrupt:
+        sys.stderr.write("\n")
+        raise DownloadStopped(
+            f"Nothing was downloaded. Run the command again and answer y to "
+            f"download {model}, or pass --yes."
+        ) from None
+    if not answer:
+        sys.stderr.write("\n")  # EOF left the question's line open
+    if answer.strip().lower() not in ("y", "yes"):
+        raise PrintModeError(
+            f"Nothing was downloaded. Run the command again and answer y to "
+            f"download {model}, pass --yes to download without being asked, or "
+            "pass --model with a model you have."
+        )
+
+
+def _stream_is_tty(stream: Any) -> bool:
+    return stream is not None and bool(getattr(stream, "isatty", lambda: False)())
+
+
 def _download_model(client: Any, model: str, size_gb: Optional[float]) -> None:
     """Download *model*, showing progress on stderr."""
     from gaia.llm.lemonade_client import (
@@ -535,8 +590,7 @@ def _download_model(client: Any, model: str, size_gb: Optional[float]) -> None:
 
     size = f" ({size_gb:.1f} GB)" if size_gb else ""
     print(
-        f"gaia -p: {model} is not downloaded; downloading it{size}. "
-        "Ctrl+C stops the download.",
+        f"gaia -p: downloading {model}{size}. Ctrl+C stops the download.",
         file=sys.stderr,
     )
     progress = _DownloadProgress(model, planned_bytes=int((size_gb or 0) * 1e9))
@@ -617,6 +671,7 @@ def _run_turn(
     disallowed_tools: Sequence[str] = (),
     no_web: bool = False,
     no_skills: bool = False,
+    yes: bool = False,
 ) -> Dict[str, Any]:
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.logger import configure
@@ -624,7 +679,7 @@ def _run_turn(
     log_manager = configure()
     log_manager.configure_agent_console(debug=False)
 
-    model = _model_on_disk(model, base_url)
+    model = _model_on_disk(model, base_url, yes=yes)
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
     except ImportError:

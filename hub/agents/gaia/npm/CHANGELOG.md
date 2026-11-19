@@ -29,12 +29,15 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   of the limit, so one long early step no longer ends the turn near its
   halfway point, and the answer after a time-limit stop is a short summary (at
   most 2,048 tokens) that names files instead of repeating them.
-- **`gaia -p` downloads a local model that is not on disk yet**, then answers
-  with it, instead of refusing the run. The size is announced and the progress
-  goes to stderr: a bar with percent and downloaded/total size on a terminal,
-  one plain line every 10% in a pipe or log file. stdout still carries only
-  the answer. Ctrl+C stops the download and exits 130; a failed download exits
-  1 with the reason.
+- **`gaia -p` can download a local model that is not on disk yet**, then
+  answer with it, instead of refusing the run. It asks first, on stderr, with
+  the model and its size (`Download it now? [y/N]`); only `y` or `yes`
+  downloads. Where nobody can answer (a script, a piped prompt, redirected
+  stderr) nothing is downloaded and the run exits 1 naming `--yes` (`-y`),
+  which agrees in advance. The progress goes to stderr: a bar with percent and
+  downloaded/total size on a terminal, one plain line every 10% in a pipe or
+  log file. stdout still carries only the answer. Ctrl+C at the question or
+  during the download exits 130; a failed download exits 1 with the reason.
 ### Changed
 
 - **Office files are checked before they are handed over.** The bundled

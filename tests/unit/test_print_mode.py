@@ -187,6 +187,7 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
         disallowed_tools=(),
         no_web=False,
         no_skills=False,
+        yes=False,
     )
 
 
@@ -717,6 +718,11 @@ def test_no_model_and_no_config_falls_back_to_the_shipped_default(
     assert _agent().config.model_id == DEFAULT_MODEL_NAME
 
 
+def _run_yes(*args, **kwargs):
+    """``gaia -p --yes``: a download was agreed to in advance."""
+    return print_mode.run(*args, yes=True, **kwargs)
+
+
 def _downloads():
     return [c[1] for c in _Catalog.calls if c[0] == "ensure_model_downloaded"]
 
@@ -738,10 +744,10 @@ def test_a_local_model_that_is_not_downloaded_is_downloaded_then_run(
 
     _config(monkeypatch)
     _Catalog.downloaded = False
-    assert print_mode.run("q") == 0
+    assert _run_yes("q") == 0
     out, err = capsys.readouterr()
     assert out == "pong\n"
-    assert f"{DEFAULT_MODEL_NAME} is not downloaded; downloading it (5.6 GB)" in err
+    assert f"gaia -p: downloading {DEFAULT_MODEL_NAME} (5.6 GB)" in err
     assert f"gaia -p: downloaded {DEFAULT_MODEL_NAME}" in err
     assert _downloads() == [DEFAULT_MODEL_NAME]
     assert _agent().config.model_id == DEFAULT_MODEL_NAME
@@ -760,7 +766,7 @@ def test_a_model_named_with_model_is_downloaded_with_streamed_progress(
 ):
     _config(monkeypatch, last_model="other")
     _Catalog.downloaded = False
-    assert print_mode.run("q", model="user.Added-27B-GGUF") == 0
+    assert _run_yes("q", model="user.Added-27B-GGUF") == 0
     (call,) = [c for c in _Catalog.calls if c[0] == "ensure_model_downloaded"]
     assert call[1] == "user.Added-27B-GGUF"
     assert callable(call[2]["on_progress"])
@@ -779,7 +785,7 @@ def test_download_progress_goes_to_stderr_and_json_stdout_stays_one_object(
         _progress(step * total // 20, total, total_download_size=total)
         for step in range(21)
     ] + [{"event": "complete", "percent": 100}]
-    assert print_mode.run("q", model="m1", output_format="json") == 0
+    assert _run_yes("q", model="m1", output_format="json") == 0
     out, err = capsys.readouterr()
     assert out.count("\n") == 1
     assert json.loads(out)["result"] == "pong"
@@ -791,6 +797,238 @@ def test_download_progress_goes_to_stderr_and_json_stdout_stays_one_object(
     assert lines[4] == "gaia -p: downloading m1: 50% (1.0 / 2.0 GB)"
     assert "\r" not in err
     assert err.rstrip().endswith("gaia -p: downloaded m1")
+
+
+class _Keyboard:
+    """A terminal's stdin: what the user types at the download question."""
+
+    def __init__(self, typed):
+        self.typed = typed
+        self.asked = 0
+
+    def isatty(self):
+        return True
+
+    def readline(self):
+        self.asked += 1
+        if isinstance(self.typed, BaseException):
+            raise self.typed
+        return self.typed
+
+
+@pytest.fixture
+def at_a_terminal(monkeypatch):
+    """stdin and stderr are a terminal; returns a setter for what is typed."""
+
+    def typed(text):
+        keyboard = _Keyboard(text)
+        monkeypatch.setattr(sys, "stdin", keyboard)
+        monkeypatch.setattr(
+            print_mode, "_stream_is_tty", lambda stream: stream is not None
+        )
+        return keyboard
+
+    return typed
+
+
+@pytest.mark.parametrize("answer", ["y\n", "Y\n", "yes\n", " YES \n"])
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_a_yes_at_the_question_downloads_then_answers(
+    stub_env, monkeypatch, capsys, at_a_terminal, answer, fmt
+):
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    _Catalog.size_gb = 18.6
+    keyboard = at_a_terminal(answer)
+    assert print_mode.run("q", model="m1", output_format=fmt) == 0
+    out, err = capsys.readouterr()
+    assert keyboard.asked == 1
+    assert err.startswith(
+        "gaia -p: m1 is not downloaded (18.6 GB). Download it now? [y/N] "
+    )
+    assert _downloads() == ["m1"]
+    assert out.count("\n") == 1
+    assert (json.loads(out)["result"] if fmt == "json" else out.strip()) == "pong"
+
+
+@pytest.mark.parametrize("answer", ["n\n", "no\n", "\n", "maybe\n", ""])
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_anything_but_yes_at_the_question_downloads_nothing(
+    stub_env, monkeypatch, capsys, at_a_terminal, answer, fmt
+):
+    """A bare Enter and EOF (``""``) are a no: the default is N."""
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    at_a_terminal(answer)
+    assert print_mode.run("q", model="m1", output_format=fmt) == 1
+    out, err = capsys.readouterr()
+    assert "Download it now? [y/N] " in err
+    assert "❌ gaia -p: Nothing was downloaded." in err
+    assert "--yes" in err
+    assert _downloads() == []
+    assert _StubAgent.instances == []
+    if fmt == "json":
+        assert out.count("\n") == 1
+        record = json.loads(out)
+        assert record["is_error"] is True
+        assert record["error"].startswith("Nothing was downloaded.")
+    else:
+        assert out == ""
+
+
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_ctrl_c_at_the_question_downloads_nothing_and_exits_130(
+    stub_env, monkeypatch, capsys, at_a_terminal, fmt
+):
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    at_a_terminal(KeyboardInterrupt())
+    assert print_mode.run("q", model="m1", output_format=fmt) == 130
+    out, err = capsys.readouterr()
+    assert "❌ gaia -p: Nothing was downloaded." in err
+    assert "Traceback" not in err
+    assert _downloads() == []
+    if fmt == "json":
+        assert json.loads(out)["is_error"] is True
+    else:
+        assert out == ""
+
+
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_with_nobody_to_ask_nothing_is_downloaded_and_yes_is_named(
+    stub_env, monkeypatch, capsys, fmt
+):
+    """A script or a piped prompt: stdin can't answer, so the run must not hang."""
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    stdin = MagicMock()
+    stdin.isatty.return_value = False
+    monkeypatch.setattr(sys, "stdin", stdin)
+    assert print_mode.run("q", model="m1", output_format=fmt) == 1
+    out, err = capsys.readouterr()
+    assert err == (
+        "❌ gaia -p: m1 is not downloaded (5.6 GB), and there is no terminal to "
+        "ask whether to download it, so nothing was downloaded. Pass --yes to "
+        "download it, or --model with a model you have.\n"
+    )
+    stdin.readline.assert_not_called()
+    stdin.read.assert_not_called()
+    assert _downloads() == []
+    assert _StubAgent.instances == []
+    if fmt == "json":
+        assert out.count("\n") == 1
+        assert json.loads(out)["is_error"] is True
+    else:
+        assert out == ""
+
+
+def test_a_question_nobody_would_see_is_not_asked(stub_env, monkeypatch, capsys):
+    """stdin is a terminal but stderr goes to a file: the question would be lost."""
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    keyboard = _Keyboard("y\n")
+    monkeypatch.setattr(sys, "stdin", keyboard)
+    assert print_mode.run("q", model="m1") == 1
+    assert keyboard.asked == 0
+    assert "Pass --yes" in capsys.readouterr().err
+    assert _downloads() == []
+
+
+def test_yes_downloads_without_asking(stub_env, monkeypatch, capsys):
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    stdin = MagicMock()
+    monkeypatch.setattr(sys, "stdin", stdin)
+    assert _run_yes("q", model="m1", output_format="json") == 0
+    out, err = capsys.readouterr()
+    stdin.readline.assert_not_called()
+    assert "Download it now?" not in err
+    assert _downloads() == ["m1"]
+    assert json.loads(out)["result"] == "pong"
+
+
+def test_a_downloaded_model_is_never_asked_about(stub_env, monkeypatch, capsys):
+    _config(monkeypatch)
+    stdin = MagicMock()
+    monkeypatch.setattr(sys, "stdin", stdin)
+    assert print_mode.run("q", model="m1") == 0
+    stdin.readline.assert_not_called()
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("source", ["last_model", "hybrid_classifier", "hybrid_routed"])
+def test_a_model_the_user_did_not_name_is_asked_about_too(
+    stub_env, monkeypatch, capsys, source
+):
+    """With nobody to ask, no implicit pick is downloaded either."""
+    from gaia.llm import hybrid
+
+    class _Router:
+        def __init__(self):
+            self.settings = hybrid.HybridSettings(
+                cheap_model="Local-Cheap-GGUF",
+                strong_model="amd.Strong",
+                classifier_model=(
+                    "Local-Classifier-GGUF"
+                    if source == "hybrid_classifier"
+                    else "amd.Classifier"
+                ),
+            )
+
+        def decide(self, text, base_url=None):
+            return hybrid.RouteDecision(
+                model="Local-Cheap-GGUF",
+                kind="chat",
+                difficulty=1,
+                stakes="low",
+                reason="test",
+                classified=True,
+                seconds=0.1,
+                policy=self.settings.policy,
+            )
+
+    monkeypatch.setattr(hybrid, "HybridRouter", _Router)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.cloud_model_provider",
+        lambda model: "amd" if model.startswith("amd.") else None,
+    )
+    _config(monkeypatch, last_model="Local-Last-GGUF")
+    _Catalog.downloaded = False
+    model = None if source == "last_model" else "hybrid"
+    assert print_mode.run("q", model=model) == 1
+    err = capsys.readouterr().err
+    missing = {
+        "last_model": "Local-Last-GGUF",
+        "hybrid_classifier": "Local-Classifier-GGUF",
+        "hybrid_routed": "Local-Cheap-GGUF",
+    }[source]
+    assert f"{missing} is not downloaded (5.6 GB)" in err
+    assert "Pass --yes" in err
+    assert _downloads() == []
+    assert _StubAgent.instances == []
+
+
+def test_main_forwards_yes(monkeypatch):
+    run = MagicMock(return_value=0)
+    monkeypatch.setattr(print_mode, "run", run)
+    from gaia import cli
+
+    for flag in ("--yes", "-y"):
+        monkeypatch.setattr(sys, "argv", ["gaia", "-p", "hi", flag])
+        with pytest.raises(SystemExit) as exit_info:
+            cli.main()
+        assert exit_info.value.code == 0
+        assert run.call_args.kwargs["yes"] is True
+
+
+def test_yes_without_p_is_a_usage_error(parser, capsys):
+    from gaia import cli
+
+    with patch.object(sys, "argv", ["gaia", "--yes", "chat"]):
+        with pytest.raises(SystemExit) as exit_info:
+            cli.main()
+    assert exit_info.value.code == 2
+    assert "--yes before a subcommand only applies to -p" in capsys.readouterr().err
 
 
 class _Terminal(io.StringIO):
@@ -861,7 +1099,7 @@ def test_a_failed_download_exits_1_with_the_reason(stub_env, monkeypatch, capsys
     _Catalog.download_error = LemonadeClientError(
         "Failed to download model 'm1': connection lost"
     )
-    assert print_mode.run("q", model="m1", output_format=fmt) == 1
+    assert _run_yes("q", model="m1", output_format=fmt) == 1
     out, err = capsys.readouterr()
     assert "❌ gaia -p: Failed to download model 'm1': connection lost" in err
     assert "LemonadeClientError" not in err
@@ -886,7 +1124,7 @@ def test_stopping_a_download_exits_130_with_a_clear_message(
         if stop == "ctrl_c"
         else ModelDownloadCancelledError("Download of m1 stopped at your request.")
     )
-    assert print_mode.run("q", model="m1") == 130
+    assert _run_yes("q", model="m1") == 130
     out, err = capsys.readouterr()
     assert out == ""
     assert "❌ gaia -p: Download of m1 stopped. Run the same command again" in err
@@ -914,7 +1152,7 @@ def test_ctrl_c_ends_the_bar_line_before_the_message(monkeypatch, capsys):
 def test_a_missing_last_model_is_downloaded_too(stub_env, monkeypatch, capsys):
     _config(monkeypatch, last_model="Gemma-4-E4B-it-GGUF", default_model="other")
     _Catalog.downloaded = False
-    assert print_mode.run("q") == 0
+    assert _run_yes("q") == 0
     assert _downloads() == ["Gemma-4-E4B-it-GGUF"]
     assert capsys.readouterr().out == "pong\n"
 
@@ -994,7 +1232,7 @@ def test_a_local_hybrid_classifier_that_is_not_downloaded_is_downloaded_first(
     )
     _config(monkeypatch)
     _Catalog.downloaded = False
-    assert print_mode.run("q", model="hybrid") == 0
+    assert _run_yes("q", model="hybrid") == 0
     assert _downloads() == ["Local-Classifier-GGUF"]
     assert _agent().config.model_id == "amd.Cheap"
 
@@ -1021,7 +1259,7 @@ def test_a_gaia_model_the_server_has_not_listed_yet_is_downloaded(
     _config(monkeypatch, default_model=FLASH_OPTION_MODEL_NAME)
     _Catalog.downloaded = False
     _Catalog.listed = False
-    assert print_mode.run("q") == 0
+    assert _run_yes("q") == 0
     assert _downloads() == [FLASH_OPTION_MODEL_NAME]
     assert "isn't a model the model server knows" not in capsys.readouterr().err
 
@@ -1061,7 +1299,7 @@ def test_a_missing_routed_hybrid_model_is_downloaded(
     monkeypatch.setattr(hybrid, "HybridRouter", _Router)
     _config(monkeypatch)
     _Catalog.downloaded = False
-    assert print_mode.run("q", model="hybrid") == 0
+    assert _run_yes("q", model="hybrid") == 0
     assert routed in _downloads()
     assert _agent().config.model_id == routed
 
@@ -1089,7 +1327,7 @@ def test_a_downloaded_local_model_is_checked_then_loaded(stub_env, monkeypatch):
 def test_the_relayed_turn_downloads_a_missing_model_first(relay, monkeypatch, capsys):
     _config(monkeypatch, default_model="cfg-model")
     _Catalog.downloaded = False
-    assert print_mode.run("q") == 0
+    assert _run_yes("q") == 0
     assert _downloads() == ["cfg-model"]
     assert len(relay) == 1
 
@@ -1102,7 +1340,7 @@ def test_the_relayed_turn_does_not_run_after_a_failed_download(
     _config(monkeypatch, default_model="cfg-model")
     _Catalog.downloaded = False
     _Catalog.download_error = LemonadeClientError("Failed to download: disk full")
-    assert print_mode.run("q") == 1
+    assert _run_yes("q") == 1
     assert "disk full" in capsys.readouterr().err
     assert list(relay) == []
 
