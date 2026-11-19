@@ -111,6 +111,13 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   `execute_python_file` is. Every Python result now says the interpreter is
   new for that call, a `NameError` adds that each call starts fresh, and a
   failed run says how to fix and re-run it without sending the code again.
+- `read_file` reads more without a detour. A .pptx comes back as slide text
+  with speaker notes. A workbook too long to read in full comes back as each
+  sheet's size and first rows, with how to read a range, instead of an error.
+  An .html file comes back as its text (`raw=true` for the markup).
+  `start_line` with `limit` reads that many lines, and a `start_line` of 0 is
+  the first line. When a loaded skill has a tool for the file's type, the
+  result names it before `index_document`.
 - A Python that `run_shell_command` starts reads and prints UTF-8, as
   `run_python` already did, unless the command or the environment sets an
   encoding itself.
