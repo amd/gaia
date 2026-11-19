@@ -82,6 +82,7 @@
               "setup",
               "quickstart",
               "guides/tui",
+              "guides/claude-code",
               "guides/memory",
               {
                 "group": "User Guides",
@@ -439,6 +440,7 @@
             "pages": [
               "plans/flagship-installer",
               "plans/embedded-onboarding",
+              "plans/claude-code-plugin",
               "spec/agent-skills",
               "plans/skill-format",
               "plans/skill-synthesis",

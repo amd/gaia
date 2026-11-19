@@ -426,6 +426,13 @@ Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   connection for `installed:gaia` now needs `gmail.readonly` and `gmail.compose`
   in its consent.
 
+### Added
+
+- **Claude Code can hand tasks to GAIA.** `gaia-agent --mcp` serves the agent as
+  an MCP server with `gaia_task` and `gaia_status`, which the new GAIA plugin for
+  Claude Code launches. Claude passes summaries, triage and document questions to
+  the local model and gets the answer back in its own conversation (SPEC §5.5).
+
 ### Changed
 
 - **The standalone email agent is gone; mail is this agent's job.**
