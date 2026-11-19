@@ -96,6 +96,7 @@ def create_app(
     lemonade=None,
     lemonade_owner=None,
     lemonade_clients=None,
+    relay_turns=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -137,6 +138,10 @@ def create_app(
     *lemonade_clients* (a :class:`gaia.daemon.lemonade_clients.LemonadeClients`,
     given with *lemonade_owner*) mounts ``/daemon/v1/lemonade/clients``, where
     front ends register while they use GAIA's Lemonade and release on exit.
+
+    *relay_turns* (a :class:`gaia.daemon.relay.RelayTurns`) counts the relay's
+    open streams; pass the one *lemonade_clients* reads. One is made when
+    *registry* is given without it.
     """
     import anyio
     from fastapi import Depends, FastAPI, HTTPException
@@ -165,8 +170,7 @@ def create_app(
     )
 
     require_token = build_require_token(token)
-    relay_turns = None
-    if registry is not None:
+    if registry is not None and relay_turns is None:
         from gaia.daemon.relay import RelayTurns
 
         relay_turns = RelayTurns()

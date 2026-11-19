@@ -12,7 +12,9 @@ Read the result in this order.
    anomaly or burst can come from it. Fit `timestamp_regex` to its
    `line_samples`; if the lines truly carry no timestamp, say so.
 2. **`coverage`** - every file with format, first and last timestamp, line,
-   entry, continuation (stack-trace) and unparsed counts. `times_in` says
+   entry, continuation (stack-trace) and unparsed counts. `undecodable_chars`
+   counts characters that were not valid in the file's `encoding` and were
+   read as U+FFFD: ids and text on those lines may be damaged, so say so. `times_in` says
    whether times are UTC (offsets in the logs were converted) or as written.
 3. **`anomalies`** - templates ranked by severity, then hosts hit, then rarity.
    Each has `why` (short window, new, spike against its own median,
