@@ -1087,9 +1087,11 @@ class CompletionEvidence:
         if data.get("status") == "denied" and data.get("timed_out") is True:
             reason = f"The write to `{path}` wasn't confirmed in time{_UNCONFIRMED}"
             self.unconfirmed.add(reason)
-        elif data.get("status") == "denied":
+        elif data.get("status") == "denied" and data.get("denied_by") != "policy":
             reason = f"The write to `{path}` was declined{_REFUSED}"
-        elif isinstance(error, str) and error.startswith(_PERMISSION_REFUSALS):
+        elif data.get("status") == "denied" or (
+            isinstance(error, str) and error.startswith(_PERMISSION_REFUSALS)
+        ):
             reason = f"Writing `{path}` was not permitted{_REFUSED}"
         else:
             return  # A preflight like "read it first" is a step, not a refusal.

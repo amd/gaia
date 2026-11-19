@@ -915,6 +915,38 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A turn that ran two winget commands Undo cannot reverse. */
+async function withUntrackedCommands(page: Page): Promise<void> {
+    await withFailedAnswer(page);
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/changes`, (route) =>
+        route.fulfill({
+            json: {
+                turns: [{
+                    turn_id: 't1', session_id: ANSWER_SESSION, message_id: 2, started_at: NOW.toISOString(),
+                    finished_at: NOW.toISOString(), restored_at: null, files: [], incomplete: true,
+                    untracked: [
+                        { kind: 'shell', detail: 'winget install --id Git.Git --exact', paths: [] },
+                        { kind: 'shell', detail: 'winget install --id Git.Git --exact --source winget', paths: [] },
+                    ],
+                }],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the undo footer says what Undo cannot reverse, in the UI language (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withUntrackedCommands);
+        const warning = page.locator('.turn-changes-warning');
+        await expect(warning).toContainText(locale === 'en' ? 'GAIA ran 2 commands. Undo only restores' : 'التراجع يعيد فقط');
+        await expect(warning).not.toContainText("can't track");
+        expect(await audit(page)).toEqual([]);
+        await warning.screenshot({ path: info.outputPath(`undo-footer-${locale}.png`) });
+        const dir = process.env.GAIA_VISUAL_SHOTS;
+        if (dir) await warning.screenshot({ path: `${dir}/undo-footer-${locale}.png` });
+    });
+}
+
 /** The server's crash notice is English; it ends a partial answer and repeats as the last error step. */
 const CRASH_NOTICE = 'GAIA stopped unexpectedly while answering. Anything it had already written is kept above. Send your message again.';
 
@@ -5121,6 +5153,32 @@ for (const locale of ['ar', 'en'] as const) {
         await expect(page.locator('.flow-tool-label').filter({ hasText: /run python|request user input/ })).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
         await shot(page, `declined-steps-${locale}`);
+    });
+}
+
+const REFUSED_STEPS = [
+    { type: 'tool_start', tool: 'run_shell_command', narration: 'Running git clone' },
+    {
+        type: 'tool_result', success: false, status: 'denied', denied_by: 'policy',
+        summary: 'Not run: this reaches github.com, and `git clone` was refused earlier in this request.',
+    },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a call GAIA blocked is not shown as the user's no (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, REFUSED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('clone the repo');
+        await page.keyboard.press('Enter');
+        const rows = page.locator('.flow-steps.live .flow-tool');
+        await expect(rows).toHaveCount(2);
+        await expect(rows.nth(0)).toHaveClass(/declined/);
+        if (locale === 'en') await expect(rows.nth(0).locator('.flow-tool-label')).toHaveText('Blocked by GAIA: Running command');
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') await expect(rows.nth(0).locator('.flow-tool-label')).toContainText('حظرها GAIA');
+        await shot(page, `refused-step-${locale}`);
     });
 }
 
