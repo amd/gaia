@@ -1606,6 +1606,7 @@ class ChatAgent(
         The profile CORE assumes memory's skill signal; without it, turning
         memory off must never cost the agent one of its own tools.
         """
+        # Safe only because init_memory settles _memory_store before warm-up.
         loader = self.tool_loader
         if (
             loader.mcp_only
