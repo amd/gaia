@@ -2295,6 +2295,40 @@ def _with_answer_beside_tool_calls(answer: str, beside: Optional[str]) -> str:
     return f"{beside}\n\n{answer.strip()}" if answer.strip() else beside
 
 
+#: A reply that points back at an answer given earlier in the turn instead of
+#: giving one ("I already reported that in my last answer").
+_DEFERS_TO_EARLIER_ANSWER = re.compile(
+    r"\b(?:my|the) (?:last|previous|earlier|prior|first|original) "
+    r"(?:answer|reply|response|message|summary|report)\b"
+    r"|\b(?:i|i've|i have|was|were|is|are) already "
+    r"(?:answered|reported|covered|explained|summari[sz]ed|listed|provided"
+    r"|gave|given|said|told|noted|mentioned|described|addressed)\b"
+    r"|\bas (?:i )?(?:said|noted|mentioned|reported|stated|explained|described) "
+    r"(?:above|before|earlier|previously)\b"
+    r"|\b(?:answer|answers|summary|report|results?|findings?) "
+    r"(?:(?:i )?(?:gave|reported|provided) )?(?:above|earlier)\b"
+    r"|\b(?:see|shown|given|stated|reported|listed|described) above\b",
+    re.IGNORECASE,
+)
+
+
+def _with_earlier_answer(answer: str, earlier: Optional[str]) -> str:
+    """Put the answer given earlier in the turn ahead of a reply that defers to it.
+
+    A model that answers in the text beside a tool call treats the user as
+    having read it, and can close the turn with a remark about that call
+    ("Same error as before; I already reported that in my last answer").
+    Only for a shorter reply that points back and does not retract.
+    """
+    reply = answer.strip()
+    if not earlier or earlier in reply or len(reply) >= len(earlier):
+        return answer
+    plain = reply.replace("’", "'")
+    if _RETRACTION.search(plain) or not _DEFERS_TO_EARLIER_ANSWER.search(plain):
+        return answer
+    return f"{earlier}\n\n{reply}"
+
+
 _GIVE_ANSWER_AGAIN = (
     "Then give your complete answer again: it replaces the one above, which "
     "the user will not see."
@@ -13174,6 +13208,8 @@ Do NOT wrap conversational replies in JSON.
         completion_gaps = []
         # Answer text the model sent alongside its latest tool calls.
         answer_beside_tool_calls: Optional[str] = None
+        # The latest answer sent alongside any tool calls this turn, lookups too.
+        answer_given_mid_turn: Optional[str] = None
         # Latest generate_image outcome this turn: None until one has run.
         capability_tool_last_succeeded: Optional[bool] = None
         image_outcome_corrected = False
@@ -14396,6 +14432,11 @@ Do NOT wrap conversational replies in JSON.
                     parsed.get("content") if parsed.get("tool_calls") else None,
                     parsed.get("tool_calls"),
                 )
+                if parsed.get("tool_calls"):
+                    answer_given_mid_turn = (
+                        _answer_beside_tool_calls(parsed.get("content"))
+                        or answer_given_mid_turn
+                    )
 
             # If the LLM needs to create a plan first, re-prompt it specifically for that
             if "needs_plan" in parsed and parsed["needs_plan"]:
@@ -15225,6 +15266,9 @@ Do NOT wrap conversational replies in JSON.
                 # Every check below must see the text the user will see.
                 answer_candidate = _with_answer_beside_tool_calls(
                     parsed["answer"], answer_beside_tool_calls
+                )
+                answer_candidate = _with_earlier_answer(
+                    answer_candidate, answer_given_mid_turn
                 )
                 # FastFlowLM occasionally ends a long prefill with zero tokens.
                 if (
