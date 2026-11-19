@@ -7,6 +7,10 @@ Read the result in this order.
    `files_below_parsed_share` was misread: look at its `unparsed_samples`,
    then call again with `timestamp_regex` (and `level_regex` / `host_regex` if
    needed) fitted to those lines. Do not report from a misread file.
+   `time_ranked` is false when a file in `files_without_timestamps` gave no
+   usable timestamps: its lines were counted but not ranked by time, so no
+   anomaly or burst can come from it. Fit `timestamp_regex` to its
+   `line_samples`; if the lines truly carry no timestamp, say so.
 2. **`coverage`** - every file with format, first and last timestamp, line,
    entry, continuation (stack-trace) and unparsed counts. `times_in` says
    whether times are UTC (offsets in the logs were converted) or as written.

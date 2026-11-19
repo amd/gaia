@@ -70,7 +70,9 @@ incident.
   the whole.
 - **Do not report from a misread file.** `checks.ok` must be true. If
   `parsed_share_ok` is false, call again with `timestamp_regex` (and
-  `level_regex` / `host_regex`) fitted to the file's `unparsed_samples`.
+  `level_regex` / `host_regex`) fitted to the file's `unparsed_samples` or
+  `line_samples`. If its lines truly carry no timestamp, say that the file
+  was counted but not ranked by time.
 - **Deliver lists from `triage_logs` output; do not rebuild them by hand.**
   A list of failed requests, sessions or jobs is `entities.list`. For
   more than 150 ids call again with

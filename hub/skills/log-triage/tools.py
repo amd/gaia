@@ -8,11 +8,13 @@ counting deterministically, in one streaming pass per file:
 
 1. **Formats.** Each file's format is learned from a sample (head, middle and
    tail): JSON lines, syslog (RFC 3164 and 5424), Apache/Nginx access and
-   error logs, glog, ``key=value``, and any line that starts with a timestamp
-   (ISO 8601, ``YYYY-MM-DD HH:MM:SS,mmm``, ``dd/Mon/yyyy:...``, ctime, epoch
-   seconds or milliseconds). Indented and stack-trace lines join the entry
-   above them. Lines that fit nothing are counted and sampled, never dropped
-   silently.
+   error logs, glog, ``key=value``, CSV exports whose header names a time
+   column, and any line that carries a timestamp at its start or after a
+   level or logger name (ISO 8601, ``YYYY-MM-DD HH:MM:SS,mmm``,
+   ``dd/Mon/yyyy:...``, ctime, epoch seconds or milliseconds). Indented and
+   stack-trace lines join the entry above them. Lines that fit nothing are
+   counted and sampled, never dropped silently, and a file with no usable
+   timestamps fails the ``parsed_share_ok`` check.
 2. **Templates.** Variable parts (numbers, hex, UUIDs, IPs, paths, URLs, mixed
    ids) are masked, then templates that differ in one high-cardinality word
    are merged (Drain-like, bounded by a template cap).
@@ -82,6 +84,8 @@ DEFAULT_TIME_BUDGET_S = 540.0
 SAMPLE_HEAD_LINES = 400
 SAMPLE_MID_LINES = 200
 SAMPLE_TAIL_BYTES = 64 * 1024
+#: A line's own timestamp starts within this many characters.
+TS_SEARCH_CHARS = 60
 MERGE_MIN_VARIANTS = 8
 
 # Classification thresholds (percent of the analysed time range unless noted).
@@ -717,11 +721,12 @@ _KV_RE = re.compile(r"([A-Za-z_@][\w.@-]*)=(\"(?:[^\"\\]|\\.)*\"|\S*)")
 _TS_KEYS = (
     "@timestamp", "timestamp", "time", "ts", "datetime", "date", "eventtime",
     "event_time", "asctime", "logtime", "log_time", "t", "created", "created_at",
-    "timegenerated", "timecreated", "time_local",
+    "timegenerated", "timecreated", "time_local", "date and time",
 )  # fmt: skip
 _LEVEL_KEYS = (
     "level", "severity", "lvl", "loglevel", "log_level", "levelname", "level_name",
     "log.level", "severitytext", "severity_text", "@level", "priority", "status_level",
+    "leveldisplayname", "entrytype",
 )  # fmt: skip
 _MSG_KEYS = (
     "message",
@@ -736,10 +741,11 @@ _MSG_KEYS = (
 _HOST_KEYS = (
     "host", "hostname", "host.name", "host.hostname", "node", "nodename", "node_name",
     "instance", "pod", "pod_name", "server", "machine", "computer", "source_host",
+    "machinename", "computername",
 )  # fmt: skip
 _SERVICE_KEYS = (
     "service", "service.name", "service_name", "app", "application", "component",
-    "logger", "logger_name", "loggername", "module", "source",
+    "logger", "logger_name", "loggername", "module", "source", "providername",
 )  # fmt: skip
 _EXC_KEYS = (
     "exception", "exc_info", "error", "err", "stack", "stack_trace", "stacktrace",
@@ -808,6 +814,15 @@ class FileContext:
         self.prefer_ts: Optional[str] = None
         self.level_pos: Optional[int] = None
         self.host_pos: Optional[int] = None
+        # The timestamp follows a level or logger name instead of leading.
+        self.ts_search = False
+        self.lead_host = False
+        # CSV export: lower-cased column names, delimiter, the header text,
+        # and whether a quoted field is still open on the current line.
+        self.csv_header: Optional[List[str]] = None
+        self.csv_delim = ","
+        self.csv_header_line: Optional[str] = None
+        self.in_quote = False
         self.formats: List[str] = []
         self.last_ts: Optional[float] = None
         self.last_raw: Optional[float] = None
@@ -1097,9 +1112,34 @@ def _strip_token(token: str) -> str:
     return token.strip("[]()<>{}:|,;")
 
 
-def _parse_generic(line: str, ctx: FileContext) -> Optional[Rec]:
+#: Where a timestamp may start inside a line: after a separator, at a digit
+#: or a month or weekday name.
+_TS_START = re.compile(r"(?<=[\s|,;:\[(<\"'=])(?=\d|[A-Z][a-z]{2}[ ,])")
+_LEAD_SPLIT = re.compile(r"[\s:|,;\[\]()<>\"'=]+")
+
+
+def _search_ts(line: str, ctx: FileContext) -> Optional[Tuple[TsMatch, int]]:
+    """The first timestamp that starts after a separator near the line start."""
+    for m in _TS_START.finditer(line, 1, TS_SEARCH_CHARS):
+        tm = parse_timestamp(line, m.start(), prefer=ctx.prefer_ts, year_hint=ctx.year)
+        if tm is not None:
+            return tm, m.start()
+    return None
+
+
+def _locate_ts(
+    line: str, ctx: FileContext, search: Optional[bool] = None
+) -> Optional[Tuple[TsMatch, str, int]]:
+    """``(timestamp, lead, end)`` for a line that carries its own timestamp.
+
+    The timestamp leads the line (after ``[`` or a syslog ``<pri>``). When the
+    file's sample put it after a level or logger name (``ctx.ts_search``), it
+    is looked for within the first TS_SEARCH_CHARS and ``lead`` is the text
+    before it. ``end`` is where the rest of the line starts.
+    """
     pos = 0
     bracket = False
+    lead = ""
     if line.startswith("["):
         pos, bracket = 1, True
     elif line.startswith("<"):
@@ -1108,7 +1148,14 @@ def _parse_generic(line: str, ctx: FileContext) -> Optional[Rec]:
             pos = close + 1
     tm = parse_timestamp(line, pos, prefer=ctx.prefer_ts, year_hint=ctx.year)
     if tm is None:
-        return None
+        if not (ctx.ts_search if search is None else search):
+            return None
+        found = _search_ts(line, ctx)
+        if found is None:
+            return None
+        tm, pos = found
+        bracket = line[pos - 1] == "["
+        lead = line[: pos - 1] if bracket else line[:pos]
     end = tm.end
     if bracket:
         close = line.find("]", end, end + 40)
@@ -1117,6 +1164,28 @@ def _parse_generic(line: str, ctx: FileContext) -> Optional[Rec]:
         end = close + 1
     if end < len(line) and line[end] not in " \t|,;]-:":
         return None
+    return tm, lead, end
+
+
+def _split_lead(lead: str) -> Tuple[Optional[str], List[str]]:
+    """The level token and the other tokens of the text before a timestamp."""
+    level = None
+    rest = []
+    for token in _LEAD_SPLIT.split(lead):
+        if not token:
+            continue
+        if level is None and level_severity(token) is not None:
+            level = token
+        else:
+            rest.append(token)
+    return level, rest
+
+
+def _parse_generic(line: str, ctx: FileContext) -> Optional[Rec]:
+    located = _locate_ts(line, ctx)
+    if located is None:
+        return None
+    tm, lead, end = located
     rec = Rec()
     rec.ts, rec.has_tz, rec.offset, rec.ts_kind = (
         tm.epoch,
@@ -1124,10 +1193,19 @@ def _parse_generic(line: str, ctx: FileContext) -> Optional[Rec]:
         tm.offset,
         tm.kind,
     )
+    lead_rest: List[str] = []
+    if lead:
+        lead_level, lead_rest = _split_lead(lead)
+        if lead_level is not None:
+            rec.sev, rec.level = level_severity(lead_level), lead_level.upper()
+        if ctx.lead_host and len(lead_rest) == 1:
+            rec.host = lead_rest.pop()
     rest = line[end:].lstrip(" \t|,;]-:")
     tokens = rest.split(" ")
     drop = set()
-    if ctx.level_pos is not None and ctx.level_pos < len(tokens):
+    if rec.sev is not None:
+        pass  # the level came before the timestamp
+    elif ctx.level_pos is not None and ctx.level_pos < len(tokens):
         sev = level_severity(_strip_token(tokens[ctx.level_pos]))
         if sev is not None:
             rec.sev, rec.level = sev, _strip_token(tokens[ctx.level_pos]).upper()
@@ -1139,7 +1217,7 @@ def _parse_generic(line: str, ctx: FileContext) -> Optional[Rec]:
                 rec.sev, rec.level = sev, _strip_token(token).upper()
                 drop.add(i)
                 break
-    if ctx.host_pos is not None and ctx.host_pos < len(tokens):
+    if rec.host is None and ctx.host_pos is not None and ctx.host_pos < len(tokens):
         candidate = _strip_token(tokens[ctx.host_pos])
         if _HOST_SHAPE.match(candidate) and level_severity(candidate) is None:
             rec.host = candidate
@@ -1161,12 +1239,79 @@ def _parse_generic(line: str, ctx: FileContext) -> Optional[Rec]:
             if rec.host is None:
                 rec.host = inner.host
             return rec
-    rec.msg = msg
+    # A logger or component name before the timestamp is part of the event.
+    rec.msg = " ".join(lead_rest + [msg]) if lead_rest else msg
     return rec
+
+
+_CSV_DELIMS = (",", ";", "\t")
+
+
+def _csv_fields(line: str, delim: str) -> List[str]:
+    try:
+        return next(csv.reader([line], delimiter=delim), [])
+    except csv.Error:
+        return []
+
+
+def _learn_csv(line: str, ctx: FileContext) -> None:
+    """Remember the columns of a CSV export whose header names a time column."""
+    for delim in _CSV_DELIMS:
+        if delim not in line:
+            continue
+        names = [f.strip().lower() for f in _csv_fields(line, delim)]
+        if (
+            len(names) >= 2
+            and all(len(n) <= 40 for n in names)
+            and any(n in _TS_KEYS for n in names)
+            and not any(parse_timestamp(n) for n in names)
+        ):
+            ctx.csv_header, ctx.csv_delim, ctx.csv_header_line = names, delim, line
+            return
+
+
+def _parse_csv(line: str, ctx: FileContext) -> Optional[Rec]:
+    """A row of a CSV export, read by the column names of its header.
+
+    Columns past the header (an event viewer export leaves the message column
+    unnamed) are the message.
+    """
+    names = ctx.csv_header
+    if names is None:
+        return None
+    fields = _csv_fields(line, ctx.csv_delim)
+    if len(fields) < 2:
+        return None
+    flat: Dict[str, Any] = {n: v.strip() for n, v in zip(names, fields) if n}
+    extra = fields[len(names) :]
+    if extra and not any(k in flat for k in _MSG_KEYS):
+        flat["message"] = ctx.csv_delim.join(extra).strip()
+    rec = _apply_mapping(flat, ctx, Rec())
+    return rec if rec.ts is not None else None
+
+
+def _csv_match_rate(sample: Sequence[str], ctx: FileContext) -> float:
+    """Share of sample rows that parse; lines inside a quoted field do not count."""
+    ok = rows = 0
+    in_quote = False
+    for ln in sample:
+        if not ln.strip() or ln == ctx.csv_header_line:
+            continue
+        parsed = _parse_csv(ln, ctx) is not None
+        if parsed:
+            ok += 1
+            rows += 1
+            in_quote = ln.count('"') % 2 == 1
+        elif in_quote:
+            in_quote = ln.count('"') % 2 == 0
+        else:
+            rows += 1
+    return ok / rows if rows else 0.0
 
 
 PARSERS: Dict[str, Callable[[str, FileContext], Optional[Rec]]] = {
     "json": _parse_json,
+    "csv": _parse_csv,
     "syslog5424": _parse_syslog5424,
     "access": _parse_access,
     "apache_error": _parse_apache_error,
@@ -1373,15 +1518,33 @@ def detect_format(
         ctx.formats = ["plain"]
         return {"format": "plain", "match_rate": 0.0, "secondary": []}
 
-    # Learn which timestamp layout the timestamped lines use first.
+    first = next((ln for ln in sample if ln.strip()), "").lstrip(BOM)
+    _learn_csv(first, ctx)
+    if ctx.csv_header is not None:
+        rate = _csv_match_rate(sample, ctx)
+        if rate >= 0.5:
+            ctx.formats = ["csv"]
+            return {"format": "csv", "match_rate": round(rate, 3), "secondary": []}
+        ctx.csv_header = ctx.csv_header_line = None
+
+    # Learn which timestamp layout the timestamped lines use first, and
+    # whether the timestamp leads the line or follows a level or logger name.
     kinds = Counter()
+    leading = following = 0
     for ln in headers[:200]:
         pos = 1 if ln.startswith("[") else 0
         tm = parse_timestamp(ln, pos, year_hint=ctx.year)
         if tm:
+            leading += 1
+        else:
+            found = _search_ts(ln, ctx)
+            tm = found[0] if found else None
+            following += tm is not None
+        if tm:
             kinds[tm.kind] += 1
     if kinds:
         ctx.prefer_ts = kinds.most_common(1)[0][0]
+    ctx.ts_search = following > leading and following >= 0.5 * len(headers[:200])
     _learn_columns(headers, ctx)
 
     rates: Dict[str, float] = {}
@@ -1407,19 +1570,20 @@ def detect_format(
 def _learn_columns(headers: Sequence[str], ctx: FileContext) -> None:
     """Find the level and host columns of timestamp-led lines."""
     rows: List[List[str]] = []
+    leads: List[List[str]] = []
     for ln in headers[:300]:
-        pos = 1 if ln.startswith("[") else 0
-        tm = parse_timestamp(ln, pos, prefer=ctx.prefer_ts, year_hint=ctx.year)
-        if not tm:
+        located = _locate_ts(ln, ctx)
+        if located is None:
             continue
-        end = tm.end
-        if pos == 1:
-            close = ln.find("]", end, end + 40)
-            end = close + 1 if close != -1 else end
+        _, lead, end = located
         rows.append(ln[end:].lstrip(" \t|,;]-:").split(" ")[:6])
+        leads.append(_split_lead(lead)[1])
     if len(rows) < 3:
         return
     n = len(rows)
+    # One host-shaped name before the timestamp, shared by many lines: a host.
+    named = [t[0] for t in leads if len(t) == 1 and _HOST_SHAPE.match(t[0])]
+    ctx.lead_host = len(named) >= 0.9 * n and len(set(named)) <= max(1, 0.5 * n)
     level_hits = Counter()
     for toks in rows:
         for i, tok in enumerate(toks[:5]):
@@ -1494,11 +1658,13 @@ class FileReport:
     secondary: List[str] = field(default_factory=list)
     lines: int = 0
     blank: int = 0
+    header: int = 0
     entries: int = 0
     continuation: int = 0
     unparsed: int = 0
     no_timestamp: int = 0
     unparsed_samples: List[Tuple[int, str]] = field(default_factory=list)
+    line_samples: List[Tuple[int, str]] = field(default_factory=list)
     first: Optional[float] = None
     last: Optional[float] = None
     tz_aware: int = 0
@@ -1725,7 +1891,21 @@ class Analyzer:
                         continue
                     if n == 1:
                         line = line.lstrip(BOM)
+                    if line == ctx.csv_header_line and not report.header:
+                        report.header = 1
+                        continue
+                    if len(report.line_samples) < OUT_SAMPLES:
+                        report.line_samples.append((n, line[:OUT_SAMPLE_CHARS]))
                     rec = None if plain else self._parse_line(line, ctx)
+                    if ctx.csv_header is not None:
+                        # A quoted field may run over several lines.
+                        quotes = line.count('"') % 2
+                        if rec is not None:
+                            ctx.in_quote = quotes == 1
+                        elif ctx.in_quote:
+                            ctx.in_quote = quotes == 0
+                            report.continuation += 1
+                            continue
                     if rec is None and pending is not None and _CONT_RE.match(line):
                         report.continuation += 1
                         prev = pending[0]  # pylint: disable=unsubscriptable-object
@@ -2838,6 +3018,12 @@ class TriageResult:
                     f"{f.name}: no timestamp format recognised; lines were templated "
                     "without time ranking. Pass timestamp_regex to fix."
                 )
+            elif f.no_timestamp > (1 - MIN_PARSED_SHARE) * f.entries:
+                out.append(
+                    f"{f.name}: {f.no_timestamp} of {f.entries} entries carry no "
+                    "timestamp; they are counted but not ranked by time. Pass "
+                    "timestamp_regex if the lines do carry one."
+                )
             if f.truncated_at_line:
                 out.append(
                     f"{f.name}: time budget ran out at line {f.truncated_at_line}; the rest "
@@ -2937,7 +3123,7 @@ class TriageResult:
         if sum(an.level_totals.values()) != an.entries:
             failed.append("level counts do not sum to entries")
         for f in an.files:
-            accounted = f.entries + f.continuation + f.unparsed + f.blank
+            accounted = f.entries + f.continuation + f.unparsed + f.blank + f.header
             if not f.error and not f.truncated_at_line and accounted != f.lines:
                 failed.append(
                     f"{f.name}: {accounted} lines accounted for, {f.lines} read"
@@ -2954,10 +3140,22 @@ class TriageResult:
         classes = len(self.anomalies) + len(self.baseline) + len(self.intermittent)
         if classes != len(an.tpls):
             failed.append("template classes do not cover every template")
+        # A file with no usable timestamps was not ranked by time: it fails
+        # the parsed-share check too, so the caller fixes the format first.
+        untimed = [
+            f.name
+            for f in an.files
+            if f.entries
+            and (
+                f.format == "plain"
+                or f.no_timestamp > (1 - MIN_PARSED_SHARE) * f.entries
+            )
+        ]
         below = [
             f.name
             for f in an.files
-            if f.entries + f.unparsed
+            if f.name in untimed
+            or f.entries + f.unparsed
             and f.entries / (f.entries + f.unparsed) < MIN_PARSED_SHARE
         ]
         return {
@@ -2966,6 +3164,8 @@ class TriageResult:
             "parsed_share_ok": not below,
             "parsed_share_min": MIN_PARSED_SHARE,
             "files_below_parsed_share": below,
+            "time_ranked": not untimed,
+            "files_without_timestamps": untimed,
             "entries": an.entries,
             "template_count_sum": tpl_total,
             "level_count_sum": sum(an.level_totals.values()),
@@ -3158,8 +3358,14 @@ class TriageResult:
                 "first": self.ts(f.first),
                 "last": self.ts(f.last),
             }
+            if f.header:
+                row["header_lines"] = f.header
             if f.no_timestamp:
                 row["no_timestamp"] = f.no_timestamp
+                # What the lines look like, to fit timestamp_regex to.
+                row["line_samples"] = [
+                    {"line": n, "text": s} for n, s in f.line_samples
+                ]
             if f.unparsed_samples:
                 row["unparsed_samples"] = [
                     {"line": n, "text": s} for n, s in f.unparsed_samples
@@ -3224,7 +3430,15 @@ class TriageResult:
             "checks": {
                 k: v
                 for k, v in self.checks.items()
-                if k in ("ok", "failed", "parsed_share_ok", "files_below_parsed_share")
+                if k
+                in (
+                    "ok",
+                    "failed",
+                    "parsed_share_ok",
+                    "files_below_parsed_share",
+                    "time_ranked",
+                    "files_without_timestamps",
+                )
             },
             "warnings": [
                 _short(w, OUT_WARNING_CHARS) for w in self.warnings[:OUT_WARNINGS]

@@ -382,6 +382,125 @@ def test_no_timestamps_falls_back_to_plain_and_says_so(tmp_path):
     assert f.format == "plain" and f.entries == 30
     assert any("no timestamp format" in w for w in res.warnings)
     assert res.checks["ok"]
+    # Not ranked by time, so the caller is sent back to fix the format.
+    checks = res.compact()["checks"]
+    assert not checks["parsed_share_ok"] and not checks["time_ranked"]
+    assert checks["files_below_parsed_share"] == ["plain.txt"]
+    assert checks["files_without_timestamps"] == ["plain.txt"]
+    row = res.compact()["coverage"]["files"][0]
+    assert row["line_samples"][0] == {"line": 1, "text": "starting up"}
+
+
+def test_json_lines_without_a_time_field_are_not_time_ranked(tmp_path):
+    lines = [json.dumps({"level": "error", "msg": f"boom {i}"}) for i in range(20)]
+    res, f = _formats(tmp_path, "a.jsonl", lines)
+    assert f.format == "json" and f.no_timestamp == 20
+    assert not res.checks["time_ranked"] and not res.checks["parsed_share_ok"]
+    assert any("carry no timestamp" in w for w in res.warnings)
+
+
+def test_level_before_the_timestamp(tmp_path):
+    lines = [
+        f"{'ERROR' if i % 10 == 0 else 'INFO'} 2025-03-04 10:{i // 60:02d}:{i % 60:02d} "
+        f"[worker-{i % 3}] {'connection refused' if i % 10 == 0 else 'job done'}"
+        for i in range(120)
+    ]
+    res, f = _formats(tmp_path, "a.log", lines)
+    assert f.format == "timestamped"
+    assert (f.entries, f.unparsed, f.no_timestamp) == (120, 0, 0)
+    assert lt.format_ts(f.first) == "2025-03-04 10:00:00"
+    assert lt.format_ts(f.last) == "2025-03-04 10:01:59"
+    assert dict(res.an.level_totals) == {"ERROR": 12, "INFO": 108}
+    assert sorted(res.an.tpls) == [
+        "[worker-<*>] connection refused",
+        "[worker-<*>] job done",
+    ]
+    assert res.checks["parsed_share_ok"] and res.checks["time_ranked"]
+
+
+def test_level_and_logger_name_before_the_timestamp(tmp_path):
+    lines = [
+        f"{'WARNING' if i % 5 == 0 else 'INFO'}:app.worker:2025-03-04 10:00:{i:02d},250:"
+        f"{'queue is slow' if i % 5 == 0 else 'handled job'} {i}"
+        for i in range(60)
+    ]
+    res, f = _formats(tmp_path, "a.log", lines)
+    assert f.format == "timestamped"
+    assert (f.entries, f.unparsed, f.no_timestamp) == (60, 0, 0)
+    assert lt.format_ts(f.first) == "2025-03-04 10:00:00.250"
+    assert dict(res.an.level_totals) == {"WARNING": 12, "INFO": 48}
+    assert sorted(res.an.tpls) == [
+        "app.worker handled job <*>",
+        "app.worker queue is slow <*>",
+    ]
+
+
+def test_host_before_the_timestamp(tmp_path):
+    lines = [
+        f"web-0{i % 3} [2025-03-04T10:00:{i:02d}Z] ERROR upstream reset"
+        for i in range(30)
+    ]
+    res, f = _formats(tmp_path, "a.log", lines)
+    assert (f.entries, f.unparsed) == (30, 0)
+    tpl = res.an.tpls["upstream reset"]
+    assert set(tpl.hosts) == {"web-00", "web-01", "web-02"} and tpl.sev == 3
+
+
+def test_a_timestamp_mentioned_in_a_few_messages_is_not_the_line_time(tmp_path):
+    lines = []
+    for i in range(40):
+        lines.append(f"worker {i % 4} picked up a batch")
+        if i % 5 == 0:
+            lines.append(f"next run at 2025-03-04 10:00:{i:02d}")
+    res, f = _formats(tmp_path, "a.log", lines)
+    assert f.format == "plain" and f.unparsed == 0
+    assert not res.checks["time_ranked"]
+
+
+def _event_export(path: Path) -> Path:
+    """An event viewer CSV export: named columns, then an unnamed message."""
+    lines = ["Level,Date and Time,Source,Event ID,Task Category"]
+    for i in range(30):
+        when = f"3/4/2025 10:{i:02d}:00 AM"
+        if i % 10 == 0:
+            lines.append(
+                f'Error,{when},Backup Agent,4101,None,"Backup of volume {i} stopped.'
+            )
+            lines.append('The target ""vault"" did not answer."')
+        else:
+            lines.append(
+                f"Information,{when},Backup Agent,4100,None,Backup of volume {i} finished."
+            )
+    return _write(path, lines, newline="\r\n")
+
+
+def test_event_viewer_csv_export(tmp_path):
+    res = lt.triage([str(_event_export(tmp_path / "events.csv"))])
+    f = res.an.files[0]
+    assert f.format == "csv"
+    assert (f.entries, f.header, f.continuation, f.unparsed) == (30, 1, 3, 0)
+    assert f.no_timestamp == 0
+    assert lt.format_ts(f.first) == "2025-03-04 10:00:00"
+    assert lt.format_ts(f.last) == "2025-03-04 10:29:00"
+    assert dict(res.an.level_totals) == {"ERROR": 3, "INFORMATION": 27}
+    assert sorted(res.an.tpls) == [
+        "[Backup Agent] Backup of volume <*> finished.",
+        "[Backup Agent] Backup of volume <*> stopped.",
+    ]
+    assert res.checks["ok"] and res.checks["parsed_share_ok"]
+    assert res.compact()["coverage"]["files"][0]["header_lines"] == 1
+
+
+def test_csv_export_with_named_columns_and_semicolons(tmp_path):
+    lines = ["TimeCreated;LevelDisplayName;MachineName;Id;Message"]
+    lines += [
+        f"2025-03-04 10:00:{i:02d};Warning;desk-{i % 2};{300 + i % 2};Sync took {i} s"
+        for i in range(20)
+    ]
+    res, f = _formats(tmp_path, "export.csv", lines)
+    assert f.format == "csv" and (f.entries, f.header, f.unparsed) == (20, 1, 0)
+    tpl = res.an.tpls["Sync took <*> s"]
+    assert tpl.sev == 2 and set(tpl.hosts) == {"desk-0", "desk-1"}
 
 
 def test_empty_and_blank_files(tmp_path):
