@@ -276,7 +276,7 @@
                 "type": "null"
               }
             ],
-            "description": "Absolute paths of the files the user attached to this conversation (contract >= 2.16). Each is granted as that exact file, never its folder, and indexed before the turn runs, up to 100 documents or 10,000 passages; the rest load when the agent is asked about one. Send the full set every turn, an empty list when none are attached: files already indexed in a retained session are skipped, so one attached mid-conversation is picked up on the next turn, and one sent before but left out now is removed from the session's index.",
+            "description": "Absolute paths of the files the user attached to this conversation (contract >= 2.16). Each is granted as that exact file, never its folder, and indexed before the turn runs, up to 100 documents or 10,000 passages; the rest load when the agent is asked about one. Send the full set every turn, an empty list when none are attached: files already indexed in a retained session are skipped, so one attached mid-conversation is picked up on the next turn, and one sent before but left out now is removed from the session's index and can no longer be read.",
             "title": "Documents"
           },
           "internet_off": {
@@ -495,6 +495,26 @@
         "title": "QueryRespondResponse",
         "type": "object"
       },
+      "SessionDeletedResponse": {
+        "additionalProperties": false,
+        "description": "``DELETE /sessions/{id}`` (contract >= 2.30).",
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "deleted"
+        ],
+        "title": "SessionDeletedResponse",
+        "type": "object"
+      },
       "ToolDecisionRequest": {
         "additionalProperties": false,
         "description": "Body of ``POST /v1/gaia/query/{run_id}/tool_decision``.\n\nThe HTTP twin of the stdio transport's ``tool_decision`` control message —\nthe seam that lets a remote surface answer a confirmation while the agent\nthread is still parked on it.",
@@ -648,7 +668,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.29"
+    "version": "2.30"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -1005,6 +1025,55 @@
           {}
         ],
         "summary": "Tool Decision",
+        "tags": [
+          "gaia-query"
+        ]
+      }
+    },
+    "/v1/gaia/sessions/{session_id}": {
+      "delete": {
+        "description": "End a session and close its agent, stopping its MCP servers.\n\nA session running a turn is a 409, not a quiet success: its agent and\nservers are still alive, so the caller must not believe they are gone.",
+        "operationId": "delete_session_v1_gaia_sessions__session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDeletedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
+        "summary": "Delete Session",
         "tags": [
           "gaia-query"
         ]

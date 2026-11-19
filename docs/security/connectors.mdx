@@ -100,8 +100,9 @@ amendment A9). The grant-ledger key for custom agents is
 code gets a new key and cannot inherit a previous grant.
 
 **An attacker with read access to the user's home directory can read
-`~/.gaia/connectors/grants.json`.** Grants are per-agent scope
-declarations only — they do NOT contain tokens. Tokens are in the OS
+`~/.gaia/connectors/grants.json` and `accounts.json`.** Grants are per-agent
+scope declarations only, and the account list holds each connected account's
+stable id, address and sign-in state — neither contains tokens. Tokens are in the OS
 keychain, which is encrypted by the OS (Keychain on macOS, DPAPI on
 Windows, SecretService on Linux). The grants file is mode 0600 and the
 parent directory 0700 on POSIX systems.
@@ -115,12 +116,15 @@ locally (browsers, native mail clients, etc.).
 **Concurrent processes refreshing the same provider's token.** Two GAIA
 processes running as the same user (e.g. `gaia chat --ui` and
 `gaia connectors status`) each maintain their own in-memory access-
-token cache and share the keyring. A refresh, a connect and a disconnect
-each hold a per-provider file lock
-(`~/.gaia/connectors/<provider>.refresh.lock`, per user like the keyring).
-A refresh re-reads the stored refresh token after taking it, so two
-GAIA processes of this version or later never refresh with the same
-token. Two writes happen outside the lock, both on reading a connection:
+token cache and share the keyring. Each stored account has its own file
+lock (`~/.gaia/connectors/<provider>.account-<hash>.lock`, per user like the
+keyring), held by its refresh and by any write of its token. A connect, a
+disconnect or a forwarded import also holds the provider's lock
+(`~/.gaia/connectors/<provider>.refresh.lock`) first, so two sign-ins never
+race to decide which slot an account lands in, while two accounts still
+refresh at the same time. A refresh re-reads the stored refresh token after
+taking its account's lock, so two GAIA processes of this version or later
+never refresh with the same token. Two writes happen outside the lock, both on reading a connection:
 the read clears it when the stored client ID or tenant no longer matches,
 or when the stored blob isn't valid JSON. A refresh that finishes
 after the user reconnected or disconnected leaves the stored connection

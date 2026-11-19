@@ -16,8 +16,9 @@ Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
 2.14), ``/sessions/{session_id}/bypass``, ``/sessions/{session_id}/internet``
-(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26) and
-``/sessions/{session_id}/tools`` (contract >= 2.27).
+(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26),
+``/sessions/{session_id}/tools`` (contract >= 2.27) and
+``DELETE /sessions/{session_id}`` (contract >= 2.30).
 ``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
@@ -107,7 +108,8 @@ AGENT_ID = "gaia"
 #: 2.28 added the non-terminal ``context_usage`` event for a caller that sends
 #: ``turns``: the turn's first call is measured before the answer streams.
 #: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
-API_VERSION = "2.29"
+#: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
+API_VERSION = "2.30"
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
@@ -216,7 +218,8 @@ class QueryRequest(_Strict):
             "Send the full set every turn, an empty list when none are attached: "
             "files already indexed in a retained session are skipped, so one "
             "attached mid-conversation is picked up on the next turn, and one "
-            "sent before but left out now is removed from the session's index."
+            "sent before but left out now is removed from the session's index "
+            "and can no longer be read."
         ),
     )
 
@@ -544,6 +547,13 @@ class GrantsResponse(_Strict):
 
     session_id: str
     grants: List[GrantView]
+
+
+class SessionDeletedResponse(_Strict):
+    """``DELETE /sessions/{id}`` (contract >= 2.30)."""
+
+    session_id: str
+    deleted: bool
 
 
 class ToolView(_Strict):
@@ -981,8 +991,45 @@ def _grant_unloaded(agent: Any, documents: List[str]) -> None:
             agent.path_validator.add_allowed_path(doc)
 
 
+def _granted_only_as_gaias_copy(validator: Any, doc: str) -> bool:
+    """Whether *doc* is still readable only because it sits in GAIA's documents folder.
+
+    The Agent UI grants that whole folder to every chat as its scratch space,
+    and keeps the copy of every document dropped into it there. A folder the
+    user granted is any other entry, and keeps covering *doc*.
+    """
+    if not validator.is_path_allowed(doc, prompt_user=False):
+        return False
+    from gaia.ui.utils import UnsafeGaiaHomeError, managed_documents_dir
+
+    try:
+        managed = managed_documents_dir().resolve()
+    except UnsafeGaiaHomeError:
+        # The Agent UI refuses to run on this GAIA_HOME, so it keeps no copies.
+        return False
+    real = Path(os.path.realpath(doc))
+    if not real.is_relative_to(managed):
+        return False
+    return not any(
+        real.is_relative_to(Path(os.path.realpath(root)))
+        for root in validator.allowed_paths
+        if Path(os.path.realpath(root)) != managed
+    )
+
+
 def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
-    """Take the documents attached last turn but not this one out of the index."""
+    """Take the documents attached last turn but not this one out of the index.
+
+    Their grants go too: a grant left behind lets ``query_specific_file``
+    index the file again from disk. GAIA's own copy of a document is refused
+    until it is attached again, since its folder stays granted.
+    """
+    validator = agent.path_validator
+    withheld = getattr(agent, "_withheld_documents", set())
+    for doc in withheld & set(documents):
+        validator.release_path(doc)
+    withheld -= set(documents)
+    agent._withheld_documents = withheld
     attached = getattr(agent, "_attached_documents", set())
     dropped = attached - set(documents)
     agent._attached_documents = set(documents)
@@ -990,6 +1037,10 @@ def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
         return
     rag = agent.rag
     for doc in sorted(dropped):
+        validator.remove_allowed_path(doc)
+        if _granted_only_as_gaias_copy(validator, doc):
+            validator.withhold_path(doc)
+            withheld.add(doc)
         if doc not in agent.indexed_files:
             continue
         held = rag is not None and str(Path(doc).absolute()) in rag.indexed_files
@@ -1815,6 +1866,14 @@ async def query(request: QueryRequest):
                         "Cancel that run or wait for it to finish, then retry."
                     ),
                 )
+            # The model server or MCP connectors changed in Settings since this agent was built.
+            if await _off_loop(
+                functools.partial(session.follow_settings, **kwargs),
+                on_abandon=lambda _rebuilt: _unwind_setup(),
+            ):
+                logger.info(
+                    "session %s rebuilt for changed settings", request.session_id
+                )
             target = _switch_target(session, request)
             if target is not None:
                 # Switched in place rather than refused. Rebuilding the agent
@@ -1853,6 +1912,10 @@ async def query(request: QueryRequest):
             if callable(follow):
                 # Off the loop: it reads config.json and may ask Lemonade.
                 await _off_loop(follow)
+            # Skills added or removed in Settings since the catalogue was built.
+            follow_skills = getattr(agent, "follow_installed_skills", None)
+            if callable(follow_skills):
+                await _off_loop(follow_skills)
             if request.working_directory is not None:
                 config = getattr(agent, "config", None)
                 if config is not None:
@@ -2487,6 +2550,31 @@ async def list_tools(session_id: str) -> ToolsResponse:
     return ToolsResponse(session_id=session_id, tools=tools)
 
 
+@router.delete("/sessions/{session_id}", response_model=SessionDeletedResponse)
+async def delete_session(session_id: str) -> SessionDeletedResponse:
+    """End a session and close its agent, stopping its MCP servers.
+
+    A session running a turn is a 409, not a quiet success: its agent and
+    servers are still alive, so the caller must not believe they are gone.
+    """
+    _require_valid_session_id(session_id)
+    if not await asyncio.to_thread(session_registry.delete, session_id):
+        # delete() is False for both; only a session still present is busy.
+        if session_registry.get(session_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No session {session_id!r} exists; it may have ended already.",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Session {session_id!r} is running a turn. Cancel it, then "
+                "delete the session again."
+            ),
+        )
+    return SessionDeletedResponse(session_id=session_id, deleted=True)
+
+
 @router.delete("/sessions/{session_id}/grants", response_model=GrantsResponse)
 async def revoke_grants(session_id: str, key: Optional[str] = None) -> GrantsResponse:
     """Revoke one "always" answer (``?key=``), or all of them.
@@ -2798,6 +2886,17 @@ def _warm_chat_model(state: _StartupWarmUp) -> None:
 app = build_app()
 
 
+def _add_serve_args(parser) -> None:
+    """The flags the daemon passes when it spawns this sidecar."""
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Serve the HTTP sidecar (implied by --host/--port).",
+    )
+    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
+
+
 def serve_http(argv: List[str]) -> int:
     """Run the sidecar over HTTP. Bound to loopback by default — this speaks for
     the user's documents and memory and has no business on a LAN interface."""
@@ -2808,13 +2907,7 @@ def serve_http(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="gaia-agent --serve", description="GAIA flagship agent HTTP sidecar"
     )
-    parser.add_argument(
-        "--serve",
-        action="store_true",
-        help="Serve the HTTP sidecar (implied by --host/--port).",
-    )
-    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
+    _add_serve_args(parser)
     args = parser.parse_args(argv)
 
     # The warm-up swallows agent-build errors, so a stale GAIA_SKILL_SET or a

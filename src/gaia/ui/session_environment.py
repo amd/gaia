@@ -21,7 +21,7 @@ from gaia.logger import get_logger
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
 from .database import ChatDatabase
-from .email_sidecar.profiles import profile_for
+from .sidecar.profiles import profile_for
 
 logger = get_logger(__name__)
 
@@ -130,8 +130,8 @@ def takes_folders(agent_type: Optional[str]) -> bool:
     """
     from gaia.daemon.sidecars.errors import SidecarError
 
-    from .email_sidecar import daemon_client
-    from .email_sidecar.profiles import profile_for, scope_supported
+    from .sidecar import daemon_client
+    from .sidecar.profiles import profile_for, scope_supported
 
     agent_type = agent_type or "chat"
     if not relayed({"agent_type": agent_type}):
@@ -149,7 +149,7 @@ def takes_folders(agent_type: Optional[str]) -> bool:
 
 def folders_refusal(agent_type: Optional[str]) -> str:
     """What to tell the user when *agent_type* can't be given folders."""
-    from .email_sidecar.profiles import profile_for
+    from .sidecar.profiles import profile_for
 
     profile = profile_for(agent_type or "chat")
     if profile is not None and profile.min_scope_api_version is not None:

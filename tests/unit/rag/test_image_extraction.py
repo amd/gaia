@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
+from gaia import config as config_mod
 from gaia.llm.lemonade_client import LemonadeClientError, resident_vision_model
 from gaia.llm.vlm_client import VLMExtractionError
 from gaia.rag.sdk import IMAGE_EXTENSIONS, RAGSDK, ImageExtractionError, RAGConfig
@@ -497,7 +498,7 @@ def test_scans_use_a_vision_model_the_pc_has(
     """Qwen3-VL-4B is never downloaded by gaia init, so it can't be the default."""
     monkeypatch.setenv("GAIA_HOME", str(tmp_path))
     if default_model:
-        (tmp_path / "config.json").write_text(
+        config_mod.GAIA_CONFIG_FILE.write_text(
             '{"default_model": "%s"}' % default_model, encoding="utf-8"
         )
 

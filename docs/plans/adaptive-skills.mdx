@@ -4,8 +4,12 @@ description: "Agent Skills v2 — an immutable authored base plus a learned, typ
 icon: "layer-group"
 ---
 
+<Note>
+  The standalone email agent this plan cites as precedent (`TrustLedger`, preference tools) has since been removed ([#4825](https://github.com/amd/gaia/issues/4825)); its links point at the last commit that had it.
+</Note>
+
 <Info>
-  **Grounds on (exists today, verified on `main`):** [`src/gaia/agents/base/memory_store.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py) (`procedures` table `:283`, `put_skill` `:2532`, `search_skills` `:2674`, `supersede_skill` `:2735`, `touch_skills` `:2756`) · [`skill_synthesis.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py) (`reconcile_and_store` `:653`, `_nearest_enabled_procedure` `:580`, `SIMILARITY_TAU` `:58`) · [`procedural_memory.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py) (`recall_skill` `:181`, the procedures FAISS index `:50`) · [`tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) (`CORE ∪ SKILL ∪ SEMANTIC` `:224`, `DEFAULT_MAX_TOOLS = 14` `:72`) · [`agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`_compose_system_prompt` `:596`) · the email agent's shipped preference store ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) and trust ledger ([`trust.py:336`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)).
+  **Grounds on (exists today, verified on `main`):** [`src/gaia/agents/base/memory_store.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py) (`procedures` table `:283`, `put_skill` `:2532`, `search_skills` `:2674`, `supersede_skill` `:2735`, `touch_skills` `:2756`) · [`skill_synthesis.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py) (`reconcile_and_store` `:653`, `_nearest_enabled_procedure` `:580`, `SIMILARITY_TAU` `:58`) · [`procedural_memory.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py) (`recall_skill` `:181`, the procedures FAISS index `:50`) · [`tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) (`CORE ∪ SKILL ∪ SEMANTIC` `:224`, `DEFAULT_MAX_TOOLS = 14` `:72`) · [`agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`_compose_system_prompt` `:596`) · the email agent's shipped preference store ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) and trust ledger ([`trust.py:336`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/trust.py)).
 
   **Shipped:** `skill_deltas.py`, `gaia skill deltas` (inspect, approve and revert the learned overlay), and the Phase 1 `gaia.skills` loader in `src/gaia/skills/`. `DistilledProcedure` is the live name of the synthesis intermediate. Where this page and the code differ, the code wins.
 </Info>
@@ -89,7 +93,7 @@ open question turned out to be already answered — inconsistently.
 | **One store, not two — extend the `procedures` table; do not build a parallel overlay store.** | **Half wrong.** One *database* and one *lineage idiom*: yes. One *table*: no. | Three blockers, cited in [Storage](#storage-one-database-two-tables). |
 | Tiered learning; tier 1 = the tool loader's `SKILL` term at **zero added text**. | **Mostly holds, one correction.** Tier 1 is *bounded*, not zero. | `select()` admits `skill_tools` into the loaded set ([`tool_loader.py:310`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)); below the cap that renders one extra tool schema, at the cap it LRU-evicts and is net-zero ([`:326`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)). |
 | Local constraints (32K NPU, ~4B model, 14 tools, 1500-char recall cap) drive the design. | **Holds, all four verified.** | [`lemonade_client.py:173-174`](https://github.com/amd/gaia/blob/main/src/gaia/llm/lemonade_client.py), [`:124`](https://github.com/amd/gaia/blob/main/src/gaia/llm/lemonade_client.py), [`tool_loader.py:72`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py), [`skill_synthesis.py:65`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py). |
-| Empirical gating is mandatory, not preferable. | **Holds — and there are already two implementations to reuse.** | `reconcile_and_store` promotes on `success_count` dominance ([`skill_synthesis.py:713`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); the email agent's `TrustLedger(min_samples=5, threshold=0.85)` tallies per-scope accept/reject outcomes ([`trust.py:345`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)). |
+| Empirical gating is mandatory, not preferable. | **Holds — and there are already two implementations to reuse.** | `reconcile_and_store` promotes on `success_count` dominance ([`skill_synthesis.py:713`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); the email agent's `TrustLedger(min_samples=5, threshold=0.85)` tallies per-scope accept/reject outcomes ([`trust.py:345`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/trust.py)). |
 | **Prefix stability: the loader is monotonic, so deltas must apply at session boundaries only.** | **Requirement holds; the premise is already violated in the worst possible place.** | See below. |
 | Procedures are atomic; chunk `references/`, never `SKILL.md` bodies. | **Holds, and the violation is live.** | The recall block hard-cuts the body at a character offset ([`procedural_memory.py:356`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)) under a header telling the model these are proven steps to reuse ([`:361`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)). Tracked as [#2676](https://github.com/amd/gaia/issues/2676). |
 
@@ -225,7 +229,7 @@ consequences for v2:
    was positive/negative," and increment the right row. The shape already exists
    in the email agent — `TrustLedger.record_outcome(db, action_type, scope,
    positive)` keyed per scope
-   ([`trust.py:358`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)) —
+   ([`trust.py:358`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/trust.py)) —
    but nothing links a *delta* to a *scope*. This needs its own issue; without it
    [#2679](https://github.com/amd/gaia/issues/2679)'s "promotion requires a track
    record, not a model assertion" is unimplementable for deltas.
@@ -245,11 +249,11 @@ already satisfied.**
 `procedures` has **no agent or context column**
 ([`memory_store.py:283-299`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
 so scope is decided by which DB file the host opens: the email agent passes its
-own `db_path` ([`agent.py:637-639`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py)),
+own `db_path` ([`agent.py:637-639`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/agent.py)),
 while ChatAgent takes the default `~/.gaia/memory.db`
 ([`memory_store.py:354-357`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
 Meanwhile tier-0 preferences live in the email agent's own `state.db`
-([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) —
+([`preference_tools.py:63`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) —
 per-agent by construction. **Deltas must carry an explicit scope column rather
 than inheriting whatever DB the host happened to open.**
 
@@ -394,7 +398,7 @@ all, and the genuinely speculative part is the classifier, not the tiers.**
 
 | Tier | Is the mechanism new? | v1 |
 |:--:|---|---|
-| **0 — Data** | No. Shipped in the email agent ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)). Needs generalizing, not inventing. | **Ship** |
+| **0 — Data** | No. Shipped in the email agent ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)). Needs generalizing, not inventing. | **Ship** |
 | **1 — Selection** | No. Shipped as `ToolLoader.select(skill_tools=…)` ([`tool_loader.py:310`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)) for #1451. A delta feeding it is a wire-up, not a mechanism. | **Ship** |
 | **2 — Parameters** | **Yes** — typed payloads, allowlisted keys per section, a rendering path, plus the anchoring it depends on. | **Defer** |
 | **3 — Prose** | Partly. The retrieval + injection path is shipped for procedures ([`procedural_memory.py:334`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); deltas reuse it. | **Ship** |
@@ -438,10 +442,10 @@ set_priority_sender("alice@example.com")
 ```
 
 This is **already shipped**: the table DDL is at
-[`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
-the tool at [`:355`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
+[`preference_tools.py:63`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
+the tool at [`:355`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
 and the consuming triage path is documented at
-[`:21-27`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py).
+[`:21-27`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py).
 The agent gets measurably better at *your* mail with **zero prompt growth** and
 no embedder dependency. Note also that the tool reports a `persisted` flag and
 refuses to claim durability it does not have — the honesty pattern every tier
@@ -571,8 +575,8 @@ model to judge anything:
 
 | Signal | What it is | Confidence | State |
 |---|---|---|---|
-| **A preference-setting tool call** | The user asked for a rule and the model called the tool that stores it — `set_priority_sender`, `set_category_default`, … ([`preference_tools.py:355`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)). The call *is* the correction; nothing needs detecting. | **Highest** | **Shipped** — needs only a delta write alongside the store write |
-| **A recorded negative outcome** | The user undid, rejected, or edited an agent action, and `TrustLedger.record_outcome(..., positive=False)` logged it ([`trust.py:358`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)). Machine-observable, no interpretation. | **High** | **Shipped** — needs a link from the scope to a candidate delta |
+| **A preference-setting tool call** | The user asked for a rule and the model called the tool that stores it — `set_priority_sender`, `set_category_default`, … ([`preference_tools.py:355`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)). The call *is* the correction; nothing needs detecting. | **Highest** | **Shipped** — needs only a delta write alongside the store write |
+| **A recorded negative outcome** | The user undid, rejected, or edited an agent action, and `TrustLedger.record_outcome(..., positive=False)` logged it ([`trust.py:358`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/trust.py)). Machine-observable, no interpretation. | **High** | **Shipped** — needs a link from the scope to a candidate delta |
 | **An explicit "remember this" affordance** | A `remember_correction`-style tool the model may call only when the user used corrective language, or a `/teach` command the user invokes. Model-*proposed*, human-*confirmed*, so a misread costs a declined prompt, not a bad delta. | Medium | **New** — the only new machinery |
 
 **Explicitly out of scope for v2.0:** inferring a preference from repeated
@@ -839,7 +843,7 @@ observe → classify tier → propose (staged) → review diff → approve → a
    *before* it is shown, and never auto-approvable at any setting.
 6. **Promote on evidence, not opinion.** A delta earns `active` on a measured
    track record — the shape the email agent already ships
-   (`min_samples=5, threshold=0.85`, [`trust.py:345`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py))
+   (`min_samples=5, threshold=0.85`, [`trust.py:345`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/trust.py))
    and the dominance rule `reconcile_and_store` already uses
    ([`skill_synthesis.py:713`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)).
    **Never on the model's judgment that the base is wrong.** Hermes patches on
@@ -881,7 +885,7 @@ controls:
 1. **Deltas inherit the tool-confirmation policy; they never bypass it.** A delta
    whose instruction leads to a tool in the agent's confirmation set still hits
    that gate at execution time — the email agent's `CONFIRMATION_REQUIRED_TOOLS`
-   ([`agent.py:453`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py))
+   ([`agent.py:453`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/agent.py))
    unioned with the base `TOOLS_REQUIRING_CONFIRMATION`
    ([`agent.py:152`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)).
    A delta can change *what the agent proposes*; it can never change *what
@@ -921,7 +925,7 @@ Deltas live in the same SQLite file as the rest of memory — `~/.gaia/memory.db
 by default, or the agent's own path
 ([`memory_store.py:354-357`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py);
 the email agent passes its own,
-[`agent.py:637-639`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py)).
+[`agent.py:637-639`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/agent.py)).
 
 **It is not encrypted at rest, and neither is today's `memory.db`.** Deltas
 therefore add no *new* exposure — but they make an existing gap more acute,
@@ -1127,8 +1131,8 @@ Three reasons, and they compound:
 
 1. Neither ships a tier-0 store or an outcome ledger, so "proving the mechanism"
    there means **building both from scratch** — the opposite of de-risking. Email
-   has both already ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
-   [`trust.py:336`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)).
+   has both already ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
+   [`trust.py:336`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/trust.py)).
 2. **Low-stakes agents have low-value learning.** Nobody teaches the browser agent
    anything worth remembering, so the eval delta would be unmeasurable — and an
    unmeasurable reference example cannot satisfy the
@@ -1144,7 +1148,7 @@ agents.** In v1, deltas may affect only **read-path and classification** tools �
 
 That set is not invented here; it is the agent's existing
 `CONFIRMATION_REQUIRED_TOOLS`
-([`agent.py:453`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py))
+([`agent.py:453`](https://github.com/amd/gaia/blob/7b306ebfaad18367e655afffcd07fd1153c67831/hub/agents/email/python/gaia_agent_email/agent.py))
 plus the destructive/organizing tools. **So the v1 rule reduces to: a delta may
 change what the agent proposes and how it ranks, never what it sends, deletes, or
 files.** The worst outcome of a wrong delta is that an important message is
