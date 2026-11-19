@@ -4,19 +4,19 @@
 import { describe, expect, it } from 'vitest';
 import { outlineToMarkdown, parseSlides, plainText } from '../slideMarkdown';
 
-const STAGES = '# Deck\n\n## Personal AI grows\nDiagram: process\n### Assist\n- Summarize email\n### Delegate\n- Plan the day\n### Autonomy\n- Deep research\nAxis: More compute\n';
+const STAGES = '# Deck\n\n## Support grows from one desk to a 24/7 team\nDiagram: process\n### Help desk\n- Email tickets\n### Live chat\n- Chat, 8am-6pm\n### 24/7 team\n- Phone, chat and email\nAxis: More channels and hours\n';
 
 describe('parseSlides', () => {
     it('draws a one-slide deck as its slide, not its cover', () => {
         const [slide, ...rest] = parseSlides(STAGES);
         expect(rest).toHaveLength(0);
         expect(slide.layout).toBe('process');
-        expect(slide.items.map((i) => i.title)).toEqual(['Assist', 'Delegate', 'Autonomy']);
-        expect(slide.axis).toBe('More compute');
+        expect(slide.items.map((i) => i.title)).toEqual(['Help desk', 'Live chat', '24/7 team']);
+        expect(slide.axis).toBe('More channels and hours');
     });
 
     it('shows the cover first while the slides are still being written', () => {
-        expect(parseSlides('# Deck\nBoard | 2026\n## Pers')[0].layout).toBe('bullets');
+        expect(parseSlides('# Deck\nBoard | 2026\n## Supp')[0].layout).toBe('bullets');
         expect(parseSlides('# Deck\nBoard | 2026')[0]).toMatchObject({ layout: 'cover', subtitle: 'Board | 2026' });
     });
 
@@ -45,10 +45,10 @@ describe('outlineToMarkdown', () => {
                 {
                     type: 'diagram',
                     diagram: 'process',
-                    title: 'Personal AI grows',
-                    items: [{ title: 'Assist', bullets: ['Summarize email'] }, { title: 'Delegate' }, { title: 'Autonomy' }],
-                    x_axis: { label: 'More compute' },
-                    takeaway: 'Fund the NPU work',
+                    title: 'Support grows from one desk to a 24/7 team',
+                    items: [{ title: 'Help desk', bullets: ['Email tickets'] }, { title: 'Live chat' }, { title: '24/7 team' }],
+                    x_axis: { label: 'More channels and hours' },
+                    takeaway: 'Fund the second shift',
                 },
                 { type: 'table', title: 'Laptops', columns: ['Model', 'RAM'], rows: [['A', '16 GB']] },
             ],
@@ -56,9 +56,9 @@ describe('outlineToMarkdown', () => {
         const [cover, stages, table] = parseSlides(outlineToMarkdown(outline));
         expect(cover.layout).toBe('cover');
         expect(stages.layout).toBe('process');
-        expect(stages.items.map((i) => i.title)).toEqual(['Assist', 'Delegate', 'Autonomy']);
-        expect(stages.axis).toBe('More compute');
-        expect(stages.takeaway).toBe('Fund the NPU work');
+        expect(stages.items.map((i) => i.title)).toEqual(['Help desk', 'Live chat', '24/7 team']);
+        expect(stages.axis).toBe('More channels and hours');
+        expect(stages.takeaway).toBe('Fund the second shift');
         expect(table.rows).toEqual([['Model', 'RAM'], ['A', '16 GB']]);
     });
 

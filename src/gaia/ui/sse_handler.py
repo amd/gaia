@@ -933,6 +933,8 @@ class SSEOutputHandler(OutputHandler):
         latency_ms = self.record_tool_result(data, success)
         event = {
             "type": "tool_result",
+            # Which call this answers, so a client can follow one tool's results.
+            "tool": self._last_tool_name,
             "title": title,
             "summary": summary,
             "success": success,
