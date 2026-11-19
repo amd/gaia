@@ -457,6 +457,8 @@ _NATIVE_ENVELOPE_TOOL_NAME_RE = re.compile(
 _NATIVE_ENVELOPE_OPEN_RE = re.compile(r'\{\s*"__tool_calls__"\s*:')
 # The opener as a literal, for recognising one split across chunks.
 _NATIVE_OPENER = '{"__tool_calls__":'
+
+
 def _partial_native_opener_start(text: str) -> Optional[int]:
     """Start of a trailing partial native-envelope opener, if any.
 
@@ -511,7 +513,6 @@ def _strip_native_envelope(text: str) -> str:
         return text
     content = parsed.get("content")
     return content if isinstance(content, str) else ""
-
 
 
 def _partial_markup_start(text: str) -> Optional[int]:
