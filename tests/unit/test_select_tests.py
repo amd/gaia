@@ -91,6 +91,7 @@ FILES = {
             return home
         """),
     "tests/unit/__init__.py": "",
+    st.CONFTEST_SMOKE_TEST: "",
     "tests/unit/sub/conftest.py": "from gaia.tools.sinks import go\n",
     "tests/unit/sub/test_in_sub.py": "def test_x():\n    pass\n",
     "tests/unit/test_base.py": "from gaia.core.base import VALUE\n",
@@ -279,6 +280,24 @@ def test_a_top_level_fixture_links_only_the_tests_that_request_it(graph):
 
 def test_a_fixture_requested_through_another_fixture_is_followed(graph):
     assert "tests/unit/test_chain.py" in _selected(graph, "src/gaia/tools/reader.py")
+
+
+def test_a_change_to_a_conftest_import_adds_the_smoke_test(graph, tmp_path):
+    # reader is imported only inside a non-autouse fixture body, so no static
+    # or map link reaches the smoke test; the guard adds it.
+    narrow = {"src/gaia/tools/reader.py": {ANCHOR}}
+    assert st.CONFTEST_SMOKE_TEST in _selected(
+        graph, "src/gaia/tools/reader.py", coverage=narrow
+    )
+    assert st.CONFTEST_SMOKE_TEST not in _selected(
+        graph, "src/gaia/tools/sinks.py", coverage={"src/gaia/tools/sinks.py": {ANCHOR}}
+    )
+    (tmp_path / st.CONFTEST_SMOKE_TEST).unlink()
+    gone = st.build_graph(
+        repo=tmp_path, files=sorted(set(FILES) - {st.CONFTEST_SMOKE_TEST})
+    )
+    with pytest.raises(SystemExit, match="CONFTEST_SMOKE_TEST"):
+        st.select(gone, ["src/gaia/tools/reader.py"], narrow)
 
 
 def test_a_module_an_autouse_fixture_imports_reaches_every_test(graph):

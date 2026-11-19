@@ -38,6 +38,8 @@ alone would run nearly everything for nearly any change.
 - Tests and tooling that list a directory (``rglob``, ``os.walk``) are affected
   by any file under a directory whose name they spell out.
 - A ``conftest.py`` below the suite root reaches every file beneath it.
+- A change to a module the root ``conftest.py`` imports always adds
+  ``CONFTEST_SMOKE_TEST``, since the map drops that conftest's suite-wide setup.
 - A package ``__init__`` reaches everything under it when it changes, but the
   walk never continues *through* one: ``gaia/__init__`` imports the agent base
   eagerly, and following that would make every test depend on everything.
@@ -98,6 +100,9 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TEST_ROOT = "tests/unit"
+# Always selected when a change touches a module the root conftest imports: the
+# map drops that conftest's suite-wide setup lines, and this test runs them.
+CONFTEST_SMOKE_TEST = "tests/unit/test_unit_daemon_isolation.py"
 MAP_VERSION = 1
 # The nightly run rebuilds the map; older than this means it stopped.
 MAX_MAP_AGE = timedelta(days=3)
@@ -260,6 +265,8 @@ class Graph:
     spawn_deps: Dict[str, Set[str]] = field(default_factory=_edges)
     imported_modules: Dict[str, Set[str]] = field(default_factory=_edges)
     sources: Dict[str, str] = field(default_factory=dict)
+    # Files the top-level conftests import, at module level or in any fixture.
+    conftest_imports: Set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -744,10 +751,13 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
                 graph.deps[path].add(conftest)
             continue
         fixtures, autouse = _fixture_imports(graph.sources.get(conftest, ""), conftest)
-        if not fixtures:
-            continue
         package = _module_name(conftest, "")
         package = package.rpartition(".")[0] if package else None
+        for node in ast.walk(ast.parse(graph.sources.get(conftest, ""))):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                graph.conftest_imports |= import_files(node, package)
+        if not fixtures:
+            continue
         patched: Set[str] = set()
         for name in autouse:
             for node in fixtures.get(name, ()):
@@ -1195,6 +1205,14 @@ def select(
         if len(tests) > FULL_FRACTION * len(all_tests):
             reason = f"{len(tests)} of {len(all_tests)} test files affected"
             tests = all_tests
+    if reason is None and graph.conftest_imports.intersection(changed):
+        if CONFTEST_SMOKE_TEST not in all_tests:
+            raise SystemExit(
+                f"select_tests: {CONFTEST_SMOKE_TEST} is missing from {test_root}, "
+                "but a change touches a module the root conftest imports. Restore "
+                "it, or point CONFTEST_SMOKE_TEST at another fast test."
+            )
+        tests = sorted(set(tests) | {CONFTEST_SMOKE_TEST})
     if platform_only:
         tests = [p for p in tests if is_platform_sensitive(graph, p)]
     detail = reason or f"{len(changed)} changed file(s)"
