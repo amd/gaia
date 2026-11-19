@@ -35,9 +35,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); skip the
+# ChatAgent ships in the flagship gaia-agent-gaia wheel (#6099); skip the
 # whole module when a framework-only env lacks it.
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
 from gaia.eval.tool_cost import (  # noqa: E402
     _build_skeleton_tool_loader,
@@ -101,7 +101,7 @@ def chat_agent_build_context(
         os.chdir(cwd)
     stubbed = _ensure_optional_deps_stubbed()
     try:
-        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+        from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
         cfg = ChatAgentConfig(
             rag_documents=[],
@@ -170,9 +170,22 @@ def chat_agent_build_context(
             os.chdir(prev_cwd)
 
 
-def build_agent_for_row(profile: str, **kwargs) -> Tuple[str, List[str]]:
-    """Build one fixture row's agent, register tools, and capture (prompt, tools)."""
-    with chat_agent_build_context(profile, **kwargs) as agent:
+def build_agent_for_row(
+    profile: str, tool_calling: Optional[bool] = None, **kwargs
+) -> Tuple[str, List[str]]:
+    """Build one fixture row's agent, register tools, and capture (prompt, tools).
+
+    *tool_calling* overrides whether the row's model takes native tool calls.
+    """
+    with contextlib.ExitStack() as stack:
+        if tool_calling is not None:
+            stack.enter_context(
+                patch(
+                    "gaia.llm.lemonade_client.is_tool_calling_model",
+                    return_value=tool_calling,
+                )
+            )
+        agent = stack.enter_context(chat_agent_build_context(profile, **kwargs))
         agent._register_tools()
         tools = sorted(agent._tools_registry.keys())
         prompt = agent._get_system_prompt()
@@ -241,10 +254,14 @@ ROWS: List[Tuple[str, Dict]] = [
     ),
     (
         "row10_doc_loader_on_non_tool_calling_model",
-        # gemma4-it-e2b-FLM: MODELS["gemma-4-e2b"], tool_calling=False
-        # (lemonade_client.py) — the FLM/NPU server 500s on a native `tools=`
-        # payload, so is_tool_calling_model() is False for this id.
-        dict(profile="doc", dynamic_tools=True, model_id="gemma4-it-e2b-FLM"),
+        # No local chat model lacks native tool calls any more, so the row
+        # forces that path rather than naming a model that takes it.
+        dict(
+            profile="doc",
+            dynamic_tools=True,
+            model_id="gemma4-it-e2b-FLM",
+            tool_calling=False,
+        ),
     ),
     ("row11_file_no_docs_baseline", dict(profile="file")),
     (
@@ -302,7 +319,7 @@ def test_profile_prompt_and_tools_match_golden(row_id, kwargs, tmp_path):
 
 def test_get_system_prompt_uses_declarative_profile_spec():
     """Keep system-prompt assembly declarative and table-driven."""
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     source = inspect.getsource(ChatAgent._get_system_prompt)
     assert "if profile ==" not in source, (
@@ -313,7 +330,7 @@ def test_get_system_prompt_uses_declarative_profile_spec():
 
 def test_register_tools_uses_declarative_profile_spec():
     """Keep tool registration declarative and table-driven."""
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
     source = inspect.getsource(ChatAgent._register_tools)
     assert "if profile ==" not in source, (

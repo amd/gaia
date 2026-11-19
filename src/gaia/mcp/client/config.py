@@ -7,6 +7,7 @@ Mutations to ``<gaia_home>/mcp_servers.json`` go through the connectors framewor
 This class is the read path used by ``MCPClient`` and ``ChatAgent``.
 """
 
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -131,8 +132,9 @@ class MCPConfig:
 
             raise ConnectorsError(
                 f"mcp_servers.json at {path} is corrupt: {e}. "
-                f"Inspect the file or remove it to start fresh; the connectors "
-                f"framework will recreate it on next configure()."
+                f"Fix the file, or remove it to start fresh: GAIA writes a new "
+                f"one the next time you connect an MCP server in Settings > "
+                f"Connectors."
             ) from e
         except OSError as e:
             from gaia.connectors.errors import ConnectorsError
@@ -140,7 +142,21 @@ class MCPConfig:
             raise ConnectorsError(
                 f"failed to read mcp_servers.json at {path}: {e}"
             ) from e
-        return data.get("mcpServers", data.get("servers", {}))
+        servers = data.get("mcpServers", data.get("servers", {}))
+        return self._with_catalog_updates(path, servers)
+
+    @staticmethod
+    def _with_catalog_updates(path: Path, servers: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply current catalog commands to connectors saved in the global file."""
+        # A project-local file is the user's own, so it is used as written.
+        if path.resolve() != mcp_servers_path().resolve():
+            return servers
+        # Connectors need keyring, so without it no entry here came from the catalog.
+        if importlib.util.find_spec("keyring") is None:
+            return servers
+        from gaia.connectors.mcp_server import rederive_catalog_entries
+
+        return rederive_catalog_entries(servers)
 
     def _load(self) -> None:
         """Load configuration from ``self.config_file`` (replaces current servers).

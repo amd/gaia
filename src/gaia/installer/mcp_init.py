@@ -127,9 +127,7 @@ class MCPInitCommand:
         )
         self.console.print()
         self.console.print("  [bold]Learn more:[/bold]")
-        self.console.print(
-            "     [cyan]https://amd-gaia.ai/docs/guides/mcp/client[/cyan]"
-        )
+        self.console.print("     [cyan]https://amd-gaia.ai/docs/sdk/sdks/mcp[/cyan]")
         self.console.print()
 
 

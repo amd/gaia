@@ -26,7 +26,9 @@ from gaia.agents.base.claims import (
     admits_unverified,
     claims_success,
     passing_test_claim,
+    read_claims,
 )
+from gaia.agents.base.completion import mentioned_paths
 from gaia.agents.base.grounding import (
     ACTION,
     CONTENT,
@@ -170,10 +172,26 @@ def _locate(path):
         ("You are working in C:\\work\\toybox. Tidy it up.", []),
         ("Build a Node.js app that prints hello.", []),
         ("What does os.path.join() do? And print()?", []),
+        ("ما الذي يفعله toybox/dates.py؟", ["toybox/dates.py"]),
+        ("请检查 toybox/dates.py。", ["toybox/dates.py"]),
+        ("هل toybox/dates.py، يعمل؟", ["toybox/dates.py"]),
+        ("toybox/dates.py？", ["toybox/dates.py"]),
     ],
 )
 def test_named_targets_are_files_and_project_symbols(query, expected):
     assert named_targets(query) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        *(f"toybox/dates.py{mark}" for mark in ["؟", "。", "،", "；", "？", "！"]),
+        "请看 《toybox/dates.py》",
+        "请看 【toybox/dates.py】",
+    ],
+)
+def test_mentioned_paths_strip_unicode_sentence_punctuation(text):
+    assert mentioned_paths(text) == ["toybox/dates.py"]
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +250,38 @@ def test_a_file_an_earlier_turn_discussed_is_not_demanded_again():
     )
 
     assert findings == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # Out of scope: the validator looked on disk instead of asking (#8030).
+        "Not found: 'toybox/dates.py' does not exist, so access was not requested. "
+        "Check the name and folder, or ask the user where the file is.",
+        None,  # in scope: read_file's own missing-file error
+    ],
+    ids=["out-of-scope", "in-scope"],
+)
+def test_a_read_that_found_the_file_missing_backs_not_found(error, tmp_path):
+    """The read that came back "not found" is the look the claim needs."""
+    from gaia.agents.tools.path_access import missing_file_error, read_refusal
+
+    result = read_refusal(error) if error else missing_file_error("toybox/dates.py")
+    records = [_rec("read_file", {"file_path": "toybox/dates.py"}, result, True)]
+
+    assert records[0]["ran"] is False
+    assert (
+        look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, records, lambda p: None) == []
+    )
+
+
+def test_a_refused_read_of_a_file_that_exists_backs_nothing():
+    result = {"executed": False, "status": "error", "error": "Access denied: x"}
+    records = [_rec("read_file", {"file_path": "toybox/dates.py"}, result, True)]
+
+    findings = look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, records, lambda p: None)
+
+    assert "no search, listing or read ran" in " ".join(f.correction for f in findings)
 
 
 def test_not_found_without_any_lookup_is_caught_even_for_a_missing_file():
@@ -463,6 +513,43 @@ def test_versions_code_and_ordinals_are_not_data(answer):
 )
 def test_action_claim_vocabulary(answer, kinds):
     assert [kind for kind, _ in action_claims(answer)] == kinds
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # rc18 round 3: the drive colon ended the clause at "I read C".
+        "C:/gtest/h18-m1/Documents/t/orders.csv",
+        "C:\\gtest\\h18-m1\\Documents\\t\\orders.csv",
+        "`C:\\gtest\\h18-m1\\Documents\\t\\orders.csv`",
+        "docs\\orders.csv",
+        "~/Documents/orders.csv",
+        "data/orders.csv",
+    ],
+)
+def test_a_read_claim_names_its_file_however_the_path_is_written(path):
+    answer = f"I read {path} and it has 4 data rows."
+    assert [kind for kind, _ in action_claims(answer)] == ["read"]
+    assert any("orders.csv" in clause for clause in read_claims(answer))
+    query = f"Use no tools. How many data rows does {path.strip('`')} have?"
+    findings = look_findings(answer, query, [], lambda p: None)
+    assert [f.note for f in findings] == [
+        f"I didn't read `{path.strip('`')}` this turn"
+    ]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # A colon that opens a list or a clause still ends the claim.
+        "I checked one thing: C is not installed, so orders.csv was never built.",
+        "I didn't read C:/data/orders.csv, so I can't say how many rows it has.",
+        "Note: read C:/data/orders.csv before you trust this.",
+        "C:/data/orders.csv probably has a header row and four data rows.",
+    ],
+)
+def test_a_windows_path_alone_is_not_a_read_claim(answer):
+    assert not any("orders.csv" in clause for clause in read_claims(answer))
 
 
 def test_tested_without_a_test_run_is_caught():
@@ -1042,3 +1129,112 @@ def test_a_claimed_check_of_a_candidate_never_opened_is_still_caught():
 
     assert [f.gate for f in findings] == [LOOK]
     assert "`resize/lanczos.c`" in findings[0].correction
+
+
+#: A reply to the check, not the user, once reached an Arabic speaker in English.
+_TO_THE_USER = (
+    "Write it for the user, in the language of their question, and don't mention "
+    "this check."
+)
+
+
+def test_every_gap_mix_ends_on_the_user_addressed_ask_once():
+    """The ask must be the last thing the model reads, however many gates fired."""
+    look = ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    content = content_findings(
+        "| variant | median |\n|---|---|\n| bilinear | 342 µs |\n| lanczos | 287 µs |",
+        [_run_python(MS_BENCH)],
+    )
+    assert look and content
+
+    for findings in (look, content, look + content):
+        correction = grounding_correction(findings)
+        assert correction.endswith(_TO_THE_USER)
+        assert correction.count("language of their question") == 1
+
+
+def test_the_ask_names_no_language_of_its_own():
+    """Naming one would pull every reply into it, the leak this guards against."""
+    correction = grounding_correction(
+        ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    )
+    ask = correction[correction.index("Then give your complete answer") :]
+
+    for language in ("English", "Arabic", "Chinese", "Spanish"):
+        assert language not in ask
+
+
+def test_the_correction_the_model_gets_ends_on_the_user_addressed_ask(agent):
+    sent = _stub_chat(agent, _answer(GUESSED_SUMMARY), _read_call(), _answer(GROUNDED))
+
+    result = agent.process_query("ماذا يفعل toybox/dates.py ؟", max_steps=10)
+
+    correction = sent[1][-1]["content"]
+    assert correction.startswith("[check:grounding] ")
+    assert correction.endswith(_TO_THE_USER)
+    assert _final_text(result) == GROUNDED
+
+
+def test_the_ask_leaves_room_to_admit_what_was_not_done():
+    """The gaps offer "say plainly that you didn't" as a way out; the ask must not close it."""
+    correction = grounding_correction(
+        ungrounded(UNREAD_README, CONFIG_QUERY, [], locate=_locate)
+    )
+    ask = correction[correction.index("Then give your complete answer") :]
+
+    assert "what changed" not in ask
+    assert "didn't" in correction[: correction.index(ask)]
+
+
+# ---------------------------------------------------------------------------
+# A turn the user barred tools on: the correction never asks for one
+# ---------------------------------------------------------------------------
+
+NO_TOOLS_QUERY = (
+    "Do NOT run anything in this turn and use no tools. I am testing a display: "
+    "answer with exactly this one sentence: I read toybox/dates.py and it has "
+    "4 data rows."
+)
+READ_CLAIM = "I read toybox/dates.py and it has 4 data rows."
+
+
+def test_a_read_claim_correction_asks_for_the_read_by_default():
+    (finding,) = ungrounded(READ_CLAIM, "Say it.", [], locate=lambda p: None)
+
+    assert finding.gate == ACTION
+    assert finding.correction.endswith("Do it now, or drop the claim.")
+
+
+def test_a_read_claim_correction_asks_for_no_tool_when_the_user_barred_them():
+    findings = ungrounded(
+        READ_CLAIM, NO_TOOLS_QUERY, [], locate=lambda p: None, may_act=False
+    )
+    (finding,) = [f for f in findings if f.gate == ACTION]
+
+    assert "Do it now" not in finding.correction
+    assert "don't call one" in finding.correction
+    assert "drop the claim or reword it" in finding.correction
+    assert finding.note.endswith("no file was read this turn")
+
+
+def test_a_no_tools_turn_is_only_asked_to_drop_the_read_claim(agent):
+    sent = _stub_chat(agent, _answer(READ_CLAIM), _answer(READ_CLAIM))
+
+    result = agent.process_query(NO_TOOLS_QUERY, max_steps=10)
+
+    assert len(sent) == 2
+    correction = sent[1][-1]["content"]
+    assert correction.startswith("[check:grounding] ")
+    assert "Do it now" not in correction
+    assert "don't call one" in correction
+    assert "no file was read this turn" in result["result"]
+
+
+def test_an_edit_ban_on_an_investigation_still_asks_for_the_read(agent):
+    sent = _stub_chat(agent, _answer(READ_CLAIM), _read_call(), _answer(GROUNDED))
+
+    agent.process_query(
+        "Why does toybox/dates.py fail? Don't touch anything.", max_steps=10
+    )
+
+    assert "Do it now, or drop the claim." in sent[1][-1]["content"]

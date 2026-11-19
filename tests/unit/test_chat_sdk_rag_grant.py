@@ -56,7 +56,9 @@ def test_enable_rag_indexes_a_named_file_outside_cwd(layout, monkeypatch):
     monkeypatch.setattr("gaia.rag.sdk.RAGSDK", _FakeRag)
     sdk = _sdk()
     sdk.config = type(
-        "C", (), {"model": "m", "show_stats": False, "use_local_llm": True}
+        "C",
+        (),
+        {"model": "m", "show_stats": False, "use_local_llm": True, "base_url": None},
     )
 
     assert sdk.enable_rag(documents=[str(doc)]) is True

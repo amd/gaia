@@ -14,7 +14,9 @@ This test validates end-to-end RAG workflows:
 - Chat SDK integration
 
 Requirements:
-- LLM server running on localhost:13305 (use: gaia docker up)
+- Lemonade Server running on localhost:13305 (`gaia init` installs it,
+  `gaia daemon start` starts it) with Qwen3-4B-Instruct-2507-GGUF,
+  user.embeddinggemma-300m-GGUF and Qwen3-VL-4B-Instruct-GGUF downloaded
 - Test PDF: data/pdf/Oil-and-Gas-Activity-Operations-Manual-1-10.pdf
 - Dependencies: pip install -e .[rag]
 

@@ -10,7 +10,8 @@
  *   npm run test:visual                 # compare against the baselines
  *   npm run test:visual -- --update-snapshots
  *
- * A local tool, not a CI gate: baselines are committed for Windows only (the
+ * `rtl.visual.ts` reads geometry instead, needs no baseline and runs in CI as
+ * `npm run test:rtl`. The screenshot suites are a local tool, not a CI gate: baselines are committed for Windows only (the
  * snapshot path includes {platform}), so on Linux or macOS the first run reports
  * missing snapshots. Pass --update-snapshots there to create your own.
  *

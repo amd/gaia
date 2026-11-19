@@ -620,9 +620,8 @@ class _ParkingSidecar:
             }
         else:
             yield {"type": "needs_input", "request_id": "q-1", "question": "Which?"}
-        if not self.answered.wait(10):
-            yield {"type": "error", "detail": "nobody answered"}
-            return
+        # No timeout here: the owning test's finally always sets this event.
+        self.answered.wait()
         yield {"type": "token", "delta": "resumed "}
         yield {"type": "final", "answer": f"answer={self.answer}"}
 
@@ -634,10 +633,13 @@ class _ParkingSidecar:
         self.answer = value
         self.answered.set()
 
+    def cancel_query(self, run_id):  # noqa: ARG002
+        self.answered.set()
+
 
 def _relay_through(sidecar):
-    from gaia.ui.email_sidecar import relay
-    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
 
     def dispatch(sse_handler, request, *_a, **_k):
         relay.relay_query(
@@ -667,7 +669,7 @@ async def test_unexpected_model_slot_retake_emits_named_error(caplog):
     handler.on_model_regained = None
     handler._emit = events.append
 
-    SSEOutputHandler.come_back_to_model(handler)
+    assert SSEOutputHandler.come_back_to_model(handler) is False
 
     assert events == [
         {
@@ -696,9 +698,45 @@ async def test_a_stop_during_the_retake_wait_is_not_an_error():
     handler.on_model_regained = None
     handler._emit = events.append
 
-    SSEOutputHandler.come_back_to_model(handler)
+    assert SSEOutputHandler.come_back_to_model(handler) is None
 
     assert events == []
+    assert handler.cancelled.is_set()
+
+
+async def test_a_stop_during_model_regain_is_reported_as_cancel():
+    events = []
+    handler = object.__new__(SSEOutputHandler)
+    handler.cancelled = threading.Event()
+    handler.turn_slot = SimpleNamespace(come_back=lambda _cancelled: True)
+
+    def stop_while_regaining():
+        handler.cancelled.set()
+
+    handler.on_model_regained = stop_while_regaining
+    handler._emit = events.append
+
+    assert SSEOutputHandler.come_back_to_model(handler) is None
+    assert events == []
+    assert handler.cancelled.is_set()
+
+
+async def test_model_regain_failure_returns_named_terminal_error():
+    events = []
+    handler = object.__new__(SSEOutputHandler)
+    handler.cancelled = threading.Event()
+    handler.turn_slot = SimpleNamespace(come_back=lambda _cancelled: True)
+
+    def fail_while_regaining():
+        raise RuntimeError("reload failed")
+
+    handler.on_model_regained = fail_while_regaining
+    handler._emit = events.append
+
+    assert SSEOutputHandler.come_back_to_model(handler) is False
+    assert events == [
+        {"type": "agent_error", "content": "reload failed", "fatal": True}
+    ]
     assert handler.cancelled.is_set()
 
 

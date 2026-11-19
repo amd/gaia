@@ -11,6 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/ui/modelsetup"
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 // ProceedMsg tells the host every precondition is satisfied (or the user
@@ -19,14 +21,6 @@ type ProceedMsg struct{ AgentID string }
 
 // CancelMsg tells the host the user backed out of the launch.
 type CancelMsg struct{ AgentID string }
-
-// ConnectMailboxMsg asks the host to open the connector flow for Provider. The
-// gate deliberately does not run OAuth itself: that flow is its own screen, and
-// owning it here would fork it.
-type ConnectMailboxMsg struct {
-	AgentID  string
-	Provider string
-}
 
 // Timeouts for the work the screen kicks off. Each is bounded so a wedged
 // daemon or sidecar surfaces as an actionable row instead of a frozen screen.
@@ -41,6 +35,7 @@ const (
 	CheckTimeout     = 120*time.Second + gaiainit.VerifyTimeout + 30*time.Second
 	startTimeout     = 90 * time.Second // above client.py's 60s daemon start
 	ensureTimeout    = 15 * time.Minute
+	updateTimeout    = 20 * time.Second
 	provisionTimeout = 5 * time.Hour // the 82 GB Strix Halo default at ~5 MB/s; esc cancels
 	// defaultReadyHold is how long an all-green screen is held so the user sees
 	// what was verified before chat replaces it.
@@ -74,6 +69,13 @@ type Options struct {
 	// StepsDone carries the first-run steps an earlier gate finished this
 	// session into one the host rebuilt, so step 3 does not restart at 1.
 	StepsDone int
+	// Motion overrides how much the screen animates; nil reads NO_MOTION,
+	// GAIA_REDUCED_MOTION, TERM and whether output is a terminal.
+	Motion *modelsetup.Motion
+	// OfferUpdate lets a blocked gate install a newer GAIA, the only way out
+	// when this build is what blocks it. Set only where the host runs the
+	// install on exit and no conversation would close with the gate.
+	OfferUpdate bool
 }
 
 // cancelBox holds the cancel func for whatever background work the screen has
@@ -160,6 +162,16 @@ type Model struct {
 	// the option under the cursor.
 	choosing bool
 	choice   int
+	// previous is the version before the last update, for `b`.
+	previous string
+
+	// setup is "choose your models" and the download after it, open over the
+	// checklist; nil when the checklist is on screen.
+	setup *modelsetup.Model
+	// setupChoices are the model choices left with esc, for the next visit.
+	setupChoices *modelsetup.Choices
+	// motion is how much this screen animates (NO_MOTION and friends).
+	motion modelsetup.Motion
 }
 
 // New builds the gate for an agent the GAIA daemon supervises.
@@ -185,6 +197,11 @@ func newWith(r Runner, cfg Config, opts Options) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 
+	updates, err := update.ReadConfig()
+	if err != nil {
+		opts.Logf("preflight: update settings unreadable, so `b` is not offered: %v", err)
+	}
+
 	return Model{
 		cfg:       cfg,
 		r:         r,
@@ -195,8 +212,10 @@ func newWith(r Runner, cfg Config, opts Options) Model {
 		height:    24,
 		spin:      s,
 		cancel:    &cancelBox{},
+		previous:  updates.Previous,
 		autoTried: map[string]bool{},
 		stepsDone: opts.StepsDone,
+		motion:    motionFrom(opts),
 	}
 }
 
@@ -252,9 +271,6 @@ func (m Model) Cancel() {
 	}
 }
 
-// RunnerLabel names the machinery behind this screen, for logs and snapshots.
-func (m Model) RunnerLabel() string { return m.r.Label() }
-
 // HeldForReview reports whether the screen is deliberately waiting for enter
 // rather than handing off. The renderer asks this rather than re-deriving it,
 // so the footer and the hand-off can never disagree about whether the launch
@@ -288,6 +304,14 @@ type provisionMsg struct {
 }
 type proceedTickMsg struct{}
 
+// updateFoundMsg is what `u` found: an install to run, or why there is none.
+type updateFoundMsg struct {
+	plan update.Plan
+	note string
+	err  error
+	gate *cancelBox
+}
+
 // --- commands --------------------------------------------------------------
 
 // begin builds the context for a piece of background work and parks its cancel
@@ -315,6 +339,48 @@ func (m Model) quickFixCmd(key string, kind FixKind, timeout time.Duration) tea.
 		res := r.Fix(ctx, cfg, kind, nil)
 		return fixDoneMsg{key: key, err: res.Err, note: res.Note, diag: res.Diagnosis}
 	}
+}
+
+func (m Model) updateCmd() tea.Cmd {
+	ctx := m.begin(updateTimeout)
+	gate := m.cancel
+	return func() tea.Msg {
+		st, err := update.Check(ctx)
+		if err != nil {
+			return updateFoundMsg{err: err, gate: gate}
+		}
+		if !st.Available {
+			return updateFoundMsg{note: st.Summary(), gate: gate}
+		}
+		p, err := update.NewPlan(st.Latest, false)
+		return updateFoundMsg{plan: p, err: err, gate: gate}
+	}
+}
+
+// backCmd plans the install `b` asked for: the version before the last update.
+func (m Model) backCmd() tea.Cmd {
+	ctx := m.begin(updateTimeout)
+	gate := m.cancel
+	tag := m.previous
+	return func() tea.Msg {
+		p, err := update.PlanTag(ctx, tag)
+		return updateFoundMsg{plan: p, err: err, gate: gate}
+	}
+}
+
+// offersUpdate reports whether `u` does anything on this screen.
+func (m Model) offersUpdate() bool {
+	if !m.opts.OfferUpdate || m.Busy() || m.choosing || !m.rep.Blocked() ||
+		update.Disabled() || update.IsDevBuild() {
+		return false
+	}
+	row, ok := m.focusedRow()
+	return !ok || !row.FirstRun
+}
+
+// offersBack reports whether `b` does anything: an update may be what broke this.
+func (m Model) offersBack() bool {
+	return m.offersUpdate() && update.Newer(update.Current, m.previous)
 }
 
 // autoStart applies the blocking row's AutoFix — starting a daemon or an agent
@@ -470,6 +536,11 @@ func (m Model) startProvision() (Model, tea.Cmd) {
 // --- update ----------------------------------------------------------------
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.setup != nil {
+		if next, cmd, handled := m.updateSetup(msg); handled {
+			return next, cmd
+		}
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -482,6 +553,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
+
+	case updateFoundMsg:
+		if msg.gate != m.cancel {
+			return m, nil
+		}
+		m.phase = phaseIdle
+		switch {
+		case msg.err != nil:
+			m.note = "Could not update GAIA: " + msg.err.Error()
+		case msg.note != "":
+			m.note = msg.note
+		default:
+			update.Schedule(msg.plan)
+			m.note = "Installing GAIA " + msg.plan.Tag + "…"
+			m.Abandon()
+			m.Cancel()
+			return m, tea.Quit
+		}
+		return m, nil
 
 	case reportMsg:
 		m.rep = msg.rep
@@ -509,8 +599,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.openChooser()
 		}
 		// A row the user can fix with one keypress holds the screen even when it
-		// does not block: the mailbox row is exactly that, and handing off past it
-		// would take `f connect a mailbox` away with the screen it was on.
+		// does not block: handing off past it would take its `f` away with the
+		// screen it was on.
 		if !m.rep.Blocked() && !m.opts.ManualProceed && !m.fixApplied && !m.rep.HasOneKeyFix() {
 			if m.rep.HasHalt() {
 				// Three edits together: the tick, the phase, and the note each
@@ -649,7 +739,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "ctrl+c":
-		// Matches the hub and chat: ctrl+c leaves the app, not just the screen.
+		// Matches chat: ctrl+c leaves the app, not just the screen.
+		m.Abandon()
 		m.Cancel()
 		m.provisionCh, m.phase = nil, phaseIdle
 		return m, tea.Quit
@@ -703,7 +794,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if row, ok := m.focusedRow(); ok && row.FirstRun && row.Fix != FixNone {
 			return m.applyFix()
 		}
-		if blocker, blocked := m.rep.Blocker(); blocked && !m.rep.OfferableDespiteFailure() {
+		if blocker, blocked := m.rep.Blocker(); blocked {
 			m.note = fmt.Sprintf("%s cannot start yet: %s is %s. Fix that row first.",
 				m.cfg.AgentName, blocker.Label, blocker.Line)
 			return m, nil
@@ -716,6 +807,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.applyFix()
+
+	case "u":
+		if !m.offersUpdate() {
+			return m, nil
+		}
+		m.phase = phaseFixing
+		m.note = "Checking for a newer GAIA…"
+		return m, tea.Batch(m.updateCmd(), m.spin.Tick)
+
+	case "b":
+		if !m.offersBack() {
+			return m, nil
+		}
+		m.phase = phaseFixing
+		m.note = "Looking up GAIA " + m.previous + "…"
+		return m, tea.Batch(m.backCmd(), m.spin.Tick)
 
 	case "g":
 		row, ok := m.focusedRow()
@@ -747,17 +854,17 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 		m.phase = phaseFixing
 		m.note = "Restarting the " + m.cfg.AgentName + " agent in the requested mode…"
 		return m, tea.Batch(m.quickFixCmd(KeySidecar, FixRestartSidecar, ensureTimeout), m.spin.Tick)
-	case FixPullModel, FixRunSetup, FixInstallServer:
+	case FixRunSetup:
+		if m.opensModelSetup() {
+			return m.openModelSetup()
+		}
+		return m.startProvision()
+	case FixPullModel, FixInstallServer:
 		return m.startProvision()
 	case FixUseRunningLemonade:
 		m.phase = phaseFixing
 		m.note = "Switching GAIA to your Lemonade…"
 		return m, tea.Batch(m.quickFixCmd(KeyLemonade, FixUseRunningLemonade, startTimeout), m.spin.Tick)
-	case FixConnectMailbox:
-		agentID, provider := m.cfg.AgentID, row.Provider
-		return m, func() tea.Msg {
-			return ConnectMailboxMsg{AgentID: agentID, Provider: provider}
-		}
 	case FixChooseChat:
 		return m.openChooser(), nil
 	case FixConnectProvider:
@@ -781,15 +888,11 @@ func (m Model) applyFix() (tea.Model, tea.Cmd) {
 // indeterminate report is handed off.
 //
 // A known failure outranks an unproven row: if the launch proceeds over a broken
-// mailbox, saying "could not be verified" would understate a state we measured.
+// row, saying "could not be verified" would understate a state we measured.
 func (m Model) unverifiedSummary() string {
 	for _, row := range m.rep.Rows {
 		if row.State != StateFailed {
 			continue
-		}
-		if agentRepairable[row.Key] {
-			return row.Label + " is not working (" + row.Line +
-				") — ask " + m.cfg.AgentName + " to fix it."
 		}
 		return row.Label + " is not working (" + row.Line +
 			"). Press enter to start without it, or fix it first."
@@ -809,9 +912,7 @@ func (m Model) proceed() tea.Cmd {
 
 // haltOutcomesCmd emits one status.Outcome per HaltingRows() row, for the
 // host's listener to act on. Only reached from the HasHalt() branch above —
-// a Blocked() report never calls this, so an offerable failure (a mailbox
-// the agent repairs in conversation) never gets a second prompt in front of
-// the one it already offers.
+// a Blocked() report never calls this.
 func (m Model) haltOutcomesCmd() tea.Cmd {
 	rows := m.rep.HaltingRows()
 	cmds := make([]tea.Cmd, 0, len(rows))
@@ -822,4 +923,14 @@ func (m Model) haltOutcomesCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-func (m Model) View() string { return m.render() }
+func (m Model) View() string {
+	if m.setup != nil {
+		return m.setup.View()
+	}
+	return m.render()
+}
+
+// Abandon stops a first-run model download the user is leaving: leaving the
+// screen cancels it, and finished models and partial files stay. The host
+// calls it when tearing the gate down.
+func (m Model) Abandon() { m.abandonSetup() }

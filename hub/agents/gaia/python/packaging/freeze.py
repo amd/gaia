@@ -22,7 +22,7 @@ Design notes / gotchas baked in (mirrors the email sidecar's freeze):
   AND copy its metadata so the entry-point lookup succeeds in the frozen app.
 - ``GaiaAgent`` subclasses ``ChatAgent`` and registers tools lazily from the
   ``full`` profile's tool groups (RAG, filesystem, scratchpad, browser,
-  screenshot), so collect both agent packages wholesale.
+  screenshot), so collect the agent package wholesale.
 - ``gaia.connectors`` discovers providers dynamically; collect it explicitly.
 - ``gaia-agent.yaml``, the agent's own ``gaia_agent/skills`` and the starter
   pack (``hub/skills``) are DATA, invisible to the import analyzer ->
@@ -67,7 +67,6 @@ PKG_ROOT = REPO_ROOT / "hub" / "agents" / "gaia" / "python"
 # at the source roots directly.
 PATHEX = [
     PKG_ROOT,
-    REPO_ROOT / "hub" / "agents" / "chat" / "python",
     REPO_ROOT / "src",
 ]
 
@@ -81,6 +80,13 @@ SKILLS_DEST = "gaia_agent/skills"
 # Linux only: the bundled OpenSSL looks for CA certs where the BUILD distro keeps
 # them, so point it at the host's bundle (see the hook's docstring).
 LINUX_CA_HOOK = HERE / "rthook_linux_ca.py"
+#: Every platform: caps OpenBLAS's pool before the entry script can load numpy.
+BLAS_THREADS_HOOK = REPO_ROOT / "src" / "gaia" / "blas_threads.py"
+#: Third-party licence notices for the libraries the binary bundles.
+NOTICES = [
+    (REPO_ROOT / "THIRD_PARTY_NOTICES.md", "."),
+    (REPO_ROOT / "licenses", "licenses"),
+]
 
 # Modules PyInstaller must pull in wholesale, and the distributions whose
 # metadata must travel with them. Declared once so the preflight guard below
@@ -90,9 +96,8 @@ COLLECT_SUBMODULES = [
     "uvicorn",
     # keyring: OS backend resolution via entry points.
     "keyring",
-    # Both agent packages register tools lazily inside functions.
+    # The agent package registers tools lazily inside functions.
     "gaia_agent",
-    "gaia_agent_chat",
     # connector provider discovery is dynamic.
     "gaia.connectors",
     # pydantic v2 ships a compiled core; collect data to be safe.
@@ -109,10 +114,9 @@ COLLECT_SUBMODULES = [
 # collect-all because the wheel carries native .dll/.pyd payloads that static
 # analysis cannot see. ~29 MB, Apache-2.0 (its vendored onnxruntime is MIT).
 COLLECT_ALL = ["faiss", "sherpa_onnx"]
-# Package data the analyzer can't see. pymupdf 2.x imports its layout module on
-# import, which loads ONNX model configs from pymupdf/layout/resources at runtime;
-# without them every ``import pymupdf`` in a run_python script fails.
-COLLECT_DATA = ["pymupdf"]
+# Package data the analyzer can't see and no PyInstaller hook collects. pypdfium2
+# needs none: pyinstaller-hooks-contrib collects its pdfium library and data.
+COLLECT_DATA: list[str] = []
 # Imported behind an ``except ImportError`` guard, so PyInstaller bundles them
 # only when they are installed and the binary otherwise boots without them.
 # anthropic: ``--use-claude`` and ``/model``, which the TUI forwards to the binary.
@@ -120,7 +124,7 @@ REQUIRED_IMPORTS = ["anthropic"]
 # Modules only ever imported by name at runtime.
 HIDDEN_IMPORTS = [tiktoken_bundle.PLUGIN_MODULE]
 # importlib.metadata version probes + entry-point agent discovery.
-COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia", "gaia-agent-chat"]
+COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia"]
 
 # What a ``run_python`` script may import. The frozen binary is the only Python
 # a user of the release has, and nothing in GAIA imports most of these, so the
@@ -133,7 +137,7 @@ SCRIPT_LIBRARIES = [
     "pptx",
     "reportlab",
     "pypdf",
-    "pymupdf",
+    "pypdfium2",
     "numpy",
     "pandas",
     "matplotlib",
@@ -154,14 +158,32 @@ STDLIB_EXCLUDED = {
     "antigravity",
     "this",
 }
-# Script-library submodules that pull in a GUI toolkit or a test suite.
+# Script-library submodules that pull in a GUI toolkit, a test suite, or a
+# package's own PyInstaller hook (numpy._pyinstaller imports PyInstaller itself).
 _UNWANTED_SUBMODULE = re.compile(
-    r"\.(?:tests?|conftest)(?:\.|$)"
+    r"\.(?:tests?|conftest|_?_pyinstaller)(?:\.|$)"
     r"|^matplotlib\.backends\.(?:.*(?:tk|qt|gtk|wx|cairo|macosx|webagg|nbagg)"
     r"|qt_editor|web_backend)",
     re.IGNORECASE,
 )
 
+# GPL code GAIA must not ship. PyInstaller's Python package is GPL-2.0 (only
+# its bootloader has the distribution exception); altgraph, pefile and macholib
+# arrive only as its dependencies. readline links GNU Readline and _gdbm/_dbm
+# link GNU dbm (GPL-3.0) on Linux. Every stdlib importer of readline treats it
+# as optional, and dbm/shelve fall back to dbm.dumb without dbm.gnu/dbm.ndbm.
+# packaging/check_bundle_licenses.py fails the build if any of it ships.
+GPL_EXCLUDES = [
+    "PyInstaller",
+    "altgraph",
+    "pefile",
+    "macholib",
+    "readline",
+    "_gdbm",
+    "_dbm",
+    "dbm.gnu",
+    "dbm.ndbm",
+]
 # Heavy ML stack reached only through the lazily-imported chat/SDK graph. All
 # inference goes to Lemonade over HTTP, so excluding these keeps the binary at
 # ~170 MB instead of ~2 GB. pandas and matplotlib are NOT here: they are
@@ -178,7 +200,13 @@ EXCLUDES = [
     "scipy",
     "sympy",
     "tkinter",
+    *GPL_EXCLUDES,
 ]
+
+
+def is_excluded(name: str) -> bool:
+    """True when *name* is, or sits under, a module in :data:`EXCLUDES`."""
+    return any(name == ex or name.startswith(ex + ".") for ex in EXCLUDES)
 
 
 def _verify_collect_targets() -> None:
@@ -216,7 +244,7 @@ def _verify_collect_targets() -> None:
 
 
 def _wanted_submodule(name: str) -> bool:
-    return not _UNWANTED_SUBMODULE.search(name)
+    return not _UNWANTED_SUBMODULE.search(name) and not is_excluded(name)
 
 
 def _stdlib_top_level() -> list[str]:
@@ -295,6 +323,44 @@ def _find_spec(name: str):
         return None
 
 
+_IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
+
+
+def _catches_import_error(handler: ast.ExceptHandler) -> bool:
+    kinds = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    return any(
+        (isinstance(k, ast.Name) and k.id in _IMPORT_ERRORS)
+        or (isinstance(k, ast.Attribute) and k.attr in _IMPORT_ERRORS)
+        for k in kinds
+    )
+
+
+def _is_type_checking(test: ast.expr) -> bool:
+    return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+    )
+
+
+def _imports(node: ast.AST, optional: bool = False):
+    """``(import node, optional)`` for every import in *node* and below it.
+
+    An import in the body of a ``try`` that catches ``ImportError``, or of an
+    ``if TYPE_CHECKING:``, is optional: the skill already runs without it.
+    """
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        yield node, optional
+        return
+    guarded: list[ast.stmt] = []
+    if isinstance(node, ast.Try) and any(
+        _catches_import_error(h) for h in node.handlers
+    ):
+        guarded = node.body
+    elif isinstance(node, ast.If) and _is_type_checking(node.test):
+        guarded = node.body
+    for child in ast.iter_child_nodes(node):
+        yield from _imports(child, optional or child in guarded)
+
+
 def skill_code_hidden_imports(skill_dirs: list[Path] | None = None) -> list[str]:
     """Modules the bundled skills' code imports, as hidden imports.
 
@@ -308,7 +374,7 @@ def skill_code_hidden_imports(skill_dirs: list[Path] | None = None) -> list[str]
     for skill_dir in bundled_skill_dirs() if skill_dirs is None else skill_dirs:
         for source in _skill_code_files(skill_dir):
             tree = ast.parse(source.read_text(encoding="utf-8"), str(source))
-            for node in ast.walk(tree):
+            for node, optional in _imports(tree):
                 if isinstance(node, ast.Import):
                     found = [alias.name for alias in node.names]
                     submodules: list[str] = []
@@ -323,7 +389,8 @@ def skill_code_hidden_imports(skill_dirs: list[Path] | None = None) -> list[str]
                     if _is_local_module(name, skill_dir, source):
                         continue
                     if _find_spec(name) is None:
-                        missing.append(f"{name} ({source.relative_to(REPO_ROOT)})")
+                        if not optional:
+                            missing.append(f"{name} ({source.relative_to(REPO_ROOT)})")
                         continue
                     names.add(name)
                     names.update(m for m in submodules if _find_spec(m) is not None)
@@ -353,7 +420,7 @@ def _resolve_add_data() -> list[tuple[Path, str]]:
             "sets could be declared and the hub metadata would be absent. "
             "Restore hub/agents/gaia/python/gaia-agent.yaml and re-run."
         )
-    add_data: list[tuple[Path, str]] = [(MANIFEST_SRC, "gaia_agent")]
+    add_data: list[tuple[Path, str]] = [(MANIFEST_SRC, "gaia_agent"), *NOTICES]
 
     skill_files = (
         sorted(p for p in SKILLS_SRC.rglob("*") if p.is_file() and p.name != ".gitkeep")
@@ -442,11 +509,13 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         args += ["--collect-all", mod]
     for mod in COLLECT_DATA:
         args += ["--collect-data", mod]
-    for mod in sorted(
+    hidden = (
         set(HIDDEN_IMPORTS)
         | set(script_hidden_imports())
         | set(skill_code_hidden_imports())
-    ):
+    )
+    # A hidden import of an excluded module would put it back in the binary.
+    for mod in sorted(m for m in hidden if not is_excluded(m)):
         args += ["--hidden-import", mod]
     for distribution in COPY_METADATA:
         args += ["--copy-metadata", distribution]
@@ -454,6 +523,7 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         args += ["--add-data", f"{source}{os.pathsep}{dest}"]
     for mod in EXCLUDES:
         args += ["--exclude-module", mod]
+    args += ["--runtime-hook", str(BLAS_THREADS_HOOK)]
     if sys.platform.startswith("linux"):
         args += ["--runtime-hook", str(LINUX_CA_HOOK)]
     args.append("--onefile" if onefile else "--onedir")

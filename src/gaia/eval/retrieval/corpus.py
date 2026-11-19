@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: MIT
 """Datasets for the retrieval benchmark: documents, questions, evidence labels.
 
-Four kinds, all on real documents:
+Three kinds, all on real documents:
 
 * hand-labelled JSON in ``eval/retrieval/datasets/`` (documents committed in
   this repo, or downloaded via ``sources.json``) — evidence is a verbatim quote
   and, for PDFs, its page;
-* FinanceBench — SEC filings with annotated evidence pages;
 * XQuAD — the multilingual slice; documents are its Wikipedia articles;
 * Simple English Wikipedia — distractors for the scale tiers.
 """
@@ -21,7 +20,6 @@ from pathlib import Path
 from typing import List, Optional, Sequence
 
 from gaia.eval.retrieval import sources
-from gaia.eval.retrieval.scoring import is_numeric_answer
 
 ANSWER_TYPES = ("numeric", "exact", "judge")
 XQUAD_LANGUAGES = ("ar", "de", "el", "en", "es", "hi", "ru", "th", "tr", "vi", "zh")
@@ -135,80 +133,6 @@ def load_labelled(name: str, offline: bool = False) -> Dataset:
         questions.append(question)
     return Dataset(
         spec["id"], spec["description"], documents, questions, sorted(used_sources)
-    )
-
-
-def load_financebench(
-    offline: bool = False, max_docs: Optional[int] = None, extra_docs: int = 0
-) -> Dataset:
-    """FinanceBench's 150 open-source questions over the filings they cite.
-
-    Evidence pages are zero-indexed upstream; GAIA's ``[Page N]`` is one-indexed.
-    ``max_docs`` keeps the questions of the first N documents (by name);
-    ``extra_docs`` adds that many uncited filings as same-domain distractors.
-    """
-    qpath = sources.fetch(
-        "financebench", "data/financebench_open_source.jsonl", offline=offline
-    )
-    rows = [
-        json.loads(line)
-        for line in qpath.read_text(encoding="utf-8").splitlines()
-        if line
-    ]
-    cited = sorted(
-        {r["doc_name"] for r in rows}
-        | {e["doc_name"] for r in rows for e in r["evidence"]}
-    )
-    if max_docs is not None:
-        cited = cited[:max_docs]
-    keep = set(cited)
-    rows = [
-        r
-        for r in rows
-        if {r["doc_name"], *(e["doc_name"] for e in r["evidence"])} <= keep
-    ]
-    available = [
-        r[len("pdfs/") : -len(".pdf")]
-        for r in sources.source_files("financebench", "pdfs/")
-    ]
-    distractors = [d for d in available if d not in keep][:extra_docs]
-    names = cited + distractors
-    paths = sources.fetch_many(
-        [("financebench", f"pdfs/{n}.pdf") for n in names], offline=offline
-    )
-    documents = [Document(n, p, "financebench") for n, p in zip(names, paths)]
-    questions = []
-    for r in rows:
-        tags = [r["question_type"]]
-        if r["question_type"] == "metrics-generated":
-            tags.append("table")
-        if len(r["evidence"]) > 1:
-            tags.append("multi_evidence")
-        answer = r["answer"].strip()
-        questions.append(
-            Question(
-                id=r["financebench_id"],
-                dataset="financebench",
-                question=r["question"],
-                answer=answer,
-                answer_type="numeric" if is_numeric_answer(answer) else "judge",
-                evidence=[
-                    {
-                        "doc": e["doc_name"],
-                        "page": int(e["evidence_page_num"]) + 1,
-                        "label_text": e.get("evidence_text", ""),
-                    }
-                    for e in r["evidence"]
-                ],
-                tags=tags,
-            )
-        )
-    return Dataset(
-        "financebench",
-        "FinanceBench open-source sample: questions over real SEC filings, evidence by page.",
-        documents,
-        questions,
-        ["financebench"],
     )
 
 

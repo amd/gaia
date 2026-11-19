@@ -50,7 +50,7 @@ class StubBridge:
         self.tools = {"gaia.query": {"name": "gaia.query", "description": "stub"}}
         self.executed = []
 
-    def execute_tool(self, tool_name, arguments):
+    def execute_tool(self, tool_name, arguments, client_gone=None):
         self.executed.append((tool_name, arguments))
         return {"success": True, "result": "stub"}
 

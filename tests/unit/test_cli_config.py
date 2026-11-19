@@ -263,6 +263,22 @@ class TestConfigCLI:
         assert exc.value.code != 0
         assert "Unknown config key" in capsys.readouterr().err
 
+    def test_set_hybrid_policy_saves_a_known_value(self, monkeypatch, tmp_path, capsys):
+        _run_main(["config", "set", "hybrid_policy", "balanced"], monkeypatch, tmp_path)
+        data = json.loads((tmp_path / "config.json").read_text())
+        assert data["hybrid_policy"] == "balanced"
+
+    def test_set_unknown_hybrid_policy_exits_nonzero_and_saves_nothing(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        with pytest.raises(SystemExit) as exc:
+            _run_main(
+                ["config", "set", "hybrid_policy", "cheap"], monkeypatch, tmp_path
+            )
+        assert exc.value.code != 0
+        assert "quality, balanced" in capsys.readouterr().err
+        assert not (tmp_path / "config.json").exists()
+
     def test_get_unknown_key_exits_nonzero(self, monkeypatch, tmp_path, capsys):
         with pytest.raises(SystemExit) as exc:
             _run_main(["config", "get", "bogus"], monkeypatch, tmp_path)
@@ -436,41 +452,27 @@ class TestModelInjection:
 
 
 class TestConfigPathEnvOverride:
-    def test_env_overrides_file_path(self, tmp_path, monkeypatch):
-        import importlib
-
+    def test_env_overrides_file_path(self, tmp_path, monkeypatch, reload_module):
         target = tmp_path / "custom" / "myconfig.json"
         monkeypatch.setenv("GAIA_CONFIG_FILE", str(target))
 
         from gaia import config as config_mod
 
-        config_mod = importlib.reload(config_mod)
-        try:
-            assert config_mod.GAIA_CONFIG_FILE == target
-            config_mod.GaiaConfig(default_model="Env-GGUF").save()
-            assert target.exists()
-            assert config_mod.GaiaConfig.load().default_model == "Env-GGUF"
-        finally:
-            # Rebuild the constants from the session's own environment.
-            monkeypatch.undo()
-            importlib.reload(config_mod)
+        config_mod = reload_module(config_mod)
+        assert config_mod.GAIA_CONFIG_FILE == target
+        config_mod.GaiaConfig(default_model="Env-GGUF").save()
+        assert target.exists()
+        assert config_mod.GaiaConfig.load().default_model == "Env-GGUF"
 
-    def test_env_dir_override(self, tmp_path, monkeypatch):
-        import importlib
-
+    def test_env_dir_override(self, tmp_path, monkeypatch, reload_module):
         monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "cfgdir"))
         # GAIA_CONFIG_FILE outranks the dir; the root conftest sets it.
         monkeypatch.delenv("GAIA_CONFIG_FILE", raising=False)
 
         from gaia import config as config_mod
 
-        config_mod = importlib.reload(config_mod)
-        try:
-            assert config_mod.GAIA_CONFIG_FILE == tmp_path / "cfgdir" / "config.json"
-        finally:
-            # Rebuild the constants from the session's own environment.
-            monkeypatch.undo()
-            importlib.reload(config_mod)
+        config_mod = reload_module(config_mod)
+        assert config_mod.GAIA_CONFIG_FILE == tmp_path / "cfgdir" / "config.json"
 
 
 # ── `--config PATH` flag points at an explicit config file ────────────────

@@ -3,12 +3,21 @@
 
 // Endpoint tests against real SQLite: the SQL, the joins and the response shape the pages rely on.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleApi } from "../src/api";
 import { insertMany, writeAtomic } from "../src/collector";
 import { memoryD1 } from "./d1";
 
 const DAY = 86_400_000;
+// Freeze the clock the API reads too, so a run near midnight UTC can't split "today" between test and code.
+const NOW = new Date("2026-06-15T12:00:00.000Z");
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 const iso = (daysAgo: number) => new Date(Date.now() - daysAgo * DAY).toISOString();
 const day = (daysAgo: number) => iso(daysAgo).slice(0, 10);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

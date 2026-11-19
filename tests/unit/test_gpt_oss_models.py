@@ -61,6 +61,7 @@ class TestRegistry:
             assert model_id not in lc.DEFAULT_MODEL_LADDER
         assert lc.OPTIONAL_CHAT_MODELS == (
             "user.ggml-gpt-oss-20b-MXFP4-GGUF",
+            lc.MUSE_GLIMMER_MODEL_NAME,
             "gpt-oss-120b-mxfp-GGUF",
         )
 
@@ -79,11 +80,21 @@ class TestFit:
         [
             (
                 STRIX_HALO_128,
-                ["user.ggml-gpt-oss-20b-MXFP4-GGUF", "gpt-oss-120b-mxfp-GGUF"],
+                [
+                    "user.ggml-gpt-oss-20b-MXFP4-GGUF",
+                    lc.MUSE_GLIMMER_MODEL_NAME,
+                    "gpt-oss-120b-mxfp-GGUF",
+                ],
             ),
-            (STRIX_HALO_64, ["user.ggml-gpt-oss-20b-MXFP4-GGUF"]),
+            (
+                STRIX_HALO_64,
+                ["user.ggml-gpt-oss-20b-MXFP4-GGUF", lc.MUSE_GLIMMER_MODEL_NAME],
+            ),
             (DGPU, ["user.ggml-gpt-oss-20b-MXFP4-GGUF"]),
-            (CPU_ONLY, ["user.ggml-gpt-oss-20b-MXFP4-GGUF"]),
+            (
+                CPU_ONLY,
+                ["user.ggml-gpt-oss-20b-MXFP4-GGUF", lc.MUSE_GLIMMER_MODEL_NAME],
+            ),
             (MAC_M4, []),
         ],
     )

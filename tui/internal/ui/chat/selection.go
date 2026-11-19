@@ -162,9 +162,9 @@ func (m ChatModel) onSelectScrollTick() (ChatModel, tea.Cmd) {
 		n = selectScrollMaxLines
 	}
 	if edge < 0 {
-		m.viewport.LineUp(n)
+		m.viewport.ScrollUp(n)
 	} else {
-		m.viewport.LineDown(n)
+		m.viewport.ScrollDown(n)
 	}
 	m = m.afterScroll()
 	m.sel.head, _, _ = m.contentPosAt(m.sel.pointerX, m.sel.pointerY)

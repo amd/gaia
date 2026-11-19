@@ -13,6 +13,7 @@ import { ModelChip } from '../../ModelChip';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
 import * as api from '../../../services/api';
+import { mockSetupApis } from '../../../test/setupApiMocks';
 import type { ActiveModel, ModelPrice, ProviderInfo, SpendingReport } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -23,7 +24,7 @@ const FLASH: ModelPrice = {
     input_per_million: 0.15, cached_input_per_million: 0.03, output_per_million: 0.5, source: 'Fireworks AI list price',
 };
 const REPORT: SpendingReport = {
-    month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, limit_usd: null, state: 'no_limit',
+    month: '2026-10', total_usd: 1.25, turns: 12, unpriced_turns: 0, unreported_turns: 0, limit_usd: null, state: 'no_limit',
     by_model: [], price_source: 'Fireworks AI list price',
 };
 const LOCAL_ACTIVE: ActiveModel = {
@@ -40,6 +41,7 @@ function fireworks(over: Partial<ProviderInfo> = {}): ProviderInfo {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    mockSetupApis(mockedApi);
     useModelStore.setState({ active: LOCAL_ACTIVE, error: null, restoreNotice: null });
     useChatStore.setState({ systemStatus: null, settingsSection: null, sessions: [], currentSessionId: null });
     mockedApi.getCloudPrices.mockImplementation(async (provider) => (provider === 'fireworks'
@@ -79,7 +81,7 @@ describe('CloudPrices', () => {
 
     it('says the gateway price is unknown and why', async () => {
         render(<CloudPrices provider="amd" />);
-        expect(await screen.findByText(/Price unknown\. Prices are set by the organization/)).toBeInTheDocument();
+        expect(await screen.findByText(/Price unknown\./)).toHaveTextContent(/Price unknown\. Prices are set by the organization/);
         expect(screen.queryByText(/\$0/)).not.toBeInTheDocument();
     });
 });
@@ -95,6 +97,21 @@ describe('SpendingLimit', () => {
         mockedApi.getSpending.mockResolvedValue({ ...REPORT, unpriced_turns: 3 });
         render(<SpendingLimit />);
         expect(await screen.findByText(/Plus 3 turns on models with an unknown price/)).toBeInTheDocument();
+    });
+
+    it('never counts a turn both in the priced total and in a "Plus" line', async () => {
+        mockedApi.getSpending.mockResolvedValue({ ...REPORT, turns: 37, unpriced_turns: 4, unreported_turns: 5 });
+        render(<SpendingLimit />);
+        expect(await screen.findByText(/28 cloud chat turns, at list price/)).toBeInTheDocument();
+        expect(screen.getByText(/Plus 4 turns on models with an unknown price/)).toBeInTheDocument();
+        expect(screen.getByText(/Plus 5 turns whose usage wasn’t reported/)).toBeInTheDocument();
+    });
+
+    it('counts stopped turns with no reported usage apart, not as an unknown price (#6541)', async () => {
+        mockedApi.getSpending.mockResolvedValue({ ...REPORT, unreported_turns: 1 });
+        render(<SpendingLimit />);
+        expect(await screen.findByText(/Plus 1 turn whose usage wasn’t reported, such as a stopped answer/)).toBeInTheDocument();
+        expect(screen.queryByText(/on models with an unknown price/)).not.toBeInTheDocument();
     });
 
     it('sets and removes a monthly limit', async () => {

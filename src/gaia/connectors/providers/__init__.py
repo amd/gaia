@@ -103,8 +103,3 @@ def reload(provider_id: str) -> OAuthProvider:
     """
     _registry.pop(provider_id, None)
     return get(provider_id)
-
-
-def list_provider_ids() -> list[str]:
-    """Return the ids of currently registered providers (no lazy init)."""
-    return sorted(_registry)

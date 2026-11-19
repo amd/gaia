@@ -269,14 +269,14 @@ func TestASkippedSetupRowIsStillAskedInTheChat(t *testing.T) {
 	}
 }
 
-// `gaia tui run email --model X` used to pass the model through. The
+// `gaia tui run gaia --model X` used to pass the model through. The
 // interactive path was rewritten to build its client inside the router, which
 // never received it — so the flag was accepted and the run quietly used the
 // agent's default. Accepting a flag and changing nothing is the silent
 // fallback the rules forbid, and the CLI reference still advertises it.
 func TestTheModelOverrideReachesTheInteractiveClient(t *testing.T) {
 	agent := catalog.Agent{
-		ID: "email", Name: "Email", Transport: catalog.TransportDaemon,
+		ID: "gaia", Name: "GAIA", Transport: catalog.TransportDaemon,
 	}
 	m := root.NewFlagshipModel(agent, false).WithModel("some-other-model")
 

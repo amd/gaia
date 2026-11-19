@@ -33,6 +33,7 @@ from gaia.daemon.errors import (
     DaemonStartError,
     DaemonVersionError,
     LemonadeNotAnsweringError,
+    LemonadeStartFailedError,
 )
 from gaia.daemon.instance import (
     DaemonInstance,
@@ -102,7 +103,7 @@ _REQUIRED_RECONFIGURE_MINOR = 5
 _CLIENTS_TIMEOUT = (2.0, 10.0)
 
 # Ensure: connect fast; read generously — a first-run ensure may lazily fetch the
-# sidecar binary before answering (mirrors gaia.ui.email_sidecar.daemon_client).
+# sidecar binary before answering (mirrors gaia.ui.sidecar.daemon_client).
 _ENSURE_TIMEOUT = (5.0, 900.0)
 # A cold start's health wait (60s) plus a start already in flight. Keep
 # gaiainit.CheckTimeout in the TUI above this plus daemon start (60s).
@@ -464,6 +465,33 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     if relayed:
         return f"{relayed} agent turn(s) are still running on it"
     try:
+        agents = requests.get(
+            f"{inst.base_url}{API_PREFIX}/agents",
+            headers=headers,
+            timeout=5.0,
+        )
+    except requests.exceptions.RequestException as e:
+        return f"GAIA could not check whether it is busy ({e})"
+    owned_sidecars = set()
+    if agents.status_code != 404:
+        if agents.status_code != 200:
+            return f"GAIA could not check whether it is busy ({_error_detail(agents)})"
+        import psutil
+
+        for agent in agents.json().get("agents") or []:
+            pid = agent.get("pid")
+            if agent.get("state") != "running" or not isinstance(pid, int):
+                continue
+            owned_sidecars.add(pid)
+            try:
+                owned_sidecars.update(
+                    child.pid for child in psutil.Process(pid).children(recursive=True)
+                )
+            except psutil.Error:
+                # A launcher can exit while its packaged child is being
+                # reparented; an unavailable process contributes no children.
+                pass
+    try:
         clients = requests.get(
             f"{inst.base_url}{API_PREFIX}/lemonade/clients",
             headers=headers,
@@ -480,7 +508,11 @@ def outdated_daemon_busy(inst: DaemonInstance) -> Optional[str]:
     users = [
         c.get("name") or c.get("kind") or "a GAIA app"
         for c in snapshot.get("clients") or []
-        if any(pid_alive(p) for p in c.get("pids") or [] if p not in ours)
+        if any(
+            pid_alive(p)
+            for p in c.get("pids") or []
+            if p not in ours and p not in owned_sidecars
+        )
     ]
     if users:
         return f"{', '.join(users)} is still using it"
@@ -510,6 +542,31 @@ def _replace_outdated(inst: DaemonInstance, why: str) -> None:
             "stop when asked. Run `gaia daemon restart`. Where to look: `gaia "
             f"daemon logs` ({paths.log_path()})."
         )
+
+
+def replace_outdated_daemon() -> Optional[str]:
+    """Stop a daemon an update left running, even a busy one.
+
+    For a caller about to replace GAIA's Lemonade Server, which cuts off the
+    daemon's work anyway: left running, a daemon from the previous release
+    brings that release's server back as soon as the new one is stopped.
+
+    Returns:
+        Why the daemon was out of date, or None when none was.
+
+    Raises:
+        DaemonError: The outdated daemon would not stop.
+    """
+    with StartLock(timeout=_START_TIMEOUT):
+        inst = read_instance()
+        if inst is None or not pid_alive(inst.pid):
+            return None
+        stale = runs_replaced_install(inst)
+        if stale is None:
+            return None
+        _replace_outdated(inst, stale)
+        _set_deferred_notice(None)
+        return stale
 
 
 def missing_daemon_deps() -> list:
@@ -545,7 +602,10 @@ def _daemon_env(drop: tuple = ()) -> dict:
             os.path.abspath(entry) if entry else entry
             for entry in env["PYTHONPATH"].split(os.pathsep)
         )
-    return env
+    from gaia.llm.lemonade_choice import child_lemonade_env
+
+    # It and every sidecar it spawns would otherwise inherit an ignored address.
+    return child_lemonade_env(env)
 
 
 def _is_spawned_daemon(registered_pid: int, spawned_pid: int) -> bool:
@@ -841,9 +901,15 @@ def ensure_lemonade(
         ) from e
     if r.status_code == 503 and r.headers.get("Retry-After"):
         raise LemonadeNotAnsweringError(_error_detail(r))
-    if r.status_code != 200:
+    if r.status_code == 409:
         raise DaemonError(
-            f"the daemon could not start Lemonade Server: {_error_detail(r)}"
+            f"the daemon has no Lemonade Server of its own to start: "
+            f"{_error_detail(r)}"
+        )
+    if r.status_code != 200:
+        reason = _error_detail(r)
+        raise LemonadeStartFailedError(
+            f"the daemon could not start Lemonade Server: {reason}", reason=reason
         )
     return r.json()
 
@@ -928,6 +994,90 @@ def reconfigure_lemonade(timeout=_LEMONADE_ENSURE_TIMEOUT) -> Optional[dict]:
             f"not the one GAIA is set to use. Check `gaia daemon logs`."
         )
     return {**applied, "restarted": True}
+
+
+def _daemon_lemonade_target(inst: DaemonInstance) -> Optional[dict]:
+    """The Lemonade *inst* uses, or None for a daemon too old to say."""
+    import requests
+
+    if _minor(inst) < _REQUIRED_RECONFIGURE_MINOR:
+        return None
+    url = f"{inst.base_url}{API_PREFIX}/lemonade/target"
+    try:
+        r = requests.get(
+            url,
+            headers={"Authorization": f"{AUTH_SCHEME} {inst.token}"},
+            timeout=_CLIENTS_TIMEOUT,
+        )
+    except requests.exceptions.RequestException as e:
+        raise DaemonError(
+            f"could not ask the daemon at {inst.base_url} which Lemonade Server it "
+            f"uses: {e}. Check `gaia daemon status`."
+        ) from e
+    if r.status_code != 200:
+        raise DaemonError(
+            "the daemon could not say which Lemonade Server it uses: "
+            f"{_error_detail(r)}"
+        )
+    return r.json()
+
+
+def match_launch_lemonade() -> Optional[str]:
+    """Restart a running daemon that uses another Lemonade than this process.
+
+    A daemon this process started would inherit its environment, so an adopted
+    one left over from a launch with another ``LEMONADE_BASE_URL`` (or from
+    before that variable was dropped) answers chats through a server this
+    process does not use. A daemon still at work is left running.
+
+    Returns:
+        Why it was restarted, or None when it matched or none runs.
+
+    Raises:
+        DaemonError: It differs and is busy, could not be read, or did not
+            restart onto this process's server.
+    """
+    from gaia.llm.lemonade_choice import describe
+
+    inst = attach()
+    if inst is None:
+        return None
+    mine = describe()
+    wanted = (mine["mode"], mine["base_url"])
+    theirs = _daemon_lemonade_target(inst)
+    if theirs is not None and (theirs.get("mode"), theirs.get("base_url")) == wanted:
+        return None
+    own = "GAIA's own server"
+    used = (
+        "a server it is too old to name"
+        if theirs is None
+        else theirs.get("base_url") or own
+    )
+    why = f"it uses Lemonade at {used}, and this launch uses {mine['base_url'] or own}"
+    busy = outdated_daemon_busy(inst)
+    if busy is not None:
+        raise DaemonError(
+            f"the GAIA daemon (pid {inst.pid}) was left running though {why}, "
+            f"because {busy}. Chats may reach a different model server until it "
+            "restarts; run `gaia daemon restart` once that work is done."
+        )
+    logger.info("daemon: pid %s: %s; restarting it", inst.pid, why)
+    if not request_shutdown(inst) or not wait_until_gone(
+        inst, timeout=STOP_WAIT_TIMEOUT
+    ):
+        raise DaemonError(
+            f"the GAIA daemon (pid {inst.pid}) did not stop to follow this launch's "
+            f"model server ({why}). Run `gaia daemon restart`. Where to look: "
+            f"`gaia daemon logs` ({paths.log_path()})."
+        )
+    fresh = start_or_attach()
+    applied = _daemon_lemonade_target(fresh)
+    if applied is None or (applied.get("mode"), applied.get("base_url")) != wanted:
+        raise DaemonError(
+            "the restarted GAIA daemon still uses another Lemonade Server than "
+            "this launch. Check `gaia daemon logs`."
+        )
+    return why
 
 
 def register_lemonade_client(

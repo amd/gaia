@@ -176,6 +176,21 @@ def test_setup_refuses_swapped_tokens_before_any_network_call(monkeypatch):
     assert any("goes in the other field" in line for line in lines)
 
 
+def test_setup_without_a_terminal_says_what_it_needs_instead_of_crashing():
+    """stdin closed (a script, a CI step): input() raises EOFError."""
+
+    def no_terminal(_prompt):
+        raise EOFError
+
+    lines = []
+    code = cli.run_setup(prompt=no_terminal, emit=lines.append, open_browser=False)
+
+    assert code == 1
+    said = " ".join(lines)
+    assert "needs a terminal to paste the tokens into" in said
+    assert "gaia slack connect" in said
+
+
 def test_setup_prints_the_create_url_when_no_browser_is_available():
     answers = iter(["xapp-a", "xoxb-b"])
     lines = []
@@ -327,9 +342,30 @@ def test_print_url_emits_only_the_url(monkeypatch):
 def _sleeper(*extra_argv):
     import subprocess
     import sys
+    import time
 
-    return subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)", *extra_argv]
+    import psutil
+
+    script = "import time; time.sleep(30)"
+    proc = subprocess.Popen([sys.executable, "-c", script, *extra_argv])
+    deadline = time.monotonic() + 5
+    last_cmdline = None
+    while time.monotonic() < deadline:
+        try:
+            last_cmdline = psutil.Process(proc.pid).cmdline()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            last_cmdline = None
+        if last_cmdline and script in last_cmdline:
+            return proc
+        if proc.poll() is not None:
+            break
+        time.sleep(0.01)
+
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait()
+    pytest.fail(
+        f"child process never reached its test script; last cmdline={last_cmdline!r}"
     )
 
 

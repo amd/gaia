@@ -17,6 +17,7 @@ import { useChatStore } from '../../stores/chatStore';
 import type { GaiaNotification } from '../../types/agent';
 import type { Session, StreamEvent } from '../../types';
 import * as api from '../../services/api';
+import { pluralKey, stripIsolates, translateBare } from '../../i18n/registry';
 
 vi.mock('../../services/api');
 const mockedApi = vi.mocked(api);
@@ -24,7 +25,7 @@ const mockedApi = vi.mocked(api);
 const originalRespond = useNotificationStore.getState().respondToPermission;
 const respond = vi.fn();
 
-const PY_SCOPE = 'Python snippets (run_python)';
+const PY_SCOPE = 'Python snippets';
 
 function prompt(over: Partial<GaiaNotification> = {}): GaiaNotification {
     return {
@@ -75,6 +76,16 @@ describe('repeated identical permission prompts', () => {
         expect(hint()).toHaveTextContent("You've allowed this 8 times already.");
     });
 
+    // Arabic pairs 2 with the dual and 11+ with the singular, so the count stays out of the noun.
+    it.each([
+        [1, 'سبق أن سمحت بهذا مرة واحدة.'],
+        [2, 'عدد المرات التي سمحت فيها بهذا من قبل: 2.'],
+        [3, 'عدد المرات التي سمحت فيها بهذا من قبل: 3.'],
+        [11, 'عدد المرات التي سمحت فيها بهذا من قبل: 11.'],
+    ])('reads correctly in Arabic after %i allows', (n, arabic) => {
+        expect(stripIsolates(translateBare('ar', pluralKey('prompt.repeated', n), { n }))).toBe(arabic);
+    });
+
     it('answers always only when the user clicks it', async () => {
         const live = prompt();
         seed([prompt({ response: 'allow' })], live);
@@ -99,7 +110,7 @@ describe('repeated identical permission prompts', () => {
     it('still asks a different tool even after many allows of another', () => {
         const earlier = Array.from({ length: 5 }, () => prompt({ response: 'allow' }));
         seed(earlier, prompt({ tool: 'run_shell_command', alwaysScope: 'git status', risk: 'read', toolArgs: { command: 'git status' } }));
-        expect(screen.getByRole('alertdialog')).toHaveTextContent('Allow GAIA to use run_shell_command?');
+        expect(screen.getByRole('alertdialog')).toHaveTextContent('Run this command?');
         expect(hint()).toBeNull();
         expect(respond).not.toHaveBeenCalled();
     });

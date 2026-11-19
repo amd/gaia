@@ -26,12 +26,21 @@ matter, and the real token to latency link is the TTFT measurement. Char
 counts are always reported (no tokenizer needed) and are the deterministic
 signal the CI test pins.
 
+``--mcp`` (#1971) measures connected MCP servers the same way: mock servers
+from :mod:`gaia.eval.mcp_fixture` go through GAIA's own MCP conversion, and the
+report gives the first-turn tokens they add per render path with the loader
+off and on, plus the loader's MCP tool recall
+(:func:`gaia.eval.tool_recall.measure_mcp_recall`).
+
 Coupling note: this harness deliberately drives the real ``Agent`` renderers so
 it measures exactly what ships, not a reimplementation. It depends on these
 ``Agent``/``ChatAgent`` internals: ``_register_tools`` (populate the registry),
 ``_instance_tools`` + ``_tools_registry`` (the per-instance snapshot it swaps to
 render subsets), ``_format_tools_for_prompt`` (text path) and
-``_build_openai_tool_schemas`` (native path). If those move, update this module
+``_build_openai_tool_schemas`` (native path). ``--mcp`` also depends on
+``_select_tools_for_turn`` and ``_thin_tool_schemas`` (what a turn sends),
+``tool_loader.reset_session`` / ``jumped``, and
+``MCPClientMixin._convert_mcp_tools``. If those move, update this module
 in lockstep — the pinned baseline test will flag a drift, but the attribute
 names are not part of a public API.
 """
@@ -51,12 +60,20 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from gaia_agent_chat.agent import ChatAgent
+    from gaia_agent.chat_agent import ChatAgent
 
 # Tokenizer proxy — see module docstring for why tiktoken (not Gemma's own).
 TOKENIZER_ENCODING = "cl100k_base"
 
 DEFAULT_PROFILE = "doc"
+
+# The report measures what ships: the flagship, on its only profile. ``chat``
+# re-measures a ChatAgent profile, which is how #1448's doc-profile numbers
+# were taken and stay reproducible.
+GAIA_AGENT = "gaia"
+CHAT_AGENT = "chat"
+DEFAULT_AGENT = GAIA_AGENT
+FLAGSHIP_PROFILE = "full"
 
 # Tool counts to inject when measuring the prompt-cost slope. 0 is the
 # real-doc baseline; the rest are evenly spaced so linearity is visible.
@@ -147,16 +164,31 @@ def _isolated_registry():
         tools_mod._TOOL_REGISTRY.update(saved)
 
 
-def _build_skeleton_tool_loader(dynamic_tools: bool, profile: str = DEFAULT_PROFILE):
+def _enter_deterministic_env(stack: contextlib.ExitStack) -> None:
+    """Force the environment-conditional external tools off for this build.
+
+    No npx -> search_documentation skipped; scrub PERPLEXITY_API_KEY ->
+    search_web skipped. clear=True + filtered copy removes the key for the
+    duration and restores the full environment afterwards.
+    """
+    stack.enter_context(patch("shutil.which", return_value=None))
+    scrubbed = {k: v for k, v in os.environ.items() if k != "PERPLEXITY_API_KEY"}
+    stack.enter_context(patch.dict(os.environ, scrubbed, clear=True))
+
+
+def _build_skeleton_tool_loader(
+    dynamic_tools: bool, profile: str = DEFAULT_PROFILE, embed_fn=None
+):
     """Return a real ToolLoader over *profile*'s config, or ``None`` when off.
 
     Registration only consults ``self.tool_loader is not None``; it never embeds
     or selects, so a trivial zero-vector embedder is enough to attach a loader.
+    Pass *embed_fn* to measure what the loader selects.
     """
     if not dynamic_tools:
         return None
     import numpy as np
-    from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
+    from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 
     from gaia.agents.base.tool_loader import ToolLoader
 
@@ -165,7 +197,7 @@ def _build_skeleton_tool_loader(dynamic_tools: bool, profile: str = DEFAULT_PROF
         core_tools=cfg.core,
         bundles=cfg.bundles,
         optional_tools=cfg.optional,
-        embed_fn=lambda text: np.zeros(1, dtype=np.float32),
+        embed_fn=embed_fn or (lambda text: np.zeros(1, dtype=np.float32)),
     )
 
 
@@ -206,7 +238,7 @@ def build_doc_agent_skeleton(
     """
     stubbed = _ensure_optional_deps_stubbed()
     try:
-        from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+        from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
         cfg = ChatAgentConfig(
             rag_documents=[],
@@ -221,14 +253,7 @@ def build_doc_agent_skeleton(
                 patch("gaia.agents.base.agent.Agent.__init__", return_value=None)
             )
             if deterministic:
-                # No npx -> search_documentation skipped; scrub PERPLEXITY_API_KEY
-                # -> search_web skipped. clear=True + filtered copy removes the key
-                # for the duration and restores the full environment afterwards.
-                stack.enter_context(patch("shutil.which", return_value=None))
-                scrubbed = {
-                    k: v for k, v in os.environ.items() if k != "PERPLEXITY_API_KEY"
-                }
-                stack.enter_context(patch.dict(os.environ, scrubbed, clear=True))
+                _enter_deterministic_env(stack)
 
             with stack:
                 agent = ChatAgent.__new__(ChatAgent)
@@ -262,7 +287,9 @@ def build_doc_agent_skeleton(
             sys.modules.pop(mod, None)
 
 
-def build_full_agent_skeleton(dynamic_tools: bool = True):
+def build_full_agent_skeleton(
+    dynamic_tools: bool = True, deterministic: bool = False, embed_fn=None
+):
     """Build a flagship ``GaiaAgent`` skeleton with its ``full`` tools registered.
 
     The ``full``-profile counterpart to :func:`build_doc_agent_skeleton`, and the
@@ -279,8 +306,16 @@ def build_full_agent_skeleton(dynamic_tools: bool = True):
       tools when the embedder is unreachable, which would silently understate
       the flagship's registry by five on any machine without Lemonade.
 
-    Returns a skeleton whose ``_tools_registry`` is the flagship's 67-tool set
-    (66 + ``load_tools`` when *dynamic_tools*).
+    With ``deterministic=True`` the environment-conditional external tools are
+    forced off, exactly as in :func:`build_doc_agent_skeleton`, so a measured
+    report is the same on every machine.
+
+    *embed_fn* is the loader's embedder; the default zero vector scores every
+    tool 0, so the session never moves past the list it opens on. Pass a real
+    one to measure what the loader picks.
+
+    Returns a skeleton whose ``_tools_registry`` is the flagship's full tool set
+    (plus ``load_tools`` when *dynamic_tools*).
     """
     stubbed = _ensure_optional_deps_stubbed()
     try:
@@ -295,6 +330,8 @@ def build_full_agent_skeleton(dynamic_tools: bool = True):
                 stack.enter_context(
                     patch("gaia.agents.base.agent.Agent.__init__", return_value=None)
                 )
+                if deterministic:
+                    _enter_deterministic_env(stack)
                 agent = GaiaAgent.__new__(GaiaAgent)
                 agent.config = cfg
                 agent._instance_tools = None
@@ -310,7 +347,7 @@ def build_full_agent_skeleton(dynamic_tools: bool = True):
                 # and deliberately outside the measured baseline.
                 agent._mcp_manager = None
                 agent.tool_loader = _build_skeleton_tool_loader(
-                    dynamic_tools, profile="full"
+                    dynamic_tools, profile="full", embed_fn=embed_fn
                 )
                 # Set by ChatAgent.__init__, which is bypassed here; without it
                 # _select_tools_for_turn raises instead of selecting.
@@ -327,6 +364,34 @@ def build_full_agent_skeleton(dynamic_tools: bool = True):
     finally:
         for mod in stubbed:
             sys.modules.pop(mod, None)
+
+
+def build_agent_skeleton(agent: str = DEFAULT_AGENT, profile: Optional[str] = None):
+    """The deterministic, unfiltered skeleton a report measures.
+
+    ``gaia`` is the flagship on its ``full`` profile — what ships. ``chat`` is a
+    ChatAgent on *profile* (default ``doc``), which is how the #1448 baseline
+    was taken; the two are different tool sets and their numbers do not compare.
+    """
+    if agent == GAIA_AGENT:
+        if profile not in (None, FLAGSHIP_PROFILE):
+            raise ValueError(
+                f"The flagship only ships the {FLAGSHIP_PROFILE!r} profile, so "
+                f"--profile {profile} cannot measure it. Pass --agent {CHAT_AGENT} "
+                f"--profile {profile} to measure that ChatAgent profile instead."
+            )
+        return build_full_agent_skeleton(dynamic_tools=False, deterministic=True)
+    if agent == CHAT_AGENT:
+        return build_doc_agent_skeleton(profile or DEFAULT_PROFILE)
+    raise ValueError(
+        f"unknown agent {agent!r}; choose {GAIA_AGENT!r} or {CHAT_AGENT!r}"
+    )
+
+
+def _profile_label(agent: str, profile: Optional[str]) -> str:
+    if agent == GAIA_AGENT:
+        return f"{GAIA_AGENT} agent, {FLAGSHIP_PROFILE}"
+    return f"{CHAT_AGENT} agent, {profile or DEFAULT_PROFILE}"
 
 
 def _render_paths(
@@ -538,6 +603,286 @@ def measure_fixed_subset(
     return rows
 
 
+# ── MCP tool cost ────────────────────────────────────────────────────────
+
+# A first turn that asks for no tool, so the list is the one a session opens on.
+MCP_FIRST_TURN_QUERY = "Hi! What can you help me with today?"
+
+
+@contextlib.contextmanager
+def with_mcp_tools(agent: "ChatAgent", entries: Dict[str, Dict[str, Any]]):
+    """Add MCP registry *entries* to *agent*'s snapshot for the block, then remove them."""
+    prev = agent._instance_tools
+    if prev is None:
+        raise ValueError(
+            "the skeleton must snapshot its tools before MCP tools are added"
+        )
+    agent._instance_tools = {**prev, **entries}
+    try:
+        yield agent
+    finally:
+        agent._instance_tools = prev
+
+
+def _render_offered(agent: "ChatAgent", names: Optional[List[str]]) -> Tuple[str, str]:
+    """Text and native tool prompts as *agent* sends them for *names* (``None``: all).
+
+    Matches ``Agent._openai_tools``: native schemas are thinned whenever the
+    agent has a loader and a local model.
+    """
+    text = agent._format_tools_for_prompt(filter_to=names)
+    schemas = agent._build_openai_tool_schemas(filter_to=names)
+    if agent._thin_tool_schemas():
+        from gaia.agents.base.tool_loader import thin_tool_schema
+
+        schemas = [thin_tool_schema(schema) for schema in schemas]
+    return text, json.dumps(schemas)
+
+
+def first_turn_tools(agent: "ChatAgent", query: str) -> Optional[List[str]]:
+    """The tool list a new session sends for *query*; ``None`` means every tool."""
+    if agent.tool_loader is None:
+        return None
+    agent.tool_loader.reset_session()
+    names: Optional[List[str]] = agent._select_tools_for_turn(query)
+    return names
+
+
+def _sizes(text: str, native: str, tok: Optional[Any]) -> Dict[str, Optional[int]]:
+    return {
+        "text_tokens": _count_tokens(text, tok),
+        "native_tokens": _count_tokens(native, tok),
+        "text_chars": len(text),
+        "native_chars": len(native),
+    }
+
+
+def _minus(
+    a: Dict[str, Optional[int]], b: Dict[str, Optional[int]]
+) -> Dict[str, Optional[int]]:
+    out: Dict[str, Optional[int]] = {}
+    for key, left in a.items():
+        right = b[key]
+        out[key] = None if left is None or right is None else left - right
+    return out
+
+
+def _first_turn_sizes(
+    agent: "ChatAgent", query: str, tok: Optional[Any]
+) -> Tuple[Dict[str, Optional[int]], Optional[List[str]]]:
+    names = first_turn_tools(agent, query)
+    if names is None and agent.tool_loader is not None:
+        raise RuntimeError(
+            "the tool loader did not select (embedder failed, or the agent is not "
+            "in dynamic-tools mode), so the loader-on row would repeat loader off; "
+            "check the embed_fn and the skeleton's _memory_store and model_id"
+        )
+    return _sizes(*_render_offered(agent, names), tok), names
+
+
+def build_mcp_cost_agents(embed_fn=None) -> Tuple["ChatAgent", "ChatAgent"]:
+    """The flagship skeleton with the loader off and on.
+
+    The "on" skeleton selects with *embed_fn*, by default the model-free
+    :func:`gaia.eval.mcp_fixture.lexical_embedder`.
+    """
+    from gaia.eval.mcp_fixture import lexical_embedder
+
+    off = build_full_agent_skeleton(dynamic_tools=False, deterministic=True)
+    on = build_full_agent_skeleton(
+        dynamic_tools=True,
+        deterministic=True,
+        embed_fn=embed_fn or lexical_embedder(),
+    )
+    return off, on
+
+
+def measure_mcp_cost(
+    server_counts: Optional[Tuple[int, ...]] = None,
+    tools_per_server: Optional[Tuple[int, ...]] = None,
+    tok: Optional[Any] = None,
+    query: str = MCP_FIRST_TURN_QUERY,
+    agents: Optional[Tuple["ChatAgent", "ChatAgent"]] = None,
+) -> Dict[str, Any]:
+    """First-turn cost of connected MCP servers, with the loader off and on.
+
+    For each grid point, mock servers are converted by GAIA's own MCP code and
+    added to the flagship skeleton. Each row reports the tokens and chars the
+    MCP tools add to the first turn, per render path: with the loader off
+    (every tool, full schemas) and on (the tools the loader selects for
+    *query*, schemas thinned as a local model gets them). ``mcp_offered``
+    counts the MCP tools the loader put on that list.
+    """
+    from gaia.eval.mcp_fixture import (
+        DEFAULT_SERVER_COUNTS,
+        DEFAULT_TOOLS_PER_SERVER,
+        build_mock_servers,
+        convert_mock_servers,
+    )
+
+    if tok is None:
+        tok = get_tokenizer()
+    off, on = agents or build_mcp_cost_agents()
+    base_off = _sizes(*_render_offered(off, None), tok)
+    base_on, _ = _first_turn_sizes(on, query, tok)
+
+    rows: List[Dict[str, Any]] = []
+    for n in server_counts or DEFAULT_SERVER_COUNTS:
+        for k in tools_per_server or DEFAULT_TOOLS_PER_SERVER:
+            entries = convert_mock_servers(off, build_mock_servers(n, k))
+            with with_mcp_tools(off, entries):
+                off_sizes = _sizes(*_render_offered(off, None), tok)
+            with with_mcp_tools(on, entries):
+                on_sizes, names = _first_turn_sizes(on, query, tok)
+            offered = list(entries) if names is None else names
+            rows.append(
+                {
+                    "servers": n,
+                    "tools_per_server": k,
+                    "mcp_tools": len(entries),
+                    "mcp_offered": sum(1 for name in offered if name in entries),
+                    "off": _minus(off_sizes, base_off),
+                    "on": _minus(on_sizes, base_on),
+                }
+            )
+    return {
+        "tokenizer": TOKENIZER_ENCODING if tok is not None else None,
+        "query": query,
+        "baseline": {"off": base_off, "on": base_on},
+        "rows": rows,
+    }
+
+
+def mcp_reduction(row: Dict[str, Any], metric: str) -> Optional[float]:
+    """Share of *metric*'s MCP cost the loader removes, 0..1; ``None`` if unmeasured."""
+    off, on = row["off"][metric], row["on"][metric]
+    if off is None or on is None or off == 0:
+        return None
+    return 1 - float(on) / float(off)
+
+
+def _pct(value: Optional[float]) -> str:
+    return "n/a" if value is None else f"{value:.0%}"
+
+
+def format_mcp_report(
+    server_counts: Optional[Tuple[int, ...]] = None,
+    tools_per_server: Optional[Tuple[int, ...]] = None,
+    min_recall: Optional[float] = None,
+    max_jump_rate: Optional[float] = None,
+) -> Tuple[str, Optional[str]]:
+    """The MCP cost and recall note as markdown, and why its guard failed (or ``None``).
+
+    Recall is measured on the largest grid point, where the most MCP tools
+    compete with each other and with the flagship's own tools. The guard runs
+    only when *min_recall* or *max_jump_rate* is given.
+    """
+    from gaia.eval.mcp_fixture import (
+        DEFAULT_SERVER_COUNTS,
+        DEFAULT_TOOLS_PER_SERVER,
+        build_mock_servers,
+        convert_mock_servers,
+        recall_probes,
+    )
+    from gaia.eval.tool_recall import check_mcp_recall, measure_mcp_recall
+
+    server_counts = server_counts or DEFAULT_SERVER_COUNTS
+    tools_per_server = tools_per_server or DEFAULT_TOOLS_PER_SERVER
+    tok = get_tokenizer()
+    off, on = build_mcp_cost_agents()
+    cost = measure_mcp_cost(server_counts, tools_per_server, tok=tok, agents=(off, on))
+
+    servers = build_mock_servers(max(server_counts), max(tools_per_server))
+    entries = convert_mock_servers(off, servers)
+    probes = recall_probes(servers)
+    recall_off = measure_mcp_recall(off, entries, probes)
+    recall_on = measure_mcp_recall(on, entries, probes)
+    with with_mcp_tools(off, entries):
+        every_off = _sizes(*_render_offered(off, None), tok)
+    with with_mcp_tools(on, entries):
+        every_on = _sizes(*_render_offered(on, None), tok)
+    failure = (
+        None
+        if min_recall is None and max_jump_rate is None
+        else check_mcp_recall(recall_on, recall_off, min_recall or 0.0, max_jump_rate)
+    )
+
+    unit = "tokens" if tok is not None else "chars"
+    tokenizer = f"{TOKENIZER_ENCODING} (proxy)" if tok else "unavailable, chars only"
+    lines = [
+        "# MCP tool cost and recall (flagship, mock MCP servers)",
+        "",
+        f"- Tokenizer: {tokenizer}",
+        f'- First turn: "{cost["query"]}"',
+        "- Loader off sends every tool with its full schema; loader on sends the "
+        "tools the loader selects, with schemas thinned as a local model gets them.",
+        "",
+        f"## First-turn tool-block {unit} the MCP tools add",
+        "",
+        "| Servers x tools | MCP tools | Offered (on) | Native off | Native on "
+        "| Native cut | Text off | Text on | Text cut |",
+        "|---|--:|--:|--:|--:|--:|--:|--:|--:|",
+    ]
+    for row in cost["rows"]:
+        lines.append(
+            f"| {row['servers']} x {row['tools_per_server']} | {row['mcp_tools']} "
+            f"| {row['mcp_offered']} "
+            f"| {_fmt(row['off']['native_' + unit])} "
+            f"| {_fmt(row['on']['native_' + unit])} "
+            f"| {_pct(mcp_reduction(row, 'native_' + unit))} "
+            f"| {_fmt(row['off']['text_' + unit])} "
+            f"| {_fmt(row['on']['text_' + unit])} "
+            f"| {_pct(mcp_reduction(row, 'text_' + unit))} |"
+        )
+    lines += [
+        "",
+        "Only the tool block is counted. A connected agent also gets the "
+        "MCP TOOL NAMES prompt fragment when it has 2+ MCP tools, on either path.",
+        "",
+        f"## Recall ({len(servers)} servers, {len(entries)} MCP tools, "
+        f"{len(probes)} requests)",
+        "",
+        "Each request needs one MCP tool and does not name it outright. A hit "
+        "means that tool is on the first turn's list: already listed, or reached "
+        "by moving the session to every tool.",
+        "",
+        "| Loader | Recall | Listed | Moved to every tool |",
+        "|---|--:|--:|--:|",
+        f"| Off | {recall_off.recall:.0%} | {recall_off.listed} | n/a |",
+        f"| On | {recall_on.recall:.0%} | {recall_on.listed} "
+        f"| {recall_on.jumps} ({recall_on.jump_rate:.0%}) |",
+        "",
+        "After a move to every tool, the session sends the whole tool block from "
+        f"that turn on: {_fmt(every_on['native_' + unit])} native and "
+        f"{_fmt(every_on['text_' + unit])} text {unit}, against "
+        f"{_fmt(every_off['native_' + unit])} and {_fmt(every_off['text_' + unit])} "
+        "with the loader off (the loader still thins native schemas). The "
+        "first-turn cut above holds only until an MCP tool is needed.",
+        "",
+        "Loader-on selection here uses a word-overlap stand-in for the embedder, "
+        "so it checks that MCP tools take part in selection, not how well a real "
+        "embedder ranks them.",
+    ]
+    if recall_on.misses:
+        lines += ["", "Missed with the loader on:", ""]
+        lines += [f"- `{tool}`: {request}" for tool, request in recall_on.misses]
+    if failure:
+        lines += ["", f"**FAIL:** {failure}"]
+    return "\n".join(lines), failure
+
+
+def _int_tuple(value: str) -> Tuple[int, ...]:
+    try:
+        counts = tuple(int(part) for part in value.split(",") if part.strip())
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(
+            f"expected comma-separated whole numbers, got {value!r}"
+        ) from e
+    if not counts or min(counts) < 1:
+        raise argparse.ArgumentTypeError(f"counts must be 1 or more, got {value!r}")
+    return counts
+
+
 def parse_ttft_from_scorecard(path: str) -> Dict[str, Any]:
     """Parse first-turn vs later-turn TTFT and needed-sets from a scorecard.
 
@@ -598,6 +943,17 @@ def _schemas_for(
         agent._instance_tools = prev
 
 
+def _refuse_unless_local(model: str, base_url: str) -> None:
+    """The raw OpenAI client below skips LemonadeClient's Local only guard."""
+    from gaia.llm.lemonade_client import LemonadeClient
+    from gaia.llm.local_only import assert_model_permitted, catalog_recipes
+
+    assert_model_permitted(
+        model,
+        lambda m: catalog_recipes(LemonadeClient(base_url=base_url, verbose=False), m),
+    )
+
+
 def measure_prefill_ttft(
     agent: "ChatAgent",
     base_url: Optional[str] = None,
@@ -627,6 +983,7 @@ def measure_prefill_ttft(
     )
 
     base_url = resolve_lemonade_base_url(base_url)
+    _refuse_unless_local(model, base_url)
     tools = _schemas_for(agent, filter_to)
     # The OpenAI client needs a non-empty key; an open Lemonade ignores it.
     api_key = resolve_lemonade_api_key(base_url=base_url) or "not-needed-for-lemonade"
@@ -686,9 +1043,11 @@ def _fmt(value: Optional[float], suffix: str = "") -> str:
 
 
 def format_markdown_report(
-    profile: str = DEFAULT_PROFILE, scorecard_path: Optional[str] = None
+    profile: Optional[str] = None,
+    scorecard_path: Optional[str] = None,
+    agent_name: str = DEFAULT_AGENT,
 ) -> str:
-    """Build the Part-0 measurement note for *profile* as markdown.
+    """Build the Part-0 measurement note for *agent_name* as markdown.
 
     Deterministic sections (cost, distribution, slope, fixed-subset) are
     computed live. TTFT is filled from *scorecard_path* when given; otherwise
@@ -696,7 +1055,8 @@ def format_markdown_report(
     Part 0 never fabricates a backend measurement.
     """
     tok = get_tokenizer()
-    agent = build_doc_agent_skeleton(profile)
+    agent = build_agent_skeleton(agent_name, profile)
+    profile = _profile_label(agent_name, profile)
     cost = measure_tool_prompt_cost(agent, tok=tok)
     dist = tool_size_distribution(agent, tok=tok)
     slope = measure_slope(agent, tok=tok)
@@ -711,12 +1071,12 @@ def format_markdown_report(
     lines.append(f"# #1448 Part 0 — tool-prompt cost & TTFT baseline ({profile})")
     lines.append("")
     lines.append(
-        f"- Profile: `{profile}`  |  Tools (deterministic): **{cost['tool_count']}**"
+        f"- Measured: {profile}  |  Tools (deterministic): **{cost['tool_count']}**"
     )
     lines.append(f"- Tokenizer: {tok_note}")
     lines.append("")
     lines.append(
-        f"**The {cost['tool_count']} is the full *unfiltered* `{profile}` registry — the "
+        f"**The {cost['tool_count']} is the full *unfiltered* registry ({profile}) — the "
         '"before" number the loader must shrink, not a CORE set.** It bundles '
         "everything the agent ships today (RAG, file, memory, shell, loop-control, "
         "clipboard, TTS, desktop-notify, window-listing, VLM), while a typical "
@@ -859,23 +1219,24 @@ def _ttft_section(scorecard_path: Optional[str]) -> str:
             "python -m gaia.ui.server --port 4200 --host 127.0.0.1   # gemma-4-e4b",
             "gaia eval agent --category tool_selection",
             "#   -> eval/results/<run-id>/scorecard.json",
-            "python -m gaia.eval.tool_cost --profile doc \\",
+            "python -m gaia.eval.tool_cost \\",
             "    --scorecard eval/results/<run-id>/scorecard.json",
             "```",
             "",
             "Cold-start micro-bench (authoritative cold number): evict/restart the",
-            "model, send ONE `doc` query, record its TTFT — eval scenarios may run",
+            "model, send ONE query, record its TTFT — eval scenarios may run",
             "warm. ⚠️ Only ONE `gaia eval agent` at a time (CLAUDE.md eval-serial).",
         ]
     )
 
 
 def _run_live_ttft(
-    profile: str,
+    profile: Optional[str],
     base_url: Optional[str],
     model: str,
     trials: int,
     filter_names: Optional[List[str]] = None,
+    agent_name: str = DEFAULT_AGENT,
 ) -> str:
     """Compare full-vs-subset prompt-prefill TTFT against a resident model.
 
@@ -887,7 +1248,7 @@ def _run_live_ttft(
 
     base_url = resolve_lemonade_base_url(base_url)
     subset_names = filter_names if filter_names else list(FIXED_SUBSET_DEFAULT)
-    agent = build_doc_agent_skeleton(profile)
+    agent = build_agent_skeleton(agent_name, profile)
     full = measure_prefill_ttft(agent, base_url=base_url, model=model, n_trials=trials)
     subset = measure_prefill_ttft(
         agent,
@@ -901,6 +1262,7 @@ def _run_live_ttft(
     lines = [
         "# #1448 Part 0 — prompt-prefill TTFT (no RAG, model resident)",
         "",
+        f"- Agent: {_profile_label(agent_name, profile)}",
         f"- Backend: `{base_url}`  |  Model: `{model}`  |  Trials: {trials} "
         "(cache-busted, first discarded)",
         "- RAG untouched — immune to the embedder↔chat-model swap.",
@@ -927,9 +1289,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         description="Measure tool-prompt cost / slope (#1448 Part 0).",
     )
     parser.add_argument(
+        "--agent",
+        choices=(GAIA_AGENT, CHAT_AGENT),
+        default=DEFAULT_AGENT,
+        help=(
+            "Agent to measure (default: gaia, the flagship on its full "
+            "profile). `chat --profile doc` reproduces the #1448 baseline."
+        ),
+    )
+    parser.add_argument(
         "--profile",
-        default=DEFAULT_PROFILE,
-        help="ChatAgent prompt profile (default: doc)",
+        default=None,
+        help="ChatAgent prompt profile, with --agent chat only (default: doc)",
     )
     parser.add_argument(
         "--scorecard",
@@ -968,7 +1339,94 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--live-ttft (e.g. the Part-1 loader's selection). Defaults to the "
         "illustrative FIXED_SUBSET_DEFAULT.",
     )
+    parser.add_argument(
+        "--mcp",
+        action="store_true",
+        help="Measure what mock MCP servers add to the flagship's first turn, "
+        "loader off vs on, and the loader's MCP tool recall.",
+    )
+    parser.add_argument(
+        "--servers",
+        type=_int_tuple,
+        default=None,
+        help="With --mcp: comma-separated connected-server counts (default: 1,3,5)",
+    )
+    parser.add_argument(
+        "--tools-per-server",
+        type=_int_tuple,
+        default=None,
+        help="With --mcp: comma-separated tools per server (default: 5)",
+    )
+    parser.add_argument(
+        "--min-mcp-recall",
+        type=float,
+        default=None,
+        help="With --mcp: exit 1 when loader-on MCP recall falls below this "
+        "share (0..1).",
+    )
+    parser.add_argument(
+        "--max-mcp-jump-rate",
+        type=float,
+        default=None,
+        help="With --mcp: exit 1 when more than this share (0..1) of MCP "
+        "requests move the session to every tool.",
+    )
     args = parser.parse_args(argv)
+    if not args.mcp and (
+        args.servers
+        or args.tools_per_server
+        or args.min_mcp_recall is not None
+        or args.max_mcp_jump_rate is not None
+    ):
+        parser.error(
+            "--servers, --tools-per-server, --min-mcp-recall and "
+            "--max-mcp-jump-rate need --mcp"
+        )
+    if args.mcp:
+        ignored = [
+            flag
+            for flag, value in (
+                ("--agent", args.agent != GAIA_AGENT),
+                ("--profile", args.profile),
+                ("--scorecard", args.scorecard),
+                ("--live-ttft", args.live_ttft),
+                ("--base-url", args.base_url),
+                ("--model", args.model != parser.get_default("model")),
+                ("--trials", args.trials != parser.get_default("trials")),
+                ("--filter", args.filter),
+            )
+            if value
+        ]
+        if ignored:
+            parser.error(
+                "--mcp measures the flagship's mock MCP servers only; "
+                f"{', '.join(ignored)} does not apply to it"
+            )
+        from gaia.eval.mcp_fixture import MAX_TOOLS_PER_SERVER
+
+        if args.tools_per_server and max(args.tools_per_server) > MAX_TOOLS_PER_SERVER:
+            parser.error(
+                f"--tools-per-server goes up to {MAX_TOOLS_PER_SERVER}, the tools "
+                "every mock server kind lists"
+            )
+        if args.min_mcp_recall is not None and not 0 <= args.min_mcp_recall <= 1:
+            parser.error("--min-mcp-recall is a share between 0 and 1")
+        if args.max_mcp_jump_rate is not None and not 0 <= args.max_mcp_jump_rate <= 1:
+            parser.error("--max-mcp-jump-rate is a share between 0 and 1")
+        report, failure = format_mcp_report(
+            args.servers,
+            args.tools_per_server,
+            args.min_mcp_recall,
+            args.max_mcp_jump_rate,
+        )
+        print(report)
+        return 1 if failure else 0
+    if args.agent == GAIA_AGENT and args.profile not in (None, FLAGSHIP_PROFILE):
+        parser.error(
+            f"the flagship only ships the {FLAGSHIP_PROFILE!r} profile; pass "
+            f"--agent {CHAT_AGENT} --profile {args.profile} to measure that "
+            "ChatAgent profile"
+        )
     if args.live_ttft:
         filter_names = (
             [n.strip() for n in args.filter.split(",") if n.strip()]
@@ -977,11 +1435,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         print(
             _run_live_ttft(
-                args.profile, args.base_url, args.model, args.trials, filter_names
+                args.profile,
+                args.base_url,
+                args.model,
+                args.trials,
+                filter_names,
+                agent_name=args.agent,
             )
         )
     else:
-        print(format_markdown_report(args.profile, args.scorecard))
+        print(format_markdown_report(args.profile, args.scorecard, args.agent))
     return 0
 
 

@@ -110,6 +110,17 @@ jobs:
           done
           ps -eo pid,user,etime,cmd | grep -E "[l]emond|[l]lama-server" || true
 
+      # Evidence for the Linux NPU path (#6632): what FastFlowLM needs, and GAIA's verdict.
+      - name: NPU setup on this machine
+        run: |
+          echo "Kernel: $(uname -r)"
+          lsmod | grep -E "^amdxdna" || echo "amdxdna: not loaded"
+          cat /sys/bus/pci/drivers/amdxdna/*/fw_version 2>/dev/null | sed 's/^/NPU firmware: /' || true
+          ls -l /dev/accel/ 2>/dev/null || echo "/dev/accel: none"
+          echo "Runner user: $(id)"
+          echo "memlock: soft $(ulimit -Sl), hard $(ulimit -Hl)"
+          "$VENV/bin/python" -c "from gaia.llm import npu_linux; print('GAIA NPU checks:', [p.as_dict() for p in npu_linux.host_problems()] or 'ready')"
+
       - name: Run the user-issue checks
         env:
           # The tests drive the installed `gaia`; the orchestrator only imports
@@ -131,6 +142,8 @@ jobs:
       - name: Leave the machine clean
         if: always()
         run: |
+          # An empty pattern would match (and kill) every process the runner owns.
+          [ -n "${GAIA_HW_WORKDIR:-}" ] || exit 0
           leftovers=$(pgrep -f "$GAIA_HW_WORKDIR" || true)
           if [ -n "$leftovers" ]; then
             echo "::warning::Stopping processes the tests left behind: $leftovers"

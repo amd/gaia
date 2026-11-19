@@ -11,6 +11,7 @@ show` gave no sign anything was missed.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from apscheduler.events import (
     EVENT_JOB_MISSED,
@@ -124,6 +125,41 @@ def test_runs_a_long_sleep_folded_together_are_recorded(tmp_path, monkeypatch):
     assert brief.missed_count == 3
     assert brief.last_missed == _iso(due + timedelta(hours=2))
     assert datetime.fromisoformat(brief.next_run) == woke_run + timedelta(hours=1)
+
+
+def test_the_repeated_hour_of_a_dst_change_is_counted_once(tmp_path, monkeypatch):
+    # 01:00 happens twice on this date in Los Angeles: 08:00 and 09:00 UTC.
+    zone = ZoneInfo("America/Los_Angeles")
+    from_crontab = daemon.CronTrigger.from_crontab
+    monkeypatch.setattr(
+        daemon.CronTrigger,
+        "from_crontab",
+        lambda cron: from_crontab(cron, timezone=zone),
+    )
+    first_due = datetime(2026, 11, 1, 6, tzinfo=timezone.utc)
+    second_one_am = datetime(2026, 11, 1, 9, tzinfo=timezone.utc)
+    store = _store(
+        tmp_path,
+        created_at=_iso(first_due - timedelta(days=1)),
+        next_run=_iso(first_due),
+        missed_since=_iso(first_due - timedelta(days=1)),
+    )
+    monkeypatch.setattr(
+        daemon, "datetime", _frozen_at(second_one_am + timedelta(minutes=30))
+    )
+    # APScheduler reports run times in the trigger's zone, so both read 01:00.
+    scheduled = [
+        (second_one_am - timedelta(hours=hours)).astimezone(zone) for hours in (0, 1)
+    ]
+
+    daemon._account_for_submission(
+        store, JobSubmissionEvent(EVENT_JOB_SUBMITTED, "brief", None, scheduled)
+    )
+
+    brief = store.get("brief")
+    assert brief.missed_count == 3
+    assert brief.last_missed == _iso(second_one_am - timedelta(hours=1))
+    assert datetime.fromisoformat(brief.next_run) == second_one_am + timedelta(hours=1)
 
 
 def test_a_run_dropped_as_too_late_is_recorded_once(tmp_path, monkeypatch):

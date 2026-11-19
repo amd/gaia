@@ -14,7 +14,7 @@ import (
 // Bubble Tea with no root wrapper, so a help panel implemented only in root is
 // simply absent on that path — which is what happened: `/help` in a `run gaia`
 // session toggled nothing and printed nothing, silently, for every user who
-// launched an agent directly rather than through the hub.
+// launched an agent directly.
 type HelpState struct {
 	Open   bool
 	Ctx    HelpContext

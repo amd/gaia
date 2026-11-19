@@ -125,6 +125,10 @@ button.context-meter:hover {
     line-height: 1.4;
 }
 
+.context-meter-note.is-setup {
+    margin: 0 0 8px;
+}
+
 .context-warning {
     display: flex;
     align-items: flex-start;
@@ -139,10 +143,26 @@ button.context-meter:hover {
     line-height: 1.4;
 }
 
-.context-warning svg {
+.context-warning > svg {
     flex-shrink: 0;
     margin-top: 2px;
     color: var(--accent-yellow);
+}
+
+.context-warning-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.context-warning-details {
+    margin: 6px 0 0;
+    overflow-wrap: anywhere;
+}
+
+.context-warning-close {
+    flex-shrink: 0;
+    margin-block: -2px;
+    color: var(--text-muted);
 }
 
 /* Keeps its width; the model chip beside it is the one that truncates. */

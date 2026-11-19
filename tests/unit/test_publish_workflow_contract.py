@@ -1,14 +1,15 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-The backend-test step in publish.yml is the release's only pytest gate — assert
-it can actually fail.
+The backend-test step in publish.yml is a final release's only in-run pytest
+gate — assert it can actually fail, and that it holds every final.
 
 ``test_unit.yml`` triggers on pushes to ``main``, not on the ``v*`` tag that
-starts a release, so this one step in ``build-npm`` is the whole Python test
-coverage between a tag and PyPI/npm. It shipped with ``2>/dev/null || echo
-"Backend tests skipped"``, which made it green whether the tests passed, failed,
-or never ran (issue #3508).
+starts a release, so this one step in ``build-npm`` is the whole in-run Python
+test coverage between a final's tag and PyPI/npm. It shipped with ``2>/dev/null
+|| echo "Backend tests skipped"``, which made it green whether the tests passed,
+failed, or never ran (issue #3508). A release candidate skips it: tests never
+hold a candidate.
 
 These are configuration assertions, not behaviour tests. They exist because the
 failure mode is silent: the step still runs and still goes green, it just stops
@@ -64,6 +65,11 @@ def test_the_backend_tests_can_fail_the_release(backend_test_step):
         f"{STEP_NAME!r} discards stderr, which hides why a step failed even when "
         "it does fail."
     )
+
+
+def test_the_backend_tests_skip_only_a_release_candidate(backend_test_step):
+    """The one carve-out is an RC; any other condition could skip a final."""
+    assert backend_test_step.get("if") == "needs.validate.outputs.is_rc != 'true'"
 
 
 def test_the_job_cannot_tolerate_the_failure_on_the_steps_behalf(backend_test_job):

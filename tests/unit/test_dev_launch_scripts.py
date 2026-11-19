@@ -4,7 +4,7 @@
 
 The TUI spawns the flagship as a child and resolves ``gaia-agent`` from PATH
 before ``~/.gaia/agents/``. The repo's own install does not create that
-executable — ``setup.py`` ships ``gaia``, ``gaia-cli`` and ``gaia-mcp`` only —
+executable — ``setup.py`` ships ``gaia`` and ``gaia-mcp`` only —
 so without a shim on PATH a developer runs the last *installed* build and
 concludes their new tool "doesn't work". PYTHONPATH cannot rescue that: the
 installed agent is a frozen binary and ignores it.
@@ -51,7 +51,7 @@ class TestAgentShim:
         """The child is a fresh interpreter and inherits none of the parent's path."""
         body = (DEV_BIN / name).read_text(encoding="utf-8")
         assert "PYTHONPATH" in body, f"{name} must set PYTHONPATH"
-        for package_root in ("src", "gaia", "chat"):
+        for package_root in ("src", "gaia"):
             assert package_root in body, (
                 f"{name} must put {package_root} on PYTHONPATH, or the agent "
                 "imports a different checkout's source."

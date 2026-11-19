@@ -21,8 +21,7 @@ const VERSION = '0.24.1';
 
 // Asset names are spelled out rather than produced by artifactFileName: a test
 // that asks the source for the name it expects cannot notice the source
-// changing it. These are the names publish.yml and release_components.yml
-// attach to a final release.
+// changing it. These are the names publish.yml attaches to a final release.
 const DESKTOP_FILES = {
   'win-x64': 'gaia-agent-ui-0.24.1-x64-setup.exe',
   'darwin-arm64': 'gaia-agent-ui-0.24.1-arm64.dmg',
@@ -624,6 +623,25 @@ describe('Downloads.astro against an incomplete release', () => {
       .map((a) => a.attrs.href as string);
     expect(hrefs.filter((h) => !rendered.publishedUrls.has(h))).toEqual([]);
     expect(hrefs.filter((h) => /\.(pkg|deb|rpm)$|gaia-0\.25\.0-win-x64-setup/.test(h))).toEqual([]);
+  });
+
+  // A release from after the rename carries both names; the card offers gaia-cli.
+  it('links the gaia-cli build when the release carries one', async () => {
+    const {
+      'win-x64-setup': _setup,
+      'darwin-arm64-pkg': _pkg,
+      'linux-x64-deb': _deb,
+      ...raw
+    } = SETUP_RELEASE_FILES;
+    const legacy = Object.values(raw);
+    const renamed = legacy.map((name) => name.replace(/^gaia-/, 'gaia-cli-'));
+    RELEASES = releaseAt([...legacy, ...renamed]);
+    rendered = await render();
+
+    const tui = ctas().filter((b) => b.attrs['data-surface'] === 'tui');
+    expect(tui.flatMap(hrefsIn).sort()).toEqual(
+      renamed.map((name) => assetUrl(`v${SETUP_VERSION}`, name)).sort(),
+    );
   });
 
   it('drops a desktop platform the release does not carry, and keeps the rest', async () => {

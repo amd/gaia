@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from gaia.eval import claude_credential
 from gaia.eval import flagship_tasks as ft
 from gaia.eval.bench import therock
 
@@ -26,6 +27,10 @@ def _transcript(*calls, answer="done"):
 
 def _capture(monkeypatch):
     """Record the payload the judge is sent, and grade every attempt the same."""
+    # The stand-in CLI is logged in.
+    monkeypatch.setattr(
+        claude_credential, "_auth_status", lambda _b, _e: {"loggedIn": True}
+    )
     sent = []
 
     def fake_run(cmd, **kwargs):

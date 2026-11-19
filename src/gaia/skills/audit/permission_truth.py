@@ -25,7 +25,7 @@ harm the user.
 from __future__ import annotations
 
 from pathlib import PurePosixPath
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, Sequence
 
 from gaia.skills.audit.code import CodeAnalysis, DomainUse
 from gaia.skills.audit.findings import CATEGORY_PERMISSION_TRUTH, Finding
@@ -288,9 +288,3 @@ def undeclared_domains(
     """Domains the code touches that no permission declares at all."""
     declared_domains = {p.domain for p in declared if not p.grants_nothing}
     return sorted(analysis.domains() - declared_domains)
-
-
-def first_scope(permissions: Sequence[Permission], domain: str) -> Optional[str]:
-    """The first declared scope for ``domain``, if any."""
-    scopes = _scopes_for(permissions, domain)
-    return scopes[0] if scopes else None

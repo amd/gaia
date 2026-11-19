@@ -31,6 +31,7 @@ from gaia.llm.lemonade_client import (
     resolve_default_chat_model,
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
+    runs_on_npu,
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 from gaia.logger import get_logger
@@ -129,6 +130,11 @@ async def _probe_lemonade_devices() -> Dict[str, Any]:
     return result
 
 
+def _decimal_gb(gib: Optional[float]) -> Optional[float]:
+    """GiB from the compatibility probe as the decimal GB setup shows next to model sizes."""
+    return round(gib * 1024**3 / 1e9, 1) if gib is not None else None
+
+
 def _classify_tier(ram_gb: Optional[float], npu: Optional[bool]) -> str:
     """Coarse hardware tier used only to phrase the recommendation."""
     if ram_gb is None:
@@ -178,8 +184,8 @@ async def onboarding_preflight() -> PreflightReport:
     gpu_vram = devices["gpu_vram_gb"]
 
     # Synthesize the recommended first-run download's requirements and run the
-    # shared checker. NPU is recommended (advisory) — a no-NPU box still runs on
-    # GPU/CPU, so we surface it as a warning rather than blocking first run.
+    # shared checker. Only an NPU build of the model asks for an NPU (advisory) —
+    # a GGUF model runs on the GPU or CPU, so an absent NPU is nothing to report.
     # The report carries the detected RAM/disk, so we surface those values from
     # the *same* scan that produced the blockers/warnings — one detection, no
     # drift between what we display and what we gate on.
@@ -187,7 +193,7 @@ async def onboarding_preflight() -> PreflightReport:
     reqs = Requirements(
         min_memory_gb=_RECOMMENDED_MEMORY_GB,
         min_disk_gb=disk_gb,
-        npu=True,
+        npu=runs_on_npu(model),
         platforms=[],  # cross-platform; don't block on the platform triple here
     )
     report = check_compatibility(
@@ -206,8 +212,8 @@ async def onboarding_preflight() -> PreflightReport:
     return PreflightReport(
         os=report.detected_platform,
         detected_platform=report.detected_platform,
-        ram_gb=round(ram_gb, 1) if ram_gb is not None else None,
-        disk_free_gb=report.free_disk_gb,
+        ram_gb=_decimal_gb(ram_gb),
+        disk_free_gb=_decimal_gb(report.free_disk_gb),
         npu_detected=npu_detected,
         gpu_name=devices["gpu_name"],
         gpu_vram_gb=gpu_vram,

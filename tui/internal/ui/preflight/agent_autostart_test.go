@@ -2,6 +2,8 @@ package preflight
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -17,9 +19,9 @@ import (
 
 func newAutoModel(t *testing.T, f *fakeTransport) (Model, tea.Cmd) {
 	t.Helper()
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	m := New(f, testConfig(), Options{ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(t.Context(), f, EmailConfig())})
+	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(t.Context(), f, testConfig())})
 	return updated.(Model), cmd
 }
 
@@ -92,7 +94,7 @@ func TestAStoppedAgentIsStartedWithoutAKeypress(t *testing.T) {
 	if m.FocusKey() != KeySidecar || !m.Busy() {
 		t.Fatalf("the stopped agent was not started (focus %q, busy %v)", m.FocusKey(), m.Busy())
 	}
-	if !strings.Contains(ansi.Strip(m.View()), "Starting the Email agent") {
+	if !strings.Contains(ansi.Strip(m.View()), "Starting the GAIA agent") {
 		t.Errorf("the screen does not say what it is starting:\n%s", m.View())
 	}
 	m, _ = runAutoFix(t, m, cmd)
@@ -127,7 +129,7 @@ func TestAFailedAutoStartGivesTheRowBackWithItsKey(t *testing.T) {
 	}
 
 	// A re-check that finds it still down reports it; it does not start again.
-	updated, cmd := m.Update(reportMsg{rep: Check(t.Context(), f, EmailConfig())})
+	updated, cmd := m.Update(reportMsg{rep: Check(t.Context(), f, testConfig())})
 	m = updated.(Model)
 	if m.Busy() || cmd != nil {
 		t.Error("a start that already failed was attempted a second time")
@@ -201,6 +203,26 @@ func TestNothingStartsWhenLemonadeLivesOnAnotherMachine(t *testing.T) {
 				t.Error("the row lost its `f` key")
 			}
 		})
+	}
+}
+
+// GAIA's own, chosen in the Agent UI over a LEMONADE_BASE_URL naming another
+// machine: the gate starts GAIA's own, as the agent will use it.
+func TestAnIgnoredLemonadeURLOnAnotherMachineStillStarts(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(cfg, []byte(`{"lemonade_mode":"gaia","lemonade_env_url_ignored":"http://10.20.30.40:13305"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GAIA_CONFIG_FILE", cfg)
+	t.Setenv("GAIA_LEMONADE_EMBEDDED", "")
+	t.Setenv(lemonadeBaseURLEnv, "http://10.20.30.40:13305")
+	if lemonadeElsewhere() {
+		t.Fatal("the ignored address still counts as the user's remote server")
+	}
+	f := newFake()
+	f.attachErr = &daemon.NotRunningError{Path: "/tmp/instance.json"}
+	if m, _ := newAutoModel(t, f); !m.Busy() {
+		t.Error("an ignored LEMONADE_BASE_URL stopped the daemon from starting")
 	}
 }
 

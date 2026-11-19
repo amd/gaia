@@ -20,7 +20,7 @@ It's a **messaging adapter**, not a separate agent: every conversation is backed
 
 <Steps>
   <Step title="Install the Telegram extra">
-    The adapter depends on `python-telegram-bot`, which ships in the `telegram` extra:
+    The adapter talks to the [Telegram Bot API](https://core.telegram.org/bots/api) directly over HTTPS, using `httpx` from GAIA's core install. The `telegram` extra adds `psutil`, which `gaia telegram stop` and `status` use to check the background process:
 
     ```bash
     uv pip install -e ".[telegram]"
@@ -44,7 +44,7 @@ Start the adapter in the foreground, passing the token from BotFather and the Te
 gaia telegram start --token 123456789:ABCdef... --allowed-users 11111111
 ```
 
-The bot begins polling Telegram immediately. Open your bot in the Telegram app, send it a message, and you'll get a streamed reply. Press `Ctrl+C` to stop.
+The adapter first checks the token with Telegram; a rejected token stops startup with an error telling you to copy it again from @BotFather. It then begins polling. Open your bot in the Telegram app, send it a message, and you'll get a streamed reply. Press `Ctrl+C` to stop.
 
 To find your own numeric user ID, message [@userinfobot](https://t.me/userinfobot). Omitting `--allowed-users` is refused at startup:
 
@@ -117,6 +117,8 @@ The adapter deletes `~/.gaia/telegram.pid` when it exits. `stop` signals the rec
 
 ## How It Works
 
+- **Long polling** — the adapter asks Telegram for new messages over HTTPS, so it needs no public URL or open port. Only new messages are fetched: edits to a message already sent are not answered, and commands other than `/start` are ignored. Only one process can poll a bot at a time; a second one stops with an error naming the conflict.
+- **Token stays out of logs** — the bot token is replaced with `REDACTED` in every logged URL and error message.
 - **Allowlist first** — every update, including `/start`, is checked against `--allowed-users` before a session is created or any model is called.
 - **No tool loop** — a Telegram session is a chat session, not an agent. There are no shell, file-write, or other action tools for a message to reach.
 - **Per-user sessions** — the adapter keeps one Agent SDK session per Telegram user ID, so conversation history stays separated between users. Sessions live in memory and are lost when the adapter restarts.

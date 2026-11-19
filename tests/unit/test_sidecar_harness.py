@@ -47,12 +47,13 @@ _EMAIL_PKG_ROOT = (
 
 
 def test_canonical_vocabulary_is_the_frozen_set():
-    # The frozen seven, plus `needs_input` — the additive-MINOR eighth type the
-    # mid-run question resume seam introduced (#2469, contract 2.6).
+    # The canonical vocabulary plus `needs_input` and the additive-MINOR
+    # `reasoning` event introduced by contracts 2.6 and 2.22.
     assert CANONICAL_EVENT_TYPES == frozenset(
         {
             "status",
             "token",
+            "reasoning",
             "tool_call",
             "tool_result",
             "needs_confirmation",

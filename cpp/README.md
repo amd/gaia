@@ -53,7 +53,7 @@ starts `LemonadeServer.exe` from the tray icon or the Start menu; Linux runs the
 start one from the repo (this restarts the server and frees its port first):
 
 ```powershell
-.\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+.\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -Port 13305 -NoModel
 ```
 
 Default model: `Qwen3-4B-GGUF` (configurable via `AgentConfig::modelId`)
@@ -490,6 +490,15 @@ builds compile byte-identical sources with the same feature flags:
 SQLite lives in [`third_party/sqlite/`](third_party/sqlite/) and is compiled
 directly into `gaia_core`; there is deliberately no `find_package` fallback. See
 that directory's README for the compile flags, the upgrade procedure, and why.
+
+**Software Bill of Materials.** [`SBOM.spdx.json`](SBOM.spdx.json) is an SPDX 2.3
+inventory of every dependency above plus OpenSSL (optional, from vcpkg or the
+system), with versions, licenses, and the SHA256 of each pinned archive. It
+describes the archives the build fetches; a build that picks up a system-installed
+copy through `find_package` links whatever version that system has. When you
+add or bump a `FetchContent_Declare`, a vendored tree, or a `vcpkg.json`
+dependency, update the SBOM in the same change: `python util/check_cpp_sbom.py`
+fails CI when the two drift.
 
 ---
 

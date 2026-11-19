@@ -341,7 +341,8 @@ still green. *Unblocks: P1.2, P4.1.*
 **P1.2 — Embeddings API on `LemonadeClient`**
 `std::vector<std::vector<float>> embeddings(const std::vector<std::string>& texts, const std::string& model, int timeoutSec)`
 against `POST /api/v1/embeddings`. Port the Python batching semantics: `MAX_EMBED_CHARS`
-truncation, per-batch retry, one-by-one fallback on batch failure. Plus `DEFAULT_EMBEDDING_MODEL`
+truncation, one call per batch that raises on any failure or short batch, and a bounded wait
+only while the model is still loading (no vectors back). Plus `DEFAULT_EMBEDDING_MODEL`
 and the `user.`-prefix registration rule for embedder pulls. Integration test against live
 Lemonade behind `GAIA_BUILD_INTEGRATION_TESTS`. *Unblocks: P2.2, P2.3.*
 
@@ -376,7 +377,7 @@ the fallback; all current agents keep working.
 New `cpp/include/gaia/chunking.h`. Sentence-aware splitter with configurable
 `chunkSize`/`chunkOverlap` matching `RAGSDK._split_text_into_chunks`. Extractors for plain text,
 Markdown, and source files. **PDF/DOCX/XLSX/PPTX are explicitly out of scope** — they need
-PyMuPDF-class dependencies, and the coding-agent target does not need them; the header leaves a
+PDFium-class dependencies, and the coding-agent target does not need them; the header leaves a
 documented extension point and unsupported types fail loudly with the reason.
 
 **P2.2 — RAG SDK**

@@ -20,17 +20,21 @@ import string
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator, List, Optional, Sequence, Tuple
+from urllib.parse import unquote
 
 from fastapi import HTTPException
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
 
+from gaia.audio.media import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
 from gaia.config import (
     GAIA_HOME_IS_FS_ROOT,
     UnsafeGaiaHomeError,
     unsafe_gaia_home_reason,
 )
 from gaia.llm.lemonade_embedded import gaia_home
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.user_folders import documents_dir
 
 from .models import (
     DocumentResponse,
@@ -61,8 +65,10 @@ logger = logging.getLogger(__name__)
 #   .xls (legacy BIFF) — openpyxl only handles .xlsx; would raise on open
 # NOTE: .pptx and .docx ARE supported — python-pptx and python-docx ship with
 # GAIA. See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
-# Image formats are tracked by issue #730 (VLM-based indexing).
-ALLOWED_EXTENSIONS = frozenset(
+#
+# FOLDER_INDEX_EXTENSIONS is what a folder walk indexes. Images are indexable
+# only when the user picks the file (see ``gaia.utils.image_formats``).
+FOLDER_INDEX_EXTENSIONS = frozenset(
     {
         ".pdf",
         ".pptx",
@@ -101,6 +107,8 @@ ALLOWED_EXTENSIONS = frozenset(
         ".toml",
     }
 )
+
+ALLOWED_EXTENSIONS = FOLDER_INDEX_EXTENSIONS | IMAGE_EXTENSIONS
 
 # Text file extensions for preview endpoint
 TEXT_EXTENSIONS = frozenset(
@@ -261,6 +269,21 @@ def message_to_response(msg: dict) -> MessageResponse:
                 exc,
             )
 
+    page_elements = None
+    if msg.get("page_elements"):
+        from pydantic import ValidationError
+
+        from gaia.browser.picked import PageElement
+
+        try:
+            page_elements = [PageElement(**e) for e in msg["page_elements"]]
+        except (ValidationError, TypeError) as exc:
+            logger.warning(
+                "Message %s picked elements do not match the schema: %s",
+                msg.get("id"),
+                exc,
+            )
+
     return MessageResponse(
         id=msg["id"],
         session_id=msg["session_id"],
@@ -271,6 +294,10 @@ def message_to_response(msg: dict) -> MessageResponse:
         agent_steps=agent_steps,
         stats=stats,
         turn_summary=turn_summary,
+        page_elements=page_elements,
+        library_notices=msg.get("library_notices"),
+        stopped=bool(msg.get("stopped")),
+        failed=bool(msg.get("failed")),
     )
 
 
@@ -332,29 +359,19 @@ def sanitize_document_path(user_path: str) -> Path:
         # Provide categorized feedback for common unsupported types
         _UNSUPPORTED_CATEGORIES = {
             "image": (
-                {
-                    ".jpg",
-                    ".jpeg",
-                    ".png",
-                    ".gif",
-                    ".bmp",
-                    ".tiff",
-                    ".webp",
-                    ".ico",
-                    ".heic",
-                    ".heif",
-                },
-                "Image files cannot be indexed for text search. "
-                "Tip: If your images contain text, convert them to PDF first — GAIA can extract text from PDFs.",
+                {".ico", ".heic", ".heif"},
+                "This image format cannot be indexed. "
+                "Tip: Convert it to PNG or JPEG — GAIA reads the text in those images.",
             ),
             "video": (
-                {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v"},
-                "Video files are not supported for indexing.",
+                VIDEO_EXTENSIONS,
+                "Video files can't go in the document library. "
+                "Tip: Attach the video to a chat to transcribe it.",
             ),
             "audio": (
-                {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".opus"},
-                "Audio files are not supported for indexing. "
-                "Tip: GAIA has a separate voice/talk mode — try `gaia talk` from the CLI.",
+                AUDIO_EXTENSIONS,
+                "Audio files can't go in the document library. "
+                "Tip: Attach the recording to a chat to transcribe it.",
             ),
             "archive": (
                 {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz"},
@@ -394,7 +411,7 @@ def sanitize_document_path(user_path: str) -> Path:
         detail = (
             f"{hint} "
             f"Supported formats: PDF, DOCX, PPTX, XLSX, EPUB, TXT, MD, CSV, JSON, "
-            f"HTML, XML, YAML, and 30+ code file formats. "
+            f"HTML, XML, YAML, images (PNG, JPG, WEBP, ...), and 30+ code file formats. "
             f"Want support for {category + ' files' if category else 'this file type'}? "
             f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"
         )
@@ -519,54 +536,92 @@ def uploads_dir() -> Path:
 UPLOAD_URL_PREFIX = "/api/files/uploads/"
 
 
+def harden_served_file(response: Response, path: str) -> Response:
+    """Stop a user file served on the app's origin from ever running as the app.
+
+    ``sandbox`` gives the document an opaque origin with scripts off; PDFs are
+    exempt because Chromium refuses to show a sandboxed PDF, and its viewer
+    never runs on the page's origin anyway.
+    """
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if not path.lower().endswith(".pdf"):
+        response.headers["Content-Security-Policy"] = "sandbox"
+    return response
+
+
 class UploadStaticFiles(StaticFiles):
     """Serve chat uploads so an uploaded page can never run as the app.
 
     Uploads include ``.html`` and ``.svg``, and the chat links them on the
-    backend's own origin. ``sandbox`` gives the document an opaque origin with
-    scripts off; PDFs are exempt because Chromium refuses to show a sandboxed
-    PDF, and its viewer never runs on the page's origin anyway.
+    backend's own origin.
     """
 
     async def get_response(self, path: str, scope) -> Response:
-        response = await super().get_response(path, scope)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        if not path.lower().endswith(".pdf"):
-            response.headers["Content-Security-Policy"] = "sandbox"
-        return response
+        return harden_served_file(await super().get_response(path, scope), path)
 
 
-_UPLOAD_LINK_RE = re.compile(
+# One upload name as the browser link carries it: the characters
+# ``quote(name, safe="")`` leaves alone, or a byte escape. Mirrors
+# UPLOAD_NAME in the web UI's markdown.ts.
+_UPLOAD_NAME_PATTERN = r"(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+"
+
+UPLOAD_LINK_RE = re.compile(
     r"(?P<bang>!?)\[(?P<label>[^\]\n]*)\]\("
     + re.escape(UPLOAD_URL_PREFIX)
-    + r"(?P<name>[^)\s]+)\)"
+    + rf"(?P<name>{_UPLOAD_NAME_PATTERN})\)"
 )
+
+
+def _upload_path(encoded_name: str, root: Path) -> Optional[str]:
+    """The file an encoded upload link names, or None if it names no plain file.
+
+    Decoding happens before validation, so an escape cannot smuggle a path
+    separator, a traversal step or a control character past the checks.
+    """
+    try:
+        name = unquote(encoded_name, errors="strict")
+    except UnicodeDecodeError:
+        return None
+    if (
+        not name
+        or name.startswith(".")
+        or name != name.strip(" .")
+        or any(c in "/\\:" or ord(c) < 32 or ord(c) == 127 for c in name)
+    ):
+        return None
+    path = root / name
+    if path.is_symlink() or not path.is_file():
+        return None
+    if path.resolve().parent != root:
+        return None
+    return str(path)
 
 
 def resolve_upload_links(message: str) -> str:
     """Point a message's attachment links at the files on disk, for the agent.
 
     The composer appends ``[name](/api/files/uploads/<file>)`` links, which only
-    the browser can follow. The agent reads files by path, so each link to a
-    file that exists directly inside ``uploads_dir()`` gets its absolute path
-    as the target. Anything else (traversal, a missing file) is left as is.
+    the browser can follow. The name is percent-encoded, so spaces and non-Latin
+    text survive the Markdown link. The agent reads files by path, so each link
+    to a file that exists directly inside ``uploads_dir()`` gets its absolute
+    path as the target. Anything else (traversal, a missing file) is left as is.
     """
     if UPLOAD_URL_PREFIX not in message:
         return message
     root = uploads_dir().resolve()
 
     def _sub(match: "re.Match[str]") -> str:
-        name = match.group("name")
-        if name in (".", "..") or "/" in name or "\\" in name:
-            logger.warning("Upload link %r is not a plain file name; left as is", name)
-            return match.group(0)
-        path = (root / name).resolve()
-        if path.parent != root or not path.is_file():
-            logger.warning("Upload link %r names no file in %s; left as is", name, root)
+        path = _upload_path(match.group("name"), root)
+        if path is None:
+            logger.warning(
+                "Upload link %r names no plain file in %s; left as is",
+                match.group("name"),
+                root,
+            )
             return match.group(0)
         return f"{match.group('bang')}[{match.group('label')}]({path})"
 
-    return _UPLOAD_LINK_RE.sub(_sub, message)
+    return UPLOAD_LINK_RE.sub(_sub, message)
 
 
 def attached_upload_paths(message: str) -> List[str]:
@@ -575,25 +630,28 @@ def attached_upload_paths(message: str) -> List[str]:
     These are GAIA's own copies of files the user just picked, so the turn may
     read them without asking. Only a regular file directly inside
     ``uploads_dir()``, linked the way ``resolve_upload_links`` writes it,
-    counts — never a symlink, a subfolder, or a path that escapes the folder.
+    counts, never a symlink, a subfolder, or a path that escapes the folder.
+    Stored names can contain spaces and parentheses, so the message is matched
+    against the folder's own entries instead of a path-shaped regex.
     """
     root = uploads_dir().resolve()
-    prefix = str(root) + os.sep
-    if prefix not in message:
+    if not root.is_dir() or "](" not in message:
+        return []
+    try:
+        children = list(root.iterdir())
+    except OSError:
         return []
     found = set()
-    for match in re.finditer(
-        r"\]\(" + re.escape(prefix) + r"(?P<name>[^)\s\\/]+)\)", message
-    ):
-        name = match.group("name")
-        if name in (".", ".."):
+    for child in children:
+        path = str(child)
+        if path not in message or f"]({path})" not in message:
             continue
-        path = root / name
-        if path.is_symlink() or not path.is_file():
+        try:
+            if child.is_symlink() or not child.is_file():
+                continue
+        except OSError:
             continue
-        if path.resolve().parent != root:
-            continue
-        found.add(str(path))
+        found.add(path)
     return sorted(found)
 
 
@@ -662,6 +720,23 @@ def _describe_roots(roots: Sequence[Path]) -> str:
     return ", ".join(by_real.values())
 
 
+def is_within_document_roots(path: Path) -> bool:
+    """Return whether *path* is browseable under the configured document roots.
+
+    The lexical check runs first, so a path outside every root (a UNC share,
+    say) is rejected without touching the filesystem.
+    """
+    roots = document_roots()
+    try:
+        lexical = Path(os.path.abspath(str(path)))
+        if not any(lexical.is_relative_to(root) for root in roots):
+            return False
+        resolved = path.resolve()
+    except (OSError, ValueError):
+        return False
+    return any(resolved.is_relative_to(root) for root in roots)
+
+
 def ensure_within_home(resolved: Path) -> None:
     """Raise HTTP 403 if *resolved* is not inside an allowed document root.
 
@@ -695,8 +770,7 @@ def ensure_document_path_allowed(raw: Path) -> str:
     denied = (
         f"GAIA can only read documents under "
         f"{_describe_roots(roots)}, and {raw} is outside them. Check the path "
-        f"is right. If it is, move or copy it under one of those folders, "
-        f"or add its folder to {DOCUMENT_ROOTS_ENV} and restart GAIA."
+        f"is right. If it is, move or copy it under one of those folders."
     )
     abs_raw = Path(os.path.abspath(str(raw)))
     if not any(abs_raw.is_relative_to(root) for root in roots):
@@ -860,12 +934,13 @@ def build_quick_links() -> list:
 
     candidates = [
         ("Desktop", home / "Desktop", "desktop"),
-        ("Documents", home / "Documents", "documents"),
+        ("Documents", documents_dir(home), "documents"),
         ("Downloads", home / "Downloads", "download"),
     ]
 
     for name, candidate_path, icon in candidates:
-        if candidate_path.is_dir():
+        # Roots first: is_dir() on a UNC path outside them can hang on SMB.
+        if is_within_document_roots(candidate_path) and candidate_path.is_dir():
             links.append(QuickLink(name=name, path=str(candidate_path), icon=icon))
 
     return links
