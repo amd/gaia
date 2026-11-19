@@ -239,7 +239,8 @@ gateway is set up here — a non-blank `LEMONADE_AMD_API_KEY` or
 `GAIA_GATEWAY_TOKEN` in GAIA's environment, a gateway key in the OS credential
 store, or a `~/.gaia/gateway.json` naming AMD's gateway — or when
 `llm-api.amd.com` accepts a connection within 2 seconds, directly or through
-`HTTPS_PROXY`. A set-up gateway decides it on its own, so a DNS failure can't
+`HTTPS_PROXY`. A `gateway.json` naming another gateway makes those keys its
+keys, so they don't count. A set-up gateway decides it on its own, so a DNS failure can't
 make GAIA think it is off the network. Listing models never contacts an AMD
 host unless an Anthropic key is set. Off AMD's network nothing changes.
 

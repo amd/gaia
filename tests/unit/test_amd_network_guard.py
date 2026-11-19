@@ -130,6 +130,23 @@ def test_gateway_json_naming_another_gateway_falls_to_the_probe(
     assert not amd_network.on_amd_network() and calls == [1]
 
 
+@pytest.mark.parametrize(
+    "where", ["LEMONADE_AMD_API_KEY", "GAIA_GATEWAY_TOKEN", "store"]
+)
+def test_another_gateways_key_is_no_evidence_of_amds_network(
+    monkeypatch, no_gateway_env, where
+):
+    no_gateway_env.GATEWAY_STATE_FILE.write_text(
+        '{"base_url": "https://gw.example.com/v1"}', encoding="utf-8"
+    )
+    if where == "store":
+        monkeypatch.setattr(no_gateway_env, "read_stored_token", lambda: "stored")
+    else:
+        monkeypatch.setenv(where, "key")
+    calls = _probe(monkeypatch, False)
+    assert not amd_network.on_amd_network() and calls == [1]
+
+
 def test_an_unreadable_gateway_json_counts_as_set_up(monkeypatch, no_gateway_env):
     no_gateway_env.GATEWAY_STATE_FILE.write_text("{not json", encoding="utf-8")
     _probe(monkeypatch, False)

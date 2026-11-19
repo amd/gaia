@@ -10,10 +10,12 @@ instead. Off it, nothing changes.
 
 1. ``GAIA_AMD_NETWORK=1`` (CI sets it for AMD's lab runners). No other value
    is accepted, so nothing can force "off".
-2. The AMD LLM Gateway is set up here: a non-blank ``LEMONADE_AMD_API_KEY`` or
-   ``GAIA_GATEWAY_TOKEN`` in GAIA's environment, a gateway key in the OS
-   credential store, or ``~/.gaia/gateway.json`` naming AMD's gateway (or
-   unreadable). This is decisive — no probe runs — so a set-up gateway can
+2. The AMD LLM Gateway is set up here: ``~/.gaia/gateway.json`` naming AMD's
+   gateway (or unreadable), or, with no ``gateway.json`` (so the gateway is
+   AMD's), a non-blank ``LEMONADE_AMD_API_KEY`` or ``GAIA_GATEWAY_TOKEN`` in
+   GAIA's environment or a gateway key in the OS credential store. A
+   ``gateway.json`` naming another gateway makes those keys its keys, so they
+   are no evidence. This is decisive — no probe runs — so a set-up gateway can
    never read as "off the network", however DNS behaves.
 3. ``llm-api.amd.com`` accepts a TCP connection on 443 within
    :data:`PROBE_TIMEOUT` seconds, directly or through ``HTTPS_PROXY`` (a
@@ -118,9 +120,6 @@ def _gateway_configured() -> Optional[str]:
     """Where the AMD LLM Gateway is set up on this machine, or None."""
     from gaia.llm import gateway
 
-    for name in (gateway.GATEWAY_ENV_VAR, "GAIA_GATEWAY_TOKEN"):
-        if os.environ.get(name, "").strip():
-            return f"{name} is set"
     state_file = gateway.GATEWAY_STATE_FILE
     if state_file.exists():
         try:
@@ -130,6 +129,11 @@ def _gateway_configured() -> Optional[str]:
             # Unreadable settings still mean someone set a gateway up here.
             log.warning("Treating this machine as on AMD's network: %s", e)
             return f"{state_file} exists"
+        # Another gateway is registered, so any gateway key here is its key.
+        return None
+    for name in (gateway.GATEWAY_ENV_VAR, "GAIA_GATEWAY_TOKEN"):
+        if os.environ.get(name, "").strip():
+            return f"{name} is set"
     try:
         token = gateway.read_stored_token()
     except gateway.GatewayError as e:
