@@ -23,6 +23,7 @@ from tests.fixtures.fake_lemonade import FakeLemonade
 GPU = DEFAULT_MODEL_NAME
 NPU = NPU_DEFAULT_MODEL_NAME
 EMBEDDER = "user.embeddinggemma-300m-GGUF"
+NPU_EMBEDDER = "embed-gemma-300m-FLM"
 
 
 @pytest.fixture
@@ -41,7 +42,7 @@ def server(tmp_path, monkeypatch):
     monkeypatch.chdir(work)
     LemonadeManager.reset()
     env = {"FAKE_LEMONADE_MAX_LLM": "1", "FAKE_LEMONADE_NPU": "1"}
-    with FakeLemonade(downloaded=(GPU, NPU, EMBEDDER), env=env) as fake:
+    with FakeLemonade(downloaded=(GPU, NPU, EMBEDDER, NPU_EMBEDDER), env=env) as fake:
         monkeypatch.setenv("LEMONADE_BASE_URL", fake.base_url)
         yield fake
     LemonadeManager.reset()
@@ -147,3 +148,124 @@ def test_image_reading_follows_the_agents_own_model_not_the_saved_pick(
         assert agent.vlm_model is None, "chat on the NPU reads no images"
     finally:
         close_agent(agent)
+
+
+@pytest.mark.parametrize("profile", ["npu", "gpu"])
+def test_every_chat_on_a_pc_uses_its_profiles_embedder(server, tmp_path, profile):
+    """A chat built on, or switched to, either device keeps the PC's embedder.
+
+    Memory has one store; a different embedder clears all its vectors (#6008).
+    It is the GPU one on an NPU PC too: the NPU build's search isn't proven.
+    """
+    from gaia_agent import stdio
+    from gaia_agent.session_registry import build_session_agent, close_agent
+
+    from gaia.config import GaiaConfig
+
+    GaiaConfig.save_keys({"default_device": profile})
+    expected = EMBEDDER
+    for model, device in ((GPU, "gpu"), (NPU, None)):
+        agent = build_session_agent(
+            model_id=model, device=device, allowed_paths=[str(tmp_path / "work")]
+        )
+        try:
+            assert agent._rag_config_kwargs["embedding_model"] == expected
+            assert agent._embedding_model == expected
+            stdio.switch_model(agent, NPU if model == GPU else GPU)
+            assert agent._embedding_model == expected
+        finally:
+            close_agent(agent)
+
+
+def test_an_open_chat_follows_an_embedder_moved_in_settings(server, tmp_path):
+    """Moving the embedder rebuilds an open chat on its next turn, keeping it.
+
+    The model, the conversation and the loaded skills carry over; nothing is
+    rebuilt while the embedder stays where it is.
+    """
+    from gaia_agent import session_registry as sr
+
+    from gaia.config import GaiaConfig
+
+    # A choice saved before the NPU embedder was withdrawn still loads.
+    path = GaiaConfig.config_path()
+    path.write_text(
+        json.dumps(
+            {**json.loads(path.read_text(encoding="utf-8")), "embedding_device": "npu"}
+        ),
+        encoding="utf-8",
+    )
+    registry = sr._SessionRegistry()
+    kwargs = {"model_id": NPU, "allowed_paths": [str(tmp_path / "work")]}
+    try:
+        session, took = registry.checkout("chat-1", **kwargs)
+        assert took
+        old = session.agent
+        assert old._embedding_model == NPU_EMBEDDER
+        old.conversation_history = [{"role": "user", "content": "hello"}]
+        assert session.follow_settings(**kwargs) is False
+        assert session.agent is old
+
+        GaiaConfig.save_key("embedding_device", "auto")
+        # A later turn names no model: the chat keeps the one it is on.
+        assert session.follow_settings(allowed_paths=kwargs["allowed_paths"])
+        assert session.agent is not old
+        assert session.agent._embedding_model == EMBEDDER
+        assert session.agent.model_id == NPU
+        assert session.agent.conversation_history == old.conversation_history
+        session.run_lock.release()
+
+        # What the user set in the chat survives the next move too.
+        session, _ = registry.checkout("chat-1", **kwargs)
+        agent = session.agent
+        granted = tmp_path / "granted"
+        granted.mkdir()
+        agent.internet_off = True
+        agent._incognito, agent._incognito_reason = True, "private"
+        agent.path_validator.add_allowed_path(str(granted))
+        agent._attached_documents = {str(granted / "notes.txt")}
+        path.write_text(
+            json.dumps(
+                {
+                    **json.loads(path.read_text(encoding="utf-8")),
+                    "embedding_device": "npu",
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert session.follow_settings(allowed_paths=kwargs["allowed_paths"])
+        moved = session.agent
+        assert moved is not agent and moved._embedding_model == NPU_EMBEDDER
+        assert moved.internet_off is True
+        assert (moved._incognito, moved._incognito_reason) == (True, "private")
+        assert moved.path_validator.is_path_allowed(str(granted), prompt_user=False)
+        assert moved._attached_documents == agent._attached_documents
+        session.run_lock.release()
+    finally:
+        registry.clear()
+
+
+def test_only_a_moved_embedder_counts_as_changed(monkeypatch):
+    """The check behind every chat's rebuild, in the sidecar and the Agent UI.
+
+    An agent that recorded no embedder never rebuilds; an unreadable config
+    fails the turn loudly rather than quietly keeping the old embedder.
+    """
+    from gaia_agent import chat_agent as ca
+
+    from gaia.config import GaiaConfigError
+
+    agent = object.__new__(ca.ChatAgent)
+    monkeypatch.setattr(ca, "machine_embedding_model", lambda: EMBEDDER)
+    assert agent.embedder_changed() is False
+    agent._embedder_at_build = EMBEDDER
+    assert agent.embedder_changed() is False
+    agent._embedder_at_build = NPU_EMBEDDER
+    assert agent.embedder_changed() is True
+
+    def unreadable():
+        raise GaiaConfigError("config.json is not valid JSON")
+
+    monkeypatch.setattr(ca, "machine_embedding_model", unreadable)
+    with pytest.raises(GaiaConfigError):
+        agent.embedder_changed()

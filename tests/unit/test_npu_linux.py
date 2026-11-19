@@ -538,7 +538,8 @@ def test_setup_plan_lists_the_problems_for_the_screen(not_set_up):
             }
         ],
     }
-    assert _npu_status(None) == {"present": False, "ready": False, "problems": []}
+    # Unread capacity is unchecked, not "no NPU" (#7341).
+    assert _npu_status(None) is None
 
 
 def test_npu_problem_is_a_plain_value():

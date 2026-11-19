@@ -88,6 +88,7 @@ from gaia.agents.base.context_eviction import (
 )
 from gaia.agents.base.credential_reads import (
     PYTHON_TOOLS,
+    as_script_call,
     python_credential_refusal,
 )
 from gaia.agents.base.deliverables import (
@@ -992,6 +993,13 @@ _STEP_CAP_ANSWER_PROMPT = (
     "you found, what you couldn't finish and why, and what they can do next."
 )
 
+# A model left to it re-types its script or the file as the answer, which
+# takes longer than the step the stop refused and leaves nothing on disk.
+_SHORT_CLOSING_ANSWER = (
+    "Keep the answer short: where the work stands and the next steps. Name "
+    "files by their path; never paste code or a file's contents into the "
+    "answer."
+)
 # The time-limit counterparts: one notice, then a stop that leaves room for
 # the write-only step and the closing answer before the caller's hard limit.
 _TIME_LIMIT_ANSWER_PROMPT = (
@@ -1000,14 +1008,14 @@ _TIME_LIMIT_ANSWER_PROMPT = (
     "to write it now; it will run, and then you give your answer. Otherwise "
     "give the user your final answer now, using only what the tool results "
     "above show: what you found, what you couldn't finish and why, and what "
-    "they can do next."
+    "they can do next. " + _SHORT_CLOSING_ANSWER
 )
 # Sent after the time-limit closing step's one tool call has run.
 _AFTER_CLOSING_CALL_NOTE = (
     "That call ran; its result is above. No more tools can run. Give the user "
     "your final answer now as plain text, using only what the tool results "
     "above show: what you found, what you couldn't finish and why, and what "
-    "they can do next."
+    "they can do next. " + _SHORT_CLOSING_ANSWER
 )
 _TIME_NOTICE = (
     "Time budget: {used} of {total} seconds used. Stop gathering context. If "
@@ -1024,14 +1032,19 @@ _TIME_MARKS_AT = (0.25, 0.5)
 _TIME_MARK = "Time check: {used} of {total} seconds used."
 # The stop keeps back the closing step's tool call and answer (plus the
 # write-only step while a requested file is missing), each costed at the
-# turn's typical step, never less than this share of the limit.
+# turn's typical step, never less than this share of the limit and never
+# more than the ceiling: the model calls of the wrap-up are cut to the time
+# left, so a turn of slow steps still closes in what the ceiling keeps.
 _TIME_RESERVE_MIN = 0.05
+_TIME_RESERVE_MAX = 0.25
 _TIME_RESERVE_RECENT_STEPS = 5
 # A model call under a time limit may write no more than the time left allows
 # at the turn's measured decode rate, with this margin, and never less than
 # the floor.
 _TIME_TOKEN_MARGIN = 0.8
 _TIME_MIN_OUTPUT_TOKENS = 256
+# Most a closing answer may write once the time limit's stop point is passed.
+_CLOSING_ANSWER_MAX_TOKENS = 2048
 # Appended to the request of a run nobody is watching, for the model only.
 _NO_ONE_TO_ASK_NOTE = (
     "\n\n[Nobody can answer questions during this run. Where the request "
@@ -8870,6 +8883,11 @@ Do NOT wrap conversational replies in JSON.
                     "error_type": "invalid_arguments",
                     "error": str(exc),
                 }
+        # A saved script run through the snippet tool is the file tool's call
+        # to every check below; _execute_tool refuses it where that is withheld.
+        script_tool, script_args = as_script_call(bare_name, tool_args)
+        if script_tool != bare_name and script_tool in self._execution_tool_registry():
+            tool_name, tool_args = script_tool, script_args
         refused = self._refuse_inventory_hand_edit(tool_name, tool_args)
         if refused is not None:
             return refused
@@ -9140,6 +9158,20 @@ Do NOT wrap conversational replies in JSON.
                     err = "Unknown tool name. Use only the tools you were given."
                 logger.error(err)
                 return {**NOT_EXECUTED, "status": "error", "error": err}
+
+        script_tool, script_args = as_script_call(tool_name, tool_args)
+        if script_tool != tool_name:
+            if script_tool not in execution_registry:
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error": (
+                        f"{tool_name} cannot run a saved script here: "
+                        f"{script_tool}, which runs it, is not available to "
+                        "this agent. Pass the code itself as `code`."
+                    ),
+                }
+            tool_name, tool_args = script_tool, script_args
 
         # A stand-in written to disk replaces the real file with that word.
         stand_in = _write_stand_in(
@@ -9900,7 +9932,9 @@ Do NOT wrap conversational replies in JSON.
         # Tool history needs the tools on some providers; the model may not call one.
         tools = self._openai_tools if offer_tools else None
         no_calls = {"tool_choice": "none"} if tools and not run_one_call else {}
-        no_calls["max_tokens"] = self._max_output_tokens()
+        no_calls["max_tokens"] = self._closing_output_tokens(
+            may_call=bool(tools) and run_one_call
+        )
         # The same effort as the loop: a change rewrites the prompt's start.
         no_calls.update(self._conversation_request_kwargs())
         no_calls.update(self._reasoning_request_kwargs())
@@ -12865,7 +12899,7 @@ Do NOT wrap conversational replies in JSON.
         reserve = max(
             self.time_limit_s * _TIME_RESERVE_MIN, steps * self._typical_step_s()
         )
-        return left - reserve
+        return left - min(reserve, self.time_limit_s * _TIME_RESERVE_MAX)
 
     def _time_left_s(self) -> Optional[float]:
         """Seconds left of the caller's time limit this turn, or None without one."""
@@ -12876,9 +12910,13 @@ Do NOT wrap conversational replies in JSON.
         return limit - (time.monotonic() - started)
 
     def _typical_step_s(self) -> float:
-        """Median of the turn's recent steps; one slow step doesn't set the pace."""
+        """Median of the turn's recent steps; one slow step doesn't set the pace.
+
+        The lower middle of an even count: of two steps, the mean is half the
+        slow one.
+        """
         recent = getattr(self, "_step_durations", [])[-_TIME_RESERVE_RECENT_STEPS:]
-        return statistics.median(recent) if recent else 0.0
+        return statistics.median_low(recent) if recent else 0.0
 
     def _time_limit_passed(self) -> bool:
         """True once the turn is past its time limit's stop point.
@@ -12940,11 +12978,26 @@ Do NOT wrap conversational replies in JSON.
             logger.warning("Stopping the turn at %.0fs of its %ss limit", used, limit)
         return stop
 
-    def _time_capped_output_tokens(self, cap: int) -> int:
+    def _closing_output_tokens(self, may_call: bool) -> int:
+        """Output cap for one closing reply.
+
+        Past a time limit's stop point an answer gets a small fixed cap, and a
+        reply that may carry the one last tool call gets half the time left:
+        the call's run and the answer after it need the other half. Elsewhere
+        the loop's own cap.
+        """
+        if not self._time_limit_passed():
+            return self._max_output_tokens()
+        if may_call:
+            return self._time_capped_output_tokens(self._output_token_cap(), 0.5)
+        return min(self._max_output_tokens(), _CLOSING_ANSWER_MAX_TOKENS)
+
+    def _time_capped_output_tokens(self, cap: int, share: float = 1.0) -> int:
         """*cap*, lowered so the call can finish in the time the turn has left.
 
         Uses the decode rate the backend measured this turn, less the latest
         call's time to first token. Unchanged with no limit or no rate yet.
+        *share* is how much of the time left the call may take.
         """
         left = self._time_left_s()
         conversation = getattr(self, "_turn_conversation", None) or []
@@ -12962,7 +13015,7 @@ Do NOT wrap conversational replies in JSON.
                 if isinstance(ttft, (int, float)) and not isinstance(ttft, bool):
                     prefill = max(float(ttft), 0.0)
                 break
-        fits = int((left - prefill) * rate * _TIME_TOKEN_MARGIN)
+        fits = int((left * share - prefill) * rate * _TIME_TOKEN_MARGIN)
         return min(cap, max(fits, _TIME_MIN_OUTPUT_TOKENS))
 
     def time_limit_abandoned_result(self, message: str) -> Dict[str, Any]:

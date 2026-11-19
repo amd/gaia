@@ -175,6 +175,12 @@ func (m ChatModel) statusHints() []hint {
 			hint{text: "type ahead", rank: rankAffordance},
 			hint{text: "Esc show chat", rank: rankInterrupt},
 		)
+	} else if m.startup.inFlight && m.startup.kind == StartupRestore {
+		// Say what the wait is; Esc still cancels a streaming restore turn.
+		hints = append(hints, hint{text: "restoring " + m.startup.model + "…", rank: rankAffordance})
+		if m.streaming {
+			hints = append(hints, hint{text: "Esc cancel", rank: rankInterrupt})
+		}
 	} else if m.streaming {
 		// Worth advertising exactly when it applies: someone who believes the
 		// composer is frozen never tries it.

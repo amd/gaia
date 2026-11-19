@@ -5152,6 +5152,10 @@ def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
     env = agent_child_env(child_env(assignments))
     # A killed Python child keeps what it printed only if it never buffered it.
     env.setdefault("PYTHONUNBUFFERED", "1")
+    # As run_python does: a Python the command starts must not die on a
+    # character the console's code page lacks.
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
     for name, value in _NO_SIGN_IN_PROMPT.items():
         env.setdefault(name, value)
     return env

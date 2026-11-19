@@ -453,5 +453,6 @@ class TestResolveInput:
 
     def test_skill_raises_not_implemented(self):
         sched = Schedule(name="s", cron="* * * * *", skill="sk")
-        with pytest.raises(NotImplementedError, match="cannot run skills yet"):
+        with pytest.raises(NotImplementedError, match="cannot run skills yet") as exc:
             runner.resolve_input(sched)
+        assert "issues/6470" in str(exc.value)
