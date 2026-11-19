@@ -75,6 +75,7 @@ DEFERRED: dict[str, str] = {
     ),
     "log-triage": "Needs an invented multi-file log corpus with a planted incident.",
     "meeting-actions": "Needs a multi-meeting notes corpus with implicit commitments.",
+    "office-docs": "Needs a rubric that opens the produced .xlsx/.pptx/.docx files.",
     "price-watch": "Requires live web fetch; non-deterministic ground truth.",
     "send-email": (
         "Every send needs a person to approve the exact message; the email eval "
