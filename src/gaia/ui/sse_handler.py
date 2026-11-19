@@ -490,31 +490,48 @@ _MARKUP_TAIL = 64
 
 
 def _strip_native_envelope(text: str) -> str:
-    """A whole native tool-call envelope reduced to the text beside the call.
+    """A native tool-call envelope reduced to the text beside the call.
 
     The provider's ``{"__tool_calls__": [...], "finish_reason": ...,
     "content": ...}`` envelope is a control frame, never the answer. Its
     ``content`` is the model's own words alongside the call, so that text is
     kept; anything else (no content, or not an envelope at all) passes through
     unchanged. Prose that merely quotes the envelope's first characters is not
-    a whole envelope and is left alone.
+    an envelope and is left alone.
+
+    The envelope is dropped wherever it sits, not only when it is the whole
+    text: prose before it is kept, the same split the streaming path makes,
+    so the final answer and the saved reply agree with what streamed. The
+    opener must sit outside a fence, and the object after it must be a
+    balanced envelope that parses with a ``__tool_calls__`` list; anything
+    else (a quoted prefix, a truncated opener, JSON in a code block) is
+    ordinary text and is left alone.
     """
     if not text:
         return text
-    stripped = text.strip()
-    if not _NATIVE_ENVELOPE_OPEN_RE.match(stripped):
+    result = text.strip()
+    while True:
+        native = _NATIVE_ENVELOPE_OPEN_RE.search(result)
+        if native is None:
+            break
+        i = native.start()
+        if _fence_after(result[:i], None, True)[0] is not None:
+            break
+        state, start, end, consumed, _scan = _leading_envelope(result[i:], True)
+        if state != _ENV_COMPLETE:
+            break
+        parsed = _parse_envelope(result[i + start : i + end])
+        if parsed is None:
+            break
+        calls = parsed.get("__tool_calls__")
+        if not isinstance(calls, list):
+            break
+        content = parsed.get("content")
+        kept = content if isinstance(content, str) else ""
+        result = result[:i] + kept + result[i + consumed :]
+    if result == text.strip():
         return text
-    try:
-        parsed = json.loads(stripped, strict=False)
-    except ValueError:
-        return text
-    if not isinstance(parsed, dict):
-        return text
-    calls = parsed.get("__tool_calls__")
-    if not isinstance(calls, list):
-        return text
-    content = parsed.get("content")
-    return content if isinstance(content, str) else ""
+    return result
 
 
 def _partial_markup_start(text: str) -> Optional[int]:
