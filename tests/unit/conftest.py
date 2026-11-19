@@ -259,7 +259,7 @@ def user_terminal(monkeypatch):
 _DAEMON_SPAWN_MESSAGE = (
     "Unit test tried to spawn a real GAIA daemon (gaia.daemon.client."
     "_spawn_and_wait). Mock the daemon boundary instead — e.g. monkeypatch "
-    "gaia.ui.email_sidecar.daemon_client.acquire_handle or "
+    "gaia.ui.sidecar.daemon_client.acquire_handle or "
     "gaia.daemon.client.start_or_attach. Real daemons belong in tests/integration/."
 )
 
@@ -641,6 +641,22 @@ def _forbid_real_lemonade_all_session(tmp_path_factory):
             + " Code running between tests (a finalizer or a leftover thread) "
             "tried: " + "; ".join(sorted({action for _, action in outside}))
         )
+
+
+@pytest.fixture(autouse=True)
+def _dead_lemonade_address_is_not_a_stopped_server(monkeypatch):
+    """A dead Lemonade address in a unit test stands in for a model server the
+    test fakes at a higher layer, so the Agent UI must not fail a turn over it.
+    A test of that check puts the real probe back itself."""
+    import importlib.util
+
+    if importlib.util.find_spec("fastapi") is None:
+        yield
+        return
+    from gaia.ui import _chat_helpers
+
+    monkeypatch.setattr(_chat_helpers, "_stopped_users_server", lambda: None)
+    yield
 
 
 _LEMONADE_ENV_VARS = ("LEMONADE_BASE_URL", "LEMONADE_HOST", "LEMONADE_PORT")

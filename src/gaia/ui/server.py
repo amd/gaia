@@ -358,7 +358,17 @@ def _run_scheduled_prompt(
     agent._cancel_event = cancel_event
     if console is not None:
         agent.console = console
-    result = agent.process_query(prompt)
+    try:
+        result = agent.process_query(prompt)
+    finally:
+        from gaia.agents.base.memory import drain_memory_extraction
+
+        # Save the run's memories now: a queued save would keep the agent alive.
+        drain_memory_extraction(agent)
+        try:
+            agent.close()
+        except Exception as exc:  # noqa: BLE001 — logged; the run's own result stands
+            logger.warning("Scheduled run: closing its agent failed: %s", exc)
     if isinstance(result, dict):
         val = result.get("result")
         answer = val if val is not None else result.get("answer", "")
@@ -546,6 +556,9 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
 
         queue = DispatchQueue(max_workers=4)
         app.state.dispatch_queue = queue
+        from gaia.ui import dispatch as dispatch_mod
+
+        dispatch_mod.BOOT_QUEUE = queue
 
         # ── Model-slot broker (#2248) ───────────────────────────────────
         # The daemon exports the broker URL into its own environment, so only
@@ -654,6 +667,17 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             if low_memory:
                 logger.info("Model preload skipped: %s", low_memory)
                 return
+
+            # The TUI may have picked another model since this app last ran.
+            from gaia.ui.routers.providers import restore_last_model
+
+            try:
+                restore_last_model(db, load=False)
+            except Exception as exc:  # noqa: BLE001 - the model list reports it
+                # /api/providers/active runs the restore again and shows why.
+                logger.warning(
+                    "Could not restore the last model before the preload: %s", exc
+                )
 
             # Check if a chat model is already loaded.
             # Let exceptions propagate so the DispatchQueue marks the job as
@@ -857,6 +881,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         await agent_loop.stop()
         logger.info("AgentLoop stopped")
         await queue.shutdown()
+        if dispatch_mod.BOOT_QUEUE is queue:
+            dispatch_mod.BOOT_QUEUE = None
         await monitor.stop()
         logger.info("Document file monitor stopped")
         from gaia.connectors.activation_watcher import stop_watcher
@@ -994,23 +1020,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(connectors_router_mod.router)
     # Issue #1292 — forwarded pre-authenticated connections (/v1/connections).
     app.include_router(connectors_router_mod.forwarded_router)
-    # Email REST surface (/v1/email/*) — out-of-process sidecar ONLY (#1767
-    # cutover / design decision 4). The core backend never imports the email
-    # wheel: it stays lightweight, crash-isolated, and dogfoods the exact binary
-    # we ship. Since #2142 the GAIA daemon supervises the sidecar; each request
-    # acquires a handle via gaia.ui.email_sidecar.daemon_client (lazy — users
-    # who never use email never pay for a daemon or sidecar). The sidecar is
-    # the SOLE /v1/email surface — there is no in-process fallback (a missing/
-    # unpublished binary fails loudly with a remedy, never silently re-mounts
-    # the wheel).
-    from gaia.ui.email_sidecar.router import router as email_sidecar_router
-
-    app.include_router(email_sidecar_router)
-    logger.info(
-        "Email REST surface served by the daemon-supervised sidecar "
-        "(GAIA_EMAIL_AGENT_MODE=%s).",
-        os.environ.get("GAIA_EMAIL_AGENT_MODE", "user"),
-    )
 
     # ── Serve Uploaded Files ─────────────────────────────────────────────
     # Mount the uploads directory so uploaded files can be served by URL.

@@ -244,17 +244,22 @@ export function CalendarApproval({ tool, args }: { tool: string; args: Record<st
         const shown = text(value, multiline);
         if (shown) rows.push([label, <Name value={shown} />]);
     };
+    // An address reads left to right in any language.
+    const account = () => {
+        const shown = text(args.calendar_account);
+        if (shown) rows.push([t('permission.calendar.account'), <bdi dir="ltr">{shown}</bdi>]);
+    };
 
     if (tool === 'calendar/create_calendar_event') {
         named(t('permission.calendar.title'), args.title);
         rows.push([t('permission.calendar.when'), <When start={text(args.start)} end={text(args.end)} />]);
-        named(t('permission.calendar.account'), args.calendar_account);
+        account();
         named(t('permission.calendar.location'), args.location);
         named(t('permission.calendar.description'), args.description, true);
     } else {
         named(t('permission.calendar.event'), args.expected_title);
         rows.push([t('permission.calendar.when'), <When start={text(args.expected_start)} end="" />]);
-        named(t('permission.calendar.account'), args.calendar_account);
+        account();
         named(t('permission.calendar.newTitle'), args.new_title);
         if (text(args.new_start)) {
             rows.push([t('permission.calendar.newTime'), <When start={text(args.new_start)} end={text(args.new_end)} />]);

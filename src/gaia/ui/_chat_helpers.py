@@ -57,7 +57,9 @@ from gaia.stream_timeout import (
     STREAM_TIMEOUT_ENV,
     stream_timeout_from_env,
 )
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.memory_settings import memory_enabled
+from gaia.ui.security import FLAGSHIP_AGENT_ID
+from gaia.ui.sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
@@ -77,8 +79,6 @@ from gaia.ui.email_sidecar.profiles import (
     turns_supported,
     working_directory_supported,
 )
-from gaia.ui.memory_settings import memory_enabled
-from gaia.ui.security import FLAGSHIP_AGENT_ID
 from gaia.ui.turn_changes import TurnRecording
 from gaia.utils import awake_clock as _awake_clock
 from gaia.utils.awake_clock import AwakeClockError
@@ -100,7 +100,7 @@ from .utils import (
     managed_documents_dir,
     resolve_upload_links,
 )
-from .warmup import wait_for_warm_up
+from .warmup import turn_ended, wait_for_warm_up
 
 logger = logging.getLogger(__name__)
 
@@ -193,13 +193,11 @@ def get_agent_registry():
 
 
 # Agent types served by an out-of-process sidecar with a dedicated dispatch
-# branch below. Since #2408, an installed sidecar IS registry-loadable (the
-# installer bridge registers it for the connectors grant flow), but its
-# factory always raises — chat dispatch must still go through the branch
-# below, never registry.create_agent(). Derived from the relay profiles so a
-# new sidecar cannot be half-wired: #4161 shipped the flagship as a binary
-# sidecar and left this set at {"email"}, which sent every flagship turn into
-# registry.create_agent() and surfaced the stub factory's RuntimeError.
+# branch below. An installed sidecar IS registry-loadable (the installer
+# bridge registers it for the connectors grant flow), but its factory always
+# raises — chat dispatch must still go through the branch below, never
+# registry.create_agent(). Derived from the relay profiles so a new sidecar
+# cannot be half-wired.
 _SIDECAR_AGENT_TYPES = SIDECAR_AGENT_IDS
 
 
@@ -233,12 +231,9 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     * a **wheel**/dev install registers a real factory and runs in-process,
       which is the path ``gaia eval agent`` and a source checkout use.
 
-    Email is the exception and says so on its profile: its in-process loop was
-    retired in #2109, so it relays even when the wheel is importable.
-
     The "no registration" branches below are defence in depth, not a live
-    path: ``_agent_type_unknown`` already rejects a non-always-relay sidecar
-    that does not resolve, so chat never reaches them today. They keep this
+    path: ``_agent_type_unknown`` already rejects a sidecar that does not
+    resolve, so chat never reaches them today. They keep this
     function correct on its own terms — a missing registration relays, unless
     the registry recorded an import failure, in which case that recorded
     reason is the answer the user needs and relaying would bury it.
@@ -246,8 +241,6 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     profile = profile_for(agent_type)
     if profile is None:
         return False
-    if profile.always_relay:
-        return True
     if registry is None:
         return True
     reg = registry.get(agent_type)
@@ -262,16 +255,11 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
 def _agent_type_unknown(agent_type: str, registry) -> bool:
     """True when *agent_type* must be rejected as unknown before dispatch.
 
-    Email is exempt: its relay does not need a registration to work.
-
-    Every other agent — ``chat`` and the flagship included — must resolve in
-    the registry. An agent that was never installed is worth saying so about:
+    Every agent — ``chat`` and the flagship included — must resolve in the
+    registry. An agent that was never installed is worth saying so about:
     "install it from the Hub" beats asking the daemon to start a sidecar that
     isn't there and surfacing whatever it says about the failure.
     """
-    profile = profile_for(agent_type)
-    if profile is not None and profile.always_relay:
-        return False
     if not registry or registry.get(agent_type):
         return False
     # Setup or `gaia hub install` may have added it after startup.
@@ -306,6 +294,10 @@ _stream_timeout_from_env = stream_timeout_from_env
 _IDLE_POLL_SECONDS = 0.2
 # How long an ended turn waits for its agent thread before freeing the model.
 _PRODUCER_STOP_GRACE_SECONDS = 5.0
+
+#: Status phases kept in a turn's saved steps: work the user waited on
+#: (``SPEECH_MODEL_DOWNLOADED_PHASE`` in ``audio_tools.py``).
+_RECORDED_PHASES = frozenset({"speech_model_downloaded"})
 
 # Chats whose stopped turn left its agent thread running (session_id -> thread).
 _stopping_sessions: dict[str, threading.Thread] = {}
@@ -1661,6 +1653,16 @@ def _canonical_agent_type(agent_type: str) -> str:
     return registry.canonical_id(agent_type)
 
 
+def _follow_model_settings(agent) -> None:
+    """Apply a vision model, or skills, changed in Settings since this cached agent last ran."""
+    follow = getattr(agent, "follow_model_switch", None)
+    if callable(follow):
+        follow()
+    follow_skills = getattr(agent, "follow_installed_skills", None)
+    if callable(follow_skills):
+        follow_skills()
+
+
 def _get_cached_agent(
     session_id: str,
     model_id: str,
@@ -1705,6 +1707,17 @@ def _get_cached_agent(
                 )
                 return None
             entry["document_ids"] = list(document_ids)
+        changed = getattr(entry["agent"], "built_settings_changed", None)
+        # ``is True``: a stand-in agent's mock answers truthy to anything.
+        if callable(changed) and changed() is True:
+            # Its model server and MCP tools were fixed as it was built.
+            old_entry = _agent_cache.pop(session_id)
+            _disconnect_cached_agent(old_entry)
+            logger.debug(
+                "Agent cache miss (settings changed) for session %s",
+                session_id[:8],
+            )
+            return None
         _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
@@ -2301,10 +2314,10 @@ def _apply_memory_state(agent, session: dict, db) -> None:
 
 
 def _session_mail_provider(session: dict) -> str | None:
-    """Session mailbox FILTER for the email agent (#1596 / #1603 Phase 2).
+    """Session mailbox FILTER for the mail tools (#1596 / #1603 Phase 2).
 
     ``None`` (unset, null, or empty string from the frontend) means "every
-    connected mailbox" — the email agent scans all of them and fails loudly
+    connected mailbox" — the mail tools scan all of them and fails loudly
     when none is connected. An explicit ``"google"`` / ``"microsoft"``
     restricts to that provider. Never coerce a missing pick to "google":
     that silently triaged Gmail for sessions that never chose a provider
@@ -2314,7 +2327,7 @@ def _session_mail_provider(session: dict) -> str | None:
 
 
 # The per-agent /query contract floor and its upgrade copy live on the relay
-# profile (``gaia.ui.email_sidecar.profiles``); ``api_version_supported``
+# profile (``gaia.ui.sidecar.profiles``); ``api_version_supported``
 # applies it. The daemon's own gate only pins MAJOR (the spec's
 # expected_api_major), so a too-old Hub binary passes that handshake and then
 # 404s every /query call — the profile's finer MAJOR.MINOR check catches it
@@ -2528,7 +2541,25 @@ def _withdrawn_reply(content: str) -> Optional[str]:
             if not kept:
                 return _CUT_OFF_REPLY_FOR_MODEL
             return f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+    # A relayed agent that crashed ends the reply with its own note and log folder.
+    kept, _, last = text.rpartition("\n\n")
+    if any(last.startswith(note) for note in _agent_crash_notes()):
+        kept = kept.rstrip()
+        return (
+            f"{kept}\n\n{_CUT_OFF_REPLY_FOR_MODEL}"
+            if kept
+            else _CUT_OFF_REPLY_FOR_MODEL
+        )
     return None
+
+
+def _agent_crash_notes() -> tuple:
+    """What each relayed agent's reply ends with when the agent crashed mid-answer."""
+    from .sidecar.profiles import relay_profiles
+
+    return tuple(
+        p.stream_ended_message for p in relay_profiles() if p.stream_ended_message
+    )
 
 
 def _with_final_reply(model_messages: Optional[list], reply: str) -> Optional[list]:
@@ -2917,8 +2948,8 @@ def _dispatch_sidecar_query(
     from gaia.daemon.sidecars.errors import SidecarError
     from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.llm.model_fit import ModelFitError
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.relay import relay_query
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.relay import relay_query
 
     profile = profile_for(agent_type)
     if profile is None:
@@ -3140,8 +3171,8 @@ def _dispatch_sidecar_query(
         )
         return
 
-    from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.profiles import full_access_supported
+    from gaia.ui.sidecar import grants as relayed_grants
+    from gaia.ui.sidecar.profiles import full_access_supported
 
     answers_confirmations = confirmations_supported(profile, handle.api_version)
     offers_always = bool(
@@ -3261,7 +3292,7 @@ def _find_last_tool_step(steps: list) -> dict | None:
 
 
 def _denial(event: dict) -> Optional[str]:
-    """``"declined"`` or ``"timedOut"`` for a ``tool_result`` whose call never ran.
+    """``"declined"``, ``"timedOut"`` or ``"autoDeclined"`` for a call that never ran.
 
     A relayed result nests its status in ``data``.
     """
@@ -3269,7 +3300,11 @@ def _denial(event: dict) -> Optional[str]:
     if event.get("status", data.get("status")) != "denied":
         return None
     timed_out = event.get("timed_out") is True or data.get("timed_out") is True
-    return "timedOut" if timed_out else "declined"
+    if timed_out:
+        return "timedOut"
+    if event.get("declined_by", data.get("declined_by")) == "agent":
+        return "autoDeclined"
+    return "declined"
 
 
 def _needed_model(event: dict) -> Optional[str]:
@@ -3279,8 +3314,8 @@ def _needed_model(event: dict) -> Optional[str]:
     return needed if isinstance(needed, str) and needed else None
 
 
-def _insert_skill_step(steps: list, step: dict) -> None:
-    """Put a skill step before the running tool call that brought the skill in."""
+def _insert_before_running_call(steps: list, step: dict) -> None:
+    """Put a step before the running tool call it happened inside (a skill it loaded, a download)."""
     for i in range(len(steps) - 1, -1, -1):
         if steps[i].get("type") == "tool":
             if steps[i].get("active"):
@@ -3916,6 +3951,42 @@ def _restart_stopped_gaia_lemonade(model_id: str, sse_handler) -> bool:
     return True
 
 
+def _refuse_turn_on_stopped_users_server() -> None:
+    """Fail a turn at once when the model server the user chose refuses connections.
+
+    GAIA starts only its own server, so nothing this turn does can bring that
+    one back, and every probe of it on the way costs seconds.
+
+    Raises:
+        LemonadeServerDownError: nothing accepts a connection at its address.
+    """
+    from gaia.llm.lemonade_client import LemonadeServerDownError
+
+    if _eval_provider_kwargs():
+        return  # The turn runs on another provider; Lemonade is not in use.
+    endpoint = _stopped_users_server()
+    if endpoint:
+        raise LemonadeServerDownError(endpoint)
+
+
+def _stopped_users_server() -> Optional[str]:
+    """``host:port`` of the model server the user chose when it refuses
+    connections; None when it accepts them or GAIA runs its own."""
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        _endpoint_label,
+        configured_lemonade_url,
+    )
+
+    url = configured_lemonade_url()
+    if not url:
+        return None
+    client = LemonadeClient(base_url=url, verbose=False)
+    if client._server_accepts_connections():
+        return None
+    return _endpoint_label(client.base_url)
+
+
 def _preflight_load(
     model_id: str, sse_handler, stopped, loads: Optional[list] = None
 ) -> None:
@@ -4319,6 +4390,7 @@ async def _get_chat_response(
             from gaia.agents.base.console import SilentConsole
 
             agent = cached_agent
+            _follow_model_settings(agent)
             # A prior streaming turn leaves its dead SSE console behind.
             agent.console = SilentConsole()
             with writing_tool_registry():
@@ -4416,8 +4488,8 @@ async def _get_chat_response(
                             memory_incognito=_memory_off(session, db),
                         ),
                         # Forwarded only here (not via _session_agent_kwargs, which
-                        # also feeds the strict ChatAgentConfig). Non-email factories
-                        # drop it via dataclasses.fields filtering. None = scan every
+                        # also feeds the strict ChatAgentConfig). Factories without
+                        # mail tools drop it via dataclasses.fields filtering. None = scan every
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
                     )
@@ -4492,6 +4564,8 @@ async def _get_chat_response(
             counts,
             failed=isinstance(result, dict) and bool(result.get("model_failed")),
         )
+        if turn_box is not None:
+            turn_box["failed"] = _turn_failure(None, None, result)[0]
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -4560,6 +4634,8 @@ async def _get_chat_response(
         raise
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
+        if turn_box is not None:
+            turn_box["failed"] = True
         # Surface the typed Lemonade error's friendly user_message
         # when we have one, instead of a stock "trouble connecting"
         # blob.  Falls back to the generic copy when we can't
@@ -4644,6 +4720,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if slot is not None:
                     slot.close()
                 _stopping_sessions[session_id] = producer
+        # After the join: the thread may still have been reading from the model.
+        # Off the loop: a context size waiting on this turn reads Lemonade.
+        await asyncio.to_thread(turn_ended)
 
     try:
         # Create SSE handler for streaming events
@@ -4781,6 +4860,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             turn_box["recording"] = recording
             try:
                 t0 = _time.monotonic()
+                _refuse_turn_on_stopped_users_server()
 
                 # ── Agent cache check ─────────────────────────────────────────
                 # Reuse what a running warm-up is caching rather than read it twice.
@@ -4797,6 +4877,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if cached_agent is not None:
                     # -- Cache hit --
                     agent = cached_agent
+                    _follow_model_settings(agent)
                     if hasattr(agent, "config"):
                         agent.config.working_directory = working_directory
                     agent.console = sse_handler
@@ -4953,8 +5034,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     working_directory=working_directory,
                                     memory_incognito=_memory_off(session, db),
                                 ),
-                                # See the non-streaming path: email-only kwarg,
-                                # filtered out by non-email factories. None = scan
+                                # See the non-streaming path: mail-tools kwarg,
+                                # filtered out by factories without them. None = scan
                                 # every connected mailbox (#1596).
                                 mail_provider=_session_mail_provider(session),
                             )
@@ -5199,6 +5280,16 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 event_type = event.get("type", "")
                 if event_type in ("answer", "agent_error") and event.get("content"):
                     event = {**event, "content": _agent_ui_wording(event["content"])}
+                if (
+                    event_type == "agent_error"
+                    and event.get("fatal")
+                    and event.get("content")
+                ):
+                    # A relayed agent can't tell a cloud chat: don't call its model local.
+                    event = {
+                        **event,
+                        "content": wording_for_model(event["content"], model_id),
+                    }
                 if event_type == "tool_start":
                     last_tool_args = {}
                 elif event_type == "tool_args" and isinstance(event.get("args"), dict):
@@ -5303,7 +5394,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 elif event_type == "skill_use" and event.get("how") != "model":
                     # A load_skill call is already its own step.
                     step_id += 1
-                    _insert_skill_step(
+                    _insert_before_running_call(
                         captured_steps,
                         {
                             "id": step_id,
@@ -5426,6 +5517,25 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "success": False,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
+                    )
+                elif (
+                    event_type == "status"
+                    and event.get("phase") in _RECORDED_PHASES
+                    and event.get("message")
+                ):
+                    step_id += 1
+                    # It finished inside the running call; saved above that call's row.
+                    _insert_before_running_call(
+                        captured_steps,
+                        {
+                            "id": step_id,
+                            "type": "status",
+                            "label": event["message"],
+                            "active": False,
+                            "success": True,
+                            "kept": True,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        },
                     )
                 elif event_type == "agent_error" and _echoes_failed_tool(
                     event, captured_steps
@@ -5593,6 +5703,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     else explained
                 )
 
+        # A failed turn with no reply is not billed, wherever this turn is reported.
+        unanswered = turn_failed and not turn_replied
+
         # Use agent result if no streamed answer was captured
         if not full_response and result_holder["answer"]:
             full_response = _agent_ui_wording(result_holder["answer"])
@@ -5724,6 +5837,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         wall_seconds=_time.monotonic() - turn_started,
                         model_id=result_holder.get("model") or model_id,
                         loads=result_holder["model_loads"],
+                        failed=unanswered,
+                        stats=inference_stats,
                     )
                 except (KeyError, TypeError, ValueError, ArithmeticError) as exc:
                     # The answer is still saved; the panel shows the turn as unmeasured.
@@ -5760,6 +5875,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # A relayed turn ran on the model it sent; with none, the sidecar picked.
                 relayed_location=turn_location if model_id else None,
             )
+            if spending.never_answered(unanswered, inference_stats):
+                spending.mark_no_reply(turn_summary)
 
             model_messages = result_holder.get("model_messages")
             if turn_cancelled:
@@ -5784,6 +5901,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 library_notices=library_notices,
                 ends_turn=True,
                 stopped=turn_cancelled,
+                # As on `done`: a Stop wins over the failure it cut short.
+                failed=turn_failed and not turn_cancelled,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -5797,7 +5916,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 db,
                 ran_on,
                 inference_stats,
-                failed=turn_failed and not turn_replied,
+                failed=unanswered,
             )
             # Fire-and-forget auto-titling, on the model this turn ran on.
             _spawn_after_turn_title(
@@ -5884,6 +6003,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 turn_summary = _turn_summary(
                     sse_handler, result_holder.get("agent"), request.message, None
                 )
+                # No reply text: spending leaves this turn out.
+                spending.mark_no_reply(turn_summary)
                 msg_id = db.add_message(
                     request.session_id,
                     "assistant",
@@ -5894,6 +6015,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     library_notices=library_notices,
                     ends_turn=True,
                     stopped=turn_cancelled,
+                    failed=failed,
                 )
                 done_event = _done_event(
                     msg_id,
@@ -6235,6 +6357,8 @@ def _index_timeout_from_env() -> float:
 _INDEX_TIMEOUT_S = _index_timeout_from_env()
 # How often a waiting index checks for progress.
 _INDEX_POLL_S = 0.5
+# Longest a document waits for the boot-time model-server check before indexing.
+_BOOT_SERVER_WAIT_S = 300.0
 
 
 def _settled_quietly(future) -> None:
@@ -6347,6 +6471,23 @@ async def _index_document(
         asyncio.CancelledError: If the awaiting task was cancelled.
     """
     from gaia.rag.sdk import IndexingStopped, name_file_for_user
+    from gaia.ui import dispatch
+
+    # At launch GAIA's own model server is still starting; embedding now fails.
+    boot = dispatch.BOOT_QUEUE
+    if boot is not None and boot.step_pending("check_server"):
+        if progress_key is not None:
+            INDEX_PROGRESS[progress_key] = {
+                "phase": "starting",
+                "done": 0,
+                "total": None,
+            }
+        try:
+            await boot.wait_for_step("check_server", _BOOT_SERVER_WAIT_S)
+        except asyncio.CancelledError:
+            if progress_key is not None:
+                INDEX_PROGRESS.pop(progress_key, None)
+            raise
 
     name = display_name or filepath.name
     stop = threading.Event()

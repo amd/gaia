@@ -18,7 +18,6 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
 # wheels are not on PyPI, and an 'amd-gaia[agents]' extra naming them made pip
 # silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
-    "gaia-agent-email",
     "gaia-agent-gaia",
 ]
 
@@ -45,7 +44,7 @@ setup(
         "gaia.daemon.sidecars",
         "gaia.ui",
         "gaia.ui.routers",
-        "gaia.ui.email_sidecar",
+        "gaia.ui.sidecar",
         "gaia.sidecar",
         "gaia.database",
         "gaia.talk",
@@ -131,7 +130,8 @@ setup(
         # get_connection_with_tls_context but has no such hook, so the SNI
         # would silently revert to the pinned IP.
         "requests>=2.32.3",
-        # RAG detects Windows-1256 / Shift-JIS / GBK text files with it.
+        # gaia.utils.text_decoding detects Windows-1256 / Shift-JIS / GBK text
+        # files with it, for the file tools, the Agent UI preview and RAG.
         "charset-normalizer>=3.0",
         # <1.0: openai checks any imported httpx for httpx.Timeout, which the
         # 1.0 pre-releases removed, so `pip install --pre` broke every chat turn.
@@ -382,7 +382,6 @@ setup(
     entry_points={
         "console_scripts": [
             "gaia = gaia.cli:main",
-            "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
         ]
     },

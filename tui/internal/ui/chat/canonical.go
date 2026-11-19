@@ -68,7 +68,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			if m.awaitingModelSwitch {
 				m.switchedTo = savedChoice{provider: providerOfBackend(e.ModelBackend), model: e.ModelID}
 				// A refused switch sends no ping, so a match is the confirmation.
-				if e.ModelID == m.switchTarget {
+				if sameModelID(e.ModelID, m.switchTarget) {
 					if r, ok := m.client.(modelSwitchRecorder); ok {
 						r.RecordModelSwitch(e.ModelID, e.ModelBackend == "claude")
 					}
@@ -198,21 +198,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			})
 			break
 		}
-		// The sidecar declared a card, so the card is the result. The email
-		// agent's pre-scan tool docstring tells the model NOT to describe the
-		// results in prose precisely because the client is expected to draw
-		// this — ignore `render` and the turn produces one vague sentence.
+		// The sidecar declared a card, so the card is the result.
 		m.markToolDone(e)
-		identity := ""
-		if e.Render == "email_pre_scan" {
-			// The one card this session can produce from TWO independent
-			// sources (this typed tool_result, or the on-open pre-scan
-			// fetch) — update it in place rather than letting each source
-			// append its own (#2743).
-			identity = preScanCardIdentity
-			m.preScanRenderedThisTurn = true
-		}
-		m.upsertCard(identity, e.Tool, e.Render, e.Data)
+		m.appendCard(e.Tool, e.Render, e.Data)
 
 	case event.CanonicalNeedsInputEvent:
 		// The run is parked waiting for this answer, on the stream we are still
@@ -280,10 +268,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		content = StripVerificationScope(content)
 		m.buffer = ""
-		m.confirmRelayedSwitch()
-		if m.awaitingModelSwitch && m.switchTarget != "" && m.switchedTo.model == m.switchTarget {
+		// A stopped turn never answered on the new model; the next reply saves it.
+		if !m.cancelPending {
+			m.confirmRelayedSwitch()
+		}
+		if m.awaitingModelSwitch && m.switchTarget != "" && sameModelID(m.switchedTo.model, m.switchTarget) {
 			m.rememberModel(m.switchedTo)
-			if m.startup.inFlight && m.switchTarget == m.startup.model {
+			if m.startup.inFlight && sameModelID(m.switchTarget, m.startup.model) {
 				m.startup.confirmed = true
 				m.startup.warmNext = true
 				if m.startup.kind == StartupRestore {
@@ -345,18 +336,13 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			cachedTok: usage.CachedTokens,
 			measured:  usage.InputTokens > 0 || usage.Tokens > 0,
 		})
-		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
-		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil
 		// The turn is over, so any question it was waiting on is dead. Leaving
 		// the panel up would swallow every keystroke into a question nobody is
 		// listening to — the composer becomes unreachable and Esc quits the app.
 		m.question = nil
-		// A still-pending confirmation was resolved above, before commitWork —
-		// and on the current email sidecar that is the ORDINARY case: the
-		// stateless D1 stub sends this final refusal in the same stream read the
-		// needs_confirmation event arrived on, before a human can plausibly react.
+		// A still-pending confirmation was resolved above, before commitWork.
 		if usage.Steps > 0 {
 			m.totalSteps = usage.Steps
 		}
@@ -389,7 +375,6 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		} else {
 			m.messages = append(m.messages, Message{Role: RoleError, Content: sanitizeErrorText(e.Detail)})
 		}
-		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil
 		m.question = nil
@@ -470,12 +455,11 @@ func (m ChatModel) answerQuestion(requestID, value string) tea.Cmd {
 }
 
 // resolveConfirmationOnTurnEnd clears a still-pending confirmation when the
-// run's own terminal event gets there first — which, against the current
-// email sidecar's stateless D1 stub, is the NORMAL case: `needs_confirmation`
-// is immediately followed, in the same stream read, by a synthesized `final`
-// refusal (docs/spec/agent-ui-query-sse-contract.md §5). Leaving the modal up
-// would trap every keystroke in a decision that can no longer change anything
-// — the composer becomes unreachable, exactly the bug m.question=nil already
+// run's own terminal event gets there first — for a stateless sidecar,
+// `needs_confirmation` is immediately followed, in the same stream read, by a
+// synthesized `final` refusal (docs/spec/agent-ui-query-sse-contract.md §5).
+// Leaving the modal up would trap every keystroke in a decision that can no
+// longer change anything — the composer becomes unreachable, exactly the bug m.question=nil already
 // fixes for a mid-run question. The gated step's row is the durable record of
 // what happened.
 func (m *ChatModel) resolveConfirmationOnTurnEnd() {
@@ -585,9 +569,8 @@ func confirmationOutcomeText(msg components.ConfirmationDecidedMsg) (text string
 // confirmAction delivers the user's decision on the transport's out-of-band
 // confirm seam. Only reachable when the triggering event carried a
 // confirm_url — the resume model (spec §5). No shipped sidecar sets that
-// field today, so this path exists for forward compatibility and is not
-// exercised against the current email agent; see ConfirmationModel's doc
-// comment for the full picture.
+// field today, so this path exists for forward compatibility; see
+// ConfirmationModel's doc comment for the full picture.
 func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 	confirmer, ok := m.client.(client.AgentConfirmer)
 	if !ok {

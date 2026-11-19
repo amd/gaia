@@ -13,6 +13,7 @@ at all.
 """
 
 import http.client
+import ssl
 import sys
 import urllib.error
 from pathlib import Path
@@ -154,6 +155,38 @@ def test_request_timeout_408_is_warning_and_retried(monkeypatch):
     assert status == "warning"
     assert "408" in detail
     assert urlopen.call_count == 1 + cdl.EXTERNAL_LINK_RETRIES
+
+
+def _cert_error(message):
+    err = ssl.SSLCertVerificationError(
+        1, f"[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: {message}"
+    )
+    err.verify_message = message
+    return urllib.error.URLError(err)
+
+
+def test_an_expired_site_certificate_is_unverified_not_broken():
+    """cmake.org let its certificate lapse; the link itself was still right."""
+    with patch(
+        "urllib.request.urlopen", side_effect=_cert_error("certificate has expired")
+    ):
+        status, detail = cdl.check_external_link("https://cmake.org/download/")
+    assert status == "warning"
+    assert "expired" in detail
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Hostname mismatch, certificate is not valid for 'example.org'",
+        "self-signed certificate",
+    ],
+)
+def test_other_certificate_failures_stay_broken(message):
+    """A wrong host or a self-signed certificate can mean the link points somewhere wrong."""
+    with patch("urllib.request.urlopen", side_effect=_cert_error(message)):
+        status, _ = cdl.check_external_link("https://example.org/page")
+    assert status == "broken"
 
 
 if __name__ == "__main__":

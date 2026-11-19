@@ -6,7 +6,100 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
+
+### Changed
+
+- **A command or snippet that starts a never-ending server is refused before it
+  runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
+  wait on it until the turn timed out; they now return an error that says so and
+  how to serve the folder instead. Code that only writes a server to a file still
+  runs. Each live-browser result now starts with where it ran, such as
+  `(headless browser)`.
+- **A chat in GAIA desktop can drive the browser pane beside it.** A new bundled
+  skill, `browser-pane`, adds nine tools that take a picture of the page, read
+  its console and network logs, press keys, answer page boxes, change screen
+  size, switch tabs, run several steps at once, run a short script on a
+  localhost page, and start a project's dev server on 127.0.0.1
+  (`browser-pane/dev_server`). The skill is offered only in a chat open in GAIA
+  desktop with the pane, and its tools join the list only once it loads, so the
+  registered tool count stays 105. `browser-pane/browser_eval` asks every time
+  and shows the whole script; the others ask before a site not yet approved, a
+  control that may not be undoable, or starting a server. Full access does not
+  skip the script or a new server: a person still approves them, and a run with
+  nobody to ask refuses them.
+
+### Fixed
+
+- A reply that goes quiet partway through is requested again, up to twice,
+  instead of ending the turn; the work done so far is kept either way.
+
+## [0.3.6]
+
+Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+
+- **A terminal UI chat follows Settings too.** Its one long-lived agent now
+  rebuilds before a message when the model server or an MCP connector changed,
+  keeping its transcript and what the session set, as Agent UI chats do.
+- **Skills added or removed reach open chats.** The skill list in an agent's
+  prompt came from a cached scan, so a skill added in Settings › Skills was
+  missing from chats already open, and a removed one stayed listed. Each turn
+  now checks the skill folders and rebuilds the list only when they changed,
+  in the Agent UI and the terminal UI.
+- **A model server chosen in Settings reaches open chats.** A session's model
+  client kept the Lemonade Server it was built on, so after switching between
+  GAIA's own and yours an open chat kept asking the old one, or waited for
+  GAIA's stopped server to come back. A session now rebuilds its agent on its
+  next turn when the chosen server changed, keeping the conversation.
+- **An MCP connector changed in Settings reaches open chats.** A session's
+  agent registered its MCP tools once, so a connector turned off stayed
+  callable and one turned on never appeared until GAIA restarted. A session now
+  rebuilds its agent on its next turn when the server list or activations
+  changed, keeping the conversation and loaded skills. The flagship also checks
+  activation as `installed:gaia` however it is built, as Settings shows it, and
+  offers only the MCP tools it registered itself, not those another session
+  left in the process.
+- **Deleting a conversation can stop its MCP servers (contract 2.30).**
+  `DELETE /v1/gaia/sessions/{session_id}` ends a session and closes its agent,
+  which stops the servers it started. Until now a session's servers ran until it
+  idled out, up to 4 hours, so a host that deleted chats kept every chat's
+  servers running. An unknown session is a `404`; one running a turn is a `409`.
+- **Closing an agent stops the MCP servers it started.** Each server is a
+  process tree (`uvx`, `uv`, the server), and it used to outlive the agent:
+  an agent built for one request left its servers running for good.
+- **The agent stops when the GAIA daemon that started it is killed.** It used
+  to keep running, holding memory and a port, until the next daemon started.
+  It now notices within seconds and shuts down normally.
+- **The Agent UI no longer calls a model server GAIA doesn't run "not
+  installed".** When that server stopped answering, a run's `error` ended with
+  this machine's start instruction, which on a PC with no Lemonade of its own
+  read "Lemonade Server is not installed. Run `gaia init`". The `error` now says
+  the model server didn't answer: send the message again, and if it keeps
+  failing the server is its owner's to start. For a `/query` with `surface:
+  "agent_ui"` it names no command; the TUI and other callers still get this
+  machine's start instruction.
+- **A session switched to another model behaves like one started on it.** A
+  `/query` naming a different `model` swaps the session's client in place. The
+  swap now also moves what was chosen for the first model: image reading (off
+  on an NPU model, on again after a switch to a GPU one), the model documents
+  are summarized with, context eviction, and the `set_reasoning_effort` tool
+  for a model that grades reasoning. A failed switch still leaves the session
+  exactly as it was.
+- **`provider: "lemonade"` with no `model` uses the configured default.** A
+  session moved back from Claude went to Gemma 4 E4B even when `default_model`
+  named another model.
+- **A model name the server doesn't list fails with a plain reason.** A
+  `/query` for a model id outside the model server's catalog answered 500 with
+  the raw preload error and a restart command. It now answers 503 saying there
+  is no model by that name to download, with the caller's own way to pick
+  another. For `surface: "agent_ui"`, a start failure's detail no longer names
+  a terminal command.
+- **Cancel says how many attached documents were left unloaded.**
+  `POST /v1/gaia/query/{run_id}/cancel` now returns `documents_left` when it
+  stops the loading of the turn's attached documents, including for a cancel
+  that lands just after the run ended. A host that closes the stream on Stop
+  never read the loading step's "Stopped: N documents were not loaded" result,
+  so its user was told nothing. The field is `null` when nothing was left.
 
 - **No "I haven't confirmed this works" line under an answer that already
   reports the failure.** An answer such as "No, the suite fails: 1 failed",
@@ -60,6 +153,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `documents` and this turn leaves out (the user detached it, or deleted it from
   the library) is dropped from the session's index, so answers stop quoting it.
   An empty `documents` list drops them all.
+- **A detached document can no longer be read either.** The agent dropped it
+  from the index but kept its permission to read the file, so asking about it
+  by name indexed it again from disk. The permission now goes with it, and a
+  copy kept in GAIA's own documents folder is refused until it is attached
+  again. A folder the caller granted still covers the files inside it.
 - **A turn the output limit keeps cutting off says what to do next.** It told
   the user to "retry with a higher output-token limit (max_tokens)", a setting
   the apps don't have, dropped what the turn had done, and sent no token counts,
@@ -97,6 +195,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   codec, so a degree sign landed as the cp1252 byte `0xB0`. Scripts now run in
   UTF-8 mode, in the packaged binary too.
 
+- **The terminal UI's executable is `gaia-cli`, not `gaia-tui`.** It is the same
+  rename a full GAIA install makes. The package writes the binary as
+  `gaia-cli[.exe]` in its cache; `npx @amd-gaia/gaia` starts it as before. A
+  `gaia-tui` left in an older cache folder is unused.
+
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
   directory now go in the session context at the start of the first user
@@ -130,7 +233,7 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   (with `--history-file`) keeps a listing beside the session's transcript:
   its title, whether it is running, waiting on a permission prompt, done or
   failed, and each finished turn in readable form. `/sessions` and
-  `gaia-tui --resume` list and reopen sessions from it. Nothing changes for the
+  `gaia-cli --resume` list and reopen sessions from it. Nothing changes for the
   HTTP surface, or for a launch without the flag.
 - **One MCP server with a bad repeat-call declaration no longer takes the
   others down.** An MCP server tool can name the arguments the repeat-call
@@ -221,6 +324,17 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Changed
 
+- **The standalone email agent is gone; mail is this agent's job.**
+  `@amd-gaia/agent-email` and `gaia-agent-email` are removed, along with
+  `gaia email`. This agent reads Gmail or Outlook through its eight read-only
+  mail tools and the `inbox-triage` skill, and drafts and sends through the
+  `send-email` skill, with the Google or Microsoft connector. Organizing,
+  undo, briefings and autonomous runs went with the old agent. See the Email
+  section in the README.
+  On upgrade GAIA removes the old agent's install folder when it is provably
+  that install, clears its leftover connector state, and names any
+  scheduled email that will no longer be sent. The old agent's data stays in
+  `~/.gaia/email/`. Installing the `email` agent id is refused.
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,

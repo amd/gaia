@@ -44,7 +44,7 @@ func TestChatRelaysOutAfterAResizeOnTheGatewayScreen(t *testing.T) {
 func TestChatRelaysOutAfterAResizeOnACancelledSwitchGate(t *testing.T) {
 	m, _ := liveChatModel(t, catalog.FlagshipID)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
-	next, _ = next.(FlagshipModel).switchAgent("email")
+	next, _ = next.(FlagshipModel).switchAgent(sampleSidecarID)
 	next, _ = next.(FlagshipModel).Update(tea.WindowSizeMsg{Width: 50, Height: 20})
 	next, _ = next.(FlagshipModel).cancelFromGate()
 	m = next.(FlagshipModel)

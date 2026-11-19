@@ -4,6 +4,7 @@
 /** Types shared across the GAIA Agent UI frontend. */
 
 import type { TurnSummaryResponse } from './api.gen';
+import type { PageElementWire } from '../../services/browser-pane/contract';
 import type { SetupNpuProblem } from './setup';
 
 export * from './setup';
@@ -27,7 +28,7 @@ export interface Session {
     agent_type?: string;
     /** Device used for this session (cpu / gpu / npu). */
     device?: string;
-    /** Mail provider for email-triage sessions ("google" | "microsoft"). */
+    /** Mailbox the session's mail tools read ("google" | "microsoft"). */
     mail_provider?: string | null;
     /** Whether chat leaves this machine; null/absent when the backend can't tell. */
     inference_remote?: boolean | null;
@@ -188,7 +189,10 @@ export interface ConnectorRow {
      * apply.
      */
     enabled: boolean;
+    /** The default account's address. */
     account_id: string | null;
+    /** Every signed-in account of an OAuth connector, oldest first; absent for MCP servers. */
+    accounts?: ConnectorAccount[];
     scopes: string[];
     /**
      * Per-agent MCP-tool-visibility activation snapshot (issue #1005).
@@ -238,6 +242,14 @@ export interface ConnectorRow {
         client_id: string | null;
         has_secret: boolean;
     } | null;
+}
+
+/** One signed-in account of an OAuth connector. `account_id` is the provider's stable id. */
+export interface ConnectorAccount {
+    account_id: string;
+    email: string;
+    status: 'ok' | 'reauth_required' | 'error';
+    is_default: boolean;
 }
 
 /** A catalog connector whose live state the backend failed to read; its summary raised. */
@@ -387,8 +399,8 @@ export interface TurnPerformance {
     /** A null name is tool time measured outside any recorded step. */
     tools: Array<{ name: string | null; seconds: number | null }>;
     loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
-    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). */
-    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported'; usd: number | null };
+    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). `no_reply`: a cloud turn that failed or was stopped before any reply; spending leaves it out. */
+    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported' | 'no_reply'; usd: number | null };
     /** Why a value is unknown, keyed by field. */
     unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
 }
@@ -484,6 +496,8 @@ export interface Message {
     historyNotice?: string;
     /** Sources, files and data flow of the turn, for the side rail (#5222). */
     turnSummary?: TurnSummary;
+    /** Elements the user picked in the browser pane and sent with this message. */
+    page_elements?: PageElementWire[] | null;
     /** Notices from adding indexed files to the document library. */
     libraryNotices?: string[];
 }
@@ -871,10 +885,14 @@ export interface AgentStep {
     result?: string;
     /** Whether this step completed successfully. */
     success?: boolean;
+    /** A finished status the user waited on, such as a download; drawn with the turn (for type='status'). */
+    kept?: boolean;
     /** The user said no to this call, so it never ran (for type='tool'). */
     declined?: boolean;
     /** Nobody answered its permission prompt in time, so it never ran (for type='tool'). */
     timedOut?: boolean;
+    /** GAIA turned this call down itself without asking, so it never ran (for type='tool'). */
+    autoDeclined?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
     /** Plan steps (for type='plan'). */

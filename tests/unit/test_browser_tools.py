@@ -1487,6 +1487,25 @@ class TestDuckDuckGoFailuresAreNotEmptyResults:
             with pytest.raises(RuntimeError, match=f"HTTP {status}"):
                 self.client.search_duckduckgo("test query")
 
+    @pytest.mark.parametrize(
+        "status, hint",
+        [
+            (500, "may be down"),
+            (502, "may be down"),
+            (404, "rejected the request"),
+            (204, "Try again later"),
+            (302, "Try again later"),
+        ],
+    )
+    def test_an_error_status_carries_its_code_and_a_next_step(self, status, hint):
+        from gaia.web.client import SearchStatusError
+
+        with self._respond(status, "<html></html>"):
+            with pytest.raises(SearchStatusError) as excinfo:
+                self.client.search_duckduckgo("test query")
+        assert excinfo.value.status == status
+        assert hint in str(excinfo.value)
+
     def test_a_200_with_no_results_is_a_genuine_empty_answer(self):
         with self._respond(200):
             assert self.client.search_duckduckgo("xyzzy 12345") == []

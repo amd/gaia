@@ -18,6 +18,8 @@ import { UpdateIndicator } from './components/UpdateIndicator';
 import { DownloadChip } from './components/setup/DownloadChip';
 import { NotificationCenter } from './components/NotificationCenter';
 import { FlagshipAgentNotice } from './components/FlagshipAgentNotice';
+import { BrowserPane } from './components/browser-pane/BrowserPane';
+import { browserPaneApi, useBrowserPaneStore } from './stores/browserPaneStore';
 import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
@@ -246,6 +248,20 @@ function App() {
     useEffect(() => {
         if (setup.state === 'serverDown' && lemonadeRunning) void checkSetup(true);
     }, [setup.state, lemonadeRunning, checkSetup]);
+
+    // The poll sees it gone while the app is open: show the launch notice without a reload.
+    const lemonadeDown = useChatStore((s) => s.systemStatus?.lemonade_running === false);
+    useEffect(() => {
+        if (setup.state !== 'ready' || !lemonadeDown) return;
+        let stale = false;
+        api.checkSetup(!!useModelStore.getState().active?.remote)
+            .then((check) => {
+                // Only an outage: anything else missing is not a reason to leave the chat.
+                if (!stale && !check.ready && check.stage === 'server' && check.initialized) setSetup({ state: 'serverDown', modelListUnread: !!check.model_list_unread });
+            })
+            .catch((err) => log.system.warn('Could not confirm the model server is down', err));
+        return () => { stale = true; };
+    }, [setup.state, lemonadeDown]);
 
     // Only the latest read may set the list; an older one in flight predates whatever setup installed.
     const agentsReadSeq = useRef(0);
@@ -581,6 +597,8 @@ function App() {
         clearSavedDraft(NEW_CHAT_DRAFT_KEY);
         if (modeError && !session.private) writeSavedDraft(chatDraftKey(session.id), text);
         addSession(session);
+        // Before the switch, so main moves the screen's tabs instead of showing the chat empty.
+        useBrowserPaneStore.getState().claimDraft(session.id);
         setCurrentSession(session.id);
         setMessages([]);
         setDraftText('');
@@ -835,6 +853,8 @@ function App() {
         );
     }
 
+    // Beside a chat or a new chat, in the desktop app only.
+    const paneApi = !showMemoryDashboard && !showSchedules ? browserPaneApi() : undefined;
     const main = showMemoryDashboard ? (
         <Suspense fallback={<Loading />}><MemoryDashboard /></Suspense>
     ) : currentSessionId ? (
@@ -910,6 +930,7 @@ function App() {
                     {main}
                 </ErrorBoundary>
             </div>
+            {paneApi && <BrowserPane api={paneApi} />}
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
             {showDocLibrary && <Suspense fallback={null}><DocumentLibrary /></Suspense>}

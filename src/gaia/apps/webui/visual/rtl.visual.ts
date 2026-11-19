@@ -571,6 +571,17 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the memory chip opens a menu that says what Private does (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.locator('.composer-chip-memory').click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-item')).toHaveCount(2);
+        await shot(page, `memory-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const LONG_TITLES = {
     latin: 'My own typed question Give me a banana bread recipe with walnuts and brown butter',
     arabic: 'سؤالي الذي كتبته بنفسي أعطني وصفة خبز الموز مع الجوز والزبدة البنية',
@@ -674,6 +685,114 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
+    });
+}
+
+const PICTURE = '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800"><rect width="1200" height="800" fill="#6a8fd8"/><circle cx="880" cy="240" r="110" fill="#ffe08a"/></svg>';
+
+async function withSentImages(page: Page): Promise<void> {
+    await page.route('**/api/files/uploads/*', (route) => route.fulfill({ status: 200, contentType: 'image/svg+xml', body: PICTURE }));
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [{
+                    id: 1, session_id: ANSWER_SESSION, role: 'user', created_at: NOW.toISOString(), rag_sources: null,
+                    content: 'ما رأيك؟\n\n![a.png](/api/files/uploads/a1.png)\n![b.png](/api/files/uploads/b2.png)\n![c.png](/api/files/uploads/c3.png)',
+                }],
+                total: 1,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`sent images are small tiles, and the viewer steps the way the page reads (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withSentImages);
+        const tiles = page.locator('.image-thumb');
+        await expect(tiles).toHaveCount(3);
+        for (const box of await tiles.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height))) {
+            expect(box).toBeLessThanOrEqual(160);
+        }
+        expect(await audit(page)).toEqual([]);
+        await tiles.first().click();
+        const dialog = page.getByRole('dialog');
+        await expect(dialog).toBeVisible();
+        const prev = await dialog.locator('.image-viewer-prev').boundingBox();
+        const next = await dialog.locator('.image-viewer-next').boundingBox();
+        expect(locale === 'ar' ? prev!.x > next!.x : prev!.x < next!.x, 'previous sits at the start edge').toBe(true);
+        const img = await dialog.locator('.image-viewer-img').boundingBox();
+        expect(img!.x).toBeGreaterThanOrEqual(0);
+        expect(img!.x + img!.width).toBeLessThanOrEqual(1400);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`image-viewer-${locale}.png`) });
+    });
+}
+
+const RAW_MODEL_ERROR = "Failed to start the query run: Failed to preload Lemonade model 'no-such-model-xyz-123' with ctx_size=65536 "
+    + "on idle server at http://localhost:64679/api/v1: Failed to auto-download 'no-such-model-xyz-123': Download failed: "
+    + 'When registering a new model, the model name must include the `user` namespace. Received: no-such-model-xyz-123';
+
+async function withFailedTurn(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Say hello.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: RAW_MODEL_ERROR, created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [{ id: 1, type: 'error', label: 'Error', detail: RAW_MODEL_ERROR, active: false, success: false }],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed turn names the cause and offers Settings, with the server error under Details (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailedTurn);
+        const reply = page.locator('.msg-error');
+        await expect(reply.locator('.msg-failed-lead')).toBeVisible();
+        await expect(reply.locator('details.msg-failed-details')).not.toHaveAttribute('open', '');
+        // Collapsed, the server's words are not on screen.
+        await expect(reply.locator('.msg-failed-details .md-content')).toBeHidden();
+        await expect(reply.locator('.msg-try-again', { hasText: '›' })).toHaveCount(1);
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`failed-turn-${locale}.png`) });
+        await reply.locator('.msg-failed-details summary').click();
+        await expect(reply.locator('.msg-failed-details .md-content')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`failed-turn-open-${locale}.png`) });
+    });
+
+    test(`a failed turn's Settings button lands on the setting it names (${locale})`, async ({ page }) => {
+        const worded = "There is no model called `no-such-model-xyz-123` to download: the model server doesn't list it. "
+            + 'If you typed this model ID yourself, clear it under Settings > Advanced > Custom model ID.';
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: {
+                    messages: [
+                        { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Say hello.', created_at: NOW.toISOString(), rag_sources: null },
+                        { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: worded, created_at: NOW.toISOString(), rag_sources: null, failed: true },
+                    ],
+                    total: 2,
+                },
+            }));
+            await p.route('**/api/settings', (route) => route.fulfill({ json: {
+                custom_model: 'no-such-model-xyz-123', model_status: { found: false, checked: true, downloaded: false, loaded: false },
+                context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+            } }));
+        });
+        await page.locator('.msg-error .msg-try-again').filter({ hasText: /Advanced|متقدم/ }).click();
+        const custom = page.locator('details[data-settings-target="custom-model"]');
+        // Opened and focused, not the top of the tab (#7861).
+        await expect(custom).toHaveAttribute('open', '');
+        await expect(custom.locator('summary')).toBeFocused();
+        await expect(custom.locator('input')).toBeInViewport();
+        await expect(page.locator('.settings-back')).toHaveCount(0);
+        await shot(page, `failed-turn-to-custom-model-${locale}`);
+        expect(await audit(page)).toEqual([]);
     });
 }
 
@@ -1377,7 +1496,8 @@ test('resource usage strip', async ({ page }) => {
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
     await expect(strip.locator('li')).toHaveCount(5);
     await expect(strip.getByText('45.0/63.6 GB')).toBeVisible();
-    await expect(strip.locator('li').last()).toContainText(/↑.*0.*↓.*8\.0.*Kbps/);
+    // The unit follows the Arabic figures, not only the English in brackets, which a narrow tile cuts.
+    await expect(strip.locator('li').last()).toContainText(/↑[^(]*0[^(]*↓[^(]*8\.0[^(]*Kbps/);
     // The close button sits at the row's end, which is the left in rtl.
     const closeBox = (await strip.getByRole('button').boundingBox())!;
     const firstTile = (await strip.locator('li').first().boundingBox())!;
@@ -1385,6 +1505,17 @@ test('resource usage strip', async ({ page }) => {
     await expectClearOfPanel(page);
     expect(await audit(page)).toEqual([]);
     await page.screenshot({ path: 'visual/test-results/resource-strip-ar.png' });
+});
+
+test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`);
+    await page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' }).getByRole('button').click();
+    const note = page.locator('.resource-hidden-note');
+    await expect(note).toContainText('أيقونة النبض');
+    await expect(note.getByRole('button')).toBeVisible();
+    await expectClearOfPanel(page);
+    expect(await audit(page)).toEqual([]);
+    await page.screenshot({ path: 'visual/test-results/resource-strip-ar-closed.png' });
 });
 
 test('resource usage strip with no GPU counters keeps CPU and memory', async ({ page }) => {
@@ -1466,6 +1597,77 @@ test('document being indexed', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    // The dialog was centred on its content, so its title and path box jumped as rows came and went.
+    test(`the document library stays put as rows arrive, and long names keep their end (${locale})`, async ({ page }) => {
+        const names = [
+            'Quarterly business review for the regional sales team final draft v7 (reviewed by finance).pdf',
+            'مراجعة الأعمال الفصلية لفريق المبيعات الإقليمي المسودة النهائية الإصدار السابع.docx',
+            'garden-notes.txt',
+        ];
+        let listed = false;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: listed
+                ? { documents: names.map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096, chunk_count: 2, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 })), total: 3, total_size_bytes: 1, total_chunks: 1 }
+                : { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 } }));
+        });
+        // Read the top once the panel's slide-in (12px) has landed, or a slow runner measures mid-slide.
+        const settledTop = async () => {
+            const modal = page.locator('.doc-modal');
+            await modal.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+            return (await modal.boundingBox())!.y;
+        };
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.empty-docs')).toBeVisible();
+        const topEmpty = await settledTop();
+        listed = true;
+        // Re-open, which lists again: the same dialog with three rows.
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.doc-modal')).toHaveCount(0);
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-row')).toHaveCount(3);
+        expect(Math.abs((await settledTop()) - topEmpty)).toBeLessThan(1);
+        const tail = page.locator('.doc-name-tail').first();
+        await expect(tail).toHaveText(/finance\)\.pdf$/);
+        await expect(tail).toBeInViewport();
+        // A name in the other script still starts at the UI's own edge.
+        const other = page.locator('.doc-name-split').nth(locale === 'ar' ? 0 : 1);
+        const [textBox, infoBox] = await other.evaluate((el) => {
+            const parts = [...el.children].map((c) => c.getBoundingClientRect());
+            const info = el.closest('.doc-info')!.getBoundingClientRect();
+            return [
+                { left: Math.min(...parts.map((r) => r.left)), right: Math.max(...parts.map((r) => r.right)) },
+                { left: info.left, right: info.right },
+            ];
+        });
+        if (locale === 'ar') expect(Math.abs(textBox.right - infoBox.right)).toBeLessThan(2);
+        else expect(Math.abs(textBox.left - infoBox.left)).toBeLessThan(2);
+        // A long Arabic name ends with ".docx" read left to right, never "docx." at its front.
+        const arabic = page.locator('.doc-name-split').nth(1);
+        const ext = await arabic.evaluate((el) => {
+            const last = el.lastElementChild!;
+            const text = last.firstChild!;
+            const box = (from: number, to: number) => {
+                const r = document.createRange();
+                r.setStart(text, from);
+                r.setEnd(text, to);
+                return r.getBoundingClientRect();
+            };
+            const at = (text.textContent ?? '').lastIndexOf('.');
+            return {
+                text: last.textContent,
+                box: last.getBoundingClientRect(),
+                dot: box(at, at + 1), word: box(at + 1, at + 5),
+            };
+        });
+        expect(ext.dot.right, 'the dot should come before "docx", read left to right').toBeLessThanOrEqual(ext.word.left + 0.5);
+        expect(ext.text).toBe('.docx');
+        // The name runs right to left, so its end, the extension, is its left-most part.
+        const headBox = await arabic.locator('.doc-name-head').boundingBox();
+        expect(ext.box.right).toBeLessThanOrEqual(headBox!.x + 0.5);
+        await shot(page, `documents-${locale}-long-names`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     // A file GAIA couldn't read used to be counted with the readable ones.
     test(`a document library with a file that could not be read (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
@@ -1875,6 +2077,18 @@ test.describe('English', () => {
         await expectClearOfPanel(page);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: 'visual/test-results/resource-strip-en.png' });
+    });
+
+    test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await page.getByRole('button', { name: 'Hide resource usage' }).click();
+        const note = page.locator('.resource-hidden-note');
+        await expect(note).toContainText('pulse icon');
+        await expectClearOfPanel(page);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en-closed.png' });
+        await note.getByRole('button', { name: 'Show resource usage' }).click();
+        await expect(page.getByRole('region', { name: 'Resource usage on this PC' })).toBeVisible();
     });
 
     test('resource usage strip on a wide window is one row', async ({ page }) => {
@@ -2364,6 +2578,57 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+// Opening and switching ease in on purpose; with reduced motion asked for, nothing moves.
+test.describe('arrivals ease in (en)', () => {
+    const openSkills = async (page: Page, motion: 'no-preference' | 'reduce') => {
+        await open(page, '', 'en', withSettingsPanes);
+        await page.emulateMedia({ reducedMotion: motion });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        await expect(page.locator('.settings-pane-title')).toBeVisible();
+    };
+
+    // The section's height on each of the 20 frames after its summary is clicked.
+    const openFrames = (page: Page) => page.locator('.settings-pane details:not([open])').first().evaluate((el) =>
+        new Promise<number[]>((done) => {
+            const heights: number[] = [];
+            (el.querySelector('summary') as HTMLElement).click();
+            const tick = () => {
+                heights.push(el.getBoundingClientRect().height);
+                if (heights.length < 20) requestAnimationFrame(tick);
+                else done(heights);
+            };
+            requestAnimationFrame(tick);
+        }));
+
+    test('a section grows open over several frames instead of jumping', async ({ page }) => {
+        await openSkills(page, 'no-preference');
+        const heights = await openFrames(page);
+        const full = heights[heights.length - 1];
+        const between = heights.filter((h) => h > heights[0] + 1 && h < full - 1);
+        expect(between.length, `heights: ${heights.map(Math.round).join(' ')}`).toBeGreaterThanOrEqual(3);
+    });
+
+    test('with reduced motion a section opens at once', async ({ page }) => {
+        await openSkills(page, 'reduce');
+        const heights = await openFrames(page);
+        // It may snap a frame late under load, but never passes through a height in between.
+        const full = heights[heights.length - 1];
+        const between = heights.filter((h) => h > heights[0] + 1 && h < full - 1);
+        expect(between, `heights: ${heights.map(Math.round).join(' ')}`).toEqual([]);
+    });
+
+    test('a Settings tab fades in when picked', async ({ page }) => {
+        await openSkills(page, 'no-preference');
+        await page.locator('.settings-pane').evaluate((el) => el.setAttribute('data-was', 'skills'));
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        // A new pane element, so its entry animation plays again, and that animation is the fade.
+        const pane = page.locator('.settings-pane');
+        await expect(pane).not.toHaveAttribute('data-was', 'skills');
+        expect(await pane.evaluate((el) => getComputedStyle(el).animationName)).toBe('fadeIn');
+    });
+});
+
 for (const locale of ['en', 'ar']) {
     test(`the model menu leads with the provider in use and asks before a download (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
@@ -2388,6 +2653,16 @@ for (const locale of ['en', 'ar']) {
         expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
     });
 }
+
+/** A Google connector holding these accounts, as GET /api/connectors sends it. */
+const MULTI_ACCOUNT_GOOGLE = (accounts: Array<{ account_id: string; email: string; status: string; is_default: boolean }>) => ({
+    id: 'google', display_name: 'Google', type: 'oauth_pkce', icon: null, category: 'email', tier: 'core',
+    description: 'Connect GAIA to your Google account for Gmail, Calendar, Drive, and more.', product_url: 'https://example.com', docs_url: null,
+    configured: accounts.some((a) => a.status === 'ok'), configurable: true, enabled: true,
+    account_id: accounts.find((a) => a.is_default && a.status === 'ok')?.email ?? null, accounts,
+    scopes: ['openid'], default_scopes: [], available_scopes: [], mcp_env_keys: [], oauth_setup_fields: [], supports_device_code: false,
+    oauth_client: { source: 'env', client_id: 'example-client', has_secret: false },
+});
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings connectors (${locale})`, () => {
@@ -2562,6 +2837,83 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `connectors-${locale}-check-slow`);
             expect(await audit(page)).toEqual([]);
             if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+        });
+
+        test('several accounts: a row each, one expired, a long address, and the disconnect question', async ({ page }) => {
+            const accounts = [
+                { account_id: 'a1', email: 'jane.with.a.rather.long.name@example.com', status: 'ok', is_default: true },
+                { account_id: 'a2', email: 'jane.work@example.com', status: 'ok', is_default: false },
+                { account_id: 'a3', email: 'jane@outlook-example.com', status: 'reauth_required', is_default: false },
+            ];
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE(accounts)]);
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await expect(tile.locator('.connector-status.failed')).toBeVisible();
+            await tile.locator('.connector-tile-header').click();
+            await expect(tile.locator('.connector-account')).toHaveCount(3);
+            await tile.locator('.connector-accounts').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-accounts-open`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+            // Each address keeps to the start edge of its row, cut in its middle, whole on hover.
+            const address = tile.locator('.account-address').first();
+            await expect(address).toHaveAttribute('title', accounts[0].email);
+            await expect(address).toHaveText(/…@example\.com$/);
+            const edge = await tile.locator('.connector-account').first().evaluate((row) => {
+                const a = row.querySelector('.account-address')!.getBoundingClientRect();
+                const r = row.getBoundingClientRect();
+                return getComputedStyle(row).direction === 'rtl' ? r.right - a.right : a.left - r.left;
+            });
+            expect(edge, 'the address drifted off the start edge').toBeLessThan(16);
+            // Long Arabic labels push the actions to a second line rather than over the address.
+            const spilled = await tile.locator('.connector-account').evaluateAll((rows) => rows.flatMap((row) => {
+                const r = row.getBoundingClientRect();
+                return [...row.querySelectorAll('.connector-account-who, .account-address, .connector-status, button')].filter((el) => {
+                    const b = el.getBoundingClientRect();
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    const text = range.getBoundingClientRect();
+                    return Math.min(b.left, text.left) < r.left - 1 || Math.max(b.right, text.right) > r.right + 1
+                        || (el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0);
+                }).map((el) => `${el.className || el.tagName}: ${el.textContent}`);
+            }));
+            expect(spilled, 'an account row spills out of its box').toEqual([]);
+
+            await tile.locator('.connector-account').nth(1).locator('.connector-account-actions .btn-secondary').last().click();
+            const ask = page.locator('.confirm-sheet');
+            await expect(ask).toContainText('jane.work@example.com');
+            await shot(page, `connectors-${locale}-accounts-disconnect`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('one account: unchanged, plus a quiet link to add another', async ({ page }) => {
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE([{ account_id: 'a1', email: 'jane@example.com', status: 'ok', is_default: true }])]);
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await tile.locator('.connector-tile-header').click();
+            await expect(tile.locator('.connector-add-account')).toBeVisible();
+            await expect(tile.locator('.connector-account')).toHaveCount(0);
+            await tile.locator('.configure-actions').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-accounts-one`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a Disconnect that finds several accounts names them all and asks first', async ({ page }) => {
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE([{ account_id: 'a1', email: 'jane@example.com', status: 'ok', is_default: true }])]);
+            // Another window added sam@ since this tile loaded, so the server refuses a plain disconnect.
+            await page.route('**/api/connectors/google', (route) => (route.request().method() === 'DELETE' ? route.fulfill({
+                status: 409,
+                json: { detail: {
+                    error: 'account_choice_required', connector_id: 'google', choices: ['jane@example.com', 'sam@example.com'],
+                    message: 'google has 2 connected accounts (jane@example.com, sam@example.com). Choose one to disconnect, or disconnect them all.',
+                } },
+            }) : route.fallback()));
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await tile.locator('.connector-tile-header').click();
+            await tile.locator('.configure-actions .btn-secondary').click();
+            const ask = page.getByRole('alertdialog');
+            await expect(ask.locator('.confirm-accounts li')).toHaveCount(2);
+            await shot(page, `connectors-${locale}-disconnect-all`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.confirm-sheet', 'bdi')).toEqual([]);
         });
 
         test('phone width: a long account stays on screen', async ({ page }) => {
@@ -3537,6 +3889,11 @@ for (const locale of ['ar', 'en']) {
         const row = page.locator('.status-row--has-hint').first();
         await expect(row).toBeVisible();
         await expect(row).not.toContainText(/gaia init|Cloud providers still work/);
+        // The backend's sentence is worded in the app's language, in the row and in the banner.
+        if (locale === 'ar') {
+            await expect(row).toContainText('لا يشغّل خادم النماذج هذا');
+            await expect(page.locator('.connection-banner')).toContainText('لا يشغّل خادم النماذج هذا');
+        }
         await expect(page.getByRole('dialog').locator('.settings-card .btn-primary')).toHaveCount(0);
         await expect(page.locator('.connection-banner')).not.toContainText('gaia init');
         await shot(page, `advanced-${locale}-server-down`);
@@ -4266,7 +4623,7 @@ test.describe('labels once left in English are in Arabic', () => {
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page, '', 'ar', withoutFlagship);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
-    await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
+    await expect(page.getByRole('button', { name: /الذاكرة لهذه المحادثة/ })).toContainText(/\p{Script=Arabic}/u);
 });
 
 /** POST /api/chat/send streams `events`, then stays open, as a turn waiting on the user does. */
@@ -4283,6 +4640,42 @@ function streamThenWait(events: unknown[]): void {
         });
         return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
     };
+}
+
+const SPEECH_NPU_PART = [
+    { type: 'tool_start', tool: 'transcribe_media', detail: 'standup.wav' },
+    { type: 'status', phase: 'speech_model_download', message: "Downloading the speech model's NPU part (0.7 GB), no progress shown" },
+];
+const SPEECH_DOWNLOADED = [
+    ...SPEECH_NPU_PART,
+    { type: 'status', phase: 'speech_model_downloaded', message: 'Downloaded the speech model (2.4 GB)' },
+    { type: 'status', phase: 'recording', message: 'Transcribing 14s of audio' },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`the speech model's NPU part says why it has no percent (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_NPU_PART);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.streaming-bubble')).toContainText(/no progress shown|دون عرض للتقدّم/);
+        await shot(page, `speech-npu-part-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a finished speech model download sits above the transcription still running (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_DOWNLOADED);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        const live = page.locator('.streaming-bubble');
+        await expect(live.locator('.flow-done')).toBeVisible();
+        // In time order (#7865): the download finished first, so it is drawn first.
+        const [done, running] = [await live.locator('.flow-done').boundingBox(), await live.locator('.flow-tool.active').first().boundingBox()];
+        expect(done!.y).toBeLessThan(running!.y);
+        await shot(page, `speech-downloaded-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 const PYTHON_PROMPT = [{
@@ -4326,7 +4719,7 @@ for (const locale of ['ar', 'en'] as const) {
         await page.addInitScript(streamThenWait, [{
             type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-always',
             args: { file_path: '/private/tmp/plans/weekly-grocery-plan.md', content: '# Weekly grocery plan\n' },
-            always_scope: 'write_file on files in /private/tmp/plans', always_label: 'writing files in /private/tmp/plans',
+            always_scope: 'changes to files in /private/tmp/plans', always_label: 'changing files in /private/tmp/plans',
         }]);
         await open(page, `#${ANSWER_SESSION}`, locale);
         await page.locator('textarea').first().fill('save my grocery plan');
@@ -4367,8 +4760,15 @@ for (const locale of ['ar', 'en'] as const) {
         const card = page.locator('.perm-card');
         await expect(card).toBeVisible();
         const always = card.locator('.perm-btn').nth(1);
-        await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
-        if (locale === 'en') await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        if (locale === 'en') {
+            await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
+            await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        } else {
+            const title = await always.getAttribute('title');
+            expect(title?.replace(/[\u2066-\u2069]/g, '')).toBe(`تغيير الملفات في ${FOLDER}`);
+            await expect(always).not.toContainText('Documents');
+            expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+        }
         expect(await audit(page)).toEqual([]);
         await shot(page, `permission-folder-${locale}`);
     });
@@ -4547,6 +4947,32 @@ for (const locale of ['ar', 'en'] as const) {
         await expect(page.locator('.flow-tool-label').filter({ hasText: /run python|request user input/ })).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
         await shot(page, `declined-steps-${locale}`);
+    });
+}
+
+// A call GAIA turned down itself, for a request that only asked to translate.
+const AUTO_DECLINED_STEPS = [
+    { type: 'tool_start', tool: 'run_shell_command', narration: 'Running a command' },
+    {
+        type: 'tool_result', success: false, status: 'denied', declined_by: 'agent',
+        summary: 'Not run: the request only asks for text in the reply.',
+    },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a call GAIA turned down itself reads as not needed, not as declined (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, AUTO_DECLINED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('translate "Good morning" to French');
+        await page.keyboard.press('Enter');
+        const row = page.locator('.flow-steps.live .flow-tool').first();
+        await expect(row).toBeVisible();
+        if (locale === 'en') await expect(row.locator('.flow-tool-label')).toHaveText(/^Not run, not needed for this request: /);
+        await expect(row.locator('.flow-tool-label')).not.toContainText('You declined');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `auto-declined-step-${locale}`);
     });
 }
 
@@ -4917,7 +5343,8 @@ test('the library path row fits a phone', async ({ page }) => {
 });
 
 test('each line of an email being approved takes its own direction', async ({ page }) => {
-    const text = 'To: dana@example.com\nSubject: Hello\n\nمرحبا، هذا اختبار.';
+    // The header becomes labelled rows; the body keeps a line per direction.
+    const text = 'To: dana@example.com\nSubject: Hello\n\nHello Dana,\nمرحبا، هذا اختبار.';
     const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
     // The prompt lasts only while its stream is open, which a routed response can't do.
     await open(page, `#${ANSWER_SESSION}`, 'ar', (p) =>
@@ -4954,6 +5381,33 @@ test('each line of an email being approved takes its own direction', async ({ pa
     expect(gaps.english).toBeLessThan(40);
     expect(gaps.arabic).toBeLessThan(40);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`an email being approved names its sending account on its own row (${locale})`, async ({ page }) => {
+        const text = 'From: jane.work@example.com\nTo: priya@example.com\nSubject: The deck\n\nHi Priya, the deck is attached.';
+        const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.addInitScript((line) => {
+                const realFetch = window.fetch;
+                window.fetch = (input, init) =>
+                    String(input).endsWith('/chat/send')
+                        ? Promise.resolve(new Response(new ReadableStream({
+                            start: (controller) => controller.enqueue(new TextEncoder().encode(line)),
+                        }), { headers: { 'Content-Type': 'text/event-stream' } }))
+                        : realFetch(input, init);
+            }, `data: ${JSON.stringify(event)}\n\n`),
+        );
+        await page.locator('textarea').last().fill('send it');
+        await page.keyboard.press('Enter');
+        const header = page.getByTestId('perm-mail-header');
+        await expect(header).toBeVisible();
+        await expect(header.locator('.perm-mail-from bdi')).toHaveAttribute('dir', 'ltr');
+        if (locale === 'ar') await expect(header.locator('dt').first()).toContainText('من');
+        await page.locator('.perm-card').scrollIntoViewIfNeeded();
+        await shot(page, `approval-from-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 /** The desktop app's updater in a given state; the browser preview has none. */
 function withUpdater(update: Record<string, unknown>) {

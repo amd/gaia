@@ -48,7 +48,14 @@ from gaia.agents.base.denied_effects import (
 )
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
-from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
+from gaia.agents.base.verification import (
+    EXECUTED_KEY,
+    NOT_EXECUTED,
+    OUT_OF_TIME,
+    TIME_LIMIT_CUT_RUN,
+    cut_by_time_limit,
+    time_capped,
+)
 from gaia.agents.tools.command_timeouts import (
     MAX_COMMAND_TIMEOUT,
     TIMEOUT_CLASSES,
@@ -1560,6 +1567,35 @@ _WAIT_TOOL = "wait_for_condition"
 
 #: Output past this many characters is cut before it reaches the model.
 MAX_OUTPUT_CHARS = 10_000
+
+
+# Fields of a shell result the model reads only when they say something.
+_ONLY_ON_TIMEOUT = ("timeout", "timeout_class")
+_ONLY_WHEN_SET = ("stderr", "has_errors", "output_truncated", "check_result")
+
+
+def lean_shell_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """The copy of a ``run_shell_command`` result the model reads.
+
+    The model wrote the command, so echoing it back (twice, with ``steps``) is
+    context spent on nothing; so are empty fields and the timeout it left at
+    its default. A line of several steps keeps ``steps``: each has its own
+    exit code.
+    """
+    lean = {k: v for k, v in result.items() if k not in ("command", "shell")}
+    steps = lean.get("steps")
+    if isinstance(steps, list) and len(steps) <= 1:
+        del lean["steps"]
+    if not lean.get("timed_out"):
+        for key in _ONLY_ON_TIMEOUT:
+            lean.pop(key, None)
+    for key in _ONLY_WHEN_SET:
+        if not lean.get(key):
+            lean.pop(key, None)
+    duration = lean.get("duration_seconds")
+    if isinstance(duration, float):
+        lean["duration_seconds"] = round(duration, 1)
+    return lean
 
 
 def _truncate(text: Optional[str], stream: str) -> str:
@@ -3723,6 +3759,9 @@ def _bulk_read_credential(
     ``_BULK_TOO_LARGE`` and ``_BULK_UNKNOWN``, *path* is the folder that
     could not be checked.
     """
+    from gaia import security
+
+    linked = None  # listed on the first folder-wide read, not for every command
     for number, words in enumerate(_command_word_lists(argv)):
         for spec, includes, excludes, tree, links_only in _bulk_read_roots(
             words, rewritten and number == 0
@@ -3741,9 +3780,11 @@ def _bulk_read_credential(
             except (OSError, ValueError) as exc:
                 logger.debug("Cannot list %r for the credential check: %s", spec, exc)
                 continue
+            if linked is None:
+                linked = security.linked_secret_files()
             if tree:
                 found, complete = _tree_credential(
-                    folder, pattern, includes, excludes, links_only
+                    folder, pattern, includes, excludes, links_only, linked
                 )
                 if not complete:
                     return str(folder), _BULK_TOO_LARGE
@@ -3757,7 +3798,7 @@ def _bulk_read_credential(
                 continue
             for entry in entries:
                 if _bulk_entry_is_credential(
-                    entry, pattern, includes, excludes, links_only
+                    entry, pattern, includes, excludes, links_only, linked
                 ):
                     return entry.path, _BULK_READ
     return None
@@ -3769,6 +3810,7 @@ def _tree_credential(
     includes: list,
     excludes: list,
     links_only: bool,
+    linked: Optional[dict] = None,
 ) -> Tuple[Optional[str], bool]:
     """``(credential, complete)`` for a recursive search of *folder*.
 
@@ -3802,14 +3844,18 @@ def _tree_credential(
                 logger.debug("Cannot stat %r for the credential check: %s", entry, exc)
                 continue
             if hit and _searched_file_is_credential(
-                entry, usable_includes, excludes, links_only
+                entry, usable_includes, excludes, links_only, linked
             ):
                 return entry.path, True
     return None, True
 
 
 def _searched_file_is_credential(
-    entry: os.DirEntry, includes: list, excludes: list, links_only: bool
+    entry: os.DirEntry,
+    includes: list,
+    excludes: list,
+    links_only: bool,
+    linked: Optional[dict] = None,
 ) -> bool:
     """Whether a search that reaches *entry* reads a credential file there.
 
@@ -3831,7 +3877,9 @@ def _searched_file_is_credential(
     except OSError as exc:
         logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
         return False
-    disguised = bool(target) and _credential_file_name(target)
+    disguised = (bool(target) and _credential_file_name(target)) or _shares_secret(
+        entry, linked
+    )
     if links_only:
         return disguised and not _credential_file_name(name)
     return disguised or _credential_file_name(name)
@@ -3843,6 +3891,7 @@ def _bulk_entry_is_credential(
     includes: list,
     excludes: list,
     links_only: bool = False,
+    linked: Optional[dict] = None,
 ) -> bool:
     """Whether a folder-wide read of *entry*'s folder reads it as a credential.
 
@@ -3863,11 +3912,34 @@ def _bulk_entry_is_credential(
     except OSError as exc:
         logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
         return False
+    disguised = _credential_file_name(os.path.basename(real)) or _shares_secret(
+        entry, linked
+    )
     if links_only:
-        return not _credential_file_name(name) and _credential_file_name(
-            os.path.basename(real)
-        )
-    return _credential_file_name(name) or _credential_file_name(os.path.basename(real))
+        return not _credential_file_name(name) and disguised
+    return _credential_file_name(name) or disguised
+
+
+def _shares_secret(entry: os.DirEntry, linked: Optional[dict]) -> bool:
+    """Whether *entry* is a hard link to a file in a credential folder.
+
+    *linked* is :func:`gaia.security.linked_secret_files` for this search. A
+    second name has the same size, and the listing already knows the size, so
+    only a file of a matching size is looked up.
+    """
+    if not linked:
+        return False
+    try:
+        size = entry.stat().st_size  # a symlink's target is what gets read
+    except OSError as exc:
+        logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
+        return False
+    if size not in {secret_size for _folder, secret_size in linked.values()}:
+        return False
+    from gaia import security
+
+    identity = security.file_identity(entry.path)
+    return identity is not None and identity in linked
 
 
 def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]:
@@ -5290,20 +5362,60 @@ def _path_has_relative_entry() -> bool:
     return False
 
 
+#: A program spelled with a folder or a drive (``.\gh``, ``C:gh``), not a bare name.
+_PATH_SPELLING = re.compile(r"[\\/:]")
+
+
 def _program_on_path(name: str, cwd: str) -> Optional[str]:
     """Where PATH alone finds program *name*: never *cwd*, never a relative entry."""
+    # A drive or folder in the name would make the join below ignore PATH.
+    if _PATH_SPELLING.search(name):
+        return None
     here = os.path.normcase(os.path.realpath(cwd))
+    # cmd.exe never runs a PATH file that has no extension.
+    suffixes = _program_suffixes()[1:]
+    if os.path.splitext(name)[1].lower() in suffixes:
+        suffixes = ["", *suffixes]
     for entry in os.environ.get("PATH", "").split(os.pathsep):
         if not entry or not os.path.isabs(entry):
             continue
         if os.path.normcase(os.path.realpath(entry)) == here:
             continue
-        # cmd.exe never runs a PATH file that has no extension.
-        for suffix in _program_suffixes()[1:]:
+        for suffix in suffixes:
             candidate = os.path.join(entry, name + suffix)
             if os.path.isfile(candidate):
                 return candidate
     return None
+
+
+#: What Windows starts without a shell; a ``.bat`` or ``.cmd`` needs cmd.exe.
+_DIRECT_PROGRAM_SUFFIXES = (".exe", ".com")
+
+
+def _pin_argv_program(argv: list, cwd: str) -> list:
+    """*argv* with its bare program replaced by the file PATH alone finds.
+
+    For a Windows run with no shell, which would otherwise look in GAIA's own
+    program folder and current folder before PATH. A granted command runs the
+    program PATH finds, never one in the working folder.
+    """
+    name = argv[0]
+    # A folder or drive spelling runs as typed: no grant matches it, so it was asked.
+    if _PATH_SPELLING.search(name):
+        return argv
+    program = _program_on_path(name, cwd)
+    if program is None:
+        raise FileNotFoundError(
+            f"'{name}' was not found on PATH. Install it, or add the folder "
+            "that holds it to PATH."
+        )
+    if not program.lower().endswith(_DIRECT_PROGRAM_SUFFIXES):
+        raise FileNotFoundError(
+            f"'{name}' on PATH is {program}, which Windows starts only through "
+            "cmd.exe, and this command runs without a shell. Run it from a "
+            "terminal instead."
+        )
+    return [program, *argv[1:]]
 
 
 #: The leading program word of one cmd.exe pipe piece.
@@ -5636,7 +5748,7 @@ def _run_step(
     )
 
     exec_cmd = [part for segment in segments for part in segment]
-    if argv_only and os.name == "nt" and not re.search(r"[\\/]", exec_cmd[0]):
+    if argv_only and os.name == "nt" and not _PATH_SPELLING.search(exec_cmd[0]):
         # By PATH alone, never from cwd.
         program = _program_on_path(exec_cmd[0], cwd)
         if program is None:
@@ -5645,6 +5757,18 @@ def _run_step(
                 "with findstr on named files."
             )
         exec_cmd = [program, *exec_cmd[1:]]
+    elif not use_shell and os.name == "nt":
+        # Every segment, so a pipeline's later programs are pinned as well. A
+        # /x-switch find or sort is Windows' own, never a GNU one earlier on PATH.
+        segments = [
+            (
+                [_system32_tool(segment[0].lower().removesuffix(".exe")), *segment[1:]]
+                if _wants_windows_tool(segment)
+                else _pin_argv_program(segment, cwd)
+            )
+            for segment in segments
+        ]
+        exec_cmd = [part for segment in segments for part in segment]
     listed_only = False
     if use_shell:
         # The step's own text, to preserve quoting (critical for PowerShell).
@@ -6383,8 +6507,12 @@ class ShellToolsMixin:
         A call the pre-flight left for a person (:meth:`_a_person_answers`)
         carries ``NEEDS_PERSON_ARG``, so pre-approval does not answer it.
 
-        Duck-typed, like :meth:`skill_grant_covers_call`.
+        Duck-typed, like :meth:`skill_grant_covers_call`. Another tool's call
+        goes on up the MRO, so a later mixin can add its own fields.
         """
+        if tool_name != _POLICY_GATED_SHELL_TOOL:
+            parent = getattr(super(), "confirmation_args_for_call", None)
+            return parent(tool_name, tool_args) if callable(parent) else tool_args
         shown = self._shown_args(tool_name, tool_args)
         if (
             tool_name == _POLICY_GATED_SHELL_TOOL
@@ -6497,12 +6625,14 @@ class ShellToolsMixin:
         )
         return session.cwd
 
-    def _line_is_read_only(self, command: str) -> bool:
+    def _line_is_read_only(self, command: str, honour_grants: bool = True) -> bool:
         """Return whether *command* is read-only under the ordinary policy.
 
         Full access changes whether a command may run, not whether it can write.
         Reparse under the normal policy so redirections and other shell-only
-        constructs still count as untracked changes.
+        constructs still count as untracked changes. *honour_grants* False
+        judges a skill-granted CLI as ungranted, since its confirmable writes
+        pass the whitelist.
         """
         # Full access hands the raw line to sh, which expands $ and backticks
         # even inside double quotes; the shell-less parse sees only text.
@@ -6522,7 +6652,7 @@ class ShellToolsMixin:
         steps, parse_error = _parse_line(command, bypass_gates=False)
         if parse_error is not None or not steps:
             return False
-        granted = shell_granted_binaries(self)
+        granted = shell_granted_binaries(self) if honour_grants else frozenset()
         for step in steps:
             if step.is_cd:
                 return False
@@ -6679,12 +6809,18 @@ class ShellToolsMixin:
         An install into an environment outside the project (the system Python,
         ``npm -g``) is the exception: it is a one-time approval normally, and
         refused under full access, where nobody is asked.
+
+        A server that never exits is refused under every rule: this tool waits
+        for the line to finish, so it would hang the turn.
         """
         # Before full access too: trusting a skill stays a terminal action.
         human_only = _human_only_command(command)
         if human_only:
             logger.warning("Refusing %r: %s is the user's to run", command, human_only)
             return _human_only_refusal(command, human_only), []
+        server = self._server_refusal(command, working_directory)
+        if server is not None:
+            return server, []
         error, steps = self._validate_shell_command(command)
         if error is None or _reaches_the_prompt(error):
             install = self._system_install_block(steps, working_directory)
@@ -6737,7 +6873,7 @@ class ShellToolsMixin:
                 if refusal is not None:
                     break
             refusal = self._path_traversal_refusal(
-                step, step_cwd, granted, outside, searchable
+                step, step_cwd, granted, outside, searchable, line=command
             ) or self._git_path_refusal(step.segments, step_cwd, outside)
         if refusal is not None:
             return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
@@ -6777,11 +6913,38 @@ class ShellToolsMixin:
         unscanned: list = []
         for step in steps:
             refusal = self._path_traversal_refusal(
-                step, cwd, frozenset(), unscanned, searchable=False
+                step, cwd, frozenset(), unscanned, searchable=False, line=command
             )
             if refusal is not None:
                 return {"tier": TIER_REFUSE, **refusal, **NOT_EXECUTED}, steps
         return error, steps
+
+    def _server_refusal(
+        self, command: str, working_directory: Any
+    ) -> Optional[Dict[str, Any]]:
+        """The refusal for a line that starts a never-ending server, or None."""
+        from gaia.browser.dev_servers import (
+            dev_server_offered,
+            server_in_command,
+            server_refusal,
+        )
+
+        server = server_in_command(command)
+        if server is None:
+            return None
+        # Read-only: repairing the session folder waits until the call runs.
+        located = self._call_cwd(working_directory) if working_directory else None
+        cwd = located[0] if located else self.shell_session.cwd
+        folder = os.path.normpath(
+            os.path.join(cwd, os.path.expanduser(server.folder or "."))
+        )
+        return {
+            **NOT_EXECUTED,
+            "status": "error",
+            "tier": TIER_REFUSE,
+            "error": server_refusal(server.what, folder, dev_server_offered(self)),
+            "has_errors": True,
+        }
 
     def _system_install_block(
         self, steps: list, working_directory: Any
@@ -6994,6 +7157,7 @@ class ShellToolsMixin:
         granted: frozenset,
         outside: Optional[list] = None,
         searchable: Optional[bool] = None,
+        line: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Refuse an argument that resolves outside the allowed paths.
 
@@ -7020,9 +7184,16 @@ class ShellToolsMixin:
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
         ``PYTHONPATH`` decides which code the command imports.
+
+        When the whole *line* only reads, an image GAIA generated
+        (``PathValidator.is_generated_image``) may be named although GAIA's
+        state folder is otherwise out of reach.
         """
         if not hasattr(self, "path_validator"):
             return None
+        media_reads = line is not None and self._line_is_read_only(
+            line, honour_grants=False
+        )
 
         from gaia.skills.binaries import policy_argv
 
@@ -7043,7 +7214,7 @@ class ShellToolsMixin:
         for label, arg in candidates:
             for candidate_path in _flag_path_values(arg):
                 refusal = self._path_candidate_refusal(
-                    label, arg, candidate_path, cwd, outside
+                    label, arg, candidate_path, cwd, outside, media_reads
                 )
                 if refusal:
                     return refusal
@@ -7077,6 +7248,7 @@ class ShellToolsMixin:
         candidate_path: str,
         cwd: str,
         outside: Optional[list] = None,
+        media_reads: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Refuse *candidate_path* (read from *arg*) when it leaves the allowed paths."""
         # A lone '/x' is a Windows switch there (/i, /format:list), not a path.
@@ -7086,7 +7258,12 @@ class ShellToolsMixin:
         # cmd.exe drops an unquoted '^' that shlex keeps; check its reading too.
         if _pipe_dialect() == "cmd" and "^" in candidate_path:
             refusal = self._path_candidate_refusal(
-                label, arg, re.sub(r"\^(.?)", r"\1", candidate_path), cwd, outside
+                label,
+                arg,
+                re.sub(r"\^(.?)", r"\1", candidate_path),
+                cwd,
+                outside,
+                media_reads,
             )
             if refusal:
                 return refusal
@@ -7107,7 +7284,9 @@ class ShellToolsMixin:
         if candidate_path.startswith(("http://", "https://", "git://", "ssh://")):
             return None
         for path in dict.fromkeys((candidate_path, expanded)):
-            refusal = self._resolved_path_refusal(label, arg, path, cwd, outside)
+            refusal = self._resolved_path_refusal(
+                label, arg, path, cwd, outside, media_reads
+            )
             if refusal:
                 return refusal
         return None
@@ -7119,6 +7298,7 @@ class ShellToolsMixin:
         candidate_path: str,
         cwd: str,
         outside: Optional[list] = None,
+        media_reads: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Refuse *candidate_path* when it resolves outside the allowed paths."""
         try:
@@ -7149,6 +7329,9 @@ class ShellToolsMixin:
                 ),
                 "has_errors": True,
             }
+        generated = getattr(self.path_validator, "is_generated_image", None)
+        if media_reads and callable(generated) and generated(resolved_path):
+            return None
         if not self._path_allowed(resolved_path, prompt_user=outside is None):
             return self._outside_scope(
                 resolved_path,
@@ -7304,6 +7487,8 @@ class ShellToolsMixin:
         class default usually blows a larger one too. A build or download is
         pointed at a background run instead.
         """
+        if cut_by_time_limit(self):
+            return TIME_LIMIT_CUT_RUN
         cls = TIMEOUT_CLASSES[timeout_class]
         hint = (
             f"It ran as a '{timeout_class}' command ({cls.summary}, "
@@ -7379,6 +7564,7 @@ class ShellToolsMixin:
         granted_binaries: frozenset = frozenset(),
         bypass_gates: bool = False,
         _unwrapped: bool = False,
+        _spelled: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
@@ -7394,6 +7580,8 @@ class ShellToolsMixin:
                 True the read-only policy is replaced wholesale by
                 ``DEVELOPER_COMMANDS`` (#3374); the default path below is left
                 exactly as it was.
+            _spelled: How the program was typed, when this call judges the
+                bare program behind a path or ``.exe`` spelling.
 
         Returns None if the command is allowed, or an error dict if blocked.
 
@@ -7427,7 +7615,7 @@ class ShellToolsMixin:
             # A refusal follows the program, not its spelling; what it would
             # merely ask about still asks, as the unlisted spelling below.
             behind = ShellToolsMixin._validate_command(
-                program, [program, *cmd_parts[1:]], command
+                program, [program, *cmd_parts[1:]], command, _spelled=cmd_parts[0]
             )
             if behind is not None and behind.get("tier") != TIER_CONFIRM:
                 return behind
@@ -7493,9 +7681,24 @@ class ShellToolsMixin:
             if decision.outcome != REFUSE:
                 return None
             tier = TIER_REFUSE
-            if not granted and shutil.which(policy.binary) is None:
+            # `python -m pytest` starts python, so python is what must exist; a
+            # path spelling is not a PATH lookup, and the launch reports it.
+            runs = policy.binary
+            if policy_parts[0] != cmd_parts[0]:
+                runs = _spelled or cmd_parts[0]
+            missing = not re.search(r"[\\/]", runs) and shutil.which(runs) is None
+            if not granted and missing:
                 # Not installed is not "load the skill": reloading cannot fix it.
-                message = f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                if runs == policy.binary:
+                    message = (
+                        f"Command '{binary}' cannot run: {policy.unavailable_note()}"
+                    )
+                else:
+                    message = (
+                        f"Command '{runs}' cannot run: `{runs}` is not installed "
+                        "here (not on PATH). Use a Python that is, or name the "
+                        "interpreter by its full path."
+                    )
                 hint = "Do not retry this command or reload the skill."
             elif granted_decision.outcome == REFUSE:
                 # Outside what GAIA's checks cover, grant or no grant. The user
@@ -8025,6 +8228,7 @@ class ShellToolsMixin:
             # build would be abandoned by the loop while the subprocess is still
             # inside its own (correct) timeout.
             timeout=MAX_COMMAND_TIMEOUT + 60,
+            model_view=lean_shell_result,
         )
         # The class table leads the docstring because the prompt renders a tool
         # by its FIRST LINE; anything below is seen only by models using native
@@ -8055,9 +8259,9 @@ class ShellToolsMixin:
                     ceiling it is refused, not clamped.
 
             Returns:
-                status, output, the last exit code, 'steps' (each with its own
-                code), the applied 'timeout' and 'timeout_class'; one killed at
-                the limit carries 'timed_out'.
+                status, output, the last exit code; several steps add
+                'steps' (each with its code); a kill at the limit adds
+                'timed_out', 'timeout' and 'timeout_class'.
             """
             working_directory = _expand_home(working_directory)
             try:
@@ -8072,7 +8276,6 @@ class ShellToolsMixin:
                         "command": command,
                         "has_errors": True,
                     }
-
                 # Check rate limits first to prevent DOS
                 allowed, reason, wait_time, waited = (
                     (True, "", 0.0, 0.0) if bypass else self._pace_rate_limit()
@@ -8087,6 +8290,10 @@ class ShellToolsMixin:
                         "wait_time_seconds": wait_time,
                         "hint": "Rate limiting prevents excessive command execution",
                     }
+                # After the pacing wait, which is time the turn has also spent.
+                timeout = time_capped(self, timeout)
+                if not timeout:
+                    return {**OUT_OF_TIME, "command": command}
 
                 # Validate an explicit directory after resolving it from the
                 # chat workspace; keep the original argument for approval keys.
@@ -8219,7 +8426,11 @@ class ShellToolsMixin:
                 search_plan = _search_plan(command, steps)
                 for step, step_cwd in zip(steps, step_cwds):
                     error = self._path_traversal_refusal(
-                        step, step_cwd, granted, searchable=search_plan is not None
+                        step,
+                        step_cwd,
+                        granted,
+                        searchable=search_plan is not None,
+                        line=command,
                     )
                     if error:
                         return error
@@ -8594,6 +8805,10 @@ class ShellToolsMixin:
                     ),
                     "has_errors": True,
                 }
+
+            timeout = time_capped(self, timeout)
+            if not timeout:
+                return dict(OUT_OF_TIME)
 
             # The wait is charged as one command up front; its probes are then
             # exempt (see _check_rate_limit) rather than each tripping the limit.
