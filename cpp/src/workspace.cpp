@@ -74,6 +74,10 @@ const std::vector<std::string>& systemDirs() {
     static const std::vector<std::string> dirs = {
         "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/opt", "/etc",
         "/sys", "/dev", "/tmp", "/var/tmp", "/snap", "/nix",
+#ifdef __APPLE__
+        // macOS keeps these under /private and links to them; a path is judged after links are followed.
+        "/private/etc", "/private/tmp", "/private/var/tmp", "/private/var/folders",
+#endif
         // Machine facts only: /proc/<pid> holds other programs' environments.
         "/proc/cpuinfo", "/proc/meminfo", "/proc/version", "/proc/uptime", "/proc/loadavg"};
 #endif
@@ -116,6 +120,8 @@ bool looksLikePattern(const std::string& abs) {
     const fs::path ap(abs);
     const fs::path rel = ap.relative_path();
     if (rel.empty()) return false;
+    // /proc is a place wherever it would be read, including on a system that has none.
+    if (abs.compare(0, 6, "/proc/") == 0) return false;
     std::error_code ec;
     return !fs::exists(ap.root_path() / *rel.begin(), ec);
 }

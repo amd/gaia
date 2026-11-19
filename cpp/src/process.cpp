@@ -1261,6 +1261,16 @@ ProcessResult runSessionScript(const std::function<std::string(const std::string
     temps.add(scriptFile);
 
 #ifdef _WIN32
+    // A batch script's `call` doubles every ^ in a path and expands %name%, so the files it names
+    // would not be found. Said plainly here; the shell's own error names no cause.
+    if (!posixScript && scriptFile.find_first_of("^%") != std::string::npos) {
+        result.exitCode = -1;
+        result.stderr_output =
+            "ShellSession: the temp folder (" + sfs::u8path(scriptFile).parent_path().u8string() +
+            ") has ^ or % in its path, which cmd.exe cannot pass to a script. Set TEMP and TMP to a folder "
+            "without them, or install Git for Windows so commands run in bash, where such a path works.";
+        return result;
+    }
     // The line goes through cmd /c, which drops the first and last quote of a line holding & or ^
     // and then splits it there. An outer pair of quotes is the pair it drops, and the path stays whole.
     const std::string invocation =

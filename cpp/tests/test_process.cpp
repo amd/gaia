@@ -785,7 +785,7 @@ TEST_F(ShellSessionTest, ACancelEndsTheSessionCommandAndLeavesNoTempFiles) {
 }
 
 TEST_F(ShellSessionTest, CommandsRunWhenTheTempFolderNameHoldsAnAmpersand) {
-    const fs::path odd = dirB_ / "R&D ^tmp";
+    const fs::path odd = dirB_ / "R&D tmp";
     fs::create_directories(odd);
 #ifdef _WIN32
     const char* names[] = {"TMP", "TEMP"};
@@ -808,6 +808,17 @@ TEST_F(ShellSessionTest, CommandsRunWhenTheTempFolderNameHoldsAnAmpersand) {
         EXPECT_EQ(result.exitCode, 0) << shell << ": " << result.stderr_output;
         EXPECT_NE(result.stdout_output.find("still_works"), std::string::npos) << shell << ": " << result.stdout_output;
     }
+#ifdef _WIN32
+    // cmd.exe's `call` doubles a caret in a path: that case is refused with its reason, not a bare error.
+    const fs::path caret = dirB_ / "R^D tmp";
+    fs::create_directories(caret);
+    _putenv_s("TMP", caret.string().c_str());
+    _putenv_s("TEMP", caret.string().c_str());
+    ShellSession batch(dirB_.string(), "");
+    const auto refused = batch.run("echo hi", 30000);
+    EXPECT_NE(refused.exitCode, 0);
+    EXPECT_NE(refused.stderr_output.find("has ^ or % in its path"), std::string::npos) << refused.stderr_output;
+#endif
     for (const auto& [name, value] : saved) {
 #ifdef _WIN32
         _putenv_s(name.c_str(), value.c_str());
