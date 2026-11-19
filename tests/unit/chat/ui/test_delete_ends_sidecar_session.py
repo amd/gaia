@@ -14,9 +14,9 @@ from fastapi.testclient import TestClient
 
 from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.ui import session_environment
-from gaia.ui.email_sidecar import daemon_client
 from gaia.ui.routers import sessions as sessions_router
 from gaia.ui.server import create_app
+from gaia.ui.sidecar import daemon_client
 
 
 class _Proxy:
@@ -199,7 +199,7 @@ def test_running_handle_raises_a_sidecar_error_when_the_daemon_drops(monkeypatch
 
 
 def test_end_session_targets_only_this_chat():
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     seen = []
 
@@ -380,7 +380,7 @@ def test_a_delete_never_starts_an_agent_that_is_not_running(
 def test_a_delete_goes_through_the_relay_never_ensure(monkeypatch, live_daemon):
     # ensure is the only path that restarts an agent on another Lemonade, so a
     # delete that never POSTs to the daemon cannot restart it.
-    from gaia.ui.email_sidecar import proxy as proxy_mod
+    from gaia.ui.sidecar import proxy as proxy_mod
 
     set_state, deletes = live_daemon
     set_state(agents=_RUNNING)
@@ -397,7 +397,7 @@ def test_a_delete_goes_through_the_relay_never_ensure(monkeypatch, live_daemon):
 
 
 def test_end_session_timeout_matches_the_other_best_effort_calls():
-    from gaia.ui.email_sidecar import proxy as proxy_mod
+    from gaia.ui.sidecar import proxy as proxy_mod
 
     assert proxy_mod._END_SESSION_TIMEOUT == proxy_mod._CANCEL_TIMEOUT
     assert proxy_mod._END_SESSION_TIMEOUT == proxy_mod._SWITCH_TIMEOUT
@@ -468,7 +468,7 @@ def test_a_hung_agent_cannot_stall_the_delete(monkeypatch, live_daemon, caplog):
 
     import requests
 
-    from gaia.ui.email_sidecar import proxy as proxy_mod
+    from gaia.ui.sidecar import proxy as proxy_mod
 
     # A real socket that accepts and never answers.
     server = socket.socket()

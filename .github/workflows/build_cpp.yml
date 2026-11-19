@@ -99,7 +99,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v7
@@ -107,6 +107,11 @@ jobs:
       - name: Install OpenSSL (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get install -y libssl-dev
+
+      # The runner's Homebrew has OpenSSL, outside the paths CMake searches by itself.
+      - name: Point CMake at OpenSSL (macOS)
+        if: runner.os == 'macOS'
+        run: echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
       - name: Restore FetchContent cache
         id: cache-deps
@@ -138,7 +143,9 @@ jobs:
           set -euo pipefail
           bin="$(find cpp/build -type f \( -name gaiacpp -o -name gaiacpp.exe \) | head -n1)"
           [ -n "${bin}" ] || { echo "::error::the build produced no gaiacpp binary"; exit 1; }
-          python cpp/tests/chaos/chaos_gaiacpp.py --binary "${bin}" --runs 200 --jobs 4
+          py=python
+          [ "${RUNNER_OS}" = "macOS" ] && py=python3
+          "${py}" cpp/tests/chaos/chaos_gaiacpp.py --binary "${bin}" --runs 200 --jobs 4
 
   # Verify cmake --install + find_package round-trip works
   install-test:

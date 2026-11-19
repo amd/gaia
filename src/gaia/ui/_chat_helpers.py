@@ -57,7 +57,9 @@ from gaia.stream_timeout import (
     STREAM_TIMEOUT_ENV,
     stream_timeout_from_env,
 )
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.memory_settings import memory_enabled
+from gaia.ui.security import FLAGSHIP_AGENT_ID
+from gaia.ui.sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
@@ -77,8 +79,6 @@ from gaia.ui.email_sidecar.profiles import (
     turns_supported,
     working_directory_supported,
 )
-from gaia.ui.memory_settings import memory_enabled
-from gaia.ui.security import FLAGSHIP_AGENT_ID
 from gaia.ui.turn_changes import TurnRecording
 from gaia.utils import awake_clock as _awake_clock
 from gaia.utils.awake_clock import AwakeClockError
@@ -193,13 +193,11 @@ def get_agent_registry():
 
 
 # Agent types served by an out-of-process sidecar with a dedicated dispatch
-# branch below. Since #2408, an installed sidecar IS registry-loadable (the
-# installer bridge registers it for the connectors grant flow), but its
-# factory always raises — chat dispatch must still go through the branch
-# below, never registry.create_agent(). Derived from the relay profiles so a
-# new sidecar cannot be half-wired: #4161 shipped the flagship as a binary
-# sidecar and left this set at {"email"}, which sent every flagship turn into
-# registry.create_agent() and surfaced the stub factory's RuntimeError.
+# branch below. An installed sidecar IS registry-loadable (the installer
+# bridge registers it for the connectors grant flow), but its factory always
+# raises — chat dispatch must still go through the branch below, never
+# registry.create_agent(). Derived from the relay profiles so a new sidecar
+# cannot be half-wired.
 _SIDECAR_AGENT_TYPES = SIDECAR_AGENT_IDS
 
 
@@ -239,12 +237,9 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     * a **wheel**/dev install registers a real factory and runs in-process,
       which is the path ``gaia eval agent`` and a source checkout use.
 
-    Email is the exception and says so on its profile: its in-process loop was
-    retired in #2109, so it relays even when the wheel is importable.
-
     The "no registration" branches below are defence in depth, not a live
-    path: ``_agent_type_unknown`` already rejects a non-always-relay sidecar
-    that does not resolve, so chat never reaches them today. They keep this
+    path: ``_agent_type_unknown`` already rejects a sidecar that does not
+    resolve, so chat never reaches them today. They keep this
     function correct on its own terms — a missing registration relays, unless
     the registry recorded an import failure, in which case that recorded
     reason is the answer the user needs and relaying would bury it.
@@ -252,8 +247,6 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     profile = profile_for(agent_type)
     if profile is None:
         return False
-    if profile.always_relay:
-        return True
     if agent_type == FLAGSHIP_AGENT_ID and _native_flagship_chosen():
         # gaiacpp is a program of its own: it only ever runs behind the daemon.
         return True
@@ -271,16 +264,11 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
 def _agent_type_unknown(agent_type: str, registry) -> bool:
     """True when *agent_type* must be rejected as unknown before dispatch.
 
-    Email is exempt: its relay does not need a registration to work.
-
-    Every other agent — ``chat`` and the flagship included — must resolve in
-    the registry. An agent that was never installed is worth saying so about:
+    Every agent — ``chat`` and the flagship included — must resolve in the
+    registry. An agent that was never installed is worth saying so about:
     "install it from the Hub" beats asking the daemon to start a sidecar that
     isn't there and surfacing whatever it says about the failure.
     """
-    profile = profile_for(agent_type)
-    if profile is not None and profile.always_relay:
-        return False
     if not registry or registry.get(agent_type):
         return False
     # Setup or `gaia hub install` may have added it after startup.
@@ -2335,10 +2323,10 @@ def _apply_memory_state(agent, session: dict, db) -> None:
 
 
 def _session_mail_provider(session: dict) -> str | None:
-    """Session mailbox FILTER for the email agent (#1596 / #1603 Phase 2).
+    """Session mailbox FILTER for the mail tools (#1596 / #1603 Phase 2).
 
     ``None`` (unset, null, or empty string from the frontend) means "every
-    connected mailbox" — the email agent scans all of them and fails loudly
+    connected mailbox" — the mail tools scan all of them and fails loudly
     when none is connected. An explicit ``"google"`` / ``"microsoft"``
     restricts to that provider. Never coerce a missing pick to "google":
     that silently triaged Gmail for sessions that never chose a provider
@@ -2348,7 +2336,7 @@ def _session_mail_provider(session: dict) -> str | None:
 
 
 # The per-agent /query contract floor and its upgrade copy live on the relay
-# profile (``gaia.ui.email_sidecar.profiles``); ``api_version_supported``
+# profile (``gaia.ui.sidecar.profiles``); ``api_version_supported``
 # applies it. The daemon's own gate only pins MAJOR (the spec's
 # expected_api_major), so a too-old Hub binary passes that handshake and then
 # 404s every /query call — the profile's finer MAJOR.MINOR check catches it
@@ -2576,7 +2564,7 @@ def _withdrawn_reply(content: str) -> Optional[str]:
 
 def _agent_crash_notes() -> tuple:
     """What each relayed agent's reply ends with when the agent crashed mid-answer."""
-    from .email_sidecar.profiles import relay_profiles
+    from .sidecar.profiles import relay_profiles
 
     return tuple(
         p.stream_ended_message for p in relay_profiles() if p.stream_ended_message
@@ -2969,8 +2957,8 @@ def _dispatch_sidecar_query(
     from gaia.daemon.sidecars.errors import SidecarError
     from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.llm.model_fit import ModelFitError
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.relay import relay_query
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.relay import relay_query
 
     profile = profile_for(agent_type)
     if profile is None:
@@ -3192,8 +3180,8 @@ def _dispatch_sidecar_query(
         )
         return
 
-    from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.profiles import full_access_supported
+    from gaia.ui.sidecar import grants as relayed_grants
+    from gaia.ui.sidecar.profiles import full_access_supported
 
     answers_confirmations = confirmations_supported(profile, handle.api_version)
     offers_always = bool(
@@ -3313,16 +3301,19 @@ def _find_last_tool_step(steps: list) -> dict | None:
 
 
 def _denial(event: dict) -> Optional[str]:
-    """``"declined"``, ``"timedOut"`` or ``"autoDeclined"`` for a call that never ran.
+    """Why a ``tool_result``'s call never ran, as the step field that records it.
 
-    A relayed result nests its status in ``data``.
+    ``"declined"`` (the user said no), ``"timedOut"`` (nobody answered),
+    ``"refused"`` (GAIA's own rule) or ``"autoDeclined"`` (GAIA judged it not
+    needed, unasked). A relayed result nests these in ``data``.
     """
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     if event.get("status", data.get("status")) != "denied":
         return None
-    timed_out = event.get("timed_out") is True or data.get("timed_out") is True
-    if timed_out:
+    if event.get("timed_out") is True or data.get("timed_out") is True:
         return "timedOut"
+    if event.get("denied_by", data.get("denied_by")) == "policy":
+        return "refused"
     if event.get("declined_by", data.get("declined_by")) == "agent":
         return "autoDeclined"
     return "declined"
@@ -4509,8 +4500,8 @@ async def _get_chat_response(
                             memory_incognito=_memory_off(session, db),
                         ),
                         # Forwarded only here (not via _session_agent_kwargs, which
-                        # also feeds the strict ChatAgentConfig). Non-email factories
-                        # drop it via dataclasses.fields filtering. None = scan every
+                        # also feeds the strict ChatAgentConfig). Factories without
+                        # mail tools drop it via dataclasses.fields filtering. None = scan every
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
                     )
@@ -4585,6 +4576,8 @@ async def _get_chat_response(
             counts,
             failed=isinstance(result, dict) and bool(result.get("model_failed")),
         )
+        if turn_box is not None:
+            turn_box["failed"] = _turn_failure(None, None, result)[0]
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -4653,6 +4646,8 @@ async def _get_chat_response(
         raise
     except Exception as e:
         logger.error("Chat error: %s", e, exc_info=True)
+        if turn_box is not None:
+            turn_box["failed"] = True
         # Surface the typed Lemonade error's friendly user_message
         # when we have one, instead of a stock "trouble connecting"
         # blob.  Falls back to the generic copy when we can't
@@ -5051,8 +5046,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     working_directory=working_directory,
                                     memory_incognito=_memory_off(session, db),
                                 ),
-                                # See the non-streaming path: email-only kwarg,
-                                # filtered out by non-email factories. None = scan
+                                # See the non-streaming path: mail-tools kwarg,
+                                # filtered out by factories without them. None = scan
                                 # every connected mailbox (#1596).
                                 mail_provider=_session_mail_provider(session),
                             )
@@ -5918,6 +5913,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 library_notices=library_notices,
                 ends_turn=True,
                 stopped=turn_cancelled,
+                # As on `done`: a Stop wins over the failure it cut short.
+                failed=turn_failed and not turn_cancelled,
             )
             link_warning = (
                 turn_box["recording"].link_message(msg_id)
@@ -6030,6 +6027,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     library_notices=library_notices,
                     ends_turn=True,
                     stopped=turn_cancelled,
+                    failed=failed,
                 )
                 done_event = _done_event(
                     msg_id,
@@ -6538,6 +6536,7 @@ async def _index_document(
         progress["at"] = _time.monotonic()
 
     def _do_index():
+        from gaia.agents.registry import machine_embedding_model
         from gaia.daemon.broker_client import lease_cancel_scope, lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
@@ -6548,7 +6547,10 @@ async def _index_document(
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
-        config = RAGConfig(allowed_paths=allowed)
+        # The embedder chat searches with, so the upload's vectors are reused.
+        config = RAGConfig(
+            allowed_paths=allowed, embedding_model=machine_embedding_model()
+        )
         rag = RAGSDK(config)
         loaded = batch.pop("embedder", None) if batch is not None else None
         if loaded is not None:

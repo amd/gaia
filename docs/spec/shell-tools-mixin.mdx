@@ -455,6 +455,54 @@ line jump still runs), and `arch` with any argument. Short-flag clusters are rea
 letter by letter, so `-0C` is `-0 -C`. `date`, `sysctl`, `hostname` and `ipconfig`
 accept only their known read-only options, so an unknown flag also asks.
 
+### A Program That Is Not Installed
+
+A command whose program is not installed is a step to take, not a refusal. The
+result carries `program_not_found` with the program's name, and it is kept off
+the per-request denial record, so installing the program and running the command
+again works in the same request.
+
+- **No prompt for a program that is not there.** A line that is one command,
+  whose program is a bare name that cannot be found, is reported as not
+  installed before anyone is asked to approve it. Shell built-ins, names with
+  a hyphen or a path, a script in the session's folder, and any line with
+  more than one command are handled as before.
+- **A fresh install is found without restarting GAIA.** A process keeps the
+  `PATH` it started with. When a program is not found, when a skill that
+  needs a CLI is loaded, and after any system package manager command or
+  `install_cli`, GAIA re-reads `PATH` (the registry on Windows, the login
+  shell on macOS after an install) and appends the new entries. Only `PATH`
+  is re-read, and existing entries keep their order.
+- **A real refusal still wins.** `git push --force` on a PC without git is
+  refused for what it does, and a line that deletes (`rm -rf x` where `rm` is
+  not a program) keeps its refusal on record.
+- **GAIA does not choose a package.** `install_cli` installs only the CLIs it
+  has a vetted command for. For anything else the agent says what is missing
+  and the user supplies the package or installs it themselves.
+
+- **A package manager's exit code is put into words.** When an approved
+  `winget` install fails, the result carries `exit_code_meaning` (for
+  example, that the Microsoft Store source's certificate could not be
+  verified and `--source winget` avoids it), the Agent UI shows it on the
+  step, and a failed `install_cli` says the same.
+- **An install that changed nothing is not repeated.** If `install_cli`
+  finishes and the program still cannot be found, a second `install_cli` for
+  it in the same request is refused without running.
+- **git does not wait for a typed password.** Commands run with
+  `GIT_TERMINAL_PROMPT=0` unless the user's environment or the command sets
+  it, so a clone that would ask on the terminal fails at once with git's own
+  message. Git Credential Manager's sign-in window still opens.
+
+A call stopped because an earlier one in the request was refused by policy, or
+denied because nobody could be asked, returns `status: "denied"` with
+`denied_by: "policy"`. The Agent UI shows it as
+"Blocked by GAIA", never as "You declined", since nobody was asked.
+
+`install_cli` and `sign_in_cli` are never answered by pre-approval
+(`GAIA_AUTO_APPROVE_TOOLS`, Full access, `--dangerously-skip-permissions`):
+where a person can be asked they are, and otherwise the call is refused with
+the command to run by hand.
+
 ### Bypass Permissions
 
 Off by default. Turned on only by the flagship sidecar's `--full-access`

@@ -802,7 +802,9 @@ INSTANTIATE_TEST_SUITE_P(
         PermissionCase{"NoLevel", "networkread", "missing its level"},
         PermissionCase{"UnknownDomain", "teleport:read", "unknown domain"},
         PermissionCase{"UndefinedLevel", "network:teleport", "does not define"},
-        PermissionCase{"WrongDomainForLevel", "shell:read", "does not define"}),
+        PermissionCase{"WrongDomainForLevel", "shell:read", "does not define"},
+        PermissionCase{"ProgramWithoutItsName", "program:run", "without naming the program"},
+        PermissionCase{"ScratchWithAScope", "scratch:write:x", "takes no scope"}),
     [](const ::testing::TestParamInfo<PermissionCase>& info) { return info.param.label; });
 
 TEST(SkillPermissions, GrammarIsValidatedNotEnforced) {
@@ -811,8 +813,8 @@ TEST(SkillPermissions, GrammarIsValidatedNotEnforced) {
     const Skill skill = gaia::parseSkill(frontmatter(
         "name: ok\ndescription: d\nmetadata:\n  gaia:\n    permissions:\n"
         "      - filesystem:write:./**\n      - mcp:connect:mcp-tavily\n"
-        "      - shell:none\n"));
-    EXPECT_EQ(skill.gaia.permissions.size(), 3u);
+        "      - shell:none\n      - program:run:soffice\n      - scratch:write\n"));
+    EXPECT_EQ(skill.gaia.permissions.size(), 5u);
     EXPECT_EQ(gaia::parseSkill(gaia::toMarkdown(skill)), skill);
 }
 
@@ -1038,4 +1040,20 @@ TEST(SkillEncoding, NonUtf8FileIsRefusedWithTheReason) {
                           "---\nname: mojibake\ndescription: caf\xE9\n---\n\nbody\n");
     EXPECT_THAT(errorFrom([&] { gaia::parseSkillFile(dir.string()); }),
                 HasSubstr("not valid UTF-8"));
+}
+
+TEST(SkillHardening, AnAbsurdlyLongVersionOrNumberDoesNotOverflowTheRegexStack) {
+    const std::string longVersion = "1.0.0-" + std::string(200000, 'a');
+    EXPECT_THAT(errorFrom([&] {
+                    gaia::parseSkill(frontmatter("name: ok\ndescription: d\nversion: \"" + longVersion + "\"\n"));
+                }),
+                HasSubstr("not valid SemVer"));
+    const std::string digits(200000, '7');
+    EXPECT_NO_THROW(gaia::parseSkill(frontmatter("name: ok\ndescription: d\nmetadata:\n  n: " + digits + "\n")));
+}
+
+TEST(SkillHardening, AnAliasThatContainsItselfIsRefusedNotFollowed) {
+    EXPECT_NE(errorFrom([] { gaia::parseSkill(frontmatter("name: ok\ndescription: d\nmetadata: &a [*a]\n")); }), "");
+    EXPECT_NE(errorFrom([] { gaia::parseSkill(frontmatter("name: ok\ndescription: d\nmetadata: &a {k: *a}\n")); }),
+              "");
 }

@@ -44,6 +44,10 @@ dependencies:
       build-installers.yml, which triggers on setup.py and pyproject.toml.
     pyproject.toml: >-
       Same reason as setup.py.
+    .github/workflows/test_unit.yml: >-
+      util/select_tests.py names it in FULL_RUN_FILES for the unit-test
+      selection. This workflow runs only its lane-scope command, which reads
+      build_tui.yml's own paths filter, never test_unit.yml.
 
   build-installers.yml:
     src/gaia/apps/webui/**: >-

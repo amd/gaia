@@ -40,6 +40,7 @@ HUB_CATALOG = {
     "unit-convert",
     "tampered-notes",
     "power-helper",
+    "date-format",
 }
 
 

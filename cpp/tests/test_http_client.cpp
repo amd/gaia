@@ -757,3 +757,101 @@ TEST(LemonadeErrorDecodeTest, NonStreamingNonJsonBodyIsReturnedVerbatim) {
 
     EXPECT_EQ(client.chatCompletions(kChatRequest), "not json at all");
 }
+
+TEST(HttpClientTest, ACancelCheckEndsARequestStillWaitingForItsReply) {
+    bench::MockLlmServer server;
+    std::atomic<bool> stop{false};
+    HttpClientConfig cfg;
+    cfg.baseUrl     = server.baseUrl();
+    cfg.cancelCheck = [&stop] { return stop.load(); };
+    HttpClient http(cfg);
+
+    std::thread later([&stop] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        stop = true;
+    });
+    const auto t0 = std::chrono::steady_clock::now();
+    try {
+        http.get("/test/slow");  // answers after 2 s
+        ADD_FAILURE() << "expected the request to be cancelled";
+    } catch (const HttpError& e) {
+        EXPECT_NE(std::string(e.what()).find("cancelled"), std::string::npos) << e.what();
+    }
+    const auto waited = std::chrono::steady_clock::now() - t0;
+    later.join();
+    EXPECT_LT(waited, std::chrono::milliseconds(1500));
+
+    stop = false;
+    EXPECT_TRUE(http.get("/api/v1/health").ok()) << "the client must work again after a cancel";
+}
+
+TEST(HttpClientTest, AResponseSizeLimitStopsTheDownload) {
+    bench::MockLlmServer server;
+    HttpClientConfig cfg;
+    cfg.baseUrl          = server.baseUrl();
+    cfg.maxResponseBytes = 1000;
+    HttpClient http(cfg);
+
+    HttpResponse capped = http.get("/test/big");
+    EXPECT_EQ(capped.status, 200);
+    EXPECT_EQ(capped.body.size(), 1000u);
+    EXPECT_EQ(capped.body, std::string(1000, 'x'));
+
+    HttpResponse next = http.get("/api/v1/health");
+    EXPECT_TRUE(next.ok()) << "the connection must be usable after a download was cut short";
+    EXPECT_FALSE(next.body.empty());
+    EXPECT_NE(next.body[0], 'x') << "left-over bytes of the big body were read as this reply";
+}
+
+TEST(HttpClientTest, AnErrorPageOverTheSizeLimitIsStillAnError) {
+    bench::MockLlmServer server;
+    HttpClientConfig cfg;
+    cfg.baseUrl          = server.baseUrl();
+    cfg.maxResponseBytes = 1000;
+    HttpClient http(cfg);
+    try {
+        http.get("/test/big-error");
+        ADD_FAILURE() << "a cut-short 500 page came back as content";
+    } catch (const HttpError& e) {
+        EXPECT_EQ(e.status(), 500);
+    }
+    EXPECT_TRUE(http.get("/api/v1/health").ok()) << "the connection must be usable afterwards";
+}
+
+TEST(HttpClientTest, ACancelCheckEndsARequestThatCannotBeInterrupted) {
+    // An address that answers nothing: the connect attempt just waits, with no open socket to close.
+    std::atomic<bool> stop{false};
+    HttpClientConfig cfg;
+    cfg.baseUrl           = "http://10.255.255.1:81";
+    cfg.connectTimeoutSec = 8;
+    cfg.cancelCheck       = [&stop] { return stop.load(); };
+    HttpClient http(cfg);
+
+    std::thread later([&stop] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        stop = true;
+    });
+    const auto t0 = std::chrono::steady_clock::now();
+    std::string failure;
+    try {
+        http.get("/x");
+    } catch (const HttpError& e) {
+        failure = e.what();
+    }
+    const auto waited = std::chrono::steady_clock::now() - t0;
+    later.join();
+    if (failure.find("cancelled") == std::string::npos) {
+        GTEST_SKIP() << "this network refuses the address at once, so nothing waited: " << failure;
+    }
+    EXPECT_LT(waited, std::chrono::milliseconds(2000)) << "the caller waited for a request it had cancelled";
+}
+
+TEST(HttpClientTest, AHostNameCanBePinnedToAnAddress) {
+    bench::MockLlmServer server;
+    const std::string port = server.baseUrl().substr(server.baseUrl().rfind(':'));
+    HttpClientConfig cfg;
+    cfg.baseUrl       = "http://pinned.invalid" + port;  // a name no resolver answers
+    cfg.hostAddresses = {{"pinned.invalid", "127.0.0.1"}};
+    HttpClient http(cfg);
+    EXPECT_TRUE(http.get("/api/v1/health").ok());
+}

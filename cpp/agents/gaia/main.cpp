@@ -186,7 +186,7 @@ void printUsage() {
         "Serve:\n"
         "  --host H                  Bind address (default 127.0.0.1)\n"
         "  --port N                  Port (default 8200; 0 = any free port)\n"
-        "  --server-key-env VAR      Require 'Authorization: Bearer $VAR' from clients\n"
+        "  --server-key-env VAR      Require 'Authorization: Bearer $VAR' from clients (required)\n"
         "  --allow-origin ORIGIN     Allow a browser origin (repeatable)\n"
         "  --expose-tool-routes      Enable POST /v1/tools/:name (direct tool runs)\n"
         "Stdio (the terminal UI passes these):\n"
@@ -270,7 +270,7 @@ Cli parseArgs(int argc, char** argv) {
                            "Lemonade only. Drop the flag and pick a model with --model, or use the "
                            "Python agent (gaia-agent) for Claude.");
         }
-        else if (a == "--prompt-file") { cli.mode = Cli::Mode::Print; cli.promptFile = need(i, a); }
+        else if (a == "--prompt-file") { setMode(Cli::Mode::Print, a); cli.promptFile = need(i, a); }
         else if (a == "--output-format") cli.outputFormat = need(i, a);
         else if (a == "-m" || a == "--model") cli.model = need(i, a);
         else if (a == "--base-url") cli.baseUrl = need(i, a);
@@ -757,6 +757,11 @@ int runPrint(const Cli& cli) {
 }
 
 int runServe(const Cli& cli) {
+    // Tools run unasked here, so a server anyone on this PC can reach would run their commands.
+    if (cli.serveKeyEnv.empty()) {
+        usageError("serve needs --server-key-env VAR naming a variable that holds the clients' key, "
+                   "for example: SERVE_KEY=$(openssl rand -hex 32) gaiacpp serve --server-key-env SERVE_KEY");
+    }
     const Settings settings = buildSettings(cli);
     gaia::AgentConfig cfg = settings.cfg;
     cfg.silentMode = true;

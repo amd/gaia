@@ -40,6 +40,10 @@ public:
     /// `posixShell` false means cmd.exe runs it, where `/s` is a switch, not a path.
     std::string checkCommand(const std::string& command, bool posixShell = true) const;
 
+    /// True for a path Git Bash on Windows serves from outside the file system:
+    /// the clipboard, the registry, raw disks and memory.
+    static bool isGitBashDevicePath(const std::string& path);
+
     /// True when a read-only command, split by splitShellCommand(), reads
     /// nothing outside the roots and the system folders: every argument is
     /// resolved against `cwd` (the shell's folder; "" = the primary root),

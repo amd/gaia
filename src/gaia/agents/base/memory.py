@@ -2973,8 +2973,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         memory lifted from it apart from one the user stated.
 
         Only reached when ``_execute_tool`` resolves to this mixin. An agent
-        listing ``Agent`` ahead of ``MemoryMixin`` — ``EmailTriageAgent`` does,
-        and documents it on its ``process_query`` — shadows this override, so
+        listing ``Agent`` ahead of ``MemoryMixin`` shadows this override, so
         its source check sees only the answer.
         """
         cap = EXTRACTION_TOOL_RECORD_DETAIL_CHARS
@@ -3818,6 +3817,16 @@ class MemoryMixin(ProceduralMemoryMixin):
         if frozen is not None and knowledge_id in shown:
             self._refresh_stable_memory_prompt()
 
+    def _prepare_turn_context(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> None:
+        """Hook run each turn just before :meth:`get_memory_dynamic_context`.
+
+        Default: no-op. A host does here whatever the context then reports
+        (the flagship loads a matching skill), so the getter itself stays
+        free of side effects. Overrides must call ``super()``.
+        """
+
     def get_memory_dynamic_context(self) -> str:
         """Build the per-turn dynamic context string: current time + upcoming items.
 
@@ -4391,6 +4400,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 self._refresh_recalled_skills(user_input)
 
             with turn_metrics.pre_turn_span(self, "memory_context"):
+                self._prepare_turn_context(user_input)
                 dynamic = self.get_memory_dynamic_context()
             augmented = frame_user_message(dynamic, user_input)
 

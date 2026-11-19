@@ -28,7 +28,8 @@ def resolve_input(schedule: Schedule) -> str:
     raise NotImplementedError(
         f"schedule {schedule.name!r} uses --skill {schedule.skill!r}, but the "
         "scheduler cannot run skills yet. Re-create it with --prompt: "
-        f"gaia schedule add --name {schedule.name} --cron '<expr>' --prompt '<text>'"
+        f"gaia schedule add --name {schedule.name} --cron '<expr>' --prompt '<text>'. "
+        "Track progress: https://github.com/amd/gaia/issues/6470"
     )
 
 

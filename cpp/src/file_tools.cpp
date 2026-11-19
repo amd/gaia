@@ -1494,6 +1494,9 @@ json FileIOTools::doFileWrite(const json& args) {
         const std::string notAFile = notAFileReason(path);
         if (!notAFile.empty()) return json{{"error", notAFile}};
 
+        const std::string credential = credentialFileReason(path);
+        if (!credential.empty()) return json{{"error", credential}};
+
         FileStateTracker& tracker = FileStateTracker::instance();
         bool recreated = false;
         bool keepCrlf = false;
@@ -1821,6 +1824,9 @@ json FileIOTools::doFileSearch(const json& args) {
         int total = 0;
         int ignoredSkipped = 0;
         int credentialSkipped = 0;
+        int tooLargeSkipped = 0;
+        // getline reads a file with no line breaks into one string.
+        constexpr std::uintmax_t kMaxSearchedFileBytes = 64u * 1024u * 1024u;
 
         std::error_code ec;
         for (auto it = fs::recursive_directory_iterator(searchDir, fs::directory_options::skip_permission_denied, ec);
@@ -1887,6 +1893,11 @@ json FileIOTools::doFileSearch(const json& args) {
                     ++credentialSkipped;
                     continue;
                 }
+                std::error_code sizeEc;
+                if (fs::file_size(entryPath, sizeEc) > kMaxSearchedFileBytes && !sizeEc) {
+                    ++tooLargeSkipped;
+                    continue;
+                }
                 std::ifstream file(entryPath);
                 if (!file.is_open()) continue;
 
@@ -1927,6 +1938,7 @@ json FileIOTools::doFileSearch(const json& args) {
             {"ignored_skipped", ignoredSkipped},
         };
         if (credentialSkipped > 0) result["credential_files_skipped"] = credentialSkipped;
+        if (tooLargeSkipped > 0) result["files_over_64mb_skipped"] = tooLargeSkipped;
         return result;
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_search failed: ") + e.what()}};

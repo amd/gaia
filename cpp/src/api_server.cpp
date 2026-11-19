@@ -897,6 +897,13 @@ struct ApiServer::Impl {
             }
             toolName = resolved;
         }
+        // The agent's tools and shell are one set: not beside a completion that is using them.
+        bool expected = false;
+        if (!busy.compare_exchange_strong(expected, true)) {
+            sendBusy(res);
+            return;
+        }
+        const BusySlot slot(busy);
         try {
             json result = agent.toolRegistry().executeTool(toolName, args);
             res.set_content(json({{"tool", toolName}, {"result", result}}).dump(-1, ' ', false, json::error_handler_t::replace),

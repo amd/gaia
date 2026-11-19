@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Pane fixture dialog</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    #backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4); display: none; align-items: center; justify-content: center; }
+    #backdrop.open { display: flex; }
+    #dialog { background: #ffffff; color: #1f2937; padding: 24px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Dialog page</h1>
+  <p id="status">The dialog is closed.</p>
+  <button id="open" type="button">Open dialog</button>
+  <div id="backdrop">
+    <div id="dialog" role="dialog" aria-label="Newsletter">
+      <p>Subscribe to the newsletter? Press Escape to close this.</p>
+    </div>
+  </div>
+  <script>
+    const backdrop = document.getElementById("backdrop");
+    const status = document.getElementById("status");
+    document.getElementById("open").addEventListener("click", () => {
+      backdrop.classList.add("open");
+      status.textContent = "The dialog is open.";
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !backdrop.classList.contains("open")) return;
+      backdrop.classList.remove("open");
+      status.textContent = "The dialog was closed with Escape.";
+    });
+  </script>
+</body>
+</html>

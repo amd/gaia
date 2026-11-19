@@ -349,7 +349,7 @@ def list_knowledge(
         pattern="^(updated_at|confidence|created_at|category|context|content|use_count)$",
     ),
     order: str = Query("desc", pattern="^(asc|desc)$"),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=2**63 - 1),
     limit: int = Query(50, ge=1, le=200),
     about_user: bool = Query(
         False,
@@ -432,13 +432,13 @@ def _embed_row(store, knowledge_id: str) -> Dict[str, Any]:
     The row stays saved either way; a failure is reported to the caller as
     ``embedded: false`` plus the reason, never swallowed.
     """
-    from gaia.agents.base.memory import EMBEDDING_MODEL
+    from gaia.agents.registry import machine_embedding_model
 
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    # The stored vectors' embedder, not a hardcoded default (#1744).
-    model = store.get_embedder_id() or EMBEDDING_MODEL
+    # The one every chat on this PC uses; the agent re-stamps the store with it.
+    model = machine_embedding_model()
     try:
         store.store_embedding(knowledge_id, _make_embed_fn(model)(item["content"]))
     except Exception as exc:  # the row is saved; only its vector is missing
@@ -745,14 +745,12 @@ def rebuild_embeddings() -> Dict:
     Returns ``{backfilled: int, total_without: int}``.
     """
     try:
-        from gaia.agents.base.memory import EMBEDDING_MODEL
+        from gaia.agents.registry import machine_embedding_model
 
         store = _get_store()
-        # Re-embed with the embedder that produced the stored vectors, not a
-        # hardcoded default. On the NPU profile that is the FLM-native embedder;
-        # the GGUF default would mix vector spaces in one table and reload a
-        # Vulkan GGUF embedder that evicts the FLM chat model (#1744).
-        embedder_model = store.get_embedder_id() or EMBEDDING_MODEL
+        # Re-embed with the embedder every chat on this PC uses, which the
+        # agent stamps on its next start anyway; the stamp may be a profile old.
+        embedder_model = machine_embedding_model()
         store.reconcile_embedder(embedder_model)
         result = store.backfill_embeddings(_make_embed_fn(embedder_model))
         return result
@@ -1860,6 +1858,135 @@ def _get_memory_settings_dict(db: ChatDatabase) -> Dict:
         == "true",
         "system_discovery_consent": json_consent,
     }
+
+
+class EmbedderBody(BaseModel):
+    """``npu`` or ``gpu``; None is the default (the GPU)."""
+
+    device: Optional[Literal["npu", "gpu"]] = None
+
+
+def _embedder_for(device: str) -> Tuple[str, str]:
+    """``(model, recipe)`` of the embedder that runs on *device*."""
+    from gaia.agents.registry import DEFAULT_DEVICE_CONFIGS
+
+    config = next(dc for dc in DEFAULT_DEVICE_CONFIGS if dc.device == device)
+    return config.embedding_model, config.recipe
+
+
+_UNPROVEN_REASON = "its search results aren't reliable yet, so GAIA embeds on the GPU"
+
+
+def _embedder_option(device: str) -> Dict[str, Any]:
+    """One device the embedder may run on, and whether this PC can use it now."""
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+    from .providers import ProviderError, device_unavailable_reason, display_name
+
+    model, recipe = _embedder_for(device)
+    proven = device in GaiaConfig.TESTED_EMBEDDING_DEVICES
+    option: Dict[str, Any] = {
+        "device": device,
+        "model": model,
+        "display_name": display_name(model),
+        "proven": proven,
+        "present": None,
+        "available": None,
+        "reason": None,
+        "downloaded": None,
+    }
+    try:
+        option["reason"] = device_unavailable_reason(recipe)
+        option["present"] = option["reason"] is None
+        option["available"] = option["present"]
+        option["downloaded"] = bool(
+            LemonadeClient(verbose=False).get_model_info(model)["downloaded"]
+        )
+    except (ProviderError, LemonadeClientError) as e:
+        # Unknown, not refused: the model server isn't answering yet.
+        option["reason"] = str(e)
+    if not proven:
+        option["available"] = False
+        if option["present"]:
+            option["reason"] = _UNPROVEN_REASON
+    return option
+
+
+def _embedder_view() -> Dict[str, Any]:
+    from gaia.agents.registry import machine_embedding_device
+    from gaia.config import GaiaConfig
+
+    config = GaiaConfig.load()
+    device = machine_embedding_device()
+    return {
+        "device": device,
+        "chosen": config.embedding_device is not None,
+        "default_device": "gpu",
+        "options": [_embedder_option(d) for d in GaiaConfig.EMBEDDING_DEVICE_CHOICES],
+    }
+
+
+@router.get("/api/memory/embedder")
+def get_embedder() -> Dict[str, Any]:
+    """Where every chat embeds documents and memory, and where it could instead."""
+    from gaia.config import GaiaConfigError
+
+    try:
+        return _embedder_view()
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.put("/api/memory/embedder", dependencies=[Depends(_require_ui_header)])
+def set_embedder(body: EmbedderBody) -> Dict[str, Any]:
+    """Run the embedder on *device* for every chat; None is the default (GPU).
+
+    Each chat moves to it on its next turn, and stored memory is re-embedded
+    with it. ``changed`` is False when the embedder stays the same. Refused
+    while a reply runs here: its agent holds the old embedder.
+    """
+    from gaia.agents.registry import machine_embedding_model
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    from .._chat_helpers import _active_sse_handlers, evict_all_session_agents
+    from .providers import ProviderError, device_unavailable_reason
+
+    if _active_sse_handlers:
+        raise HTTPException(
+            status_code=409,
+            detail="A reply is running. Change the embedder once it finishes.",
+        )
+    if (
+        body.device is not None
+        and body.device not in GaiaConfig.TESTED_EMBEDDING_DEVICES
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"GAIA doesn't embed on the {body.device.upper()}: {_UNPROVEN_REASON}.",
+        )
+    if body.device is not None:
+        _, recipe = _embedder_for(body.device)
+        try:
+            reason = device_unavailable_reason(recipe)
+        except ProviderError as e:
+            raise HTTPException(status_code=503, detail=str(e)) from e
+        if reason:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This PC can't run the embedder on the {body.device.upper()}: {reason}",
+            )
+    try:
+        before = machine_embedding_model()
+        GaiaConfig.save_key("embedding_device", body.device or "auto")
+        changed = machine_embedding_model() != before
+    except GaiaConfigError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+    if changed:
+        # This process's agents picked theirs as they were built; GAIA's agent
+        # sidecar rebuilds each session on its next turn.
+        evict_all_session_agents()
+    return {**_embedder_view(), "changed": changed}
 
 
 @router.get("/api/memory/settings")

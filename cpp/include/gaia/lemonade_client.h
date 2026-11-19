@@ -259,7 +259,10 @@ public:
     bool hasApiKey() const { return hasApiKey_; }
 
     /// Polled on every streamed chunk; returning true ends the stream early.
-    void setAbortCheck(std::function<bool()> check) { abortCheck_ = std::move(check); }
+    void setAbortCheck(std::function<bool()> check) {
+        abortCheck_ = check;
+        http_.setCancelCheck(std::move(check));  // also ends a load, or the wait for a first token
+    }
 
 private:
     /// Normalize URL: strip trailing slashes, preserve /v1 or /api/v1, append /api/v1 otherwise.

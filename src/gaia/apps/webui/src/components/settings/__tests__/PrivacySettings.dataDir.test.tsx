@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PrivacySettings } from '../PrivacySettings';
 import { useChatStore } from '../../../stores/chatStore';
+import { useModelStore } from '../../../stores/modelStore';
 import type { SystemStatus } from '../../../types';
 import * as api from '../../../services/api';
 
@@ -40,5 +41,39 @@ describe('PrivacySettings data folder', () => {
         useChatStore.setState({ systemStatus: null });
         render(<PrivacySettings />);
         expect(screen.queryByText('Data folder')).toBeNull();
+    });
+});
+
+describe('PrivacySettings where your data goes', () => {
+    afterEach(() => {
+        useModelStore.setState({ active: null });
+        useChatStore.setState({ locale: 'en' });
+    });
+
+    function useCloudModel() {
+        useModelStore.setState({
+            active: {
+                provider: 'fireworks', model: 'fireworks.other', label: 'other',
+                remote: true, is_default: false, provider_name: 'Fireworks AI',
+            },
+        } as never);
+    }
+
+    it('says what is stored here and what is sent, as two parallel lines', () => {
+        useCloudModel();
+        render(<PrivacySettings />);
+        expect(screen.getByText('Stored on this PC: chats, documents, memory.')).toBeInTheDocument();
+        expect(screen.getByText('Sent to Fireworks AI: each message and the chat history, to get an answer.')).toBeInTheDocument();
+        expect(screen.queryByText(/stay on this PC/)).toBeNull();
+    });
+
+    it('says the same in Arabic', () => {
+        useCloudModel();
+        useChatStore.setState({ locale: 'ar' });
+        const { container } = render(<PrivacySettings />);
+        // Arabic text arrives wrapped in bidi isolates; compare the words only.
+        const text = (container.textContent ?? '').replace(/[⁦-⁩]/g, '');
+        expect(text).toContain('محفوظ على هذا الجهاز: المحادثات والمستندات والذاكرة.');
+        expect(text).toContain('يُرسَل إلى Fireworks AI: كل رسالة وسجل المحادثة، للحصول على إجابة.');
     });
 });

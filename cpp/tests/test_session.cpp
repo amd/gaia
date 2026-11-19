@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 #include <gaia/agent.h>
 #include <gaia/session.h>
@@ -32,7 +33,7 @@ protected:
     std::unique_ptr<SessionStore> store;
 
     void SetUp() override {
-        storeDir = fs::temp_directory_path() / "gaia_session_test";
+        storeDir = fs::temp_directory_path() / testsupport::perProcess("gaia_session_test");
         fs::remove_all(storeDir);
         store = std::make_unique<SessionStore>(storeDir.string());
     }

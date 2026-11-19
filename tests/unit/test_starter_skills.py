@@ -53,6 +53,7 @@ STARTER_PACK = frozenset(
     {
         "analyze-recording",
         "automations",
+        "browser-pane",
         "calculators",
         "calendar",
         "check-in",
@@ -68,6 +69,7 @@ STARTER_PACK = frozenset(
         "log-triage",
         "meeting-actions",
         "music-gen",
+        "office-docs",
         "price-watch",
         "recommendations",
         "report-from-sources",
@@ -443,6 +445,21 @@ def test_starter_skill_read_window_never_starts_below_line_one(skill_dir: Path):
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_references_never_start_below_line_one(skill_dir: Path):
+    """Reference files are loaded into the turn too, so they need the same floor."""
+    bad = {
+        ref.name: found
+        for ref in sorted((skill_dir / "references").glob("*.md"))
+        if (found := _unclamped_start_lines(ref.read_text(encoding="utf-8")))
+    }
+
+    assert not bad, (
+        f"{skill_dir.name} references compute start_line with no max(1, ...) "
+        f"floor: {bad}"
+    )
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
 def test_starter_skill_scratchpad_sql_uses_the_table_prefix(skill_dir: Path):
     """Scratchpad tables are only reachable through their ``scratch_`` prefix.
 
@@ -551,7 +568,7 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
 
 
 def test_rss_digest_registers_its_declared_tool(pack_manager: SkillManager):
-    """The pack's one tool-providing skill really registers its @tool.
+    """A tool-providing skill really registers its @tool.
 
     Proves the manifest matches ``tools.py`` — the loader refuses on any
     signature drift, so this is a live contract check, not a formality.
@@ -984,7 +1001,7 @@ def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
     ``text_to_speech`` is a real, always-registered ChatAgent tool
     (``gaia_agent/chat_agent.py``), so a doc listing it as a missing capability
     tells the model to under-promise. Skill-aware scheduling genuinely is still
-    missing (``gaia schedule add --skill`` is rejected, #1019), so that claim
+    missing (``gaia schedule add --skill`` is rejected, #6470), so that claim
     must stay.
     """
     gaia_agent = pytest.importorskip("gaia_agent")
@@ -1013,9 +1030,12 @@ def test_daily_brief_and_guide_do_not_underclaim_tts_or_scheduling():
         ), f"{doc_name} still claims TTS is not callable by an agent"
 
     # The scheduling limitation is still real — don't let a future edit
-    # accidentally claim it works before #1019 actually lands.
+    # accidentally claim it works before #6470 actually lands.
     assert "gaia schedule add" in daily_brief
     assert "gaia schedule add --skill" in guide
+    # #1019 is closed; the limitation must point at the issue that tracks it.
+    assert "issues/6470" in daily_brief
+    assert "issues/1019" not in daily_brief
 
 
 def test_the_guides_run_a_skill_snippet_still_type_checks():

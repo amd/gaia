@@ -331,8 +331,11 @@ std::string SkillLibrary::hubUrl() {
 std::string SkillLibrary::installFromHub(const std::string& name, const std::string& version,
                                          const std::string& destRoot, bool allowExperimental,
                                          std::string* tierOut) {
-    if (name.empty() || name.find_first_of("/\\.") != std::string::npos) {
-        throw SkillError("Not a skill name: '" + name + "'");
+    // The name reaches the unpack command line, so only plain skill-name characters.
+    if (name.empty() || name[0] == '-' ||
+        name.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-") !=
+            std::string::npos) {
+        throw SkillError("Not a skill name: '" + name + "'. A skill name uses letters, digits, - and _.");
     }
     if (version.find_first_of("^~*<>= ,") != std::string::npos) {
         throw SkillError("gaiacpp installs exact versions only (e.g. " + name +
@@ -382,7 +385,11 @@ std::string SkillLibrary::installFromHub(const std::string& name, const std::str
     }
 
     std::error_code ec;
-    const fs::path work = fs::temp_directory_path() / ("gaia-skill-" + name + "-" + actual.substr(0, 12));
+    // Its own folder: two installs of one skill would delete each other's files, and a name
+    // another user can predict could be filled in ahead of the signature check.
+    std::random_device entropy;
+    const fs::path work = fs::temp_directory_path() / ("gaia-skill-" + name + "-" + actual.substr(0, 12) + "-" +
+                                                       std::to_string(entropy()) + std::to_string(entropy()));
     fs::remove_all(work, ec);
     fs::create_directories(work / "x");
     const fs::path zip = work / filename;

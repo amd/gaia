@@ -675,12 +675,24 @@ void mapStrings(json& value, std::string (*mask)(const std::string&)) {
 
 }  // namespace
 
+namespace {
+// A key printed by a command (cat id_rsa) is a credential no token pattern matches.
+std::string maskPrivateKeys(std::string text) {
+    std::vector<std::pair<std::size_t, std::size_t>> spans;
+    privateKeySpans(text, spans);
+    for (auto it = spans.rbegin(); it != spans.rend(); ++it) {
+        text.replace(it->first, it->second - it->first, "[redacted private key]");
+    }
+    return text;
+}
+}  // namespace
+
 std::string redactCredentials(const std::string& text) {
-    return maskTokens(maskSecretQueries(maskUserinfo(text, false), false), false);
+    return maskPrivateKeys(maskTokens(maskSecretQueries(maskUserinfo(text, false), false), false));
 }
 
 std::string redactFileText(const std::string& text) {
-    return maskTokens(maskSecretQueries(maskUserinfo(text, true), true), true);
+    return maskPrivateKeys(maskTokens(maskSecretQueries(maskUserinfo(text, true), true), true));
 }
 
 bool holdsCredentials(const std::string& text) { return !text.empty() && redactFileText(text) != text; }

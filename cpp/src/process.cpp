@@ -91,18 +91,23 @@ std::string readStream(FILE* stream, size_t maxBytes) {
     std::array<char, 4096> buffer;
     size_t totalRead = 0;
 
+    bool ended = false;
     while (totalRead < maxBytes) {
         size_t toRead = std::min(buffer.size(),
                                  maxBytes - totalRead);
         size_t bytesRead = std::fread(buffer.data(), 1, toRead, stream);
-        if (bytesRead == 0) break;
+        if (bytesRead == 0) {
+            ended = true;
+            break;
+        }
         output.append(buffer.data(), bytesRead);
         totalRead += bytesRead;
     }
 
-    // Drain remaining data so the process doesn't block on a full pipe,
-    // but don't store it.
-    while (std::fread(buffer.data(), 1, buffer.size(), stream) > 0) {
+    // Drain remaining data so the process doesn't block on a full pipe, but don't store it.
+    // Never after the stream ended or a read was cancelled: one more read could wait for good
+    // on a pipe a background process still holds.
+    while (!ended && std::fread(buffer.data(), 1, buffer.size(), stream) > 0) {
         // discard
     }
 
@@ -494,9 +499,11 @@ ProcessResult runWithTimeout(const std::string& command,
     // The pipes end when the last writer closes them. A background process the
     // command left behind may still hold them, so the wait for it is bounded.
     for (int waited = 0; readersDone.load() < 2 && waited < 2000; waited += 10) Sleep(10);
-    if (readersDone.load() < 2) {
+    // Again until both readers are out: a cancel only ends the read in flight at that moment.
+    while (readersDone.load() < 2) {
         CancelIoEx(stdoutReadH, nullptr);
         CancelIoEx(stderrReadH, nullptr);
+        Sleep(10);
     }
     convergentStdout.join();
     convergentStderr.join();
@@ -1102,9 +1109,14 @@ struct ShellSession::Impl {
                 s << "set \"" << kv.first << "=" << batchQuote(kv.second)
                   << "\"\r\n";
             }
-            s << "call \"" << commandFile << "\" <nul\r\n";
+            // `call` doubles every ^ in a path it is given, so the command file is called as
+            // .\name from the folder this script is in; its own first line (popd) steps back into
+            // the session's folder before the command runs. A bare name is not enough: cmd.exe can
+            // be set to leave the current folder out of its search.
+            s << "pushd \"%~dp0\"\r\n";
+            s << "call .\\" << sfs::u8path(commandFile).filename().u8string() << " <nul\r\n";
             s << "set __GAIA_RC=%ERRORLEVEL%\r\n";
-            s << "> \"" << stateFile << "\" (\r\n";
+            s << "> \"" << batchQuote(stateFile) << "\" (\r\n";
             s << "  cd\r\n";
             s << "  echo " << kEnvMarker << "\r\n";
             s << "  set\r\n";
@@ -1238,7 +1250,9 @@ ProcessResult runSessionScript(const std::function<std::string(const std::string
     // The command gets its own file so it cannot splice into the script's
     // bookkeeping; on Windows it must be a .cmd for `call` to accept it.
     std::string commandFile;
-    if (!writeTempFile(scriptExt, command + "\n", commandFile)) {
+    // Under cmd.exe the script calls this file from the temp folder: see buildScript.
+    if (!writeTempFile(scriptExt, (posixScript ? std::string() : std::string("@popd\r\n")) + command + "\n",
+                       commandFile)) {
         result.exitCode = -1;
         result.stderr_output = tempError;
         return result;
@@ -1253,8 +1267,14 @@ ProcessResult runSessionScript(const std::function<std::string(const std::string
     }
     temps.add(scriptFile);
 
+#ifdef _WIN32
+    // The line goes through cmd /c, which drops the first and last quote of a line holding & or ^
+    // and then splits it there. An outer pair of quotes is the pair it drops, and the path stays whole.
     const std::string invocation =
-        posixScript ? shell + " " + posixQuote(genericPath(scriptFile)) : "\"" + scriptFile + "\"";
+        "\"" + (posixScript ? shell + " \"" + genericPath(scriptFile) + "\"" : "\"" + scriptFile + "\"") + "\"";
+#else
+    const std::string invocation = shell + " " + posixQuote(genericPath(scriptFile));
+#endif
 
     // No cwd/env arguments: the script applies both inside the child, so the
     // calling process is never mutated and concurrent sessions cannot collide.
@@ -1281,6 +1301,26 @@ ProcessResult ShellSession::run(const std::string& command,
     const auto build = [this](const std::string& commandFile, const std::string& stateFile) {
         return impl_->buildScript(commandFile, stateFile);
     };
+
+    // The folder the session stands in can be deleted under it; every later command would fail before it starts.
+    std::string movedNote;
+    {
+        std::error_code goneEc;
+        std::string native = impl_->cwd;
+        bool checkable = true;
+#ifdef _WIN32
+        // Git Bash reports /c/Users/...; other /paths (its /tmp, /home) have no Windows form to test.
+        if (!native.empty() && native[0] == '/') {
+            checkable = native.size() >= 3 && std::isalpha(static_cast<unsigned char>(native[1])) && native[2] == '/';
+            if (checkable) native = std::string(1, native[1]) + ":" + native.substr(2);
+        }
+#endif
+        if (checkable && impl_->cwd != impl_->startCwd && !sfs::is_directory(sfs::u8path(native), goneEc)) {
+            movedNote = "ShellSession: the folder this session was in (" + impl_->cwd +
+                        ") no longer exists, so this command ran from " + impl_->startCwd + ".";
+            impl_->cwd = impl_->startCwd;
+        }
+    }
 
     if (!impl_->baselineFromShell) {
         // One empty command with nothing of the session's applied, to learn the shell's own environment.
@@ -1309,6 +1349,10 @@ ProcessResult ShellSession::run(const std::string& command,
     std::string state;
     result = runSessionScript(build, impl_->posixScript, impl_->shell, command, timeoutMs, maxOutputBytes, state);
     impl_->absorbState(state);
+
+    if (!movedNote.empty()) {
+        result.stderr_output += std::string(result.stderr_output.empty() ? "" : "\n") + movedNote;
+    }
 
     const std::string droppedAfter = impl_->dropUnsafeBatchValues();
     if (!droppedAfter.empty()) droppedVars += (droppedVars.empty() ? "" : ", ") + droppedAfter;

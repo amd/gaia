@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""read_file returns the full text of Word, PDF and Excel files, in marked parts.
+"""read_file returns the full text of Word, PDF, Excel and PowerPoint files, in marked parts.
 
 Asked to reconcile a term sheet against a draft agreement, the agent read the
 .docx with read_file, got ``[Binary file, N bytes]``, fell back to indexing and
@@ -207,7 +207,7 @@ def test_formulas_without_saved_values_are_flagged_not_silently_blank(
     assert "1 formula cell(s) have no saved value" in result["warning"]
 
 
-@pytest.mark.parametrize("extension", [".pptx", ".epub"])
+@pytest.mark.parametrize("extension", [".epub"])
 def test_formats_it_cannot_extract_point_at_index_document(
     read_file, tmp_path, extension
 ):

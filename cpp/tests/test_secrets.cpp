@@ -441,3 +441,16 @@ TEST(RedactFileContentTest, MasksEveryStringAndNeverHidesLines) {
     EXPECT_EQ(out["lines"][1], 3);
     EXPECT_FALSE(has(out.dump(), kHiddenMark));
 }
+
+TEST(SecretsTest, APrivateKeyInToolOutputIsMasked) {
+    const std::string printed =
+        "$ cat id_rsa\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\nq7x9\n"
+        "-----END OPENSSH PRIVATE KEY-----\ndone";
+    const std::string out = gaia::redactCredentials(printed);
+    EXPECT_EQ(out.find("b3BlbnNzaC1rZXk"), std::string::npos) << out;
+    EXPECT_NE(out.find("[redacted private key]"), std::string::npos) << out;
+    EXPECT_NE(out.find("$ cat id_rsa"), std::string::npos);
+    EXPECT_NE(out.find("done"), std::string::npos);
+    const std::string cert = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+    EXPECT_EQ(gaia::redactCredentials(cert), cert) << "a certificate is public";
+}

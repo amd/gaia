@@ -44,6 +44,19 @@ describe('Composer with an Arabic-named file', () => {
 
         expect(await screen.findByText(name)).toHaveAttribute('dir', 'ltr');
     });
+
+    it('links the Arabic name to its encoded file', async () => {
+        const name = 'ملاحظات الاجتماع.txt';
+        mockedApi.uploadFile.mockResolvedValue({ filename: name, original_name: name, url: `/api/files/uploads/${encodeURIComponent(name)}`, size: 5, content_type: 'text/plain', is_image: false });
+        const { result } = renderHook(() => useAttachments());
+
+        act(() => result.current.addFiles([new File(['x'], name, { type: 'text/plain' })]));
+        await waitFor(() => expect(result.current.hasUploaded).toBe(true));
+
+        expect(result.current.compose('go')).toBe(
+            `go\n\n[${name}](/api/files/uploads/${encodeURIComponent(name)})`,
+        );
+    });
 });
 
 describe('Composer with a recording', () => {

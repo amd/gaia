@@ -10,12 +10,9 @@ learned during the turn. A skill activated by ``load_skill`` lives on
 no skills loaded while the model, having just said "it's loaded", keeps
 promising otherwise.
 
-Started as a deliberate mirror of ``gaia_agent_email.agent_routes._SessionRegistry``
-— same idle-TTL + LRU bounds, same claim-the-lock eviction — and has since
-diverged: this one reserves a slot while an agent builds so the cap is a real
-bound, and tears agents down through ``close()``, which the email agent does not
-have. The duplication is a known cost; extracting one shared registry into core
-touches the email agent's tested paths and belongs in its own change.
+Idle-TTL + LRU bounds with claim-the-lock eviction. It reserves a slot while
+an agent builds so the cap is a real bound, and tears agents down through
+``close()``.
 """
 
 from __future__ import annotations
@@ -88,7 +85,8 @@ def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
     rebuild that dropped them would quietly put an offline chat back online,
     or a private one back into memory: the conversation, loaded skills, the
     internet switch, the memory mode, granted, read-only and withheld paths,
-    which documents are attached, and the working folder.
+    which documents are attached, the working folder, and which skills were
+    auto-loaded or unloaded, so a rebuild never auto-loads one the user dropped.
     """
     new.conversation_history = list(getattr(old, "conversation_history", None) or [])
     if hasattr(old, "internet_off"):
@@ -126,6 +124,14 @@ def _carry_session_state(old: Any, new: Any, session_id: str) -> None:
                 name,
                 exc,
             )
+    # After the loads above, so they cannot overwrite what the session recorded.
+    for records in ("_autoloaded_skills", "_unloaded_skills"):
+        if getattr(old, records, None) is not None:
+            setattr(new, records, set(getattr(old, records)))
+    if getattr(old, "_autoload_granted", None) is not None:
+        new._autoload_granted = {
+            name: list(programs) for name, programs in old._autoload_granted.items()
+        }
 
 
 class _AgentSession:

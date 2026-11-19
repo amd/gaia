@@ -16,6 +16,7 @@
 #include <string>
 
 #include "gaia/clean_console.h"
+#include "gaia/secrets.h"
 
 #ifdef _WIN32
 #   include <windows.h>
@@ -371,7 +372,11 @@ bool isReadOnlyShellCommand(const std::string& command, bool posixShell) {
             for (size_t dots = a.find(".."); dots != std::string::npos; dots = a.find("..", dots + 1)) {
                 const size_t next = dots + 2;
                 if (next == a.size() || a[next] == '/' || a[next] == '\\') return false;
+                // cmd.exe also ends an argument at a comma, a semicolon or an equals sign.
+                if (!posixShell && (a[next] == ',' || a[next] == ';' || a[next] == '=')) return false;
             }
+            // file_read refuses a key or .env file; reading one through the shell at least asks.
+            if (a[0] != '-' && isCredentialFileName(a.substr(a.find_last_of("/\\") + 1))) return false;
             // hostname with a name sets it.
             if (program == "hostname" && a[0] != '-') return false;
             if (program != "find") continue;
@@ -386,8 +391,10 @@ bool isReadOnlyShellCommand(const std::string& command, bool posixShell) {
 namespace {
 bool urlIsLocal(const std::string& url) {
     static const std::regex host(R"(^[A-Za-z][A-Za-z0-9+.\-]*://(?:[^/@?#]*@)?(\[[^\]]*\]|[^/:?#]*))");
+    // The host is at the front; a long tail would only deepen the matcher's recursion.
+    const std::string head = url.substr(0, 1024);
     std::smatch m;
-    if (!std::regex_search(url, m, host)) return false;
+    if (!std::regex_search(head, m, host)) return false;
     std::string h = lowerAscii(m[1].str());
     if (!h.empty() && h.front() == '[') h = h.substr(1, h.size() - 2);
     if (h == "localhost" || h == "::1") return true;
@@ -397,6 +404,9 @@ bool urlIsLocal(const std::string& url) {
 
 // Longer than any real command, and std::regex recurses once per character matched.
 constexpr size_t kMaxScannedBytes = 64 * 1024;
+// The patterns below match within one line, so one line bounds the recursion: a thread's
+// stack (512 KB on macOS) holds a few thousand characters of it.
+constexpr size_t kMaxScannedLine = 2048;
 
 bool isAsciiLetter(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
 bool isSchemeChar(char c) { return isAsciiLetter(c) || (c >= '0' && c <= '9') || c == '+' || c == '.' || c == '-'; }
@@ -464,12 +474,22 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
                    std::to_string(kMaxScannedBytes) + " bytes it cannot be checked for going online. Write long "
                    "input to a file and have the command read it.";
         }
+        for (size_t start = 0; start <= command.size();) {
+            const size_t end = (std::min)(command.find('\n', start), command.size());
+            if (end - start > kMaxScannedLine) {
+                return why + "a command with a line of " + std::to_string(end - start) + " bytes: over " +
+                       std::to_string(kMaxScannedLine) + " bytes on one line it cannot be checked for going "
+                       "online. Break the line up, or write long input to a file and have the command read it.";
+            }
+            start = end + 1;
+        }
         // Commands that go online with no URL in sight: a remote, a package index, an API.
         static const std::regex online(
             R"(\b(?:git\b.*\b(?:clone|fetch|pull|push|ls-remote|submodule\s+update)\b)"
-            R"(|(?:pip3?|uv\s+pip|python3?\s+-m\s+pip)\s+(?:install|download)\b)"
-            R"(|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|update|publish)\b|(?:npx|uvx|pipx|bunx)\s)"
-            R"(|uv\s+(?:add|sync|tool\s+install)\b|cargo\s+(?:install|fetch|update)\b)"
+            R"(|git\b.*\bremote\s+update\b)"
+            R"(|(?:pip[0-9.]*|uv\s+pip|(?:python[0-9.]*|py)\s+-m\s+pip)\s+(?:install|download)\b)"
+            R"(|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|ci|update|publish)\b|(?:npx|uvx|pipx|bunx)\s)"
+            R"(|uv\s+(?:add|sync|tool\s+install|run\s+--with)\b|cargo\s+(?:install|fetch|update)\b)"
             R"(|go\s+(?:get|install|mod\s+download)\b|docker\s+(?:pull|push|login)\b)"
             R"(|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum)\s+(?:install|upgrade|update)\b)"
             R"(|gh\s|ssh\b|scp\b|sftp\b|ftp\b|rsync\b|nc\b|ncat\b|telnet\b|socat\b)"
@@ -482,19 +502,66 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
         // bash opens a socket for a redirect to these names.
         const bool socketFile = command.find("/dev/tcp/") != std::string::npos ||
                                 command.find("/dev/udp/") != std::string::npos;
-        if (socketFile || std::regex_search(command, online) || mentionsRemoteUrl(command)) {
+        // The shell drops quotes and backslashes before it looks a program up: cu''rl runs curl.
+        std::string bare;
+        for (const char c : command) {
+            if (c != '\'' && c != '"' && c != '\\') bare.push_back(c);
+        }
+        if (socketFile || std::regex_search(command, online) || std::regex_search(bare, online) ||
+            mentionsRemoteUrl(command)) {
             return why + "`" + command.substr(0, 80) + "`, which goes online.";
         }
         // A fetch stays local only when every destination it names is this PC.
-        if (std::regex_search(command, fetch)) {
-            // A proxy or a pinned address sends a "localhost" request elsewhere.
+        if (std::regex_search(command, fetch) || std::regex_search(bare, fetch)) {
+            // A proxy or a pinned address sends a "localhost" request elsewhere; -x also rides in a
+            // flag cluster (-sx) or holds its value (-xhost).
             static const std::regex reroute(
-                R"((?:^|\s)(?:-x|--proxy|--preproxy|--socks\S*|--resolve|--connect-to|-e|--execute)(?:[\s=]|$))");
+                R"((?:^|\s)(?:-[A-Za-z]*x\S*|--proxy|--preproxy|--socks\S*|--resolve|--connect-to|-e|--execute)(?:[\s=]|$))");
             if (std::regex_search(command, reroute)) return why + "`" + command.substr(0, 80) + "`, which goes online.";
             size_t urlBegin = 0, urlEnd = 0;
             if (!nextUrl(command, 0, urlBegin, urlEnd) || command.find("$(") != std::string::npos ||
                 command.find('`') != std::string::npos || command.find("${") != std::string::npos) {
                 return why + "`" + command.substr(0, 80) + "`, which goes online.";
+            }
+            // curl and wget take a bare host as a destination too (curl http://localhost/ example.com),
+            // and that has no scheme for the URL scan to find.
+            static const std::regex bareHost(R"(^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::[0-9]+)?(?:[/?#]|$))");
+            const auto isFetchProgram = [](const std::string& word) {
+                const std::string name = lowerAscii(word.substr(word.find_last_of("/\\") + 1));
+                return name == "curl" || name == "wget" || name == "curl.exe" || name == "wget.exe";
+            };
+            // Flags whose next word is a file or a value, not a destination.
+            static const std::set<std::string> takesValue = {
+                "-o", "-O", "--output", "--output-document", "-d", "--data", "--data-raw", "--data-binary",
+                "--data-urlencode", "-H", "--header", "-T", "--upload-file", "-F", "--form", "-u", "--user",
+                "-A", "--user-agent", "-b", "--cookie", "-c", "--cookie-jar", "-K", "--config", "-w",
+                "--write-out", "-X", "--request", "-m", "--max-time", "--retry", "--connect-timeout"};
+            std::istringstream words(bare);
+            bool fetching = false, skipNext = false;
+            for (std::string w; words >> w;) {
+                if (std::string(";|&<>").find(w[0]) != std::string::npos) {
+                    fetching = false;  // a redirect target or the next command
+                    skipNext = w.find_first_not_of("<>&|;") == std::string::npos && (w[0] == '<' || w[0] == '>');
+                    continue;
+                }
+                if (skipNext) {
+                    skipNext = false;
+                    continue;
+                }
+                if (isFetchProgram(w)) {
+                    fetching = true;
+                    continue;
+                }
+                if (!fetching) continue;
+                if (w[0] == '-') {
+                    // wget -O takes a file; curl -O takes none, and then the next word is a URL anyway.
+                    skipNext = takesValue.count(w) > 0;
+                    continue;
+                }
+                // Only the head is matched: std::regex recurses once per character of a long word.
+                const std::string head = w.substr(0, 300);
+                if (head.find("://") != std::string::npos || !std::regex_search(head, bareHost)) continue;
+                if (!urlIsLocal("http://" + head)) return why + "`" + command.substr(0, 80) + "`, which goes online.";
             }
         }
         return "";
@@ -511,7 +578,8 @@ std::string shellCommandScope(const std::string& command) {
     if (start == std::string::npos) return "exact:";
     const std::string cmd = command.substr(start, command.find_last_not_of(" \t\r\n") - start + 1);
     // Anything that runs a second thing or hides a word is approved only as written.
-    for (const char* op : {";", "&", "|", "`", "$", ">", "<", "\n", "(", "\\", "\"", "'"}) {
+    // cmd.exe expands %VAR% and !VAR! and drops ^ before the program sees its words.
+    for (const char* op : {";", "&", "|", "`", "$", ">", "<", "\n", "(", "\\", "\"", "'", "%", "^", "!"}) {
         if (cmd.find(op) != std::string::npos) return "exact:" + cmd;
     }
     std::istringstream words(cmd);
@@ -538,6 +606,18 @@ std::string shellCommandScope(const std::string& command) {
     if (plain.count(program)) {
         // A flag that runs another program or writes a file is approved only as written.
         for (std::string w; words >> w;) {
+            // A grant for a program covers work in the folder, not a path that climbs out of it or names home.
+            if (w[0] == '~') return "exact:" + cmd;
+            // A wildcard in an absolute path (/*, /h*/me) can match any folder on the machine.
+            const bool absolute = w[0] == '/' || (w.size() > 1 && w[1] == ':');
+            if (absolute && w.find_first_of("*?[{") != std::string::npos) return "exact:" + cmd;
+            for (size_t dots = w.find(".."); dots != std::string::npos; dots = w.find("..", dots + 1)) {
+                // C:..\x climbs from the drive's current folder.
+                const bool starts = dots == 0 || w[dots - 1] == '/' || w[dots - 1] == '\\' || w[dots - 1] == '=' ||
+                                    w[dots - 1] == ':';
+                const size_t next = dots + 2;
+                if (starts && (next == w.size() || w[next] == '/' || w[next] == '\\')) return "exact:" + cmd;
+            }
             if (w.size() < 2) continue;
 #ifdef _WIN32
             if (program == "sort" && w[0] == '/' && (w[1] == 'o' || w[1] == 'O')) return "exact:" + cmd;

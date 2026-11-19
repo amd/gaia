@@ -113,11 +113,27 @@ struct GAIA_API HttpClientConfig {
     std::string caCertPath;
 
     /// A kept connection idle for longer than this is reopened rather than
-    /// reused, since a server may have dropped it without saying so.
-    int keepAliveIdleSec = 30;
+    /// reused, since a server may have dropped it without saying so. Shorter
+    /// than the 5 seconds many servers keep an idle connection for.
+    int keepAliveIdleSec = 4;
 
     /// Log method and URL to stderr.
     bool debug = false;
+
+    /// Host name to address: connect to this address for that name instead of
+    /// looking the name up, so a check made on an address still holds for the
+    /// request. The name is still sent as Host and used for TLS.
+    std::map<std::string, std::string> hostAddresses;
+
+    /// GET only: stop reading a response body at this many bytes and return what
+    /// arrived, so a huge or endless page can't fill memory. 0 reads it all.
+    std::size_t maxResponseBytes = 0;
+
+    /// Asked about ten times a second while a request is in flight. Once it
+    /// returns true the caller gets HttpError at once, so it is never held for a
+    /// whole read timeout; the request itself is closed, or left to end alone
+    /// where a blocked read can't be interrupted (Windows).
+    std::function<bool()> cancelCheck;
 };
 
 // ---- Client ----
@@ -198,10 +214,12 @@ public:
 
     bool debug() const;
     void setDebug(bool enabled);
+    /// See HttpClientConfig::cancelCheck. Set before a request starts, not during one.
+    void setCancelCheck(std::function<bool()> check);
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::shared_ptr<Impl> impl_;  // shared with a request left to finish alone after a cancel
 };
 
 } // namespace gaia

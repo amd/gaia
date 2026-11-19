@@ -95,6 +95,12 @@ TEST(WorkspaceTest, CommandChecks) {
         << "division in inline code is not the root folder";
     EXPECT_NE(ws.checkCommand("sudo find / -name x"), "");
     EXPECT_NE(ws.checkCommand("cd /tmp && rm -rf / "), "");
+    // The shell expands an unquoted wildcard in the top folder into real folders.
+    for (const char* globbed : {"rm -rf /*", "cat /h*/me/.ssh/id_rsa", "rm -rf /{home,x}/me", "ls /[a-z]*"}) {
+        EXPECT_NE(ws.checkCommand(globbed), "") << globbed;
+    }
+    EXPECT_EQ(ws.checkCommand("grep -rn '/v[0-9]*/' src"), "") << "quoted, it is a pattern";
+    EXPECT_EQ(ws.checkCommand("cat > a.js <<'EOF'\n/* a comment */\nEOF"), "") << "a comment, not a command";
     EXPECT_NE(ws.checkCommand("cat " + (d.other / "secret.txt").string()), "");
     EXPECT_NE(ws.checkCommand("python3 -c \"open('" + (d.other / "f").string() + "')\""), "");
 #ifndef _WIN32
@@ -262,4 +268,93 @@ TEST(WorkspaceTest, ACommandNamingALinkOutOfTheFolderIsRefused) {
     EXPECT_EQ(ws.checkCommand("ls sub && cat notes.txt"), "");
     EXPECT_EQ(ws.checkCommand("linked/python -m pytest && linked/pip list"), "") << "a linked program may be run";
     fs::remove("linked");
+}
+
+#ifndef _WIN32
+TEST(WorkspaceTest, ALinkToAFileNotThereYetIsJudgedByItsTarget) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    std::error_code ec;
+    fs::create_symlink(d.other / "new.txt", d.work / "out.md", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::create_symlink(fs::path("sub") / "new.txt", d.work / "in.md", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    EXPECT_NE(ws.checkPath((d.work / "out.md").string()), "") << "a write would land outside the folder";
+    EXPECT_EQ(ws.checkPath((d.work / "in.md").string()), "");
+}
+#endif
+
+#ifndef _WIN32
+TEST(WorkspaceTest, AWildcardOrLinkFollowingReadAsksWhenALinkLeadsOut) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const std::string cwd = d.work.string();
+    for (const char* ok : {"cat *", "grep KEY *.txt", "grep -R x .", "find -L . -name x", "ls -L sub", "cat sub/*"}) {
+        EXPECT_TRUE(staysInside(ws, ok, cwd)) << ok << " (no link in the folder yet)";
+    }
+    std::error_code ec;
+    fs::create_symlink(d.other / "secret.txt", d.work / "env", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    fs::create_directory_symlink(d.other, d.work / "sub" / "deps", ec);
+    ASSERT_FALSE(ec) << ec.message();
+    for (const char* asks : {"cat *", "grep KEY *", "grep -R x .", "grep -rR x sub", "find -L . -name x", "du -L",
+                             "ls -RL", "cat sub/*", "cat */notes.txt"}) {
+        EXPECT_FALSE(staysInside(ws, asks, cwd)) << asks;
+    }
+    for (const char* ok : {"cat notes.txt", "grep -rn x sub", "find . -name x", "ls -la", "grep -L x notes.txt"}) {
+        EXPECT_TRUE(staysInside(ws, ok, cwd)) << ok << " (follows no link)";
+    }
+}
+#else
+TEST(WorkspaceTest, AJunctionThatLeadsOutMakesAWalkingReadAsk) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    const std::string cwd = d.work.string();
+    EXPECT_TRUE(staysInside(ws, "grep -R x .", cwd)) << "no junction yet";
+    const fs::path junction = d.work / "sub" / "deps";
+    // A junction needs no privilege, unlike a Windows symlink.
+    const std::string mklink = "cmd /c mklink /J \"" + junction.string() + "\" \"" + d.other.string() + "\" >nul";
+    if (std::system(mklink.c_str()) != 0) GTEST_SKIP() << "mklink /J failed";
+    for (const char* asks : {"grep -R x .", "cat sub/*"}) {
+        EXPECT_FALSE(staysInside(ws, asks, cwd)) << asks;
+    }
+    EXPECT_TRUE(staysInside(ws, "cat notes.txt", cwd));
+    std::error_code ec;
+    fs::remove(junction, ec);  // the junction, not what it points at
+}
+#endif
+
+TEST(WorkspaceTest, GitBashDevicePathsAreNotFiles) {
+    for (const char* device : {"/dev/clipboard", "/dev/sda1", "/dev/mem", "/proc/registry/HKEY_CURRENT_USER/x",
+                               "/proc/1/environ", "/dev/conin"}) {
+        EXPECT_TRUE(Workspace::isGitBashDevicePath(device)) << device;
+    }
+    for (const char* fine : {"/dev/null", "/dev/stdin", "/dev/fd/3", "/dev/urandom", "/c/Users/me/notes.txt",
+                             "/tmp/x", "dev/clipboard"}) {
+        EXPECT_FALSE(Workspace::isGitBashDevicePath(fine)) << fine;
+    }
+#ifdef _WIN32
+    Dirs d;
+    Workspace ws({d.work.string()});
+    EXPECT_NE(ws.checkCommand("cat /dev/clipboard"), "");
+    EXPECT_NE(ws.checkCommand("cat /proc/registry/HKEY_CURRENT_USER/Environment/PATH"), "");
+#endif
+}
+
+TEST(WorkspaceTest, AVeryLongWordInACommandIsCheckedWithoutACrash) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    EXPECT_NO_THROW(ws.checkCommand("cat /" + std::string(60000, 'a')));
+    EXPECT_NE(ws.checkCommand("cat " + d.other.generic_string() + "/" + std::string(60000, 'a')), "")
+        << "a path outside the folder, however long";
+    EXPECT_EQ(ws.checkCommand("echo " + std::string(60000, 'a')), "");
+    EXPECT_NE(ws.checkCommand("dir \\\\" + std::string(60000, 'h') + "\\share"), "");
+    // The hand-written scan finds what the pattern did.
+#ifndef _WIN32  // under Git Bash /etc is inside Git's own folder
+    EXPECT_NE(ws.checkCommand("cat \"/etc/../home/x/secret\""), "");
+#endif
+    EXPECT_NE(ws.checkCommand("cp a.txt ~/elsewhere"), "");
+    EXPECT_NE(ws.checkCommand("type C:\\Windows\\win.ini,D:\\x"), "");
+    EXPECT_EQ(ws.checkCommand("awk '{gsub(/ /, \"\"); print}' notes.txt"), "");
+    EXPECT_EQ(ws.checkCommand("curl https://example.com/a/b"), "") << "the tail of a URL is not a path";
 }

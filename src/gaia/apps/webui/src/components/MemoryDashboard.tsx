@@ -6,7 +6,7 @@ import {
     X, Search, RefreshCw, Plus, Trash2, Pencil, Copy, Clock, ArrowLeft,
     Brain, MessageSquare, Wrench, TrendingUp, ChevronLeft, ChevronRight,
     AlertTriangle, CheckCircle, Shield, ShieldOff, ChevronDown, Database,
-    Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks,
+    Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks, Eye,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useGoalHealthStore } from '../stores/goalHealthStore';
@@ -811,6 +811,11 @@ export function MemoryDashboard() {
     const handleToggleSensitive = useCallback(async (entry: KnowledgeEntry) => {
         try {
             await memoryApi.editKnowledge(entry.id, { sensitive: !entry.sensitive });
+            // Marking an entry sensitive hides it, so close an editor holding its text.
+            if (!entry.sensitive && editingId === entry.id && !revealedIds.has(entry.id)) {
+                setEditingId(null);
+                setFormData(prev => ({ ...prev, content: '' }));
+            }
             loadKnowledge();
             log.ui.info(`Toggled sensitive for ${entry.id}: ${!entry.sensitive}`);
             showToast(t(entry.sensitive ? 'mem.toast.unmarkedSensitive' : 'mem.toast.markedSensitive'), 'info');
@@ -818,9 +823,10 @@ export function MemoryDashboard() {
             log.system.error('Failed to toggle sensitive', err);
             showToast(t('mem.toast.sensitiveFailed', { error: errorText(err) }), 'error');
         }
-    }, [loadKnowledge, showToast, t]);
+    }, [loadKnowledge, showToast, t, editingId, revealedIds]);
 
     const startEdit = useCallback((entry: KnowledgeEntry) => {
+        if (entry.sensitive && !revealedIds.has(entry.id)) return;
         setEditingId(entry.id);
         setShowAddForm(false);
         setFormData({
@@ -832,7 +838,22 @@ export function MemoryDashboard() {
             sensitive: entry.sensitive,
             due_at: entry.due_at || '',
         });
-    }, []);
+    }, [revealedIds]);
+
+    const toggleReveal = useCallback((entry: KnowledgeEntry) => {
+        const hiding = revealedIds.has(entry.id);
+        setRevealedIds(prev => {
+            const next = new Set(prev);
+            if (hiding) next.delete(entry.id);
+            else next.add(entry.id);
+            return next;
+        });
+        // Re-hiding must also close an open editor, which holds the plain text.
+        if (hiding && editingId === entry.id) {
+            setEditingId(null);
+            setFormData(prev => ({ ...prev, content: '' }));
+        }
+    }, [revealedIds, editingId]);
 
     const copyId = useCallback((id: string) => {
         navigator.clipboard.writeText(id).then(
@@ -1170,7 +1191,7 @@ export function MemoryDashboard() {
                         >
                             <ArrowLeft size={18} />
                         </button>
-                        <h1>{t('mem.title')} <span className="mem-beta" style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginInlineStart: 8, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{t('mem.beta')}</span></h1>
+                        <h1>{t('mem.title')} <span className="mem-beta" style={{ fontSize: 11, fontWeight: 500, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '2px 8px', borderRadius: 4, marginInlineStart: 8, verticalAlign: 'middle', whiteSpace: 'nowrap' }}>{t('mem.beta')}</span></h1>
                     </div>
                     <div className="memory-dashboard-header-actions">
                         {activeTab === 'advanced' && <>
@@ -1673,6 +1694,18 @@ export function MemoryDashboard() {
                                                     {knowledge.items.map(entry => {
                                                         const isExpanded = expandedRowId === entry.id;
                                                         const hasEmbed = entry.has_embedding;
+                                                        // Hidden sensitive text is never rendered — not even blurred or in a tooltip.
+                                                        const hidden = entry.sensitive && !revealedIds.has(entry.id);
+                                                        const revealButton = (
+                                                            <button
+                                                                type="button"
+                                                                className="mem-about-link"
+                                                                onClick={(e) => { e.stopPropagation(); toggleReveal(entry); }}
+                                                                onKeyDown={(e) => e.stopPropagation()}
+                                                            >
+                                                                <Eye size={12} /> {t('mem.about.showSensitive')}
+                                                            </button>
+                                                        );
                                                         return (
                                                         <React.Fragment key={entry.id}>
                                                         <tr
@@ -1692,7 +1725,7 @@ export function MemoryDashboard() {
                                                                 </span>
                                                             </td>
                                                             <td>
-                                                                <div className="mem-content-cell" title={entry.content}>
+                                                                <div className="mem-content-cell" title={hidden ? undefined : entry.content}>
                                                                     {/* Embedding status dot — only show when backend provides the field */}
                                                                     {hasEmbed !== undefined && (
                                                                         <span
@@ -1707,24 +1740,17 @@ export function MemoryDashboard() {
                                                                             <Shield size={11} />
                                                                         </span>
                                                                     )}
-                                                                    <span className={
-                                                                        entry.sensitive && !revealedIds.has(entry.id)
-                                                                            ? 'mem-sensitive-blur'
-                                                                            : entry.superseded_by ? 'mem-superseded-text' : ''
-                                                                    }
-                                                                    onClick={(e) => {
-                                                                        if (entry.sensitive) {
-                                                                            e.stopPropagation();
-                                                                            setRevealedIds(prev => {
-                                                                                const next = new Set(prev);
-                                                                                if (next.has(entry.id)) next.delete(entry.id);
-                                                                                else next.add(entry.id);
-                                                                                return next;
-                                                                            });
-                                                                        }
-                                                                    }}>
-                                                                        <bdi>{entry.content}</bdi>
-                                                                    </span>
+                                                                    {hidden ? revealButton : (
+                                                                        <span className={entry.superseded_by ? 'mem-superseded-text' : ''}
+                                                                            onClick={(e) => {
+                                                                                if (entry.sensitive) {
+                                                                                    e.stopPropagation();
+                                                                                    toggleReveal(entry);
+                                                                                }
+                                                                            }}>
+                                                                            <bdi>{entry.content}</bdi>
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                             </td>
                                                             <td>
@@ -1775,7 +1801,9 @@ export function MemoryDashboard() {
                                                             </td>
                                                             <td className="mem-actions-cell">
                                                                 <div className="mem-row-actions" onClick={e => e.stopPropagation()}>
-                                                                    <button className="mem-row-action-btn" onClick={() => startEdit(entry)} title={t('mem.row.edit')}>
+                                                                    <button className="mem-row-action-btn" onClick={() => startEdit(entry)}
+                                                                        disabled={hidden}
+                                                                        title={t(hidden ? 'mem.about.editHidden' : 'mem.row.edit')}>
                                                                         <Pencil size={13} />
                                                                     </button>
                                                                     <button className="mem-row-action-btn" onClick={() => handleToggleSensitive(entry)}
@@ -1855,7 +1883,7 @@ export function MemoryDashboard() {
                                                                         </div>
                                                                         <div className="mem-detail-content-full">
                                                                             <span className="mem-detail-label">{t('mem.detail.fullContent')}</span>
-                                                                            <div className="mem-detail-content-text"><bdi>{entry.content}</bdi></div>
+                                                                            <div className="mem-detail-content-text">{hidden ? revealButton : <bdi>{entry.content}</bdi>}</div>
                                                                         </div>
                                                                     </div>
                                                                 </td>
@@ -2121,7 +2149,7 @@ export function MemoryDashboard() {
                             {/* ── Settings ─────────────────────── */}
                             <div className="mem-section">
                                 <div className="mem-section-title">
-                                    <Shield size={14} /> {t('mem.settings.title')} <span className="mem-beta" style={{ fontSize: 10, fontWeight: 600, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginInlineStart: 6, verticalAlign: 'middle' }}>{t('mem.beta')}</span>
+                                    <Shield size={14} /> {t('mem.settings.title')} <span className="mem-beta" style={{ fontSize: 10, fontWeight: 500, color: 'var(--accent-yellow)', background: 'var(--accent-yellow-dim)', padding: '1px 6px', borderRadius: 4, marginInlineStart: 6, verticalAlign: 'middle' }}>{t('mem.beta')}</span>
                                 </div>
                                 <div className="mem-setting-row">
                                     <div className="mem-setting-info">
@@ -2227,11 +2255,11 @@ export function MemoryDashboard() {
                                         >
                                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
                                                 <span className="mem-beta" style={{
-                                                    fontSize: 11, fontWeight: 700, color: 'var(--accent-yellow)',
+                                                    fontSize: 11, fontWeight: 500, color: 'var(--accent-yellow)',
                                                     background: 'var(--accent-yellow-dim)', padding: '3px 10px',
                                                     borderRadius: 4,
                                                 }}>{t('mem.beta')}</span>
-                                                <h2 id="mem-beta-confirm-title" style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-primary)' }}>
+                                                <h2 id="mem-beta-confirm-title" style={{ fontSize: 16, fontWeight: 500, color: 'var(--text-primary)' }}>
                                                     {t(cfg.title)}
                                                 </h2>
                                             </div>
@@ -2264,7 +2292,7 @@ export function MemoryDashboard() {
                                                         }
                                                     }}
                                                     style={{
-                                                        padding: '8px 24px', fontSize: 13, fontWeight: 600,
+                                                        padding: '8px 24px', fontSize: 13, fontWeight: 500,
                                                         borderRadius: 6, border: 'none', cursor: 'pointer',
                                                         background: 'var(--accent-fill)',
                                                         color: 'var(--accent-fill-text)',

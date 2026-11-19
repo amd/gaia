@@ -227,3 +227,54 @@ TEST(DocumentIndexTest, ToolsIndexFolderQueryAndRespectPathCheck) {
     ASSERT_FALSE(q["results"].empty());
     EXPECT_NE(q["results"][0]["text"].get<std::string>().find("manager approval"), std::string::npos);
 }
+
+TEST(DocumentIndexTest, AFolderIndexSkipsALinkThatLeadsOut) {
+    TempDir inside, outside;
+    inside.write("policy.txt", "Remote work requires manager approval.");
+    const std::string secret = outside.write("credentials.txt", "aws_secret_access_key = abc");
+    std::error_code ec;
+    std::filesystem::create_symlink(secret, inside.path / "notes.txt", ec);
+    if (ec) GTEST_SKIP() << "can't create a symlink here: " << ec.message();
+    DocumentIndex idx;
+    ToolRegistry reg;
+    idx.registerTools(reg, [&inside](const std::string& p) {
+        return p.find(inside.path.string()) == 0 ? "" : std::string("Refused: outside");
+    });
+    json indexed = reg.executeTool("index_document", json{{"path", inside.path.string()}});
+    ASSERT_EQ(indexed["status"], "success") << indexed.dump();
+    ASSERT_EQ(indexed["indexed"].size(), 1u) << indexed.dump();
+    EXPECT_NE(indexed["indexed"][0]["file"].get<std::string>().find("policy.txt"), std::string::npos);
+}
+
+TEST(DocumentIndexTest, AWordFileInAFolderWithASpaceIsRead) {
+    // A minimal .docx: one stored zip entry, word/document.xml, with two paragraphs.
+    static const char* const kDocxHex =
+        "504b03041400000000000000215cee71b67b050100000501000011000000776f72642f646f63756d656e742e786d6c3c3f78"
+        "6d6c2076657273696f6e3d22312e30223f3e3c773a646f63756d656e7420786d6c6e733a773d22687474703a2f2f73636865"
+        "6d61732e6f70656e786d6c666f726d6174732e6f72672f776f726470726f63657373696e676d6c2f323030362f6d61696e22"
+        "3e3c773a626f64793e3c773a703e3c773a723e3c773a743e54686520616772656564206275646765742069732034382c3235"
+        "30206575726f732e3c2f773a743e3c2f773a723e3c2f773a703e3c773a703e3c773a723e3c773a743e546865206f776e6572"
+        "206973204d61726974204f6b73616e656e2e3c2f773a743e3c2f773a723e3c2f773a703e3c2f773a626f64793e3c2f773a64"
+        "6f63756d656e743e504b010214001400000000000000215cee71b67b05010000050100001100000000000000000000008001"
+        "00000000776f72642f646f63756d656e742e786d6c504b050600000000010001003f000000340100000000";
+    std::string bytes;
+    for (size_t i = 0; kDocxHex[i] != '\0' && kDocxHex[i + 1] != '\0'; i += 2) {
+        bytes.push_back(static_cast<char>(std::stoi(std::string(kDocxHex + i, 2), nullptr, 16)));
+    }
+    TempDir d;
+    fs::create_directories(d.path / "my docs");
+    const fs::path docx = d.path / "my docs" / "halden note.docx";
+    std::ofstream(docx, std::ios::binary).write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+
+    std::string text;
+    try {
+        for (const auto& page : DocumentIndex::extractPages(docx.string())) text += page.second + "\n";
+    } catch (const std::runtime_error& e) {
+        if (std::string(e.what()).find("is not installed") != std::string::npos) {
+            GTEST_SKIP() << "no zip reader on this machine: " << e.what();
+        }
+        FAIL() << e.what();
+    }
+    EXPECT_NE(text.find("The agreed budget is 48,250 euros."), std::string::npos) << text;
+    EXPECT_NE(text.find("The owner is Marit Oksanen."), std::string::npos) << text;
+}

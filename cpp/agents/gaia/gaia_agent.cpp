@@ -51,6 +51,7 @@ GaiaAgent::GaiaAgent(const AgentConfig& config, Options options)
         EmbedFunction embed;
         if (!options_.embeddingModel.empty()) {
             embedClient_ = std::make_unique<LemonadeClient>();
+            embedClient_->setAbortCheck([this] { return isCancelled(); });
             // Follow the agent's endpoint and key as they are when the call is made.
             embed = [this](const std::vector<std::string>& texts) {
                 const AgentConfig c = this->config();
@@ -97,8 +98,9 @@ void GaiaAgent::registerTools() {
             ShellSession& session = shell ? *shell : BashTools::defaultSession();
             // An exported PATH or preload decides which program `ls` is.
             for (const auto& [name, value] : session.environment()) {
-                static const std::set<std::string> steering = {"PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_ENV",
-                                                               "ENV", "PS4", "CDPATH", "PROMPT_COMMAND", "IFS"};
+                static const std::set<std::string> steering = {
+                    "PATH", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES",
+                    "DYLD_LIBRARY_PATH", "GCONV_PATH", "BASH_ENV", "ENV", "PS4", "CDPATH", "PROMPT_COMMAND", "IFS"};
                 std::string upper = name;
                 std::transform(upper.begin(), upper.end(), upper.begin(),
                                [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
@@ -260,7 +262,7 @@ std::string GaiaAgent::getSystemPrompt() const {
 - Remove personal data completely when asked to redact; check the result.
 
 ## Final answer
-Lead with the result. Name the files you created or changed. Cite where facts came from (file and page, sheet or line) when the user asked about documents. State plainly anything you could not do or verify. Keep it concise.)" + systemContext() +
+Lead with the result. Name the files you created or changed. Cite where facts came from (file and page, sheet or line) when the user asked about documents. State plainly anything you could not do or verify. Keep it concise. A summary the user calls brief or short is two to four sentences on what was decided and what happens next, never a list that walks through each section.)" + systemContext() +
            (skills_ ? "\n" + skills_->renderPrompt() : std::string()) +
            (memory_ && !memoryOff() ? "\n" + memory_->promptBlock() : std::string());
 }

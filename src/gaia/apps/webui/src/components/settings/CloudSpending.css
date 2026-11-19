@@ -39,7 +39,7 @@
 .cloud-prices-legend {
     color: var(--text-primary);
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .cloud-prices-list.is-pickable {
@@ -72,7 +72,7 @@
 
 .cloud-prices-default {
     color: var(--accent);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .model-row-meta.is-unknown-price {

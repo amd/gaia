@@ -376,6 +376,19 @@ TEST_F(GaiacppCli, EveryFailureAfterParsingEndsStdoutWithAnErrorRecord) {
     expectRecord(run(mock, ""), "model failure");
 }
 
+TEST_F(GaiacppCli, ServeWithoutAKeyDoesNotStart) {
+    bench::MockLlmServer mock;
+    std::string bin = GAIACPP_BIN;
+    if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
+    const gaia::ProcessResult r = gaia::ProcessRunner::run(
+        bin + " serve --host 127.0.0.1 --port 0 -m mock-model --base-url " + mock.baseUrl() +
+            " --no-memory --no-skills --no-web",
+        30000, (dir_ / "work").string(), {{"GAIACPP_CONFIG", (dir_ / "no-config.json").string()}});
+    EXPECT_EQ(r.exitCode, 2) << r.stderr_output;
+    EXPECT_NE(r.stderr_output.find("--server-key-env"), std::string::npos) << r.stderr_output;
+    EXPECT_EQ(r.stdout_output.find("\"ready\""), std::string::npos) << r.stdout_output;
+}
+
 TEST_F(GaiacppCli, ServeOnAPortInUseFailsWithoutWaiting) {
     bench::MockLlmServer mock;
     // A listener that shares its port with nobody, whatever options the other side sets.
@@ -395,11 +408,11 @@ TEST_F(GaiacppCli, ServeOnAPortInUseFailsWithoutWaiting) {
     if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
     const std::string cmd = bin + " serve --host 127.0.0.1 --port " + std::to_string(port) +
                             " -m mock-model --base-url " + mock.baseUrl() +
-                            " --no-memory --no-skills --no-web";
+                            " --no-memory --no-skills --no-web --server-key-env SERVE_KEY";
     const auto t0 = std::chrono::steady_clock::now();
     const gaia::ProcessResult r = gaia::ProcessRunner::run(
         cmd, 30000, (dir_ / "work").string(),
-        {{"GAIACPP_CONFIG", (dir_ / "no-config.json").string()}});
+        {{"GAIACPP_CONFIG", (dir_ / "no-config.json").string()}, {"SERVE_KEY", "test-key"}});
     const auto elapsed = std::chrono::steady_clock::now() - t0;
     blocker.stop();
 

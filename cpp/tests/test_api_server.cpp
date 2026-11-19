@@ -3,6 +3,7 @@
 //
 // ApiServer tests: a real Agent served over HTTP, its LLM an in-process mock.
 
+#include "support/unique_temp.h"
 #include <gtest/gtest.h>
 
 #include <gaia/agent.h>
@@ -616,7 +617,7 @@ TEST(ApiServerTest, StopEndsRun) {
 
 TEST(ApiServerTest, SessionListNamesTheProblemOfAnUnreadableSessionFile) {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::temp_directory_path() / "gaia_api_test_unreadable_sessions";
+    const fs::path dir = fs::temp_directory_path() / testsupport::perProcess("gaia_api_test_unreadable_sessions");
     fs::remove_all(dir);
     auto store = std::make_shared<SessionStore>(dir.string());
     Message hello;

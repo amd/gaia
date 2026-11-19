@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -17,8 +19,14 @@ namespace gaia {
 namespace {
 
 // Folders and paths are UTF-8 strings here, as a model and the UI write them.
-std::string normalized(const fs::path& p) {
+std::string normalized(const fs::path& p, int depth = 0) {
     std::error_code ec;
+    // A link to a file not there yet keeps its own name in weakly_canonical; a write lands on its target.
+    const fs::path given = fs::absolute(p, ec);
+    if (!ec && depth < 8 && fs::is_symlink(given, ec) && !fs::exists(given, ec)) {
+        const fs::path target = fs::read_symlink(given, ec);
+        if (!ec) return normalized(target.is_absolute() ? target : given.parent_path() / target, depth + 1);
+    }
     fs::path abs = fs::weakly_canonical(fs::absolute(p, ec), ec);
     if (ec) abs = fs::absolute(p).lexically_normal();
     std::string s = abs.generic_u8string();
@@ -66,6 +74,10 @@ const std::vector<std::string>& systemDirs() {
     static const std::vector<std::string> dirs = {
         "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/opt", "/etc",
         "/sys", "/dev", "/tmp", "/var/tmp", "/snap", "/nix",
+#ifdef __APPLE__
+        // macOS keeps these under /private and links to them; a path is judged after links are followed.
+        "/private/etc", "/private/tmp", "/private/var/tmp", "/private/var/folders",
+#endif
         // Machine facts only: /proc/<pid> holds other programs' environments.
         "/proc/cpuinfo", "/proc/meminfo", "/proc/version", "/proc/uptime", "/proc/loadavg"};
 #endif
@@ -108,6 +120,8 @@ bool looksLikePattern(const std::string& abs) {
     const fs::path ap(abs);
     const fs::path rel = ap.relative_path();
     if (rel.empty()) return false;
+    // /proc is a place wherever it would be read, including on a system that has none.
+    if (abs.compare(0, 6, "/proc/") == 0) return false;
     std::error_code ec;
     return !fs::exists(ap.root_path() / *rel.begin(), ec);
 }
@@ -148,32 +162,69 @@ namespace {
 // /s, /b, /a:d, /-c, /? : a cmd.exe switch rather than a place.
 bool looksLikeCmdSwitch(const std::string& token) {
     static const std::regex switchRe(R"(/-?[A-Za-z?](?::[^/\\]*)?)");
-    return std::regex_match(token, switchRe);
+    return token.size() <= 64 && std::regex_match(token, switchRe);
 }
 } // namespace
+
+bool Workspace::isGitBashDevicePath(const std::string& path) {
+    if (path.rfind("/proc/", 0) == 0) return true;  // /proc/registry is the Windows registry
+    if (path.rfind("/dev/", 0) != 0) return false;
+    const std::string name = path.substr(5);
+    for (const char* harmless : {"null", "zero", "stdin", "stdout", "stderr", "tty", "random", "urandom"}) {
+        if (name == harmless) return false;
+    }
+    return name.rfind("fd/", 0) != 0;
+}
 
 std::string Workspace::checkCommand(const std::string& command, bool posixShell) const {
     if (command.size() > kMaxCommandBytes) {
         return "Refused: the command is " + std::to_string(command.size()) + " bytes long and the limit is " +
                std::to_string(kMaxCommandBytes) + ". Write long input to a file and have the command read it.";
     }
-    // Absolute POSIX paths, ~/ paths and Windows drive paths, as standalone words.
-    static const std::regex pathRe(
-        R"((?:^|[\s'"=(:,`])((?:/|~/|[A-Za-z]:[\\/])[^\s'"`;|&()<>,]*))");
-    for (auto it = std::sregex_iterator(command.begin(), command.end(), pathRe);
-         it != std::sregex_iterator(); ++it) {
-        std::string token = (*it)[1].str();
+    // Absolute POSIX paths, ~/ paths and Windows drive paths, as standalone words. Found by hand:
+    // std::regex recurses once per character, and a 60,000-character word overflows the stack.
+    std::vector<std::pair<size_t, std::string>> pathWords;
+    for (size_t i = 0; i < command.size(); ++i) {
+        static const std::string kBefore = " \t\n\v\f\r'\"=(:,`", kEnds = " \t\n\v\f\r'\"`;|&()<>,";
+        if (i > 0 && kBefore.find(command[i - 1]) == std::string::npos) continue;
+        const char c = command[i];
+        const char next = i + 1 < command.size() ? command[i + 1] : '\0';
+        const char third = i + 2 < command.size() ? command[i + 2] : '\0';
+        const bool starts = c == '/' || (c == '~' && next == '/') ||
+                            (std::isalpha(static_cast<unsigned char>(c)) && next == ':' &&
+                             (third == '\\' || third == '/'));
+        if (!starts) continue;
+        const size_t end = (std::min)(command.find_first_of(kEnds, i), command.size());
+        pathWords.emplace_back(i, command.substr(i, end - i));
+        i = end;  // the character that ended this word may open the next
+    }
+    static const std::set<std::string> fsCommands = {
+        "find", "ls", "du", "cd", "rm", "cp", "mv", "tar", "chmod", "chown", "grep", "cat", "head", "tail",
+        "rg", "fd", "locate", "tree", "stat", "rsync", "zip", "7z", "dir", "type", "del", "Get-ChildItem"};
+    // The program of the command segment a word at `at` belongs to.
+    const auto programBefore = [&command](size_t at) {
+        const size_t segStart = command.find_last_of(";|&\n(", at);
+        std::istringstream seg(command.substr(segStart == std::string::npos ? 0 : segStart + 1,
+                                              at - (segStart == std::string::npos ? 0 : segStart + 1)));
+        std::string w, program;
+        while (seg >> w) {
+            if (program.empty() && w.find('=') == std::string::npos && w != "sudo") program = w;
+        }
+        return fs::u8path(program).filename().u8string();
+    };
+    for (const auto& [tokenAt, tokenText] : pathWords) {
+        std::string token = tokenText;
         if (!posixShell && looksLikeCmdSwitch(token)) continue;
         if (token.rfind("//", 0) == 0) {
             // After a colon it is the tail of a URL (https://…); otherwise a network share.
-            const size_t at = static_cast<size_t>((*it).position(1));
+            const size_t at = tokenAt;
             if (at > 0 && command[at - 1] == ':') continue;
             return refusal(token);
         }
         if (token == "/") {
             // The root only as a standalone word (find / …), not a regex
             // delimiter such as awk's gsub(/ /, …).
-            const size_t at = static_cast<size_t>((*it).position(1));
+            const size_t at = tokenAt;
             const char before = at == 0 ? ' ' : command[at - 1];
             const char after = at + 1 < command.size() ? command[at + 1] : ' ';
             const bool word = std::isspace(static_cast<unsigned char>(before)) &&
@@ -182,22 +233,22 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
             if (!word) continue;
             // ...and only as an argument to a command that walks or changes the
             // filesystem; `a / b` in inline code is division.
-            static const std::set<std::string> fsCommands = {
-                "find", "ls", "du", "cd", "rm", "cp", "mv", "tar", "chmod", "chown", "grep",
-                "rg", "fd", "locate", "tree", "stat", "rsync", "zip", "7z", "dir", "Get-ChildItem"};
-            const size_t segStart = command.find_last_of(";|&\n(", at);
-            std::istringstream seg(command.substr(segStart == std::string::npos ? 0 : segStart + 1,
-                                                  at - (segStart == std::string::npos ? 0 : segStart + 1)));
-            std::string w, program;
-            while (seg >> w) {
-                if (program.empty() && w.find('=') == std::string::npos && w != "sudo") program = w;
-            }
-            if (!fsCommands.count(fs::u8path(program).filename().u8string())) continue;
+            if (!fsCommands.count(programBefore(tokenAt))) continue;
         }
+#ifdef _WIN32
+        // Not files: no folder check can place them, and they reach the clipboard and the registry.
+        if (posixShell && isGitBashDevicePath(token)) return refusal(token);
+#endif
         const std::string expanded = expandHome(fromShellPath(token));
         if (contains(expanded)) continue;
         const std::string abs = normalized(fs::u8path(expanded));
-        if (inSystemDir(abs) || looksLikePattern(abs)) continue;
+        // Unquoted after a file command, /* or /h*/me is expanded by the shell into real folders.
+        const bool unquoted = tokenAt == 0 || std::isspace(static_cast<unsigned char>(command[tokenAt - 1]));
+        const fs::path rel = fs::u8path(expanded).relative_path();
+        const bool globbedTop = unquoted && !rel.empty() &&
+                                rel.begin()->u8string().find_first_of("*?[{") != std::string::npos &&
+                                fsCommands.count(programBefore(tokenAt));
+        if (inSystemDir(abs) || (!globbedTop && looksLikePattern(abs))) continue;
         if (looksLikeCmdSwitch(token)) {
             return refusal(token) + " Commands here run in bash, where " + token +
                    " is a path, not a switch: use bash commands such as ls -R or find "
@@ -206,9 +257,12 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
         return refusal(token);
     }
     // \\host\share, which the path pattern above does not see.
-    static const std::regex uncRe(R"((?:^|[\s'"=(,`])(\\\\[^\s\\'"]+))");
-    std::smatch unc;
-    if (std::regex_search(command, unc, uncRe)) return refusal(unc[1].str());
+    for (size_t at = command.find("\\\\"); at != std::string::npos; at = command.find("\\\\", at + 1)) {
+        static const std::string kBefore = " \t\n\v\f\r'\"=(,`", kEnds = " \t\n\v\f\r\\'\"";
+        if (at > 0 && kBefore.find(command[at - 1]) == std::string::npos) continue;
+        const size_t end = (std::min)(command.find_first_of(kEnds, at + 2), command.size());
+        if (end > at + 2) return refusal(command.substr(at, end - at));
+    }
     // A relative name that exists here but resolves elsewhere is a link out of the folder.
     static const std::string kBreaks = " \t\r\n'\"`;|&()<>=,";
     std::error_code cwdError;
@@ -244,9 +298,71 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
     return "";
 }
 
+namespace {
+using Inside = std::function<bool(const std::string&)>;
+
+// An entry the shell could read through to somewhere else.
+bool mayLeadOut(const fs::directory_entry& entry, std::error_code& ec) {
+    if (entry.is_symlink(ec)) return true;
+#ifdef _WIN32
+    // A junction is not a symlink to the standard library, so a folder is judged by where it resolves.
+    if (entry.is_directory(ec)) return true;
+#endif
+    return false;
+}
+
+// The shell expands a wildcard and reads through a link it matches, and the word never names that
+// link. False when the wildcard's folder holds a link that leads out, or can't be told to hold none.
+bool wildcardStaysInside(const fs::path& folder, const std::string& word, const Inside& inside) {
+    const fs::path pattern = fs::u8path(fromShellPath(word));
+    const fs::path parent = pattern.parent_path();
+    if (parent.u8string().find_first_of("*?[") != std::string::npos) return false;
+    std::error_code ec;
+    size_t seen = 0;
+    for (fs::directory_iterator it(pattern.is_absolute() ? parent : folder / parent,
+                                   fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        if (++seen > 5000) return false;
+        if (mayLeadOut(*it, ec) && !inside(normalized(it->path()))) return false;
+    }
+    return true;
+}
+
+// For a command that follows links as it walks (grep -R, find -L): false when the tree holds a
+// link that leads out, or is too large to tell.
+bool treeStaysInside(const fs::path& root, const Inside& inside) {
+    std::error_code ec;
+    size_t seen = 0;
+    for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        if (++seen > 20000) return false;
+        if (mayLeadOut(*it, ec) && !inside(normalized(it->path()))) return false;
+    }
+    return true;
+}
+
+bool followsLinks(const std::vector<std::string>& words) {
+    const std::string& program = words[0];
+    for (size_t i = 1; i < words.size(); ++i) {
+        const std::string& w = words[i];
+        if (w.size() < 2 || w[0] != '-') continue;
+        if (w == "--dereference" || w == "--dereference-recursive" || w == "--follow" || w == "-follow") return true;
+        if (w[1] == '-') continue;
+        if (program == "find") {
+            if (w == "-L") return true;
+        } else if (program == "grep") {
+            if (w.find('R') != std::string::npos) return true;  // -L lists files; -R follows links
+        } else if (w.find('L') != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+}  // namespace
+
 bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& segments,
                                 const std::string& cwd) const {
-    auto inside = [this](const std::string& abs) {
+    const Inside inside = [this](const std::string& abs) {
         return std::any_of(roots_.begin(), roots_.end(), [&](const std::string& r) { return under(abs, r); });
     };
     // `cd` in a pipeline changes nothing and `cd` after ; or && does, so a
@@ -257,6 +373,26 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
         if (words.empty()) return false;
         const bool cd = words[0] == "cd";
         if (cd && (words.size() != 2 || words[1] == "-")) return false;  // home, or the previous folder
+        // With CDPATH set, `cd name` can land in a folder that is not under this one.
+        const char* cdPath = std::getenv("CDPATH");
+        if (cd && cdPath != nullptr && *cdPath != '\0') return false;
+        if (followsLinks(words)) {
+            bool named = false;
+            for (size_t i = 1; i < words.size(); ++i) {
+                if (words[i].empty() || words[i][0] == '-') continue;
+                for (const auto& folder : folders) {
+                    const fs::path p = fs::u8path(expandHome(fromShellPath(words[i])));
+                    const fs::path dir = p.is_absolute() ? p : fs::u8path(folder) / p;
+                    std::error_code ec;
+                    if (!fs::is_directory(dir, ec)) continue;
+                    named = true;
+                    if (!treeStaysInside(dir, inside)) return false;
+                }
+            }
+            for (const auto& folder : folders) {
+                if (!named && !treeStaysInside(fs::u8path(folder), inside)) return false;
+            }
+        }
         for (size_t i = 1; i < words.size(); ++i) {
             std::string w = words[i];
             if (w.empty()) continue;
@@ -274,6 +410,11 @@ bool Workspace::readsStayInside(const std::vector<std::vector<std::string>>& seg
                 if (w[at] != '.' || (at > 0 && w[at - 1] != '/' && w[at - 1] != '\\')) continue;
                 const size_t end = w.find_first_of("/\\", at);
                 if (w.substr(at, end - at).find_first_of("*?[") != std::string::npos) return false;
+            }
+            if (w.find_first_of("*?[") != std::string::npos) {
+                for (const auto& folder : folders) {
+                    if (!wildcardStaysInside(fs::u8path(folder), w, inside)) return false;
+                }
             }
             const fs::path p = fs::u8path(expandHome(fromShellPath(w)));
             const size_t known = folders.size();
