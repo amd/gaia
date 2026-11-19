@@ -11,6 +11,7 @@ import { useScheduleStore } from '../../stores/scheduleStore';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 const failure = 'GAIA stopped this unattended run at "Writing file": that step needs your approval.';
 

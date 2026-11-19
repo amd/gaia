@@ -38,10 +38,16 @@ const npmStats = await getNpmDownloadStats();
 // install` fetch agents from hub.amd-gaia.ai (R2), and pip and npm have their
 // own registries — so it is labelled as release downloads, not installs. See
 // docs/plans/website-admin-dashboard.md for the all-source count.
+// The latest release's figure leaves out the update feeds the desktop app
+// fetches on every start, and checksums. The site rebuilds daily
+// (deploy_website.yml) so it keeps up after a release. Its date is in the
+// release stream beside it.
+const latest = releaseStats.latestRelease;
 const STATS = [
   { value: formatCount(repoStats.stars), label: 'GitHub stars' },
   { value: formatCount(repoStats.forks), label: 'GitHub forks' },
   { value: formatCount(releaseStats.totalDownloadCount), label: 'Release downloads' },
+  ...(latest ? [{ value: formatCount(latest.installDownloads), label: `${latest.tag} downloads` }] : []),
   { value: String(releaseStats.totalReleaseCount), label: 'Releases' },
   { value: formatCount(npmStats.weekly), label: 'npm downloads / week' },
   { value: formatCount(npmStats.lifetime), label: 'npm downloads total' },
@@ -325,7 +331,8 @@ const ARCHITECTURE = [
 
     <!-- 5. The open-source project: the ask to contribute, with the live
          numbers and shipping cadence as its evidence. Stats come from GitHub
-         and npm at build time (website/src/data/github.ts); no bundled fixture. -->
+         and npm at build time (website/src/data/github.ts). PR CI can read the
+         checked-in GitHub fixture in tests/fixtures/github/releases.json. -->
     <section id="contribute" class="border-t border-g-border bg-g-bg2">
       <div class="g-shell grid gap-12 py-16 sm:py-20 lg:grid-cols-[minmax(0,1fr)_minmax(0,400px)] lg:gap-16">
         <div>

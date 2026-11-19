@@ -101,6 +101,28 @@ describe('resource usage in a chat', () => {
         expect(screen.queryByRole('region', { name: 'Resource usage on this PC' })).toBeNull();
     });
 
+    it('says how to bring it back after the ✕, and brings it back from the note', async () => {
+        renderChat();
+        await screen.findByText('4.70 GHz');
+        expect(screen.queryByText(/pulse icon/)).toBeNull();
+        fireEvent.click(screen.getByRole('button', { name: 'Hide resource usage' }));
+
+        const note = screen.getByText(/pulse icon at the top of a chat brings it back/);
+        expect(note.closest('[role="status"]')).not.toBeNull();
+        expect(note).toHaveTextContent('Settings › General');
+        fireEvent.click(screen.getByRole('button', { name: 'Show resource usage' }));
+        expect(await screen.findByRole('region', { name: 'Resource usage on this PC' })).toBeInTheDocument();
+        expect(screen.queryByText(/pulse icon/)).toBeNull();
+    });
+
+    it('says nothing when the header toggle hides it', async () => {
+        renderChat();
+        await screen.findByText('4.70 GHz');
+        fireEvent.click(screen.getByRole('button', { name: 'Resource usage' }));
+        expect(screen.queryByRole('region', { name: 'Resource usage on this PC' })).toBeNull();
+        expect(screen.queryByText(/pulse icon/)).toBeNull();
+    });
+
     it('comes back from the header toggle', async () => {
         renderChat();
         await screen.findByText('4.70 GHz');
