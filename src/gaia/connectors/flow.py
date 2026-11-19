@@ -386,14 +386,15 @@ async def start_authorization(
     *,
     add_account: bool = False,
     account: Optional[str] = None,
+    callback_port: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Begin the OAuth flow for ``provider_id`` with the requested scopes.
 
-    Returns ``{flow_id, authorization_url}``. Spins up a loopback aiohttp
-    runner on an ephemeral port, stores the pending flow, fires a
-    background callback to ``webbrowser.open(...)`` (in an executor to
-    keep the event loop responsive), and returns immediately.
+    Returns ``{flow_id, authorization_url, callback_port}``. Spins up a
+    loopback aiohttp runner on an ephemeral port (or explicit ``callback_port``),
+    stores the pending flow, fires a background callback to ``webbrowser.open(...)``
+    (in an executor to keep the event loop responsive), and returns immediately.
 
     The caller is expected to await ``complete_authorization(flow_id)``
     to wait for the redirect. A flow nobody awaits (the apps) still ends
@@ -416,6 +417,18 @@ async def start_authorization(
     with the same id is updated in place, any other is added, and no account
     is ever overwritten by a different one.
     """
+    if callback_port is not None:
+        if (
+            not isinstance(callback_port, int)
+            or isinstance(callback_port, bool)
+            or callback_port < 1
+            or callback_port > 65535
+        ):
+            raise ConnectorsError(
+                f"Invalid callback port {callback_port!r}: "
+                "must be an integer between 1 and 65535."
+            )
+
     intent, target = _sign_in_intent(provider_id, add_account, account)
     if _pending:
         # User re-clicking Connect signals the previous flow is dead.
@@ -468,8 +481,22 @@ async def start_authorization(
     # aiohttp's access log would write the code and state in the query string.
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 0)
-    await site.start()
+    site = web.TCPSite(runner, "127.0.0.1", callback_port or 0)
+    try:
+        await site.start()
+    except OSError as e:
+        await runner.cleanup()
+        if callback_port is not None:
+            cause = (
+                "permission denied (ports below 1024 need elevated rights)"
+                if isinstance(e, PermissionError)
+                else f"port is already in use ({type(e).__name__})"
+            )
+            raise ConnectorsError(
+                f"Could not bind OAuth callback to port {callback_port}: {cause}. "
+                "Choose a free port above 1024 with --callback-port, or omit it for an ephemeral port."
+            ) from e
+        raise
 
     # Read back the actual port the kernel assigned. aiohttp keeps the
     # bound sockets on the runner.sites list.
@@ -536,7 +563,11 @@ async def start_authorization(
         len(_pending[flow_id].grant_agents),
         flow_id,
     )
-    return {"flow_id": flow_id, "authorization_url": authorization_url}
+    return {
+        "flow_id": flow_id,
+        "authorization_url": authorization_url,
+        "callback_port": port,
+    }
 
 
 async def complete_authorization(flow_id: str) -> Dict[str, Any]:

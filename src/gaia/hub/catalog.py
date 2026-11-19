@@ -134,6 +134,142 @@ def fetch_bytes(url: str, timeout: int = _HTTP_TIMEOUT) -> bytes:
     return resp.content
 
 
+class ArtifactDownloadError(RuntimeError):
+    """An artifact download failed on every attempt, or ran out of time."""
+
+
+class _ShortBody(Exception):
+    """The server closed the connection before the whole body arrived."""
+
+
+# Artifact downloads (the flagship binary is ~150 MB) get their own budget: a
+# stall ends one attempt, a dropped connection is retried, and the whole
+# download has a deadline so setup never sits on "Downloading" forever.
+ARTIFACT_CONNECT_TIMEOUT_SECONDS = 15.0
+ARTIFACT_READ_TIMEOUT_SECONDS = 30.0
+ARTIFACT_DOWNLOAD_ATTEMPTS = 4
+ARTIFACT_BACKOFF_SECONDS = 2.0
+ARTIFACT_DEADLINE_SECONDS = 30 * 60.0
+_ARTIFACT_CHUNK_BYTES = 1 << 20
+_CONTENT_RANGE = re.compile(r"bytes\s+(\d+)-\d+/(\d+|\*)")
+
+
+def download_artifact(
+    url: str,
+    *,
+    attempts: int = ARTIFACT_DOWNLOAD_ATTEMPTS,
+    deadline_seconds: float = ARTIFACT_DEADLINE_SECONDS,
+    backoff_seconds: float = ARTIFACT_BACKOFF_SECONDS,
+    read_timeout: float = ARTIFACT_READ_TIMEOUT_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> bytes:
+    """Download a large artifact, retrying dropped or stalled connections.
+
+    A retry asks for the rest with a ``Range`` request and keeps what it has
+    when the server answers ``206`` from the right offset; any other answer
+    restarts from zero. Fails with :class:`ArtifactDownloadError` once
+    *attempts* are spent or *deadline_seconds* pass. HTTP errors other than
+    5xx/429 are not retried. The caller still verifies the checksum.
+    """
+    if url.startswith("file://"):
+        return fetch_bytes(url)
+
+    import requests
+
+    retryable = (
+        requests.ConnectionError,
+        requests.Timeout,
+        requests.exceptions.ChunkedEncodingError,
+        _ShortBody,
+    )
+    started = clock()
+    body = bytearray()
+    last_error: Optional[BaseException] = None
+
+    def out_of_time() -> bool:
+        return clock() - started > deadline_seconds
+
+    for attempt in range(1, attempts + 1):
+        headers = {
+            CORE_VERSION_HEADER: _running_core_version(),
+            # Byte offsets must refer to the stored bytes, not a gzip stream.
+            "Accept-Encoding": "identity",
+        }
+        if body:
+            headers["Range"] = f"bytes={len(body)}-"
+        try:
+            with requests.get(
+                url,
+                headers=headers,
+                stream=True,
+                timeout=(ARTIFACT_CONNECT_TIMEOUT_SECONDS, read_timeout),
+            ) as resp:
+                if resp.status_code in (416, 429) or resp.status_code >= 500:
+                    body.clear()
+                    raise requests.ConnectionError(
+                        f"HTTP {resp.status_code} from {url}"
+                    )
+                resp.raise_for_status()
+                expected_total: Optional[int] = None
+                if body and resp.status_code == 206:
+                    match = _CONTENT_RANGE.match(resp.headers.get("Content-Range", ""))
+                    if not match or int(match.group(1)) != len(body):
+                        body.clear()
+                        raise _ShortBody(
+                            f"{url} answered the resume from the wrong offset"
+                        )
+                    if match.group(2) != "*":
+                        expected_total = int(match.group(2))
+                else:
+                    if body:
+                        logger.info(
+                            "hub: %s does not resume downloads; starting over", url
+                        )
+                    body.clear()
+                    length = resp.headers.get("Content-Length")
+                    if length and length.isdigit():
+                        expected_total = int(length)
+                for chunk in resp.iter_content(_ARTIFACT_CHUNK_BYTES):
+                    body.extend(chunk)
+                    if out_of_time():
+                        break
+                if out_of_time():
+                    break
+                if expected_total is not None and len(body) != expected_total:
+                    raise _ShortBody(
+                        f"{len(body)} of {expected_total} bytes arrived from {url}"
+                    )
+                return bytes(body)
+        except retryable as exc:
+            last_error = exc
+            logger.warning(
+                "hub: download attempt %d/%d of %s failed (%s; %d bytes kept)",
+                attempt,
+                attempts,
+                url,
+                exc,
+                len(body),
+            )
+        if attempt == attempts or out_of_time():
+            break
+        delay = backoff_seconds * (2 ** (attempt - 1))
+        if clock() - started + delay > deadline_seconds:
+            break
+        sleep(delay)
+
+    if out_of_time():
+        raise ArtifactDownloadError(
+            f"The download of {url} did not finish within "
+            f"{deadline_seconds / 60:.0f} minutes, so it was stopped. Check your "
+            f"internet connection and try again."
+        ) from last_error
+    raise ArtifactDownloadError(
+        f"Couldn't download {url}: the connection failed {attempt} time(s), "
+        f"last with: {last_error}. Check your internet connection and try again."
+    ) from last_error
+
+
 def _fetch_json(url: str, fetcher: Fetcher) -> Any:
     raw = fetcher(url)
     return json.loads(raw)

@@ -6,13 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleManager, formatNextRun } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
-import { parseScheduleInput } from '../../services/api';
+import { parseScheduleInput } from '../../services/scheduleApi';
 import { stripIsolates } from '../../i18n/registry';
 import { dateLocale, translator } from '../../i18n/useT';
 import { readsAs } from '../../test/readsAs';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 const schedule: Schedule = {
     id: 's1',

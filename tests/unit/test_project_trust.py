@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from gaia import config as config_mod
 from gaia import project_trust
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import TerminalConfirmationMixin
@@ -33,7 +34,10 @@ from gaia.project_trust import (
     ProjectTrustError,
     folder_key,
     folder_trust,
+    forget_folder_trust,
+    list_folder_trust,
     remember_folder_trust,
+    resolve_project_folder,
     trust_store_path,
 )
 
@@ -62,8 +66,10 @@ def repo(tmp_path):
 # ── the store ─────────────────────────────────────────────────────────────
 
 
-def test_store_sits_beside_config_json(tmp_path):
-    assert trust_store_path() == tmp_path / "project_trust.json"
+def test_store_sits_beside_config_json():
+    assert (
+        trust_store_path() == config_mod.GAIA_CONFIG_FILE.parent / "project_trust.json"
+    )
 
 
 def test_unknown_folder_has_no_answer(repo):
@@ -169,7 +175,7 @@ def test_concurrent_threads_keep_every_answer(tmp_path):
 def test_another_process_writing_at_the_same_time_loses_nothing(tmp_path):
     env = {
         **os.environ,
-        "GAIA_CONFIG_FILE": str(tmp_path / "config.json"),
+        "GAIA_CONFIG_FILE": str(config_mod.GAIA_CONFIG_FILE),
         "PYTHONPATH": str(REPO_ROOT / "src"),
     }
     script = (
@@ -458,7 +464,7 @@ def test_pre_approved_tools_never_answer_for_the_user(repo):
 def test_a_store_that_cannot_be_written_keeps_the_answer_for_the_session(
     repo, monkeypatch, caplog
 ):
-    def refuse(*_args):
+    def refuse(*_args, **_kwargs):
         raise ProjectTrustError("Cannot save the answer to x")
 
     monkeypatch.setattr("gaia.project_trust.remember_folder_trust", refuse)
@@ -481,6 +487,188 @@ def test_the_prompt_names_the_folder_and_the_files():
 
 
 def test_the_sidecar_relay_never_offers_always_for_it():
-    from gaia.ui.email_sidecar import relay
+    from gaia.ui.sidecar import relay
 
     assert PROJECT_TRUST_PROMPT_TOOL in relay._FRESH_CONSENT_TOOLS
+
+
+# ── list, forget and resolve ──────────────────────────────────────────────
+
+
+def test_list_folder_trust_returns_all_entries(repo, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    remember_folder_trust(repo, TRUSTED)
+    remember_folder_trust(other, DECLINED)
+
+    entries = list_folder_trust()
+    assert folder_key(repo) in entries
+    assert entries[folder_key(repo)]["decision"] == TRUSTED
+    assert folder_key(other) in entries
+    assert entries[folder_key(other)]["decision"] == DECLINED
+
+
+def test_list_folder_trust_raises_on_corrupted_store(repo):
+    store = trust_store_path()
+    store.write_text("{corrupt json", encoding="utf-8")
+    with pytest.raises(ProjectTrustError, match="project_trust.json"):
+        list_folder_trust()
+
+
+def test_forget_folder_trust_single_entry(repo, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    remember_folder_trust(repo, TRUSTED)
+    remember_folder_trust(other, DECLINED)
+
+    removed = forget_folder_trust(folder=repo)
+    assert removed == [folder_key(repo)]
+    assert folder_trust(repo) is None
+    assert folder_trust(other) == DECLINED
+
+
+def test_forget_folder_trust_all_entries(repo, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    remember_folder_trust(repo, TRUSTED)
+    remember_folder_trust(other, DECLINED)
+
+    removed = forget_folder_trust(all_entries=True)
+    assert set(removed) == {folder_key(repo), folder_key(other)}
+    assert list_folder_trust() == {}
+
+
+def test_forget_folder_trust_missing_only(repo, tmp_path):
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    remember_folder_trust(repo, TRUSTED)
+    remember_folder_trust(gone, DECLINED)
+    # Now remove the folder on disk
+    gone.rmdir()
+
+    removed = forget_folder_trust(missing_only=True)
+    assert removed == [folder_key(gone)]
+    assert folder_trust(gone) is None
+    assert folder_trust(repo) == TRUSTED
+
+
+def test_forget_folder_trust_raises_on_corrupt_store():
+    store = trust_store_path()
+    store.write_text("invalid json content", encoding="utf-8")
+    with pytest.raises(ProjectTrustError, match="project_trust.json"):
+        forget_folder_trust(all_entries=True)
+
+
+def test_resolve_project_folder_finds_repo_root_from_subfolder(repo):
+    sub = repo / "src" / "deep"
+    sub.mkdir(parents=True)
+    assert resolve_project_folder(sub) == str(repo.resolve())
+
+
+def test_resolve_project_folder_keeps_a_non_vcs_folder_as_named(tmp_path):
+    project = tmp_path / "non_vcs_project"
+    project.mkdir()
+    (project / "CLAUDE.md").write_text("# Instructions\n", encoding="utf-8")
+    sub = project / "docs"
+    sub.mkdir()
+    # A session outside a repository only reads guidance from its own folder.
+    assert resolve_project_folder(project) == str(project.resolve())
+    assert resolve_project_folder(sub) == str(sub.resolve())
+
+
+def test_resolve_project_folder_nonexistent_raises():
+    with pytest.raises(FileNotFoundError, match="not found"):
+        resolve_project_folder("/path/that/does/not/exist/anywhere")
+
+
+def test_resolve_project_folder_file_not_dir_raises(tmp_path):
+    some_file = tmp_path / "file.txt"
+    some_file.write_text("content", encoding="utf-8")
+    with pytest.raises(ValueError, match="not a directory"):
+        resolve_project_folder(some_file)
+
+
+@pytest.fixture(params=["env_marker", "in_process_tool"])
+def as_agent(request, monkeypatch):
+    from gaia.skills.human_only import AGENT_CHILD_ENV, agent_tool_running
+
+    if request.param == "env_marker":
+        monkeypatch.setenv(AGENT_CHILD_ENV, "1")
+        yield
+    else:
+        monkeypatch.delenv(AGENT_CHILD_ENV, raising=False)
+        with agent_tool_running():
+            yield
+
+
+def test_an_agent_cannot_save_trusted_through_the_library(repo, as_agent):
+    with pytest.raises(ProjectTrustError, match="only you can trust a folder"):
+        remember_folder_trust(repo, TRUSTED)
+    assert folder_trust(repo) is None
+
+
+def test_an_agent_cannot_overwrite_a_declined_answer_with_trusted(repo, monkeypatch):
+    from gaia.skills.human_only import AGENT_CHILD_ENV
+
+    remember_folder_trust(repo, DECLINED)
+    monkeypatch.setenv(AGENT_CHILD_ENV, "1")
+    with pytest.raises(ProjectTrustError):
+        remember_folder_trust(repo, TRUSTED)
+    assert folder_trust(repo) == DECLINED
+
+
+def test_an_agent_may_still_save_declined(repo, as_agent):
+    remember_folder_trust(repo, DECLINED)
+    assert folder_trust(repo) == DECLINED
+
+
+def test_a_session_under_an_agent_keeps_a_yes_for_itself_only(repo, as_agent):
+    console = _Console(answer=True)
+    agent = _FakeAgent(repo, console)
+    agent._on_task_start("hi")
+    assert len(console.asked) == 1
+    assert agent._full_project_context() is True
+    assert folder_trust(repo) is None
+
+
+def test_the_session_prompt_saves_the_users_yes(repo, monkeypatch):
+    from gaia.skills.human_only import AGENT_CHILD_ENV, started_by_agent
+
+    monkeypatch.delenv(AGENT_CHILD_ENV, raising=False)
+    assert not started_by_agent()
+    console = _Console(answer=True)
+    _FakeAgent(repo, console)._on_task_start("hi")
+    assert folder_trust(repo) == TRUSTED
+
+
+def test_remember_folder_trust_has_no_exemption_keyword(repo, as_agent):
+    with pytest.raises(TypeError):
+        remember_folder_trust(repo, TRUSTED, asked_user=True)
+    assert folder_trust(repo) is None
+
+
+_DYNAMIC_CALLS = [
+    "m = __import__('gaia.project' + '_trust', fromlist=['x'])\n"
+    "m.remember_folder_trust(FOLDER, 'trusted')",
+    "import importlib\n"
+    "m = importlib.import_module('.'.join(['gaia', 'project_trust']))\n"
+    "m.remember_folder_trust(FOLDER, 'trusted')",
+    "import runpy\n"
+    "ns = runpy.run_module('gaia.' + 'project_trust')\n"
+    "ns['remember_folder_trust'](FOLDER, 'trusted')",
+    "import importlib\n"
+    "cli = importlib.import_module('gaia.project' + '_trust_cli')\n"
+    "import argparse\n"
+    "cli._handle_add(argparse.Namespace(folder=FOLDER))",
+]
+
+
+@pytest.mark.parametrize("code", _DYNAMIC_CALLS)
+def test_a_dynamic_import_from_agent_code_cannot_save_trusted(repo, as_agent, code):
+    # runpy loads a fresh copy of the module, so match the refusal by name.
+    try:
+        exec(code, {"FOLDER": str(repo)})  # noqa: S102
+    except Exception as e:  # pylint: disable=broad-except
+        assert type(e).__name__ == "ProjectTrustError", e
+        assert "only you can trust a folder" in str(e)
+    assert folder_trust(repo) is None

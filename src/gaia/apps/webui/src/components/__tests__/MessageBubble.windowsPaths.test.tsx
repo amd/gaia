@@ -197,13 +197,13 @@ describe('a Windows path is one chip with its exact text', () => {
         expect(textOf(content, 'user')).toBe(content);
     });
 
-    it('keeps the path whole once its file is in the library', () => {
+    it('the whole path becomes one citation once its file is in the library', () => {
         useChatStore.setState({ documents: [{
             id: 'b', filename: 'budget.txt', filepath: PATH, file_size: 1, chunk_count: 1,
             indexed_at: '2026-01-01T00:00:00Z', last_accessed_at: null, sessions_using: 0, indexing_status: 'complete',
         }] });
-        expect(chips(`Please index "${PATH}" into my document library`)).toEqual([PATH]);
-        expect(chips(`Please index ${PATH} now`)).toEqual([PATH]);
+        expect(chips(`Please index "${PATH}" into my document library`)).toEqual(['budget.txt']);
+        expect(chips(`Please index ${PATH} now`)).toEqual(['budget.txt']);
     });
 
     it.each([

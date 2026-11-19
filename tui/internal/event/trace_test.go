@@ -350,7 +350,7 @@ func TestDefaultTracePathNamesTheRunAndAgent(t *testing.T) {
 func TestTraceSlugIsFilenameSafe(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"gaia", "gaia"},
-		{"Email", "email"},
+		{"Notes", "notes"},
 		{"doc/qa", "doc-qa"},
 		{"a b:c", "a-b-c"},
 		{"", "agent"},

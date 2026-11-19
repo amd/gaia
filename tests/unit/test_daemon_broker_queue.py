@@ -45,14 +45,6 @@ from gaia.daemon.constants import (
 _TOKEN = "broker-queue-token"
 
 
-def _free_port() -> int:
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
 class _Daemon:
     def __init__(self, broker: ModelSlotBroker, port: int):
         self.broker = broker
@@ -85,7 +77,11 @@ class _Daemon:
 
 def _start_daemon(broker: ModelSlotBroker):
     uvicorn = pytest.importorskip("uvicorn")
-    port = _free_port()
+    # Hand uvicorn a socket that is already bound: freeing a port and binding it
+    # again later lets a parallel worker's daemon take it in between.
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
     app = create_app(
         token=_TOKEN,
         port=port,
@@ -96,13 +92,15 @@ def _start_daemon(broker: ModelSlotBroker):
     server = uvicorn.Server(
         uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     )
-    thread = threading.Thread(target=server.run, daemon=True)
+    thread = threading.Thread(
+        target=server.run, kwargs={"sockets": [sock]}, daemon=True
+    )
     thread.start()
     deadline = time.time() + 15
     while not server.started and time.time() < deadline:
         time.sleep(0.05)
     assert server.started, "test daemon did not come up"
-    return server, thread, _Daemon(broker, port)
+    return server, thread, sock, _Daemon(broker, port)
 
 
 @pytest.fixture
@@ -111,8 +109,8 @@ def daemon_factory(monkeypatch):
     started = []
 
     def _make(broker=None):
-        server, thread, daemon = _start_daemon(broker or ModelSlotBroker())
-        started.append((server, thread))
+        server, thread, sock, daemon = _start_daemon(broker or ModelSlotBroker())
+        started.append((server, thread, sock))
         monkeypatch.setenv(BROKER_URL_ENV_VAR, daemon.url)
         monkeypatch.setenv(BROKER_TOKEN_ENV_VAR, _TOKEN)
         return daemon
@@ -122,9 +120,10 @@ def daemon_factory(monkeypatch):
     monkeypatch.setattr(broker_client, "_broker_unsupported", False)
     broker_client._held.set(None)
     yield _make
-    for server, thread in started:
+    for server, thread, sock in started:
         server.should_exit = True
         thread.join(timeout=30)
+        sock.close()
     broker_client._held.set(None)
 
 
@@ -403,11 +402,13 @@ def test_a_lease_from_a_client_that_does_not_renew_keeps_the_fixed_ttl():
 @pytest.mark.allow_network
 def test_model_lease_renews_while_held(daemon_factory):
     """A holder that runs past the heartbeat TTL keeps the slot end to end."""
-    daemon_factory(ModelSlotBroker(lease_ttl_s=1.0, heartbeat_ttl_s=1.0))
-    holder, released = _hold_in_thread("holder-model", 3.0, max_hold_s=30)
+    # A 1 s heartbeat left 0.75 s of slack, which a busy CI runner can use up.
+    daemon_factory(ModelSlotBroker(lease_ttl_s=1.0, heartbeat_ttl_s=4.0))
+    holder, released = _hold_in_thread("holder-model", 6.0, max_hold_s=30)
 
     lease = broker_client.acquire_lease("waiter-model")
 
+    assert "at" in released, "the lease was reclaimed mid-hold"
     assert time.monotonic() >= released["at"], "the lease was reclaimed mid-hold"
     broker_client.release_lease(lease["lease_id"])
     holder.join(10)

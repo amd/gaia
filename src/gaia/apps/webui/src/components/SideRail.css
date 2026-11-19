@@ -18,7 +18,7 @@
     width: 100%;
     padding: 10px 4px 6px;
     font-size: 12.5px;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
     text-align: start;
 }
@@ -65,7 +65,9 @@
     font-size: 12.5px;
     color: var(--text-primary);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -77,11 +79,13 @@
     text-decoration: none;
 }
 
-/* A flex item's bare text never gets an ellipsis, so the title needs its own box. */
+/* A flex item's bare text can't fade where it's cut, so the title needs its own box. */
 .side-rail-link-text {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -93,7 +97,9 @@
     font-size: 11.5px;
     color: var(--text-muted);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 

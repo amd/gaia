@@ -166,7 +166,11 @@ def test_connect_passes_the_account_choice(monkeypatch, flags, intent):
 
     async def _start(connector_id, *, scopes, grant_agents=None, **account):
         seen.update(account)
-        return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+        return {
+            "flow_id": "F1",
+            "authorization_url": "https://auth.example",
+            "callback_port": 8085,
+        }
 
     async def _complete(flow_id):
         return {"account_email": "carol@example.com", "added": True}
@@ -193,7 +197,11 @@ def test_add_and_account_cannot_be_combined():
 
 def _fake_browser_sign_in(monkeypatch, result):
     async def _start(connector_id, *, scopes, grant_agents=None, **account):
-        return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+        return {
+            "flow_id": "F1",
+            "authorization_url": "https://auth.example",
+            "callback_port": 8085,
+        }
 
     async def _complete(flow_id):
         return result

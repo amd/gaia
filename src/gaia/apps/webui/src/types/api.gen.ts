@@ -27,6 +27,7 @@ export interface ApiSchemas {
   ChatRequest: ChatRequest;
   CommandOutputResponse: CommandOutputResponse;
   CommitRequest: CommitRequest;
+  Component: Component;
   ConfigureRequest: ConfigureRequest;
   ConnectRequest: ConnectRequest;
   ContextRequest: ContextRequest;
@@ -39,10 +40,13 @@ export interface ApiSchemas {
   DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
+  DismissDownloadRequest: DismissDownloadRequest;
   DocumentListResponse: DocumentListResponse;
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadProgress: DownloadProgress;
+  EditScheduleRequest: EditScheduleRequest;
+  EmbedderBody: EmbedderBody;
   EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
   FileListResponse: FileListResponse;
@@ -91,9 +95,11 @@ export interface ApiSchemas {
   ModelStatus: ModelStatus;
   NetworkUsage: NetworkUsage;
   OpenFileRequest: OpenFileRequest;
+  PageElement: PageElement;
   ParseScheduleRequest: ParseScheduleRequest;
   ParseScheduleResponse: ParseScheduleResponse;
   PermissionModeRequest: PermissionModeRequest;
+  PickedRect: PickedRect;
   PolicyNotice: PolicyNotice;
   PreflightReport: PreflightReport;
   PullRequestRequest: PullRequestRequest;
@@ -124,6 +130,7 @@ export interface ApiSchemas {
   SkillLinkRequest: SkillLinkRequest;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
+  SourceLoc: SourceLoc;
   SpeakRequest: SpeakRequest;
   SpeechModel: SpeechModel;
   SpeechSettings: SpeechSettings;
@@ -269,6 +276,7 @@ export interface AgentStepResponse {
   policyVersion?: string | null;
   reason?: string | null;
   receiptId?: string | null;
+  refused?: boolean | null;
   render?: string | null;
   result?: string | null;
   ruleIds?: string[] | null;
@@ -383,8 +391,54 @@ export interface ChatRequest {
   agent_type?: string | null;
   document_ids?: string[] | null;
   message: string;
+  page_elements?:
+    | []
+    | [PageElement]
+    | [PageElement, PageElement]
+    | [PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | [PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement, PageElement]
+    | null;
   session_id: string;
   stream?: boolean;
+}
+/**
+ * One composer chip as the renderer sends it. A toggle that is off sends null.
+ */
+export interface PageElement {
+  component?: Component | null;
+  cropUrl?: string | null;
+  label: string;
+  name: string;
+  outerHTML?: string | null;
+  rect: PickedRect;
+  ref: string;
+  role: string;
+  selector: string;
+  styles?: {
+    [k: string]: string | undefined;
+  } | null;
+  tag: string;
+  text: string;
+  title: string;
+  url: string;
+}
+export interface Component {
+  name: string;
+  source?: SourceLoc | null;
+}
+export interface SourceLoc {
+  file: string;
+  line: number;
+}
+export interface PickedRect {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
 }
 export interface CommitRequest {
   /**
@@ -509,6 +563,9 @@ export interface DiscoveryCommitItem {
   entity?: string | null;
   sensitive?: boolean;
 }
+export interface DismissDownloadRequest {
+  model_name: string;
+}
 /**
  * List of documents.
  */
@@ -563,6 +620,29 @@ export interface DownloadProgress {
   state: string;
   total_bytes?: number;
   total_files?: number;
+}
+/**
+ * Request to change when a scheduled task runs and what it asks.
+ */
+export interface EditScheduleRequest {
+  /**
+   * New schedule, in the words the create form accepts
+   */
+  interval: string;
+  /**
+   * New prompt to execute on each run
+   */
+  prompt: string;
+  /**
+   * IANA time zone the schedule's times are in. Defaults to the server machine's zone.
+   */
+  timezone?: string | null;
+}
+/**
+ * ``npu`` or ``gpu``; None is the default (the GPU).
+ */
+export interface EmbedderBody {
+  device?: ("npu" | "gpu") | null;
 }
 export interface EvalMailboxRequest {
   attached: boolean;
@@ -907,8 +987,10 @@ export interface MessageResponse {
   agent_steps?: AgentStepResponse[] | null;
   content: string;
   created_at: string;
+  failed?: boolean;
   id: number;
   library_notices?: string[] | null;
+  page_elements?: PageElement[] | null;
   rag_sources?: SourceInfo[] | null;
   role: string;
   session_id: string;

@@ -162,12 +162,12 @@ class TestRegistry:
         assert "gaia connectors configure google --client-id" in msg
         # connect authorizes scopes and grants the agent in one flow (#2347).
         assert "gaia connectors connect google --scopes" in msg
-        assert "--grant-agent installed:email" in msg
-        # Concrete, copy-paste example with the email agent's FULL scope set.
-        assert "gmail.modify" in msg
-        assert "gmail.send" in msg
+        assert "--grant-agent installed:gaia" in msg
+        assert "installed:email" not in msg
+        # Concrete, copy-paste example with the scopes GAIA declares.
+        assert "gmail.readonly" in msg
+        assert "gmail.compose" in msg
         assert "calendar.events" in msg
-        assert "calendar.readonly" in msg
         # UI path still named for UI users.
         assert "Settings -> Connectors -> Google" in msg
         assert "amd-gaia.ai/docs/connectors/google" in msg
