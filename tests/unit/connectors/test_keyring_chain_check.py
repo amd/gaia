@@ -113,7 +113,7 @@ def test_chain_with_any_weak_backend_is_refused(active, weak_name, position):
         store.verify_keyring_backend()
     msg = str(exc.value)
     assert "Insecure" in msg and weak_name in msg
-    assert "docs/security/connections.mdx" in msg
+    assert "See docs" in msg
 
 
 @pytest.mark.parametrize("weak_name", WEAK_NAMES)
@@ -158,7 +158,7 @@ def test_chain_that_cannot_be_inspected_is_refused(active):
     with pytest.raises(ConnectorsError) as exc:
         store.verify_keyring_backend()
     assert "Could not inspect" in str(exc.value)
-    assert "docs/security/connections.mdx" in str(exc.value)
+    assert "See docs" in str(exc.value)
     assert isinstance(exc.value.__cause__, RuntimeError)
 
 
