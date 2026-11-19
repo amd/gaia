@@ -46,4 +46,10 @@ function buildIndexQuery(port) {
   return { api: `http://127.0.0.1:${port}${API_PATH}` };
 }
 
-module.exports = { buildIndexQuery, API_PATH };
+/**
+ * Query for the page shown while the backend installs: there is no port yet.
+ * Must match isInstallScreen in src/gaia/apps/webui/src/utils/engineInstall.ts.
+ */
+const INSTALL_SCREEN_QUERY = Object.freeze({ engine: "install" });
+
+module.exports = { buildIndexQuery, API_PATH, INSTALL_SCREEN_QUERY };

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,8 @@ var store keyStoreCalls
 var realRestoreKey = restoreKey
 
 func TestMain(m *testing.M) {
+	// A developer's own Local only must not change what these tests send.
+	os.Setenv("GAIA_POLICY_FILE", filepath.Join(os.TempDir(), "gaia-providers-test-no-policy.json"))
 	callDaemon = func(method, path string, body []byte, start bool, op, alternative string) ([]byte, error) {
 		return nil, errors.New("a test reached the daemon")
 	}
@@ -56,6 +59,8 @@ func TestMain(m *testing.M) {
 		store.restored = append(store.restored, provider)
 		return store.restoreErr
 	}
+	// Nor may a test reach the network to check the AMD gateway.
+	probeGateway = func(context.Context, string, string) error { return nil }
 	// The user's own GAIA Lemonade would otherwise be where a pasted key goes.
 	home, err := os.MkdirTemp("", "gaia-providers-test-")
 	if err != nil {
@@ -126,7 +131,7 @@ func TestAnOutdatedServiceIsOneLineWithDetailsBehindD(t *testing.T) {
 		restoreErr: skew, started: time.Now()})
 	m = next.(Model)
 	view := ansi.Strip(m.View())
-	if !strings.Contains(view, "GAIA's background service is out of date. Run `pip install --upgrade amd-gaia`, then press r.") {
+	if !strings.Contains(view, "GAIA's background service is out of date. Update GAIA, then press r.") {
 		t.Fatalf("the status line is not the one-sentence form:\n%s", view)
 	}
 	for _, internal := range []string{"/daemon/v1/", "LEMONADE_<PROVIDER>_API_KEY", "daemon.log"} {
@@ -352,6 +357,30 @@ func TestClearingForgetsTheKeptKey(t *testing.T) {
 	resetStore()
 	srv := fakeLemonade(t, nil)
 	m := New(srv, 100, 30)
+	m.selected = 1
+	m = m.setup()
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	drain(cmd)
+	if len(store.forgotten) != 1 || store.forgotten[0] != "fireworks" {
+		t.Errorf("forgot %v, want fireworks", store.forgotten)
+	}
+}
+
+// A provider Lemonade no longer holds still loses GAIA's kept key on Ctrl+D.
+func TestClearingAnUnregisteredProviderForgetsTheKeptKey(t *testing.T) {
+	resetStore()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodDelete &&
+			strings.HasSuffix(r.URL.Path, "/cloud/auth/fireworks") {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"Cloud provider 'fireworks' is not installed. Call POST /v1/install first.","type":"invalid_request"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	m := New(srv.URL+"/api/v1", 100, 30)
 	m.selected = 1
 	m = m.setup()
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})

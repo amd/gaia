@@ -33,6 +33,10 @@ _VALID_TYPES: frozenset[str] = frozenset({"oauth_pkce", "mcp_server"})
 # declare it as ``ConnectorRequirement(connector_id="mcp-…", scopes=("use",))``.
 MCP_SERVER_SCOPES: tuple[str, ...] = ("use",)
 
+#: Capability a connector lists in ``provides`` when ``search_web`` may fall
+#: back to it; it must also name the MCP tool that runs the search.
+WEB_SEARCH = "web_search"
+
 
 @dataclass(frozen=True)
 class ConfigField:
@@ -52,6 +56,7 @@ class ConfigField:
     help_md: str = ""
     options: tuple[str, ...] | None = None
     secret: bool = False
+    prefix: str = ""
 
     def __post_init__(self) -> None:
         if not self.key or not self.key.strip():
@@ -94,6 +99,9 @@ class ConnectorSpec:
     # or whatever else the connector needs. Falls back to ``product_url``
     # in the UI when ``None``, but every connector should set it.
     docs_url: str | None = None
+    # Opens the service's own page that creates whatever the user must paste
+    # back (e.g. a pre-filled Slack app). The UI shows it as a button.
+    setup_url: str | None = None
     # oauth_pkce only
     default_scopes: tuple[str, ...] = field(default_factory=tuple)
     available_scopes: tuple[str, ...] = field(default_factory=tuple)
@@ -129,6 +137,10 @@ class ConnectorSpec:
     mcp_command: str | None = None
     mcp_args: tuple[str, ...] = field(default_factory=tuple)
     mcp_env_keys: tuple[str, ...] = field(default_factory=tuple)
+    # Capabilities other GAIA features may call on, e.g. ``(WEB_SEARCH,)``.
+    provides: tuple[str, ...] = field(default_factory=tuple)
+    # mcp_server only: the tool that runs a web search, for ``WEB_SEARCH``.
+    web_search_tool: str | None = None
 
     def scope_ceiling(self) -> tuple[str, ...]:
         """Every scope a grant for this connector is allowed to carry.
@@ -164,3 +176,9 @@ class ConnectorSpec:
         object.__setattr__(self, "oauth_setup_fields", tuple(self.oauth_setup_fields))
         object.__setattr__(self, "mcp_args", tuple(self.mcp_args))
         object.__setattr__(self, "mcp_env_keys", tuple(self.mcp_env_keys))
+        object.__setattr__(self, "provides", tuple(self.provides))
+        if WEB_SEARCH in self.provides and not self.web_search_tool:
+            raise ValueError(
+                f"ConnectorSpec {self.id!r} provides {WEB_SEARCH!r} but names no "
+                "web_search_tool for search_web to call."
+            )

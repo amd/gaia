@@ -18,7 +18,7 @@ import (
 func providerBlockedRoot(t *testing.T) FlagshipModel {
 	t.Helper()
 	agent := catalog.Agent{ID: catalog.FlagshipID, Name: "GAIA", BinaryPath: filepath.Join(t.TempDir(), "missing-agent")}
-	m := NewFlagshipModel(agent)
+	m := NewFlagshipModel(agent, true)
 	next, cmd := m.beginPreflight(agent)
 	m = next.(FlagshipModel)
 	batch := cmd().(tea.BatchMsg)
@@ -59,7 +59,7 @@ func TestProviderSelectionRebuildsStartupGateWithSelectedModel(t *testing.T) {
 // pick made at that gate must reopen readiness for m.pending (the incoming
 // agent the gate on screen is actually for), never for m.agent.
 func TestProviderSelectionAtASwitchGateReopensForTheIncomingAgent(t *testing.T) {
-	m, _ := liveChatModel(t, "email")
+	m, _ := liveChatModel(t, sampleSidecarID)
 	incoming := m.catalog.Get(catalog.FlagshipID)
 	if incoming == nil {
 		t.Fatal("test setup: catalog has no flagship entry")
@@ -77,7 +77,7 @@ func TestProviderSelectionAtASwitchGateReopensForTheIncomingAgent(t *testing.T) 
 	if m.pending == nil || m.pending.ID != catalog.FlagshipID {
 		t.Fatalf("gate reopened for %v, want the incoming agent %q", m.pending, catalog.FlagshipID)
 	}
-	if m.agent.ID != "email" {
+	if m.agent.ID != sampleSidecarID {
 		t.Fatalf("the outgoing agent must not change before the switch commits, got %q", m.agent.ID)
 	}
 }
@@ -105,7 +105,7 @@ func TestClosingProviderSetupRechecksWithoutChangingStartupModel(t *testing.T) {
 // already says: a choice made on the gate, or a saved one, skips the question.
 func TestTheGateAsksWhereChatRunsOnlyWhenNothingSaysSo(t *testing.T) {
 	agent := catalog.Agent{ID: catalog.FlagshipID, Name: "GAIA"}
-	m := NewFlagshipModel(agent)
+	m := NewFlagshipModel(agent, false)
 	if opts := m.localOptions(agent); !opts.AskWhereChatRuns || opts.ChatProvider != "" {
 		t.Errorf("new flagship launch: %+v, want the question asked", opts)
 	}

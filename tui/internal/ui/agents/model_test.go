@@ -5,6 +5,9 @@ package agents
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -58,11 +61,11 @@ func TestPopulatedListShowsIDNameVersionAndState(t *testing.T) {
 	client := &stubLister{
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
 			{ID: "gaia", Name: "GAIA", InstalledVersion: "0.2.0"},
-			{ID: "email", Name: "Email", InstalledVersion: "0.1.3"},
+			{ID: "notes", Name: "Notes", InstalledVersion: "0.1.3"},
 		}},
 		agentsOut: []catalog.AgentRuntime{
 			{AgentID: "gaia", State: "running"},
-			{AgentID: "email", State: "stopped"},
+			{AgentID: "notes", State: "stopped"},
 		},
 	}
 	m := loadSync(New(client, 80, 24))
@@ -72,19 +75,16 @@ func TestPopulatedListShowsIDNameVersionAndState(t *testing.T) {
 	if len(gaia) < 4 || gaia[1] != "GAIA" || gaia[2] != "v0.2.0" || gaia[3] != "running" {
 		t.Fatalf("gaia row wrong: %v", gaia)
 	}
-	email := rowFields(t, view, "email")
-	if len(email) < 4 || email[1] != "Email" || email[2] != "v0.1.3" || email[3] != "stopped" {
-		t.Fatalf("email row wrong: %v", email)
+	notes := rowFields(t, view, "notes")
+	if len(notes) < 4 || notes[1] != "Notes" || notes[2] != "v0.1.3" || notes[3] != "stopped" {
+		t.Fatalf("notes row wrong: %v", notes)
 	}
 }
 
 func TestZeroInstalledAgentsShowsVerbatimMessage(t *testing.T) {
 	client := &stubLister{catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{}}}
 	m := loadSync(New(client, 80, 24))
-	want := "Only the flagship is installed. Install another with: gaia hub install <id>"
-	if !strings.Contains(m.View(), want) {
-		t.Fatalf("missing verbatim message: %s", m.View())
-	}
+	assertOnlyFlagshipMessage(t, m.View())
 }
 
 func TestUncachedHubIndexUsesLocallyKnownDisplayName(t *testing.T) {
@@ -94,7 +94,7 @@ func TestUncachedHubIndexUsesLocallyKnownDisplayName(t *testing.T) {
 		// {"id": id, "name": id}.
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
 			{ID: "gaia", Name: "gaia"},
-			{ID: "email", Name: "email"},
+			{ID: "notes", Name: "notes"},
 		}},
 		agentsOut: []catalog.AgentRuntime{{AgentID: "gaia", State: "running"}},
 	}
@@ -105,9 +105,10 @@ func TestUncachedHubIndexUsesLocallyKnownDisplayName(t *testing.T) {
 	if len(gaia) < 2 || gaia[1] != "GAIA" {
 		t.Fatalf("expected known display name GAIA, got: %v", gaia)
 	}
-	email := rowFields(t, view, "email")
-	if len(email) < 2 || email[1] != "Email" {
-		t.Fatalf("expected known display name Email, got: %v", email)
+	// An id this binary does not ship is never given a guessed name.
+	notes := rowFields(t, view, "notes")
+	if len(notes) < 2 || notes[1] != "notes" {
+		t.Fatalf("expected the id verbatim for an unknown agent, got: %v", notes)
 	}
 }
 
@@ -116,9 +117,18 @@ func TestOnlyFlagshipInstalledShowsVerbatimMessage(t *testing.T) {
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{{ID: "gaia", Name: "GAIA"}}},
 	}
 	m := loadSync(New(client, 80, 24))
-	want := "Only the flagship is installed. Install another with: gaia hub install <id>"
-	if !strings.Contains(m.View(), want) {
-		t.Fatalf("missing verbatim message: %s", m.View())
+	assertOnlyFlagshipMessage(t, m.View())
+}
+
+// GAIA ships one agent, and terminal-only installs have no `gaia` CLI, so the
+// panel must not offer an install command.
+func assertOnlyFlagshipMessage(t *testing.T, view string) {
+	t.Helper()
+	if !strings.Contains(view, "Only the GAIA agent is installed.") {
+		t.Fatalf("missing only-flagship message: %s", view)
+	}
+	if strings.Contains(view, "gaia hub") || strings.Contains(view, "Install another") {
+		t.Fatalf("panel names an install command: %s", view)
 	}
 }
 
@@ -144,9 +154,9 @@ func TestSelectionAndCancelKeys(t *testing.T) {
 	client := &stubLister{
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
 			{ID: "gaia", Name: "GAIA"},
-			{ID: "email", Name: "Email"},
+			{ID: "notes", Name: "Notes"},
 		}},
-		agentsOut: []catalog.AgentRuntime{{AgentID: "gaia", State: "running"}, {AgentID: "email", State: "stopped"}},
+		agentsOut: []catalog.AgentRuntime{{AgentID: "gaia", State: "running"}, {AgentID: "notes", State: "stopped"}},
 	}
 	m := loadSync(New(client, 80, 24))
 
@@ -160,7 +170,7 @@ func TestSelectionAndCancelKeys(t *testing.T) {
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
 	sel, ok := cmd().(SelectedMsg)
-	if !ok || sel.ID != "email" {
+	if !ok || sel.ID != "notes" {
 		t.Fatalf("enter did not select the highlighted row: %+v", sel)
 	}
 	// Selection drops the fetch that was in flight...
@@ -204,7 +214,7 @@ func TestAbandonedLoadResultsCannotLandOnTheCurrentList(t *testing.T) {
 func TestPanelNeverOutgrowsItsWindow(t *testing.T) {
 	client := &stubLister{
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
-			{ID: "gaia", Name: "GAIA"}, {ID: "email", Name: "Email"}, {ID: "another", Name: "Another"},
+			{ID: "gaia", Name: "GAIA"}, {ID: "notes", Name: "Notes"}, {ID: "another", Name: "Another"},
 		}},
 		agentsOut: []catalog.AgentRuntime{{AgentID: "gaia", State: "running"}},
 	}
@@ -228,7 +238,7 @@ func TestThePanelStaysUsableAfterAnAbandonedSelection(t *testing.T) {
 	client := &stubLister{
 		catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
 			{ID: "gaia", Name: "GAIA", InstalledVersion: "0.2.0"},
-			{ID: "email", Name: "Email", InstalledVersion: "0.1.3"},
+			{ID: "notes", Name: "Notes", InstalledVersion: "0.1.3"},
 		}},
 		agentsOut: []catalog.AgentRuntime{{AgentID: "gaia", State: "running"}},
 	}
@@ -300,5 +310,57 @@ func TestSelectedAgentStaysVisibleInALongList(t *testing.T) {
 			next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 			m = next.(Model)
 		}
+	}
+}
+
+// The warning lines come after the rows, and the panel keeps only its tail
+// when it is too short, so a long warning must not push the selected row out.
+func TestASelectedRowStaysVisibleBesideInstallWarnings(t *testing.T) {
+	writeCorruptInstall(t, "broken")
+	client := &stubLister{catalogOut: &catalog.HubCatalog{Agents: []catalog.HubEntry{
+		{ID: "gaia", Name: "GAIA"}, {ID: "alpha", Name: "Alpha"}, {ID: "bravo", Name: "Bravo"},
+		{ID: "charlie", Name: "Charlie"}, {ID: "delta", Name: "Delta"}, {ID: "echo", Name: "Echo"},
+	}}}
+	const width, height = 40, 14
+
+	view := ansi.Strip(loadSync(New(client, width, height)).View())
+
+	if !strings.Contains(view, "› gaia") {
+		t.Fatalf("the selected row was cropped off the panel:\n%s", view)
+	}
+	if !strings.Contains(view, "! ") {
+		t.Fatalf("the install warning is missing:\n%s", view)
+	}
+	if n := len(strings.Split(view, "\n")); n > height {
+		t.Fatalf("the panel is %d lines, taller than its %d-line window:\n%s", n, height, view)
+	}
+}
+
+// writeCorruptInstall leaves an install record GAIA cannot read, the way an
+// interrupted install or a damaged disk does.
+func writeCorruptInstall(t *testing.T, id string) {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".gaia", "agents", id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, catalog.SentinelName), []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+}
+
+func TestAnUnreadableInstallIsNamedNotDropped(t *testing.T) {
+	writeCorruptInstall(t, "notes")
+	client := &stubLister{catalogOut: &catalog.HubCatalog{}}
+
+	view := ansi.Strip(loadSync(New(client, 120, 30)).View())
+
+	if !strings.Contains(view, "'notes' is not listed as installed") || !strings.Contains(view, "reinstall it") {
+		t.Fatalf("the panel dropped the unreadable install silently:\n%s", view)
 	}
 }

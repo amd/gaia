@@ -4,11 +4,11 @@
 
   ● Install formulas (pip) · 2.0s
     └ python -m pip install formulas --quiet
-    └ ✗ failed: No module named pip — carried on
-  ● Install formulas (uv) · 4.0s
-    └ uv pip install formulas (1 line)
+    └ error, retried: Permission denied: site-packages is not writeable
+  ● Install formulas (pip) · 4.0s
+    └ python -m pip install --user formulas --quiet (1 line)
 
-  Installed formulas with uv.
+  Installed formulas for your user.
   ✓ Ran 1 command · 9.0s
 
 
@@ -21,4 +21,4 @@
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────
 › Ask anything — Enter to send, Alt+Enter for a new line
-  ● agent gaia connected     ask mode (shift+tab) · ↑↓/wheel scroll · Ctrl+O details · Ctrl+C quit
+  ● agent gaia connected        ask mode (shift+tab) · /connectors · ↑↓/wheel scroll · Ctrl+C quit

@@ -32,6 +32,11 @@ describe('isAbandonedDraft', () => {
         expect(isAbandonedDraft('s1', baseState)).toBe(true);
     });
 
+    it('is true for an untouched "New chat" draft, the title new chats get now', () => {
+        const state = { ...baseState, sessions: [session({ title: 'New chat' })] };
+        expect(isAbandonedDraft('s1', state)).toBe(true);
+    });
+
     it('is false when the session is unknown', () => {
         expect(isAbandonedDraft('missing', baseState)).toBe(false);
     });
@@ -59,6 +64,18 @@ describe('isAbandonedDraft', () => {
     it('is false when a turn is running server-side', () => {
         const state = { ...baseState, runningSessionIds: ['s1'] };
         expect(isAbandonedDraft('s1', state)).toBe(false);
+    });
+
+    it('is false while the chat still has messages waiting to send, open or not', () => {
+        const queued = { s1: [{ id: 1, text: 'next', state: 'queued' }] };
+        expect(isAbandonedDraft('s1', { ...baseState, messageQueues: queued })).toBe(false);
+        expect(isAbandonedDraft('s1', { ...baseState, currentSessionId: 'other', messageQueues: queued })).toBe(false);
+        expect(isAbandonedDraft('s1', { ...baseState, messageQueues: { other: queued.s1 } })).toBe(true);
+    });
+
+    it('is false while its first message is handed over but not sent yet', () => {
+        expect(isAbandonedDraft('s1', { ...baseState, pendingPrompt: { sessionId: 's1' } })).toBe(false);
+        expect(isAbandonedDraft('s1', { ...baseState, pendingPrompt: { sessionId: 'other' } })).toBe(true);
     });
 
     it('ignores the loaded-messages signal for a non-current session', () => {

@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -34,6 +35,9 @@ const (
 	// has no table entry for. Not DESTRUCTIVE: nothing about `pytest` deletes
 	// anything, and saying so is what trains people to wave the real one through.
 	RiskExecute
+	// RiskAccess lets GAIA into one more file or folder. The call that raised
+	// it is as often a read as a write, so the card claims neither.
+	RiskAccess
 )
 
 // riskFromWire maps the agent's `risk` field onto a tier. The agent reads the
@@ -71,6 +75,8 @@ func (t RiskTier) Badge() string {
 		return badgeDestructiveStyle.Render("DESTRUCTIVE")
 	case RiskExecute:
 		return badgeExecuteStyle.Render("RUNS CODE")
+	case RiskAccess:
+		return badgeReadStyle.Render("ACCESS")
 	case RiskDenied:
 		return badgeDeniedStyle.Render("BLOCKED")
 	default:
@@ -80,16 +86,8 @@ func (t RiskTier) Badge() string {
 
 // confirmationRiskTiers classifies every gated tool this client knows about.
 //
-// The first group is the nine the email agent gates
-// (agent.CONFIRMATION_REQUIRED_TOOLS in
-// hub/agents/email/python/gaia_agent_email/agent.py). send/schedule/forward and
-// the calendar RSVP actions are Write — external or state-changing, but not
-// destructive on their own terms. permanent_delete and quarantine are
-// Destructive: one is irreversible by name, the other pulls a message out of
-// the inbox on the agent's own judgment about a security threat, where a false
-// positive hides real mail.
-//
-// The second group is the base set every agent gates
+// The first group is the flagship's engineering-mode tools. The second is the
+// base set every agent gates
 // (agent.TOOLS_REQUIRING_CONFIRMATION in src/gaia/agents/base/agent.py) plus
 // the flagship's own two. Left unlisted they all fell through to the cautious
 // default and rendered "DESTRUCTIVE" — including a `pwd`. A badge that says
@@ -103,21 +101,24 @@ func (t RiskTier) Badge() string {
 // current one sends `risk`, and WithRisk replaces the guess with it. The file
 // writers and CLI setup are Write — scoped, and visible afterwards.
 var confirmationRiskTiers = map[string]RiskTier{
-	"share_engineering_context":   RiskWrite,
-	"append_engineering_context":  RiskWrite,
-	"approve_engineering_code":    RiskWrite,
-	"send_now":                    RiskWrite,
-	"send_draft":                  RiskWrite,
-	"schedule_send":               RiskWrite,
-	"forward_message":             RiskWrite,
-	"accept_invite":               RiskWrite,
-	"decline_invite":              RiskWrite,
-	"create_event_from_email":     RiskWrite,
-	"permanent_delete":            RiskDestructive,
-	"quarantine_phishing_message": RiskDestructive,
+	"share_engineering_context":  RiskWrite,
+	"append_engineering_context": RiskWrite,
+	"approve_engineering_code":   RiskWrite,
+	"send_now":                   RiskWrite,
+	"send_draft":                 RiskWrite,
+	"forward_message":            RiskWrite,
+	"reply_to_message":           RiskWrite,
+	"update_draft":               RiskWrite,
+	"discard_draft":              RiskDestructive,
+	// The flagship's send-email skill, under its namespaced names.
+	"send-email/send_now":         RiskWrite,
+	"send-email/send_draft":       RiskWrite,
+	"send-email/forward_message":  RiskWrite,
+	"send-email/reply_to_message": RiskWrite,
+	"send-email/update_draft":     RiskWrite,
+	"send-email/discard_draft":    RiskDestructive,
 
 	"run_shell_command":   RiskDestructive,
-	"run_cli_command":     RiskDestructive,
 	"wait_for_condition":  RiskDestructive,
 	"run_python":          RiskDestructive,
 	"execute_python_file": RiskDestructive,
@@ -133,8 +134,12 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"update_gaia_md":      RiskWrite,
 	"install_skill":       RiskWrite,
 	"remove_skill":        RiskWrite,
+	// Erases every memory and past conversation; nothing brings them back.
+	"forget_everything": RiskDestructive,
 	// Not a tool: PathValidator asking to widen this session's scope by one path (reads and changes).
-	"allow_path_access": RiskWrite,
+	"allow_path_access": RiskAccess,
+	// Not a tool: the agent asking whether to read this folder's CLAUDE.md, AGENTS.md and skills.
+	"trust_project_folder": RiskWrite,
 }
 
 // actionTitles is the question the prompt asks, in words. The tool name is the
@@ -142,22 +147,43 @@ var confirmationRiskTiers = map[string]RiskTier{
 // saying "Run 'run_shell_command' with command=…" asked the same thing twice
 // before showing the one thing that mattered.
 var actionTitles = map[string]string{
-	"run_shell_command":   "Run this command?",
-	"run_cli_command":     "Run this command?",
-	"wait_for_condition":  "Poll with this command?",
-	"run_python":          "Run this Python code?",
-	"execute_python_file": "Run this Python file?",
-	"write_file":          "Write this file?",
-	"write_python_file":   "Write this file?",
-	"write_markdown_file": "Write this file?",
-	"edit_file":           "Edit this file?",
-	"edit_python_file":    "Edit this file?",
-	"replace_function":    "Edit this file?",
-	"update_gaia_md":      "Update GAIA.md?",
-	"install_skill":       "Install this skill?",
-	"remove_skill":        "Remove this skill?",
-	"allow_path_access":   "Allow access to this location?",
-	"continue_long_turn":  "Keep going?",
+	"run_shell_command":    "Run this command?",
+	"run_cli_command":      "Run this command?",
+	"wait_for_condition":   "Poll with this command?",
+	"run_python":           "Run this Python code?",
+	"execute_python_file":  "Run this Python file?",
+	"write_file":           "Write this file?",
+	"write_python_file":    "Write this file?",
+	"write_markdown_file":  "Write this file?",
+	"edit_file":            "Edit this file?",
+	"edit_python_file":     "Edit this file?",
+	"replace_function":     "Edit this file?",
+	"update_gaia_md":       "Update GAIA.md?",
+	"install_skill":        "Install this skill?",
+	"remove_skill":         "Remove this skill?",
+	"forget_everything":    "Erase all of GAIA's memory?",
+	"allow_path_access":    "Allow access to this location?",
+	"trust_project_folder": "Trust this folder's instructions and skills?",
+	"continue_long_turn":   "Keep going?",
+	"send_now":             "Send this email?",
+	"send_draft":           "Send this email?",
+	"reply_to_message":     "Send this reply?",
+	"forward_message":      "Forward this email?",
+	"discard_draft":        "Delete this draft?",
+	"update_draft":         "Change this draft?",
+
+	"send-email/send_now":         "Send this email?",
+	"send-email/send_draft":       "Send this email?",
+	"send-email/reply_to_message": "Send this reply?",
+	"send-email/forward_message":  "Forward this email?",
+	"send-email/discard_draft":    "Delete this draft?",
+	"send-email/update_draft":     "Change this draft?",
+}
+
+// approveLabels names what y grants for a prompt whose yes outlasts the call.
+var approveLabels = map[string]string{
+	// Saved for the folder, so later sessions there are not asked again.
+	"trust_project_folder": "trust this folder",
 }
 
 // ActionTitle is the prompt's question for a gated action.
@@ -174,7 +200,6 @@ func ActionTitle(action string) string {
 // or as code decides which text on screen the warning points at.
 var unboundedRiskActions = map[string]string{
 	"run_shell_command":   "command",
-	"run_cli_command":     "command",
 	"wait_for_condition":  "command",
 	"run_python":          "code",
 	"execute_python_file": "code",
@@ -182,7 +207,7 @@ var unboundedRiskActions = map[string]string{
 
 // destructiveWarning is the sentence shown beneath a RiskDestructive summary.
 //
-// Two different claims were hiding under one tier. permanent_delete IS
+// Two different claims were hiding under one tier. forget_everything IS
 // destructive, by name. run_shell_command is not: it is *unbounded* — `pwd` on
 // one call and `rm -rf` on the next — which is exactly why it is tiered
 // cautiously (see confirmationRiskTiers). Telling someone that `pwd` "is a
@@ -238,10 +263,10 @@ const (
 // ConfirmationTimeout is how long an UNDELIVERABLE confirmation waits before
 // auto-denying.
 //
-// It applies only where the answer has nowhere to go: the email sidecar's
-// stateless D1 stub ends the run with its own refusal within the same stream
-// read the `needs_confirmation` event arrived on, so the modal there is a
-// record of intent, not a live question, and letting it expire costs nothing.
+// It applies only where the answer has nowhere to go: a stateless sidecar ends
+// the run with its own refusal within the same stream read the
+// `needs_confirmation` event arrived on, so the modal there is a record of
+// intent, not a live question, and letting it expire costs nothing.
 //
 // A person reading "run `rm -rf build`?" and deciding routinely takes longer
 // than 30s, so a deliverable prompt gets DeliverableConfirmationTimeout
@@ -337,15 +362,34 @@ type ConfirmationDecidedMsg struct {
 	Deliverable bool
 }
 
+// wholeTextActions are the prompts whose text IS the decision: an email is
+// approved as it will go out, so it can never be approved partly unseen. Mirrors
+// EXACT_SUMMARY_TOOLS in PermissionPrompt.tsx. The flagship runs them from its
+// send-email skill, so they arrive namespaced.
+var wholeTextActions = map[string]bool{
+	"send_now":                    true,
+	"send_draft":                  true,
+	"reply_to_message":            true,
+	"forward_message":             true,
+	"discard_draft":               true,
+	"update_draft":                true,
+	"send-email/send_now":         true,
+	"send-email/send_draft":       true,
+	"send-email/reply_to_message": true,
+	"send-email/forward_message":  true,
+	"send-email/discard_draft":    true,
+	"send-email/update_draft":     true,
+}
+
 // ConfirmationModel renders a needs_confirmation pause: the gated action, its
 // summary, a risk-tier badge, and a y/n/Esc prompt that auto-denies after
 // ConfirmationTimeout.
 //
-// Approving here does not by itself deliver anything. The shipping email
-// sidecar's `/query` contract is the stateless stop-and-hand-off model (spec
-// §5, D1): `needs_confirmation` is immediately followed, in the same stream
-// read, by a synthesized `final` refusal — there is no server-side pause and
-// no confirm endpoint to resume it (`ConfirmURL` is always empty). Denying is
+// Approving here does not by itself deliver anything. A sidecar on the
+// stateless stop-and-hand-off model (spec §5, D1) follows `needs_confirmation`
+// immediately, in the same stream read, with a synthesized `final` refusal —
+// there is no server-side pause and no confirm endpoint to resume it
+// (`ConfirmURL` is always empty). Denying is
 // therefore always real (nothing was ever going to be sent either way);
 // approving only becomes real delivery once a peer implements the resume
 // model documented in the spec — the caller checks ConfirmURL before treating
@@ -371,6 +415,9 @@ type ConfirmationModel struct {
 	// (e.g. `gh issue list`). Empty means no grant is on offer for this call.
 	alwaysScope string
 	tier        RiskTier
+	// calendarAccount is the account a calendar change lands on, shown under
+	// the title: with several accounts connected it is half of the decision.
+	calendarAccount string
 	// riskFromAgent is set when tier came from the agent reading the call,
 	// rather than this client guessing from the tool name.
 	riskFromAgent bool
@@ -379,6 +426,12 @@ type ConfirmationModel struct {
 	modeHint string
 	state    ConfirmState
 	width    int
+	// maxRows is the height the chat view can spend on this prompt; zero means
+	// unconstrained. scroll and seen only move on a wholeTextActions prompt that
+	// doesn't fit: the first text line on screen, and how many have been shown.
+	maxRows int
+	scroll  int
+	seen    int
 }
 
 // NewConfirmationModel builds the modal for one needs_confirmation event.
@@ -392,6 +445,8 @@ func NewConfirmationModel(runID, action, summary, confirmURL string) Confirmatio
 		tier:       ClassifyActionRisk(action),
 		state:      ConfirmationPending,
 		width:      76,
+
+		calendarAccount: calendarAccountOf(summary),
 	}
 }
 
@@ -436,7 +491,6 @@ func (m ConfirmationModel) RunID() string       { return m.runID }
 func (m ConfirmationModel) Seq() uint64         { return m.seq }
 func (m ConfirmationModel) Action() string      { return m.action }
 func (m ConfirmationModel) State() ConfirmState { return m.state }
-func (m ConfirmationModel) Tier() RiskTier      { return m.tier }
 func (m ConfirmationModel) Pending() bool       { return m.state == ConfirmationPending }
 
 // Deliverable reports whether answering this prompt actually reaches the agent.
@@ -455,7 +509,90 @@ func (m *ConfirmationModel) SetWidth(w int) {
 	if w < 24 {
 		w = 24
 	}
+	if w == m.width {
+		return
+	}
 	m.width = w
+	// Rewrapping renumbers every line, so what was seen can't be carried over.
+	m.scroll, m.seen = 0, 0
+	m.markSeen()
+}
+
+// SetMaxRows tells the prompt how many rows it may use. A prompt that must be
+// read whole scrolls inside them; any other is left to the caller to clip.
+func (m *ConfirmationModel) SetMaxRows(rows int) {
+	if rows < 1 {
+		rows = 1
+	}
+	m.maxRows = rows
+	m.scrollBy(0)
+}
+
+func (m ConfirmationModel) textLines() []string {
+	return strings.Split(WrapText(strings.TrimSpace(m.summary), m.innerWidth()), "\n")
+}
+
+func (m ConfirmationModel) innerWidth() int {
+	if inner := m.width - 4; inner > 16 {
+		return inner
+	}
+	return 16
+}
+
+// scrolls reports whether this prompt is shown as a window over its text.
+func (m ConfirmationModel) scrolls() bool {
+	return m.state == ConfirmationPending && wholeTextActions[m.action] &&
+		m.maxRows > 0 && lipgloss.Height(m.fullView()) > m.maxRows
+}
+
+// unread reports whether part of the text has not been on screen yet, which is
+// what keeps y from approving.
+func (m ConfirmationModel) unread() bool {
+	return m.scrolls() && m.seen < len(m.textLines())
+}
+
+// windowLayout is the pieces of a scrolling prompt that fit in maxRows: the rows
+// left for text, and whether the title and position line still get one. They go
+// in that order, because the text and the keys are what the decision needs.
+func (m ConfirmationModel) windowLayout() (rows int, title, position bool) {
+	inner := m.innerWidth()
+	rows = m.maxRows - lipgloss.Height(WrapText(m.styledKeyHint(), inner))
+	title, position = true, true
+	titleRows := lipgloss.Height(WrapText(m.titleLine(), inner))
+	if rows-titleRows-1 >= 1 {
+		return rows - titleRows - 1, title, position
+	}
+	title = false
+	if rows-1 >= 1 {
+		return rows - 1, title, position
+	}
+	if rows < 0 {
+		rows = 0
+	}
+	return rows, false, false
+}
+
+func (m *ConfirmationModel) markSeen() {
+	if !m.scrolls() {
+		return
+	}
+	rows, _, _ := m.windowLayout()
+	if rows > 0 && m.scroll+rows > m.seen {
+		m.seen = m.scroll + rows
+	}
+}
+
+func (m *ConfirmationModel) scrollBy(delta int) {
+	rows, _, _ := m.windowLayout()
+	limit := len(m.textLines()) - rows
+	m.scroll += delta
+	if m.scroll > limit {
+		m.scroll = limit
+	}
+	if m.scroll < 0 {
+		m.scroll = 0
+	}
+	m.markSeen()
 }
 
 // Update handles one key while the confirmation is pending. Only y/Y (approve
@@ -474,14 +611,34 @@ func (m ConfirmationModel) Update(msg tea.Msg) (ConfirmationModel, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	rows, _, _ := m.windowLayout()
 	switch key.String() {
 	case "y", "Y":
+		if m.unread() {
+			return m, nil
+		}
 		return m.decide(ConfirmationApproved, false)
 	case "a", "A":
-		if !m.allowAlways() {
+		if !m.allowAlways() || m.unread() {
 			return m, nil
 		}
 		return m.decide(ConfirmationAlways, false)
+	case "down", "j":
+		if m.scrolls() {
+			m.scrollBy(1)
+		}
+	case "up", "k":
+		if m.scrolls() {
+			m.scrollBy(-1)
+		}
+	case "pgdown", " ":
+		if m.scrolls() {
+			m.scrollBy(rows)
+		}
+	case "pgup":
+		if m.scrolls() {
+			m.scrollBy(-rows)
+		}
 	case "n", "N", "esc":
 		return m.decide(ConfirmationDenied, false)
 	}
@@ -553,17 +710,90 @@ var (
 // QuestionModel.View — handing the wrapped result to a width-constrained style
 // as well would re-wrap already-wrapped lines and shear the border.
 func (m ConfirmationModel) View() string {
-	inner := m.width - 4
-	if inner < 16 {
-		inner = 16
+	if m.scrolls() {
+		return m.windowView()
 	}
+	return m.fullView()
+}
 
-	var lines []string
+// calendarAccountOf reads `calendar_account` from a summary that is the call's
+// arguments as JSON, which is how the calendar skill's changes arrive.
+func calendarAccountOf(summary string) string {
+	var args struct {
+		CalendarAccount string `json:"calendar_account"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(summary)), &args) != nil {
+		return ""
+	}
+	return strings.TrimSpace(ansi.Strip(args.CalendarAccount))
+}
+
+func (m ConfirmationModel) titleLine() string {
 	title := confirmationTitleStyle
 	if m.titleColour != nil {
 		title = title.Foreground(m.titleColour)
 	}
-	lines = append(lines, m.tier.Badge()+" "+title.Render(ActionTitle(m.action)))
+	return m.tier.Badge() + " " + title.Render(ActionTitle(m.action))
+}
+
+// windowView is a prompt too long for the screen: a window over its text, where
+// it stands, and the keys. It never exceeds maxRows, so nothing clips it. Its
+// height doesn't change once the text has been read, so the keys don't jump.
+func (m ConfirmationModel) windowView() string {
+	inner := m.innerWidth()
+	rows, title, position := m.windowLayout()
+	text := m.textLines()
+
+	var lines []string
+	if title {
+		lines = append(lines, WrapText(m.titleLine(), inner))
+	}
+	if rows > 0 {
+		end := m.scroll + rows
+		if end > len(text) {
+			end = len(text)
+		}
+		lines = append(lines, confirmationBodyStyle.Render(strings.Join(text[m.scroll:end], "\n")))
+	}
+	if position {
+		lines = append(lines, confirmationHintStyle.Render(ansi.Truncate(m.positionLine(rows, len(text)), inner, "…")))
+	}
+	lines = append(lines, lipgloss.PlaceVertical(
+		lipgloss.Height(WrapText(m.styledKeyHint(), inner)), lipgloss.Bottom,
+		WrapText(m.windowKeyHint(), inner)))
+	return confirmationPanelStyle.Width(m.width - confirmationBorderCols).Render(strings.Join(lines, "\n"))
+}
+
+func (m ConfirmationModel) positionLine(rows, total int) string {
+	end := m.scroll + rows
+	if end > total {
+		end = total
+	}
+	where := "lines " + strconv.Itoa(m.scroll+1) + "-" + strconv.Itoa(end) + " of " + strconv.Itoa(total)
+	if m.unread() {
+		return where + " · ↓ to read the rest"
+	}
+	return where + " · read to the end"
+}
+
+// windowKeyHint offers only the keys that work right now: y arrives once the
+// whole text has been on screen.
+func (m ConfirmationModel) windowKeyHint() string {
+	if !m.unread() {
+		return m.styledKeyHint()
+	}
+	return confirmationKeyStyle.Render("n/esc") + " " + confirmationBodyStyle.Render("deny")
+}
+
+// fullView is the whole prompt, however tall.
+func (m ConfirmationModel) fullView() string {
+	inner := m.innerWidth()
+
+	var lines []string
+	lines = append(lines, m.titleLine())
+	if m.calendarAccount != "" {
+		lines = append(lines, confirmationBodyStyle.Render(WrapText("Calendar: "+m.calendarAccount, inner)))
+	}
 
 	// The call itself, once. The title already says what kind of action it is.
 	summary := strings.TrimSpace(m.summary)
@@ -638,7 +868,11 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 // empty scope hides the choice entirely.
 func (m ConfirmationModel) styledKeyHint() string {
 	type choice struct{ key, label string }
-	choices := []choice{{"y", "once"}}
+	approve, ok := approveLabels[m.action]
+	if !ok {
+		approve = "once"
+	}
+	choices := []choice{{"y", approve}}
 	if m.allowAlways() {
 		choices = append(choices, choice{"a", "always: " + m.alwaysScope + " (this session)"})
 	}

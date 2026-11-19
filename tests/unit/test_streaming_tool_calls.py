@@ -18,6 +18,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import _tool_call_deltas
 from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
@@ -87,6 +89,36 @@ def test_a_lone_sentinel_lookalike_without_tools_stays_prose():
     responses = list(sdk.send_messages_stream([{"role": "user", "content": "q"}]))
 
     assert [r.is_complete for r in responses] == [False, True]
+
+
+def test_an_envelope_without_tools_is_still_a_control_frame():
+    """A cloud model on the in-text tool format can still make a native call;
+    the provider's whole envelope must not reach the chat as answer text."""
+    sdk, _ = _sdk(["Saving that.", SENTINEL])
+    responses = list(sdk.send_messages_stream([{"role": "user", "content": "q"}]))
+
+    assert [r.text for r in responses] == ["Saving that.", SENTINEL]
+    assert [r.is_complete for r in responses] == [False, True]
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(['{"__tool_calls__": "none"}'], id="key-not-a-list"),
+        pytest.param([SENTINEL + " and that is the JSON."], id="trailing-prose"),
+        pytest.param([SENTINEL[:30], SENTINEL[30:]], id="split-across-chunks"),
+        pytest.param(['{"tool_calls": [{"name": "x"}]}'], id="other-key"),
+        pytest.param(['[{"__tool_calls__": []}]'], id="inside-an-array"),
+    ],
+)
+def test_json_the_user_asked_for_stays_answer_text_without_tools(chunks):
+    """Without tools, only a whole provider envelope ends the turn; JSON the
+    model writes as its answer, even JSON naming the key, is streamed as text."""
+    sdk, _ = _sdk(chunks)
+    responses = list(sdk.send_messages_stream([{"role": "user", "content": "q"}]))
+
+    assert [r.text for r in responses] == [*chunks, ""]
+    assert [r.is_complete for r in responses] == [*([False] * len(chunks)), True]
 
 
 def test_tool_call_deltas_ignores_a_non_sequence():

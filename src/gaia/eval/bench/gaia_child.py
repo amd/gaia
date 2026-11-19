@@ -136,6 +136,9 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    from gaia.logger import configure
+
+    configure()
     args = sys.argv[1:] if argv is None else argv
     if len(args) != 1:
         sys.stderr.write("usage: python -m gaia.eval.bench.gaia_child SPEC.json\n")

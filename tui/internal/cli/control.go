@@ -73,8 +73,8 @@ func agentControlOptions(enabled bool, port int, explicitPort, oneShot bool) (*c
 // only ever wired for those two paths); the one-shot case refuses it loudly.
 //
 // --dev turns the control API on for an interactive launch only: a one-shot has
-// no session to drive, and --dev changes nothing else, so it is a no-op there
-// rather than a refusal.
+// no session to drive, so there --dev only turns on its diagnostics rather
+// than being refused.
 func controlOptionsForAgentRun(cmd *cobra.Command, oneShot bool) (*control.Options, error) {
 	return agentControlOptions(controlEnabled || (dev && !oneShot), controlPort, cmd.Flags().Changed("control-port"), oneShot)
 }

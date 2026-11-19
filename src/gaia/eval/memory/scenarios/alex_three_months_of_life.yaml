@@ -1,0 +1,261 @@
+# Three months of weekly chats with one person, the way a long relationship
+# builds up: work, a partner, a cat, climbing, books, a language, money, a
+# balcony garden, an injury that heals. Thirty-odd facts by the end. The probes
+# are ordinary requests that only go well if the right *older* fact reaches the
+# agent, which is what "growing with the user" depends on.
+id: alex_three_months_of_life
+title: A relationship built over three months of everyday chats
+persona: Alex, high-school chemistry teacher in Halifax
+end: 2026-04-01T08:30
+
+sessions:
+  - id: s01
+    date: 2026-01-05T20:00
+    turns:
+      - user: "Hi, I'm Alex. I teach chemistry at Citadel High in Halifax."
+        assistant: "Hi Alex! Happy to help with teaching or anything else."
+        extract:
+          - {op: add, category: fact, content: "User's name is Alex"}
+          - {op: add, category: fact, content: "User teaches chemistry at Citadel High in Halifax"}
+      - user: "I live with my partner Jamie, who's an ER nurse, and our cat Pepper."
+        assistant: "Nice to meet you three, at least on paper."
+        extract:
+          - {op: add, category: fact, content: "User lives with their partner Jamie, an ER nurse", entity: "person:jamie"}
+          - {op: add, category: fact, content: "User has a cat named Pepper", entity: "pet:pepper"}
+      - user: "One thing: I like answers as bullet points, I read on my phone between classes."
+        assistant: "Bullet points it is."
+        extract:
+          - {op: add, category: preference, content: "User wants answers as bullet points; reads on their phone"}
+
+  - id: s02
+    date: 2026-01-12T19:15
+    turns:
+      - user: "I boulder twice a week at Seaside Bouldering and I'm working on my first V5."
+        assistant: "Nice goal. Want a weekly plan with finger strength and technique days?"
+        extract:
+          - {op: add, category: fact, content: "User boulders twice a week at Seaside Bouldering and is working toward a first V5"}
+      - user: "Yes, but my left shoulder is sore so no overhead pressing for now."
+        assistant: "Plan without overhead pressing: hangboard repeaters, footwork drills, rows."
+        extract:
+          - {op: add, category: fact, content: "User has a sore left shoulder and must avoid overhead pressing"}
+      - user: "Perfect, I climb Tuesdays and Thursdays after school."
+        assistant: "Tuesday technique, Thursday strength."
+        extract:
+          - {op: add, category: fact, content: "User climbs Tuesdays and Thursdays after school"}
+
+  - id: s03
+    date: 2026-01-19T21:00
+    turns:
+      - user: "I teach four sections of grade 11 chemistry this semester."
+        assistant: "Four sections is a full load. Want help with a unit plan?"
+        extract:
+          - {op: add, category: fact, content: "User teaches four sections of grade 11 chemistry this semester"}
+      - user: "Yes, stoichiometry next. Always include a lab safety note in lesson plans."
+        assistant: "Stoichiometry unit with a safety box per lab."
+        extract:
+          - {op: add, category: preference, content: "User wants a lab safety note in every lesson plan"}
+      - user: "And keep handouts to one page, my students won't read more."
+        assistant: "One-page handouts."
+        extract:
+          - {op: add, category: preference, content: "User wants student handouts kept to one page"}
+
+  - id: s04
+    date: 2026-01-26T22:10
+    turns:
+      - user: "I just finished The Left Hand of Darkness and loved it. More like that?"
+        assistant: "Try The Dispossessed, A Memory Called Empire, and Ancillary Justice."
+        extract:
+          - {op: add, category: preference, content: "User loves thoughtful science fiction like Ursula K. Le Guin's The Left Hand of Darkness"}
+      - user: "Please never recommend horror, I can't do it."
+        assistant: "No horror, ever."
+        extract:
+          - {op: add, category: preference, content: "User never wants horror recommendations"}
+      - user: "I read mostly ebooks from the library app."
+        assistant: "I'll favour titles likely to be on library apps."
+        extract:
+          - {op: add, category: preference, content: "User reads ebooks from the library app"}
+
+  - id: s05
+    date: 2026-02-02T18:30
+    turns:
+      - user: "Jamie and I are going to Oaxaca in July, so I'm learning Spanish on weekends."
+        assistant: "¡Qué bien! Want a weekend study plan aimed at travel Spanish?"
+        extract:
+          - {op: add, category: fact, content: "User is learning Spanish on weekends for a trip to Oaxaca with Jamie in July"}
+      - user: "Yes, and give vocab with pronunciation, I learn by ear."
+        assistant: "Vocab lists with pronunciation from now on."
+        extract:
+          - {op: add, category: preference, content: "User wants Spanish vocabulary with pronunciation; learns by ear"}
+      - user: "Start with food and ordering at markets."
+        assistant: "Mercado basics: ¿Cuánto cuesta? (KWAN-toh KWES-tah), un kilo de (oon KEE-loh deh)..."
+
+  - id: s06
+    date: 2026-02-09T17:45
+    turns:
+      - user: "I'm lactose intolerant but I love really spicy food. Dinner ideas for this week?"
+        assistant: "Spicy, dairy-free: chili-garlic tofu, birria-style beans, Szechuan green beans, Thai larb."
+        extract:
+          - {op: add, category: preference, content: "User is lactose intolerant and loves very spicy food"}
+      - user: "We have a slow cooker and I prep on Sundays."
+        assistant: "Slow-cooker Sunday prep: big batch of chipotle black beans and a curry."
+        extract:
+          - {op: add, category: fact, content: "User has a slow cooker and meal-preps on Sundays"}
+      - user: "Pepper keeps stealing food off the counter, any tips?"
+        assistant: "Clear counters, a cat tree near the kitchen, and a deterrent mat."
+
+  - id: s07
+    date: 2026-02-16T21:30
+    turns:
+      - user: "I'm saving for a used car and can put away 400 dollars a month."
+        assistant: "At $400 a month you'd have about $4,800 in a year. Want a budget sheet?"
+        extract:
+          - {op: add, category: fact, content: "User is saving for a used car, putting away $400 a month"}
+      - user: "Yes, and please never suggest crypto, not interested."
+        assistant: "No crypto. A high-interest savings account fits this goal."
+        extract:
+          - {op: add, category: preference, content: "User never wants crypto suggestions"}
+      - user: "My bank is a credit union, if that matters."
+        assistant: "Credit unions often have good savings rates; worth checking theirs."
+        extract:
+          - {op: add, category: fact, content: "User banks with a credit union"}
+
+  - id: s08
+    date: 2026-02-23T20:20
+    turns:
+      - user: "Jamie's birthday is March 15. They love hiking and live jazz."
+        assistant: "Ideas: tickets to a jazz night, a guided hike, or new trail gear."
+        extract:
+          - {op: add, category: fact, content: "User's partner Jamie loves hiking and live jazz", entity: "person:jamie"}
+        remember:
+          - {fact: "Jamie's birthday is March 15", category: reminder, due_at: "2026-03-15"}
+      - user: "Jamie works night shifts, so plans have to be on a day off."
+        assistant: "I'll plan around Jamie's days off."
+        extract:
+          - {op: add, category: fact, content: "User's partner Jamie works night shifts", entity: "person:jamie"}
+      - user: "Let's keep the budget under 150 dollars."
+        assistant: "Under $150: jazz club tickets for two plus dinner."
+
+  - id: s09
+    date: 2026-03-02T18:00
+    turns:
+      - user: "I started a balcony garden, it's south-facing, growing tomatoes and basil."
+        assistant: "South-facing is ideal for both. Water deeply, pinch basil flowers."
+        extract:
+          - {op: add, category: fact, content: "User has a south-facing balcony garden with tomatoes and basil"}
+      - user: "Pepper chews the basil, is that a problem?"
+        assistant: "Basil is non-toxic to cats; just keep tomato leaves out of reach."
+      - user: "I want to compost too but I only have the balcony."
+        assistant: "A small bokashi bin works on a balcony."
+        extract:
+          - {op: add, category: fact, content: "User wants to compost on their balcony"}
+
+  - id: s10
+    date: 2026-03-09T19:40
+    turns:
+      - user: "I'm coordinating the school chemistry fair on April 20 this year."
+        assistant: "Big job! Want a planning timeline?"
+        extract:
+          - {op: add, category: reminder, content: "User is coordinating the school chemistry fair on April 20", due_at: "2026-04-20"}
+      - user: "Yes, backwards from April 20 with judging rubrics due April 6."
+        assistant: "Timeline: rubrics April 6, project approvals March 23, setup April 19."
+        extract:
+          - {op: add, category: reminder, content: "Chemistry fair judging rubrics due April 6", due_at: "2026-04-06"}
+      - user: "Also I started a podcast called Reaction Time about chemistry for teens."
+        assistant: "Great name. Want episode ideas tied to the curriculum?"
+        extract:
+          - {op: add, category: fact, content: "User hosts a podcast called Reaction Time about chemistry for teens"}
+
+  - id: s11
+    date: 2026-03-23T20:45
+    turns:
+      - user: "Physio says my shoulder has fully healed, overhead pressing is fine again."
+        assistant: "Great news! Overhead work can come back gradually."
+        extract:
+          - {op: update, update_of: "sore left shoulder", category: fact, content: "User's left shoulder has healed; overhead pressing is fine again"}
+      - user: "I finally sent my first V5 last night!"
+        assistant: "Congratulations on the V5!"
+        extract:
+          - {op: update, update_of: "working toward a first V5", category: fact, content: "User boulders twice a week at Seaside Bouldering and sent their first V5 in March 2026"}
+      - user: "Next goal is V6 by summer."
+        assistant: "V6 by summer: add limit bouldering and more board sessions."
+        extract:
+          - {op: add, category: fact, content: "User's climbing goal is a V6 by summer"}
+
+consolidation:
+  s02:
+    summary: "Alex boulders at Seaside Bouldering, working on a V5, and has a sore shoulder."
+    knowledge:
+      - {category: fact, content: "User has a sore left shoulder and must avoid overhead pressing"}
+  s04:
+    summary: "Alex loved The Left Hand of Darkness, wants similar books, never horror."
+    knowledge: []
+  s06:
+    summary: "Alex is lactose intolerant, loves spicy food and preps in a slow cooker on Sundays."
+    knowledge: []
+  s07:
+    summary: "Alex is saving $400 a month for a used car and wants no crypto."
+    knowledge: []
+  s08:
+    summary: "Alex planned a birthday for Jamie, who loves hiking and jazz."
+    knowledge: []
+
+probes:
+  - id: book_rec
+    at: end
+    kind: scale
+    query: "Recommend me a book for the weekend."
+    seen: [[Left Hand of Darkness, Le Guin, science fiction]]
+    mentions: [[science fiction, sci-fi, Le Guin]]
+    avoids: [horror]
+
+  - id: partner_plan
+    at: end
+    kind: scale
+    query: "Plan a fun day out with my partner."
+    seen: [Jamie, [hiking, jazz]]
+    mentions: [[hiking, jazz, hike]]
+
+  - id: dinner
+    at: end
+    kind: scale
+    query: "What should I make for dinner tonight?"
+    seen: [[lactose, spicy]]
+    avoids: [cheese, cream sauce]
+
+  - id: spanish
+    at: end
+    kind: scale
+    query: "Give me ten new words to practise this weekend."
+    seen: [Oaxaca, pronunciation]
+
+  - id: workout_after_healing
+    at: end
+    kind: changed_fact
+    query: "Plan my climbing training for this week."
+    seen: [healed, V6]
+    unseen: ["must avoid overhead pressing"]
+
+  - id: lesson_plan
+    at: end
+    kind: scale
+    query: "Write a lesson plan for limiting reagents."
+    seen: [lab safety, one page]
+
+  - id: garden
+    at: end
+    kind: scale
+    query: "My plants are drooping, help?"
+    seen: [[tomatoes, basil, balcony]]
+
+  - id: money
+    at: end
+    kind: scale
+    query: "Where should I put my savings this month?"
+    seen: [[used car, $400]]
+    avoids: [crypto, bitcoin]
+
+  - id: fair_deadline
+    at: s10
+    kind: reminder
+    query: "What's on my plate this month?"
+    seen: [chemistry fair]

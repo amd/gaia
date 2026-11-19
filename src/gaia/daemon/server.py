@@ -15,9 +15,11 @@ file is never clobbered).
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets
 import socket
+import sys
 import time
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -90,7 +92,9 @@ def _load_extra_specs() -> dict:
     return specs
 
 
-def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=None):
+def _build_registry(
+    specs, forwarder, *, custody_auth=None, custody_base_url=None, keychain_auth=None
+):
     """The daemon's sidecar registry, wired to the crash-reap ledger and the
     OAuth forward-out on-spawn push (#2154).
 
@@ -127,6 +131,7 @@ def _build_registry(specs, forwarder, *, custody_auth=None, custody_base_url=Non
         on_started=_on_started,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
+        keychain_auth=keychain_auth,
     )
 
 
@@ -142,7 +147,10 @@ def _build_clock(
     oversight — reconciling jobs before an executor exists would permanently
     fail-mark every one of them on first fire.
     """
-    return DaemonClock(db_path, executors=executors or {})
+    from gaia.automations.daemon_tick import AutomationsTick
+
+    # GAIA automations keep their own store; the clock only gives them a pass.
+    return DaemonClock(db_path, executors=executors or {}, on_pass=[AutomationsTick()])
 
 
 def _build_register(
@@ -181,9 +189,17 @@ def _build_register(
         killed = ledger.reap_stale(specs)
         if killed:
             logger.info("daemon: reaped stale sidecar pids %s", killed)
+        from gaia import version
+
         write_instance(
             DaemonInstance(
-                pid=pid, port=port, token=token, host=host, started_at=started_at
+                pid=pid,
+                port=port,
+                token=token,
+                host=host,
+                started_at=started_at,
+                gaia_version=version.__version__,
+                version_file=os.path.abspath(version.__file__),
             )
         )
         try:
@@ -251,28 +267,58 @@ def _build_deregister(
     return _deregister
 
 
+def _keychain_auth():
+    """The /host/v1/keychain credential store, or ``None`` off macOS.
+
+    Only macOS ties keychain approval to the build asking; elsewhere the
+    sidecar keeps reading the OS store itself and the routes are not mounted.
+    """
+    if sys.platform != "darwin":
+        return None
+    from gaia.daemon.custody.auth import CustodyAuth
+
+    return CustodyAuth()
+
+
 def run(host: str = HOST) -> None:
     """Start the daemon and serve until shutdown. Blocks."""
+    from gaia.logger import configure
+
+    configure()
     import uvicorn
 
+    from gaia.login_path import apply_login_path
     from gaia.tls import use_os_trust_store
 
     use_os_trust_store()
+    apply_login_path()
 
     from gaia.daemon.custody.auth import CustodyAuth
     from gaia.daemon.custody.store import CustodyStore
-    from gaia.daemon.lifetime import LifetimeWatch, exit_with_pid_from_env
+    from gaia.daemon.lifetime import (
+        DaemonIdle,
+        LifetimeWatch,
+        app_path_from_env,
+        exit_with_pid_from_env,
+        idle_exit_seconds_from_env,
+    )
     from gaia.daemon.migrate import run_migrations
     from gaia.daemon.paths import custody_db_path, scheduler_db_path
+    from gaia.daemon.retired_agents import clean_up_retired_agents
     from gaia.daemon.sidecars.spec import builtin_specs
 
     exit_with_pid = exit_with_pid_from_env()
+    app_path = app_path_from_env()
+    idle_limit = idle_exit_seconds_from_env()
 
     # One-time versioned state migration (§0.10 step 0). Runs before the port is
     # bound so a corrupt/unknown-newer custody schema refuses loudly (MigrationError
     # propagates and the daemon exits) rather than serving over ambiguous state.
     result = run_migrations()
     logger.info("daemon: custody schema %s", result)
+    # An upgrade from a GAIA that shipped a since-retired agent leaves its
+    # binary behind with nothing to supervise it.
+    clean_up_retired_agents()
 
     port = _find_free_port(host)
     token = secrets.token_urlsafe(32)
@@ -287,6 +333,7 @@ def run(host: str = HOST) -> None:
     # callback URL is the daemon's own loopback address.
     custody_store = CustodyStore(custody_db_path())
     custody_auth = CustodyAuth()
+    keychain_auth = _keychain_auth()
     custody_base_url = f"http://{host}:{port}"
 
     specs = {**builtin_specs(), **_load_extra_specs()}
@@ -296,6 +343,7 @@ def run(host: str = HOST) -> None:
         forwarder,
         custody_auth=custody_auth,
         custody_base_url=custody_base_url,
+        keychain_auth=keychain_auth,
     )
 
     from gaia.daemon.forward_refresh import ForwardRefresher
@@ -332,9 +380,15 @@ def run(host: str = HOST) -> None:
     # The front ends using it: unload its models when the last app closes, and
     # stop it after the configured idle time with nobody connected.
     from gaia.daemon.lemonade_clients import LemonadeClients
+    from gaia.daemon.relay import RelayTurns
 
+    relay_turns = RelayTurns()
+    # An idle sidecar does not hold the models; a turn relayed to one does.
     lemonade_clients = LemonadeClients(
-        lemonade_owner, busy=lambda: bool(registry.running_connections())
+        lemonade_owner,
+        busy=lambda: relay_turns.count > 0,
+        agent_pids=registry.process_ids,
+        stop_agents=registry.stop_idle,
     )
 
     # The machine's model server. The daemon owns the process: front-ends ask
@@ -350,9 +404,31 @@ def run(host: str = HOST) -> None:
     def _exit_on_own(_reason: str) -> None:
         server.should_exit = True
 
+    def _slots_idle() -> Optional[float]:
+        slots = broker.snapshot()
+        if slots["active"] is not None or slots["waiting"]:
+            return None
+        ago = slots["last_activity_s_ago"]
+        return math.inf if ago is None else ago
+
+    idle = DaemonIdle(
+        clients_idle=lambda: lemonade_clients.snapshot()["idle_seconds"],
+        slots_idle=_slots_idle,
+        jobs_pending=lambda: bool(clock.job_counts()["pending"]),
+        limit=idle_limit,
+    )
+
     # Exit once nothing can find this daemon (its home or instance.json is
-    # gone) or the GAIA_DAEMON_EXIT_WITH_PID process has exited.
-    lifetime = LifetimeWatch(_exit_on_own, exit_with_pid=exit_with_pid)
+    # gone), the GAIA_DAEMON_EXIT_WITH_PID process has exited, the app that
+    # started it was deleted, or, outside the default home, nothing has used it
+    # for the idle limit.
+    lifetime = LifetimeWatch(
+        _exit_on_own,
+        exit_with_pid=exit_with_pid,
+        idle=idle,
+        idle_limit=idle_limit,
+        app_path=app_path,
+    )
 
     _register = _build_register(
         specs=specs,
@@ -391,10 +467,12 @@ def run(host: str = HOST) -> None:
         broker=broker,
         custody_auth=custody_auth,
         custody_store=custody_store,
+        keychain_auth=keychain_auth,
         clock=clock,
         lemonade=lemonade,
         lemonade_owner=lemonade_owner,
         lemonade_clients=lemonade_clients,
+        relay_turns=relay_turns,
     )
 
     config = uvicorn.Config(

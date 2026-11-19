@@ -11,7 +11,7 @@
     └ msa_acme.docx, nda_beta.docx,…
   ● Extract clause terms in… · 4.0s
     └ Run a 6-line Python script
-    └ ✗ failed: KeyError: 'Term'
+    └ error: KeyError: 'Term'
 
 
 

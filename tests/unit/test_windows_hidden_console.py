@@ -9,7 +9,6 @@ which its children inherit — and never ``DETACHED_PROCESS``.
 """
 
 import ast
-import asyncio
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -120,9 +119,9 @@ def test_sidecar_gets_a_hidden_console(on_windows, spawned, tmp_path, monkeypatc
     from gaia.daemon.sidecars.spec import builtin_specs
 
     # Dev mode delivers the secret by file, so no installed binary is needed.
-    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    monkeypatch.setenv("GAIA_GAIA_AGENT_MODE", "dev")
     m = mgr.AgentSidecarManager(
-        builtin_specs()["email"], cache_dir=tmp_path, log_dir=tmp_path / "logs"
+        builtin_specs()["gaia"], cache_dir=tmp_path, log_dir=tmp_path / "logs"
     )
     with pytest.raises(SidecarSpawnError):
         m._spawn_process(["sidecar"], {}, 9127)
@@ -144,7 +143,7 @@ def test_supervised_lemonade_gets_a_hidden_console(on_windows, spawned, tmp_path
 def test_mcp_stdio_server_gets_a_hidden_console(on_windows, spawned):
     from gaia.mcp.client.transports.stdio import StdioTransport
 
-    assert StdioTransport(command="npx", args=["-y", "server"]).connect() is False
+    assert StdioTransport(command="mcp-server", args=["--stdio"]).connect() is False
     _assert_hidden(spawned[0], group=False)
 
 
@@ -170,30 +169,14 @@ def test_setup_run_gets_a_hidden_console(on_windows, spawned):
     from gaia.ui.setup_runner import SetupError, SetupRunner
 
     with pytest.raises(SetupError):
-        SetupRunner().start(skip_chat_model=True)
-    _assert_hidden(spawned[0], group=False)
-
-
-def test_agent_ui_mcp_server_gets_a_hidden_console(on_windows, spawned, monkeypatch):
-    pytest.importorskip("fastapi")
-    from fastapi import HTTPException
-
-    from gaia.ui.routers import mcp as router
-
-    async def port_free(_port):
-        return False
-
-    monkeypatch.setattr(router, "_probe_mcp_port", port_free)
-    monkeypatch.setattr(router, "_agent_mcp_process", None)
-    with pytest.raises(HTTPException):
-        asyncio.run(router.start_agent_mcp_server())
+        SetupRunner().start(skip_chat_model=True, chat_model_for=lambda run: "")
     _assert_hidden(spawned[0], group=False)
 
 
 # -- every spawn in the background paths carries a helper --------------------
 
 _HELPERS = {"windows_hidden_popen_kwargs", "background_popen_kwargs"}
-_SPAWNS = {"Popen", "run", "check_output", "call", "check_call"}
+_SPAWNS = {"Popen", "run", "check_output", "call", "check_call", "popen_outliving_job"}
 
 # Modules whose spawns can run under a console-less parent (the daemon, the
 # Agent UI backend, a sidecar). A spawn meant to be seen opts out explicitly.
@@ -205,7 +188,6 @@ _GUARDED = [
     "llm/lemonade_embedded.py",
     "llm/lemonade_supervisor.py",
     "mcp/client/transports/stdio.py",
-    "ui/routers/mcp.py",
     "ui/setup_runner.py",
     "ui/tunnel.py",
 ]

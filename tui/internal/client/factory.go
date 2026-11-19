@@ -10,6 +10,10 @@ import (
 
 // ForAgentOptions configures the transport built by ForAgent.
 type ForAgentOptions struct {
+	// Dev is developer mode (the TUI's --dev). It turns on the subprocess
+	// transport's stderr diagnostics and appends the agent's DevArgs to its
+	// argv, so the child logs verbosely too.
+	Dev bool
 	// Model / MaxSteps override the sidecar defaults on the daemon transport.
 	// Ignored by the subprocess transport, which takes its model via BinaryArgs.
 	Model    string
@@ -37,7 +41,24 @@ type ForAgentOptions struct {
 	// transports: the flagship's is chosen by install state, so tracing only
 	// one of them would leave --trace silently recording nothing.
 	Trace *event.TraceWriter
+	// HistoryFile is the flagship session transcript to open (or reopen), and
+	// SessionKind asks the agent to keep a listing of it beside the file — what
+	// /sessions and --resume read (see sessionstore). Subprocess flagship only.
+	// A file with no kind is kept but not listed.
+	HistoryFile string
+	SessionKind string
 }
+
+// Flags the flagship's stdio child takes for a listed session. Must match
+// gaia_agent.stdio's parser; pinned by tests/fixtures/stdio/gaia_stdio_wire.json.
+const (
+	HistoryFileFlag = "--history-file"
+	SessionKindFlag = "--session-kind"
+)
+
+// HistoryFileEnv pins the flagship's transcript to one file for every launch
+// (gaia_agent.stdio reads the same variable as --history-file's default).
+const HistoryFileEnv = "GAIA_HISTORY_FILE"
 
 // FullAccessFlag is the argument that starts a subprocess agent with
 // prompts off. Must match the flag gaia_agent.stdio's parser declares, and
@@ -80,13 +101,22 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 				"or drop --claude-model", opts.ClaudeModel)
 	}
 
+	if opts.SessionKind != "" && opts.HistoryFile == "" {
+		return nil, fmt.Errorf("session kind %q was set with no history file: the listing lives beside it",
+			opts.SessionKind)
+	}
+	if opts.HistoryFile != "" && (agent.ID != catalog.FlagshipID || agent.Transport != catalog.TransportSubprocess) {
+		return nil, fmt.Errorf("agent %q cannot keep a resumable session: only the built-in GAIA "+
+			"agent the TUI starts itself writes one", agent.ID)
+	}
+
 	switch agent.Transport {
 	case catalog.TransportDaemon:
 		if opts.UseClaude {
 			return nil, fmt.Errorf(
 				"agent %q runs over the daemon transport, which cannot switch inference "+
 					"backends — --use-claude only works for an agent the TUI spawns itself. "+
-					"Drop the flag, or run the flagship (`gaia tui`), which is one",
+					"Drop the flag, or run the flagship (`gaia-cli`), which is one",
 				agent.ID)
 		}
 		return NewSSEClient(agent.ID, daemon.New(daemon.Options{Logf: opts.Logf}), SSEOptions{
@@ -111,12 +141,10 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		}
 		// Appended, never mutated in place: BinaryArgs belongs to the catalog
 		// entry, and appending to it directly would let a full slice alias the
-		// catalog's backing array and leak one launch's flags into the next.
-		//
-		// A traced launch is the debugging one, so it also puts the child's own
-		// log at DEBUG. The screen is the same either way.
+		// catalog's backing array and leak --dev into the next launch. A traced
+		// launch is a debugging one too, so it gets the agent's DEBUG log.
 		args := agent.BinaryArgs
-		if opts.Trace != nil && len(agent.DevArgs) > 0 {
+		if (opts.Dev || opts.Trace != nil) && len(agent.DevArgs) > 0 {
 			args = append(append([]string{}, args...), agent.DevArgs...)
 		}
 		if opts.FullAccess {
@@ -135,10 +163,16 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			}
 			args = append(append([]string{}, args...), "--model", opts.Model)
 		}
-		if agent.CanonicalEvents {
-			return NewCanonicalSubprocessClient(bin, args).WithTrace(opts.Trace), nil
+		if opts.HistoryFile != "" {
+			args = append(append([]string{}, args...), HistoryFileFlag, opts.HistoryFile)
 		}
-		return NewSubprocessClient(bin, args).WithTrace(opts.Trace), nil
+		if opts.SessionKind != "" {
+			args = append(args, SessionKindFlag, opts.SessionKind)
+		}
+		if agent.CanonicalEvents {
+			return NewCanonicalSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf), nil
+		}
+		return NewSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf), nil
 
 	default:
 		return nil, fmt.Errorf(

@@ -23,6 +23,7 @@ Examples:
 """
 
 from pathlib import Path
+from typing import List
 
 from gaia import Agent, tool
 
@@ -68,7 +69,7 @@ Use the generate_landing_page tool to create mockups."""
 
         @tool
         def generate_landing_page(
-            product_name: str, description: str, features: list
+            product_name: str, description: str, features: List[str]
         ) -> dict:
             """Generate an HTML landing page mockup for a product.
 

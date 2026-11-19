@@ -1,0 +1,120 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Publish the first-party skills under hub/skills/ to the Agent Hub's skills lane
+# on every final release, signed with the AMD key GAIA trusts out of the box
+# (BUILTIN_TRUSTED_KEYS in src/gaia/skills/signing.py). util/publish_skills.py
+# skips versions already on the hub and fails on a skill that changed without a
+# version bump, so a re-run is safe.
+#
+# Dispatch by hand to publish between releases; dry_run (the default) runs every
+# gate and uploads nothing.
+
+name: Publish Hub Skills
+
+on:
+  push:
+    # Not for a release candidate: hub versions are immutable and the catalog
+    # has no pre-release channel.
+    tags:
+      - 'v*'
+      - '!v*-rc*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run every gate without publishing'
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish skills
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      dry_run: ${{ steps.mode.outputs.dry_run }}
+    # agent-publish holds GAIA_HUB_TOKEN and GAIA_SKILL_SIGNING_KEY, requires a
+    # reviewer, and only admits main / v* refs. A dry run takes no environment, so
+    # it gets no secrets and runs from any branch.
+    environment: ${{ (github.event_name == 'push' || github.event.inputs.dry_run == 'false') && 'agent-publish' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ github.event.inputs.dry_run }}" = "false" ]; then
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install GAIA
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv pip install --system -e .
+
+      - name: Install the AMD skill signing key
+        if: steps.mode.outputs.dry_run == 'false'
+        env:
+          GAIA_SKILL_SIGNING_KEY: ${{ secrets.GAIA_SKILL_SIGNING_KEY }}
+          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          for name in GAIA_SKILL_SIGNING_KEY GAIA_HUB_TOKEN GAIA_HUB_PUBLISH_URL; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::${name} is not set on the agent-publish environment (GAIA_HUB_PUBLISH_URL is a variable, the others secrets). See util/publish_skills.py."
+              exit 1
+            fi
+          done
+          umask 077
+          mkdir -p ~/.gaia/skills/keys
+          printf '%s\n' "${GAIA_SKILL_SIGNING_KEY}" > ~/.gaia/skills/keys/amd-skills.key
+
+      # The dry run cannot read the real key, so it signs with a throwaway one;
+      # publish_skills.py only demands the AMD key when it will upload.
+      - name: Generate a throwaway signing key (dry run)
+        if: steps.mode.outputs.dry_run == 'true'
+        run: gaia skill keygen --key-name amd-skills
+
+      - name: Publish skills
+        env:
+          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.mode.outputs.dry_run }}" = "true" ]; then
+            python util/publish_skills.py --dry-run
+          else
+            python util/publish_skills.py --hub-url "${GAIA_HUB_PUBLISH_URL}"
+          fi
+
+  # The website's /hub page reads the catalog at build time.
+  redeploy-website:
+    name: Redeploy website
+    needs: publish
+    if: |
+      !cancelled()
+      && needs.publish.result == 'success'
+      && needs.publish.outputs.dry_run == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
+          echo "✓ requested website redeploy (deploy_website.yml on main)"

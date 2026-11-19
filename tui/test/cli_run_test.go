@@ -3,8 +3,8 @@ package test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"github.com/amd/gaia/tui/internal/control"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/ui"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 )
@@ -42,12 +43,26 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	// A developer's own Local only must not change what these tests send.
+	os.Setenv("GAIA_POLICY_FILE", filepath.Join(os.TempDir(), "gaia-cli-test-no-policy.json"))
 	// A gate that finds Lemonade down must report it, not start the
 	// developer's real server under an isolated HOME and leave it running.
 	restore := preflight.StubLemonadeAutoStartForTest(
 		func(context.Context) (bool, string, string) { return false, "", "" })
+	// Clients built with no StartCommand must not spawn a real daemon and
+	// leave it running; tests that need one pass their own launcher.
+	restoreDaemon := daemon.StubDefaultStartForTest(func(context.Context) (*exec.Cmd, error) {
+		return nil, errors.New("test: no daemon")
+	})
+	daemonHome, err := os.MkdirTemp("", "gaia-cli-test-daemon-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv(daemon.EnvHome, daemonHome)
 	code := m.Run()
 	restore()
+	restoreDaemon()
+	_ = os.RemoveAll(daemonHome)
 	if builtDir != "" {
 		_ = os.RemoveAll(builtDir)
 	}
@@ -61,7 +76,7 @@ func buildBinaries(t *testing.T) (gaiaBin, binDir string) {
 	}
 
 	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "gaia-tui-build")
+		dir, err := os.MkdirTemp("", "gaia-cli-build")
 		if err != nil {
 			buildErr = err
 			return
@@ -72,7 +87,7 @@ func buildBinaries(t *testing.T) (gaiaBin, binDir string) {
 		if runtime.GOOS == "windows" {
 			suffix = ".exe"
 		}
-		builtBin = filepath.Join(dir, "gaia-tui"+suffix)
+		builtBin = filepath.Join(dir, "gaia-cli"+suffix)
 		mockBin := filepath.Join(dir, "gaia-agent"+suffix)
 
 		root, rerr := os.Getwd()
@@ -177,7 +192,7 @@ func TestRunQueryIsAGenuineOneShot(t *testing.T) {
 	}
 }
 
-// A tool's own error carries the remedy its author wrote — for the mailbox it
+// A tool's own error carries the remedy its author wrote — for a mailbox it
 // is a `gaia connectors connect …` line explicitly marked "no Agent UI
 // required". Relayed through the model it came back as "use Settings →
 // Connections in the Agent UI", a GUI a terminal user cannot reach. It has to
@@ -192,7 +207,7 @@ func TestFailedToolRemedyReachesStderrVerbatim(t *testing.T) {
 	cmd.Stderr = &stderr
 	_ = cmd.Run()
 
-	const remedy = "`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:email`"
+	const remedy = "`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:gaia`"
 	if !strings.Contains(stderr.String(), remedy) {
 		t.Errorf("the tool's remedy did not reach stderr:\n%s", stderr.String())
 	}
@@ -209,35 +224,34 @@ func TestFailedToolRemedyReachesStderrVerbatim(t *testing.T) {
 	}
 }
 
-// --dev (and its old name --debug) only turns on the control API, which a
-// one-shot has no use for — so it changes nothing about a one-shot's output.
-// Diagnostics go to the session log, where they are there for every run.
-func TestDebugChangesNothingOnTheOneShotPath(t *testing.T) {
+// --debug is documented as "enable debug logging to stderr" and produced output
+// byte-identical to a run without it on the one-shot path — the path it is most
+// needed on.
+func TestDebugAddsDiagnosticsToTheOneShotPath(t *testing.T) {
 	gaiaBin, binDir := buildBinaries(t)
 
-	run := func(args ...string) (stderr, sessionLog string) {
-		home := t.TempDir()
+	run := func(args ...string) string {
 		cmd := exec.Command(gaiaBin, args...)
-		cmd.Env = append(oneShotEnv(t, binDir), control.EnvHome+"="+home)
-		var errBuf bytes.Buffer
-		cmd.Stderr = &errBuf
+		cmd.Env = oneShotEnv(t, binDir)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
 		_ = cmd.Run()
-		raw, _ := os.ReadFile(filepath.Join(home, control.LogFileName))
-		return errBuf.String(), string(raw)
+		return stderr.String()
 	}
 
 	mock := filepath.Join(binDir, mockName())
-	quiet, quietLog := run("run", "gaia", "--mock", mock, "--query", "list the files")
-	loud, loudLog := run("run", "gaia", "--mock", mock, "--query", "list the files", "--debug")
+	quiet := run("run", "gaia", "--mock", mock, "--query", "list the files")
+	loud := run("run", "gaia", "--mock", mock, "--query", "list the files", "--debug")
 
-	for name, out := range map[string]string{"plain": quiet, "--debug": loud} {
-		if strings.Contains(out, "[DEBUG]") {
-			t.Errorf("%s run wrote diagnostics to the terminal:\n%s", name, out)
-		}
+	if !strings.Contains(loud, "[DEBUG]") {
+		t.Fatalf("--debug produced no diagnostics on the one-shot path:\n%s", loud)
 	}
-	for name, log := range map[string]string{"plain": quietLog, "--debug": loudLog} {
-		if !strings.Contains(log, "one-shot: agent=gaia") {
-			t.Errorf("%s run left no diagnostics in the session log:\n%s", name, log)
+	if len(loud) <= len(quiet) {
+		t.Errorf("--debug output is no richer than the plain run:\n%s", loud)
+	}
+	for _, want := range []string{"one-shot: agent=gaia", "tool_result"} {
+		if !strings.Contains(loud, want) {
+			t.Errorf("--debug output is missing %q:\n%s", want, loud)
 		}
 	}
 }
@@ -276,7 +290,7 @@ func TestUnknownAgentErrorNamesTheIdsThatExist(t *testing.T) {
 	}
 
 	text := stderr.String()
-	if !strings.Contains(text, "gaia") || !strings.Contains(text, "email") {
+	if !strings.Contains(text, "Known ids: gaia") {
 		t.Errorf("the error does not name the ids that do exist:\n%s", text)
 	}
 	// The old text pointed at a browser to go find one in.
@@ -352,19 +366,19 @@ func TestTheShippedSubcommandsExist(t *testing.T) {
 
 	out, err := exec.Command(gaiaBin, "--help").CombinedOutput()
 	if err != nil {
-		t.Fatalf("gaia-tui --help: %v\n%s", err, out)
+		t.Fatalf("gaia-cli --help: %v\n%s", err, out)
 	}
 	commands := commandNames(t, string(out))
 	for _, want := range []string{"run", "status", "chat"} {
 		if !commands[want] {
-			t.Errorf("`gaia-tui --help` does not list the %q subcommand:\n%s", want, out)
+			t.Errorf("`gaia-cli --help` does not list the %q subcommand:\n%s", want, out)
 		}
 	}
 	// Matched as a COMMAND, not as a substring: `status`'s own summary says
 	// "what is installed", and a bare Contains("install") hits that.
 	for _, gone := range []string{"list", "install", "uninstall", "hub"} {
 		if commands[gone] {
-			t.Errorf("`gaia-tui --help` still offers the %q subcommand, which is gone:\n%s", gone, out)
+			t.Errorf("`gaia-cli --help` still offers the %q subcommand, which is gone:\n%s", gone, out)
 		}
 	}
 }

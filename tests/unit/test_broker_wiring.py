@@ -91,7 +91,9 @@ class _LocalBroker:
         monkeypatch.setattr(broker_client, "acquire_lease", self._acquire)
         monkeypatch.setattr(broker_client, "release_lease", self._release)
 
-    def _acquire(self, model, *, priority=None, timeout=None, request_timeout=310.0):
+    def _acquire(
+        self, model, *, priority=None, timeout=None, request_timeout=310.0, **_kw
+    ):
         prio = priority or "background"
         self.acquired.append((model, prio))
         lease = self.broker.acquire(model, priority=prio, holder="host")
@@ -335,6 +337,21 @@ def test_nested_lease_for_a_different_model_is_loud(monkeypatch):
         with pytest.raises(broker_client.BrokerUnavailableError, match="model-a"):
             with broker_client.model_lease("model-b"):
                 pass
+
+
+def test_nested_lease_for_the_same_model_under_its_user_name_folds(monkeypatch):
+    """A custom model is leased as user.X by one path and as X by another.
+
+    Lemonade lists a registered user.X model as X, so the two names are one
+    model and the inner lease must fold, not raise.
+    """
+    local = _LocalBroker(monkeypatch)
+
+    with broker_client.model_lease("Qwen3-0.6B-Q8_0-GGUF"):
+        with broker_client.model_lease("user.Qwen3-0.6B-Q8_0-GGUF") as inner:
+            assert inner is None
+
+    assert len(local.acquired) == 1
 
 
 def test_outer_lease_plus_load_model_acquires_once(monkeypatch):
@@ -647,6 +664,8 @@ def test_streaming_lease_is_held_through_a_retried_attempt(monkeypatch, first_at
     observed: List[Tuple[str, bool]] = []
     during_backoff: List[bool] = []
     client._retry_sleep = lambda s: during_backoff.append(broker_client.holding_lease())
+    # The server is up; only this one attempt's connection failed.
+    client._server_accepts_connections = lambda: True
     stall = _Stalls(observed)
     first = stall if first_attempt == "stall" else _RefusesConnection()
     _install_fake_openai(monkeypatch, [first, _Yields(observed)])
@@ -723,7 +742,7 @@ def test_streaming_lease_is_released_after_stop_during_a_stall(monkeypatch):
 
 
 def test_streaming_lease_is_released_when_the_consumer_stops_reading(monkeypatch):
-    """Closing the stream after the first chunk (UI Stop) frees the slot."""
+    """Closing a non-NPU stream after the first chunk frees the slot."""
     local = _LocalBroker(monkeypatch)
     client = _streaming_client(monkeypatch)
     observed: List[Tuple[str, bool]] = []
@@ -737,6 +756,50 @@ def test_streaming_lease_is_released_when_the_consumer_stops_reading(monkeypatch
     assert observed[0] == ("chunk", True)
     assert len(local.acquired) == 1 and len(local.released) == 1
     assert not broker_client.holding_lease()
+
+
+def test_npu_stream_keeps_the_cross_process_lease_until_its_drain_ends(monkeypatch):
+    """A second process must not obtain the slot while a stopped NPU reply drains."""
+    local = _LocalBroker(monkeypatch)
+    client = _streaming_client(monkeypatch)
+    model = "gemma4-it-e4b-FLM"
+    draining = threading.Event()
+    finish = threading.Event()
+    ended = threading.Event()
+    observed: List[Tuple[str, bool]] = []
+
+    class _Drains:
+        def __iter__(self):
+            observed.append(("first", broker_client.holding_lease()))
+            yield _Chunk()
+            draining.set()
+            finish.wait(5)
+            observed.append(("end", broker_client.holding_lease()))
+            ended.set()
+
+    _install_fake_openai(monkeypatch, [_Drains()])
+    gen = _stream(client, model=model)
+    next(gen)
+    gen.close()
+    assert draining.wait(5)
+    assert not local.released, "the lease escaped while the NPU reply was draining"
+
+    granted = threading.Event()
+
+    def other_process() -> None:
+        with broker_client.model_lease("other-model"):
+            granted.set()
+
+    waiter = threading.Thread(target=other_process, daemon=True)
+    waiter.start()
+    assert not granted.wait(0.3), "another process acquired during the drain"
+    finish.set()
+    assert ended.wait(5)
+    waiter.join(5)
+
+    assert granted.is_set()
+    assert observed == [("first", True), ("end", True)]
+    assert len(local.acquired) == 2 and len(local.released) == 2
 
 
 def test_streaming_lease_is_released_after_an_exception_mid_stream(monkeypatch):
@@ -1130,7 +1193,9 @@ def test_reattaches_after_a_daemon_restart_rotates_its_token(monkeypatch):
     def _acquire(model, **kwargs):
         attempts.append(broker_client._attached)
         if len(attempts) == 1:
-            raise broker_client.BrokerUnavailableError("HTTP 401: token rotated")
+            raise broker_client.BrokerUnavailableError(
+                "HTTP 401: token rotated", status_code=401
+            )
         return {"lease_id": "L-new"}
 
     monkeypatch.setattr(broker_client, "acquire_lease", _acquire)

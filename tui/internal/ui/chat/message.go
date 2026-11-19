@@ -60,14 +60,10 @@ type Message struct {
 	Render string
 	Data   json.RawMessage
 
-	// Identity marks a RoleCard message as the ONE singular card of its
-	// kind per turn-sequence (#2743) -- today only the email pre-scan card,
-	// which can arrive from two independent sources (a typed turn's
-	// tool_result, or the on-open pre-scan fetch) that must update the SAME
-	// message in place rather than each appending its own. Empty for every
-	// other card, which always appends. Looked up by identity, not by a
-	// tracked index: `/clear` sets ChatModel.messages to nil (model.go), so
-	// a stale index would panic or silently overwrite an unrelated message.
+	// Identity marks a message updated in place rather than appended again
+	// (see setup.go). Looked up by identity, not by a tracked index: `/clear`
+	// sets ChatModel.messages to nil, so a stale index would overwrite an
+	// unrelated message.
 	Identity string
 
 	// Work is a RoleWork message's steps, as the live log held them.
@@ -95,23 +91,6 @@ func (m *Message) renderCard(w int) string {
 	m.cardCache = cards.Render(m.Render, m.Data, w)
 	m.cardCacheWidth = w
 	return m.cardCache
-}
-
-// renderCardDeduped draws the card at w like renderCard, but skips any item
-// whose message_id is already in seen and folds the ids it ends up showing
-// into seen -- so a caller drawing more than one card in a turn threads the
-// accumulated set across calls. Always recomputes rather than using the width
-// cache: this card's visible content can legitimately differ call to call as
-// seen grows while sibling cards in the same turn are drawn. seen may be nil,
-// equivalent to renderCard.
-func (m *Message) renderCardDeduped(w int, seen map[string]bool) string {
-	rendered, ids := cards.RenderDeduped(m.Render, m.Data, w, seen)
-	if seen != nil {
-		for _, id := range ids {
-			seen[id] = true
-		}
-	}
-	return rendered
 }
 
 type ActivityItem struct {
@@ -149,4 +128,11 @@ type ActivityItem struct {
 	// Repeat counts additional consecutive occurrences folded into this item by
 	// the live work log; 0 means it happened once.
 	Repeat int
+	// RetryKey is what "the same kind of call" means for a failed step that a
+	// later success can settle (see retryKey). Empty means nothing to match
+	// on, so the failure is never marked retried.
+	RetryKey string
+	// Recovery is how a failed step reads given the rest of its turn — set at
+	// render time by settleFailures, never stored. "" is a plain failure.
+	Recovery string
 }

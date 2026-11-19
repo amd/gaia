@@ -167,7 +167,7 @@ class TestGenScorecardPayload:
             mod.build_payload(empty, **_BUILD_KWARGS)
 
     def test_benchmark_scorecard_rejected(self, tmp_path):
-        # A `gaia eval benchmark` output (scenarios but no summary) must not
+        # A file with scenarios but no summary must not
         # silently build a flagship card.
         mod = _load("gen_scorecard")
         run_dir = tmp_path / "run"
@@ -370,9 +370,9 @@ class TestGenScorecardPayload:
 
 
 class TestReleaseWorkflowWiring:
-    def test_publish_job_needs_scorecard_and_eval_gates(self):
-        # Mirrors the email twin in test_scorecard_gate.py: the release cannot
-        # publish without the scorecard gate and the judged eval subset.
+    def test_publish_needs_the_scorecard_gate_but_not_the_eval(self):
+        # The scorecard gate blocks publishing; the judged eval subset only
+        # reports, so a long or broken eval never holds a release (#5172).
         import yaml
 
         workflow_path = REPO_ROOT / ".github" / "workflows" / "release_agent_gaia.yml"
@@ -383,7 +383,7 @@ class TestReleaseWorkflowWiring:
         assert (
             "scorecard-gate" in needs
         ), f"publish.needs missing scorecard-gate: {needs}"
-        assert "gaia-eval" in needs, f"publish.needs missing gaia-eval: {needs}"
+        assert "gaia-eval" not in needs, f"publish must not wait on the eval: {needs}"
 
 
 class TestPerfReport:

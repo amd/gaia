@@ -21,10 +21,9 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Literal, Optional, Sequence
+from typing import Any, Iterable, Literal, Optional
 
 from gaia.governance.schemas import DecisionType, GovernanceDecision
-from gaia.skills.format import SKILL_FILENAME, SKILL_TOOLS_FILENAME
 
 #: Engine id + version. Bumped whenever a rule change can move a verdict, so a
 #: recorded catalog entry always names the engine that produced it.
@@ -182,10 +181,6 @@ class AuditReport:
             if any(f.severity == severity for f in self.findings)
         }
 
-    def findings_by_category(self, category: str) -> tuple[Finding, ...]:
-        """Every finding in one category, in discovery order."""
-        return tuple(f for f in self.findings if f.category == category)
-
     @property
     def rule_ids(self) -> list[str]:
         """Distinct rule ids in first-seen order."""
@@ -337,8 +332,3 @@ def relative_path(path: Path, directory: Path) -> str:
         return path.relative_to(directory).as_posix()
     except ValueError:  # pragma: no cover - callers always pass a child path
         return path.name
-
-
-def declared_file_names() -> Sequence[str]:
-    """The two filenames the format itself defines (for error messages)."""
-    return (SKILL_FILENAME, SKILL_TOOLS_FILENAME)

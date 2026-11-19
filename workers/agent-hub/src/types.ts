@@ -155,6 +155,21 @@ export interface VersionEntry {
   artifacts: ArtifactInfo[];
 }
 
+/** A release channel: `stable` is what `latest_version` names, `next` adds release candidates. */
+export type Channel = "stable" | "next";
+
+export const CHANNELS: readonly Channel[] = ["stable", "next"];
+
+/**
+ * The version each channel currently resolves to. `stable` always equals
+ * `latest_version` ("" while only `next` versions exist). `next` is the newest
+ * version on either channel, so it is never behind `stable`.
+ */
+export interface Channels {
+  stable: string;
+  next: string;
+}
+
 /**
  * Per-agent manifest stored at `agents/<id>/manifest.json`. Aggregates full
  * metadata plus every published version. Source of truth for immutability.
@@ -183,7 +198,12 @@ export interface AgentManifest {
   deprecation_message?: string;
   npm_package?: string;
   playground_url?: string;
+  /** Absent on manifests written before channels existed; derive it with `channelsOf`. */
+  channels?: Channels;
+  /** Stable versions only, so a client that installs the newest entry never gets an RC. */
   versions: Record<string, VersionEntry>;
+  /** Versions published to `next` only. Absent until the first `next` publish. */
+  next_versions?: Record<string, VersionEntry>;
 }
 
 // ── Skills lane (#2467) ─────────────────────────────────────────────────────
@@ -379,6 +399,8 @@ export interface IndexEntry {
    * fetching the per-agent manifest. Absent on skill entries.
    */
   min_gaia_versions?: Record<string, string>;
+  /** The version each channel resolves to. Agent-lane entries only. */
+  channels?: Channels;
   permissions: string[];
   deprecated: boolean;
   deprecation_message?: string;
@@ -438,7 +460,7 @@ export interface PackageFile {
 
 /** The downloadable whole-package zip + its contents. */
 export interface PackageInfo {
-  /** Zip artifact filename, e.g. "agent-email-0.2.1.zip" (downloaded from the version dir). */
+  /** Zip artifact filename, e.g. "agent-gaia-0.2.1.zip" (downloaded from the version dir). */
   filename: string;
   /** Zip size in bytes; 0 if the artifact isn't found. */
   size_bytes: number;

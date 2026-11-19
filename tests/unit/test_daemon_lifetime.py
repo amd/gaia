@@ -8,11 +8,13 @@ Test runs used to leave dozens of daemons polling a deleted temp home forever.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import shutil
 import subprocess
 import sys
 import threading
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -119,6 +121,85 @@ def test_home_is_checked_before_the_tied_pid(daemon_home, dead_pid):
     assert str(daemon_home) in reason
 
 
+# -- GAIA_APP_PATH: the desktop app that started the daemon (#6682) -------------
+
+
+@pytest.fixture()
+def app_file(tmp_path):
+    app = tmp_path / "GAIA.AppImage"
+    app.write_text("app", encoding="utf-8")
+    return app
+
+
+@pytest.fixture()
+def app_bundle(tmp_path):
+    exe = tmp_path / "Applications" / "GAIA.app" / "Contents" / "MacOS" / "GAIA"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("app", encoding="utf-8")
+    return exe
+
+
+@pytest.mark.parametrize("raw", [None, "", "   "])
+def test_app_path_unset_means_no_tie(monkeypatch, raw):
+    if raw is None:
+        monkeypatch.delenv(lifetime.APP_PATH_ENV, raising=False)
+    else:
+        monkeypatch.setenv(lifetime.APP_PATH_ENV, raw)
+    assert lifetime.app_path_from_env() is None
+
+
+def test_app_path_reads_an_existing_app(monkeypatch, app_file):
+    monkeypatch.setenv(lifetime.APP_PATH_ENV, f" {app_file} ")
+    assert lifetime.app_path_from_env() == str(app_file)
+
+
+def test_a_relative_app_path_is_refused(monkeypatch, app_file):
+    monkeypatch.chdir(app_file.parent)
+    monkeypatch.setenv(lifetime.APP_PATH_ENV, app_file.name)
+    with pytest.raises(DaemonStartError, match=lifetime.APP_PATH_ENV):
+        lifetime.app_path_from_env()
+
+
+def test_an_app_already_removed_at_start_is_refused_loudly(monkeypatch, tmp_path):
+    missing = tmp_path / "Trash" / "GAIA.AppImage"
+    monkeypatch.setenv(lifetime.APP_PATH_ENV, str(missing))
+    with pytest.raises(DaemonStartError) as err:
+        lifetime.app_path_from_env()
+    assert str(missing) in str(err.value)
+    assert lifetime.APP_PATH_ENV in str(err.value)
+
+
+def test_no_reason_while_the_app_is_installed(registered, app_file):
+    assert lifetime.exit_reason(app_path=str(app_file)) is None
+
+
+def test_reason_when_the_appimage_is_deleted(registered, app_file):
+    app_file.unlink()
+    reason = lifetime.exit_reason(app_path=str(app_file))
+    assert reason is not None and str(app_file) in reason
+
+
+def test_reason_when_the_mac_app_is_moved_to_the_trash(registered, app_bundle):
+    bundle = app_bundle.parents[2]
+    trash = bundle.parent.parent / ".Trash"
+    trash.mkdir()
+    shutil.move(str(bundle), str(trash / bundle.name))
+    reason = lifetime.exit_reason(app_path=str(app_bundle))
+    assert reason is not None and str(app_bundle) in reason
+
+
+def test_a_replaced_app_at_the_same_path_keeps_the_daemon(registered, app_file):
+    # An in-place upgrade writes the new app where the old one was.
+    app_file.unlink()
+    app_file.write_text("new app", encoding="utf-8")
+    assert lifetime.exit_reason(app_path=str(app_file)) is None
+
+
+def test_home_is_checked_before_the_app(daemon_home, tmp_path):
+    reason = lifetime.exit_reason(app_path=str(tmp_path / "gone"))
+    assert str(daemon_home) in reason
+
+
 # -- LifetimeWatch ---------------------------------------------------------------
 
 
@@ -182,6 +263,26 @@ def test_watch_exits_when_the_tied_process_exits(registered):
         watch.stop()
         if proc.poll() is None:
             proc.kill()
+
+
+def test_watch_exits_when_the_app_is_removed(registered, app_file):
+    fired = threading.Event()
+    calls = []
+
+    def on_exit(reason):
+        calls.append(reason)
+        fired.set()
+
+    watch = _watch(on_exit, app_path=str(app_file))
+    watch.start()
+    try:
+        threading.Event().wait(0.1)
+        assert not fired.is_set()
+        app_file.unlink()
+        assert fired.wait(5), "the watch never noticed the app was removed"
+    finally:
+        watch.stop()
+    assert len(calls) == 1 and str(app_file) in calls[0]
 
 
 def test_watch_stop_is_safe_before_start_and_twice():
@@ -266,3 +367,176 @@ def test_deregister_stops_the_watch_first(daemon_home):
         lifetime=watch,
     )()
     assert calls[:2] == ["lifetime.stop", "clients.stop"]
+
+
+# -- idle exit outside the default home ----------------------------------------
+
+
+def test_idle_limit_defaults_to_two_hours(monkeypatch):
+    monkeypatch.delenv(lifetime.IDLE_EXIT_ENV, raising=False)
+    assert lifetime.idle_exit_seconds_from_env() == 120 * 60.0
+
+
+def test_idle_limit_reads_minutes_and_zero_turns_it_off(monkeypatch):
+    monkeypatch.setenv(lifetime.IDLE_EXIT_ENV, " 30 ")
+    assert lifetime.idle_exit_seconds_from_env() == 1800.0
+    monkeypatch.setenv(lifetime.IDLE_EXIT_ENV, "0")
+    assert lifetime.idle_exit_seconds_from_env() is None
+
+
+@pytest.mark.parametrize("raw", ["abc", "1.5", "-1"])
+def test_idle_limit_rejects_a_bad_value_loudly(monkeypatch, raw):
+    monkeypatch.setenv(lifetime.IDLE_EXIT_ENV, raw)
+    with pytest.raises(DaemonStartError, match=lifetime.IDLE_EXIT_ENV):
+        lifetime.idle_exit_seconds_from_env()
+
+
+def test_a_scratch_home_is_not_the_default(registered):
+    assert lifetime.is_default_home() is False
+
+
+def test_the_machine_home_is_the_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("GAIA_DAEMON_HOME", str(tmp_path / ".gaia" / "host"))
+    assert lifetime.is_default_home() is True
+
+
+def test_an_unused_scratch_daemon_exits_after_the_limit(registered):
+    reason = lifetime.exit_reason(idle_seconds=7200.0, idle_limit=7200.0)
+    assert reason is not None and "nothing has used it" in reason
+
+
+@pytest.mark.parametrize("idle", [None, 7199.0])
+def test_a_used_or_recently_used_daemon_stays(registered, idle):
+    assert lifetime.exit_reason(idle_seconds=idle, idle_limit=7200.0) is None
+
+
+def test_no_limit_means_no_idle_exit(registered):
+    assert lifetime.exit_reason(idle_seconds=10**9, idle_limit=None) is None
+
+
+def test_the_default_home_never_idles_out(registered, monkeypatch):
+    monkeypatch.setattr(lifetime, "is_default_home", lambda: True)
+    assert lifetime.exit_reason(idle_seconds=10**9, idle_limit=60.0) is None
+
+
+def test_the_watch_shuts_an_idle_scratch_daemon_down(registered):
+    reasons = []
+    done = threading.Event()
+
+    def on_exit(reason):
+        reasons.append(reason)
+        done.set()
+
+    watch = lifetime.LifetimeWatch(
+        on_exit, idle=lambda: 120.0, idle_limit=60.0, interval=0.05
+    )
+    watch.start()
+    try:
+        assert done.wait(5)
+    finally:
+        watch.stop()
+    assert "nothing has used it" in reasons[0]
+
+
+def test_a_failing_idle_probe_does_not_stop_the_home_checks(registered, caplog):
+    reasons = []
+    done = threading.Event()
+
+    def on_exit(reason):
+        reasons.append(reason)
+        done.set()
+
+    def broken_probe():
+        raise RuntimeError("database is locked")
+
+    watch = lifetime.LifetimeWatch(
+        on_exit, idle=broken_probe, idle_limit=60.0, interval=0.05
+    )
+    with caplog.at_level(logging.ERROR, logger="gaia.daemon.lifetime"):
+        watch.start()
+        try:
+            threading.Event().wait(0.2)
+            assert reasons == []
+            instance_mod.remove_instance()
+            assert done.wait(5), "a failing idle probe killed the lifetime watch"
+        finally:
+            watch.stop()
+    assert "instance.json" in reasons[0]
+    assert any("idle check failed" in r.getMessage() for r in caplog.records)
+
+
+# -- DaemonIdle: what counts as use --------------------------------------------
+
+
+class _Fake:
+    def __init__(self):
+        self.clients_idle = 0.0
+        self.slots_idle = math.inf
+        self.jobs_pending = False
+        self.job_reads = 0
+
+    def jobs(self):
+        self.job_reads += 1
+        return self.jobs_pending
+
+    def idle(self, limit=600.0):
+        return lifetime.DaemonIdle(
+            clients_idle=lambda: self.clients_idle,
+            slots_idle=lambda: self.slots_idle,
+            jobs_pending=self.jobs,
+            limit=limit,
+        )
+
+
+def test_a_connected_client_means_in_use():
+    fake = _Fake()
+    fake.clients_idle = None
+    assert fake.idle()() is None
+
+
+def test_a_held_or_queued_model_slot_means_in_use():
+    fake = _Fake()
+    fake.clients_idle = 10_000.0
+    fake.slots_idle = None
+    assert fake.idle()() is None
+
+
+def test_a_recent_slot_lease_keeps_the_idle_time_short():
+    fake = _Fake()
+    fake.clients_idle = 10_000.0
+    fake.slots_idle = 30.0
+    assert fake.idle()() == 30.0
+
+
+def test_a_pending_job_keeps_it_only_once_past_the_limit():
+    fake = _Fake()
+    fake.jobs_pending = True
+    fake.clients_idle = 100.0
+    assert fake.idle()() == 100.0
+    assert fake.job_reads == 0
+    fake.clients_idle = 700.0
+    assert fake.idle()() is None
+    assert fake.job_reads == 1
+
+
+def test_past_the_limit_with_nothing_pending_reports_the_idle_time():
+    fake = _Fake()
+    fake.clients_idle = 700.0
+    assert fake.idle()() == 700.0
+
+
+# -- ModelSlotBroker: when the slot was last used ------------------------------
+
+
+def test_the_broker_reports_how_long_the_slot_sat_unused():
+    from gaia.daemon.broker import ModelSlotBroker
+
+    now = [100.0]
+    broker = ModelSlotBroker(time_fn=lambda: now[0])
+    assert broker.snapshot()["last_activity_s_ago"] is None
+    lease = broker.acquire("m", holder="t", timeout=1)
+    now[0] = 103.0
+    broker.release(lease.lease_id)
+    now[0] = 110.0
+    assert broker.snapshot()["last_activity_s_ago"] == 7.0

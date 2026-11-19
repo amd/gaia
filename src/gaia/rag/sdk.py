@@ -6,19 +6,23 @@
 GAIA RAG SDK - Simple PDF document retrieval and Q&A
 """
 
+import codecs
+import contextlib
 import errno
 import hashlib
 import hmac
+import io
 import json
+import math
 import os
 import re
 import secrets
 import threading
 import time
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -42,14 +46,157 @@ except Exception:  # pylint: disable=broad-except
 
 from gaia import config as gaia_config
 from gaia.chat.sdk import AgentConfig, AgentSDK
+from gaia.daemon.broker_client import LeaseWaitCancelled
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
+    EMBED_MAX_CHARS,
     EMBEDDER_LLAMACPP_ARGS,
     EMBEDDER_UBATCH_TOKENS,
+    RERANK_QUERY_MAX_CHARS,
+    RERANKER_LLAMACPP_ARGS,
+    resident_vision_model,
+    resolve_default_vision_model,
+    vision_off_reason,
 )
+from gaia.llm.vlm_client import VLMExtractionError
 from gaia.logger import get_logger
+from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
+from gaia.rag.html_utils import HTML_EXTENSIONS, extract_html_text
+from gaia.rag.normalize import search_form
+from gaia.rag.pdf_tables import looks_tabular, tables_as_rows
+from gaia.rag.pdf_utils import pdf_parse_limits
+from gaia.rag.text_units import (
+    SENTENCE_BREAK,
+    estimate_tokens,
+    join_pieces,
+    last_tokens,
+)
 from gaia.security import PathValidator
+from gaia.utils.document_formats import (
+    UNSUPPORTED_DOCUMENTS,
+    unsupported_document_message,
+)
+from gaia.utils.file_lock import (
+    FileLockError,
+    FileLockTimeout,
+    file_lock,
+    held_by_another_program,
+    lock_dir_unwritable,
+    write_bytes_atomic,
+    write_text_atomic,
+)
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
+from gaia.utils.text_decoding import TRIED_ENCODINGS, decode_text
+
+_TEXT_BOM_ENCODINGS = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
+
+#: Plain-text documents, read as text.
+TEXT_DOCUMENT_EXTENSIONS = frozenset(
+    {".txt", ".md", ".mdx", ".markdown", ".rst", ".log"}
+)
+
+#: Source, markup and config files, read as text for Q&A.
+CODE_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".pyw",
+        ".java",
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".hpp",
+        ".h",
+        ".c",
+        ".cs",
+        ".go",
+        ".rs",
+        ".rb",
+        ".php",
+        ".swift",
+        ".kt",
+        ".kts",
+        ".scala",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+        ".vue",
+        ".svelte",
+        ".astro",
+        ".css",
+        ".scss",
+        ".sass",
+        ".less",
+        ".styl",
+        ".stylus",
+        ".html",
+        ".htm",
+        ".svg",
+        ".sh",
+        ".bash",
+        ".ps1",
+        ".r",
+        ".sql",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".env",
+        ".properties",
+        ".gradle",
+        ".cmake",
+        ".mk",
+        ".make",
+    }
+)
+
+#: Formats with a dedicated extractor (PDF, Office, CSV, JSON, EPUB).
+STRUCTURED_DOCUMENT_EXTENSIONS = frozenset(
+    {".pdf", ".pptx", ".docx", ".xlsx", ".csv", ".json", ".epub"}
+)
+
+#: What a folder walk indexes. Images need the vision model, and *.env files
+#: hold secrets, so both are indexed only when picked one at a time.
+FOLDER_INDEX_EXTENSIONS = (
+    STRUCTURED_DOCUMENT_EXTENSIONS | TEXT_DOCUMENT_EXTENSIONS | CODE_EXTENSIONS
+) - {".env"}
+
+
+def folder_index_skip_reason(file_path) -> Optional[str]:
+    """Why a folder walk should skip *file_path*, or None when it is indexable."""
+    path = Path(file_path)
+    ext = path.suffix.lower()
+    if ext in FOLDER_INDEX_EXTENSIONS:
+        return None
+    if ext in UNSUPPORTED_DOCUMENTS:
+        return unsupported_document_message(path.name, ext)
+    if ext == ".env":
+        return (
+            ".env files usually hold secrets and are not indexed from a folder; "
+            "index the file on its own if it is safe to."
+        )
+    if ext in IMAGE_EXTENSIONS:
+        return (
+            f"{ext} images are read by the vision model and are not indexed "
+            "from a folder; index the image file on its own."
+        )
+    if not ext:
+        return "no file extension, so the document type is unknown"
+    return f"{ext} files are not a supported document type"
+
 
 # --- PDF extraction errors ---------------------------------------------------
 # These inherit from ValueError so existing `except ValueError` blocks in
@@ -87,6 +234,115 @@ class EmptyPDFError(PDFExtractionError):
     status = "empty"
 
 
+class ImageExtractionError(ValueError):
+    """Raised when an image file cannot be read into text, with a remedy."""
+
+
+class VisionModelFailedError(ValueError):
+    """The vision model kept failing before it read any image in the document."""
+
+    error_type = "vision_model_failed"
+
+
+# A vision model that fails this many images with none read is broken, not unlucky.
+VISION_FAILURE_LIMIT = 2
+
+
+class _VisionAttempts:
+    """Stops reading a document's images once the vision model looks broken."""
+
+    def __init__(self, file_name: str, model: Optional[str]):
+        self.file_name = file_name
+        self.model = model
+        self.reads = 0
+        self.failures = 0
+
+    def record_read(self) -> None:
+        self.reads += 1
+
+    def record_failure(self, error: Exception) -> None:
+        """Count a failed image; raise once the model has failed with nothing read."""
+        if getattr(error, "image_num", 1) > 1:
+            # The page's earlier images were read before this one failed.
+            self.reads += 1
+        self.failures += 1
+        if self.reads == 0 and self.failures >= VISION_FAILURE_LIMIT:
+            raise VisionModelFailedError(
+                f"Could not read the images in {self.file_name}: the vision model "
+                f"{self.model} failed {self.failures} times in a row without "
+                "reading any of them.\n"
+                f"Last error: {error}\n"
+                "Check Lemonade's log for errors from that model, fix it or "
+                "restart Lemonade, then index this file again."
+            ) from error
+
+
+# Each page is one VLM call (seconds to tens of seconds), so a fax-sized TIFF is
+# fine and a 500-page archive is a mistake to stop early.
+MAX_IMAGE_PAGES = 50
+# Past this much text a page's images are logos and photos, not its content.
+IMAGE_PAGE_TEXT_LIMIT = 200
+
+
+def _flatten_for_vlm(img):
+    """Upright, opaque copy of *img*: EXIF rotation applied, alpha on white.
+
+    Image files only. PDF-embedded images are shown as the PDF places them, so
+    the PDF path must not rotate them by their own EXIF tag.
+    """
+    from PIL import Image, ImageOps  # pylint: disable=import-outside-toplevel
+
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+        # The VLM drops alpha, so a transparent background would read as black.
+        rgba = img.convert("RGBA")
+        white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        img = Image.alpha_composite(white, rgba).convert("RGB")
+    return img
+
+
+def _image_pages_for_vlm(img, file_name: str) -> list:
+    """The prepared VLM inputs for an opened image file, one per page."""
+    from PIL import ImageSequence  # pylint: disable=import-outside-toplevel
+
+    from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+        prepare_pil_image_for_vlm,
+    )
+
+    if img.format != "TIFF":
+        return [prepare_pil_image_for_vlm(_flatten_for_vlm(img))]
+
+    page_count = getattr(img, "n_frames", 1)
+    if page_count > MAX_IMAGE_PAGES:
+        raise ImageExtractionError(
+            f"Cannot index image {file_name}: it has {page_count} pages, and GAIA "
+            f"reads at most {MAX_IMAGE_PAGES} pages from one image file.\n"
+            "Split the TIFF into smaller files and index each one."
+        )
+    return [
+        prepare_pil_image_for_vlm(_flatten_for_vlm(frame))
+        for frame in ImageSequence.Iterator(img)
+    ]
+
+
+class SpreadsheetReadError(ValueError):
+    """An Excel workbook that can't be read; ``status`` is its error kind."""
+
+    def __init__(self, message: str, status: str):
+        super().__init__(message)
+        self.status = status
+
+
+class PresentationReadError(ValueError):
+    """A .pptx that is damaged or not a real presentation."""
+
+    status = "corrupted"
+
+
+# Legacy .xls and password-protected .xlsx are both OLE2 compound files.
+_OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
 def _missing_package_hint(*packages: str) -> str:
     from gaia.agents.install_hints import (  # pylint: disable=import-outside-toplevel
         missing_package_hint,
@@ -116,50 +372,277 @@ def _is_connection_failure(exc: BaseException) -> bool:
     return False
 
 
+class IndexingStopped(Exception):
+    """Raised from an ``index_document`` callback to stop indexing.
+
+    It leaves ``index_document`` as raised: the document is not indexed, and
+    any cache it had is kept.
+    """
+
+
+def _stop_behind(error: BaseException) -> Optional[Exception]:
+    """The stop *error* was raised from, if any.
+
+    A stop (:class:`IndexingStopped`, or :class:`LeaseWaitCancelled` from a
+    cancelled model-slot wait) can be wrapped by the client on the way out.
+    """
+    seen = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        if isinstance(current, (IndexingStopped, LeaseWaitCancelled)):
+            return current
+        seen.add(id(current))
+        current = _next_in_chain(current)
+    return None
+
+
+def _next_in_chain(error: BaseException) -> Optional[BaseException]:
+    """The exception Python's traceback shows *error* as raised from or during."""
+    if error.__cause__ is not None:
+        return error.__cause__
+    if error.__suppress_context__:
+        return None
+    return error.__context__
+
+
+def name_file_for_user(text: str, file_path: str, display_name: str) -> str:
+    """Replace every spelling of *file_path* in *text* with *display_name*.
+
+    Indexing often runs on a private copy of the user's file; this keeps the
+    copy's path and name out of messages the user reads.
+    """
+    path = Path(file_path)
+    spellings = {str(file_path), str(path), path.as_posix(), os.path.realpath(path)}
+    for spelling in sorted(spellings, key=len, reverse=True):
+        text = text.replace(spelling, display_name)
+    # Any other spelling of the copy's folder (8.3 names, a symlinked temp dir).
+    return re.sub(
+        r"(?:[^\s'\"()]*[\\/])?" + re.escape(path.name), lambda _m: display_name, text
+    )
+
+
+# The running index_document's ``heartbeat`` on this thread, called once per
+# extracted page, so a long extraction shows progress and can be stopped.
+_HEARTBEAT = threading.local()
+
+
+def _beat() -> None:
+    heartbeat = getattr(_HEARTBEAT, "fn", None)
+    if heartbeat is not None:
+        heartbeat()
+
+
+def _is_read_timeout(exc: BaseException) -> bool:
+    """Whether *exc*, or anything it was raised from, is a read timeout."""
+    import requests  # pylint: disable=import-outside-toplevel
+
+    seen = set()
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, requests.exceptions.ReadTimeout):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _vision_record(extracted: Dict[str, Any]) -> Dict[str, Any]:
+    """What the cache keeps about reading images, so a later load can redo them."""
+    return {
+        key: extracted[key]
+        for key in ("vlm_checked", "vlm_available", "unread_image_pages")
+        if key in extracted
+    }
+
+
+class _ImagesReadableNow(Exception):
+    """A cached document left image text unread, and the vision model is up now."""
+
+
+class _EmbedderWarmingUp(Exception):
+    """The embedder answered with no vectors: it is still loading."""
+
+
+class _EmbedderSwapLock:
+    """Embedding requests share the embedder; reloading it waits for them all.
+
+    Every ``RAGSDK`` in this process (one per upload, one per chat) unloads and
+    reloads the embedder on its first embed. Without this, that swap dropped
+    the requests other instances had in flight. A waiting reload also holds
+    back new requests, so it is not starved by a busy chat.
+    """
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._requests = 0
+        self._swapping = False
+        self._swaps_waiting = 0
+
+    @contextlib.contextmanager
+    def request(self):
+        with self._cond:
+            self._cond.wait_for(lambda: not self._swapping and not self._swaps_waiting)
+            self._requests += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._requests -= 1
+                self._cond.notify_all()
+
+    @contextlib.contextmanager
+    def swap(self):
+        with self._cond:
+            self._swaps_waiting += 1
+            self._cond.wait_for(lambda: not self._swapping and not self._requests)
+            self._swaps_waiting -= 1
+            self._swapping = True
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._swapping = False
+                self._cond.notify_all()
+
+
+_EMBEDDER_SWAP = _EmbedderSwapLock()
+
+
 class EmbeddingUnavailableError(RuntimeError):
     """The embedding model could not run, so nothing was embedded or searched.
 
     ``unreachable`` is True when Lemonade Server itself could not be reached,
-    as opposed to the server answering with an error.
+    as opposed to the server answering with an error. ``busy`` is True when
+    the server was reached but did not answer in time — the hardware it runs
+    on is shared with other work.
     """
 
     def __init__(self, model: str, cause: BaseException):
         self.model = model
         self.unreachable = _is_connection_failure(cause)
+        self.busy = not self.unreachable and _is_read_timeout(cause)
         if self.unreachable:
             what = (
                 f"Lemonade Server is not reachable, so the embedding model "
                 f"{model} could not run"
+            )
+        elif self.busy:
+            what = (
+                f"The embedding model {model} did not answer within "
+                f"{EMBED_BATCH_TIMEOUT_S}s; the GPU or CPU it runs on is likely "
+                "busy with another model or app"
             )
         else:
             what = f"The embedding model {model} failed"
         super().__init__(f"{what}: {cause}")
 
 
+_CACHE_LOCK_NAME = "rag-cache"
+
+#: A file written this close to when its stat was taken may be rewritten
+#: within the same timestamp tick, so that stat alone is not trusted.
+_RACY_STAT_NS = 2_000_000_000
+
+
+def _cache_lock_target(cache_path: str) -> Path:
+    """Every chunk cache in one directory shares one lock (``rag-cache.lock``)."""
+    return Path(cache_path).parent / _CACHE_LOCK_NAME
+
+
+# Letter ranges -> script name for document_scripts(); first match wins.
+_SCRIPT_RANGES = (
+    (
+        "Arabic",
+        (
+            (0x0600, 0x06FF),
+            (0x0750, 0x077F),
+            (0x08A0, 0x08FF),
+            (0xFB50, 0xFDFF),
+            (0xFE70, 0xFEFF),
+        ),
+    ),
+    ("Hebrew", ((0x0590, 0x05FF),)),
+    ("Cyrillic", ((0x0400, 0x04FF),)),
+    ("Devanagari", ((0x0900, 0x097F),)),
+    ("CJK", ((0x3040, 0x30FF), (0x4E00, 0x9FFF), (0xAC00, 0xD7AF))),
+)
+
+
+def _script_of(ch: str) -> Optional[str]:
+    """The script of a letter, "Latin" for ASCII/Latin letters, None for the rest."""
+    if not ch.isalpha():
+        return None
+    code = ord(ch)
+    if code < 0x0250:
+        return "Latin"
+    for name, ranges in _SCRIPT_RANGES:
+        if any(lo <= code <= hi for lo, hi in ranges):
+            return name
+    return None
+
+
+def text_scripts(text: str) -> List[str]:
+    """Writing systems that make up at least 10% of ``text``'s letters, largest first."""
+    counts: Dict[str, int] = {}
+    for ch in text:
+        script = _script_of(ch)
+        if script:
+            counts[script] = counts.get(script, 0) + 1
+    total = sum(counts.values())
+    return sorted(
+        (name for name, n in counts.items() if n / total >= 0.1),
+        key=lambda name: -counts[name],
+    )
+
+
 # Files the RAG cache writes: signed chunk caches, their sidecar signatures,
-# and extracted-text markdown. clear_cache() deletes nothing else.
+# saved vectors, and extracted-text markdown. clear_cache() deletes nothing else.
 _CACHE_OWNED_FILE = re.compile(
     r"^(?:[0-9a-f]{16}_[0-9a-f]{32}|[0-9a-f]{64}_notfound)(?:_[0-9a-f]{8})?"
     r"\.json(?:\.sig)?$"
     r"|_extracted\.md$"
-)
-
-
-#: Headroom for the BOS/EOS tokens the server adds to every input.
-_EMBED_RESERVED_TOKENS = 48
-#: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
-_EMBED_MIN_CHARS_PER_TOKEN = 1.0
-#: Longest text that embeds whole. No chunk is cut longer than this.
-EMBED_MAX_CHARS = int(
-    (EMBEDDER_UBATCH_TOKENS - _EMBED_RESERVED_TOKENS) * _EMBED_MIN_CHARS_PER_TOKEN
+    r"|^vectors_[0-9a-f]{24}\.npy$"
 )
 
 
 #: Chunks embedded between two progress reports during indexing.
 PROGRESS_SLICE_CHUNKS = 250
 
+#: Chunks sent in one ``/embeddings`` request.
+EMBED_BATCH_SIZE = 25
+#: How long one batch may wait for the embedder. It is sent once: resending a
+#: timed-out batch queues the same work again on hardware too busy to finish it.
+EMBED_BATCH_TIMEOUT_S = 300
+#: Seconds between "still waiting" reports while a batch is outstanding.
+EMBED_WAIT_REPORT_S = 15
+#: Tries for a batch the embedder answers with no vectors (still loading).
+EMBED_WARMUP_ATTEMPTS = 3
+EMBED_WARMUP_PAUSE_S = 2
+#: Lemonade catalog reranker named when none is downloaded.
+_SUGGESTED_RERANKER = "bge-reranker-v2-m3-GGUF"
+#: llama-server's error when an input is longer than the loaded ubatch.
+_RERANK_BATCH_TOO_SMALL = "increase the physical batch size"
 
-def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+# Windows' sharing and lock violations: another program has the file open.
+_SHARING_WINERRORS = frozenset({32, 33})
+
+
+def _open_state(file_path: str) -> Optional[str]:
+    """Why *file_path* can't be opened for reading now, or None when it can."""
+    try:
+        with open(file_path, "rb"):
+            return None
+    except FileNotFoundError:
+        return "missing"
+    except PermissionError as e:
+        if getattr(e, "winerror", None) in _SHARING_WINERRORS:
+            return "locked"
+        return "denied"
+    except OSError:
+        return "unreadable"
+
+
+def _split_at_whitespace(text: str, max_chars: int) -> List[str]:
     """Split *text* into pieces of at most *max_chars*, dropping nothing but whitespace.
 
     Breaks at the last newline, else the last space, in the back half of each
@@ -186,9 +669,131 @@ def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str
     return pieces
 
 
+def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+    """Split *text* into pieces whose embedded form is at most *max_chars* long.
+
+    The embedder reads :func:`search_form`, which a ligature such as U+FDFA
+    lengthens, so a piece that grows past the limit is cut finer.
+    """
+    fitted = []
+    for piece in _split_at_whitespace(text, max_chars):
+        size = max_chars
+        parts = [piece]
+        while size > 1 and any(len(search_form(p)) > max_chars for p in parts):
+            size = max(1, size * 3 // 4)
+            parts = _split_at_whitespace(piece, size)
+        fitted.extend(parts)
+    return fitted
+
+
 def default_rag_cache_dir() -> str:
     """Absolute default RAG cache directory: ``<GAIA_CONFIG_DIR>/cache/rag``."""
     return str(Path(gaia_config.GAIA_CONFIG_DIR) / "cache" / "rag")
+
+
+@dataclass
+class JsonLoaderConfig:
+    """Index each object of a JSON array as its own record.
+
+    Every chunk of a record starts with that record's ``metadata_fields`` as
+    ``key: value`` lines, so a retrieved chunk carries its citation.
+    """
+
+    #: Fields whose values are the searchable text, in order.
+    content_fields: List[str]
+    #: Fields copied onto every chunk of the record (id, title, url, ...).
+    metadata_fields: List[str] = field(default_factory=list)
+    #: Dotted path to the array of records; "" means the file is the array.
+    document_array_path: str = ""
+
+    def __post_init__(self):
+        if isinstance(self.content_fields, str) or not self.content_fields:
+            raise ValueError(
+                "JsonLoaderConfig.content_fields must be a non-empty list of "
+                "field names, e.g. ['bodyText', 'summary']."
+            )
+        if isinstance(self.metadata_fields, str):
+            raise ValueError(
+                "JsonLoaderConfig.metadata_fields must be a list of field names."
+            )
+
+
+_JSON_RECORD_MARKER = re.compile(r"^=== JSON record \d+ ===\n", re.MULTILINE)
+# Any content line that is exactly a marker, the last line included.
+_JSON_MARKER_LINE = re.compile(r"^(?==== JSON record \d+ ===$)", re.MULTILINE)
+
+
+def _json_to_text_lines(obj, indent: int = 0) -> List[str]:
+    """Render parsed JSON as indented ``key: value`` lines."""
+    lines = []
+    prefix = "  " * indent
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(value, (dict, list)):
+                lines.append(f"{prefix}{key}:")
+                lines.extend(_json_to_text_lines(value, indent + 1))
+            else:
+                lines.append(f"{prefix}{key}: {value}")
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, (dict, list)):
+                lines.append(f"{prefix}Item {i + 1}:")
+                lines.extend(_json_to_text_lines(item, indent + 1))
+            else:
+                lines.append(f"{prefix}- {item}")
+    else:
+        lines.append(f"{prefix}{obj}")
+    return lines
+
+
+def _json_value_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (dict, list)):
+        return "\n".join(_json_to_text_lines(value)).strip()
+    return str(value)
+
+
+def _json_metadata_value(value) -> str:
+    """One-line form of a metadata value; a newline would end the header."""
+    if isinstance(value, list):
+        value = ", ".join(_json_value_text(v) for v in value)
+    elif isinstance(value, dict):
+        value = json.dumps(value, ensure_ascii=False)
+    return " ".join(_json_value_text(value).split())
+
+
+def _json_records(data, loader: JsonLoaderConfig, source: str) -> List[dict]:
+    """The record array *loader* points at inside *data*."""
+    node = data
+    walked = []
+    for key in [k for k in loader.document_array_path.split(".") if k]:
+        if not isinstance(node, dict) or key not in node:
+            where = ".".join(walked) or "the top level"
+            found = sorted(node) if isinstance(node, dict) else type(node).__name__
+            raise ValueError(
+                f"document_array_path '{loader.document_array_path}' not found in "
+                f"{source}: no key '{key}' at {where} (found: {found}). Fix "
+                "JsonLoaderConfig.document_array_path."
+            )
+        node = node[key]
+        walked.append(key)
+    if not isinstance(node, list):
+        where = loader.document_array_path or "the top level"
+        raise ValueError(
+            f"{source}: expected an array of records at {where}, found "
+            f"{type(node).__name__}. Set JsonLoaderConfig.document_array_path "
+            "to the array that holds the records."
+        )
+    for i, record in enumerate(node):
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"{source}: record {i + 1} is a {type(record).__name__}, not an "
+                "object; JsonLoaderConfig needs an array of objects."
+            )
+    return node
 
 
 @dataclass
@@ -220,11 +825,19 @@ class RAGConfig:
         False  # Enable LLM-based intelligent chunking (requires LLM client)
     )
     # VLM settings (enabled if available, errors out if model can't be loaded)
-    vlm_model: str = "Qwen3-VL-4B-Instruct-GGUF"
+    # None while chat runs on the NPU: images are then not read.
+    vlm_model: Optional[str] = field(default_factory=resolve_default_vision_model)
     # False skips image text extraction even when the VLM is installed
     use_vlm: bool = True
+    # Optional second-stage retrieval: off unless set, never downloads a reranker.
+    enable_reranking: bool = False
+    reranking_model: Optional[str] = None
+    reranking_candidate_multiplier: int = 3
+    reranking_timeout: int = 30
     # Security settings
     allowed_paths: Optional[List[str]] = None
+    # Index each object of a JSON array as its own record (None: whole file)
+    json_loader: Optional[JsonLoaderConfig] = None
 
 
 @dataclass
@@ -239,6 +852,40 @@ class RAGResponse:
     source_files: Optional[List[str]] = None  # List of source files for each chunk
     chunk_metadata: Optional[List[Dict[str, Any]]] = None  # Detailed metadata per chunk
     query_metadata: Optional[Dict[str, Any]] = None  # Query-level metadata
+
+
+def _same_file(a: str, b: str) -> bool:
+    """Whether *a* and *b* name one file, however spelled.
+
+    Case, 8.3 short names, UNC and extended-length paths all name the same file.
+    A file that no longer exists is compared by its normalised real path.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(
+            os.path.realpath(b)
+        )
+
+
+def _locked_cause(
+    error: Optional[BaseException], file_path: str
+) -> Optional[PermissionError]:
+    """The lock on *file_path* in *error*'s chain, if any.
+
+    Parsers wrap the OS error they hit, so the chain is walked the way Python
+    prints it. A lock that names another file (a temp or cache file) is not
+    this document's; a read error carries no filename, an open names the file.
+    """
+    seen = set()
+    while error is not None and id(error) not in seen:
+        if isinstance(error, PermissionError) and held_by_another_program(error):
+            name = error.filename
+            if name is None or _same_file(os.fsdecode(name), file_path):
+                return error
+        seen.add(id(error))
+        error = _next_in_chain(error)
+    return None
 
 
 class RAGSDK:
@@ -296,6 +943,8 @@ class RAGSDK:
         self.llm_client = None
         self.use_lemonade_embeddings = False
         self._embedding_cache = None  # content-keyed query-embed cache (lazy)
+        self._reranking_model: Optional[str] = None
+        self._reranking_checked = False
         self.index = None
         self.chunks = []
         self.indexed_files = set()
@@ -303,6 +952,7 @@ class RAGSDK:
         # Per-file indexing: maps file paths to their chunk indices
         # This enables efficient per-file searches
         self.file_to_chunk_indices = {}  # {file_path: [chunk_idx1, chunk_idx2, ...]}
+        self._scripts_cache = {}  # {file_path: ((first_idx,), n_chunks), scripts)}
         self.chunk_to_file = {}  # {chunk_idx: file_path} for reverse lookup
 
         # Per-file FAISS indices and embeddings (CACHED for performance)
@@ -320,6 +970,12 @@ class RAGSDK:
         self._access_counter = 0
         self.file_access_times = {}  # {file_path: monotonic access counter}
         self.file_index_times = {}  # {file_path: index_time (wall clock for display)}
+        # {file_path: _content_key of the bytes that were indexed}
+        self.file_content_keys = {}
+        # {file_path: (_stat_key, ns it was taken)} of those same bytes
+        self.file_stat_keys = {}
+        # A load pushed a document out to fit under max_total_chunks.
+        self._evicted_for_size = False
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -331,6 +987,7 @@ class RAGSDK:
             max_tokens=self.config.max_tokens,
             show_stats=self.config.show_stats,
             use_local_llm=self.config.use_local_llm,
+            base_url=self.config.base_url,
         )
         self.chat = AgentSDK(chat_config)
 
@@ -385,6 +1042,103 @@ class RAGSDK:
                 )
             raise ImportError(error_msg)
 
+    def _log_read_failure(
+        self, error: BaseException, file_path: str, message: str
+    ) -> None:
+        """A warning for a lock, which the caller may retry; *message* otherwise."""
+        locked = _locked_cause(error, file_path)
+        if locked is not None:
+            self.log.warning(
+                f"Could not read {file_path}: another program may have it locked, "
+                f"or it is not readable: {locked}"
+            )
+        else:
+            self.log.error(message)
+
+    def _vision_off(self) -> str:
+        """Why images aren't read while ``vlm_model`` is None."""
+        return vision_off_reason(getattr(self.config, "base_url", None))
+
+    def _read_images_remedy(self, lead: str) -> str:
+        """How to get images read: a download, or why it can't happen on the NPU."""
+        if self.config.vlm_model is None:
+            return f"{lead}images aren't read here: {self._vision_off()}"
+        return (
+            f"{lead}enable VLM image extraction by downloading "
+            f"{self.config.vlm_model} in Lemonade"
+        )
+
+    def _vision_unavailable(self, vlm_available: bool) -> bool:
+        """Images were meant to be read, but the vision model couldn't be reached."""
+        return (
+            not vlm_available
+            and self.config.use_vlm
+            and self.config.vlm_model is not None
+        )
+
+    def _unread_images_note(self, pages: int) -> str:
+        """Tell the user which images went unread and how to get them read."""
+        return (
+            f"Text in images on {pages} page(s) was not read because the vision "
+            f"model ({self.config.vlm_model}) was not available. Once it is, "
+            "index this file again and those images are read."
+        )
+
+    def _images_readable_now(self, metadata: Dict[str, Any]) -> bool:
+        """Whether a cache made without the vision model should be re-extracted.
+
+        Only a cache that recorded unread images qualifies, and only once the
+        model answers now. Older caches never recorded it and are left alone.
+        """
+        if metadata.get("vlm_available") is not False:
+            return False
+        if not metadata.get("unread_image_pages"):
+            return False
+        if not self.config.use_vlm or self.config.vlm_model is None:
+            return False
+        try:
+            from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
+
+            vlm = VLMClient(
+                vlm_model=resident_vision_model(
+                    self.config.vlm_model, self.config.base_url
+                ),
+                base_url=self.config.base_url,
+            )
+            return vlm.check_availability()
+        except Exception as e:  # pylint: disable=broad-except
+            # The same probe extraction makes; failing it means images still can't be read.
+            self.log.warning(
+                f"Could not reach the vision model, keeping the cache: {e}"
+            )
+            return False
+
+    def _left_images_unread(self, file_path: str) -> bool:
+        """Whether *file_path*'s indexed text skipped images the vision model should read.
+
+        Call with ``_state_lock`` held.
+        """
+        metadata = self.file_metadata.get(file_path, {})
+        return metadata.get("vlm_available") is False and bool(
+            metadata.get("unread_image_pages")
+        )
+
+    def unread_images_readable(self, file_path: str) -> bool:
+        """Whether indexing *file_path* again would read images it left unread."""
+        file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if not self._left_images_unread(file_path):
+                return False
+            metadata = dict(self.file_metadata[file_path])
+        return self._images_readable_now(metadata)
+
+    def _note_images_skipped(self) -> None:
+        """Say once per file that its images aren't read while chat is on the NPU."""
+        reason = self._vision_off()
+        self.log.info(f"Images in this file are not read: {reason}")
+        if self.config.show_stats:
+            print(f"  ⚠️  Images not read: {reason}")
+
     def _safe_open(self, file_path: str, mode="rb"):
         """
         Safely open file with path validation and O_NOFOLLOW to prevent symlink attacks.
@@ -402,7 +1156,13 @@ class RAGSDK:
         """
         # Security check: Validate path against allowed directories
         # Use prompt_user=False to prevent blocking on input() in server contexts
-        if not self.path_validator.is_path_allowed(file_path, prompt_user=False):
+        read_only = "r" in mode and "+" not in mode
+        allowed = (
+            self.path_validator.validate_read(file_path, prompt_user=False)[0]
+            if read_only
+            else self.path_validator.is_path_allowed(file_path, prompt_user=False)
+        )
+        if not allowed:
             raise PermissionError(f"Access denied: {file_path} is not in allowed paths")
 
         import stat
@@ -430,7 +1190,10 @@ class RAGSDK:
         except OSError as e:
             if e.errno == errno.ELOOP:  # too many symbolic links
                 raise PermissionError(f"Symlinks not allowed: {file_path}")
-            raise IOError(f"Cannot open file {file_path}: {e}")
+            # Keep the errno: it is how a caller tells a locked file apart.
+            raise OSError(
+                e.errno, f"Cannot open file: {e.strerror}", str(file_path)
+            ) from e
 
         # Verify it's a regular file (not directory or special file)
         try:
@@ -447,7 +1210,7 @@ class RAGSDK:
 
             return os.fdopen(fd, mode_str)
 
-        except Exception as _e:
+        except Exception:
             os.close(fd)
             raise
 
@@ -455,7 +1218,7 @@ class RAGSDK:
         """
         Get or create HMAC key for cache integrity verification.
 
-        The key is stored per-installation in ~/.gaia/cache/hmac.key
+        The key is stored per-installation in <gaia_home>/cache/hmac.key
         and is used to sign cache files to prevent tampering. Cached in
         memory after first load to avoid repeated disk reads.
 
@@ -465,20 +1228,18 @@ class RAGSDK:
         if self._hmac_key is not None:
             return self._hmac_key
 
-        key_dir = Path.home() / ".gaia" / "cache"
+        key_dir = gaia_config.gaia_home() / "cache"
         key_path = key_dir / "hmac.key"
 
-        if key_path.exists():
-            self._hmac_key = key_path.read_bytes()
-            return self._hmac_key
+        # Locked so two first-run processes cannot each mint a key and leave
+        # every cache the other signed failing verification.
+        with file_lock(key_path):
+            if key_path.exists():
+                self._hmac_key = key_path.read_bytes()
+                return self._hmac_key
 
-        key_dir.mkdir(parents=True, exist_ok=True)
-        key = secrets.token_bytes(32)
-        key_path.write_bytes(key)
-        try:
-            key_path.chmod(0o600)
-        except (OSError, AttributeError):
-            pass
+            key = secrets.token_bytes(32)
+            write_bytes_atomic(key_path, key, mode=0o600)
         self.log.info("Generated new HMAC key for cache integrity verification")
         self._hmac_key = key
         return self._hmac_key
@@ -499,10 +1260,10 @@ class RAGSDK:
         key = self._get_hmac_key()
         signature = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
 
-        with open(cache_path, "wb") as f:
-            f.write(json_bytes)
-        with open(cache_path + ".sig", "w", encoding="utf-8") as f:
-            f.write(signature)
+        # One lock over both files, so a reader never pairs new JSON with an old .sig.
+        with file_lock(_cache_lock_target(cache_path)):
+            write_bytes_atomic(cache_path, json_bytes)
+            write_bytes_atomic(cache_path + ".sig", signature.encode("utf-8"))
 
         self.log.debug(f"Saved signed cache: {cache_path}")
 
@@ -525,14 +1286,17 @@ class RAGSDK:
         """
         sig_path = cache_path + ".sig"
 
-        if not os.path.exists(sig_path):
-            raise ValueError("Cache signature file missing — cannot verify integrity")
+        with file_lock(_cache_lock_target(cache_path)):
+            if not os.path.exists(sig_path):
+                raise ValueError(
+                    "Cache signature file missing — cannot verify integrity"
+                )
 
-        with open(cache_path, "rb") as f:
-            json_bytes = f.read()
+            with open(cache_path, "rb") as f:
+                json_bytes = f.read()
 
-        with open(sig_path, "r", encoding="utf-8") as f:
-            stored_sig = f.read().strip()
+            with open(sig_path, "r", encoding="utf-8") as f:
+                stored_sig = f.read().strip()
 
         key = self._get_hmac_key()
         expected_sig = hmac.new(key, json_bytes, hashlib.sha256).hexdigest()
@@ -559,18 +1323,29 @@ class RAGSDK:
                 "embed_max_chars": EMBED_MAX_CHARS,
                 # Only when off, so existing caches keep their keys.
                 **({} if self.config.use_vlm else {"use_vlm": False}),
+                **(
+                    {"json_loader": asdict(self.config.json_loader)}
+                    if self.config.json_loader is not None
+                    else {}
+                ),
             },
             sort_keys=True,
         )
         return hashlib.sha256(spec.encode("utf-8")).hexdigest()[:8]
 
-    def _content_key(self, file_path: str) -> str:
+    def _content_key(self, file_path: str, raise_locked: bool = False) -> str:
         """``<path hash>_<content hash>``: the shared stem of a document's cache files.
 
         The content hash (not mtime/size) makes same-size edits and sub-second
-        rewrites invalidate; the path hash keeps identical files apart. An
-        unreadable file gets a path-only ``<hash>_notfound`` key, and indexing
-        then fails at extraction.
+        rewrites invalidate; the path hash names each path's own entry, though
+        :meth:`_cache_of_same_bytes` reuses another path's for identical bytes. An
+        unreadable file gets a path-only ``<hash>_notfound`` key, which
+        :meth:`index_document` refuses to index or cache under.
+
+        Raises:
+            PermissionError: With ``raise_locked``, when the read is refused as
+                :func:`held_by_another_program`. Hashing reads every byte, so
+                this sees a lock in any format before a parser misreports it.
         """
         path = Path(file_path).absolute()
         try:
@@ -580,10 +1355,58 @@ class RAGSDK:
                 while chunk := f.read(8192):
                     hasher.update(chunk)
         except OSError as e:
+            if raise_locked and held_by_another_program(e):
+                raise
             self.log.warning(f"Cannot read file for cache key: {e}")
             return f"{hashlib.sha256(str(path).encode()).hexdigest()}_notfound"
         path_hash = hashlib.sha256(str(path).encode()).hexdigest()[:16]
         return f"{path_hash}_{hasher.hexdigest()[:32]}"
+
+    @staticmethod
+    def _stat_key(file_path: str) -> Tuple[int, ...]:
+        """Size, mtime, inode and (POSIX) ctime: what an edit almost always moves.
+
+        Raises:
+            OSError: When the file cannot be stat'ed.
+        """
+        st = os.stat(file_path)
+        key = (st.st_size, st.st_mtime_ns, st.st_ino)
+        if os.name != "nt":
+            # Windows has no change time; POSIX ctime moves on every write.
+            key += (st.st_ctime_ns,)
+        return key
+
+    def _taken_stat(self, file_path: str) -> Optional[Tuple[Tuple[int, ...], int]]:
+        """``(_stat_key, ns)``, taken before the bytes it vouches for are hashed."""
+        taken_at = time.time_ns()
+        try:
+            return self._stat_key(file_path), taken_at
+        except OSError:
+            return None
+
+    def _record_stat(self, file_path: str, taken) -> None:
+        """Keep *taken* as the indexed bytes' stat. Call with ``_state_lock`` held."""
+        if taken is None:
+            self.file_stat_keys.pop(file_path, None)
+        else:
+            self.file_stat_keys[file_path] = taken
+
+    def document_scripts(self, file_path: str) -> List[str]:
+        """Writing systems that make up at least 10% of an indexed file's letters.
+
+        Lets the agent search a document in its own language when the question
+        is asked in another (an English question over an Arabic report).
+        """
+        with self._state_lock:
+            indices = list(self.file_to_chunk_indices.get(file_path, []))
+            chunks = [self.chunks[i] for i in indices if i < len(self.chunks)]
+        key = (tuple(indices[:1]), len(chunks))
+        cached = self._scripts_cache.get(file_path)
+        if cached and cached[0] == key:
+            return list(cached[1])
+        scripts = text_scripts("".join(chunks))
+        self._scripts_cache[file_path] = (key, scripts)
+        return list(scripts)
 
     def _get_cache_path(self, file_path: str, content_key: Optional[str] = None) -> str:
         """Chunk-cache path: :meth:`_content_key` plus :meth:`_chunking_fingerprint`.
@@ -596,6 +1419,25 @@ class RAGSDK:
         return os.path.join(
             self.config.cache_dir, f"{key}_{self._chunking_fingerprint()}.json"
         )
+
+    def _cache_of_same_bytes(self, cache_path: str, content_key: str) -> str:
+        """``cache_path``, or the entry another path of these exact bytes left.
+
+        The library indexes an upload's temp copy and chats index the original,
+        so without this a chat reads every page again, images included.
+        """
+        if os.path.exists(cache_path):
+            return cache_path
+        content_hash = content_key.rsplit("_", 1)[-1]
+        if content_hash == "notfound":
+            return cache_path
+        suffix = f"_{content_hash}_{self._chunking_fingerprint()}.json"
+        try:
+            names = sorted(os.listdir(self.config.cache_dir))
+        except FileNotFoundError:
+            return cache_path
+        match = next((name for name in names if name.endswith(suffix)), None)
+        return os.path.join(self.config.cache_dir, match) if match else cache_path
 
     def _extracted_markdown_path(self, content_key: str) -> str:
         """Extracted text depends on content alone, so no chunking fingerprint."""
@@ -617,6 +1459,9 @@ class RAGSDK:
             except EmbeddingUnavailableError:
                 raise
             except Exception as e:
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
                 raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
 
     def _start_embedder(self):
@@ -628,7 +1473,7 @@ class RAGSDK:
         from gaia.llm.lemonade_client import MODELS, LemonadeClient
 
         if not hasattr(self, "llm_client") or self.llm_client is None:
-            self.llm_client = LemonadeClient()
+            self.llm_client = LemonadeClient(base_url=self.config.base_url)
 
         # Register + download the embedder before loading. Custom
         # (``user.``) embedders aren't Lemonade built-ins — they need
@@ -660,7 +1505,10 @@ class RAGSDK:
         # priority so a warm-up never makes an interactive turn wait.
         from gaia.daemon.broker_client import model_lease
 
-        with model_lease(self.config.embedding_model, priority="background"):
+        with (
+            model_lease(self.config.embedding_model, priority="background"),
+            _EMBEDDER_SWAP.swap(),
+        ):
             # Scoped unload of the embedder ONLY — a global /unload would evict
             # the co-resident chat model and trigger a ~100s cold reload (#1544).
             # ignore_if_not_loaded: on a cold start the embedder slot is empty
@@ -684,40 +1532,51 @@ class RAGSDK:
         )
 
     def _encode_texts(
-        self, texts: List[str], show_progress: bool = False
+        self,
+        texts: List[str],
+        show_progress: bool = False,
+        wait_callback: Optional[Callable[[int], None]] = None,
     ) -> "np.ndarray":
         """
         Encode texts to embeddings using Lemonade server with batching and timing.
 
+        Each batch is sent once and waits up to ``EMBED_BATCH_TIMEOUT_S``. Only
+        two failures are tried again, both logged: an embedder still loading
+        (no vectors back, up to ``EMBED_WARMUP_ATTEMPTS`` tries) and one
+        reloaded with too small a batch (reloaded once). Everything else raises
+        ``EmbeddingUnavailableError`` at once.
+
         Args:
             texts: List of text strings to encode
             show_progress: Whether to show progress
+            wait_callback: Called every ``EMBED_WAIT_REPORT_S`` with the seconds
+                the current batch has waited, and with 0 once it answers.
 
         Returns:
             numpy array of embeddings with shape (num_texts, embedding_dim)
         """
 
+        # Documents and queries are embedded in one search form; NFKC also turns
+        # no-break spaces, which can exceed one token per character, into spaces.
+        safe_texts = [search_form(text) for text in texts]
         # Chunks are cut to fit, so a longer text here is a caller bug that
         # the embedder would answer with a 500.
-        oversized = [len(t) for t in texts if len(t) > EMBED_MAX_CHARS]
+        oversized = [len(t) for t in safe_texts if len(t) > EMBED_MAX_CHARS]
         if oversized:
             raise ValueError(
                 f"{len(oversized)}/{len(texts)} texts exceed the embedder's "
                 f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
                 "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
-        safe_texts = list(texts)
 
-        # Batch embedding requests to avoid timeouts
-        BATCH_SIZE = 25  # Smaller batches for reliability (25 chunks ~= 12KB text)
         all_embeddings = []
 
-        total_batches = (len(safe_texts) + BATCH_SIZE - 1) // BATCH_SIZE
+        total_batches = (len(safe_texts) + EMBED_BATCH_SIZE - 1) // EMBED_BATCH_SIZE
         total_start = time.time()
 
-        for batch_idx in range(0, len(safe_texts), BATCH_SIZE):
-            batch_texts = safe_texts[batch_idx : batch_idx + BATCH_SIZE]
-            batch_num = (batch_idx // BATCH_SIZE) + 1
+        for batch_idx in range(0, len(safe_texts), EMBED_BATCH_SIZE):
+            batch_texts = safe_texts[batch_idx : batch_idx + EMBED_BATCH_SIZE]
+            batch_num = (batch_idx // EMBED_BATCH_SIZE) + 1
 
             batch_start = time.time()
 
@@ -726,73 +1585,10 @@ class RAGSDK:
                     f"   📦 Embedding batch {batch_num}/{total_batches} ({len(batch_texts)} chunks)..."
                 )
 
-            # Call Lemonade embeddings API for this batch with retry
-            max_retries = 2
-            for attempt in range(max_retries + 1):
-                try:
-                    # Use longer timeout for embedding batches (180s = 3 minutes per batch)
-                    response = self.embedder.embeddings(
-                        batch_texts, model=self.config.embedding_model, timeout=180
-                    )
-                    batch_embeddings = []
-                    data = response.get("data", [])
-                    if any("index" in item for item in data):
-                        indices = [item.get("index") for item in data]
-                        if any(
-                            not isinstance(i, int) or isinstance(i, bool)
-                            for i in indices
-                        ) or sorted(indices) != list(range(len(batch_texts))):
-                            raise RuntimeError(
-                                "Embedding response has missing or duplicate indices; verify the backend and retry indexing."
-                            )
-                        data = sorted(data, key=lambda item: item["index"])
-                    for item in data:
-                        embedding = item.get("embedding", [])
-                        batch_embeddings.append(embedding)
-
-                    if len(batch_embeddings) != len(batch_texts):
-                        raise RuntimeError(
-                            f"Embedding backend returned {len(batch_embeddings)}/{len(batch_texts)} "
-                            f"vectors for batch {batch_num} using {self.config.embedding_model!r}. "
-                            "Verify Lemonade Server is reachable and the embedding model is "
-                            "fully loaded, or lower chunk_size if inputs exceed the model token limit. "
-                            "Then retry indexing. No partial batch was accepted."
-                        )
-                    expected_dim = len(all_embeddings[0]) if all_embeddings else None
-                    for embedding in batch_embeddings:
-                        if not embedding or (
-                            expected_dim is not None and len(embedding) != expected_dim
-                        ):
-                            raise RuntimeError(
-                                f"Embedding backend returned an empty or inconsistent vector "
-                                f"in batch {batch_num} using {self.config.embedding_model!r}. "
-                                "Verify the embedding model is fully loaded or lower chunk_size if "
-                                "inputs exceed its token limit, then retry indexing."
-                            )
-                        expected_dim = len(embedding)
-
-                    break  # Success, exit retry loop
-                except Exception as e:
-                    if attempt < max_retries:
-                        self.log.warning(
-                            f"   ⚠️  Batch {batch_num} attempt {attempt + 1} failed, retrying: {e}"
-                        )
-                        if "physical batch size" in str(e):
-                            self.log.warning(
-                                "   The embedder was reloaded with a smaller batch "
-                                "than RAG chunks need; reloading it with "
-                                f"{EMBEDDER_LLAMACPP_ARGS} before retrying."
-                            )
-                            self.embedder = None
-                            self._load_embedder()
-                        time.sleep(2)  # Wait before retry
-                    else:
-                        self.log.error(
-                            f"   ❌ Batch {batch_num} failed after {max_retries + 1} attempts"
-                        )
-                        raise EmbeddingUnavailableError(
-                            self.config.embedding_model, e
-                        ) from e
+            expected_dim = len(all_embeddings[0]) if all_embeddings else None
+            batch_embeddings = self._embed_batch(
+                batch_texts, batch_num, expected_dim, wait_callback
+            )
 
             batch_duration = time.time() - batch_start
 
@@ -807,7 +1603,7 @@ class RAGSDK:
                 )
 
         total_duration = time.time() - total_start
-        if len(safe_texts) > BATCH_SIZE:
+        if len(safe_texts) > EMBED_BATCH_SIZE:
             overall_rate = len(safe_texts) / total_duration if total_duration > 0 else 0
             self.log.info(
                 f"   🎯 Total embedding time: {total_duration:.2f}s ({overall_rate:.1f} chunks/sec, {total_batches} batches)"
@@ -815,6 +1611,162 @@ class RAGSDK:
 
         # Convert to numpy array
         return np.array(all_embeddings, dtype=np.float32)
+
+    def _embed_batch(
+        self,
+        batch_texts: List[str],
+        batch_num: int,
+        expected_dim: Optional[int],
+        wait_callback: Optional[Callable[[int], None]],
+    ) -> List[List[float]]:
+        """One batch's vectors, in input order, under the policy in ``_encode_texts``."""
+        warmup_attempt = 1
+        reloaded = False
+        while True:
+            try:
+                with _EMBEDDER_SWAP.request():
+                    response = self._request_embeddings(batch_texts, wait_callback)
+            except Exception as e:  # noqa: BLE001 — classified, then re-raised
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
+                if "physical batch size" in str(e) and not reloaded:
+                    self.log.warning(
+                        f"   ⚠️  Batch {batch_num}: the embedder was reloaded with a "
+                        "smaller batch than RAG chunks need; reloading it with "
+                        f"{EMBEDDER_LLAMACPP_ARGS} and sending the batch once more."
+                    )
+                    reloaded = True
+                    self.embedder = None
+                    self._load_embedder()
+                    continue
+                self.log.error(f"   ❌ Batch {batch_num} failed: {e}")
+                raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
+
+            try:
+                return self._vectors_from_response(
+                    response, batch_texts, batch_num, expected_dim
+                )
+            except _EmbedderWarmingUp as e:
+                if warmup_attempt >= EMBED_WARMUP_ATTEMPTS:
+                    raise EmbeddingUnavailableError(
+                        self.config.embedding_model,
+                        RuntimeError(
+                            f"it is still loading: batch {batch_num} came back with "
+                            f"no vectors {EMBED_WARMUP_ATTEMPTS} times. Check "
+                            "Lemonade Server's log for a load error, then retry."
+                        ),
+                    ) from e
+                self.log.warning(
+                    f"   ⏳ Batch {batch_num}: the embedding model is still loading "
+                    f"(no vectors back); try {warmup_attempt + 1}/"
+                    f"{EMBED_WARMUP_ATTEMPTS} in {EMBED_WARMUP_PAUSE_S}s."
+                )
+                warmup_attempt += 1
+                time.sleep(EMBED_WARMUP_PAUSE_S)
+            except RuntimeError as e:
+                self.log.error(f"   ❌ Batch {batch_num} failed: {e}")
+                raise EmbeddingUnavailableError(self.config.embedding_model, e) from e
+
+    def _request_embeddings(
+        self,
+        batch_texts: List[str],
+        wait_callback: Optional[Callable[[int], None]],
+    ) -> Dict[str, Any]:
+        """Send one batch, reporting how long it has waited while it is out."""
+        if wait_callback is None:
+            return self.embedder.embeddings(
+                batch_texts,
+                model=self.config.embedding_model,
+                timeout=EMBED_BATCH_TIMEOUT_S,
+            )
+
+        answered = threading.Event()
+        started = time.monotonic()
+
+        def _report_waiting():
+            while not answered.wait(EMBED_WAIT_REPORT_S):
+                wait_callback(max(1, int(time.monotonic() - started)))
+
+        reporter = threading.Thread(
+            target=_report_waiting, name="rag-embed-wait", daemon=True
+        )
+        reporter.start()
+        try:
+            response = self.embedder.embeddings(
+                batch_texts,
+                model=self.config.embedding_model,
+                timeout=EMBED_BATCH_TIMEOUT_S,
+            )
+        finally:
+            answered.set()
+            reporter.join()
+        # Cleared only on success so a raising callback can't mask the real error.
+        wait_callback(0)
+        return response
+
+    @staticmethod
+    def _vectors_from_response(
+        response: Dict[str, Any],
+        batch_texts: List[str],
+        batch_num: int,
+        expected_dim: Optional[int],
+    ) -> List[List[float]]:
+        """The batch's vectors in input order, or why the response is unusable.
+
+        Raises:
+            _EmbedderWarmingUp: no vectors at all — the model is still loading.
+            RuntimeError: a malformed response; sending it again won't help.
+        """
+        if not isinstance(response, dict) or "data" not in response:
+            detail = response.get("error") if isinstance(response, dict) else None
+            raise RuntimeError(
+                f"Embedding backend sent no 'data' for batch {batch_num}"
+                f"{f': {detail}' if detail else ''}. Check Lemonade Server's log, "
+                "then retry indexing."
+            )
+        data = response["data"]
+        if not isinstance(data, list) or not all(
+            isinstance(item, dict) and isinstance(item.get("embedding", []), list)
+            for item in data
+        ):
+            raise RuntimeError(
+                f"Embedding backend sent a malformed reply for batch {batch_num}; "
+                "verify the backend and retry indexing."
+            )
+        if not any(item.get("embedding") for item in data):
+            raise _EmbedderWarmingUp()
+        if any("index" in item for item in data):
+            indices = [item.get("index") for item in data]
+            if any(
+                not isinstance(i, int) or isinstance(i, bool) for i in indices
+            ) or sorted(indices) != list(range(len(batch_texts))):
+                raise RuntimeError(
+                    "Embedding response has missing or duplicate indices; verify the backend and retry indexing."
+                )
+            data = sorted(data, key=lambda item: item["index"])
+        batch_embeddings = [item.get("embedding", []) for item in data]
+
+        if len(batch_embeddings) != len(batch_texts):
+            raise RuntimeError(
+                f"Embedding backend returned {len(batch_embeddings)}/{len(batch_texts)} "
+                f"vectors for batch {batch_num}. "
+                "Verify Lemonade Server is reachable and the embedding model is "
+                "fully loaded, or lower chunk_size if inputs exceed the model token limit. "
+                "Then retry indexing. No partial batch was accepted."
+            )
+        for embedding in batch_embeddings:
+            if not embedding or (
+                expected_dim is not None and len(embedding) != expected_dim
+            ):
+                raise RuntimeError(
+                    f"Embedding backend returned an empty or inconsistent vector "
+                    f"in batch {batch_num}. "
+                    "Verify the embedding model is fully loaded or lower chunk_size if "
+                    "inputs exceed its token limit, then retry indexing."
+                )
+            expected_dim = len(embedding)
+        return batch_embeddings
 
     def _get_embedding_cache(self):
         """Lazy-init the content-keyed embedding cache (per-instance)."""
@@ -833,6 +1785,7 @@ class RAGSDK:
         Falls back to ``_encode_texts`` on a miss. Stored/doc-chunk vectors
         are persisted elsewhere; this targets repeated *query* embeds only.
         """
+        query = search_form(query)
         if len(query) > EMBED_MAX_CHARS:
             self.log.warning(
                 f"Search query is {len(query)} chars; only the first "
@@ -857,7 +1810,49 @@ class RAGSDK:
         ext = Path(file_path).suffix.lower()
         return ext if ext else ".unknown"
 
+    def _page_tables_as_rows(self, page, page_num: int, text: str, header):
+        """``text`` with the page's tables as header-named rows (see pdf_tables)."""
+        try:
+            layout = page.extract_text(extraction_mode="layout") or ""
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            # pypdf's layout mode fails on some fonts; the plain text is still whole.
+            self.log.warning(
+                "Page %d: table rows not rebuilt, layout extraction failed: %s",
+                page_num,
+                e,
+            )
+            return text, header
+        return tables_as_rows(text, layout, header)
+
     def _extract_text_from_pdf(self, pdf_path: str) -> tuple:
+        """:meth:`_read_pdf_text` under :func:`pdf_parse_limits`.
+
+        pypdf parses lazily, so the whole read, not just the open, runs under them.
+        """
+        try:
+            from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+                LimitReachedError,
+            )
+        except ImportError:  # pragma: no cover - PyPDF2 has no such limit
+            LimitReachedError = ()  # type: ignore[assignment,misc]
+
+        try:
+            with pdf_parse_limits():
+                return self._read_pdf_text(pdf_path)
+        except LimitReachedError as e:
+            file_name = Path(pdf_path).name
+            self.log.error(f"PDF past GAIA's parsing limits {pdf_path}: {e}")
+            raise PDFExtractionError(
+                f"Could not read PDF: {file_name}\n"
+                "Reason: the file is too complex for GAIA to read safely "
+                f"(pypdf: {e}).\n"
+                "Suggestions:\n"
+                "  1. Print it to a new PDF (Print, then 'Save as PDF' or "
+                "'Microsoft Print to PDF') and index the new file\n"
+                "  2. Or split it into smaller PDFs and index those"
+            ) from e
+
+    def _read_pdf_text(self, pdf_path: str) -> tuple:
         """
         Extract text from PDF file with VLM for images (always enabled if available).
 
@@ -866,6 +1861,7 @@ class RAGSDK:
             - num_pages: int
             - vlm_pages: int (number of pages enhanced with VLM)
             - total_images: int (total images processed)
+            - image_pages_skipped: int (pages whose images were left unread)
             - pdf_status: str ("readable", "degraded", "encrypted",
               "corrupted", "empty"). "degraded" means the document indexed but
               at least one page may be incomplete — see degraded_pages.
@@ -933,23 +1929,34 @@ class RAGSDK:
             # Initialize VLM client (auto-enabled if available)
             vlm = None
             vlm_available = False
+            from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+                PdfImageExtractionError,
+                PdfPageInspectionError,
+                count_images_in_page,
+                extract_images_from_page_pdfium,
+            )
+
             try:
                 from gaia.llm import VLMClient
-                from gaia.rag.pdf_utils import (
-                    PdfPageInspectionError,
-                    count_images_in_page,
-                    extract_images_from_page_pymupdf,
-                )
 
-                vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
-                )
-                vlm_available = self.config.use_vlm and vlm.check_availability()
+                if self.config.vlm_model is None:
+                    self._note_images_skipped()
+                else:
+                    vlm = VLMClient(
+                        vlm_model=resident_vision_model(
+                            self.config.vlm_model, self.config.base_url
+                        ),
+                        base_url=self.config.base_url,
+                    )
+                    vlm_available = self.config.use_vlm and vlm.check_availability()
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from images")
                 elif (
-                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                    not vlm_available
+                    and self.config.use_vlm
+                    and self.config.vlm_model is not None
+                    and self.config.show_stats
                 ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
@@ -978,14 +1985,27 @@ class RAGSDK:
             pages_data = []
             vlm_pages_count = 0
             total_images_processed = 0
+            image_pages_skipped = 0
+            # Pages whose images the vision model would have read, had it been up.
+            unread_image_pages = 0
+            unavailable = self._vision_unavailable(vlm_available)
             degraded_pages = []
             page_warnings = {}
+            table_header = None
+            attempts = _VisionAttempts(
+                file_name, vlm.vlm_model if vlm else self.config.vlm_model
+            )
 
             for i, page in enumerate(reader.pages, 1):
+                _beat()
                 page_start = time_module.time()
 
                 # Step 1: Extract text with pypdf
-                pypdf_text = page.extract_text()
+                pypdf_text = normalize_arabic_pdf_text(extract_pdf_page_text(page))
+                if looks_tabular(pypdf_text):
+                    pypdf_text, table_header = self._page_tables_as_rows(
+                        page, i, pypdf_text, table_header
+                    )
 
                 # Step 2: Check for images
                 has_imgs = False
@@ -996,7 +2016,7 @@ class RAGSDK:
                         has_imgs, num_imgs = count_images_in_page(page, page_num=i)
                     except PdfPageInspectionError as e:
                         # Unknown, not "none". The inventory comes from pypdf
-                        # and the extraction from PyMuPDF, so a page pypdf
+                        # and the extraction from PDFium, so a page pypdf
                         # cannot inspect may still extract — try it rather than
                         # indexing the page as blank (#3551).
                         page_warning = str(e)
@@ -1005,24 +2025,42 @@ class RAGSDK:
                         # Not zero — unknown. Reporting 0 alongside
                         # has_images=True is a contradiction on the record.
                         num_imgs = None
+                elif unavailable and len(pypdf_text.strip()) < IMAGE_PAGE_TEXT_LIMIT:
+                    try:
+                        if count_images_in_page(page, page_num=i)[0]:
+                            unread_image_pages += 1
+                    except PdfPageInspectionError:
+                        unread_image_pages += 1  # may hold images: unknown
 
                 # Step 3: Extract from images if present
                 image_texts = []
-                if has_imgs and vlm_available:
+                read_images = len(pypdf_text.strip()) < IMAGE_PAGE_TEXT_LIMIT
+                if has_imgs and vlm_available and not read_images:
+                    image_pages_skipped += 1
+                elif has_imgs and vlm_available:
                     try:
-                        images = extract_images_from_page_pymupdf(pdf_path, page_num=i)
+                        try:
+                            images = extract_images_from_page_pdfium(
+                                pdf_path, page_num=i
+                            )
+                        except PdfImageExtractionError as e:
+                            page_warning = f"image extraction failed on page {i}: {e}"
+                            self.log.warning(page_warning)
+                            images = e.images
                         if images:
                             image_texts = vlm.extract_from_page_images(
                                 images, page_num=i
                             )
+                            attempts.record_read()
                             if image_texts:
                                 vlm_pages_count += 1
                                 total_images_processed += len(image_texts)
-                    except Exception as img_error:
+                    except VLMExtractionError as img_error:
                         page_warning = (
                             f"image extraction failed on page {i}: {img_error}"
                         )
                         self.log.warning(page_warning)
+                        attempts.record_failure(img_error)
 
                 # Step 4: Merge
                 merged_text = self._merge_page_texts(
@@ -1063,8 +2101,8 @@ class RAGSDK:
             if vlm_available and vlm:
                 try:
                     vlm.cleanup()
-                except Exception:  # pylint: disable=broad-except
-                    pass
+                except Exception as e:  # pylint: disable=broad-except
+                    self.log.debug("VLM cleanup failed: %s", e)
 
             extract_duration = time_module.time() - extract_start
 
@@ -1093,7 +2131,7 @@ class RAGSDK:
                 print(f"{'='*60}\n")
 
             self.log.info(
-                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages)"
+                f"📝 Extracted {len(full_text):,} characters in {extract_duration:.2f}s (VLM: {vlm_pages_count} pages, {image_pages_skipped} text pages' images left unread)"
             )
 
             # If pypdf parsed the file but every page came back blank, surface
@@ -1114,8 +2152,7 @@ class RAGSDK:
                     "  2. All content is rendered as images or vector glyphs\n"
                     "Suggestions:\n"
                     "  1. Run OCR on the PDF (e.g. `ocrmypdf input.pdf output.pdf`)\n"
-                    "  2. Or enable VLM image extraction by downloading "
-                    f"{self.config.vlm_model} in Lemonade"
+                    + self._read_images_remedy("  2. Or ")
                 )
                 self.log.error(f"Empty PDF (no text): {pdf_path}")
                 raise EmptyPDFError(msg)
@@ -1125,6 +2162,8 @@ class RAGSDK:
                 "num_pages": total_pages,
                 "vlm_pages": vlm_pages_count,
                 "total_images": total_images_processed,
+                "image_pages_skipped": image_pages_skipped,
+                "unread_image_pages": unread_image_pages,
                 "vlm_checked": True,  # Indicates this cache was created with VLM capability check
                 "vlm_available": vlm_available,  # Whether VLM was actually available
                 "pdf_status": "degraded" if degraded_pages else "readable",
@@ -1141,9 +2180,9 @@ class RAGSDK:
                 )
 
             return full_text, total_pages, metadata
-        except PDFExtractionError:
-            # Already a well-formed extraction error with actionable guidance —
-            # re-raise without wrapping or re-logging (callers will log).
+        except (PDFExtractionError, VisionModelFailedError, IndexingStopped):
+            # Already a well-formed extraction error with actionable guidance,
+            # or a stop — re-raise without wrapping or re-logging.
             raise
         except Exception as e:
             self.log.error(f"Error reading PDF {pdf_path}: {e}")
@@ -1211,11 +2250,16 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self.log.error(f"Corrupted PPTX (bad zip): {pptx_path}: {e}")
-            raise ValueError(msg) from e
+            self._log_read_failure(
+                e, pptx_path, f"Corrupted PPTX (bad zip): {pptx_path}: {e}"
+            )
+            raise PresentationReadError(msg) from e
 
         try:
-            prs = Presentation(pptx_path)
+            # A stream, not the path: given a path, python-pptx's is_zipfile
+            # check swallows a lock and reports the file as not a package.
+            with open(pptx_path, "rb") as stream:
+                prs = Presentation(stream)
         except Exception as e:
             msg = (
                 f"Could not read PowerPoint file: {file_name}\n"
@@ -1226,8 +2270,8 @@ class RAGSDK:
                 "  2. Try opening the file in PowerPoint to confirm it is readable\n"
                 "  3. Save as PDF and index the PDF instead"
             )
-            self.log.error(f"Corrupted PPTX {pptx_path}: {e}")
-            raise ValueError(msg) from e
+            self._log_read_failure(e, pptx_path, f"Corrupted PPTX {pptx_path}: {e}")
+            raise PresentationReadError(msg) from e
 
         try:
             extract_start = time_module.time()
@@ -1285,6 +2329,7 @@ class RAGSDK:
                         "total_images": pdf_metadata.get("total_images", 0),
                         "vlm_checked": pdf_metadata.get("vlm_checked", False),
                         "vlm_available": pdf_metadata.get("vlm_available", False),
+                        "unread_image_pages": pdf_metadata.get("unread_image_pages", 0),
                         "pptx_status": "readable",
                         "conversion": "powerpoint_com",
                     }
@@ -1294,6 +2339,9 @@ class RAGSDK:
                         f"📝 Extracted {len(pdf_text):,} characters via PDF conversion in {extract_duration:.2f}s"
                     )
                     return pdf_text, pdf_pages, metadata
+                except (IndexingStopped, VisionModelFailedError):
+                    # The fallback would ask the same broken model again.
+                    raise
                 except Exception as pdf_err:
                     self.log.warning(
                         "PDF extraction from converted PPTX failed, falling back: %s",
@@ -1312,24 +2360,34 @@ class RAGSDK:
             # Initialize VLM client (auto-enabled if available)
             vlm = None
             vlm_available = False
+            from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
+                count_images_in_slide,
+                extract_images_from_slide,
+            )
+
             try:
                 from gaia.llm import (  # pylint: disable=import-outside-toplevel
                     VLMClient,
                 )
-                from gaia.rag.pptx_utils import (  # pylint: disable=import-outside-toplevel
-                    count_images_in_slide,
-                    extract_images_from_slide,
-                )
 
-                vlm = VLMClient(
-                    vlm_model=self.config.vlm_model, base_url=self.config.base_url
-                )
-                vlm_available = self.config.use_vlm and vlm.check_availability()
+                if self.config.vlm_model is None:
+                    self._note_images_skipped()
+                else:
+                    vlm = VLMClient(
+                        vlm_model=resident_vision_model(
+                            self.config.vlm_model, self.config.base_url
+                        ),
+                        base_url=self.config.base_url,
+                    )
+                    vlm_available = self.config.use_vlm and vlm.check_availability()
 
                 if vlm_available and self.config.show_stats:
                     print("  🔍 VLM enabled: Will extract text from slide images")
                 elif (
-                    not vlm_available and self.config.use_vlm and self.config.show_stats
+                    not vlm_available
+                    and self.config.use_vlm
+                    and self.config.vlm_model is not None
+                    and self.config.show_stats
                 ):
                     print("  ⚠️  VLM not available - images will not be processed")
                     print("  📥 To enable VLM image extraction:")
@@ -1357,9 +2415,16 @@ class RAGSDK:
 
             pages_data = []
             vlm_slides_count = 0
+            # Slides whose images the vision model would have read, had it been up.
+            unread_image_pages = 0
+            unavailable = self._vision_unavailable(vlm_available)
             total_images_processed = 0
+            attempts = _VisionAttempts(
+                file_name, vlm.vlm_model if vlm else self.config.vlm_model
+            )
 
             for i, slide in enumerate(prs.slides, 1):
+                _beat()
                 page_start = time_module.time()
 
                 # Step 1: Extract native text from shapes / tables
@@ -1384,6 +2449,15 @@ class RAGSDK:
                         self.log.debug(
                             "count_images_in_slide failed on slide %d: %s", i, e
                         )
+                elif unavailable:
+                    try:
+                        if count_images_in_slide(slide)[0]:
+                            unread_image_pages += 1
+                    except Exception as e:  # pylint: disable=broad-except
+                        self.log.debug(
+                            "count_images_in_slide failed on slide %d: %s", i, e
+                        )
+                        unread_image_pages += 1  # may hold images: unknown
 
                 # Step 4: Extract from images if present
                 image_texts = []
@@ -1394,9 +2468,17 @@ class RAGSDK:
                             image_texts = vlm.extract_from_page_images(
                                 images, page_num=i
                             )
+                            attempts.record_read()
                             if image_texts:
                                 vlm_slides_count += 1
                                 total_images_processed += len(image_texts)
+                    except LeaseWaitCancelled:
+                        raise
+                    except VLMExtractionError as img_error:
+                        self.log.warning(
+                            f"Image extraction failed on slide {i}: {img_error}"
+                        )
+                        attempts.record_failure(img_error)
                     except Exception as img_error:
                         self.log.warning(
                             f"Image extraction failed on slide {i}: {img_error}"
@@ -1477,9 +2559,8 @@ class RAGSDK:
                     f"The file has {total_slides} slide(s) but none contained text.\n"
                     "Suggestions:\n"
                     "  1. Ensure the presentation has text content (not just images)\n"
-                    "  2. Enable VLM image extraction by downloading "
-                    f"{self.config.vlm_model} in Lemonade\n"
-                    "  3. Save as PDF and index the PDF instead"
+                    + self._read_images_remedy("  2. ")
+                    + "\n  3. Save as PDF and index the PDF instead"
                 )
                 self.log.error(f"Empty PPTX (no text): {pptx_path}")
                 raise ValueError(msg)
@@ -1488,13 +2569,14 @@ class RAGSDK:
                 "num_slides": total_slides,
                 "vlm_slides": vlm_slides_count,
                 "total_images": total_images_processed,
+                "unread_image_pages": unread_image_pages,
                 "vlm_checked": True,
                 "vlm_available": vlm_available,
                 "pptx_status": "readable",
             }
 
             return full_text, total_slides, metadata
-        except ValueError:
+        except (ValueError, IndexingStopped):
             raise
         except Exception as e:
             self.log.error(f"Error reading PPTX {pptx_path}: {e}")
@@ -1674,27 +2756,20 @@ These positions indicate where to split the text."""
     def _extract_text_from_text_file(self, file_path: str) -> str:
         """Extract text from text-based file (txt, md, etc.)."""
         try:
-            encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
-            text = None
+            with self._safe_open(file_path, "rb") as f:
+                data = f.read()
 
-            for encoding in encodings:
-                try:
-                    # Use _safe_open with binary mode, then decode
-                    with self._safe_open(file_path, "rb") as f:
-                        text = f.read().decode(encoding)
-                    break
-                except (UnicodeDecodeError, AttributeError):
-                    continue
-
-            if text is None:
+            try:
+                text = decode_text(data)[0]
+            except UnicodeDecodeError as exc:
                 raise ValueError(
                     f"Failed to decode file: {file_path}\n"
-                    f"Tried encodings: {', '.join(encodings)}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
                     "Suggestions:\n"
                     "  1. Convert the file to UTF-8 encoding\n"
                     "  2. Check if the file is corrupted\n"
                     "  3. Ensure the file is a text file (not binary)"
-                )
+                ) from exc
 
             if self.config.show_stats:
                 print(f"  ✅ Loaded text file ({len(text):,} characters)")
@@ -1702,7 +2777,9 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from text file")
             return text.strip()
         except Exception as e:
-            self.log.error(f"Error reading text file {file_path}: {e}")
+            self._log_read_failure(
+                e, file_path, f"Error reading text file {file_path}: {e}"
+            )
             raise
 
     def _extract_text_from_csv(self, csv_path: str) -> str:
@@ -1711,94 +2788,74 @@ These positions indicate where to split the text."""
             import csv
 
             text_parts = []
-            encodings = ["utf-8", "utf-8-sig", "latin-1", "cp1252"]
 
-            for encoding in encodings:
-                try:
-                    # Use _safe_open with binary mode, then decode for csv.reader
-                    from io import StringIO
+            from io import StringIO
 
-                    with self._safe_open(csv_path, "rb") as f:
-                        text = f.read().decode(encoding)
-                        reader = csv.reader(StringIO(text))
-                        rows = list(reader)
+            with self._safe_open(csv_path, "rb") as f:
+                data = f.read()
 
-                        if not rows:
-                            raise ValueError("CSV file is empty")
+            try:
+                decoded = decode_text(data)[0]
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    f"Failed to decode CSV file: {csv_path}\n"
+                    f"Tried encodings: {TRIED_ENCODINGS}\n"
+                    "Suggestions:\n"
+                    "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
+                    "  2. Check if the file is a valid CSV (not corrupted)\n"
+                    "  3. Try opening and re-saving in a text editor"
+                ) from exc
 
-                        # Include header as context
-                        if rows:
-                            header = rows[0]
-                            text_parts.append(f"Columns: {', '.join(header)}\n")
+            reader = csv.reader(StringIO(decoded))
+            rows = list(reader)
 
-                        # Convert rows to readable text
-                        for row in rows[1:]:
-                            # Create a readable row format
-                            row_text = []
-                            for i, cell in enumerate(row):
-                                if i < len(header):
-                                    row_text.append(f"{header[i]}: {cell}")
-                                else:
-                                    row_text.append(cell)
-                            text_parts.append(" | ".join(row_text))
+            if not rows:
+                raise ValueError("CSV file is empty")
 
-                        text = "\n".join(text_parts)
+            # Include header as context
+            header = rows[0]
+            text_parts.append(f"Columns: {', '.join(header)}\n")
 
-                        if self.config.show_stats:
-                            print(
-                                f"  ✅ Loaded CSV file ({len(rows)} rows, {len(header)} columns)"
-                            )
+            # Convert rows to readable text
+            for row in rows[1:]:
+                # Create a readable row format
+                row_text = []
+                for i, cell in enumerate(row):
+                    if i < len(header):
+                        row_text.append(f"{header[i]}: {cell}")
+                    else:
+                        row_text.append(cell)
+                text_parts.append(" | ".join(row_text))
 
-                        self.log.info(f"📊 Extracted {len(rows)} rows from CSV")
-                        return text
-                except UnicodeDecodeError:
-                    continue
+            text = "\n".join(text_parts)
 
-            raise ValueError(
-                f"Failed to decode CSV file: {csv_path}\n"
-                f"Tried encodings: {', '.join(encodings)}\n"
-                "Suggestions:\n"
-                "  1. Save the CSV file with UTF-8 encoding in Excel/LibreOffice\n"
-                "  2. Check if the file is a valid CSV (not corrupted)\n"
-                "  3. Try opening and re-saving in a text editor"
-            )
+            if self.config.show_stats:
+                print(f"  ✅ Loaded CSV file ({len(rows)} rows, {len(header)} columns)")
+
+            self.log.info(f"📊 Extracted {len(rows)} rows from CSV")
+            return text
         except Exception as e:
-            self.log.error(f"Error reading CSV {csv_path}: {e}")
+            self._log_read_failure(e, csv_path, f"Error reading CSV {csv_path}: {e}")
             raise
 
     def _extract_text_from_json(self, json_path: str) -> str:
-        """Extract text from JSON file."""
+        """Extract text from JSON file.
+
+        With ``config.json_loader`` set, each record of the configured array
+        becomes its own ``=== JSON record N ===`` block (metadata lines, a
+        blank line, then content) that :meth:`_chunk_json_records` chunks
+        record by record.
+        """
         try:
             # Use _safe_open to prevent symlink attacks
             with self._safe_open(json_path, "rb") as f:
                 data = json.load(f)
 
-            # Convert JSON to readable text format
-            def json_to_text(obj, indent=0):
-                """Recursively convert JSON to readable text."""
-                lines = []
-                prefix = "  " * indent
-
-                if isinstance(obj, dict):
-                    for key, value in obj.items():
-                        if isinstance(value, (dict, list)):
-                            lines.append(f"{prefix}{key}:")
-                            lines.extend(json_to_text(value, indent + 1))
-                        else:
-                            lines.append(f"{prefix}{key}: {value}")
-                elif isinstance(obj, list):
-                    for i, item in enumerate(obj):
-                        if isinstance(item, (dict, list)):
-                            lines.append(f"{prefix}Item {i + 1}:")
-                            lines.extend(json_to_text(item, indent + 1))
-                        else:
-                            lines.append(f"{prefix}- {item}")
-                else:
-                    lines.append(f"{prefix}{obj}")
-
-                return lines
-
-            text = "\n".join(json_to_text(data))
+            loader = self.config.json_loader
+            if loader is None:
+                text = "\n".join(_json_to_text_lines(data))
+            else:
+                text = self._render_json_records(data, loader, Path(json_path).name)
 
             if self.config.show_stats:
                 print(f"  ✅ Loaded JSON file ({len(text):,} characters)")
@@ -1806,38 +2863,166 @@ These positions indicate where to split the text."""
             self.log.info(f"📝 Extracted {len(text):,} characters from JSON")
             return text
         except Exception as e:
-            self.log.error(f"Error reading JSON {json_path}: {e}")
+            self._log_read_failure(e, json_path, f"Error reading JSON {json_path}: {e}")
             raise
 
-    def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
-        """Extract text from Excel (.xlsx / .xls) files using openpyxl."""
-        try:
-            import openpyxl
+    def _render_json_records(self, data, loader: JsonLoaderConfig, source: str) -> str:
+        blocks = []
+        empty = 0
+        for record in _json_records(data, loader, source):
+            content = [
+                _json_value_text(record.get(name)) for name in loader.content_fields
+            ]
+            body = "\n\n".join(part for part in content if part)
+            # A content line shaped like a record marker would split the record.
+            body = _JSON_MARKER_LINE.sub(" ", body)
+            if not body:
+                empty += 1
+                continue
+            header = [
+                f"{name}: {_json_metadata_value(record[name])}"
+                for name in loader.metadata_fields
+                if name in record and _json_metadata_value(record[name])
+            ]
+            blocks.append(
+                f"=== JSON record {len(blocks) + 1} ===\n"
+                + "\n".join(header)
+                + "\n\n"
+                + body
+            )
+        if not blocks:
+            raise ValueError(
+                f"{source}: none of its records has text in content_fields "
+                f"{loader.content_fields}. Check the field names in "
+                "JsonLoaderConfig.content_fields."
+            )
+        if empty:
+            self.log.warning(
+                f"{source}: skipped {empty} record(s) with no text in "
+                f"{loader.content_fields}"
+            )
+        return "\n\n".join(blocks)
 
-            wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+    def _chunk_json_records(self, text: str) -> List[str]:
+        """Chunk each record on its own, prefixing every chunk with its metadata."""
+        chunks = []
+        for block in _JSON_RECORD_MARKER.split(text):
+            if not block.strip():
+                continue
+            header, _, body = block.partition("\n\n")
+            room = EMBED_MAX_CHARS - (len(header) + 1 if header else 0)
+            if room < EMBED_MAX_CHARS // 2:
+                raise ValueError(
+                    f"A JSON record's metadata_fields render to {len(header)} "
+                    f"chars, over half the embedder's {EMBED_MAX_CHARS}-char "
+                    "input. List fewer or shorter JsonLoaderConfig.metadata_fields."
+                )
+            for chunk in self._split_text_into_chunks(body):
+                for piece in split_for_embedding(chunk, room):
+                    chunks.append(f"{header}\n{piece}" if header else piece)
+        return chunks
+
+    def _extract_text_from_xlsx(self, xlsx_path: str) -> str:
+        """Extract text from an Excel .xlsx workbook using openpyxl.
+
+        Raises:
+            SpreadsheetReadError: The file is not a readable .xlsx workbook
+                (``corrupted``), is a legacy .xls or password-protected one
+                (``unsupported_workbook``), or has no cell values (``empty_file``).
+            ImportError: openpyxl is not installed.
+        """
+        try:
+            import openpyxl  # pylint: disable=import-outside-toplevel
+        except ImportError as e:
+            raise ImportError(
+                "openpyxl is required to read Excel files. "
+                + _missing_package_hint("openpyxl")
+            ) from e
+        from openpyxl.utils.exceptions import (  # pylint: disable=import-outside-toplevel
+            InvalidFileException,
+        )
+
+        name = Path(xlsx_path).name
+        legacy = SpreadsheetReadError(
+            f"Could not read {name}: it is not in the .xlsx format (a legacy .xls "
+            "workbook, or one protected with a password). Open it in Excel, save "
+            "a copy as .xlsx without a password, then index that copy.",
+            "unsupported_workbook",
+        )
+        try:
+            with open(xlsx_path, "rb") as f:
+                magic = f.read(len(_OLE2_MAGIC))
+            if magic == _OLE2_MAGIC or Path(xlsx_path).suffix.lower() == ".xls":
+                raise legacy
+            try:
+                wb = openpyxl.load_workbook(xlsx_path, data_only=True)
+            except InvalidFileException as e:
+                raise legacy from e
+            # KeyError: the zip lacks a part every workbook has (xl/workbook.xml).
+            except (zipfile.BadZipFile, KeyError) as e:
+                self.log.warning(f"openpyxl could not open {xlsx_path}: {e!r}")
+                raise SpreadsheetReadError(
+                    f"Could not read {name}: it is not a valid .xlsx workbook. "
+                    "Open it in Excel and save it again as .xlsx, or re-download "
+                    "it, then index the new copy.",
+                    "corrupted",
+                ) from e
             parts = []
+            has_values = False
+
+            def _numeric(cell: str) -> bool:
+                return cell.strip().replace(".", "").replace("-", "").isdigit()
 
             for sheet in wb.worksheets:
                 parts.append(f"Sheet: {sheet.title}")
 
                 # Collect rows, skipping entirely blank rows
                 rows = []
-                for row in sheet.iter_rows(values_only=True):
+                row_numbers = []
+                for number, row in enumerate(sheet.iter_rows(values_only=True), 1):
                     cells = [str(c) if c is not None else "" for c in row]
                     if any(c.strip() for c in cells):
                         rows.append(cells)
+                        row_numbers.append(number)
+                merged_starts = {
+                    (r.min_row, r.min_col)
+                    for r in sheet.merged_cells.ranges
+                    if r.max_col > r.min_col
+                }
 
                 if not rows:
                     continue
+                has_values = True
+
+                # Single-cell rows above the header are titles when merged
+                # across the table, or when a row of labels then numbers follows.
+                first_wide = next(
+                    (
+                        i
+                        for i, r in enumerate(rows)
+                        if sum(1 for c in r if c.strip()) > 1
+                    ),
+                    0,
+                )
+                merged_titles = all(
+                    (row_numbers[i], next(j for j, c in enumerate(r) if c.strip()) + 1)
+                    in merged_starts
+                    for i, r in enumerate(rows[:first_wide])
+                )
+                labels_then_numbers = (
+                    first_wide + 1 < len(rows)
+                    and not any(_numeric(c) for c in rows[first_wide])
+                    and any(_numeric(c) for c in rows[first_wide + 1])
+                )
+                if first_wide and (merged_titles or labels_then_numbers):
+                    for row in rows[:first_wide]:
+                        parts.append(" ".join(c for c in row if c.strip()))
+                    rows = rows[first_wide:]
 
                 # Use first non-empty row as header if it looks like one
                 # (contains at least one non-numeric string cell)
                 header = rows[0]
-                has_header = any(
-                    c.strip()
-                    and not c.strip().replace(".", "").replace("-", "").isdigit()
-                    for c in header
-                )
+                has_header = any(c.strip() and not _numeric(c) for c in header)
 
                 if has_header and len(rows) > 1:
                     parts.append(
@@ -1846,7 +3031,9 @@ These positions indicate where to split the text."""
                     for row in rows[1:]:
                         row_parts = []
                         for i, cell in enumerate(row):
-                            col_name = header[i] if i < len(header) else f"Col{i+1}"
+                            col_name = (
+                                header[i].strip() if i < len(header) else ""
+                            ) or f"Col{i+1}"
                             if cell.strip():
                                 row_parts.append(f"{col_name}: {cell}")
                         if row_parts:
@@ -1855,6 +3042,12 @@ These positions indicate where to split the text."""
                     for row in rows:
                         parts.append(" | ".join(c for c in row if c.strip()))
 
+            if not has_values:
+                raise SpreadsheetReadError(
+                    f"{name} has no cell values to index. Add data to the "
+                    "workbook, save it, then index it again.",
+                    "empty_file",
+                )
             text = "\n".join(parts)
 
             if self.config.show_stats:
@@ -1866,7 +3059,9 @@ These positions indicate where to split the text."""
             )
             return text
         except Exception as e:
-            self.log.error(f"Error reading Excel file {xlsx_path}: {e}")
+            self._log_read_failure(
+                e, xlsx_path, f"Error reading Excel file {xlsx_path}: {e}"
+            )
             raise
 
     def _extract_text_from_docx(self, docx_path: str) -> str:
@@ -1887,12 +3082,183 @@ These positions indicate where to split the text."""
         try:
             text = extract_docx_text(docx_path)
         except (ImportError, ValueError) as e:
-            self.log.error(f"Error reading Word file {docx_path}: {e}")
+            self._log_read_failure(
+                e, docx_path, f"Error reading Word file {docx_path}: {e}"
+            )
             raise
 
         if self.config.show_stats:
             print(f"  ✅ Loaded Word file ({len(text):,} chars)")
         self.log.info(f"📄 Extracted {len(text):,} characters from Word file")
+        return text
+
+    def _extract_text_from_image(self, image_path: str) -> tuple:
+        """Read an image file's text with the vision model.
+
+        Each page is sent as the PDF path sends an embedded image, after EXIF
+        rotation and flattening transparency onto white. A multi-page TIFF is
+        read page by page; other formats (animated GIF included) by their
+        first frame. There is no non-VLM path: an image the VLM cannot read
+        fails instead of indexing empty or placeholder text.
+
+        Returns:
+            (text, metadata) — metadata has vlm_pages and total_images set to
+            the number of pages read, and num_pages for a multi-page TIFF.
+
+        Raises:
+            ImageExtractionError: VLM turned off or unavailable, the file is not
+                a decodable image, it has more than MAX_IMAGE_PAGES pages, or the
+                VLM found no text in it.
+        """
+        from PIL import Image  # pylint: disable=import-outside-toplevel
+
+        from gaia.llm import VLMClient  # pylint: disable=import-outside-toplevel
+        from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
+            describe_client_hint,
+            describe_start_hint,
+        )
+
+        file_name = Path(image_path).name
+        if self.config.vlm_model is None:
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: {self._vision_off()}"
+            )
+        model = (
+            resident_vision_model(self.config.vlm_model, self.config.base_url)
+            if self.config.use_vlm
+            else self.config.vlm_model
+        )
+
+        if not self.config.use_vlm:
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: image text extraction is off "
+                "(RAGConfig.use_vlm=False).\n"
+                "Images are read by the vision model; set use_vlm=True to index them."
+            )
+
+        # Outside the try: a locked file must reach index_document as PermissionError.
+        raw = Path(image_path).read_bytes()
+        try:
+            with Image.open(io.BytesIO(raw)) as img:
+                pages = _image_pages_for_vlm(img, file_name)
+        except ImageExtractionError:
+            raise
+        except (OSError, ValueError, Image.DecompressionBombError) as e:
+            self.log.error(f"Unreadable image {image_path}: {e}")
+            raise ImageExtractionError(
+                f"Could not read image: {file_name}\n"
+                f"Reason: {e}\n"
+                "The file appears to be corrupted or not a supported image.\n"
+                "Re-export it as PNG or JPEG and index it again."
+            ) from e
+
+        vlm = VLMClient(vlm_model=model, base_url=self.config.base_url)
+        if not vlm.check_availability():
+            try:
+                vlm.client.health_check()
+            except Exception as e:  # pylint: disable=broad-except
+                if not _is_connection_failure(e):
+                    raise ImageExtractionError(
+                        f"Cannot index image {file_name}: Lemonade Server at "
+                        f"{vlm.server_url} returned an error: {e}\n"
+                        "Check the Lemonade Server log, then index the image again."
+                    ) from e
+                raise ImageExtractionError(
+                    f"Cannot index image {file_name}: Lemonade Server isn't "
+                    f"reachable at {vlm.server_url}.\n"
+                    f"{describe_start_hint().instruction}\n"
+                    "Then index the image again."
+                ) from e
+            # Reachable, so the model is what's missing.
+            pull = describe_client_hint("pull", model).instruction
+            raise ImageExtractionError(
+                f"Cannot index image {file_name}: vision model {model} is not "
+                f"available at {vlm.server_url}.\n"
+                "Images are indexed by reading their text with the vision model.\n"
+                "To fix:\n"
+                f"  1. Download it. {pull}\n"
+                f"     Or download {model} in the Lemonade Model Manager "
+                f"({vlm.server_url}).\n"
+                "  2. Index the image again."
+            )
+        model = vlm.vlm_model
+
+        if self.config.show_stats:
+            print(f"  🖼️  Reading image text with {model} ({len(pages)} page(s))...")
+        page_texts = []
+        try:
+            for page_num, page in enumerate(pages, 1):
+                _beat()
+                results = vlm.extract_from_page_images([page], page_num=page_num)
+                page_texts.append(
+                    "\n\n".join(r["text"].strip() for r in results).strip()
+                )
+        except VLMExtractionError as e:
+            raise ImageExtractionError(
+                f"Could not read text from image {file_name}: {e}"
+            ) from e
+        finally:
+            vlm.cleanup()
+
+        if len(pages) == 1:
+            text = page_texts[0]
+        else:
+            text = "\n\n".join(
+                f"[Page {i}]\n{t}" for i, t in enumerate(page_texts, 1) if t
+            )
+        if not text.strip():
+            raise ImageExtractionError(
+                f"No text found in image: {file_name}\n"
+                f"The vision model ({model}) read the image but returned no text."
+            )
+
+        self.log.info(
+            f"🖼️  Extracted {len(text):,} characters from {file_name} "
+            f"({len(pages)} page(s))"
+        )
+        metadata = {
+            "num_pages": len(pages) if len(pages) > 1 else None,
+            "vlm_pages": len(pages),
+            "total_images": len(pages),
+            "vlm_checked": True,
+            "vlm_available": True,
+        }
+        return text, metadata
+
+    def _extract_text_from_epub(self, epub_path: str) -> tuple:
+        """Extract an EPUB book's text; returns ``(text, num_chapters)``."""
+        from gaia.rag.epub_utils import (  # pylint: disable=import-outside-toplevel
+            extract_epub_text,
+        )
+
+        try:
+            text, num_chapters = extract_epub_text(epub_path)
+        except ValueError as e:
+            self.log.error(f"Error reading EPUB file {epub_path}: {e}")
+            raise
+
+        if self.config.show_stats:
+            print(f"  ✅ Loaded EPUB ({num_chapters} chapters, {len(text):,} chars)")
+        self.log.info(
+            f"📖 Extracted {len(text):,} characters from EPUB ({num_chapters} chapters)"
+        )
+        return text, num_chapters
+
+    def _extract_text_from_html(self, html_path: str) -> str:
+        """A web page's readable text, without its markup, scripts or embedded JSON."""
+        try:
+            with self._safe_open(html_path, "rb") as f:
+                markup = f.read()
+            text = extract_html_text(html_path, markup)
+        except Exception as e:
+            self._log_read_failure(
+                e, html_path, f"Error reading HTML file {html_path}: {e}"
+            )
+            raise
+        self.log.info(
+            f"🌐 Extracted {len(text):,} characters of text from "
+            f"{len(markup):,} bytes of HTML"
+        )
         return text
 
     def _extract_text_from_file(self, file_path: str) -> tuple:
@@ -1902,8 +3268,8 @@ These positions indicate where to split the text."""
         Returns:
             (text, metadata_dict) tuple where metadata_dict contains:
             - num_pages: int (for PDFs/PPTX) or None
-            - vlm_pages: int (for PDFs/PPTX with VLM) or None
-            - total_images: int (for PDFs/PPTX with VLM) or None
+            - vlm_pages: int (for PDFs/PPTX/images with VLM) or None
+            - total_images: int (for PDFs/PPTX/images with VLM) or None
         """
         file_type = self._get_file_type(file_path)
         metadata = {"num_pages": None, "vlm_pages": None, "total_images": None}
@@ -1914,6 +3280,7 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_pages
             metadata["vlm_pages"] = pdf_metadata.get("vlm_pages", 0)
             metadata["total_images"] = pdf_metadata.get("total_images", 0)
+            metadata.update(_vision_record(pdf_metadata))
             # Carry the degraded-page report up. Dropping it here is what made
             # "which pages are incomplete" a log line nobody could act on.
             metadata["pdf_status"] = pdf_metadata.get("pdf_status", "readable")
@@ -1928,10 +3295,15 @@ These positions indicate where to split the text."""
             metadata["num_pages"] = num_slides
             metadata["vlm_pages"] = pptx_metadata.get("vlm_slides", 0)
             metadata["total_images"] = pptx_metadata.get("total_images", 0)
+            metadata.update(_vision_record(pptx_metadata))
             return text, metadata
 
+        # Image files (read by the vision model)
+        elif file_type in IMAGE_EXTENSIONS:
+            return self._extract_text_from_image(file_path)
+
         # Text-based files
-        elif file_type in [".txt", ".md", ".markdown", ".rst", ".log"]:
+        elif file_type in TEXT_DOCUMENT_EXTENSIONS:
             return self._extract_text_from_text_file(file_path), metadata
 
         # CSV files
@@ -1943,93 +3315,63 @@ These positions indicate where to split the text."""
             return self._extract_text_from_json(file_path), metadata
 
         # Excel files
-        elif file_type in [".xlsx", ".xls"]:
+        elif file_type == ".xlsx":
             return self._extract_text_from_xlsx(file_path), metadata
 
         # Word files
         elif file_type == ".docx":
             return self._extract_text_from_docx(file_path), metadata
 
+        # E-books
+        elif file_type == ".epub":
+            text, num_chapters = self._extract_text_from_epub(file_path)
+            metadata["num_chapters"] = num_chapters
+            return text, metadata
+
+        elif file_type in UNSUPPORTED_DOCUMENTS:
+            raise ValueError(unsupported_document_message(file_path, file_type))
+
+        elif file_type in HTML_EXTENSIONS:
+            metadata["html_text"] = True
+            return self._extract_text_from_html(file_path), metadata
+
         # Code files (treat as text for Q&A purposes)
-        elif file_type in [
-            # Backend languages
-            ".py",
-            ".pyw",  # Python
-            ".java",  # Java
-            ".cpp",
-            ".cc",
-            ".cxx",
-            ".hpp",
-            ".h",  # C++
-            ".c",  # C
-            ".cs",  # C#
-            ".go",  # Go
-            ".rs",  # Rust
-            ".rb",  # Ruby
-            ".php",  # PHP
-            ".swift",  # Swift
-            ".kt",
-            ".kts",  # Kotlin
-            ".scala",  # Scala
-            # Web - JavaScript/TypeScript
-            ".js",
-            ".jsx",  # JavaScript
-            ".ts",
-            ".tsx",  # TypeScript
-            ".mjs",
-            ".cjs",  # JavaScript modules
-            # Web - Frameworks
-            ".vue",  # Vue.js
-            ".svelte",  # Svelte
-            ".astro",  # Astro
-            # Web - Styling
-            ".css",  # CSS
-            ".scss",
-            ".sass",  # Sass
-            ".less",  # Less
-            ".styl",
-            ".stylus",  # Stylus
-            # Web - Markup
-            ".html",
-            ".htm",  # HTML
-            ".svg",  # SVG
-            ".jsx",
-            ".tsx",  # JSX/TSX (already listed but emphasizing)
-            # Scripting
-            ".sh",
-            ".bash",  # Shell
-            ".ps1",  # PowerShell
-            ".r",
-            ".R",  # R
-            # Database
-            ".sql",  # SQL
-            # Configuration
-            ".yaml",
-            ".yml",  # YAML
-            ".xml",  # XML
-            ".toml",  # TOML
-            ".ini",
-            ".cfg",
-            ".conf",  # Config files
-            ".env",  # Environment files
-            ".properties",  # Properties files
-            # Build & Package
-            ".gradle",  # Gradle
-            ".cmake",  # CMake
-            ".mk",
-            ".make",  # Makefiles
-            # Documentation
-            ".rst",  # ReStructuredText
-        ]:
+        elif file_type in CODE_EXTENSIONS:
             self.log.info(f"Indexing code/web file: {file_type}")
             return self._extract_text_from_text_file(file_path), metadata
 
         # Unknown file type - try as text
         else:
+            self._refuse_binary(file_path, file_type)
             self.log.warning(
                 f"Unknown file type {file_type}, attempting to read as text"
             )
             return self._extract_text_from_text_file(file_path), metadata
+
+    def _refuse_binary(self, file_path: str, file_type: str) -> None:
+        """Raise when *file_path* holds binary data; latin-1 would "decode" it as garbage."""
+        with self._safe_open(file_path, "rb") as f:
+            head = f.read(8192)
+        has_nul = b"\x00" in head
+        for bom, encoding in _TEXT_BOM_ENCODINGS:
+            if head.startswith(bom):
+                # UTF-16/32 text is full of NUL bytes; judge its decoded form.
+                decoder = codecs.getincrementaldecoder(encoding)()
+                try:
+                    has_nul = "\x00" in decoder.decode(head, final=False)
+                except UnicodeDecodeError:
+                    return  # the text decoder reports the bad encoding
+                break
+        if has_nul:
+            raise ValueError(
+                f"Cannot index {Path(file_path).name}: it is a binary file, not "
+                f"text, and GAIA has no reader for {file_type} files.\n"
+                "Supported: PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), "
+                "EPUB, images (PNG, JPG, ...), plain text, Markdown, CSV, JSON, HTML "
+                "and source code. "
+                "Convert the file to one of these (PDF works for most documents) "
+                "and index that copy."
+            )
 
     def _split_text_into_chunks(self, text: str) -> List[str]:
         """
@@ -2055,7 +3397,7 @@ These positions indicate where to split the text."""
             if self.llm_client is None:
                 from gaia.llm.lemonade_client import LemonadeClient
 
-                self.llm_client = LemonadeClient()
+                self.llm_client = LemonadeClient(base_url=self.config.base_url)
                 self.log.info("✅ Initialized LLM client for intelligent chunking")
 
             return self._fit_chunks_to_embedder(
@@ -2074,10 +3416,14 @@ These positions indicate where to split the text."""
         protected_text = text
         for i, match in enumerate(re.finditer(vlm_pattern, text, re.DOTALL)):
             placeholder = f"<<<VLM_BLOCK_{i}>>>"
-            vlm_blocks.append(
-                {"placeholder": placeholder, "content": match.group(0).strip()}
+            block = match.group(0)
+            content = block.rstrip()
+            vlm_blocks.append({"placeholder": placeholder, "content": content})
+            # Keep the whitespace after the block, or restoring it fuses its last
+            # word to the next image or page marker.
+            protected_text = protected_text.replace(
+                block, placeholder + block[len(content) :], 1
             )
-            protected_text = protected_text.replace(match.group(0), placeholder, 1)
 
         # STEP 2: Identify natural document boundaries
         # Look for markdown headers, section breaks, or significant whitespace
@@ -2139,7 +3485,11 @@ These positions indicate where to split the text."""
         vlm_paragraphs = set()
         for idx, para in enumerate(paragraphs):
             # Check if this paragraph contains VLM markers
-            if "### 🖼️ IMAGE" in para or "**Content Extracted from Images:**" in para:
+            if (
+                "### 🖼️ IMAGE" in para
+                or "**Content Extracted from Images:**" in para
+                or any(block["placeholder"] in para for block in vlm_blocks)
+            ):
                 vlm_paragraphs.add(idx)
                 self.log.debug(
                     f"Paragraph {idx} marked as VLM content (will keep atomic)"
@@ -2154,7 +3504,7 @@ These positions indicate where to split the text."""
                 continue
 
             # Estimate tokens (rough: 1 token ≈ 4 characters)
-            para_tokens = len(para) // 4
+            para_tokens = estimate_tokens(para)
 
             # Check if this is VLM content - if so, keep it atomic
             is_vlm_content = idx in vlm_paragraphs
@@ -2165,18 +3515,18 @@ These positions indicate where to split the text."""
                 sentences = self._split_into_sentences(para)
 
                 for sentence in sentences:
-                    sentence_tokens = len(sentence) // 4
+                    sentence_tokens = estimate_tokens(sentence)
 
                     # If adding this sentence exceeds chunk size, save current chunk
                     if (
                         current_size + sentence_tokens > chunk_size_tokens
                         and current_chunk
                     ):
-                        chunks.append(" ".join(current_chunk))
+                        chunks.append(join_pieces(current_chunk))
 
                         # Keep overlap (last few sentences)
-                        overlap_text = " ".join(current_chunk)
-                        overlap_actual = len(overlap_text) // 4
+                        overlap_text = join_pieces(current_chunk)
+                        overlap_actual = estimate_tokens(overlap_text)
                         if overlap_actual > overlap_tokens:
                             # Trim to overlap size
                             current_chunk = self._get_last_n_tokens(
@@ -2195,7 +3545,7 @@ These positions indicate where to split the text."""
                 if is_vlm_content:
                     if current_chunk:
                         # Save current chunk before adding VLM content
-                        chunks.append(" ".join(current_chunk))
+                        chunks.append(join_pieces(current_chunk))
                         current_chunk = []
                         current_size = 0
 
@@ -2207,14 +3557,14 @@ These positions indicate where to split the text."""
 
                 elif current_size + para_tokens > chunk_size_tokens and current_chunk:
                     # Save current chunk
-                    chunks.append(" ".join(current_chunk))
+                    chunks.append(join_pieces(current_chunk))
 
                     # Keep overlap
-                    overlap_text = " ".join(current_chunk)
+                    overlap_text = join_pieces(current_chunk)
                     current_chunk = self._get_last_n_tokens(
                         overlap_text, overlap_tokens
                     ).split()
-                    current_size = len(" ".join(current_chunk)) // 4
+                    current_size = estimate_tokens(join_pieces(current_chunk))
 
                     current_chunk.append(para)
                     current_size += para_tokens
@@ -2224,7 +3574,7 @@ These positions indicate where to split the text."""
 
         # Add final chunk
         if current_chunk:
-            chunks.append(" ".join(current_chunk))
+            chunks.append(join_pieces(current_chunk))
 
         # STEP 4: Restore VLM blocks from placeholders
         if vlm_blocks:
@@ -2258,7 +3608,7 @@ These positions indicate where to split the text."""
         fitted = []
         split = pieces = 0
         for chunk in chunks:
-            if len(chunk) <= EMBED_MAX_CHARS:
+            if len(search_form(chunk)) <= EMBED_MAX_CHARS:
                 fitted.append(chunk)
                 continue
             parts = split_for_embedding(chunk)
@@ -2278,8 +3628,6 @@ These positions indicate where to split the text."""
 
         Better than word splitting, doesn't require NLTK dependency.
         """
-        # Split on sentence endings followed by space and capital letter
-
         # Handle common abbreviations that shouldn't split
         text = text.replace("Dr.", "Dr<DOT>")
         text = text.replace("Mr.", "Mr<DOT>")
@@ -2294,7 +3642,7 @@ These positions indicate where to split the text."""
         text = text.replace("etc.", "etc<DOT>")
 
         # Split on sentence boundaries
-        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
+        sentences = SENTENCE_BREAK.split(text)
 
         # Restore abbreviations
         sentences = [s.replace("<DOT>", ".") for s in sentences]
@@ -2303,17 +3651,7 @@ These positions indicate where to split the text."""
 
     def _get_last_n_tokens(self, text: str, n_tokens: int) -> str:
         """Get approximately the last n tokens from text."""
-        # Rough estimate: 1 token ≈ 4 characters
-        target_chars = n_tokens * 4
-        if len(text) <= target_chars:
-            return text
-
-        # Try to break on word boundary
-        trimmed = text[-target_chars:]
-        first_space = trimmed.find(" ")
-        if first_space > 0:
-            return trimmed[first_space + 1 :]
-        return trimmed
+        return last_tokens(text, n_tokens)
 
     def _create_faiss_index(self, embeddings: "np.ndarray"):
         """Build a FAISS L2 index from precomputed embeddings."""
@@ -2323,20 +3661,75 @@ These positions indicate where to split the text."""
         index.add(embeddings.astype("float32"))
         return index
 
+    def _vectors_path(self, chunks: List[str]) -> str:
+        """Where the embeddings of *chunks* under the current embedder are kept.
+
+        The name binds the vectors to the embedding model and the chunk text as
+        embedded, so different text never reads them and the same text, indexed
+        again from a new temp copy, adds no second file.
+        """
+        digest = hashlib.sha256(self.config.embedding_model.encode("utf-8"))
+        for chunk in chunks:
+            digest.update(b"\x1e" + search_form(chunk).encode("utf-8"))
+        return os.path.join(
+            self.config.cache_dir, f"vectors_{digest.hexdigest()[:24]}.npy"
+        )
+
+    def _load_vectors(self, path: str, count: int) -> Optional["np.ndarray"]:
+        """Saved embeddings at *path*, or None when absent or not *count* rows."""
+        if not os.path.exists(path):
+            return None
+        try:
+            with file_lock(_cache_lock_target(path)):
+                vectors = np.load(path, allow_pickle=False)
+        except (OSError, ValueError) as e:
+            self.log.warning(f"Re-embedding: saved vectors unreadable ({path}): {e}")
+            return None
+        if vectors.ndim != 2 or vectors.shape[0] != count:
+            self.log.warning(
+                f"Re-embedding: saved vectors have shape {vectors.shape}, "
+                f"expected {count} rows ({path})"
+            )
+            return None
+        return vectors
+
+    def _save_vectors(self, path: str, vectors: "np.ndarray") -> None:
+        buf = io.BytesIO()
+        np.save(buf, np.ascontiguousarray(vectors, dtype="float32"))
+        with file_lock(_cache_lock_target(path)):
+            write_bytes_atomic(path, buf.getvalue())
+
     def _create_vector_index(
         self,
         chunks: List[str],
         return_embeddings: bool = False,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
+        cache_path: Optional[str] = None,
     ) -> tuple:
         """Create FAISS vector index from chunks with progress reporting.
 
         ``progress_callback(done, total)`` is called before the first chunk is
         embedded and after every ``PROGRESS_SLICE_CHUNKS`` chunks.
+        ``wait_callback`` is passed to ``_encode_texts``.
+
+        With ``cache_path`` (the document's chunk cache), embeddings are saved
+        beside it and reused, so reopening a document never re-embeds it.
         """
         import time as time_module  # pylint: disable=reimported
 
         self._load_embedder()
+
+        vectors_path = self._vectors_path(chunks) if cache_path else None
+        saved = self._load_vectors(vectors_path, len(chunks)) if vectors_path else None
+        if saved is not None:
+            if progress_callback is not None and chunks:
+                progress_callback(len(chunks), len(chunks))
+            index = self._create_faiss_index(saved)
+            self.log.info(f"📚 Index ready with {index.ntotal} saved vectors")
+            if return_embeddings:
+                return index, chunks, saved
+            return index, chunks
 
         # Generate embeddings with detailed progress
         self.log.info(f"🔍 Generating embeddings for {len(chunks)} chunks...")
@@ -2351,7 +3744,9 @@ These positions indicate where to split the text."""
         embed_start = time_module.time()
         if progress_callback is None or not chunks:
             embeddings = self._encode_texts(
-                chunks, show_progress=self.config.show_stats
+                chunks,
+                show_progress=self.config.show_stats,
+                wait_callback=wait_callback,
             )
         else:
             progress_callback(0, len(chunks))
@@ -2359,11 +3754,21 @@ These positions indicate where to split the text."""
             for start in range(0, len(chunks), PROGRESS_SLICE_CHUNKS):
                 part = chunks[start : start + PROGRESS_SLICE_CHUNKS]
                 parts.append(
-                    self._encode_texts(part, show_progress=self.config.show_stats)
+                    self._encode_texts(
+                        part,
+                        show_progress=self.config.show_stats,
+                        wait_callback=wait_callback,
+                    )
                 )
                 progress_callback(start + len(part), len(chunks))
             embeddings = np.concatenate(parts)
         embed_duration = time_module.time() - embed_start
+        if vectors_path:
+            try:
+                self._save_vectors(vectors_path, embeddings)
+            except (OSError, FileLockError) as e:
+                # Saved vectors only speed up reopening; the index itself is built.
+                self.log.warning(f"Could not save vectors to {vectors_path}: {e}")
 
         if self.config.show_stats:
             print(
@@ -2399,6 +3804,22 @@ These positions indicate where to split the text."""
         if return_embeddings:
             return index, chunks, embeddings
         return index, chunks
+
+    def _index_without_rows(self, removed: set):
+        """A new index with every vector of ``self.index`` except rows *removed*.
+
+        Copies the stored vectors instead of re-embedding, and leaves
+        ``self.index`` untouched for readers holding a snapshot of it.
+        """
+        total = self.index.ntotal
+        if total != len(self.chunks):
+            raise RuntimeError(
+                f"Vector index holds {total} vectors for {len(self.chunks)} "
+                "chunks; re-index the documents to rebuild it."
+            )
+        keep = np.ones(total, dtype=bool)
+        keep[sorted(removed)] = False
+        return self._create_faiss_index(self.index.reconstruct_n(0, total)[keep])
 
     def _snapshot_query_state(self) -> Dict[str, Any]:
         """Capture a consistent read snapshot for query operations."""
@@ -2466,9 +3887,8 @@ These positions indicate where to split the text."""
                                 new_file_to_chunk_indices[owner] = []
                             new_file_to_chunk_indices[owner].append(new_idx)
 
-                    # Rebuild index only after the new chunk set is ready.
                     if new_chunks:
-                        new_index, new_chunks = self._create_vector_index(new_chunks)
+                        new_index = self._index_without_rows(chunk_indices_set)
                     else:
                         new_index = None
 
@@ -2480,12 +3900,15 @@ These positions indicate where to split the text."""
 
                 # Remove from indexed files
                 self.indexed_files.discard(file_path)
+                self._evicted_for_size = False
 
                 # Clean up LRU tracking
                 if file_path in self.file_access_times:
                     del self.file_access_times[file_path]
                 if file_path in self.file_index_times:
                     del self.file_index_times[file_path]
+                self.file_content_keys.pop(file_path, None)
+                self.file_stat_keys.pop(file_path, None)
 
                 # Clean up cached per-file indices and embeddings
                 if file_path in self.file_indices:
@@ -2514,82 +3937,141 @@ These positions indicate where to split the text."""
                 self.log.error(f"Failed to remove document {file_path}: {e}")
                 return False
 
-    def reindex_document(self, file_path: str) -> Dict[str, Any]:
+    def reindex_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
+    ) -> Dict[str, Any]:
         """
-        Reindex a document (remove old chunks and add new ones).
+        Re-index a document that may have changed on disk.
+
+        Same path as :meth:`index_document` on an edited file: the new
+        version is extracted and embedded without the index lock, so searches
+        keep answering from the old version until it is swapped in. If the
+        re-index fails, the old version stays indexed. Unchanged bytes are not
+        re-embedded; the result then has ``already_indexed: True``.
 
         Args:
             file_path: Path to document to reindex
+            progress_callback: Passed to :meth:`index_document`.
+            wait_callback: Passed to :meth:`index_document`.
 
         Returns:
             Dict with indexing results and statistics (same as index_document)
         """
+        result = self.index_document(
+            file_path,
+            progress_callback=progress_callback,
+            wait_callback=wait_callback,
+        )
+        if result.get("success") and not result.get("already_indexed"):
+            result["reindexed"] = True
+        return result
+
+    def is_current(self, file_path: str) -> bool:
+        """Whether *file_path* is indexed from the bytes it holds now.
+
+        Hashes the file outside the index lock, so an edit is caught whatever
+        its size or timestamp. An unreadable file is not current.
+        """
         file_path = str(Path(file_path).absolute())
         with self._state_lock:
-            previous_state = {
-                name: getattr(self, name).copy()
-                for name in (
-                    "chunks",
-                    "indexed_files",
-                    "chunk_to_file",
-                    "file_to_chunk_indices",
-                    "file_indices",
-                    "file_embeddings",
-                    "file_metadata",
-                    "file_access_times",
-                    "file_index_times",
-                )
-            }
-            previous_state.update(
-                index=self.index, _access_counter=self._access_counter
-            )
-            # Keep remove+reindex under the same lock so readers never observe a
-            # gap where the document disappeared between generations. Query
-            # paths snapshot state quickly under this same lock and then do the
-            # expensive work outside it.
-            # Remove old version if it exists
-            if file_path in self.indexed_files:
-                self.log.info(f"Removing old version of {file_path}")
-                if not self.remove_document(file_path):
-                    return {
-                        "success": False,
-                        "error": "Failed to remove old version",
-                        "file_name": Path(file_path).name,
-                    }
+            if file_path not in self.indexed_files:
+                return False
+            indexed_key = self.file_content_keys.get(file_path)
+        if indexed_key is None:
+            return False
+        return self._content_key(file_path) == indexed_key
 
-            # Index the new version
-            self.log.info(f"Indexing new version of {file_path}")
-            succeeded = False
-            result = None
-            try:
-                result = self.index_document(file_path)
-                succeeded = bool(result.get("success"))
-                if succeeded:
-                    result["reindexed"] = True
-                return result
-            finally:
-                if not succeeded:
-                    # Removal builds a fresh index, so the old generation is intact.
-                    for name, value in previous_state.items():
-                        setattr(self, name, value)
-                    if result is not None:
-                        result["total_indexed_files"] = len(self.indexed_files)
-                        result["total_chunks"] = len(self.chunks)
+    def freshness(self, file_path: str) -> str:
+        """How *file_path* compares to the bytes it was indexed from; cheap to call.
 
-    def _evict_lru_document(self) -> bool:
+        Returns ``"current"``, ``"changed"``, ``"missing"``, ``"locked"`` (another
+        program holds it), ``"denied"`` (the user may no longer read it),
+        ``"unreadable"`` or ``"not_indexed"``. Hashes only
+        when the file's size, mtime, inode or (POSIX) ctime moved since it was
+        indexed, or when it was written within 2s of that stat. On Windows, an
+        edit that later restores both size and mtime is caught by
+        :meth:`is_current`, not here.
+        """
+        file_path = str(Path(file_path).absolute())
+        with self._state_lock:
+            if file_path not in self.indexed_files:
+                return "not_indexed"
+            indexed_key = self.file_content_keys.get(file_path)
+            recorded = self.file_stat_keys.get(file_path)
+        taken_at = time.time_ns()
+        try:
+            stat_key = self._stat_key(file_path)
+        except FileNotFoundError:
+            return "missing"
+        except OSError:
+            stat_key = None
+        if (
+            stat_key is not None
+            and recorded is not None
+            and recorded[0] == stat_key
+            and recorded[1] - stat_key[1] >= _RACY_STAT_NS
+        ):
+            # A permission change moves no stat field on Windows.
+            return _open_state(file_path) or "current"
+        if indexed_key is None:
+            return "changed"
+        try:
+            key = self._content_key(file_path, raise_locked=True)
+        except PermissionError:
+            return "locked"
+        if key.endswith("_notfound"):
+            return "unreadable" if os.path.lexists(file_path) else "missing"
+        if key != indexed_key:
+            return "changed"
+        with self._state_lock:
+            if stat_key is not None and self._indexed_from(file_path, key):
+                self.file_stat_keys[file_path] = (stat_key, taken_at)
+        return "current"
+
+    def _indexed_from(self, file_path: str, content_key: str) -> bool:
+        """Whether *file_path* is indexed from the bytes *content_key* names.
+
+        Call with ``_state_lock`` held.
+        """
+        return (
+            file_path in self.indexed_files
+            and self.file_content_keys.get(file_path) == content_key
+        )
+
+    def _drop_other_generation(self, file_path: str, stats: Dict[str, Any]) -> bool:
+        """Remove another writer's index of different bytes before publishing.
+
+        Call with ``_state_lock`` held. Returns False, with ``stats["error"]``
+        set, when that index could not be removed.
+        """
+        if file_path not in self.indexed_files:
+            return True
+        self.log.info(f"Replacing the index of another version of {file_path}")
+        if self.remove_document(file_path):
+            return True
+        stats["error"] = (
+            f"Could not replace the index of another version of "
+            f"{Path(file_path).name}. Remove the document and add it again."
+        )
+        return False
+
+    def _evict_lru_document(self) -> Optional[str]:
         """
         Evict the least recently used document to free memory.
 
         Returns:
-            True if a document was evicted, False otherwise
+            The path of the evicted document, or None if no document was evicted
         """
         if not self.config.enable_lru_eviction:
             self.log.warning("LRU eviction disabled, cannot free memory")
-            return False
+            return None
 
         if not self.file_access_times:
             self.log.warning("No tracked files available for LRU eviction")
-            return False
+            return None
 
         # Find LRU file (oldest access time)
         lru_file = min(self.file_access_times, key=self.file_access_times.get)
@@ -2605,27 +4087,36 @@ These positions indicate where to split the text."""
         result = self.remove_document(lru_file)
         if not result:
             self.log.error(f"Failed to evict LRU document: {Path(lru_file).name}")
-        return result
+            return None
+        return lru_file
 
-    def _check_memory_limits(self) -> bool:
+    def _check_memory_limits(self) -> Tuple[bool, List[str]]:
         """
         Check memory limits and evict documents if necessary.
 
         Returns:
-            True if limits are satisfied, False if still exceeded
+            A tuple containing:
+                - True if limits are satisfied, False if still exceeded
+                - A list of evicted document paths (if any)
         """
+        evicted_files: List[str] = []
+
         # Check total chunks limit
         while (
             self.config.max_total_chunks > 0
             and len(self.chunks) > self.config.max_total_chunks
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
-            if not self._evict_lru_document():
+            path = self._evict_lru_document()
+            if path is None:
                 self.log.warning(
                     f"Cannot meet chunk limit: {len(self.chunks)} chunks "
                     f"exceeds max {self.config.max_total_chunks}, eviction failed"
                 )
                 break
+            evicted_files.append(path)
+        if evicted_files:
+            self._evicted_for_size = True
 
         # Check indexed files limit
         while (
@@ -2633,12 +4124,14 @@ These positions indicate where to split the text."""
             and len(self.indexed_files) > self.config.max_indexed_files
             and len(self.indexed_files) > 1
         ):  # Keep at least one file
-            if not self._evict_lru_document():
+            path = self._evict_lru_document()
+            if path is None:
                 self.log.warning(
                     f"Cannot meet file limit: {len(self.indexed_files)} files "
                     f"exceeds max {self.config.max_indexed_files}, eviction failed"
                 )
                 break
+            evicted_files.append(path)
 
         chunks_ok = (
             self.config.max_total_chunks <= 0
@@ -2648,30 +4141,57 @@ These positions indicate where to split the text."""
             self.config.max_indexed_files <= 0
             or len(self.indexed_files) <= self.config.max_indexed_files
         )
-        return chunks_ok and files_ok
+        return chunks_ok and files_ok, evicted_files
 
-    def _has_indexing_capacity(self) -> bool:
+    def full_by(self) -> Optional[str]:
+        """Which limit stops the index taking one more document without pushing one out.
+
+        ``"size"`` once its passages reach ``max_total_chunks``, or a load had
+        to push a document out to fit under it; ``"files"`` at
+        ``max_indexed_files`` documents; None while there is room.
+        """
+        with self._state_lock:
+            files = len(self.indexed_files)
+            chunks = len(self.chunks)
+            evicted_for_size = self._evicted_for_size
+        if evicted_for_size or 0 < self.config.max_total_chunks <= chunks:
+            return "size"
+        if 0 < self.config.max_indexed_files <= files:
+            return "files"
+        return None
+
+    def is_full(self) -> bool:
+        """True when indexing one more document would push out one already held."""
+        return self.full_by() is not None
+
+    def _has_indexing_capacity(self, replacing: Optional[str] = None) -> bool:
         """Check if there is capacity to index another document.
 
         This is a read-only check — it does not evict. When eviction is
         enabled, capacity is available if there is at least one document
         that could be evicted. When disabled, capacity requires being
-        under the limits.
+        under the limits. *replacing* names an indexed file about to be
+        swapped out, so its current generation is not counted.
         """
+        num_files = len(self.indexed_files)
+        num_chunks = len(self.chunks)
+        if replacing is not None and replacing in self.indexed_files:
+            num_files -= 1
+            num_chunks -= len(self.file_to_chunk_indices.get(replacing, []))
         files_at_limit = (
             self.config.max_indexed_files > 0
-            and len(self.indexed_files) >= self.config.max_indexed_files
+            and num_files >= self.config.max_indexed_files
         )
         chunks_at_limit = (
             self.config.max_total_chunks > 0
-            and len(self.chunks) >= self.config.max_total_chunks
+            and num_chunks >= self.config.max_total_chunks
         )
 
         if not files_at_limit and not chunks_at_limit:
             return True  # Under both limits
 
         # At limit — can we evict to make room?
-        if self.config.enable_lru_eviction and len(self.indexed_files) > 0:
+        if self.config.enable_lru_eviction and num_files > 0:
             return True  # Eviction can free space (post-index)
 
         # At limit with no eviction possible
@@ -2681,6 +4201,41 @@ These positions indicate where to split the text."""
         self,
         file_path: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
+        heartbeat: Optional[Callable[[], None]] = None,
+        display_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Index a document for retrieval; see :meth:`_index_document`.
+
+        ``heartbeat`` is called once per extracted PDF page. Raising
+        :class:`IndexingStopped` from it, or from ``progress_callback``,
+        stops the index and keeps any cache the document had.
+
+        ``display_name`` is the name the user knows the file by, when
+        ``file_path`` is a copy. The returned ``file_name`` and ``error`` use
+        it in place of the copy's path.
+        """
+        if display_name:
+            self.log.info(f"Indexing {display_name} (copy at {file_path})")
+        previous = getattr(_HEARTBEAT, "fn", None)
+        _HEARTBEAT.fn = heartbeat
+        try:
+            stats = self._index_document(file_path, progress_callback, wait_callback)
+        finally:
+            _HEARTBEAT.fn = previous
+        if display_name:
+            stats["file_name"] = display_name
+            if stats.get("error"):
+                stats["error"] = name_file_for_user(
+                    str(stats["error"]), file_path, display_name
+                )
+        return stats
+
+    def _index_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
     ) -> Dict[str, Any]:
         """
         Index a document for retrieval.
@@ -2700,6 +4255,9 @@ These positions indicate where to split the text."""
             file_path: Path to document or code file
             progress_callback: Optional ``(chunks_embedded, total_chunks)``
                 callback, called as embedding starts and while it runs.
+            wait_callback: Optional ``(seconds_waited)`` callback, called every
+                ``EMBED_WAIT_REPORT_S`` while a batch waits on a busy embedder
+                and with 0 once it answers.
 
         Returns:
             Dict with indexing results and statistics:
@@ -2712,7 +4270,12 @@ These positions indicate where to split the text."""
                 "num_chunks": int,
                 "total_indexed_files": int,
                 "total_chunks": int,
-                "error": str (if failed)
+                "error": str (if failed),
+                "error_type": str (some failures: "file_locked",
+                    "cache_busy" or "embedding_unavailable"),
+                "xlsx_status": str (an unreadable workbook: "corrupted",
+                    "unsupported_workbook" or "empty_file"),
+                "pptx_status": str ("readable", or "corrupted" for a damaged file)
             }
 
         Raises:
@@ -2747,6 +4310,16 @@ These positions indicate where to split the text."""
             stats["error"] = f"File not found: {file_path}"
             return stats
 
+        # A folder's size reads as 0 on Windows, which would say "empty".
+        if os.path.isdir(file_path):
+            self.log.error(f"Not a file: {file_path}")
+            stats["error"] = (
+                f"'{file_path}' is a folder, not a file. Index a folder's "
+                "documents with index_directory."
+            )
+            stats["is_folder"] = True
+            return stats
+
         # Check if file is empty (early validation to save time)
         file_size = os.path.getsize(file_path)
         file_size_mb = file_size / (1024 * 1024)
@@ -2758,6 +4331,7 @@ These positions indicate where to split the text."""
                 print(f"❌ File is empty: {file_path}")
                 print("   The file has no content to index")
             stats["error"] = "File is empty"
+            stats["empty_file"] = True
             return stats
 
         # Enforce maximum file size limit (prevent OOM)
@@ -2793,9 +4367,29 @@ These positions indicate where to split the text."""
         stats["file_type"] = file_type
         stats["file_name"] = Path(file_path).name
 
+        replacing = False
+        with self._state_lock:
+            was_indexed = file_path in self.indexed_files
+        if was_indexed:
+            try:
+                current_key = self._content_key(file_path, raise_locked=True)
+            except PermissionError as e:
+                return self._document_locked(stats, file_path, e)
+            with self._state_lock:
+                replacing = not self._indexed_from(file_path, current_key)
+            if replacing:
+                # Built without the lock; the old text serves until the swap.
+                self.log.info(f"{file_path} changed since it was indexed; re-indexing")
+            elif self.unread_images_readable(file_path):
+                replacing = True
+                self.log.info(
+                    f"{file_path} left images unread and the vision model is up; "
+                    "re-indexing to read them"
+                )
+
         with self._state_lock:
             # Check if already indexed
-            if file_path in self.indexed_files:
+            if file_path in self.indexed_files and not replacing:
                 if self.config.show_stats:
                     print(f"📋 Document already indexed: {Path(file_path).name}")
                 self.log.info(f"Document already indexed: {file_path}")
@@ -2807,7 +4401,7 @@ These positions indicate where to split the text."""
                 return stats
 
             # Pre-flight: check capacity before investing in indexing
-            if not self._has_indexing_capacity():
+            if not replacing and not self._has_indexing_capacity():
                 msg = (
                     f"Memory limit reached: {len(self.indexed_files)} files "
                     f"(max: {self.config.max_indexed_files}), "
@@ -2823,8 +4417,19 @@ These positions indicate where to split the text."""
                 return stats
 
         # Check cache - the cache key is based on file content hash
-        content_key = self._content_key(file_path)
-        cache_path = self._get_cache_path(file_path, content_key)
+        taken = self._taken_stat(file_path)
+        try:
+            content_key = self._content_key(file_path, raise_locked=True)
+        except PermissionError as e:
+            return self._document_locked(stats, file_path, e)
+        if content_key.endswith("_notfound"):
+            # PDF, DOCX, XLSX and PPTX are opened by their own libraries, so
+            # extraction can succeed on a file we could not hash. Caching that
+            # under the path-only key would serve the first version forever.
+            return self._document_unhashable(stats, file_path)
+        cache_path = self._cache_of_same_bytes(
+            self._get_cache_path(file_path, content_key), content_key
+        )
         md_cache_path = self._extracted_markdown_path(content_key)
 
         if os.path.exists(cache_path):
@@ -2836,6 +4441,13 @@ These positions indicate where to split the text."""
                 cached_chunks = cached_data["chunks"]
                 cached_full_text = cached_data.get("full_text", "")
                 cached_metadata = cached_data.get("metadata", {})
+
+                if self._images_readable_now(cached_metadata):
+                    raise _ImagesReadableNow()
+                if file_type in HTML_EXTENSIONS and not cached_metadata.get(
+                    "html_text"
+                ):
+                    raise ValueError("cached HTML was indexed as raw markup")
 
                 # Check if cache might be missing VLM content
                 # If metadata doesn't have VLM info, it's an old cache
@@ -2858,15 +4470,18 @@ These positions indicate where to split the text."""
                         vlm_info = f" (VLM: {cached_metadata['vlm_pages']} pages)"
                     print(f"  ✅ Loaded {len(cached_chunks)} cached chunks{vlm_info}")
 
-                # The cache holds chunks, not vectors, so this re-embeds.
                 new_index, _, file_embeddings = self._create_vector_index(
                     list(cached_chunks),
                     return_embeddings=True,
                     progress_callback=progress_callback,
+                    wait_callback=wait_callback,
+                    cache_path=cache_path,
                 )
 
                 with self._state_lock:
-                    if file_path in self.indexed_files:
+                    if self._indexed_from(
+                        file_path, content_key
+                    ) and not self._left_images_unread(file_path):
                         self.log.info(f"Document already indexed: {file_path}")
                         stats["success"] = True
                         stats["already_indexed"] = True
@@ -2876,11 +4491,10 @@ These positions indicate where to split the text."""
                         stats["total_indexed_files"] = len(self.indexed_files)
                         stats["total_chunks"] = len(self.chunks)
                         return stats
-
                     # Re-check capacity under the lock because another writer
                     # may have indexed or evicted documents while we were
                     # loading this cache entry from disk.
-                    if not self._has_indexing_capacity():
+                    if not self._has_indexing_capacity(replacing=file_path):
                         msg = (
                             f"Memory limit reached: {len(self.indexed_files)} files "
                             f"(max: {self.config.max_indexed_files}), "
@@ -2893,6 +4507,12 @@ These positions indicate where to split the text."""
                             print(f"❌ {msg}")
                         stats["error"] = msg
                         stats["memory_limit_reached"] = True
+                        return stats
+
+                    # Everything that can fail runs before the old generation
+                    # is dropped, so a failed re-index keeps serving it.
+                    file_index = self._create_faiss_index(file_embeddings)
+                    if not self._drop_other_generation(file_path, stats):
                         return stats
 
                     if self.index is None:
@@ -2917,8 +4537,6 @@ These positions indicate where to split the text."""
                                 f"  ➕ Appending {len(cached_chunks)} cached chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                             )
 
-                    file_index = self._create_faiss_index(file_embeddings)
-
                     if self.index is None:
                         self.index = new_index
                     else:
@@ -2939,6 +4557,8 @@ These positions indicate where to split the text."""
                         }
 
                     self.indexed_files.add(file_path)
+                    self.file_content_keys[file_path] = content_key
+                    self._record_stat(file_path, taken)
 
                     # Track access time for LRU (was missing — pre-existing bug)
                     current_time = time.time()
@@ -2950,7 +4570,7 @@ These positions indicate where to split the text."""
                     print("  ✅ Successfully loaded from cache")
 
                 # Check memory limits after cache load
-                limits_ok = self._check_memory_limits()
+                limits_ok, evicted = self._check_memory_limits()
 
                 # Update stats for cache load
                 stats["success"] = True
@@ -2958,29 +4578,48 @@ These positions indicate where to split the text."""
                 stats["num_pages"] = cached_metadata.get("num_pages")
                 stats["vlm_pages"] = cached_metadata.get("vlm_pages")
                 stats["total_images"] = cached_metadata.get("total_images")
+                if cached_metadata.get("unread_image_pages"):
+                    stats["unread_image_pages"] = cached_metadata["unread_image_pages"]
+                    stats["unread_images_note"] = self._unread_images_note(
+                        cached_metadata["unread_image_pages"]
+                    )
                 stats["total_indexed_files"] = len(self.indexed_files)
                 stats["total_chunks"] = len(self.chunks)
                 stats["from_cache"] = True
+                if replacing:
+                    stats["reindexed"] = True
+                if evicted:
+                    stats["evicted"] = evicted
                 if not limits_ok:
                     stats["memory_limit_warning"] = True
                 return stats
+            except (IndexingStopped, LeaseWaitCancelled):
+                raise
+            except _ImagesReadableNow:
+                self.log.info(
+                    f"Re-extracting {file_path}: its images were not read while the "
+                    "vision model was unavailable, and it is available now"
+                )
+                if self.config.show_stats:
+                    print(
+                        "  🖼️  Vision model is available now: reading this file's images"
+                    )
             except EmbeddingUnavailableError as e:
                 # The cache is fine; the embedder is not. Keep the cache.
                 return self._embedding_failed(stats, file_path, e)
+            except FileLockError as e:
+                # Not corrupt: re-extracting would redo another process's work,
+                # or fail the same way saving into an unwritable cache.
+                return self._cache_lock_failed(stats, file_path, e)
             except Exception as e:
+                # A miss, not a delete: re-indexing replaces the entry atomically,
+                # and deleting here could destroy a fresh cache another process
+                # just wrote, or leave none at all if re-indexing then fails.
                 self.log.warning(f"Cache load failed: {e}, reindexing")
                 if self.config.show_stats:
                     print(
                         "  ⚠️  Cache outdated or corrupted, will reindex from scratch"
                     )
-                try:
-                    os.remove(cache_path)
-                except OSError:
-                    pass
-                try:
-                    os.remove(md_cache_path)
-                except OSError:
-                    pass
 
         # Extract and process document
         if self.config.show_stats:
@@ -2989,7 +4628,17 @@ These positions indicate where to split the text."""
 
         try:
             # Extract text based on file type
-            text, file_metadata = self._extract_text_from_file(file_path)
+            try:
+                text, file_metadata = self._extract_text_from_file(file_path)
+            except Exception as e:
+                stop = _stop_behind(e)
+                if stop is not None:
+                    raise stop from e
+                # Only the document's own read: a cache write can fail with EACCES too.
+                locked = _locked_cause(e, file_path)
+                if locked is not None:
+                    return self._document_locked(stats, file_path, locked)
+                raise
 
             # Store metadata in stats if available (for PDFs)
             if file_metadata.get("num_pages"):
@@ -2998,6 +4647,11 @@ These positions indicate where to split the text."""
                 stats["vlm_pages"] = file_metadata["vlm_pages"]
             if file_metadata.get("total_images"):
                 stats["total_images"] = file_metadata["total_images"]
+            if file_metadata.get("unread_image_pages"):
+                stats["unread_image_pages"] = file_metadata["unread_image_pages"]
+                stats["unread_images_note"] = self._unread_images_note(
+                    file_metadata["unread_image_pages"]
+                )
 
             if not text.strip():
                 error_msg = (
@@ -3013,16 +4667,23 @@ These positions indicate where to split the text."""
                 raise ValueError(error_msg)
 
             # Split into chunks
-            new_chunks = self._split_text_into_chunks(text)
+            if file_type == ".json" and self.config.json_loader is not None:
+                new_chunks = self._chunk_json_records(text)
+            else:
+                new_chunks = self._split_text_into_chunks(text)
 
             new_index, _, file_embeddings = self._create_vector_index(
                 list(new_chunks),
                 return_embeddings=True,
                 progress_callback=progress_callback,
+                wait_callback=wait_callback,
+                cache_path=cache_path,
             )
 
             with self._state_lock:
-                if file_path in self.indexed_files:
+                if self._indexed_from(
+                    file_path, content_key
+                ) and not self._left_images_unread(file_path):
                     if self.config.show_stats:
                         print(f"📋 Document already indexed: {Path(file_path).name}")
                     self.log.info(f"Document already indexed: {file_path}")
@@ -3034,12 +4695,11 @@ These positions indicate where to split the text."""
                     stats["total_indexed_files"] = len(self.indexed_files)
                     stats["total_chunks"] = len(self.chunks)
                     return stats
-
                 # This second capacity check is intentional: the optimistic
                 # pre-flight above avoids expensive extraction work, while this
                 # locked check protects against TOCTOU drift after extraction
                 # and chunking finish.
-                if not self._has_indexing_capacity():
+                if not self._has_indexing_capacity(replacing=file_path):
                     msg = (
                         f"Memory limit reached: {len(self.indexed_files)} files "
                         f"(max: {self.config.max_indexed_files}), "
@@ -3052,6 +4712,29 @@ These positions indicate where to split the text."""
                         print(f"❌ {msg}")
                     stats["error"] = msg
                     stats["memory_limit_reached"] = True
+                    return stats
+
+                # Everything that can fail runs before the old generation
+                # is dropped, so a failed re-index keeps serving it.
+                if self.config.show_stats:
+                    print("🔍 Building per-file search index...")
+
+                file_index = self._create_faiss_index(file_embeddings)
+
+                # Persist before publishing any searchable state or ownership maps.
+                if self.config.show_stats:
+                    print("💾 Caching processed chunks...")
+                cache_data = {
+                    "chunks": new_chunks,
+                    "full_text": text,
+                    "metadata": file_metadata,
+                }
+                self._save_cache(cache_path, cache_data)
+                self._save_extracted_markdown(
+                    file_path, text, file_metadata, content_key
+                )
+
+                if not self._drop_other_generation(file_path, stats):
                     return stats
 
                 if self.index is None:
@@ -3077,24 +4760,6 @@ These positions indicate where to split the text."""
                             f"➕ Appending {len(new_chunks)} new chunks to existing index ({old_count} -> {len(rebuilt_chunks)} total)"
                         )
 
-                if self.config.show_stats:
-                    print("🔍 Building per-file search index...")
-
-                file_index = self._create_faiss_index(file_embeddings)
-
-                # Persist before publishing any searchable state or ownership maps.
-                if self.config.show_stats:
-                    print("💾 Caching processed chunks...")
-                cache_data = {
-                    "chunks": new_chunks,
-                    "full_text": text,
-                    "metadata": file_metadata,
-                }
-                self._save_cache(cache_path, cache_data)
-                self._save_extracted_markdown(
-                    file_path, text, file_metadata, content_key
-                )
-
                 if self.index is None:
                     self.index = new_index
                 else:
@@ -3113,6 +4778,8 @@ These positions indicate where to split the text."""
                 }
 
                 self.indexed_files.add(file_path)
+                self.file_content_keys[file_path] = content_key
+                self._record_stat(file_path, taken)
 
                 # Track index time for LRU
                 current_time = time.time()
@@ -3121,7 +4788,9 @@ These positions indicate where to split the text."""
                 self.file_access_times[file_path] = self._access_counter
 
                 # Check memory limits and evict if necessary
-                limits_ok = self._check_memory_limits()
+                limits_ok, evicted = self._check_memory_limits()
+            if evicted:
+                stats["evicted"] = evicted
             if not limits_ok:
                 self.log.warning(
                     f"Memory limits exceeded after indexing {file_path}. "
@@ -3144,6 +4813,8 @@ These positions indicate where to split the text."""
 
             # Update final stats
             stats["success"] = True
+            if replacing:
+                stats["reindexed"] = True
             stats["num_chunks"] = len(new_chunks)
             stats["total_indexed_files"] = len(self.indexed_files)
             stats["total_chunks"] = len(self.chunks)
@@ -3169,17 +4840,112 @@ These positions indicate where to split the text."""
             stats["error"] = str(e)
             stats["pdf_status"] = e.status
             return stats
-        except EmbeddingUnavailableError as e:
-            return self._embedding_failed(stats, file_path, e)
-        except Exception as e:
+        except SpreadsheetReadError as e:
             if self.config.show_stats:
                 print(f"❌ Failed to index {Path(file_path).name}: {e}")
-            self.log.error(
-                f"Failed to index {file_path}: {type(e).__name__}: {e}",
-                exc_info=True,
-            )
+            self.log.error(f"Excel extraction failed for {file_path}: {e.status}")
             stats["error"] = str(e)
+            stats["xlsx_status"] = e.status
             return stats
+        except PresentationReadError as e:
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"PowerPoint extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["pptx_status"] = e.status
+            return stats
+        except VisionModelFailedError as e:
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"Vision model failed while indexing {file_path}: {e}")
+            stats["error"] = str(e)
+            stats["error_type"] = e.error_type
+            return stats
+        except (IndexingStopped, LeaseWaitCancelled):
+            raise
+        except EmbeddingUnavailableError as e:
+            return self._embedding_failed(stats, file_path, e)
+        except FileLockError as e:
+            return self._cache_lock_failed(stats, file_path, e)
+        except Exception as e:
+            return self._index_failed(stats, file_path, e)
+
+    def _document_locked(
+        self, stats: Dict[str, Any], file_path: str, error: PermissionError
+    ) -> Dict[str, Any]:
+        """Index stats for a document Windows would not let us read."""
+        message = (
+            f"Could not read {Path(file_path).name}: another program may have it "
+            "open, or you may not have permission to read it. Close any program "
+            "using it and index the document again."
+        )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        # A warning: the caller gets error_type and decides whether to retry.
+        self.log.warning(f"{message} ({error})")
+        stats["error"] = message
+        stats["error_type"] = "file_locked"
+        return stats
+
+    def _document_unhashable(
+        self, stats: Dict[str, Any], file_path: str
+    ) -> Dict[str, Any]:
+        """Index stats for a document whose bytes could not be read to hash."""
+        message = (
+            f"Could not read {Path(file_path).name} to check its contents, so it "
+            "was not indexed. It may be missing, unreadable, or outside the "
+            "folders GAIA is allowed to read. Fix that and index it again."
+        )
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        self.log.warning(message)
+        stats["error"] = message
+        stats["error_type"] = "file_unreadable"
+        return stats
+
+    def _index_failed(
+        self, stats: Dict[str, Any], file_path: str, e: Exception
+    ) -> Dict[str, Any]:
+        """Index stats for a document that failed for any other reason."""
+        if self.config.show_stats:
+            print(f"❌ Failed to index {Path(file_path).name}: {e}")
+        self.log.error(
+            f"Failed to index {file_path}: {type(e).__name__}: {e}",
+            exc_info=True,
+        )
+        stats["error"] = str(e)
+        return stats
+
+    def _cache_lock_failed(
+        self, stats: Dict[str, Any], file_path: str, error: FileLockError
+    ) -> Dict[str, Any]:
+        """Index stats for a document whose cache lock could not be taken.
+
+        ``error_type`` is ``cache_busy`` when another process held the lock,
+        ``cache_unwritable`` when this user cannot create files in the cache
+        folder, and ``cache_lock_error`` when the lock file itself is unusable.
+        """
+        folder = error.lock_path.parent
+        name = Path(file_path).name
+        if isinstance(error, FileLockTimeout):
+            error_type = "cache_busy"
+            message = f"Could not use the cached index for {name} in {folder}: {error}"
+        elif lock_dir_unwritable(error):
+            error_type = "cache_unwritable"
+            message = (
+                f"Cannot use the RAG cache folder {folder} for {name}: {error} "
+                "The document itself is fine."
+            )
+        else:
+            error_type = "cache_lock_error"
+            message = f"Cannot open the RAG cache lock in {folder} for {name}: {error}"
+        if self.config.show_stats:
+            print(f"❌ {message}")
+        self.log.error(message)
+        stats["error"] = message
+        stats["error_type"] = error_type
+        stats["cache_dir"] = str(folder)
+        return stats
 
     def _embedding_failed(
         self, stats: Dict[str, Any], file_path: str, error: EmbeddingUnavailableError
@@ -3191,6 +4957,7 @@ These positions indicate where to split the text."""
         stats["error"] = str(error)
         stats["error_type"] = "embedding_unavailable"
         stats["lemonade_unreachable"] = error.unreachable
+        stats["embedder_busy"] = error.busy
         return stats
 
     def _retrieve_chunks_from_file(self, query: str, file_path: str) -> tuple:
@@ -3280,12 +5047,25 @@ These positions indicate where to split the text."""
         chunks = snapshot["retrieved_chunks"]
         scores = snapshot["scores"]
 
+        duplicates = snapshot.get("duplicate_indices") or [[] for _ in chunks]
+
         # Build metadata for each chunk
         metadata = []
-        for i, (chunk_idx, chunk, score) in enumerate(
-            zip(snapshot["retrieved_indices"], chunks, scores)
+        for i, (chunk_idx, chunk, score, copies) in enumerate(
+            zip(snapshot["retrieved_indices"], chunks, scores, duplicates)
         ):
             source_file = snapshot["chunk_to_file"].get(chunk_idx, "unknown")
+            # Every file holding this exact text, the best match first.
+            source_paths = list(
+                dict.fromkeys(
+                    path
+                    for path in (
+                        snapshot["chunk_to_file"].get(idx, "unknown")
+                        for idx in [chunk_idx, *copies]
+                    )
+                    if path != "unknown"
+                )
+            )
 
             metadata.append(
                 {
@@ -3296,6 +5076,8 @@ These positions indicate where to split the text."""
                         else "unknown"
                     ),
                     "source_path": source_file,
+                    "source_files": [Path(path).name for path in source_paths],
+                    "source_paths": source_paths,
                     "relevance_score": float(score),
                     "chunk_length": len(chunk),
                     "estimated_tokens": len(chunk) // 4,  # Rough token estimate
@@ -3309,13 +5091,187 @@ These positions indicate where to split the text."""
         snapshot = self._search_chunks(query)
         return snapshot["retrieved_chunks"], snapshot["scores"]
 
+    def _resolve_reranking_model(self) -> Optional[str]:
+        if not self.config.enable_reranking:
+            return None
+        if self._reranking_checked:
+            return self._reranking_model
+        try:
+            if self.llm_client is None:
+                from gaia.llm.lemonade_client import LemonadeClient
+
+                self.llm_client = LemonadeClient(base_url=self.config.base_url)
+            models = self.llm_client.list_models(show_all=False).get("data", [])
+        except Exception as error:
+            raise RuntimeError(
+                "Reranking is enabled, but GAIA could not list Lemonade's "
+                f"downloaded models: {error}\n"
+                "Make sure Lemonade Server is running and reachable, or set "
+                "enable_reranking=False."
+            ) from error
+        requested = self.config.reranking_model
+        candidates = [item for item in models if self._is_downloaded_reranker(item)]
+        if requested:
+            model = next(
+                (item.get("id") for item in candidates if item.get("id") == requested),
+                None,
+            )
+            if not model:
+                raise RuntimeError(
+                    f"Reranking is enabled, but reranker {requested!r} is not "
+                    "downloaded in Lemonade.\n"
+                    f"{self._reranker_download_hint(requested)}\n"
+                    "Or clear reranking_model, or set enable_reranking=False."
+                )
+        elif candidates:
+            model = candidates[0].get("id")
+        else:
+            raise RuntimeError(
+                "Reranking is enabled, but no downloaded Lemonade model has the "
+                "reranking label.\n"
+                f"{self._reranker_download_hint(_SUGGESTED_RERANKER)}\n"
+                "Or set enable_reranking=False."
+            )
+        self._load_reranker(model)
+        self._reranking_model = model
+        self._reranking_checked = True
+        return model
+
+    @staticmethod
+    def _is_downloaded_reranker(item: Any) -> bool:
+        if isinstance(item, dict):
+            labels = item.get("labels")
+            labels = [] if labels is None else labels
+            if isinstance(labels, list):
+                return item.get("downloaded") is not False and "reranking" in {
+                    str(label).lower() for label in labels
+                }
+        raise RuntimeError(
+            "Reranking is enabled, but Lemonade's model list has an entry "
+            f"GAIA cannot read: {item!r}\n"
+            "Update Lemonade Server, or set enable_reranking=False."
+        )
+
+    def _load_reranker(self, model: str) -> None:
+        # llama-server rejects an input longer than its ubatch (default 512).
+        try:
+            self.llm_client.load_model(
+                model,
+                llamacpp_args=RERANKER_LLAMACPP_ARGS,
+                # Saved so Lemonade's own reload after an eviction keeps it too.
+                save_options=not self.llm_client.is_users_server(),
+            )
+        except Exception as error:
+            stop = _stop_behind(error)
+            if stop is not None:
+                raise stop from error
+            raise RuntimeError(
+                f"Reranking is enabled, but Lemonade could not load reranker "
+                f"{model!r} with {RERANKER_LLAMACPP_ARGS}: {error}\n"
+                "Check the Lemonade Server log, or set enable_reranking=False."
+            ) from error
+
+    def _reranker_download_hint(self, model: str) -> str:
+        from gaia.llm.lemonade_launcher import (  # pylint: disable=import-outside-toplevel
+            describe_client_hint,
+        )
+
+        server = getattr(self.llm_client, "base_url", None) or "your Lemonade Server"
+        return (
+            f"Download {model}. {describe_client_hint('pull', model).instruction}\n"
+            f"Or download it in the Lemonade Model Manager ({server})."
+        )
+
+    def _send_rerank(
+        self, query: str, candidate_chunks: List[str], model: str
+    ) -> Dict[str, Any]:
+        try:
+            return self.llm_client.rerank(
+                query,
+                candidate_chunks,
+                model=model,
+                timeout=self.config.reranking_timeout,
+            )
+        except Exception as error:
+            # A user-run Lemonade keeps no saved options, so its own reload
+            # after an eviction brings the reranker back at the default batch.
+            batch_too_small = _RERANK_BATCH_TOO_SMALL in str(error).lower()
+            if not batch_too_small or not self.llm_client.is_users_server():
+                raise
+            self.log.warning(
+                f"Reranker {model} came back without {RERANKER_LLAMACPP_ARGS}; "
+                "reloading it with them and retrying once."
+            )
+        self._load_reranker(model)
+        return self.llm_client.rerank(
+            query,
+            candidate_chunks,
+            model=model,
+            timeout=self.config.reranking_timeout,
+        )
+
+    def _rerank_candidates(
+        self, query: str, candidate_chunks: List[str], model: str
+    ) -> Tuple[List[int], List[float]]:
+        if len(candidate_chunks) < 2:
+            return list(range(len(candidate_chunks))), [1.0] * len(candidate_chunks)
+        if len(query) > RERANK_QUERY_MAX_CHARS:
+            self.log.warning(
+                f"Search query is {len(query)} chars; only the first "
+                f"{RERANK_QUERY_MAX_CHARS} are used to rerank results."
+            )
+            query = query[:RERANK_QUERY_MAX_CHARS]
+        try:
+            response = self._send_rerank(query, candidate_chunks, model)
+            results = response.get("results")
+            if not isinstance(results, list):
+                raise ValueError("response has no results list")
+            ranked: List[Tuple[int, float]] = []
+            seen = set()
+            for item in results:
+                index = item.get("index") if isinstance(item, dict) else None
+                score = item.get("relevance_score") if isinstance(item, dict) else None
+                if (
+                    isinstance(index, bool)
+                    or not isinstance(index, int)
+                    or index < 0
+                    or index >= len(candidate_chunks)
+                    or index in seen
+                    or isinstance(score, bool)
+                    or not isinstance(score, (int, float))
+                    or not math.isfinite(float(score))
+                ):
+                    raise ValueError("response contains an invalid rerank result")
+                seen.add(index)
+                ranked.append((index, float(score)))
+            if len(ranked) != len(candidate_chunks):
+                raise ValueError("response does not score every candidate")
+            ranked.sort(key=lambda result: result[1], reverse=True)
+            order = [index for index, _ in ranked]
+            scores = []
+            for _, logit in ranked:
+                # Stable sigmoid: math.exp overflows on large negative logits.
+                if logit >= 0:
+                    scores.append(1.0 / (1.0 + math.exp(-logit)))
+                else:
+                    scores.append(math.exp(logit) / (1.0 + math.exp(logit)))
+            return order, scores
+        except Exception as error:
+            stop = _stop_behind(error)
+            if stop is not None:
+                raise stop from error
+            raise RuntimeError(
+                f"Lemonade rerank failed for model {model}: {error}"
+            ) from error
+
     def _search_chunks(self, query: str) -> Dict[str, Any]:
-        """Retrieve relevant chunks and indices from a consistent snapshot."""
+        """Retrieve chunks from a snapshot, optionally reranking FAISS candidates."""
         snapshot = self._snapshot_query_state()
         chunks_snapshot = snapshot["chunks"]
         index_snapshot = snapshot["index"]
 
         self._load_embedder()
+        reranking_model = self._resolve_reranking_model()
 
         # Generate query embedding
         if self.config.show_stats:
@@ -3323,25 +5279,68 @@ These positions indicate where to split the text."""
         self.log.debug(f"Encoding query: {query[:50]}...")
         query_embedding = self._encode_query(query)
 
-        # Search for similar chunks
-        k = min(self.config.max_chunks, len(chunks_snapshot))
+        # Search for similar chunks; reranking widens the candidate pool.
+        result_limit = min(self.config.max_chunks, len(chunks_snapshot))
+        multiplier = max(1, int(self.config.reranking_candidate_multiplier))
+        candidate_limit = (
+            min(len(chunks_snapshot), result_limit * multiplier)
+            if reranking_model
+            else result_limit
+        )
         if self.config.show_stats:
-            print(f"  🎯 Finding {k} most relevant chunks...")
-        # pylint: disable=no-value-for-parameter
-        distances, indices = index_snapshot.search(query_embedding.astype("float32"), k)
+            print(f"  🎯 Finding {candidate_limit} most relevant chunks...")
 
-        retrieved_indices = []
-        retrieved_chunks = []
-        scores = []
-        for idx, dist in zip(indices[0], distances[0]):
-            idx = int(idx)
-            # FAISS can surface stale or invalid positions relative to the
-            # captured chunk snapshot; skip anything outside the snapshot.
-            if idx < 0 or idx >= len(chunks_snapshot):
-                continue
-            retrieved_indices.append(idx)
-            retrieved_chunks.append(chunks_snapshot[idx])
-            scores.append(1.0 / (1.0 + float(dist)))
+        # Fetch enough candidates to keep candidate_limit distinct chunks. This
+        # prevents identical indexed copies from consuming reranker slots or
+        # hiding a different chunk from the model.
+        fetch = candidate_limit
+        while True:
+            # pylint: disable=no-value-for-parameter
+            distances, indices = index_snapshot.search(
+                query_embedding.astype("float32"), fetch
+            )
+            retrieved_indices = []
+            retrieved_chunks = []
+            scores = []
+            duplicate_indices: List[List[int]] = []
+            position: Dict[str, int] = {}
+            for idx, dist in zip(indices[0], distances[0]):
+                idx = int(idx)
+                # FAISS can surface stale or invalid positions relative to the
+                # captured chunk snapshot; skip anything outside the snapshot.
+                if idx < 0 or idx >= len(chunks_snapshot):
+                    continue
+                chunk = chunks_snapshot[idx]
+                if chunk in position:
+                    duplicate_indices[position[chunk]].append(idx)
+                    continue
+                if len(retrieved_chunks) == candidate_limit:
+                    continue
+                position[chunk] = len(retrieved_chunks)
+                retrieved_indices.append(idx)
+                retrieved_chunks.append(chunk)
+                scores.append(1.0 / (1.0 + float(dist)))
+                duplicate_indices.append([])
+
+            if len(retrieved_chunks) == candidate_limit or fetch >= len(
+                chunks_snapshot
+            ):
+                break
+            fetch = min(len(chunks_snapshot), fetch * 2)
+
+        # A lone candidate keeps its vector score; there is nothing to reorder.
+        if reranking_model and len(retrieved_chunks) > 1:
+            order, rerank_scores = self._rerank_candidates(
+                query, retrieved_chunks, reranking_model
+            )
+            retrieved_indices = [retrieved_indices[i] for i in order]
+            retrieved_chunks = [retrieved_chunks[i] for i in order]
+            duplicate_indices = [duplicate_indices[i] for i in order]
+            scores = rerank_scores
+        retrieved_indices = retrieved_indices[:result_limit]
+        retrieved_chunks = retrieved_chunks[:result_limit]
+        duplicate_indices = duplicate_indices[:result_limit]
+        scores = scores[:result_limit]
 
         if self.config.show_stats:
             avg_relevance = sum(scores) / len(scores) if scores else 0.0
@@ -3355,11 +5354,16 @@ These positions indicate where to split the text."""
         snapshot["retrieved_indices"] = retrieved_indices
         snapshot["retrieved_chunks"] = retrieved_chunks
         snapshot["scores"] = scores
+        # Other positions holding each retrieved chunk's exact text.
+        snapshot["duplicate_indices"] = duplicate_indices
         return snapshot
 
     def query(self, question: str, include_metadata: bool = True) -> RAGResponse:
         """
         Query the indexed documents with enhanced metadata tracking.
+
+        Each call answers from the chunks retrieved for this question. Earlier
+        queries are not included in the prompt.
 
         Args:
             question: Question to ask about the documents
@@ -3397,19 +5401,15 @@ Question: {question}
 
 Answer:"""
 
-        # Get LLM response
-        response = self.chat.send(prompt)
+        # One question per call — stored history would resend earlier chunks.
+        response = self.chat.send(prompt, no_history=True)
 
         # Build query metadata
         query_metadata = None
         if include_metadata and chunk_metadata:
             # Get unique source files
             source_files = list(
-                set(
-                    m["source_file"]
-                    for m in chunk_metadata
-                    if m["source_file"] != "unknown"
-                )
+                set(name for m in chunk_metadata for name in m["source_files"])
             )
 
             query_metadata = {
@@ -3483,8 +5483,7 @@ Answer:"""
 """
 
             # Write markdown file
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(markdown_content)
+            write_text_atomic(md_path, markdown_content, mode=0o644)
 
             self.log.debug(f"Saved extracted markdown to {md_path}")
 
@@ -3517,7 +5516,7 @@ Answer:"""
                 f"{default_rag_cache_dir()})."
             )
 
-        with self._state_lock:
+        with self._state_lock, file_lock(cache_dir / _CACHE_LOCK_NAME):
             removed = 0
             if cache_dir.is_dir():
                 for entry in cache_dir.iterdir():
@@ -3571,6 +5570,9 @@ def quick_rag(pdf_path: str, question: str, **kwargs) -> str:
 
     config = RAGConfig(**kwargs)
     rag = RAGSDK(config)
+    # Naming the file is the grant to read it, as in AgentSDK._index_named_document.
+    if "allowed_paths" not in kwargs and os.path.isfile(pdf_path):
+        rag.path_validator.add_allowed_path(pdf_path)
 
     result = rag.index_document(pdf_path)
     if not result.get("success"):

@@ -8,12 +8,13 @@
  * Required because main.cjs uses `contextIsolation: true`.
  *
  * Channels:
- *   agent:*          — Agent process management (T2)
  *   tray:*           — Tray icon/config (T1)
  *   notification:*   — Desktop notifications & permission prompts (T5)
- *   install:*        — First-run backend install progress (Phase A)
+ *   install:*        — Backend install status, retry and log (Phase A)
  *   gaia:update:*    — Auto-update status & manual check (Phase F)
- *   system:*         — System metrics for the observability dashboard (#2007)
+ *   power:*          — Keep the PC awake while a chat turn runs (#5226)
+ *   dialog:*         — The OS folder picker
+ *   backend:*        — Backend restarts after a crash (services/backend-supervisor.cjs)
  */
 
 const { contextBridge, ipcRenderer } = require("electron");
@@ -26,33 +27,14 @@ function onEvent(channel, callback) {
 }
 
 contextBridge.exposeInMainWorld("gaiaAPI", {
-  // ── Agent process management (T2) ─────────────────────────────────────
-  agent: {
-    start: (id) => ipcRenderer.invoke("agent:start", id),
-    stop: (id) => ipcRenderer.invoke("agent:stop", id),
-    restart: (id) => ipcRenderer.invoke("agent:restart", id),
-    status: (id) => ipcRenderer.invoke("agent:status", id),
-    statusAll: () => ipcRenderer.invoke("agent:status-all"),
-    sendRpc: (id, method, params) =>
-      ipcRenderer.invoke("agent:send-rpc", id, method, params),
-    getManifest: () => ipcRenderer.invoke("agent:get-manifest"),
-    // install(id, opts?) — opts: { trustNative?, version? }. Proxies to the
-    // backend install runtime; progress arrives via onInstallProgress (#1721).
-    install: (id, opts) => ipcRenderer.invoke("agent:install", id, opts),
-    uninstall: (id) => ipcRenderer.invoke("agent:uninstall", id),
-
-    // Event streams (return unsubscribe functions)
-    onStdout: (cb) => onEvent("agent:stdout", cb),
-    onStderr: (cb) => onEvent("agent:stderr", cb),
-    onStatusChange: (cb) => onEvent("agent:status-change", cb),
-    onCrashed: (cb) => onEvent("agent:crashed", cb),
-    onInstallProgress: (cb) => onEvent("agent:install-progress", cb),
-  },
-
   // ── Tray configuration (T1) ───────────────────────────────────────────
   tray: {
     getConfig: () => ipcRenderer.invoke("tray:get-config"),
     setConfig: (cfg) => ipcRenderer.invoke("tray:set-config", cfg),
+    // What GAIA is doing, for the tray icon, tooltip and menu.
+    setActivity: (activity) => ipcRenderer.invoke("tray:set-activity", activity),
+    // Tray menu actions: open-chat, new-chat, open-settings, refresh-status.
+    onCommand: (cb) => onEvent("tray:command", cb),
     onNavigate: (cb) => onEvent("tray:navigate", cb),
   },
 
@@ -63,27 +45,92 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
     respondPermission: (id, action, remember) =>
       ipcRenderer.invoke("notification:respond", id, action, remember),
     onNotification: (cb) => onEvent("notification:new", cb),
+    // Chat alerts (#5226)
+    show: (payload) => ipcRenderer.invoke("notification:show", payload),
+    flash: () => ipcRenderer.invoke("notification:flash"),
+    setAttentionCount: (count) =>
+      ipcRenderer.invoke("notification:attention", count),
   },
 
-  // ── System metrics for the observability dashboard (#2007) ────────────
-  system: {
-    getMetrics: () => ipcRenderer.invoke("system:get-metrics"),
+  // ── Keep the PC awake while GAIA works (#5226) ────────────────────────
+  power: {
+    setKeepAwake: (on) => ipcRenderer.invoke("power:keep-awake", on),
+  },
+
+  // ── OS folder picker; resolves the chosen path, or null on cancel ─────
+  dialog: {
+    pickFolder: (defaultPath) => ipcRenderer.invoke("dialog:pick-folder", defaultPath),
+  },
+
+  // ── GAIA's backend process: restarts after a crash, and its new port ──
+  backend: {
+    getState: () => ipcRenderer.invoke("backend:get-state"),
+    restart: () => ipcRenderer.invoke("backend:restart"),
+    onState: (cb) => onEvent("backend:state", cb),
   },
 });
 
-// ── Install progress (Phase A) ──────────────────────────────────────────
-// Exposed as a separate global so the progress window can use it without
-// pulling in the full gaiaAPI surface (and so it keeps working if an
-// install dialog runs before the main window is ready).
+// ── Window frame ─────────────────────────────────────────────────────────
+// Says whether the app draws its own top row and where the native controls sit in it.
+contextBridge.exposeInMainWorld("gaiaWindow", {
+  /**
+   * "mac": traffic lights at the top left; "overlay": controls at the top right;
+   * "native": the system frame. Must match titleBarKind in services/window-frame.cjs
+   * (a sandboxed preload can't require it).
+   */
+  titleBar: { darwin: "mac", win32: "overlay" }[process.platform] || "native",
+  /** Match the native window controls to the app: { color, symbolColor } as #rrggbb. */
+  setColors: (colors) => ipcRenderer.invoke("window:set-titlebar-colors", colors),
+});
+
+// ── Browser pane ─────────────────────────────────────────────────────────
+// Channel names match CHANNELS in services/browser-pane/ipc.cjs (a sandboxed
+// preload can't require it). Types: services/browser-pane/contract.d.ts.
+contextBridge.exposeInMainWorld("gaiaBrowserPane", {
+  getState: () => ipcRenderer.invoke("pane:get-state"),
+  onState: (cb) => onEvent("pane:state", cb),
+  onCommand: (cb) => onEvent("pane:command", cb),
+  setBounds: (rect) => ipcRenderer.send("pane:set-bounds", rect),
+  setView: (chat, visible) => ipcRenderer.send("pane:set-view", chat, visible),
+  claimDraft: (sessionId) => ipcRenderer.send("pane:claim-draft", sessionId),
+  forgetChat: (sessionId) => ipcRenderer.send("pane:forget-chat", sessionId),
+  setOccluded: (occluded) => ipcRenderer.invoke("pane:set-occluded", occluded),
+  openTab: (url) => ipcRenderer.invoke("pane:open-tab", url),
+  closeTab: (tabId) => ipcRenderer.invoke("pane:close-tab", tabId),
+  selectTab: (tabId) => ipcRenderer.invoke("pane:select-tab", tabId),
+  navigate: (tabId, url) => ipcRenderer.invoke("pane:navigate", tabId, url),
+  history: (tabId, action) => ipcRenderer.invoke("pane:history", tabId, action),
+  toggleDevTools: (tabId) => ipcRenderer.invoke("pane:toggle-devtools", tabId),
+  clearBrowsingData: () => ipcRenderer.invoke("pane:clear-data"),
+  openExternal: (tabId) => ipcRenderer.invoke("pane:open-external", tabId),
+  setControl: (tabId, control) => ipcRenderer.invoke("pane:set-control", tabId, control),
+  setViewport: (tabId, choice) => ipcRenderer.invoke("pane:set-viewport", tabId, choice),
+  togglePicking: () => ipcRenderer.invoke("pane:toggle-picking"),
+  onPicked: (cb) => onEvent("pane:picked", cb),
+  stopDevServer: (key) => ipcRenderer.invoke("pane:stop-dev-server", key),
+  answerDialog: (tabId, accept, text) => ipcRenderer.invoke("pane:answer-dialog", tabId, accept, text),
+});
+
+// ── Backend install (Phase A) ───────────────────────────────────────────
+// EngineInstallScreen runs with no backend, so this stands apart from gaiaAPI.
 contextBridge.exposeInMainWorld("gaiaInstall", {
-  // Subscribe to progress updates. Returns an unsubscribe function.
+  // Subscribe to status updates. Returns an unsubscribe function.
   onProgress: (cb) => onEvent("install:progress", cb),
 
-  // Query the current install state (state machine + log/state paths).
+  // The current status: { phase, stage, percent, message, error, logPath }.
   status: () => ipcRenderer.invoke("install:status"),
 
-  // Copy the log file path to the clipboard.
-  copyLogPath: () => ipcRenderer.invoke("install:copy-log-path"),
+  // After a failure, install again. Resolves false when none is waiting.
+  retry: () => ipcRenderer.invoke("install:retry"),
+
+  // Goes on past a failed agent update; the next launch tries it again.
+  continueWithoutAgentUpdate: () => ipcRenderer.invoke("install:continue"),
+
+  // After a failed update, go back to the version before it; the app restarts into it.
+  revert: () => ipcRenderer.invoke("install:revert"),
+
+  // After a 'locked' failure held only by GAIA processes: ends those and installs again.
+  closeLockingPrograms: () => ipcRenderer.invoke("install:close-lockers"),
 
   // Open the log file in the OS's default viewer.
   openLogFile: () => ipcRenderer.invoke("install:open-log-file"),
@@ -125,9 +172,31 @@ contextBridge.exposeInMainWorld("gaiaUpdater", {
    */
   installVersion: (tag) => ipcRenderer.invoke("gaia:update:install-version", tag),
 
+  /** Go back to the version before the last update, and pin it. */
+  revertUpdate: () => ipcRenderer.invoke("gaia:update:revert"),
+
+  /** Setup finished on this version: remember it as the one to come back to. */
+  markSetupWorked: () => ipcRenderer.invoke("gaia:update:setup-worked"),
+
+  /** Go back to the last version setup finished on, and pin it. */
+  revertToLastWorking: () => ipcRenderer.invoke("gaia:update:revert-to-working"),
+
   /**
    * Resume normal auto-updates — clears the version pin set by installVersion.
    * Resolves with the updated state.
    */
   resumeUpdates: () => ipcRenderer.invoke("gaia:update:resume"),
+
+  /** Turn auto-update on or off (persisted; off by default). Resolves with the state. */
+  setAutoUpdate: (enabled) => ipcRenderer.invoke("gaia:update:set-auto-update", enabled),
+
+  /** Offer release candidates as updates (independent of auto-update). Resolves with the state. */
+  setIncludePrereleases: (enabled) =>
+    ipcRenderer.invoke("gaia:update:set-include-prereleases", enabled),
+
+  /** "Update now": download the offered update; the restart prompt follows. */
+  downloadUpdate: () => ipcRenderer.invoke("gaia:update:download"),
+
+  /** Restart into a downloaded update. */
+  restart: () => ipcRenderer.invoke("gaia:update:restart"),
 });

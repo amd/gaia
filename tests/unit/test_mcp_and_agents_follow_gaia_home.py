@@ -147,7 +147,7 @@ def test_chat_agent_mcp_gate_uses_gaia_home():
     """The chat agent's "is any MCP configured" gate must not probe ``~/.gaia``."""
     src = (
         Path(__file__).resolve().parents[2]
-        / "hub/agents/chat/python/gaia_agent_chat/agent.py"
+        / "hub/agents/gaia/python/gaia_agent/chat_agent.py"
     ).read_text(encoding="utf-8")
     assert '_mcp_config_path = gaia_home() / "mcp_servers.json"' in src
     assert 'Path.home() / ".gaia" / "mcp_servers.json"' not in src

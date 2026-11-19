@@ -181,19 +181,19 @@ func TestFrameRealFailure(t *testing.T) {
 	golden(t, "real-failure", screen(*m))
 }
 
-// A recovered error is one calm line: the agent carried on and the turn
-// answered, so nothing on screen is red.
+// A recovered error is one calm line: a later run of the same job went through
+// and the turn answered, so nothing on screen is red.
 func TestFrameRecoveredError(t *testing.T) {
 	m, now := frameChat(t, 100, 24)
 	startTurn(m, *now, "Install formulas")
 	at(t, m, now, time.Second, call("run_shell_command", `{"command":"python -m pip install formulas --quiet"}`))
 	at(t, m, now, 2*time.Second, event.CanonicalToolResultEvent{
 		Type: "tool_result", Tool: "run_shell_command",
-		Data: json.RawMessage(`{"success":false,"error":"No module named pip"}`),
+		Data: json.RawMessage(`{"success":false,"error":"Permission denied: site-packages is not writeable"}`),
 	})
-	at(t, m, now, time.Second, call("run_shell_command", `{"command":"uv pip install formulas"}`))
+	at(t, m, now, time.Second, call("run_shell_command", `{"command":"python -m pip install --user formulas --quiet"}`))
 	at(t, m, now, 4*time.Second, result("run_shell_command", `{"success":true,"stdout":"Installed 1 package\n"}`))
-	at(t, m, now, time.Second, event.CanonicalFinalEvent{Type: "final", Answer: "Installed formulas with uv."})
+	at(t, m, now, time.Second, event.CanonicalFinalEvent{Type: "final", Answer: "Installed formulas for your user."})
 	got := screen(*m)
 	golden(t, "recovered-error", got)
 	var work []ActivityItem
@@ -206,8 +206,8 @@ func TestFrameRecoveredError(t *testing.T) {
 	if len(entries) < 2 {
 		t.Fatalf("want the failed and the retried call as two bullets, got %d", len(entries))
 	}
-	if state := entryState(entries[0], laterSuccess(entries[1:])); state != "calm" {
-		t.Errorf("a failure the agent carried on past reads as %q, want calm:\n%s", state, got)
+	if state := entryState(entries[0], retried(entries[0])); state != "calm" {
+		t.Errorf("a failure a later run recovered reads as %q, want calm:\n%s", state, got)
 	}
 }
 

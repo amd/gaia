@@ -235,14 +235,14 @@ func TestStillWorkingHintLastsUntilRealWorkLands(t *testing.T) {
 
 	// A completed step is.
 	m = feed(t, m,
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
-		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "pre_scan_inbox", Preview: "31 messages"},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "list_inbox", Preview: "31 messages"},
 	)
 	if tip := ansi.Strip(m.statusTip(time.Now())); strings.Contains(tip, "still working") {
 		t.Errorf("the tip must give way once real work has landed: %q", tip)
 	}
 	out := ansi.Strip(m.renderLiveRegion())
-	if !strings.Contains(out, "Scan your inbox") || !strings.Contains(out, "31 messages") {
+	if !strings.Contains(out, "Read your inbox") || !strings.Contains(out, "31 messages") {
 		t.Errorf("the completed action never appeared:\n%s", out)
 	}
 }
@@ -263,15 +263,18 @@ func TestLiveRegionOutcomesAreReadableWithoutColour(t *testing.T) {
 
 	out := ansi.Strip(m.renderLiveRegion())
 	t.Logf("\n%s", out)
-	if !strings.Contains(out, "failed") {
+	// Mid-turn it is an error the agent may still retry past; once the turn
+	// ends on it, it is a failure — in words both times.
+	if !strings.Contains(out, "└ error") {
 		t.Errorf("a failed step must say so in words, not in red:\n%s", out)
 	}
 	if !strings.Contains(out, "4 unread") {
 		t.Errorf("a succeeded step must report what it came back with:\n%s", out)
 	}
 	// ✗ is decoration beside the word, never the signal on its own.
-	if !strings.Contains(out, "✗ failed") {
-		t.Errorf("the failure mark is not next to the word:\n%s", out)
+	ended := feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: "Could not send it."})
+	if got := transcriptText(ended); !strings.Contains(got, "✗ failed") {
+		t.Errorf("a failure the turn ended on must say failed, mark beside the word:\n%s", got)
 	}
 	for _, emoji := range []string{"🔧", "🧠", "🎯", "⚠️"} {
 		if strings.Contains(out, emoji) {

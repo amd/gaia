@@ -27,7 +27,14 @@ from gaia.agents.base.completion import CompletionEvidence
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.turn_scope import TurnScopeGuard
 from gaia.chat.sdk import AgentResponse
-from gaia.llm.providers.lemonade import LemonadeProvider, LemonadeStreamCutOffError
+from gaia.llm.failure_record import failure_kind
+from gaia.llm.lemonade_client import LemonadeClientError
+from gaia.llm.providers.lemonade import (
+    LemonadeProvider,
+    LemonadeReplyStalledError,
+    LemonadeStreamCutOffError,
+)
+from gaia.llm.retry import StreamStalledError
 
 # --------------------------------------------------------------------------
 # Script-written outputs and folders named in prose
@@ -134,6 +141,8 @@ def test_a_file_from_before_the_turn_does_not_count(tmp_path):
     old.write_text("old\n")
     hour_ago = time.time() - 3600
     os.utime(old, (hour_ago, hour_ago))
+    # Created (or utime'd) before the run's clock slack, as a real old file is.
+    time.sleep(0.1)
     ledger = CompletionEvidence("Save the outputs into out/", str(tmp_path))
     _run_script(ledger, lambda: None)
     assert _missing(_gaps(ledger))
@@ -485,6 +494,68 @@ def test_a_cut_off_native_call_is_never_emitted_as_a_call():
             assert "__tool_calls__" not in chunk
 
 
+def _stalled(before_output):
+    """The client's error for a stream gone quiet, as the provider receives it."""
+    stall = StreamStalledError(limit=120, remote=True, before_output=before_output)
+    error = LemonadeClientError(stall.describe(1))
+    error.__cause__ = stall
+    return error
+
+
+def _stalling(chunks, error):
+    yield from chunks
+    raise error
+
+
+def test_a_reply_that_stalls_partway_is_a_cut_off_keeping_its_own_message():
+    error = _stalled(before_output=False)
+    with pytest.raises(LemonadeReplyStalledError) as caught:
+        _provider_stream(_stalling([_text("Let me build the three")], error))
+    assert isinstance(caught.value, LemonadeStreamCutOffError)
+    assert "sent nothing for 120s" in caught.value.user_message
+    assert caught.value.__cause__ is error
+
+
+def test_a_model_silent_from_the_start_is_not_a_cut_off():
+    error = _stalled(before_output=True)
+    with pytest.raises(LemonadeClientError) as caught:
+        _provider_stream(_stalling([], error))
+    assert caught.value is error
+
+
+def test_a_reply_that_stalled_partway_is_requested_again(agent):
+    stalled = LemonadeReplyStalledError(_stalled(before_output=False).args[0])
+    calls = _streams(
+        agent,
+        ["Let me build it.\n", stalled],
+        call("write_file", file_path="a.md", content="real\n"),
+        {"answer": "Wrote a.md."},
+    )
+    result = agent.process_query("Write a.md with the word real.")
+    assert len(calls) == 3
+    assert result["result"].startswith("Wrote a.md.")
+    assert agent.writes == [("a.md", "real\n")]
+
+
+def test_a_reply_that_stalls_every_time_ends_the_turn_failed_with_a_report(agent):
+    def stalled():
+        error = LemonadeReplyStalledError(_stalled(before_output=False).args[0])
+        error.__cause__ = _stalled(before_output=False)
+        return ["Let me build it.", error]
+
+    calls = _streams(agent, stalled(), stalled(), stalled(), stalled())
+    saved = []
+    with patch.object(
+        agent, "_save_failure_record", lambda exc: saved.append(exc) or "GF-1"
+    ):
+        result = agent.process_query("Write a.md.")
+    assert len(calls) == 3
+    assert result["status"] == "failed"
+    assert "GF-1" in result["result"]
+    assert "Let me build it" not in result["result"]
+    assert failure_kind(saved[0]) == "timeout"
+
+
 def _provider_stream_iter(chunks):
     with patch("gaia.llm.providers.lemonade.LemonadeClient") as backend:
         backend.return_value.chat_completions.return_value = iter(chunks)
@@ -826,3 +897,189 @@ def test_a_large_file_written_by_write_file_still_needs_a_full_read(tmp_path):
     result = {"file_path": str(target), "content": "ref,amount\n", "start_line": 1}
     ledger.delivered("read_file", {"file_path": str(target)}, result, result)
     assert any("out.csv" in g and "read back" in g for g in _gaps(ledger))
+
+
+@pytest.mark.parametrize("name", ["`_daemon_alive`", "`run()`", "`Foo::bar`", "`a=b`"])
+def test_a_quoted_code_name_after_in_is_not_a_missing_destination(tmp_path, name):
+    ledger = CompletionEvidence("Explain the bug.", str(tmp_path))
+    gaps = _gaps(ledger, f"The bug is in {name}, which drops the error.")
+    assert not any(name.strip("`") in g for g in _missing(gaps))
+
+
+# --------------------------------------------------------------------------
+# Framework read-back of a whole-file write
+# --------------------------------------------------------------------------
+
+
+# Stand-in carrying the real read-back size cap.
+_AGENT = MagicMock(_MAX_FRAMEWORK_READBACK=Agent._MAX_FRAMEWORK_READBACK)
+
+
+def _write_and_verify(tmp_path, name, content, on_disk=None):
+    """A requested output written with write_file, then the framework check."""
+    ledger = CompletionEvidence(f"Write the report to {name}.", str(tmp_path))
+    target = tmp_path / name
+    target.write_text(content if on_disk is None else on_disk, encoding="utf-8")
+    args = {"file_path": name, "content": content}
+    ledger.record("write_file", args, {"status": "success"}, True)
+    Agent._verify_whole_write(_AGENT, ledger, "write_file", args)
+    return _gaps(ledger, f"The report is saved to `{name}`.")
+
+
+def _script_writes_then_shell_shows(tmp_path, command, stdout=None, **extra):
+    """A requested output a script wrote, then a shell line that prints it."""
+    ledger = CompletionEvidence("Write the result to out.toml.", str(tmp_path))
+    target = tmp_path / "out.toml"
+    content = "takeoff = 53\nlanding = 62\n"
+    target.write_text(content, encoding="utf-8")
+    ledger.record(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "file_path": str(target)},
+        True,
+    )
+    args = {"command": command}
+    result = {"status": "success", "stdout": content if stdout is None else stdout}
+    result.update(extra)
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    return _gaps(ledger, "The result is saved to `out.toml`.")
+
+
+def test_a_shell_cat_that_showed_the_whole_file_is_a_read_back(tmp_path):
+    """A file a script wrote, shown whole by cat, was still called unread."""
+    gaps = _script_writes_then_shell_shows(tmp_path, "cat out.toml")
+    assert not any("read back" in g for g in gaps)
+
+
+@pytest.mark.parametrize(
+    "command, stdout, extra",
+    [
+        ("cat out.toml | head -1", None, {}),
+        ("cat out.toml && echo done", None, {}),
+        ("head -1 out.toml", None, {}),
+        ("cat out.toml", "takeoff = 53\n", {}),
+        ("cat out.toml", None, {"output_truncated": True}),
+    ],
+)
+def test_a_shell_line_that_did_not_show_all_of_it_is_no_read_back(
+    tmp_path, command, stdout, extra
+):
+    gaps = _script_writes_then_shell_shows(tmp_path, command, stdout, **extra)
+    assert any("read back" in g for g in gaps)
+
+
+def test_a_cat_run_in_another_folder_reads_the_file_there(tmp_path):
+    """After a cd the shell is elsewhere; the path is relative to that folder."""
+    ledger = CompletionEvidence("Write the result to out/r.toml.", str(tmp_path))
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "r.toml").write_text("ok = true" + chr(10), encoding="utf-8")
+    ledger.record(
+        "run_python",
+        {"code": "..."},
+        {"status": "success", "file_path": str(out / "r.toml")},
+        True,
+    )
+    args = {"command": "cat r.toml"}
+    result = {"status": "success", "stdout": "ok = true" + chr(10), "cwd": str(out)}
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    gaps = _gaps(ledger, "The result is saved to `out/r.toml`.")
+    assert not any("read back" in g for g in gaps)
+
+
+def test_a_cat_of_a_script_output_not_yet_recorded_is_a_read_back(tmp_path):
+    """The script reported no path and the request named none: still a read."""
+    ledger = CompletionEvidence("Save the result as a TOML file.", str(tmp_path))
+    target = tmp_path / "out.toml"
+    content = "takeoff = 53\n"
+    _run_script(ledger, lambda: target.write_text(content, encoding="utf-8"))
+    args = {"command": "cat out.toml"}
+    result = {"status": "success", "stdout": content}
+    ledger.record("run_shell_command", args, result, True)
+    Agent._verify_shown_file(_AGENT, ledger, "run_shell_command", args, result)
+    gaps = _gaps(ledger, "The result is saved to `out.toml`.")
+    assert not any("read back" in g for g in gaps)
+
+
+def test_a_whole_write_the_framework_matched_needs_no_read_back(tmp_path):
+    gaps = _write_and_verify(tmp_path, "report.md", "# Report\n\nAll good.\n")
+    assert not any("read back" in g for g in gaps)
+
+
+def test_crlf_on_disk_still_matches_what_was_written(tmp_path):
+    target = tmp_path / "r.md"
+    ledger = CompletionEvidence("Write the report to r.md.", str(tmp_path))
+    target.write_bytes(b"a\r\nb\r\n")
+    args = {"file_path": "r.md", "content": "a\nb\n"}
+    ledger.record("write_file", args, {"status": "success"}, True)
+    Agent._verify_whole_write(_AGENT, ledger, "write_file", args)
+    assert not any("read back" in g for g in _gaps(ledger, "Saved to `r.md`."))
+
+
+def test_a_file_that_differs_from_the_write_still_needs_reading(tmp_path):
+    # A hook, a formatter or a partial write changed what landed on disk.
+    gaps = _write_and_verify(tmp_path, "report.md", "full text", on_disk="full te")
+    assert any("report.md" in g and "read back" in g for g in gaps)
+
+
+@pytest.mark.parametrize(
+    "tool, args",
+    [
+        (
+            "edit_file",
+            {"file_path": "report.md", "old_content": "a", "new_content": "b"},
+        ),
+        ("write_file", {"file_path": "report.md"}),
+        ("write_file", {"file_path": "report.md", "content": 5}),
+        ("write_file", {"file_path": "bad\x00name", "content": "x"}),
+    ],
+)
+def test_only_a_whole_text_write_is_verified_by_the_framework(tmp_path, tool, args):
+    ledger = MagicMock()
+    ledger.root = str(tmp_path)
+    (tmp_path / "report.md").write_text("b", encoding="utf-8")
+    Agent._verify_whole_write(_AGENT, ledger, tool, args)
+    ledger.read_by_framework.assert_not_called()
+
+
+def test_an_oversized_write_is_left_for_the_model(tmp_path):
+    fake = MagicMock()
+    fake._MAX_FRAMEWORK_READBACK = 4
+    ledger = MagicMock()
+    ledger.root = str(tmp_path)
+    (tmp_path / "big.md").write_text("12345", encoding="utf-8")
+    Agent._verify_whole_write(
+        fake, ledger, "write_file", {"file_path": "big.md", "content": "12345"}
+    )
+    ledger.read_by_framework.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "text", ["saved in `<folder>/<name>`", r"written to <folder>\<name>"]
+)
+def test_a_placeholder_path_is_not_a_missing_destination(tmp_path, text):
+    ledger = CompletionEvidence("Fix the download bug.", str(tmp_path))
+    gaps = _gaps(ledger, f"Each download is {text} after the user agrees.")
+    assert not any("<folder>" in g for g in gaps)
+
+
+def test_a_write_under_project_dir_is_read_back_from_there(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "r.md").write_text("done", encoding="utf-8")
+    ledger = CompletionEvidence("Write r.md in the project.", str(tmp_path))
+    args = {"file_path": "r.md", "content": "done", "project_dir": str(project)}
+    ledger.record("write_file", args, {"status": "success"}, True)
+    Agent._verify_whole_write(_AGENT, ledger, "write_file", args)
+    assert ledger.files[ledger.key("r.md", str(project))].verified
+
+
+def test_a_network_share_is_never_read_back(tmp_path):
+    ledger = MagicMock()
+    ledger.key.return_value = r"\\server\share\r.md"
+    Agent._verify_whole_write(
+        _AGENT, ledger, "write_file", {"file_path": "x", "content": "y"}
+    )
+    ledger.read_by_framework.assert_not_called()

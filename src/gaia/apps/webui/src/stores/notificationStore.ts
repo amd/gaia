@@ -12,6 +12,9 @@
 import { create } from 'zustand';
 import type { GaiaNotification, NotificationType } from '../types/agent';
 import { confirmTool } from '../services/api';
+import { useChatStore } from './chatStore';
+import { isMessageKey, ref, type MessageKey } from '../i18n/registry';
+import { tEn, type Translate } from '../i18n/useT';
 
 // ── Constants ────────────────────────────────────────────────────────────
 
@@ -47,30 +50,101 @@ export type PermissionDecision = 'allow' | 'always' | 'deny';
 /** The prompt raised when a tool reaches outside the chat's files (security.py). */
 export const PATH_ACCESS_TOOL = 'allow_path_access';
 
-function pathAccessArgs(args: unknown): { target: string; kind: unknown } {
+/** The prompt asking whether to read a folder's CLAUDE.md, AGENTS.md and skills. Answered per folder, never "always". */
+export const PROJECT_TRUST_TOOL = 'trust_project_folder';
+
+function pathAccessArgs(args: unknown): { target: string | null; kind: unknown } {
   const { path, kind } = (args ?? {}) as { path?: unknown; kind?: unknown };
-  return { target: String(path ?? 'a file'), kind };
+  return { target: typeof path === 'string' && path.trim() ? path : null, kind };
 }
 
 /**
  * The question a path-access prompt asks. `kind` is the agent's: it omits it only
- * when nothing exists at the path yet. `followUp` means it backs a call just allowed.
+ * when nothing exists at the path yet, so a prompt that names no path at all
+ * says nothing about whether it exists. `followUp` means it backs a call just allowed.
  */
-export function pathAccessQuestion(args: unknown, followUp = false): string {
+export function pathAccessQuestion(
+  args: unknown,
+  followUp = false,
+  t: Translate = tEn,
+  mark: (path: string) => string = (p) => p,
+): string {
   const { target, kind } = pathAccessArgs(args);
-  const what = kind === 'folder'
-    ? `the folder ${target} and everything in it`
-    : kind === 'file' ? `the file ${target}` : `${target}, which doesn't exist yet`;
-  return followUp
-    ? `To do what you just allowed, GAIA also needs ${what}. This chat can't reach it yet. Allow it for this chat?`
-    : `GAIA wants to use ${what}. This chat can't reach it yet. Allow it for this chat?`;
+  const what = !target
+    ? ref('prompt.path.what.unknown')
+    : ref(kind === 'folder' ? 'prompt.path.what.folder' : kind === 'file' ? 'prompt.path.what.file' : 'prompt.path.what.new', {
+      path: mark(target),
+    });
+  return t(followUp ? 'prompt.path.askAlso' : 'prompt.path.ask', { what });
 }
 
 /** The path-access prompt's heading, in the user's terms rather than the tool's name. */
-export function pathAccessTitle(args: unknown, followUp = false): string {
+export function pathAccessTitle(args: unknown, followUp = false, t: Translate = tEn): string {
   const { kind } = pathAccessArgs(args);
   const noun = kind === 'folder' ? 'folder' : kind === 'file' ? 'file' : 'location';
-  return followUp ? `Also let GAIA use this ${noun}?` : `Let GAIA use this ${noun}?`;
+  return t(`prompt.path.${followUp ? 'titleAlso' : 'title'}.${noun}`);
+}
+
+/**
+ * A permission prompt's heading and question, worded from the call in the UI
+ * language rather than from its stored English title and message.
+ */
+/** Calls asked about in the user's words, not as "Allow running python?". */
+const PLAIN_TITLES: Record<string, MessageKey> = {
+  run_python: 'prompt.title.python',
+  execute_python_file: 'prompt.title.pythonFile',
+  run_shell_command: 'prompt.title.command',
+};
+
+export function permissionPromptText(
+  n: GaiaNotification,
+  t: Translate = tEn,
+  mark: (text: string) => string = (s) => s,
+): { heading: string; question: string } {
+  const args = n.toolArgs ?? {};
+  if (n.tool === PATH_ACCESS_TOOL) {
+    return {
+      heading: pathAccessTitle(args, n.pathFollowUp, t),
+      question: pathAccessQuestion(args, n.pathFollowUp, t, mark),
+    };
+  }
+  if (n.tool === PROJECT_TRUST_TOOL) {
+    return { heading: t('prompt.trust.title'), question: t('prompt.trust.ask') };
+  }
+  const tool = toolAction(n, t) ?? mark(n.toolLabel ?? n.tool ?? '');
+  const plain = PLAIN_TITLES[n.tool ?? ''];
+  return {
+    heading: plain ? t(plain) : t(n.toolLabel ? 'prompt.title.tool' : 'prompt.title.toolId', { tool }),
+    question: t('prompt.needsOk', { tool }),
+  };
+}
+
+/** The call in the UI language ("writing file"), for a tool whose activity label is translated; the backend's own label is English. */
+function toolAction(n: GaiaNotification, t: Translate): string | null {
+  const key = `tool.${n.tool}.active`;
+  if (!n.toolLabel || !isMessageKey(key)) return null;
+  const label = t.bare(key as MessageKey);
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
+/** The scope of a folder grant shared by writes, edits and renames. */
+const FILE_CHANGE_SCOPE = 'changes to files in ';
+
+/**
+ * What an "always allow" answer covers, in the UI language. The backend words
+ * its scope in English (`write_file on notes.txt`, `changes to files in /x`);
+ * null when the scope isn't one of those, and the caller keeps the backend's text.
+ */
+export function alwaysScopeText(n: GaiaNotification, t: Translate): string | null {
+  if (n.alwaysScope?.startsWith(FILE_CHANGE_SCOPE)) {
+    return t.bare('prompt.always.changes', { folder: n.alwaysScope.slice(FILE_CHANGE_SCOPE.length) });
+  }
+  const action = toolAction(n, t);
+  const prefix = `${n.tool} `;
+  if (!action || !n.alwaysScope?.startsWith(prefix)) return null;
+  const rest = n.alwaysScope.slice(prefix.length);
+  if (rest.startsWith('on files in ')) return t.bare('prompt.always.folder', { action, folder: rest.slice('on files in '.length) });
+  return t.bare('prompt.always.file', { action, name: rest.startsWith('on ') ? rest.slice(3) : rest });
 }
 
 /** `C:\A\b.txt` and `c:/a/b.txt/` compare equal. Picks card wording only; too loose for an access check. */
@@ -112,7 +186,8 @@ export function requiresFreshConsent(tool: string | undefined): boolean {
   return tool === 'share_engineering_context'
     || tool === 'append_engineering_context'
     || tool === 'approve_engineering_code'
-    || tool === PATH_ACCESS_TOOL;
+    || tool === PATH_ACCESS_TOOL
+    || tool === PROJECT_TRUST_TOOL;
 }
 
 /**
@@ -171,9 +246,19 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   typeFilter: null,
 
   addNotification: (notification) =>
-    set((state) => ({
-      notifications: [notification, ...state.notifications].slice(0, MAX_NOTIFICATIONS),
-    })),
+    set((state) => {
+      const existing = state.notifications.find((n) => n.id === notification.id);
+      if (!existing) {
+        return { notifications: [notification, ...state.notifications].slice(0, MAX_NOTIFICATIONS) };
+      }
+      // A re-attached run replays its prompt with the same id: keep one entry, and any answer.
+      if (existing.response) return state;
+      return {
+        notifications: state.notifications.map((n) =>
+          n.id === notification.id ? { ...notification, read: existing.read } : n
+        ),
+      };
+    }),
 
   dismiss: (id) =>
     set((state) => ({
@@ -229,6 +314,11 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
           : n
       ),
     }));
+    // The run goes on, often silently (a long tool), so the answer itself ends the wait.
+    const chat = useChatStore.getState();
+    if (notification.sessionId && notification.sessionId === chat.currentSessionId && chat.awaitingUser) {
+      chat.setAwaitingUser(false);
+    }
   },
 }));
 
@@ -247,9 +337,117 @@ export const selectVisibleNotifications = (state: NotificationState): GaiaNotifi
   return visible;
 };
 
+/** The kinds of notification in the list, for the panel's filter tabs. */
+export const selectPresentTypes = (state: NotificationState): NotificationType[] => [
+  ...new Set(state.notifications.filter((n) => !n.dismissed).map((n) => n.type)),
+];
+
 /** The newest unanswered permission request of chat `sessionId` — the one the agent waits on. */
 export const selectSessionPermissionPrompt = (sessionId: string) =>
   (state: NotificationState): GaiaNotification | null =>
     state.notifications.find(
       (n) => n.type === 'permission_request' && n.sessionId === sessionId && !n.response && !n.dismissed
     ) ?? null;
+
+/** Chats with an unanswered permission prompt, sorted; feeds the chat list's Needs you group. */
+export const selectPromptingSessionIds = (state: NotificationState): string[] =>
+  [...new Set(
+    state.notifications
+      .filter((n) => n.type === 'permission_request' && n.sessionId && !n.response && !n.dismissed)
+      .map((n) => n.sessionId as string)
+  )].sort();
+
+// ── Chat alert settings (#5226) ──────────────────────────────────────────
+
+/** The chat events that can alert the user. */
+export type AlertEvent = 'needs_approval' | 'question' | 'finished';
+/** banner: OS notification plus badge; badge: counted on the tray/dock badge only. */
+export type AlertMode = 'banner' | 'badge' | 'off';
+
+export interface AlertSettings {
+  modes: Record<AlertEvent, AlertMode>;
+  /** A short chime with each alert. */
+  sound: boolean;
+  /** Flash the taskbar button when an alert fires and GAIA isn't focused. */
+  flash: boolean;
+  /** Hold off idle sleep while a chat turn runs (desktop app). */
+  keepAwake: boolean;
+  /** On battery, stop holding off sleep below this percent; 0 never stops. */
+  batteryFloor: number;
+}
+
+export const ALERT_SETTINGS_KEY = 'gaia_alert_settings';
+
+export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
+  modes: { needs_approval: 'banner', question: 'banner', finished: 'banner' },
+  sound: false,
+  flash: true,
+  keepAwake: true,
+  batteryFloor: 20,
+};
+
+const ALERT_MODES: readonly AlertMode[] = ['banner', 'badge', 'off'];
+
+/** Saved settings over the defaults; an unreadable or invalid value is reported and replaced. */
+export function loadAlertSettings(): AlertSettings {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(ALERT_SETTINGS_KEY);
+  } catch (err) {
+    console.warn('[alerts] Notification settings unreadable (site data blocked); using defaults.', err);
+    return DEFAULT_ALERT_SETTINGS;
+  }
+  if (!raw) return DEFAULT_ALERT_SETTINGS;
+  let saved: Partial<AlertSettings>;
+  try {
+    saved = JSON.parse(raw);
+  } catch (err) {
+    console.warn('[alerts] Saved notification settings are corrupt; using defaults.', err);
+    return DEFAULT_ALERT_SETTINGS;
+  }
+  const modes = { ...DEFAULT_ALERT_SETTINGS.modes };
+  for (const event of Object.keys(modes) as AlertEvent[]) {
+    const m = saved.modes?.[event];
+    if (m !== undefined && ALERT_MODES.includes(m)) modes[event] = m;
+    else if (m !== undefined) console.warn(`[alerts] Ignored unknown mode ${String(m)} for ${event}.`);
+  }
+  const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
+  const floor = saved.batteryFloor;
+  return {
+    modes,
+    sound: bool(saved.sound, DEFAULT_ALERT_SETTINGS.sound),
+    flash: bool(saved.flash, DEFAULT_ALERT_SETTINGS.flash),
+    keepAwake: bool(saved.keepAwake, DEFAULT_ALERT_SETTINGS.keepAwake),
+    batteryFloor: typeof floor === 'number' && floor >= 0 && floor <= 100
+      ? floor : DEFAULT_ALERT_SETTINGS.batteryFloor,
+  };
+}
+
+interface AlertSettingsState extends AlertSettings {
+  setMode: (event: AlertEvent, mode: AlertMode) => void;
+  update: (patch: Partial<Omit<AlertSettings, 'modes'>>) => void;
+}
+
+function saveAlertSettings(s: AlertSettings): void {
+  try {
+    localStorage.setItem(ALERT_SETTINGS_KEY, JSON.stringify(s));
+  } catch (err) {
+    console.warn('[alerts] Notification settings not saved; they will reset on reload.', err);
+  }
+}
+
+const pickSettings = (s: AlertSettings): AlertSettings => ({
+  modes: s.modes, sound: s.sound, flash: s.flash, keepAwake: s.keepAwake, batteryFloor: s.batteryFloor,
+});
+
+export const useAlertSettings = create<AlertSettingsState>((set, get) => ({
+  ...loadAlertSettings(),
+  setMode: (event, mode) => {
+    set({ modes: { ...get().modes, [event]: mode } });
+    saveAlertSettings(pickSettings(get()));
+  },
+  update: (patch) => {
+    set(patch);
+    saveAlertSettings(pickSettings(get()));
+  },
+}));

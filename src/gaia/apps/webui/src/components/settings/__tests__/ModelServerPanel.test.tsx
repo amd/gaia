@@ -24,12 +24,10 @@ function info(overrides: Partial<ModelServerInfo> = {}): ModelServerInfo {
             backend: 'vulkan', backend_source: 'requested', ctx_size: null,
         },
         default_backend: 'vulkan',
-        available_backends: [
-            { name: 'vulkan', state: 'installed' },
-            { name: 'rocm', state: 'installable' },
-            { name: 'cpu', state: 'installed' },
-        ],
+        // The server lists only backends GAIA has tested.
+        available_backends: [{ name: 'vulkan', state: 'installed' }],
         preferred_backend: null, system_info_error: null,
+        loaded_models: [],
         ...overrides,
     };
 }
@@ -39,6 +37,37 @@ beforeEach(() => {
 });
 
 describe('ModelServerPanel', () => {
+    it('shows other loaded models with their type, backend, and context', async () => {
+        mockedApi.getModelServer.mockResolvedValue(info({
+            loaded_models: [
+                {
+                    name: 'Gemma-3n-Vision-GGUF',
+                    model_type: 'vision',
+                    recipe: 'llamacpp',
+                    device: 'gpu',
+                    backend: 'vulkan',
+                    backend_source: 'lemonade_default',
+                    ctx_size: 4096,
+                },
+                {
+                    name: 'bge-reranker-v2-m3-GGUF',
+                    model_type: 'reranking',
+                    recipe: 'llamacpp',
+                    device: 'gpu',
+                    backend: 'rocm',
+                    backend_source: 'requested',
+                    ctx_size: null,
+                },
+            ],
+        }));
+        render(<ModelServerPanel />);
+
+        expect(await screen.findByText('Vision model')).toBeInTheDocument();
+        expect(screen.getByText(/Gemma-3n-Vision-GGUF · Vulkan.*4K tokens/)).toBeInTheDocument();
+        expect(screen.getByText('Reranker model')).toBeInTheDocument();
+        expect(screen.getByText(/bge-reranker-v2-m3-GGUF · ROCm/)).toBeInTheDocument();
+    });
+
     it('names the server, its address, and what the chat model runs on', async () => {
         mockedApi.getModelServer.mockResolvedValue(info());
         render(<ModelServerPanel />);
@@ -48,6 +77,19 @@ describe('ModelServerPanel', () => {
         expect(screen.getByText("Vulkan (Lemonade's default)")).toBeInTheDocument();
         expect(screen.getByText('64K tokens')).toBeInTheDocument();
         expect(screen.getByText(/embeddinggemma-300m-GGUF · Vulkan/)).toBeInTheDocument();
+    });
+
+    it('names a cloud chat model without its routing prefix, keeping the id in the tooltip', async () => {
+        mockedApi.getModelServer.mockResolvedValue(info({
+            chat_model: {
+                name: 'fireworks.deepseek-v4p1-flash', recipe: 'cloud', device: null,
+                backend: 'remote', backend_source: null, ctx_size: null,
+            },
+        }));
+        render(<ModelServerPanel />);
+        const name = await screen.findByText('deepseek-v4p1-flash');
+        expect(name).toHaveAttribute('title', 'fireworks.deepseek-v4p1-flash');
+        expect(screen.queryByText('fireworks.deepseek-v4p1-flash')).not.toBeInTheDocument();
     });
 
     it('says why the embedding model runs on the CPU with ROCm, and only then', async () => {
@@ -63,38 +105,38 @@ describe('ModelServerPanel', () => {
         expect(screen.queryByText(/known GPU driver issue/)).not.toBeInTheDocument();
     });
 
-    it('offers only the backends Lemonade reports for this machine', async () => {
+    it('offers only the backends GAIA has tested, with no Auto', async () => {
         mockedApi.getModelServer.mockResolvedValue(info());
         render(<ModelServerPanel />);
         await screen.findByRole('radiogroup', { name: 'llama.cpp backend' });
 
-        const options = screen.getAllByRole('radio').map((b) => b.textContent);
-        expect(options).toEqual(['Auto (Vulkan)', 'Vulkan', 'ROCm', 'CPU']);
-        expect(screen.queryByText('Metal')).not.toBeInTheDocument();
-        expect(screen.getByText(/ROCm downloads on first use/)).toBeInTheDocument();
+        expect(screen.getAllByRole('radio').map((b) => b.textContent)).toEqual(['Vulkan']);
+        expect(screen.getByRole('radio', { name: 'Vulkan' })).toHaveAttribute('aria-checked', 'true');
+        expect(screen.getByText(/NPU models run on FastFlowLM/)).toBeInTheDocument();
     });
 
-    it('saves a choice and says when it applies', async () => {
-        mockedApi.getModelServer.mockResolvedValue(info());
-        mockedApi.setModelServerBackend.mockResolvedValue(info({ preferred_backend: 'rocm' }));
+    it('keeps an untested backend saved earlier visible, so it can be switched to Vulkan', async () => {
+        mockedApi.getModelServer.mockResolvedValue(info({ preferred_backend: 'rocm' }));
+        mockedApi.setModelServerBackend.mockResolvedValue(info({ preferred_backend: 'vulkan' }));
         render(<ModelServerPanel />);
 
-        fireEvent.click(await screen.findByRole('radio', { name: 'ROCm' }));
+        expect(await screen.findByRole('radio', { name: 'ROCm' })).toHaveAttribute('aria-checked', 'true');
+        fireEvent.click(screen.getByRole('radio', { name: 'Vulkan' }));
 
         await screen.findByText(/applies the next time the chat model loads/);
-        expect(mockedApi.setModelServerBackend).toHaveBeenCalledWith('rocm');
-        expect(screen.getByRole('radio', { name: 'ROCm' })).toHaveAttribute('aria-checked', 'true');
+        expect(mockedApi.setModelServerBackend).toHaveBeenCalledWith('vulkan');
+        expect(screen.getByRole('radio', { name: 'Vulkan' })).toHaveAttribute('aria-checked', 'true');
     });
 
     it('shows a refused choice as an error', async () => {
-        mockedApi.getModelServer.mockResolvedValue(info());
-        mockedApi.setModelServerBackend.mockRejectedValue(new Error("llama.cpp's 'rocm' backend is not available"));
+        mockedApi.getModelServer.mockResolvedValue(info({ preferred_backend: 'rocm' }));
+        mockedApi.setModelServerBackend.mockRejectedValue(new Error('Lemonade is not answering'));
         render(<ModelServerPanel />);
 
-        fireEvent.click(await screen.findByRole('radio', { name: 'ROCm' }));
+        fireEvent.click(await screen.findByRole('radio', { name: 'Vulkan' }));
 
-        expect(await screen.findByRole('alert')).toHaveTextContent('not available');
-        expect(screen.getByRole('radio', { name: 'Auto (Vulkan)' })).toHaveAttribute('aria-checked', 'true');
+        expect(await screen.findByRole('alert')).toHaveTextContent('not answering');
+        expect(screen.getByRole('radio', { name: 'ROCm' })).toHaveAttribute('aria-checked', 'true');
     });
 
     it('reads unknown, not a crash, when an older Lemonade omits the backend', async () => {
@@ -158,10 +200,10 @@ describe('ModelServerPanel', () => {
 
     it('reloads the chat model at its current context window', async () => {
         mockedApi.getModelServer.mockResolvedValue(info());
-        mockedApi.loadModel.mockResolvedValue({ status: 'loading', model: 'Qwen3.6-35B-A3B-GGUF', ctx_size: 65536 });
+        mockedApi.loadModelAskingFirst.mockResolvedValue(true);
         render(<ModelServerPanel />);
 
         fireEvent.click(await screen.findByRole('button', { name: 'Reload chat model now' }));
-        await waitFor(() => expect(mockedApi.loadModel).toHaveBeenCalledWith('Qwen3.6-35B-A3B-GGUF', 65536));
+        await waitFor(() => expect(mockedApi.loadModelAskingFirst).toHaveBeenCalledWith('Qwen3.6-35B-A3B-GGUF', 65536));
     });
 });

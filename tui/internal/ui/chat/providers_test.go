@@ -64,7 +64,7 @@ func TestCloudLaunchHasProviderBeforeFirstAgentEvent(t *testing.T) {
 }
 
 func TestProviderSelectionSetsUnstartedChildModel(t *testing.T) {
-	c := client.NewCanonicalSubprocessClient("unused", []string{"--use-claude", "--dev"})
+	c := client.NewCanonicalSubprocessClient("unused", []string{"--use-claude", "--dev"}, false)
 	m := NewChatModelForFlagship(c, "gaia", "GAIA", true)
 	m.width, m.height = 80, 24
 	updated, _ := m.submit("/provider")

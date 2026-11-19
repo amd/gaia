@@ -11,6 +11,24 @@
     margin-bottom: 20px;
 }
 
+.schedule-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.schedule-field-label {
+    font-size: var(--fs-label);
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.schedule-field-hint,
+.schedule-prompt-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
 .schedule-form-row {
     display: flex;
     gap: 8px;
@@ -34,6 +52,12 @@
 
 .schedule-form-row input::placeholder {
     color: var(--text-muted);
+}
+
+/* An edited schedule keeps its name, so the field reads as fixed. */
+.schedule-form-row input[readonly] {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
 }
 
 .schedule-prompt-input {
@@ -70,6 +94,21 @@
     margin-top: -4px;
 }
 
+/* Failed pause, resume, run now or delete; stays above the list until dismissed */
+.schedule-action-error {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 6px 8px;
+    border-inline-start: 2px solid var(--danger);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    font-size: 12px;
+    color: var(--text-primary);
+    overflow-wrap: anywhere;
+}
+
 /* Schedule list */
 .schedule-section {
     margin-bottom: 20px;
@@ -80,10 +119,8 @@
 }
 
 .schedule-section h4 {
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
+    font-size: var(--fs-label);
+    font-weight: 500;
     color: var(--text-muted);
     margin-bottom: 10px;
 }
@@ -123,7 +160,7 @@
 }
 
 .schedule-card.just-ran {
-    animation: schedule-flash 1.5s ease-out;
+    animation: schedule-flash var(--duration-pulse) var(--ease);
 }
 
 @keyframes schedule-flash {
@@ -140,18 +177,19 @@
 
 .schedule-card-name {
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
     flex: 1;
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
 .schedule-card-status {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    font-size: var(--fs-caption);
+    font-weight: 500;
+    text-transform: capitalize;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
 }
@@ -180,13 +218,28 @@
     color: var(--text-secondary);
 }
 
+.schedule-card-error {
+    margin-top: 6px;
+    padding: 6px 8px;
+    border-inline-start: 2px solid var(--danger);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    font-size: 12px;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 .schedule-card-prompt {
     font-size: 12px;
     color: var(--text-secondary);
     margin-top: 4px;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    animation: fade-cut-block both;
+    animation-timeline: scroll(self block);
+    overflow-wrap: anywhere;
 }
 
 .schedule-card-actions {
@@ -196,6 +249,9 @@
 }
 
 .schedule-card-actions .btn-sm {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 11px;
     padding: 3px 10px;
     border-radius: var(--radius-sm);
@@ -228,6 +284,48 @@
     background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
+.schedule-card-actions {
+    flex-wrap: wrap;
+}
+
+/* Past runs sit at the far end, as the disclosure for the panel below. */
+.schedule-card-actions .schedule-history-toggle {
+    margin-inline-start: auto;
+    background: transparent;
+    border-color: transparent;
+    color: var(--text-secondary);
+}
+
+.schedule-form-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+/* Quick picks for "When to run" */
+.schedule-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.schedule-preset {
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 12px;
+    transition: border-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+
+.schedule-preset:hover,
+.schedule-preset.is-picked {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
 /* Results panel */
 .schedule-results {
     margin-top: 16px;
@@ -236,10 +334,8 @@
 }
 
 .schedule-results h4 {
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.8px;
+    font-size: var(--fs-label);
+    font-weight: 500;
     color: var(--text-muted);
     margin-bottom: 10px;
 }
@@ -262,8 +358,9 @@
 .schedule-result-time {
     color: var(--text-muted);
     margin-bottom: 4px;
-    font-family: var(--font-mono);
-    font-size: 11px;
+    font-family: var(--font-sans);
+    font-size: var(--fs-caption);
+    font-variant-numeric: tabular-nums;
 }
 
 .schedule-result-content {
@@ -276,6 +373,7 @@
 
 .schedule-result-error {
     color: var(--accent);
+    max-height: none;
 }
 
 .schedule-results-empty {
@@ -333,8 +431,13 @@
 }
 
 .schedule-parsed-description {
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.schedule-parsed-hint {
+    color: var(--text-secondary);
     margin-bottom: 4px;
 }
 
@@ -366,40 +469,4 @@
 .schedule-field-missing {
     border-color: var(--accent-yellow) !important;
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-yellow) 30%, transparent);
-}
-
-.btn-primary {
-    padding: 6px 16px;
-    border-radius: var(--radius-sm);
-    border: none;
-    background: var(--accent-fill);
-    color: var(--accent-fill-text);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background var(--duration-fast) var(--ease);
-}
-
-.btn-primary:hover {
-    background: var(--accent-fill-hover);
-}
-
-.btn-primary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-.btn-secondary {
-    padding: 6px 16px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border);
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    font-size: 13px;
-    cursor: pointer;
-    transition: background var(--duration-fast) var(--ease);
-}
-
-.btn-secondary:hover {
-    background: var(--bg-active);
 }

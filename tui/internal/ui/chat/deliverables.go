@@ -51,7 +51,7 @@ var deliverableExts = map[string]bool{
 	"png": true, "jpg": true, "jpeg": true, "svg": true, "zip": true,
 }
 
-// openableExts are the deliverables Ctrl+G may hand to the system opener:
+// openableExts are the deliverables Ctrl+F may hand to the system opener:
 // documents that cannot carry code. An executable, a script, a page or a
 // macro-enabled or legacy Office file the agent wrote is never launched by a
 // keystroke.
@@ -485,6 +485,22 @@ func textLines(path string) int {
 // lastDeliverable is the newest openable file any answer produced.
 func (m ChatModel) lastDeliverable() (deliverable, bool) {
 	for i := len(m.messages) - 1; i >= 0; i-- {
+		for _, d := range m.messages[i].Deliverables {
+			if openableExts[extOf(d.Path)] {
+				return d, true
+			}
+		}
+	}
+	return deliverable{}, false
+}
+
+// newerDeliverable is the newest created document, unless a generated media
+// card came after it: Ctrl+F opens whichever a turn made last.
+func (m ChatModel) newerDeliverable() (deliverable, bool) {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if _, ok := mediaCandidate(m.messages[i]); ok {
+			return deliverable{}, false
+		}
 		for _, d := range m.messages[i].Deliverables {
 			if openableExts[extOf(d.Path)] {
 				return d, true

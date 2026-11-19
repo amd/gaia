@@ -1,6 +1,6 @@
 ---
 title: "Terminal UI — Developer Manual"
-description: "Build gaia-tui from source, drive it from a script through the control API, and debug it"
+description: "Build gaia-cli from source, drive it from a script through the control API, and debug it"
 icon: "wrench"
 ---
 
@@ -15,7 +15,7 @@ Three processes, and knowing which one you are looking at saves most of the
 debugging time:
 
 ```
-gaia-tui            Go. The terminal app and the control API.
+gaia-cli            Go. The terminal app and the control API.
   └─ gaia-agent     Python subprocess, spawned once per session. The agent loop
                     and every tool.
        └─ Lemonade  HTTP server. Runs local models and routes cloud chat.
@@ -39,7 +39,7 @@ Needs `git`, [Go](https://go.dev/dl/), and a Python env with `gaia` installed.
 
 ```bash
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build          # -> tui/bin/gaia-tui
+cd tui && make build          # -> tui/bin/gaia-cli (.exe on Windows)
 ```
 
 Other targets: `test`, `test-race`, `lint`, `vet`, `cover`, `mock-agent`,
@@ -52,14 +52,23 @@ scripts/dev/run-tui.sh --dev --control
 ```
 
 There is one screen. `--dev` changes nothing on it: it turns on the control API
-(like `--control`) and logs that API's input counts, state changes and waits to
-`$GAIA_TUI_HOME/gaia-tui.log`. Debug detail lives elsewhere:
+(like `--control`), logs that API's input counts, state changes and waits, and
+the transport's diagnostics, to `$GAIA_TUI_HOME/gaia-tui.log`, and puts agents
+the TUI spawns at DEBUG in `~/.gaia/logs/gaia-agent.log`. Debug detail lives
+elsewhere:
 
 | Where | What |
 |---|---|
 | `Ctrl+O` | Each call's command or code, timings, full outcomes, and the turn's metrics (when the agent ran with `GAIA_TURN_LOG`) |
 | `--trace=<path>` | Every event as JSONL, tool arguments and results included. A traced launch also puts agents the TUI spawns at DEBUG in `~/.gaia/logs/gaia-agent.log` |
-| `gaia-tui.log` | Transport diagnostics, always on. Metadata only, never input contents |
+| `gaia-tui.log` | Transport diagnostics under `--dev`. Metadata only, never input contents |
+
+To profile the TUI's own startup and rendering, add `--pprof 127.0.0.1:6060`
+(loopback addresses only) and read it with Go's profiler:
+
+```bash
+go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=20
+```
 
 ### Point it at your checkout, not the published sidecar
 
@@ -68,8 +77,7 @@ than source. When testing an agent from a checkout, set the matching mode on the
 TUI launch so its ensure request agrees:
 
 ```bash
-GAIA_GAIA_AGENT_MODE=dev gaia-tui     # flagship
-GAIA_EMAIL_AGENT_MODE=dev gaia-tui    # email
+GAIA_GAIA_AGENT_MODE=dev gaia-cli     # flagship
 ```
 
 Starting a dev sidecar separately while the TUI still defaults to `user` creates
@@ -294,7 +302,8 @@ colour support, and the TUI then emits no escape sequences at all. It reads as
 - **Check which screen you are on** before sending keys. Keys sent to the wrong
   screen do nothing and read as "the binding is broken".
 - **Grep for the right words.** The confirmation prompt's first line is a
-  risk badge (`READ`, `WRITE`, `RUNS CODE`, `DESTRUCTIVE`) and a question. A
+  risk badge (`READ`, `WRITE`, `RUNS CODE`, `DESTRUCTIVE`, or `ACCESS` on a
+  prompt to use a file or folder outside the chat's) and a question. A
   tool the TUI knows gets a plain question — a shell command reads
   `RUNS CODE Run this command?`, a file write `WRITE Write this file?` — and
   any other tool reads `Allow <tool>?`. There is no `Confirm: <tool>` line.
@@ -337,7 +346,7 @@ gaia lemonade embedded status
 ```
 
 It is private: its URL and key are its own, and other configured servers never
-inherit them. Cloud routing needs 11.8.1 or later.
+inherit them.
 
 `gaia init --check` is the exact gate the preflight screen uses, and it names
 the missing model id:
@@ -349,11 +358,13 @@ NOT READY: profile 'gaia' needs setup
 
 <Warning>
 `user.`-prefixed models are **custom registrations**: pulling one requires
-`checkpoint` + `recipe` (+ `embedding` for an embedder). Built-in models are the
-opposite — pulling one *with* a recipe makes Lemonade treat it as a new
-registration and 400 (#1655). `gaia init` gets this right;
-`readiness.pull_model` posts `model_name` only and therefore cannot pull a
-`user.` model — it returns HTTP 500 `not registered with Lemonade Server`.
+`checkpoint` + `recipe` (+ `embedding` for an embedder, and `mmproj` / `vision`
+/ `reasoning` when the model needs them), unless Lemonade already lists it —
+then it is pulled by name. Built-in models are the opposite —
+pulling one *with* a recipe makes Lemonade treat it as a new registration and
+400 (#1655). `gaia init` sends those fields, and `readiness.pull_model` and
+the Agent UI Download button share one body (`pull_request_body`). A gateway
+model is refused before any request: there are no weights to fetch.
 </Warning>
 
 ## Related

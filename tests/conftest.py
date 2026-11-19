@@ -12,6 +12,7 @@ See: https://docs.pytest.org/en/stable/reference/fixtures.html#conftest-py-shari
 
 Current fixtures:
 - _block_real_browser_launch: Session-autouse guard so no test can open a real browser
+- _block_real_screen_capture: Session-autouse guard so no test can grab the real screen
 - api_server: Function-scoped fixture that starts GAIA API server for integration tests
 - api_client: HTTP client (requests.Session) configured for API testing
 - lemonade_available: Session-scoped fixture checking if Lemonade server is running
@@ -20,6 +21,7 @@ Current fixtures:
   (used by tests/unit/connectors/ to avoid SecretService prerequisite on Linux CI)
 - ui_api_client: Function-scoped TestClient against gaia.ui.server.create_app()
 - mock_lemonade_client: Shared mock for LemonadeClient (requires pytest-mock)
+- reload_module: importlib.reload a module for one test, restoring its originals after
 
 Current options:
 - --hybrid: Run tests with hybrid configuration (cloud + local models)
@@ -28,6 +30,7 @@ To add new fixtures for other test suites, define them in this file and they'll
 be automatically available to all test files.
 """
 
+import importlib
 import os
 import subprocess
 import sys
@@ -77,58 +80,27 @@ def _block_real_browser_launch():
         setattr(webbrowser, name, original)
 
 
-_EMAIL_CORPUS_DIR = Path(__file__).parent / "fixtures" / "email"
-_BUILD_EMAIL_CORPUS = """
-try:
-    from tests.fixtures.email.generate_mbox import ensure_corpus
-except ImportError:
-    raise SystemExit(0)
-ensure_corpus()
-"""
-
-
-def pytest_sessionstart(session):
-    """Rebuild the email-triage corpus from its committed seed before any test.
-
-    ``synthetic_inbox.mbox`` + ``ground_truth.json`` are generated artifacts (not
-    committed — fully derived from ``vendor_corpus_seed.jsonl``), so a fresh
-    checkout has the seed but not the corpus. This materialises them once so
-    email unit/integration tests find their inputs. It no-ops when the email
-    agent extra isn't installed (those tests don't run here); a missing
-    committed seed still raises loudly inside ``ensure_corpus``.
-
-    Under pytest-xdist only the controller builds it, before any worker starts:
-    several workers rewriting the same mbox would corrupt it. It runs in a
-    child interpreter because importing the generator puts the email agent on
-    ``sys.path``, which would change which test files collect.
-    """
-    if hasattr(session.config, "workerinput"):
-        return
-    if all(
-        (_EMAIL_CORPUS_DIR / name).exists()
-        for name in ("synthetic_inbox.mbox", "ground_truth.json")
-    ):
-        return
-    subprocess.run(
-        [sys.executable, "-c", _BUILD_EMAIL_CORPUS],
-        cwd=_EMAIL_CORPUS_DIR.parents[2],
-        check=True,
-    )
-
-
 @pytest.fixture(scope="session", autouse=True)
-def _ensure_email_corpus():
-    """Check the corpus is in place, and import its generator after collection.
+def _block_real_screen_capture():
+    """No test may grab the real screen: it prompts for screen recording on macOS."""
+    saved = []
 
-    The controller already built the corpus (see ``pytest_sessionstart``), so
-    ``ensure_corpus`` is a no-op here; the import still puts the email agent on
-    ``sys.path`` for the rest of the session, as it always has.
-    """
-    try:
-        from tests.fixtures.email.generate_mbox import ensure_corpus
-    except ImportError:
-        return
-    ensure_corpus()
+    def _blocked(*_args, **_kwargs):
+        raise RuntimeError(
+            "tests must not capture the real screen; stub it like "
+            "tests/unit/test_screenshot_tools.py"
+        )
+
+    for module_name, attr in (("PIL.ImageGrab", "grab"), ("mss", "mss")):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
+        saved.append((module, attr, getattr(module, attr)))
+        setattr(module, attr, _blocked)
+    yield
+    for module, attr, original in saved:
+        setattr(module, attr, original)
 
 
 def pytest_configure(config):
@@ -194,6 +166,23 @@ def _reset_model_broker_state():
     _reset()
     yield
     _reset()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_ui_model_record(tmp_path, monkeypatch):
+    """Keep the Agent UI's record of the models it loaded out of the real home.
+
+    Every chat pre-flight or Settings load that succeeds records its model in
+    ``<GAIA home>/ui/loaded_models.json``; many tests run one with a mocked
+    client, and would otherwise write that record into the developer's GAIA.
+    """
+    try:
+        from gaia.ui import _chat_helpers
+    except ImportError:
+        return
+    record = tmp_path / "ui-loaded-models.json"
+    monkeypatch.setattr(_chat_helpers, "_owned_models_path", lambda: record)
+    monkeypatch.setattr(_chat_helpers, "_models_loaded_here", None)
 
 
 @pytest.fixture(scope="session")
@@ -310,6 +299,35 @@ def require_lemonade(lemonade_available):
 def mock_lemonade_client(mocker):
     """Shared mock for LemonadeClient — avoids duplicating patch targets across test files."""
     return mocker.patch("gaia.llm.lemonade_client.LemonadeClient")
+
+
+@pytest.fixture
+def reload_module():
+    """Reload a module for this test only, then put its original objects back.
+
+    A reload re-executes the module into the same namespace, so its classes and
+    constants are replaced by new objects while every ``from mod import X`` made
+    earlier keeps the old ones; ``except mod.SomeError`` then stops matching on
+    later tests in the worker. Reloading again does not help, since it mints a
+    third set, so teardown restores the saved namespace instead.
+    """
+    saved = {}
+
+    def _reload(module):
+        if module.__name__ not in saved:
+            saved[module.__name__] = (module, dict(module.__dict__))
+        return importlib.reload(module)
+
+    yield _reload
+
+    for name, (module, namespace) in saved.items():
+        module.__dict__.clear()
+        module.__dict__.update(namespace)
+        sys.modules[name] = module
+        parent_name, _, attr = name.rpartition(".")
+        parent = sys.modules.get(parent_name)
+        if parent is not None:
+            setattr(parent, attr, module)
 
 
 @pytest.fixture(scope="function")

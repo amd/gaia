@@ -54,6 +54,8 @@ beforeEach(() => {
 
 it('labels a conversation by its chat title, not its session ID', async () => {
     render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
 
     expect(await screen.findByText('Remember teal and Calgary office')).toBeInTheDocument();
     expect(screen.queryByText(/c2639b15/)).not.toBeInTheDocument();
@@ -61,12 +63,16 @@ it('labels a conversation by its chat title, not its session ID', async () => {
 
 it('keeps the short ID for a chat the sidebar no longer has', async () => {
     render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
 
     expect(await screen.findByText('deadbeef...')).toBeInTheDocument();
 });
 
 it('opens the chat from the conversation detail', async () => {
     render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
     fireEvent.click(await screen.findByText('Remember teal and Calgary office'));
     fireEvent.click(await screen.findByRole('button', { name: 'Open chat' }));
 
@@ -79,6 +85,8 @@ it('labels a conversation search hit by its chat title', async () => {
         { id: 7, session_id: TITLED_ID, role: 'user', content: 'My favourite colour is teal', context: 'global', timestamp: '2026-10-16T00:00:00Z' },
     ] as never);
     render(<MemoryDashboard />);
+    // Stats and the knowledge table live under Advanced.
+    fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
     await screen.findByText('Remember teal and Calgary office');
     fireEvent.change(screen.getByLabelText('Search conversations'), { target: { value: 'teal' } });
 

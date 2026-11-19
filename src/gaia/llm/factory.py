@@ -13,7 +13,7 @@ _PROVIDERS: dict[str, str] = {
 
 
 REMOVED_PROVIDER_MESSAGE = (
-    "The openai/litellm providers and use_openai/use_chatgpt options were removed "
+    "The openai/litellm providers were removed "
     "because they discarded tool calls. Configure your local or on-prem model "
     "in Lemonade and select provider='lemonade' with its base_url and model ID. "
     "See https://amd-gaia.ai/docs/sdk/sdks/llm#gateway-migration."
@@ -23,15 +23,17 @@ REMOVED_PROVIDER_MESSAGE = (
 def create_client(
     provider: Optional[str] = None,
     use_claude: bool = False,
-    use_openai: bool = False,
     **kwargs,
 ) -> LLMClient:
     """Create a Lemonade or Claude client.
 
-    ``use_openai`` is retained only to reject legacy callers with migration
-    guidance; it cannot select a backend, even with an explicit provider.
+    A Lemonade model id naming a gateway Claude model (``amd.Claude-*``) gets a
+    ``GatewayClaudeProvider``, which calls the gateway's Anthropic route.
+
+    ``provider="openai"`` or ``"litellm"`` raises ``ValueError`` with migration
+    guidance.
     """
-    if use_openai or (provider and provider.lower() in {"openai", "litellm"}):
+    if provider and provider.lower() in {"openai", "litellm"}:
         raise ValueError(REMOVED_PROVIDER_MESSAGE)
     if provider is None:
         provider = "claude" if use_claude else "lemonade"
@@ -41,6 +43,15 @@ def create_client(
     if provider_lower not in _PROVIDERS:
         available = ", ".join(_PROVIDERS.keys())
         raise ValueError(f"Unknown provider: {provider}. Available: {available}")
+
+    if provider_lower == "lemonade":
+        from .gateway import gateway_claude_upstream_id
+
+        if gateway_claude_upstream_id(kwargs.get("model")):
+            # Lemonade's gateway route drops cache_control; this one keeps it.
+            from .providers.claude import GatewayClaudeProvider
+
+            return GatewayClaudeProvider(**kwargs)
 
     import importlib
 

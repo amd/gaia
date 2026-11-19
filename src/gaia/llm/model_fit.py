@@ -10,6 +10,9 @@ with the server that will actually load the model:
   Lemonade's ``select_gpu_memory_pool`` uses. A discrete GPU contributes its
   VRAM; Apple Silicon its Metal working set. With no GPU, system RAM.
 * **Disk** is the free space in Lemonade's model store.
+* **NPU memory**, for FastFlowLM (``-FLM``) models, is the system RAM the OS
+  sees: installed RAM less an APU's GPU carve-out. Only a PC whose Lemonade
+  reports an available ``amd_npu`` has any.
 
 A model fits when ``size * MEMORY_OVERHEAD_FACTOR + MEMORY_OVERHEAD_GB`` plus
 its KV cache fits the memory pool, and its download fits the disk. The KV cache
@@ -18,7 +21,7 @@ loads with (``ModelRequirement.kv_bytes_per_token``). :func:`largest_context`
 turns the rule around: given the memory left after the weights, how large a
 window the KV cache can take.
 
-``tui/internal/lemonade/recommended_models.json`` carries the same two constants for
+``tui/internal/lemonade/recommended_models.json`` carries the same fit constants for
 the Go picker; ``tests/unit/test_model_fit.py`` fails if they drift.
 
 Total memory says which models this machine can ever run. Before a load, what
@@ -31,6 +34,7 @@ run the machine out of memory.
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -41,8 +45,12 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 MEMORY_OVERHEAD_FACTOR = 1.05
 #: Fixed headroom for compute buffers and a small KV cache.
 MEMORY_OVERHEAD_GB = 1.0
+#: Share of RAM WDDM lets an integrated GPU use beyond its BIOS carve-out.
+WINDOWS_IGPU_SHARED_RAM_FRACTION = 0.5
 #: ``MachineCapacity.memory_source`` when no GPU holds the model.
 SYSTEM_RAM = "System RAM"
+#: ``memory_source`` of :func:`npu_capacity`.
+NPU_RAM = "NPU, system RAM"
 #: Share of the pool a window above a model's floor must leave free: the
 #: desktop and driver, and llama.cpp compute buffers that grow with the window.
 CONTEXT_HEADROOM_FRACTION = 0.10
@@ -72,11 +80,50 @@ class MachineCapacity:
     memory_source: str
     #: Free space in the model store, or ``None`` when Lemonade did not say.
     disk_free_gb: Optional[float]
+    #: System RAM an FLM model loads into, or ``None`` when no NPU is reported.
+    npu_memory_gb: Optional[float] = None
+    #: The NPU is this Linux PC's, whose own setup decides whether FastFlowLM
+    #: runs (:func:`npu_problems`); read only when an NPU model is judged.
+    npu_setup_matters: bool = False
 
     @property
     def on_gpu(self) -> bool:
         """The memory pool is a GPU's, not system RAM on a CPU-only PC."""
-        return self.memory_source != SYSTEM_RAM
+        return self.memory_source not in (SYSTEM_RAM, NPU_RAM)
+
+    @property
+    def has_npu(self) -> bool:
+        """Lemonade reports an available AMD NPU with memory to load into."""
+        return bool(self.npu_memory_gb)
+
+
+def npu_capacity(capacity: MachineCapacity) -> Optional[MachineCapacity]:
+    """*capacity* as an FLM model sees it, or ``None`` on a PC with no NPU."""
+    if not capacity.has_npu:
+        return None
+    return MachineCapacity(
+        memory_gb=capacity.npu_memory_gb,
+        memory_source=NPU_RAM,
+        disk_free_gb=capacity.disk_free_gb,
+        npu_memory_gb=capacity.npu_memory_gb,
+        npu_setup_matters=capacity.npu_setup_matters,
+    )
+
+
+def npu_problems(capacity: Optional[MachineCapacity]) -> List[Any]:
+    """What stops a model running on this PC's NPU though it is there."""
+    from gaia.llm import npu_linux
+
+    if capacity is None or not capacity.has_npu or not capacity.npu_setup_matters:
+        return []
+    return npu_linux.problems()
+
+
+def npu_not_ready_reason(capacity: Optional[MachineCapacity]) -> Optional[str]:
+    """:func:`npu_problems` as one predicate ("needs ... set up first: ..."), or None."""
+    from gaia.llm import npu_linux
+
+    return npu_linux.summary(npu_problems(capacity))
 
 
 @dataclass(frozen=True)
@@ -84,33 +131,6 @@ class FitVerdict:
     fits: bool
     #: Why not, in words a user can act on. Empty when it fits.
     reason: str = ""
-
-
-def check_server_supports(
-    min_version: Optional[str], server_version: Optional[str]
-) -> FitVerdict:
-    """Whether a Lemonade server is new enough to load a model.
-
-    An unknown server version cannot show support, so it does not pass: the
-    cost of guessing wrong is a large download the server then cannot load.
-    """
-    if not min_version:
-        return FitVerdict(True)
-    from gaia.version import parse_version
-
-    found, wanted = parse_version(server_version), parse_version(min_version)
-    if found is not None and wanted is not None and found >= wanted:
-        return FitVerdict(True)
-    running = (
-        f"this server is v{server_version}"
-        if server_version
-        else ("this server's version is unknown")
-    )
-    return FitVerdict(
-        False,
-        f"needs Lemonade v{min_version} or newer ({running}); "
-        "upgrade it with `gaia init --force-reinstall`",
-    )
 
 
 def required_memory_gb(size_gb: float, kv_cache_gb: float = 0.0) -> float:
@@ -154,13 +174,37 @@ def largest_context(
 
 
 def _num(value: Any) -> float:
-    return float(value) if isinstance(value, (int, float)) else 0.0
+    """A plausible finite GiB value, or zero when the report is unusable."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    number = float(value)
+    return number if math.isfinite(number) and 0.0 <= number <= 1024.0 else 0.0
 
 
 def _physical_memory_gb(info: Dict[str, Any]) -> float:
     raw = str(info.get("Physical Memory") or "")
     match = re.search(r"([\d.]+)\s*GB", raw)
-    return float(match.group(1)) if match else 0.0
+    try:
+        return float(match.group(1)) if match else 0.0
+    except ValueError:
+        # Unreadable counts as absent; callers then raise ModelFitError.
+        return 0.0
+
+
+def format_gb(gb: float) -> str:
+    """``gb`` for a message; under 1 GB keeps a decimal so 0.5 never reads as 0."""
+    return f"{gb:.1f}" if 0 < gb < 1 else f"{gb:.0f}"
+
+
+def _windows_shared_gb(physical_gb: float, carve_out_gb: float) -> float:
+    """System RAM Windows lets an integrated GPU use beyond its carve-out.
+
+    WDDM caps an adapter's shared system memory at half of the RAM Windows
+    sees; it is the Windows counterpart of the GTT pool Lemonade adds to the
+    carve-out on Linux. Lemonade's ``Physical Memory`` is installed RAM, which
+    still counts the carve-out, so the carve-out comes off before halving.
+    """
+    return max(0.0, physical_gb - carve_out_gb) * WINDOWS_IGPU_SHARED_RAM_FRACTION
 
 
 #: GPU keys Lemonade has used in ``devices``, with a label and whether an entry
@@ -233,7 +277,67 @@ def _windows_adapter_memory_gb(name: Any) -> float:
             return int(size) / 1024**3 if isinstance(size, int) else 0.0
 
 
-def _gpu_pool(devices: Dict[str, Any]) -> Optional[Tuple[float, str]]:
+@dataclass(frozen=True)
+class IgpuMemory:
+    """An AMD integrated GPU's memory, in GB: the pool is their sum."""
+
+    #: Reserved for the GPU at boot (BIOS UMA / Windows Variable Graphics Memory).
+    carve_out_gb: float
+    #: System RAM it may also use: GTT on Linux, WDDM shared memory on Windows.
+    shared_gb: float
+    #: ``"lemonade"`` when Lemonade reported the split, ``"windows"`` from the driver.
+    reported_by: str
+
+
+def _igpu_memory(gpu: Dict[str, Any], physical_gb: float) -> Optional[IgpuMemory]:
+    if _num(gpu.get("vram_gb")):
+        return IgpuMemory(
+            _num(gpu.get("vram_gb")), _num(gpu.get("virtual_mem_gb")), "lemonade"
+        )
+    carve_out = _windows_adapter_memory_gb(gpu.get("name"))
+    if not carve_out:
+        return None
+    if physical_gb <= 0:
+        raise ModelFitError(
+            f"Lemonade reports an AMD integrated GPU ({gpu.get('name')}) "
+            "but not this PC's 'Physical Memory', and the GPU's BIOS "
+            "carve-out alone is not the memory it loads into, so GAIA "
+            "cannot tell which models fit. Update Lemonade (`gaia init`) "
+            "and retry, or choose the model yourself with "
+            "`gaia config set default_model <model>`."
+        )
+    return IgpuMemory(carve_out, _windows_shared_gb(physical_gb, carve_out), "windows")
+
+
+def integrated_gpu_memory(info: Dict[str, Any]) -> Optional[IgpuMemory]:
+    """The first AMD integrated GPU's memory split, or ``None`` when there is none.
+
+    The same split :func:`capacity_from_system_info` sums into the pool.
+    """
+    if not isinstance(info, dict):
+        raise ModelFitError("Lemonade /system-info did not return an object")
+    physical = _physical_memory_gb(info)
+    for vendor, integrated, gpu in _gpu_entries(info.get("devices") or {}):
+        if vendor == "AMD" and integrated:
+            split = _igpu_memory(gpu, physical)
+            if split is not None:
+                return split
+    return None
+
+
+def physical_memory_gb(info: Dict[str, Any]) -> float:
+    """Installed RAM from ``/system-info``, or 0 when Lemonade did not say."""
+    return _physical_memory_gb(info) if isinstance(info, dict) else 0.0
+
+
+def windows_shared_gb(physical_gb: float, carve_out_gb: float) -> float:
+    """System RAM Windows lets an integrated GPU use beyond a carve-out."""
+    return _windows_shared_gb(physical_gb, carve_out_gb)
+
+
+def _gpu_pool(
+    devices: Dict[str, Any], physical_gb: float
+) -> Optional[Tuple[float, str]]:
     """The memory llama.cpp loads into, or ``None`` when no GPU is reported.
 
     Raises :class:`ModelFitError` when a GPU is reported without its memory:
@@ -244,14 +348,9 @@ def _gpu_pool(devices: Dict[str, Any]) -> Optional[Tuple[float, str]]:
     for vendor, integrated, gpu in entries:
         if vendor != "AMD" or not integrated:
             continue
-        if _num(gpu.get("vram_gb")):
-            return (
-                _num(gpu.get("vram_gb")) + _num(gpu.get("virtual_mem_gb")),
-                "AMD iGPU",
-            )
-        dedicated = _windows_adapter_memory_gb(gpu.get("name"))
-        if dedicated:
-            return dedicated, "AMD iGPU"
+        split = _igpu_memory(gpu, physical_gb)
+        if split is not None:
+            return split.carve_out_gb + split.shared_gb, "AMD iGPU"
     for vendor, _, gpu in entries:
         if _num(gpu.get("vram_gb")):
             return _num(gpu.get("vram_gb")), f"{vendor} GPU"
@@ -273,9 +372,9 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
     """
     if not isinstance(info, dict):
         raise ModelFitError("Lemonade /system-info did not return an object")
-    pool = _gpu_pool(info.get("devices") or {})
+    ram = _physical_memory_gb(info)
+    pool = _gpu_pool(info.get("devices") or {}, ram)
     if pool is None:
-        ram = _physical_memory_gb(info)
         if ram <= 0:
             raise ModelFitError(
                 "Lemonade /system-info reported neither GPU memory nor "
@@ -283,10 +382,82 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
                 "Update Lemonade (`gaia init`) and retry."
             )
         pool = (ram, SYSTEM_RAM)
-    storage = info.get("model_storage") or {}
+    from gaia.llm import npu_linux
+
+    disk, _ = model_store_free_gb(info)
+    npu_gb = _npu_memory_gb(
+        info.get("devices") or {}, ram, _physical_counts_carve_out(info)
+    )
+    return MachineCapacity(
+        memory_gb=pool[0],
+        memory_source=pool[1],
+        disk_free_gb=disk,
+        npu_memory_gb=npu_gb,
+        npu_setup_matters=bool(npu_gb) and npu_linux.applies_to(info),
+    )
+
+
+def _physical_counts_carve_out(info: Dict[str, Any]) -> bool:
+    """Lemonade's ``Physical Memory`` includes an APU's GPU carve-out.
+
+    True on Windows, where it is installed RAM; on Linux it is ``MemTotal``,
+    which the carve-out is already out of.
+    """
+    return str(info.get("OS Version") or "").lower().startswith("windows")
+
+
+def _npu_memory_gb(
+    devices: Dict[str, Any], physical_gb: float, counts_carve_out: bool
+) -> Optional[float]:
+    """System RAM an FLM model can load into, or ``None`` with no NPU.
+
+    The NPU shares the RAM the OS sees, so when *physical_gb* still counts an
+    APU's GPU carve-out, it comes off first.
+    """
+    npu = devices.get("amd_npu")
+    if not isinstance(npu, dict) or not npu.get("available") or physical_gb <= 0:
+        return None
+    if not counts_carve_out:
+        return physical_gb
+    carve_out = 0.0
+    for vendor, integrated, gpu in _gpu_entries(devices):
+        if vendor == "AMD" and integrated:
+            carve_out = _num(gpu.get("vram_gb")) or _windows_adapter_memory_gb(
+                gpu.get("name")
+            )
+            break
+    return max(0.0, physical_gb - carve_out) or None
+
+
+def model_store_free_gb(info: Dict[str, Any]) -> Tuple[Optional[float], Optional[str]]:
+    """Free GB in Lemonade's model store and its path, from ``/system-info``.
+
+    Either is ``None`` when Lemonade did not report it.
+    """
+    storage = (info.get("model_storage") if isinstance(info, dict) else None) or {}
     free = storage.get("free_bytes")
     disk = float(free) / 1e9 if isinstance(free, (int, float)) else None
-    return MachineCapacity(memory_gb=pool[0], memory_source=pool[1], disk_free_gb=disk)
+    where = storage.get("path")
+    return disk, where if isinstance(where, str) and where else None
+
+
+def check_download_fits_disk(
+    download_gb: float, disk_free_gb: Optional[float], store_path: Optional[str] = None
+) -> FitVerdict:
+    """Whether ``download_gb`` of models fits the free space in the model store.
+
+    Unlike :func:`check_fit`, which judges one model, this is the whole set a
+    setup is about to pull: each may fit alone while together they do not.
+    """
+    if disk_free_gb is None or download_gb <= disk_free_gb:
+        return FitVerdict(True)
+    where = f" at {store_path}" if store_path else ""
+    return FitVerdict(
+        False,
+        f"the models need about {download_gb:.1f} GB of disk and the model "
+        f"store{where} has {disk_free_gb:.1f} GB free. Free up "
+        f"{download_gb - disk_free_gb:.1f} GB there, then re-run `gaia init`",
+    )
 
 
 def check_fit(
@@ -298,7 +469,7 @@ def check_fit(
         return FitVerdict(
             False,
             f"needs ~{need:.0f} GB of memory; this PC has "
-            f"{capacity.memory_gb:.0f} GB ({capacity.memory_source})",
+            f"{format_gb(capacity.memory_gb)} GB ({capacity.memory_source})",
         )
     if capacity.disk_free_gb is not None and size_gb > capacity.disk_free_gb:
         return FitVerdict(
@@ -436,6 +607,19 @@ def _card_for(cards: Tuple[GpuMemoryUse, ...], vram_gb: float):
     return cards[0] if len(cards) == 1 else None
 
 
+def npu_free_memory(info: Dict[str, Any], os_memory: OsMemory) -> FreeMemory:
+    """Memory an FLM model load can take now: the RAM the OS reports free.
+
+    The NPU allocates from system RAM, which on an APU already excludes the
+    GPU carve-out. Raises :class:`ModelFitError` when ``/system-info`` is
+    unusable, as :func:`free_memory` does.
+    """
+    if not isinstance(info, dict):
+        raise ModelFitError("Lemonade /system-info did not return an object")
+    ram = os_memory.ram_available_gb
+    return FreeMemory(ram, ram + os_memory.swap_free_gb)
+
+
 def free_memory(info: Dict[str, Any], os_memory: OsMemory) -> Optional[FreeMemory]:
     """Memory a model load on the pool of :func:`capacity_from_system_info` can take now.
 
@@ -472,14 +656,19 @@ def free_memory(info: Dict[str, Any], os_memory: OsMemory) -> Optional[FreeMemor
             )
         # No per-GPU report (Windows): the BIOS carve-out is outside the RAM the
         # OS reports, and only GPU work uses it.
-        carve_out = _num(gpu.get("vram_gb")) or _windows_adapter_memory_gb(
-            gpu.get("name")
-        )
-        if not carve_out:
+        carve_out = _num(gpu.get("vram_gb"))
+        if carve_out:
+            return FreeMemory(carve_out + ram, carve_out + ram + swap)
+        carve_out = _windows_adapter_memory_gb(gpu.get("name"))
+        physical = _physical_memory_gb(info)
+        if not carve_out or physical <= 0:
             # Unknown, like a discrete card's: judging on RAM alone would
             # shrink or refuse a model the GPU holds.
             return None
-        return FreeMemory(carve_out + ram, carve_out + ram + swap)
+        shared = _windows_shared_gb(physical, carve_out)
+        return FreeMemory(
+            carve_out + min(shared, ram), carve_out + min(shared, ram + swap)
+        )
     for vendor, _, gpu in entries:
         vram = _num(gpu.get("vram_gb"))
         if vendor == "AMD":

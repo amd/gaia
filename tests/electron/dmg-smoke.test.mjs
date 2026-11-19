@@ -10,21 +10,11 @@
 //   GAIA_DMG=$(ls src/gaia/apps/webui/dist-app/*.dmg) \
 //     node --test tests/electron/dmg-smoke.test.mjs
 //
-// NOTE: the AC3/T5b check runs `codesign --verify --strict` against the
-// bundled uv, matching ensureUv()'s runtime verification (see the
-// BUNDLED_UV_SHA256 comment in backend-installer.cjs — ad-hoc-signed
-// output is not deterministic across CI runner images, so mac-arm64 has no
-// fixed SHA256 pin to compare against). A local build without Apple signing
-// certs (CSC_LINK unset) still produces an ad-hoc-signed uv (identity=-),
-// and ad-hoc signatures pass `codesign --verify --strict` — so T5b is
-// meaningful on local builds too, not just signed CI builds.
-//
 // Acceptance-criteria mapping (issue #941):
-//   - AC3 / T5: bundled mac-arm64 uv binary is present, executable, passes
-//              `codesign --verify --strict`, AND `uv --version` runs.
-//              The exec check transitively validates DMG mode-bit
-//              preservation — if HFS+/APFS dropped the executable bit,
-//              execFileSync fails with EACCES.
+//   - AC3 / T5: the frozen `gaia` core is present, executable, passes
+//              `codesign --verify --strict`, AND `gaia --version` runs.
+//              The run transitively validates DMG mode-bit preservation —
+//              if HFS+/APFS dropped the executable bit, it fails with EACCES.
 //
 // Implementation note — node:test scheduling vs. live mounts:
 //   Top-level `test()` calls register tests SYNCHRONOUSLY but the runner
@@ -38,17 +28,13 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import {
-  assertUvBinary,
-  backendInstallerPath,
-  bundledUvPath,
-} from "./_helpers/installer-smoke.mjs";
+import { assertCoreBinary, bundledCorePath } from "./_helpers/installer-smoke.mjs";
 
 const DMG = process.env.GAIA_DMG;
 const PLATFORM_KEY = "mac-arm64";
@@ -141,40 +127,15 @@ if (!DMG) {
           "Contents",
           "Resources",
         );
-        const uvPath = bundledUvPath(resourcesDir, PLATFORM_KEY);
-        const installerPath = backendInstallerPath(import.meta.url);
-
-        // ── AC3/T5b: existence + mode bit + codesign verification ─────
         await t.test(
-          "AC3/T5b: bundled mac-arm64 uv is present, executable, codesign-verified",
+          "AC3/T5b: the frozen gaia core is present, executable, codesign-verified, and starts",
           () => {
-            assertUvBinary(uvPath, PLATFORM_KEY, installerPath);
+            assertCoreBinary(bundledCorePath(resourcesDir, PLATFORM_KEY), PLATFORM_KEY);
           },
         );
-
-        // ── AC3/T5c: `uv --version` actually runs ─────────────────────
-        // Catches Gatekeeper-quarantine and stale-code-sign failure
-        // modes that pure existence/SHA checks miss. Also transitively
-        // validates DMG mode-bit preservation: if APFS dropped the
-        // executable bit, execFileSync fails with EACCES.
-        await t.test("AC3/T5c: bundled mac-arm64 uv --version runs", () => {
-          const out = execFileSync(uvPath, ["--version"], {
-            timeout: 10_000,
-            encoding: "utf8",
-          });
-          assert.match(
-            out,
-            /^uv \d+\.\d+\.\d+/,
-            `unexpected uv --version output: ${out}`,
-          );
-        });
       } else {
-        // Emit explicit skips so the CI log shows three subtest results
-        // regardless of T5a outcome — makes it obvious the gap is upstream.
-        await t.test("AC3/T5b: bundled mac-arm64 uv (skipped — no .app)", (st) => {
-          st.skip("T5a failed to locate .app bundle; downstream checks cannot run");
-        });
-        await t.test("AC3/T5c: bundled mac-arm64 uv --version (skipped — no .app)", (st) => {
+        // An explicit skip so the CI log shows the gap is upstream.
+        await t.test("AC3/T5b: the frozen gaia core (skipped — no .app)", (st) => {
           st.skip("T5a failed to locate .app bundle; downstream checks cannot run");
         });
       }

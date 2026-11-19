@@ -77,24 +77,6 @@ def test_the_remedies_never_name_a_binary_a_modern_install_lacks(modern_linux):
     assert "/usr/bin/lemonade load SDXL-Turbo" in timeout_message
 
 
-def test_a_legacy_install_still_gets_the_command_it_actually_has(mocker):
-    """The hint tells the truth per host: a real legacy CLI is still named."""
-    mocker.patch("platform.system", return_value="Linux")
-    mocker.patch(
-        "gaia.llm.lemonade_launcher.resolve_lemonade",
-        return_value=LemonadeTooling(
-            found=True,
-            kind="legacy",
-            client_path="/usr/local/bin/lemonade-server",
-            server_launcher="/usr/local/bin/lemonade-server",
-        ),
-    )
-
-    message = SDToolsMixin._describe_client_error(_REFUSED, model="SDXL-Turbo")
-
-    assert "/usr/local/bin/lemonade-server serve" in message
-
-
 @pytest.mark.parametrize("error", [_TIMEOUT, _REFUSED], ids=["timeout", "refused"])
 def test_the_raw_error_survives_for_debugging(error, modern_linux):
     """A friendlier message must not delete the detail a bug report needs."""

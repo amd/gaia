@@ -59,8 +59,15 @@
   --g-rc-dim: rgba(242, 101, 34, 0.45);
 
   /* --- Starfield (StarField.astro) ------------------------------------------ */
-  --g-sky-star: 255 255 255;      /* most streaks */
-  --g-sky-hot: 237 28 36;         /* the occasional red one, and the haze */
+  /* Star colours by temperature, hottest first, as a deep Hubble field shows them. */
+  --g-sky-o: 160 182 255;         /* hot blue */
+  --g-sky-b: 204 216 255;         /* blue-white */
+  --g-sky-star: 248 247 255;      /* white, the most common */
+  --g-sky-f: 255 244 232;         /* yellow-white */
+  --g-sky-g: 255 228 200;         /* yellow, like the Sun */
+  --g-sky-k: 255 204 160;         /* orange */
+  --g-sky-m: 255 176 140;         /* red giant */
+  --g-sky-hot: 237 28 36;         /* the red haze behind the headline */
 
   /* --- Elevation ------------------------------------------------------------ */
   --g-shadow-card: 0 24px 60px -24px rgba(0, 0, 0, 0.8),

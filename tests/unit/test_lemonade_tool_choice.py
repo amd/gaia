@@ -40,7 +40,7 @@ def client(monkeypatch):
     """A client for a local model that never loads it or takes a broker lease."""
     client = LemonadeClient(verbose=False)
     monkeypatch.setattr(client, "_ensure_model_loaded", lambda *a, **k: None)
-    monkeypatch.setattr(client, "_model_slot_lease", lambda model: nullcontext())
+    monkeypatch.setattr(client, "_model_slot_lease", lambda model, **_kw: nullcontext())
     return client
 
 
@@ -146,8 +146,13 @@ def test_provider_sends_tool_choice_through_to_the_body(client):
     assert body["tool_choice"] == "none"
 
 
-def test_provider_withholds_tool_choice_with_the_tools(client):
+def test_provider_withholds_tool_choice_with_the_tools(client, monkeypatch):
     """A model without native tool calls gets neither tools nor tool_choice."""
+    # No local chat model lacks native tool calls any more; force the path.
+    monkeypatch.setattr(
+        "gaia.llm.providers.lemonade.is_tool_calling_model",
+        lambda model: model != _NO_TOOL_MODEL,
+    )
     client.chat_completions = MagicMock(return_value=_REPLY)
 
     _provider(client).chat(

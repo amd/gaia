@@ -1,20 +1,36 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import {
-    Bell, Brain, Clock, Cloud, Cpu, EyeOff, FileText, HelpCircle, Loader2, PanelLeftClose, PanelLeftOpen,
-    Search, Settings, Smartphone, SquarePen, Trash2, X,
+    Bell, Brain, Check, Clock, EyeOff, FileText, MoreHorizontal, PanelLeftClose, PanelLeftOpen,
+    Pencil, Pin, PinOff, Plug, Search, Settings, Smartphone, Sparkles, SquarePen, Trash2, X,
 } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useChatStore } from '../stores/chatStore';
-import { useModelStore, useInferencePlace, shortModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
-import { useNotificationStore, selectUnreadCount } from '../stores/notificationStore';
+import { ModelStatusPill } from './ModelStatusPill';
+import { DownloadChip } from './setup/DownloadChip';
+import { useNotificationStore, selectUnreadCount, selectPromptingSessionIds } from '../stores/notificationStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
-import { groupSessionsByRecency } from '../utils/sessionGrouping';
+import {
+    groupSessionsForList, hiddenAutomatedCount, sessionRowStatus, type ListGroup, type LiveRuns, type RowStatus,
+} from '../utils/sessionGrouping';
+import { ordinal } from '../utils/chatAlerts';
+import { formatShortcut } from '../utils/platform';
 import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
+import { MAX_SESSION_TITLE_CHARS } from '../utils/constants';
+import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
+import { useMediaQuery } from '../hooks/useMediaQuery';
+import { useToday } from '../hooks/useToday';
+import { Popover } from './Popover';
 import gaiaRobot from '../assets/gaia-robot.png';
+import { useSidebarWidth } from './SidebarResizer';
 import type { Session } from '../types';
+import { pluralKey, ref, type MessageKey } from '../i18n/registry';
+import { useT } from '../i18n/useT';
+import type { SessionSearchResult } from '../types/api.gen';
+import { foldText, splitMatch, type MatchParts } from '../utils/chatSearch';
 import './Sidebar.css';
 
 interface SidebarProps {
@@ -23,50 +39,291 @@ interface SidebarProps {
     tunnelActive?: boolean;
 }
 
-function SessionRow({ session, active, running, onSelect, onDelete }: {
+const STATUS_LABEL: Record<RowStatus, MessageKey> = {
+    running: 'row.status.running',
+    queued: 'row.status.queued',
+    waiting: 'row.status.waiting',
+    done: 'row.status.done',
+    failed: 'row.status.failed',
+};
+
+const GROUP_LABEL: Record<ListGroup['label'], MessageKey> = {
+    'Needs you': 'sidebar.group.needsYou',
+    Pinned: 'sidebar.group.pinned',
+    Today: 'sidebar.group.today',
+    Yesterday: 'sidebar.group.yesterday',
+    'Previous 7 days': 'sidebar.group.prev7',
+    'Previous 30 days': 'sidebar.group.prev30',
+    Older: 'sidebar.group.older',
+};
+
+const SHOW_AUTOMATED_KEY = 'gaia-show-automated-runs';
+const SEARCH_DEBOUNCE_MS = 200;
+const NO_HITS = new Map<string, SessionSearchResult>();
+
+function Highlight({ parts }: { parts: MatchParts }) {
+    return <>{parts.before}<mark className="sb-hit">{parts.match}</mark>{parts.after}</>;
+}
+
+function readShowAutomated(): boolean {
+    try {
+        return localStorage.getItem(SHOW_AUTOMATED_KEY) === '1';
+    } catch (err) {
+        log.system.warn('Chat-list filter unreadable (site data blocked); hiding eval and scheduled runs.', err);
+        return false;
+    }
+}
+
+const resultRowId = (id: string) => `sb-result-${id}`;
+
+function SessionRow({ session, active, phone, moved, focusPin, status, queuePlace, unsent, failed, onSelect, onDelete, onPin, onRename, rowId, kbdActive, titleMatch, snippet }: {
     session: Session;
     active: boolean;
-    running: boolean;
+    /** Just pinned or unpinned from the phone menu: the row jumped groups, so scroll to it and mark it. */
+    moved: boolean;
+    /** Pinned by keyboard and remounted in its new group: focus its pin button once. */
+    focusPin: boolean;
+    /** Phone width: the row's actions sit behind one ⋯ menu instead of three icons. */
+    phone: boolean;
+    /** DOM id the search box points at while this row is the keyboard pick. */
+    rowId?: string;
+    kbdActive?: boolean;
+    /** Where the search query sits in the title, and in the chat's text. */
+    titleMatch?: MatchParts | null;
+    snippet?: MatchParts | null;
+    status: RowStatus | null;
+    /** 1-based place in line for the GPU while queued; 0 otherwise. */
+    queuePlace: number;
+    /** Messages typed into this chat that have not gone out yet, and how many of them failed. */
+    unsent: number;
+    failed: number;
     onSelect: (id: string) => void;
     onDelete: (id: string) => void;
+    onPin: (id: string, pinned: boolean, follow?: boolean, byKeyboard?: boolean) => void;
+    onRename: (id: string, title: string) => void;
 }) {
+    const t = useT();
     const [confirm, setConfirm] = useState(false);
+    const [menuOpen, setMenuOpen] = useState(false);
+    const moreRef = useRef<HTMLButtonElement>(null);
+    const closeMenu = useCallback(() => { setMenuOpen(false); setConfirm(false); }, []);
+    const [draft, setDraft] = useState<string | null>(null);
+    const editing = draft !== null;
+    const settled = useRef(false);
+    const startEdit = () => { settled.current = false; setDraft(session.title); };
+    const mainRef = useRef<HTMLButtonElement>(null);
+    const pinRef = useRef<HTMLButtonElement>(null);
+    const refocus = useRef(false);
+    const finishEdit = (save: boolean, byKey = false) => {
+        // Unmounting the focused input fires blur again; ignore it.
+        if (draft === null || settled.current) return;
+        settled.current = true;
+        refocus.current = byKey;
+        setDraft(null);
+        if (save) onRename(session.id, draft);
+    };
+    // Held while the pointer rests on it: the wider label reverting under a reader puts Pin under the click.
+    const [overDelete, setOverDelete] = useState(false);
     useEffect(() => {
-        if (!confirm) return;
-        const t = setTimeout(() => setConfirm(false), 3000);
-        return () => clearTimeout(t);
-    }, [confirm]);
+        if (!confirm || overDelete) return;
+        const timer = setTimeout(() => setConfirm(false), 3000);
+        return () => clearTimeout(timer);
+    }, [confirm, overDelete]);
+    useEffect(() => {
+        if (!editing && refocus.current) {
+            refocus.current = false;
+            mainRef.current?.focus();
+        }
+    }, [editing]);
+    useEffect(() => {
+        if (focusPin) pinRef.current?.focus();
+    }, [focusPin]);
+    const rowRef = useRef<HTMLLIElement>(null);
+    useEffect(() => {
+        if (moved) rowRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }, [moved]);
+    // Keeps the field focused, so tapping Save or Cancel isn't preceded by a blur that saves.
+    const keepFocus = (e: React.PointerEvent | React.MouseEvent) => e.preventDefault();
+
+    const unread = !!session.unread && !active;
+    // Done is news only until read; failed stays until the next turn.
+    const dot = status === 'done' && !unread ? null : status;
+    const place = queuePlace > 0 ? `${ordinal(queuePlace)} in line` : null;
+    const label = dot ? [t(STATUS_LABEL[dot]), place].filter(Boolean).join(', ') : undefined;
+    const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
+    const note = [place, waiting].filter(Boolean).join(' · ');
+    const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
+    const title = <span className="sb-row-title" dir="auto">{titleMatch ? <Highlight parts={titleMatch} /> : session.title}</span>;
 
     return (
-        <li className={`sb-row${active ? ' is-active' : ''}`}>
-            <button
-                type="button"
-                className="sb-row-main"
-                onClick={() => onSelect(session.id)}
-                aria-current={active ? 'page' : undefined}
-                title={session.title}
-            >
-                {running && <Loader2 size={12} className="spin sb-row-icon" aria-label="Running" />}
-                {session.private && <EyeOff size={12} className="sb-row-icon" aria-label="Private chat" />}
-                <span className="sb-row-title">{session.title}</span>
-            </button>
-            <button
-                type="button"
-                className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
-                onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
-                aria-label={confirm ? `Confirm delete ${session.title}` : `Delete ${session.title}`}
-                title={confirm ? 'Click again to delete' : 'Delete'}
-            >
-                {confirm ? <span className="sb-row-delete-label">Delete?</span> : <Trash2 size={13} />}
-            </button>
+        <li
+            ref={rowRef}
+            className={`sb-row${active ? ' is-active' : ''}${unread ? ' is-unread' : ''}${moved ? ' is-moved' : ''}${kbdActive ? ' is-kbd-active' : ''}`}
+            data-status={dot ?? undefined}
+        >
+            {editing ? (
+                <input
+                    className="sb-row-edit"
+                    value={draft}
+                    maxLength={MAX_SESSION_TITLE_CHARS}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onBlur={() => finishEdit(true)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                            e.preventDefault(); // else the Enter also presses the button that takes focus
+                            finishEdit(true, true);
+                        }
+                        if (e.key === 'Escape') { e.preventDefault(); finishEdit(false, true); }
+                    }}
+                    {...CLAIMS_ESCAPE}
+                    autoFocus
+                    onFocus={(e) => e.currentTarget.select()}
+                    aria-label={t('row.renameAria', { title: session.title })}
+                    dir="auto"
+                />
+            ) : (
+                <button
+                    ref={mainRef}
+                    type="button"
+                    id={rowId}
+                    className="sb-row-main"
+                    onClick={() => onSelect(session.id)}
+                    onDoubleClick={startEdit}
+                    aria-current={active ? 'page' : undefined}
+                    aria-label={[session.title, label, waiting, unread ? t('row.unread') : null, snippetText].filter(Boolean).join(', ')}
+                    title={session.title}
+                >
+                    {dot && <span className={`sb-dot is-${dot}`} aria-hidden="true" title={label} />}
+                    {session.private && <EyeOff size={12} className="sb-row-icon" aria-label={t('row.private')} />}
+                    {snippet ? (
+                        <span className="sb-row-text">
+                            {title}
+                            <span className="sb-row-snippet"><Highlight parts={snippet} /></span>
+                        </span>
+                    ) : title}
+                    {note && <span className={`sb-row-queue${failed > 0 ? ' is-failed' : ''}`}>{note}</span>}
+                </button>
+            )}
+            {phone && editing && (
+                <>
+                    <button
+                        type="button"
+                        className="sb-row-edit-btn is-save"
+                        onPointerDown={keepFocus}
+                        onMouseDown={keepFocus}
+                        onClick={() => finishEdit(true)}
+                        aria-label={t('row.saveName')}
+                    >
+                        <Check size={18} aria-hidden="true" />
+                    </button>
+                    <button
+                        type="button"
+                        className="sb-row-edit-btn"
+                        onPointerDown={keepFocus}
+                        onMouseDown={keepFocus}
+                        onClick={() => finishEdit(false)}
+                        aria-label={t('row.cancelRename')}
+                    >
+                        <X size={18} aria-hidden="true" />
+                    </button>
+                </>
+            )}
+            {phone ? (!editing && (
+                <>
+                    <button
+                        ref={moreRef}
+                        type="button"
+                        className="sb-row-more"
+                        onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
+                        aria-haspopup="dialog"
+                        aria-expanded={menuOpen}
+                        aria-label={t('row.moreActions', { title: session.title })}
+                    >
+                        <MoreHorizontal size={18} aria-hidden="true" />
+                    </button>
+                    <Popover open={menuOpen} onClose={closeMenu} anchor={moreRef} label={t('row.actions')} placement="below" align="end">
+                        <div className="sb-row-menu">
+                            <button type="button" className="popover-item" onClick={() => { closeMenu(); startEdit(); }}>
+                                <Pencil size={15} aria-hidden="true" />
+                                {t('row.rename')}
+                            </button>
+                            <button type="button" className="popover-item" onClick={() => { closeMenu(); onPin(session.id, !session.pinned, true); }}>
+                                {session.pinned ? <PinOff size={15} aria-hidden="true" /> : <Pin size={15} aria-hidden="true" />}
+                                {session.pinned ? t('row.unpin') : t('row.pin')}
+                            </button>
+                            <button
+                                type="button"
+                                className="popover-item sb-row-menu-delete"
+                                onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
+                            >
+                                <Trash2 size={15} aria-hidden="true" />
+                                {confirm
+                                    ? t('row.tapAgain', { label: unsent > 0 ? ref(pluralKey('row.deleteUnsent', unsent), { n: unsent }) : ref('row.deleteConfirm') })
+                                    : t('row.delete')}
+                            </button>
+                            {confirm && <p className="sb-row-menu-note">{t('row.deleteMemoryNote')}</p>}
+                        </div>
+                    </Popover>
+                </>
+            )) : (
+                <span className={`sb-row-actions${editing ? ' is-editing' : ''}`}>
+                    {!editing && (
+                        <button
+                            type="button"
+                            className="sb-row-rename"
+                            onClick={startEdit}
+                            aria-label={t('row.renameAria', { title: session.title })}
+                            title={t('row.rename')}
+                        >
+                            <Pencil size={13} />
+                        </button>
+                    )}
+                    <button
+                        ref={pinRef}
+                        type="button"
+                        className={`sb-row-pin${session.pinned ? ' is-pinned' : ''}`}
+                        onClick={(e) => onPin(session.id, !session.pinned, false, e.detail === 0)}
+                        aria-label={t(session.pinned ? 'row.unpinAria' : 'row.pinAria', { title: session.title })}
+                        aria-pressed={!!session.pinned}
+                        title={session.pinned ? t('row.unpin') : t('row.pinToTop')}
+                    >
+                        {session.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+                    </button>
+                    <button
+                        type="button"
+                        className={`sb-row-delete${confirm ? ' is-confirm' : ''}`}
+                        onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
+                        onPointerEnter={() => setOverDelete(true)}
+                        onPointerLeave={() => setOverDelete(false)}
+                        aria-label={confirm
+                            ? (unsent > 0
+                                ? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })
+                                : t('row.confirmDeleteAria', { title: session.title }))
+                            : t('row.deleteAria', { title: session.title })}
+                        title={confirm
+                            ? `${unsent > 0 ? t.plural('row.clickAgainUnsent', unsent) : t('row.clickAgain')}\n${t('row.deleteMemoryNote')}`
+                            : t('row.delete')}
+                    >
+                        {confirm
+                            ? <span className="sb-row-delete-label">{unsent > 0 ? t.plural('row.deleteUnsent', unsent) : t('row.deleteConfirm')}</span>
+                            : <Trash2 size={13} />}
+                    </button>
+                </span>
+            )}
         </li>
     );
 }
 
 export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProps) {
+    const t = useT();
     const sessions = useChatStore((s) => s.sessions);
     const currentSessionId = useChatStore((s) => s.currentSessionId);
     const runningSessionIds = useChatStore((s) => s.runningSessionIds);
+    const queuedSessionIds = useChatStore((s) => s.queuedSessionIds);
+    const awaitingBySession = useChatStore((s) => s.awaitingBySession);
+    const messageQueues = useChatStore((s) => s.messageQueues);
+    const updateSessionInList = useChatStore((s) => s.updateSessionInList);
+    const prompting = useNotificationStore(useShallow(selectPromptingSessionIds));
     const sidebarOpen = useChatStore((s) => s.sidebarOpen);
     const collapsed = useChatStore((s) => s.sidebarCollapsed);
     const toggleCollapsed = useChatStore((s) => s.toggleSidebarCollapsed);
@@ -77,23 +334,35 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const addPendingDelete = useChatStore((s) => s.addPendingDelete);
     const removePendingDelete = useChatStore((s) => s.removePendingDelete);
     const openSettings = useChatStore((s) => s.openSettings);
+    const skillsOpen = useChatStore((s) => s.settingsSection === 'skills');
     const setShowMemoryDashboard = useChatStore((s) => s.setShowMemoryDashboard);
     const setShowSchedules = useChatStore((s) => s.setShowSchedules);
     const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
     const showMemory = useChatStore((s) => s.showMemoryDashboard);
     const showSchedules = useChatStore((s) => s.showSchedules);
-    const active = useModelStore((s) => s.active);
-    const place = useInferencePlace();
     const unread = useNotificationStore(selectUnreadCount);
     const showNotifications = useNotificationStore((s) => s.showPanel);
     const setShowNotifications = useNotificationStore((s) => s.setShowPanel);
 
     const [query, setQuery] = useState('');
+    const [hits, setHits] = useState<{ query: string; results: SessionSearchResult[]; truncated: boolean } | null>(null);
+    const [searchError, setSearchError] = useState<string | null>(null);
+    const [activeIdx, setActiveIdx] = useState(-1);
     const [deleteError, setDeleteError] = useState<string | null>(null);
+    const [rowError, setRowError] = useState<string | null>(null);
+    const [showAutomated, setShowAutomated] = useState(readShowAutomated);
+    const phone = useMediaQuery('(max-width: 768px)');
     const searchRef = useRef<HTMLInputElement>(null);
+    // What had focus before search took it, so Esc can give it back.
+    const beforeSearch = useRef<HTMLElement | null>(null);
+
+    // Opening or leaving a chat ends the search, so the full list comes back.
+    useEffect(() => setQuery(''), [currentSessionId]);
 
     useEffect(() => {
         const focusSearch = () => {
+            const active = document.activeElement;
+            if (active instanceof HTMLElement && active !== searchRef.current) beforeSearch.current = active;
             if (collapsed) toggleCollapsed();
             requestAnimationFrame(() => searchRef.current?.focus());
         };
@@ -101,11 +370,134 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         return () => window.removeEventListener('gaia:focus-search', focusSearch);
     }, [collapsed, toggleCollapsed]);
 
+    const live: LiveRuns = useMemo(() => ({
+        running: runningSessionIds,
+        queued: queuedSessionIds,
+        awaiting: awaitingBySession,
+        prompting,
+    }), [runningSessionIds, queuedSessionIds, awaitingBySession, prompting]);
+
+    // Titles filter on every keystroke; message text comes from the backend.
+    const q = query.trim();
+    useEffect(() => {
+        setActiveIdx(-1);
+        setSearchError(null);
+        if (!q) {
+            setHits(null);
+            return;
+        }
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => {
+            api.searchSessions(q, showAutomated, ctrl.signal)
+                .then(({ results, truncated }) => setHits({ query: q, results, truncated: !!truncated }))
+                .catch((err) => {
+                    if (ctrl.signal.aborted) return;
+                    log.chat.error('Chat search failed', err);
+                    setSearchError(`Could not search inside chats: ${err instanceof Error ? err.message : err}`);
+                    setHits({ query: q, results: [], truncated: false });
+                });
+        }, SEARCH_DEBOUNCE_MS);
+        return () => {
+            clearTimeout(timer);
+            ctrl.abort();
+        };
+    }, [q, showAutomated]);
+    const pending = !!q && hits?.query !== q;
+    const contentHits = useMemo(
+        () => (hits && hits.query === q ? new Map(hits.results.map((r) => [r.session_id, r])) : NO_HITS),
+        [hits, q],
+    );
+
+    const hiddenCount = hiddenAutomatedCount(sessions);
+    const today = useToday();
     const groups = useMemo(() => {
-        const q = query.trim().toLowerCase();
-        const list = q ? sessions.filter((s) => s.title.toLowerCase().includes(q)) : sessions;
-        return groupSessionsByRecency(list);
-    }, [sessions, query]);
+        const needle = foldText(q);
+        const list = q
+            ? sessions.filter((s) => foldText(s.title).includes(needle) || contentHits.has(s.id))
+            : sessions;
+        return groupSessionsForList(list, live, { showAutomated, now: today });
+    }, [sessions, q, contentHits, live, showAutomated, today]);
+    const results = useMemo(() => (q ? groups.flatMap((g) => g.sessions) : []), [q, groups]);
+    const picked = activeIdx >= 0 && results.length > 0 ? results[Math.min(activeIdx, results.length - 1)] : undefined;
+
+    useEffect(() => {
+        if (picked) document.getElementById(resultRowId(picked.id))?.scrollIntoView?.({ block: 'nearest' });
+    }, [picked]);
+
+    const toggleAutomated = useCallback(() => {
+        setShowAutomated((on) => {
+            try {
+                localStorage.setItem(SHOW_AUTOMATED_KEY, on ? '0' : '1');
+            } catch (err) {
+                log.system.warn('Chat-list filter not saved; it will reset on reload.', err);
+            }
+            return !on;
+        });
+    }, []);
+
+    const markRead = useCallback((id: string) => {
+        updateSessionInList(id, { unread: false });
+        // No rollback: flipping unread back would re-fire this effect in a tight loop.
+        api.markSessionRead(id).catch((err) => {
+            log.chat.error(`Could not mark chat ${id} read`, err);
+            setRowError(`Could not mark the chat read: ${err instanceof Error ? err.message : err}`);
+        });
+    }, [updateSessionInList]);
+
+    // A reply that lands while you're looking at the chat is already read.
+    const currentUnread = sessions.find((s) => s.id === currentSessionId)?.unread;
+    useEffect(() => {
+        if (!currentSessionId || !currentUnread) return;
+        if (document.hasFocus()) {
+            markRead(currentSessionId);
+            return;
+        }
+        const onFocus = () => markRead(currentSessionId);
+        window.addEventListener('focus', onFocus, { once: true });
+        return () => window.removeEventListener('focus', onFocus);
+    }, [currentSessionId, currentUnread, markRead]);
+
+    // The row a phone user just pinned or unpinned; it changes groups, so it is followed and marked briefly.
+    const [movedId, setMovedId] = useState<string | null>(null);
+    // Pinning regroups the row and remounts it; a keyboard user's focus goes back to its pin button.
+    const [pinFocusId, setPinFocusId] = useState<string | null>(null);
+    useEffect(() => {
+        if (pinFocusId) setPinFocusId(null);
+    }, [pinFocusId]);
+    useEffect(() => {
+        if (!movedId) return;
+        const timer = setTimeout(() => setMovedId(null), 1200);
+        return () => clearTimeout(timer);
+    }, [movedId]);
+
+    const pin = useCallback(async (id: string, pinned: boolean) => {
+        setRowError(null);
+        updateSessionInList(id, { pinned });
+        try {
+            await api.pinSession(id, pinned);
+        } catch (err) {
+            log.chat.error(`Could not ${pinned ? 'pin' : 'unpin'} chat ${id}`, err);
+            updateSessionInList(id, { pinned: !pinned });
+            setRowError(err instanceof Error ? err.message : `Could not ${pinned ? 'pin' : 'unpin'} the chat.`);
+        }
+    }, [updateSessionInList]);
+
+    const rename = useCallback(async (id: string, draft: string) => {
+        const title = draft.trim().slice(0, MAX_SESSION_TITLE_CHARS).trim();
+        const previous = useChatStore.getState().sessions.find((x) => x.id === id)?.title;
+        // Untouched draft: never cut an old over-long title the user didn't edit.
+        if (!title || draft === previous || title === previous) return;
+        setRowError(null);
+        updateSessionInList(id, { title });
+        try {
+            // Explicit rename: pin against the auto-retitler (#2165).
+            await api.updateSession(id, { title, title_is_custom: true });
+        } catch (err) {
+            log.chat.error(`Could not rename chat ${id}`, err);
+            if (previous !== undefined) updateSessionInList(id, { title: previous });
+            setRowError(err instanceof Error ? err.message : 'Could not rename the chat.');
+        }
+    }, [updateSessionInList]);
 
     const closeOnMobile = useCallback(() => {
         if (window.innerWidth <= 768) setSidebarOpen(false);
@@ -124,6 +516,31 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         closeOnMobile();
     }, [currentSessionId, setCurrentSession, setMessages, closeOnMobile]);
 
+    const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            setQuery('');
+            // Back to where typing was, as closing a dialog does; the message box when nothing had focus.
+            const back = beforeSearch.current;
+            beforeSearch.current = null;
+            const to = back?.isConnected && back !== document.body ? back : document.querySelector<HTMLElement>('.composer-input');
+            if (to) to.focus(); else searchRef.current?.blur();
+            return;
+        }
+        if (!q || results.length === 0 || e.nativeEvent.isComposing) return;
+        const at = picked ? results.indexOf(picked) : -1;
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setActiveIdx(Math.min(at + 1, results.length - 1));
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setActiveIdx(Math.max(at - 1, 0));
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            select((picked ?? results[0]).id);
+        }
+    };
+
     const remove = useCallback(async (id: string) => {
         setDeleteError(null);
         addPendingDelete(id);
@@ -138,46 +555,47 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         }
     }, [addPendingDelete, removePendingDelete, removeSession]);
 
-    const LocationIcon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
-    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
-    const isCollapsed = collapsed && !isMobile;
+    const isCollapsed = collapsed && !phone;
+    const setSidebarCollapsed = useChatStore((s) => s.setSidebarCollapsed);
+    const collapse = useCallback(() => setSidebarCollapsed(true), [setSidebarCollapsed]);
+    const pane = useSidebarWidth(collapse);
+    const resizable = !phone && !isCollapsed;
 
     const nav = [
-        { key: 'memory', label: 'Memory', icon: Brain, on: showMemory, onClick: () => { setShowMemoryDashboard(true); closeOnMobile(); } },
-        { key: 'schedules', label: 'Scheduled tasks', icon: Clock, on: showSchedules, onClick: () => { setShowSchedules(true); closeOnMobile(); } },
-        { key: 'documents', label: 'Documents', icon: FileText, on: false, onClick: () => { setShowDocLibrary(true); closeOnMobile(); } },
+        { key: 'memory', label: t('sidebar.memory'), icon: Brain, on: showMemory, onClick: () => { setShowMemoryDashboard(true); closeOnMobile(); } },
+        { key: 'schedules', label: t('sidebar.schedules'), icon: Clock, on: showSchedules, onClick: () => { setShowSchedules(true); closeOnMobile(); } },
+        { key: 'connectors', label: t('settings.section.connectors'), icon: Plug, on: false, onClick: () => { openSettings('connectors'); closeOnMobile(); } },
+        { key: 'documents', label: t('sidebar.documents'), icon: FileText, on: false, onClick: () => { setShowDocLibrary(true); closeOnMobile(); } },
+        { key: 'skills', label: t('settings.section.skills'), icon: Sparkles, on: skillsOpen, onClick: () => { openSettings('skills'); closeOnMobile(); } },
     ];
 
     return (
         <aside
-            className={`sb${sidebarOpen ? ' is-open' : ''}${isCollapsed ? ' is-collapsed' : ''}`}
-            aria-label="Chats"
+            className={`sb${sidebarOpen ? ' is-open' : ''}${isCollapsed ? ' is-collapsed' : ''}${pane.resizing ? ' is-resizing' : ''}`}
+            style={resizable ? { width: pane.width, minWidth: pane.width } : undefined}
+            aria-label={t('sidebar.label')}
         >
+            {resizable && pane.handle}
             <div className="sb-top">
-                {!isCollapsed && (
-                    <div className="sb-brand">
-                        <img src={gaiaRobot} alt="" width={22} height={22} />
-                        <span>GAIA</span>
-                    </div>
-                )}
+                {/* The icon stays when collapsed: with no title bar it is the app's mark. */}
+                <div className="sb-brand">
+                    <img src={gaiaRobot} alt="" width={22} height={22} />
+                    {!isCollapsed && <span>GAIA</span>}
+                </div>
                 <button
                     type="button"
                     className="sb-icon-btn"
-                    onClick={isMobile ? () => setSidebarOpen(false) : toggleCollapsed}
-                    aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                    title={isCollapsed ? 'Expand sidebar (Ctrl+B)' : 'Collapse sidebar (Ctrl+B)'}
+                    onClick={phone ? () => setSidebarOpen(false) : toggleCollapsed}
+                    aria-label={isCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+                    title={t.hint(isCollapsed ? t('sidebar.expand') : t('sidebar.collapse'), formatShortcut('Mod+B'))}
                 >
-                    {isMobile ? <X size={17} /> : isCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+                    {phone ? <X size={17} /> : isCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
                 </button>
             </div>
 
             <div className="sb-actions">
-                <button type="button" className="sb-nav-item" onClick={() => { onNewChat(); closeOnMobile(); }} title="New chat (Ctrl+Shift+O)">
-                    <SquarePen size={16} aria-hidden="true" />
-                    {!isCollapsed && <span>New chat</span>}
-                </button>
                 {isCollapsed ? (
-                    <button type="button" className="sb-nav-item" onClick={() => window.dispatchEvent(new CustomEvent('gaia:focus-search'))} aria-label="Search chats">
+                    <button type="button" className="sb-nav-item" onClick={() => window.dispatchEvent(new CustomEvent('gaia:focus-search'))} aria-label={t('sidebar.search')}>
                         <Search size={16} aria-hidden="true" />
                     </button>
                 ) : (
@@ -188,12 +606,28 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             type="search"
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Escape') { setQuery(''); searchRef.current?.blur(); } }}
-                            placeholder="Search chats"
-                            aria-label="Search chats (Ctrl+K)"
+                            onKeyDown={onSearchKey}
+                            onFocus={(e) => { if (e.relatedTarget instanceof HTMLElement) beforeSearch.current = e.relatedTarget; }}
+                            {...CLAIMS_ESCAPE}
+                            placeholder={t.bare('sidebar.search')}
+                            aria-label={t.hint(t('sidebar.search'), formatShortcut('Mod+K'))}
+                            aria-controls="sb-chat-list"
+                            aria-activedescendant={picked ? resultRowId(picked.id) : undefined}
+                            dir="auto"
                         />
                     </label>
                 )}
+                <p className="sb-sr-only" role="status" aria-live="polite">
+                    {q && !pending
+                        ? results.length === 0
+                            ? t('sidebar.noMatch')
+                            : t.plural('sidebar.matchCount', results.length)
+                        : ''}
+                </p>
+                <button type="button" className="sb-nav-item" onClick={() => { onNewChat(); closeOnMobile(); }} title={t.hint(t('sidebar.newChat'), formatShortcut('Mod+Shift+O'))}>
+                    <SquarePen size={16} aria-hidden="true" />
+                    {!isCollapsed && <span>{t('sidebar.newChat')}</span>}
+                </button>
                 {nav.map(({ key, label, icon: Icon, on, onClick }) => (
                     <button
                         key={key}
@@ -211,56 +645,76 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
             </div>
 
             {!isCollapsed && (
-                <nav className="sb-list" aria-label="Recent chats">
+                <nav className="sb-list" id="sb-chat-list" aria-label={t('sidebar.recent')}>
                     {groups.length === 0 && (
-                        <p className="sb-empty">{query ? 'No chats match.' : 'No chats yet.'}</p>
+                        <p className="sb-empty">{q ? (pending ? t('sidebar.searching') : t('sidebar.noMatch')) : t('sidebar.empty')}</p>
                     )}
                     {groups.map((g) => (
-                        <section key={g.label} className="sb-group">
-                            <h2 className="sb-group-label">{g.label}</h2>
+                        <section key={g.label} className={`sb-group${g.label === 'Needs you' ? ' is-needs-you' : ''}`}>
+                            <h2 className="sb-group-label">{t(GROUP_LABEL[g.label])}</h2>
                             <ul>
                                 {g.sessions.map((s) => (
                                     <SessionRow
                                         key={s.id}
                                         session={s}
-                                        active={s.id === currentSessionId}
-                                        running={runningSessionIds.includes(s.id)}
+                                        // Memory replaces the chat on screen, so its row is the one selected.
+                                        active={s.id === currentSessionId && !showMemory}
+                                        phone={phone}
+                                        moved={s.id === movedId}
+                                        focusPin={s.id === pinFocusId}
+                                        status={sessionRowStatus(s, live)}
+                                        queuePlace={queuedSessionIds.indexOf(s.id) + 1}
+                                        unsent={messageQueues[s.id]?.length ?? 0}
+                                        failed={messageQueues[s.id]?.filter((m) => m.state === 'failed').length ?? 0}
                                         onSelect={select}
                                         onDelete={remove}
+                                        onPin={(id, pinned, follow, byKeyboard) => {
+                                            if (follow) setMovedId(id);
+                                            if (byKeyboard) setPinFocusId(id);
+                                            void pin(id, pinned);
+                                        }}
+                                        onRename={(id, title) => void rename(id, title)}
+                                        rowId={q ? resultRowId(s.id) : undefined}
+                                        kbdActive={picked?.id === s.id}
+                                        titleMatch={q ? splitMatch(s.title, q) : null}
+                                        snippet={contentHits.get(s.id)?.field === 'message' ? contentHits.get(s.id)!.snippet : null}
                                     />
                                 ))}
                             </ul>
                         </section>
                     ))}
+                    {hiddenCount > 0 && (
+                        <button
+                            type="button"
+                            className="sb-filter"
+                            onClick={toggleAutomated}
+                            aria-pressed={showAutomated}
+                        >
+                            {showAutomated
+                                ? t('sidebar.hideBackground')
+                                : t.plural('sidebar.showBackground', hiddenCount)}
+                        </button>
+                    )}
+                    {q && hits?.query === q && hits.truncated && (
+                        <p className="sb-empty">{t('sidebar.searchCapped', { n: hits.results.length })}</p>
+                    )}
+                    {searchError && <p className="sb-error" role="alert">{searchError}</p>}
                     {deleteError && <p className="sb-error" role="alert">{deleteError}</p>}
+                    {rowError && <p className="sb-error" role="alert">{rowError}</p>}
                 </nav>
             )}
 
+            {!isCollapsed && <DownloadChip />}
             <div className="sb-bottom">
-                {!isCollapsed && (
-                    <button
-                        type="button"
-                        className="sb-location"
-                        onClick={() => openSettings('model')}
-                        title={!place
-                            ? UNKNOWN_PLACE_TITLE
-                            : place.description
-                                ?? (place.remote ? `Chat history is sent to ${place.label}` : 'Runs on this PC')}
-                    >
-                        <LocationIcon size={13} aria-hidden="true" />
-                        <span className="sb-location-text">
-                            {[place?.label, active && shortModelName(active.model)].filter(Boolean).join(' · ') || 'Model'}
-                        </span>
-                    </button>
-                )}
+                {!isCollapsed && <ModelStatusPill />}
                 <div className="sb-bottom-actions">
                     <button
                         type="button"
                         className={`sb-icon-btn${showNotifications ? ' is-active' : ''}`}
                         onClick={() => setShowNotifications(!showNotifications)}
-                        aria-label={unread > 0 ? `Notifications, ${unread} unread` : 'Notifications'}
+                        aria-label={unread > 0 ? t('sidebar.notificationsUnread', { n: unread }) : t('sidebar.notifications')}
                         aria-expanded={showNotifications}
-                        title="Notifications"
+                        title={t('sidebar.notifications')}
                     >
                         <Bell size={16} />
                         {unread > 0 && <span className="sb-badge" aria-hidden="true">{unread > 99 ? '99+' : unread}</span>}
@@ -270,13 +724,13 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             type="button"
                             className={`sb-icon-btn${tunnelActive ? ' is-active' : ''}`}
                             onClick={onMobileAccess}
-                            aria-label={tunnelActive ? 'Mobile access is on' : 'Mobile access'}
-                            title="Mobile access"
+                            aria-label={tunnelActive ? t('sidebar.mobileAccessOn') : t('sidebar.mobileAccess')}
+                            title={t('sidebar.mobileAccess')}
                         >
                             <Smartphone size={16} />
                         </button>
                     )}
-                    <button type="button" className="sb-icon-btn" onClick={() => openSettings()} aria-label="Settings" title="Settings (Ctrl+,)">
+                    <button type="button" className="sb-icon-btn" onClick={() => openSettings()} aria-label={t('sidebar.settings')} title={t.hint(t('sidebar.settings'), formatShortcut('Mod+,'))}>
                         <Settings size={16} />
                     </button>
                 </div>

@@ -17,7 +17,9 @@ const displayClassKey = `SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-1
 // name, or 0. Lemonade reports no memory for an integrated AMD GPU on Windows;
 // the driver's HardwareInformation.qwMemorySize is its BIOS carve-out, the heap
 // llama.cpp's Vulkan backend loads into.
-func adapterMemoryGB(name string) float64 {
+var adapterMemoryGB = readAdapterMemoryGB
+
+func readAdapterMemoryGB(name string) float64 {
 	if name == "" {
 		return 0
 	}

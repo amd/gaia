@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata as md
+import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 from typing import Iterator
 
 import pytest
@@ -50,15 +52,12 @@ def _discover_subcommands() -> list[tuple[str, ...]]:
 def _discover_console_scripts() -> list[tuple[str, str]]:
     """Return (name, module) for every `gaia-*` console_scripts entry.
 
-    Excludes `gaia` (covered by in-process subcommand walk) and `gaia-cli`
-    (a documented alias of `gaia` with no new signal).
+    Excludes `gaia`, which the in-process subcommand walk covers.
     """
     eps = md.entry_points(group="console_scripts")
     out = []
     for ep in eps:
         if not ep.name.startswith("gaia-"):
-            continue
-        if ep.name == "gaia-cli":
             continue
         module = ep.value.split(":")[0]
         out.append((ep.name, module))
@@ -202,8 +201,10 @@ def test_console_script_minimum_count() -> None:
     reason="package not installed; run `pip install -e .` to enable binary PATH checks",
 )
 def test_gaia_binary_on_path(binary: str) -> None:
-    """Every `gaia*` console_scripts shim is reachable on PATH after `pip install`."""
-    assert shutil.which(binary) is not None, (
+    """Every `gaia*` console_scripts shim is reachable after `pip install`."""
+    # The running env's scripts dir: a venv's python can run with it off PATH.
+    search = os.pathsep.join([sysconfig.get_path("scripts"), os.environ["PATH"]])
+    assert shutil.which(binary, path=search) is not None, (
         f"Binary {binary!r} not found on PATH. The console_scripts shim "
         f"from setup.py may not have been installed. Run `pip install -e .`"
     )

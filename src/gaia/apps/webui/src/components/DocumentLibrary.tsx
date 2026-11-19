@@ -1,16 +1,77 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { ensureModel } from '../stores/modelNeededStore';
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw } from 'lucide-react';
+import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw, Undo2 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
+import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { requestErrorParam } from '../utils/requestErrors';
 import { formatSize } from '../utils/format';
-import { UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
-import type { Document } from '../types';
+import { examplePath } from '../utils/platform';
+import { cleanPastedPath } from '../utils/pastedPath';
+import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
+import type { Document, IndexFolderResponse } from '../types';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
+import { pluralKey } from '../i18n/registry';
+import { IndexingProgress } from './IndexingProgress';
+import { isServerFailure, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
 import './DocumentLibrary.css';
+
+/** Split a stored indexing error into a one-line summary and the rest. */
+function splitFailureReason(lastError: string): { summary: string; more: string } {
+    const text = lastError.replace(/^RAG indexing failed for [^:]+:\s*/, '').trim();
+    const [first, ...rest] = text.split('\n');
+    return { summary: first.trim(), more: rest.join('\n').trim() };
+}
+
+/** One sentence on what folder indexing added, skipped and couldn't read. */
+function describeFolderResult(t: Translate, folderName: string, result: IndexFolderResponse): string {
+    const skipped = result.skipped ?? 0;
+    return t.compose((say) => {
+        const parts: string[] = [];
+        if (result.indexed > 0) {
+            parts.push(say(pluralKey('docs.folder.indexed', result.indexed), { n: result.indexed, name: folderName }));
+        } else if (result.failed === 0) {
+            parts.push(say('docs.folder.none', { name: folderName }));
+        }
+        if (skipped > 0) {
+            parts.push(say(pluralKey('docs.folder.skipped', skipped), { n: skipped }));
+        }
+        const images = result.skipped_images ?? 0;
+        if (images > 0) {
+            parts.push(say(pluralKey('docs.folder.images', images), { n: images }));
+        }
+        if (result.failed > 0) {
+            parts.push(say(pluralKey('docs.folder.failed', result.failed), { n: result.failed }));
+            if (result.errors[0]) parts.push(result.errors[0].split('\n')[0]);
+        }
+        parts.push(say('docs.folder.noSubfolders'));
+        return parts.join(' ');
+    });
+}
+
+/** How often an indexing document's status (and progress) is asked for. */
+export const INDEX_POLL_MS = 1000;
+
+/** A library longer than this gets a filter box. */
+const FILTER_AFTER = 5;
+/** How long a removed document can be put back before it is deleted. */
+export const REMOVE_UNDO_MS = 6000;
+
+interface PendingRemoval { id: string; name: string }
+
+/** The progress map with `id` set to `progress`, or dropped once there is none. */
+function withProgress(map: Record<string, api.IndexProgress>, id: string, progress: api.IndexProgress | null | undefined) {
+    if (progress) return { ...map, [id]: progress };
+    if (!(id in map)) return map;
+    const { [id]: _gone, ...rest } = map;
+    return rest;
+}
 
 /** Compute elapsed time as human-readable string. */
 function elapsed(startMs: number): string {
@@ -22,7 +83,7 @@ function elapsed(startMs: number): string {
 }
 
 /** Format an ISO timestamp as a relative or absolute local time string. */
-function formatTimestamp(isoString: string): string {
+function formatTimestamp(isoString: string, t: Translate): string {
     try {
         const date = new Date(isoString);
         if (isNaN(date.getTime())) return '';
@@ -33,14 +94,14 @@ function formatTimestamp(isoString: string): string {
         const diffHour = Math.floor(diffMin / 60);
         const diffDay = Math.floor(diffHour / 24);
 
-        if (diffSec < 60) return 'just now';
-        if (diffMin < 60) return `${diffMin}m ago`;
-        if (diffHour < 24) return `${diffHour}h ago`;
-        if (diffDay === 1) return 'yesterday';
-        if (diffDay < 7) return `${diffDay}d ago`;
+        if (diffSec < 60) return t('time.justNow');
+        if (diffMin < 60) return t('time.minutesAgo', { n: diffMin });
+        if (diffHour < 24) return t('time.hoursAgo', { n: diffHour });
+        if (diffDay === 1) return t('time.yesterday');
+        if (diffDay < 7) return t('time.daysAgo', { n: diffDay });
 
         // Older than a week: show date + time
-        return date.toLocaleDateString(undefined, {
+        return date.toLocaleDateString(dateLocale(t), {
             month: 'short',
             day: 'numeric',
             hour: 'numeric',
@@ -52,11 +113,11 @@ function formatTimestamp(isoString: string): string {
 }
 
 /** Format an ISO timestamp as a full local date/time for tooltips. */
-function formatFullTimestamp(isoString: string): string {
+function formatFullTimestamp(isoString: string, t: Translate): string {
     try {
         const date = new Date(isoString);
         if (isNaN(date.getTime())) return '';
-        return date.toLocaleString(undefined, {
+        return date.toLocaleString(dateLocale(t), {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
@@ -69,41 +130,103 @@ function formatFullTimestamp(isoString: string): string {
     }
 }
 
+/** Characters a long name keeps at its end, so the extension and any version suffix stay in view. */
+export const NAME_TAIL_CHARS = 14;
+
+/** A file name that, when it doesn't fit, is cut in the middle rather than at the end. */
+function DocName({ name }: { name: string }) {
+    // Code points, so an emoji at the cut isn't split into two broken halves.
+    const chars = Array.from(name);
+    if (chars.length <= NAME_TAIL_CHARS * 2) {
+        // Left to right, so the extension stays last whatever the script.
+        return <span className="doc-name" dir="ltr">{name}</span>;
+    }
+    // dir="auto" picks the direction from the first strong letter; the CSS needs to know it too.
+    const firstStrong = name.match(/\p{L}/u)?.[0] ?? '';
+    const rtlText = /[֐-ࣿיִ-﷿ﹰ-﻿]/.test(firstStrong);
+    if (rtlText) {
+        const ext = name.match(/\.[^.\s]{1,10}$/)?.[0] ?? '';
+        // Splitting inside right-to-left words puts "docx." at the front; cut only the base name instead.
+        return (
+            <span className="doc-name doc-name-split is-rtl-text" dir="auto" title={name}>
+                <span className="doc-name-head">{name.slice(0, name.length - ext.length)}</span>
+                {ext && <span className="doc-name-tail" dir="ltr">{ext}</span>}
+            </span>
+        );
+    }
+    return (
+        <span className="doc-name doc-name-split" dir="auto" title={name}>
+            <span className="doc-name-head">{chars.slice(0, -NAME_TAIL_CHARS).join('')}</span>
+            <span className="doc-name-tail">{chars.slice(-NAME_TAIL_CHARS).join('')}</span>
+        </span>
+    );
+}
+
 export function DocumentLibrary() {
-    const { documents, setDocuments, setShowDocLibrary, setShowFileBrowser,
+    const t = useT();
+    const { documents, setDocuments, setShowDocLibrary, openFileBrowserFromLibrary,
             currentSessionId, sessions, updateSessionInList,
             draftDocumentIds, addDraftDocuments, removeDraftDocument } = useChatStore();
     const currentSession = sessions.find(s => s.id === currentSessionId) ?? null;
+    // A chat searches only its own attachments, so the user picks where new documents go.
+    const [target, setTarget] = useState<'chat' | 'next'>(currentSessionId ? 'chat' : 'next');
+    const targetSessionId = target === 'chat' ? currentSessionId : null;
+    const targetChatName = `“${currentSession?.title || t('docs.untitledChat')}”`;
+    const [notice, setNotice] = useState('');
+    const [filter, setFilter] = useState('');
+    const filterText = documents.length > FILTER_AFTER ? filter.trim().toLowerCase() : '';
+    const matchesFilter = (doc: Document) => !filterText || doc.filename.toLowerCase().includes(filterText);
+    /** The document the notice is about, so removing it takes the notice with it. */
+    const noticeDocId = useRef<string | null>(null);
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    useFocusTrap(dialogRef, true);
+    useDialogFocus(dialogRef, true);
     const [isDragOver, setIsDragOver] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
     const [folderPath, setFolderPath] = useState('');
     // Upload error state for rich error toasts
-    const [uploadError, setUploadError] = useState<{ filename: string; error: string } | null>(null);
+    const [uploadError, setUploadError] = useState<{ filename: string; error: string; status?: number; kind?: string | null } | null>(null);
+    // Outcome of indexing a folder typed into the path box
+    const [folderNotice, setFolderNotice] = useState<string | null>(null);
+    // Why the last remove, cancel or open-folder failed
+    const [actionError, setActionError] = useState<string | null>(null);
+    // A removed document stays on the server until its Undo runs out
+    const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
+    const pendingRemovalRef = useRef<PendingRemoval | null>(null);
+    const removalTimer = useRef<number | null>(null);
+    // The library couldn't be listed: an empty list would look like the documents are gone
+    const [loadError, setLoadError] = useState<{ err: unknown } | null>(null);
     // Documents with a reindex in flight — guards double-click and shows progress
     const [reindexingIds, setReindexingIds] = useState<Set<string>>(new Set());
+    // Pages read / chunks embedded, per document being indexed right now
+    const [progressById, setProgressById] = useState<Record<string, api.IndexProgress>>({});
     // Track indexing start times for elapsed display
     const indexingStartTimes = useRef<Map<string, number>>(new Map());
     // Force re-render for elapsed time updates
     const [, setTick] = useState(0);
 
-    // Load documents on mount
-    useEffect(() => {
+    const loadDocuments = useCallback(() => {
         log.doc.info('Loading document library...');
-        const t = log.doc.time();
+        const timer = log.doc.time();
+        setLoadError(null);
         api.listDocuments()
             .then((data) => {
                 const docs = data.documents || [];
                 setDocuments(docs);
-                log.doc.timed(`Loaded ${docs.length} document(s), ${data.total_chunks || 0} chunks, ${data.total_size_bytes || 0} bytes total`, t);
+                log.doc.timed(`Loaded ${docs.length} document(s), ${data.total_chunks || 0} chunks, ${data.total_size_bytes || 0} bytes total`, timer);
             })
             .catch((err) => {
                 log.doc.error('Failed to load documents', err);
-                setDocuments([]);
+                setLoadError({ err });
             });
     }, [setDocuments]);
+
+    // Load documents on mount
+    useEffect(loadDocuments, [loadDocuments]);
 
     // Poll for indexing status on documents that are still 'indexing'
     const hasIndexingDocs = documents.some(
@@ -140,20 +263,22 @@ export function DocumentLibrary() {
                 for (const doc of indexingDocs) {
                     try {
                         const status = await api.getDocumentStatus(doc.id);
+                        setProgressById((m) => withProgress(m, doc.id, status.progress));
                         if (status.indexing_status !== 'indexing' && status.indexing_status !== 'pending') {
                             indexingStartTimes.current.delete(doc.id);
                             const data = await api.listDocuments();
                             setDocuments(data.documents || []);
                             break;
                         }
-                    } catch {
-                        // ignore poll errors
+                    } catch (err) {
+                        // The next tick asks again; the row keeps its last known progress meanwhile.
+                        log.doc.warn(`Indexing status for ${doc.filename} unavailable`, err);
                     }
                 }
             } finally {
                 isPolling = false;
             }
-        }, 2000);
+        }, INDEX_POLL_MS);
 
         return () => clearInterval(interval);
     }, [hasIndexingDocs, setDocuments]);
@@ -170,6 +295,7 @@ export function DocumentLibrary() {
                 indexingStartTimes.current.delete(id);
             }
         }
+        setProgressById((m) => Object.keys(m).reduce((acc, id) => (activeIds.has(id) ? acc : withProgress(acc, id, null)), m));
     }, [documents]);
 
     // Periodic refresh to pick up server-side re-indexing and update timestamps
@@ -192,84 +318,184 @@ export function DocumentLibrary() {
                     setDocuments(freshDocs);
                     log.doc.debug('Document list refreshed (server-side changes detected)');
                 }
-            } catch {
-                // Ignore refresh errors
+                setLoadError(null);
+            } catch (err) {
+                // The next refresh asks again; the list keeps what it last showed.
+                log.doc.warn('Document list refresh failed', err);
             }
         }, 15000); // Refresh every 15 seconds
 
         return () => clearInterval(refreshInterval);
     }, [setDocuments]);
 
-    const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
-    const totalChunks = documents.reduce((sum, d) => sum + d.chunk_count, 0);
+    // The row waiting on Undo is already gone from the list, so from the count too.
+    const shownDocs = documents.filter((d) => d.id !== pendingRemoval?.id);
+    const shownCount = shownDocs.length;
+    const totalSize = shownDocs.reduce((sum, d) => sum + d.file_size, 0);
+    const failedDocs = shownDocs.filter((d) => d.indexing_status === 'failed');
+    // A file that failed only because the model server was down isn't unreadable.
+    const serverWaitCount = failedDocs.filter((d) => isServerFailure(d.error_kind)).length;
+    const unreadableCount = failedDocs.length - serverWaitCount;
+
+    /** Attach a document where the user chose, and say where it went. */
+    const attachToTarget = useCallback(async (docId: string, filename: string) => {
+        noticeDocId.current = docId;
+        if (!targetSessionId) {
+            addDraftDocuments([docId]);
+            setNotice(t('docs.willAttach', { name: filename }));
+            log.doc.info(`"${filename}" will be attached to the next new chat`);
+            return;
+        }
+        await api.attachDocument(targetSessionId, docId);
+        const freshSession = useChatStore.getState().sessions.find(s => s.id === targetSessionId);
+        const existing = freshSession?.document_ids ?? [];
+        if (!existing.includes(docId)) {
+            updateSessionInList(targetSessionId, {
+                document_ids: [...existing, docId],
+            });
+            // The listed count predates this attach; without it the row says one chat too few.
+            const store = useChatStore.getState();
+            store.setDocuments(store.documents.map((d) => (
+                d.id === docId ? { ...d, sessions_using: (d.sessions_using ?? 0) + 1 } : d
+            )));
+        }
+        setNotice(t('docs.attached', { name: filename, chat: targetChatName }));
+        log.doc.info(`Attached "${filename}" to session ${targetSessionId}`);
+    }, [targetSessionId, targetChatName, updateSessionInList, addDraftDocuments, t]);
+
+    /** Attach a folder's newly indexed documents where the user chose. */
+    const attachIndexed = useCallback(async (docIds: string[], label: string) => {
+        if (docIds.length === 0) return;
+        if (!targetSessionId) {
+            addDraftDocuments(docIds);
+            log.doc.info(`"${label}" will be attached to the next new chat`);
+            return;
+        }
+        const attached: string[] = [];
+        for (const id of docIds) {
+            try {
+                await api.attachDocument(targetSessionId, id);
+                attached.push(id);
+            } catch (attachErr) {
+                log.doc.warn(`Could not attach document to session: ${attachErr}`);
+            }
+        }
+        const freshSession = useChatStore.getState().sessions.find(s => s.id === targetSessionId);
+        const existing = freshSession?.document_ids ?? [];
+        const added = attached.filter((id) => !existing.includes(id));
+        if (added.length > 0) {
+            updateSessionInList(targetSessionId, { document_ids: [...existing, ...added] });
+        }
+        log.doc.info(`Attached "${label}" to session ${targetSessionId}`);
+    }, [targetSessionId, updateSessionInList, addDraftDocuments]);
 
     // Shared upload state-machine: preflight extension check, set UI state,
-    // run the caller-provided uploader, auto-attach the result to the current
-    // session, and refresh the document list. Used by both path-based and
+    // run the caller-provided uploader, attach the result where the user
+    // chose, and refresh the document list. Used by both path-based and
     // blob-based upload flows.
     const runUpload = useCallback(async (
         filename: string,
         uploader: () => Promise<Document>,
-    ) => {
-        // Pre-check: warn about unsupported file types before sending to server
+        onFolder?: () => Promise<boolean>,
+    ): Promise<boolean> => {
+        if (!(await ensureModel('embedding'))) return false;
         const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
-        if (ext && !isExtensionSupported(ext)) {
-            const category = getUnsupportedCategory(ext);
-            const errMsg = category
-                ? category.message
-                : `The file type "${ext}" is not supported for indexing.`;
+        const unsupportedMessage = ext && !isExtensionSupported(ext)
+            ? (getUnsupportedCategory(ext)?.message ?? `The file type "${ext}" is not supported for indexing.`)
+            : null;
+        // A typed path may be a dotted folder name (notes.v2), so only the server can rule it out.
+        if (unsupportedMessage && !onFolder) {
             log.doc.warn(`Unsupported file type: ${filename} (${ext})`);
-            setUploadError({ filename, error: errMsg });
-            return;
+            setUploadError({ filename, error: unsupportedMessage });
+            return false;
         }
 
         log.doc.info(`Indexing document: ${filename}`);
-        const t = log.doc.time();
+        const timer = log.doc.time();
         setIsUploading(true);
-        setUploadStatus(`Indexing ${filename}...`);
+        setUploadStatus(t('docs.indexingFile', { name: filename }));
         setUploadError(null);
+        setActionError(null);
+        setFolderNotice(null);
+        setNotice('');
         try {
             const doc = await uploader();
-            log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, t);
-            // Auto-attach to the active session so the agent can immediately use it
-            if (currentSessionId && doc?.id) {
-                try {
-                    await api.attachDocument(currentSessionId, doc.id);
-                    const freshSession = useChatStore.getState().sessions.find(s => s.id === currentSessionId);
-                    const existing = freshSession?.document_ids ?? [];
-                    if (!existing.includes(doc.id)) {
-                        updateSessionInList(currentSessionId, {
-                            document_ids: [...existing, doc.id],
-                        });
-                    }
-                    log.doc.info(`Auto-attached "${filename}" to session ${currentSessionId}`);
-                } catch (attachErr) {
-                    log.doc.warn(`Could not attach document to session: ${attachErr}`);
-                }
+            log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, timer);
+            const failed = doc?.indexing_status === 'failed';
+            if (failed) {
+                // Its row carries the reason and Retry; attaching it would promise a chat a file it can't search.
+                log.doc.warn(`"${filename}" couldn't be added (${doc.error_kind ?? 'unreadable'}); not attaching it`);
+                const name = doc.filename || filename;
+                setActionError(serverNotAddedText(doc.error_kind, name, t) ?? t('docs.notAdded', { name }));
             } else if (doc?.id) {
-                // No chat is open: the agent only sees attached documents, so hold it for the next one.
-                addDraftDocuments([doc.id]);
-                log.doc.info(`"${filename}" will be attached to the next new chat`);
+                try {
+                    await attachToTarget(doc.id, doc.filename || filename);
+                } catch (attachErr) {
+                    log.doc.error(`Could not attach "${filename}" to ${targetChatName}`, attachErr);
+                    setUploadError({
+                        filename,
+                        error: `Indexed, but not attached to ${targetChatName}: ${
+                            attachErr instanceof Error ? attachErr.message : attachErr}`,
+                    });
+                }
             }
             // Refresh document list
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
             setUploadStatus('');
+            // A failed add keeps the typed path, so Retry is one click.
+            return !failed;
         } catch (err) {
+            // ApiError's fields, read by shape: the class itself is mocked in tests.
+            const { httpStatus, reason, body } = (err ?? {}) as { httpStatus?: number; reason?: string | null; body?: Record<string, unknown> | null };
+            if (reason === 'is_folder' && onFolder) {
+                return await onFolder();
+            }
             log.doc.error(`Failed to index "${filename}"`, err);
-            // Extract error message from API response
-            const errMsg = err instanceof Error ? err.message : 'Upload failed';
-            setUploadError({ filename, error: errMsg });
+            const errMsg = reason === 'too_large'
+                ? t('docs.tooLargeDetail', { max: String(body?.max_mb) })
+                : serverFailureText(reason, t) ?? (httpStatus === 400 && unsupportedMessage
+                    ? unsupportedMessage
+                    : err instanceof Error ? err.message : 'Upload failed');
+            setUploadError({ filename, error: errMsg, status: httpStatus, kind: reason });
             setUploadStatus('');
+            return false;
         } finally {
             setIsUploading(false);
         }
-    }, [currentSessionId, updateSessionInList, setDocuments, addDraftDocuments]);
+    }, [attachToTarget, targetChatName, setDocuments, t]);
+
+    /** Index the documents directly inside a folder typed into the path box. */
+    const indexFolderPath = useCallback(async (folder: string, folderName: string): Promise<boolean> => {
+        log.doc.info(`"${folder}" is a folder; indexing its documents`);
+        setUploadStatus(t('docs.indexingFolder', { name: folderName }));
+        try {
+            // Top level only: a typed path like a home folder would otherwise index everything below it.
+            const result = await api.indexFolder(folder, false);
+            await attachIndexed(result.documents.map((d) => d.id).filter(Boolean), folderName);
+            setFolderNotice(describeFolderResult(t, folderName, result));
+            const data = await api.listDocuments();
+            setDocuments(data.documents || []);
+            return true;
+        } catch (err) {
+            log.doc.error(`Failed to index folder "${folder}"`, err);
+            const errMsg = err instanceof Error ? err.message : 'Folder indexing failed';
+            const { httpStatus } = (err ?? {}) as { httpStatus?: number };
+            setUploadError({ filename: folderName, error: errMsg, status: httpStatus });
+            return false;
+        } finally {
+            setUploadStatus('');
+        }
+    }, [attachIndexed, setDocuments, t]);
 
     /** Index a document by a server-side filesystem path (used by the file browser and path input). */
     const uploadFile = useCallback(async (filepath: string, filename: string) => {
-        await runUpload(filename, () => api.uploadDocumentByPath(filepath));
-    }, [runUpload]);
+        return runUpload(
+            filename,
+            () => api.uploadDocumentByPath(filepath),
+            () => indexFolderPath(filepath, filename),
+        );
+    }, [runUpload, indexFolderPath]);
 
     /**
      * Index a document by uploading its bytes directly (used by drag-and-drop).
@@ -293,43 +519,99 @@ export function DocumentLibrary() {
         }
     }, [uploadFileBlob]);
 
-    const handleDeleteDoc = useCallback(async (id: string) => {
-        const doc = documents.find((d) => d.id === id);
-        log.doc.info(`Deleting document: ${doc?.filename || id}`);
+    const handlePickedFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files ?? []);
+        e.target.value = '';
+        for (const file of files) {
+            await uploadFileBlob(file);
+        }
+    }, [uploadFileBlob]);
+
+    const commitRemoval = useCallback(async ({ id, name }: PendingRemoval) => {
+        log.doc.info(`Deleting document: ${name}`);
         try {
             await api.deleteDocument(id);
-            indexingStartTimes.current.delete(id);
-            removeDraftDocument(id);
-            setDocuments(documents.filter((d) => d.id !== id));
-            log.doc.info(`Deleted document: ${doc?.filename || id}`);
         } catch (err) {
-            log.doc.error(`Failed to delete document: ${doc?.filename || id}`, err);
+            log.doc.error(`Failed to delete document: ${name}`, err);
+            setPendingRemoval((p) => (p?.id === id ? null : p));
+            setActionError(t('docs.deleteFailed', { name, error: requestErrorParam(err) }));
+            return;
         }
-    }, [documents, setDocuments, removeDraftDocument]);
+        indexingStartTimes.current.delete(id);
+        removeDraftDocument(id);
+        if (noticeDocId.current === id) setNotice('');
+        // The list now, not when the click happened: a poll may have refreshed it meanwhile.
+        setDocuments(useChatStore.getState().documents.filter((d) => d.id !== id));
+        setPendingRemoval((p) => (p?.id === id ? null : p));
+        log.doc.info(`Deleted document: ${name}`);
+    }, [setDocuments, removeDraftDocument, t]);
+
+    /** Deletes the removal waiting on Undo now, if there is one. */
+    const flushRemoval = useCallback(() => {
+        if (removalTimer.current !== null) clearTimeout(removalTimer.current);
+        removalTimer.current = null;
+        const pending = pendingRemovalRef.current;
+        pendingRemovalRef.current = null;
+        if (pending) void commitRemoval(pending);
+    }, [commitRemoval]);
+
+    const handleDeleteDoc = useCallback((id: string) => {
+        const name = documents.find((d) => d.id === id)?.filename || id;
+        setActionError(null);
+        setUploadError(null);
+        setFolderNotice(null);
+        setNotice('');
+        flushRemoval();
+        const pending = { id, name };
+        pendingRemovalRef.current = pending;
+        setPendingRemoval(pending);
+        removalTimer.current = window.setTimeout(flushRemoval, REMOVE_UNDO_MS);
+    }, [documents, flushRemoval]);
+
+    const undoRemoval = useCallback(() => {
+        if (removalTimer.current !== null) clearTimeout(removalTimer.current);
+        removalTimer.current = null;
+        pendingRemovalRef.current = null;
+        setPendingRemoval(null);
+    }, []);
+
+    // Closing the library doesn't cancel a removal; only Undo does.
+    const flushOnClose = useRef(flushRemoval);
+    flushOnClose.current = flushRemoval;
+    useEffect(() => () => flushOnClose.current(), []);
 
     const handleOpenFolder = useCallback(async (filepath: string, filename: string) => {
         log.doc.info(`Opening folder for: ${filepath}`);
+        setActionError(null);
         try {
             await api.openFileOrFolder(filepath, true);
         } catch (err) {
             log.doc.error(`Failed to open folder for: ${filename}`, err);
+            setActionError(t('docs.openFolderFailed', { name: filename, error: requestErrorParam(err) }));
         }
-    }, []);
+    }, [t]);
 
     const handleCancelIndexing = useCallback(async (id: string) => {
-        const doc = documents.find((d) => d.id === id);
-        log.doc.info(`Cancelling indexing for: ${doc?.filename || id}`);
+        const name = documents.find((d) => d.id === id)?.filename || id;
+        log.doc.info(`Cancelling indexing for: ${name}`);
+        setActionError(null);
         try {
             await api.cancelIndexing(id);
-            indexingStartTimes.current.delete(id);
-            // Refresh
+        } catch (err) {
+            log.doc.error(`Failed to cancel indexing: ${name}`, err);
+            setActionError(t('docs.cancelFailed', { name, error: requestErrorParam(err) }));
+            return;
+        }
+        indexingStartTimes.current.delete(id);
+        log.doc.info(`Cancelled indexing for: ${name}`);
+        try {
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
-            log.doc.info(`Cancelled indexing for: ${doc?.filename || id}`);
         } catch (err) {
-            log.doc.error(`Failed to cancel indexing: ${doc?.filename || id}`, err);
+            // The periodic refresh shows the cancelled row on its next pass.
+            log.doc.warn('Could not refresh the documents after cancelling', err);
         }
-    }, [documents, setDocuments]);
+    }, [documents, setDocuments, t]);
 
     const handleReindex = useCallback(async (id: string) => {
         if (reindexingIds.has(id)) return; // guard against double-click
@@ -361,107 +643,130 @@ export function DocumentLibrary() {
     }, [documents, setDocuments, reindexingIds]);
 
     const handleAttachDoc = useCallback(async (docId: string) => {
-        const doc = documents.find((d) => d.id === docId);
-        if (!currentSessionId) {
-            addDraftDocuments([docId]);
-            log.doc.info(`"${doc?.filename || docId}" will be attached to the next new chat`);
-            return;
-        }
-        log.doc.info(`Attaching document to session: ${doc?.filename || docId}`);
+        const name = documents.find((d) => d.id === docId)?.filename || docId;
+        setNotice('');
         try {
-            await api.attachDocument(currentSessionId, docId);
-            const freshSession = useChatStore.getState().sessions.find(s => s.id === currentSessionId);
-            const existing = freshSession?.document_ids ?? [];
-            if (!existing.includes(docId)) {
-                updateSessionInList(currentSessionId, {
-                    document_ids: [...existing, docId],
-                });
-            }
-            log.doc.info(`Attached "${doc?.filename || docId}" to session ${currentSessionId}`);
+            await attachToTarget(docId, name);
         } catch (err) {
-            log.doc.error(`Failed to attach document to session: ${doc?.filename || docId}`, err);
+            log.doc.error(`Failed to attach ${name} to ${targetChatName}`, err);
+            setUploadError({
+                filename: name,
+                error: `Not attached to ${targetChatName}: ${err instanceof Error ? err.message : err}`,
+            });
         }
-    }, [currentSessionId, documents, updateSessionInList, addDraftDocuments]);
+    }, [documents, attachToTarget, targetChatName]);
 
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!folderPath.trim()) return;
-        log.doc.info(`Indexing from path input: ${folderPath.trim()}`);
-        await uploadFile(folderPath.trim(), folderPath.trim().split(/[\\/]/).pop() || 'file');
-        setFolderPath('');
+        const typed = cleanPastedPath(folderPath);
+        if (!typed) return;
+        log.doc.info(`Indexing from path input: ${typed}`);
+        const added = await uploadFile(typed, typed.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'file');
+        if (added) setFolderPath('');
     }, [folderPath, uploadFile]);
 
     const renderDocStatus = (doc: Document) => {
         const status = doc.indexing_status || 'complete';
         const startTime = indexingStartTimes.current.get(doc.id);
-        const indexedTime = doc.indexed_at ? formatTimestamp(doc.indexed_at) : '';
-        const indexedTimeFull = doc.indexed_at ? formatFullTimestamp(doc.indexed_at) : '';
+        const indexedTime = doc.indexed_at ? formatTimestamp(doc.indexed_at, t) : '';
+        const indexedTimeFull = doc.indexed_at ? formatFullTimestamp(doc.indexed_at, t) : '';
 
         switch (status) {
             case 'indexing':
-            case 'pending':
+            case 'pending': {
+                const progress = progressById[doc.id];
                 return (
                     <div className="doc-indexing-status">
+                        {progress ? <IndexingProgress progress={progress} /> : (
                         <div className="doc-indexing-bar">
                             <div className="doc-indexing-bar-track">
                                 <div className="doc-indexing-bar-fill" />
                             </div>
                             <span className="doc-indexing-label">
                                 <Loader size={12} className="doc-spin" />
-                                Indexing{startTime ? ` (${elapsed(startTime)})` : '...'}
+                                {startTime ? t.hint(t('docs.indexingLabel'), elapsed(startTime)) : t('docs.indexing')}
                             </span>
                         </div>
+                        )}
                         <button
                             className="btn-cancel"
                             onClick={(e) => { e.stopPropagation(); handleCancelIndexing(doc.id); }}
-                            title="Cancel indexing"
-                            aria-label={`Cancel indexing ${doc.filename}`}
+                            title={t('docs.cancelIndexing')}
+                            aria-label={t('docs.cancelIndexingAria', { name: doc.filename })}
                         >
                             <StopCircle size={14} />
-                            Cancel
+                            {t('docs.cancel')}
                         </button>
                     </div>
                 );
-            case 'failed':
+            }
+            case 'failed': {
+                const hint = doc.error_kind ? PERMANENT_FAILURE_HINTS[doc.error_kind] : undefined;
+                const serverReason = serverFailureText(doc.error_kind, t);
+                const waiting = waitsForServerReturn(doc.error_kind);
+                const lastError = serverReason ?? doc.last_error;
+                const reason = lastError ? splitFailureReason(lastError) : null;
                 return (
-                    <div className="doc-indexing-status">
-                        <span
-                            className="doc-status-badge doc-status-failed"
-                            title={doc.last_error || undefined}
-                            aria-label={doc.last_error ? `Failed: ${doc.last_error}` : 'Indexing failed'}
-                        >
-                            <AlertCircle size={12} /> Failed
-                        </span>
-                        <button
-                            className="btn-retry"
-                            onClick={(e) => { e.stopPropagation(); handleReindex(doc.id); }}
-                            title="Retry indexing"
-                            aria-label={`Retry indexing ${doc.filename}`}
-                            disabled={reindexingIds.has(doc.id)}
-                        >
-                            <RefreshCcw size={14} />
-                            {reindexingIds.has(doc.id) ? 'Retrying…' : 'Retry'}
-                        </button>
+                    <div className="doc-failure">
+                        <div className="doc-indexing-status">
+                            <span
+                                className={waiting ? 'doc-status-badge doc-status-waiting' : 'doc-status-badge doc-status-failed'}
+                                title={lastError || undefined}
+                                aria-label={lastError ? t(waiting ? 'docs.waitingAria' : 'docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
+                            >
+                                <AlertCircle size={12} /> {hint ? t('docs.cantRead') : waiting ? t('docs.waiting') : t('docs.failed')}
+                            </span>
+                            <button
+                                className={hint ? 'btn-retry btn-retry-quiet' : 'btn-retry'}
+                                onClick={(e) => { e.stopPropagation(); handleReindex(doc.id); }}
+                                title={hint ? t('docs.retryTitleFix') : t('docs.retryTitle')}
+                                aria-label={t('docs.retryAria', { name: doc.filename })}
+                                disabled={reindexingIds.has(doc.id)}
+                            >
+                                <RefreshCcw size={hint ? 12 : 14} />
+                                {reindexingIds.has(doc.id) ? t('docs.retrying') : t('docs.retry')}
+                            </button>
+                        </div>
+                        {hint && <p className="doc-failure-hint">{hint}</p>}
+                        {/* The hint already says what's wrong; the raw reason is for whoever asks. */}
+                        {hint && reason && (
+                            <details className="doc-failure-reason">
+                                <summary>{t('docs.technicalDetails')}</summary>
+                                <p>{[reason.summary, reason.more].filter(Boolean).join('\n')}</p>
+                            </details>
+                        )}
+                        {!hint && reason && (reason.more ? (
+                            <details className="doc-failure-reason">
+                                <summary>{reason.summary}</summary>
+                                <p>{reason.more}</p>
+                            </details>
+                        ) : (
+                            <p className="doc-failure-reason">{reason.summary}</p>
+                        ))}
+                        {!reason && !hint && (
+                            <p className="doc-failure-reason">{t('docs.noReason')}</p>
+                        )}
                     </div>
                 );
+            }
             case 'cancelled':
                 return (
                     <span className="doc-status-badge doc-status-cancelled">
-                        <StopCircle size={12} /> Cancelled
+                        <StopCircle size={12} /> {t('docs.cancelled')}
                     </span>
                 );
             case 'missing':
                 return (
                     <span className="doc-status-badge doc-status-missing">
-                        <AlertCircle size={12} /> File missing
+                        <AlertCircle size={12} /> {t('docs.missing')}
                     </span>
                 );
             default:
                 return (
                     <span className="doc-meta">
-                        {formatSize(doc.file_size)} &middot; {doc.chunk_count} chunk{doc.chunk_count !== 1 ? 's' : ''}
+                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi>
                         {indexedTime && (
-                            <span className="doc-timestamp" title={`Indexed: ${indexedTimeFull}`}>
+                            <span className="doc-timestamp" title={t('docs.indexedAt', { time: indexedTimeFull })}>
                                 <Clock size={10} />
                                 {indexedTime}
                             </span>
@@ -471,24 +776,69 @@ export function DocumentLibrary() {
         }
     };
 
+    /** Which chats a readable document is in, from the open chat and the server's count. */
+    const renderUsage = (doc: Document) => {
+        if (doc.indexing_status && doc.indexing_status !== 'complete') return null;
+        const inThisChat = !!currentSession?.document_ids?.includes(doc.id);
+        const others = Math.max((doc.sessions_using ?? 0) - (inThisChat ? 1 : 0), 0);
+        let label: string;
+        if (inThisChat) {
+            label = others > 0 ? t.plural('docs.usage.hereAndOthers', others) : t('docs.usage.here');
+        } else if (draftDocumentIds.includes(doc.id)) {
+            label = t('docs.usage.next');
+        } else {
+            label = others > 0 ? t.plural('docs.usage.chats', others) : t('docs.usage.none');
+        }
+        return <span className={`doc-usage${inThisChat ? ' is-here' : ''}`}>{label}</span>;
+    };
+
     return (
-        <div className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label="Document Library">
+        <div ref={dialogRef} className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label={t('docs.title')}>
             <div className="modal-panel doc-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>Document Library</h3>
-                    <button className="btn-icon" onClick={() => setShowDocLibrary(false)} aria-label="Close document library">
+                    <h3>{t('docs.title')}</h3>
+                    <button className="btn-icon" onClick={() => setShowDocLibrary(false)} aria-label={t('docs.close')}>
                         <X size={18} />
                     </button>
                 </div>
 
                 <div className="modal-body">
+                    <div className="doc-target">
+                        {currentSessionId ? (
+                            <label className="doc-target-choice">
+                                {t('docs.addTo')}
+                                <select
+                                    value={target}
+                                    onChange={(e) => { setTarget(e.target.value as 'chat' | 'next'); setNotice(''); }}
+                                >
+                                    <option value="chat">{t.bare('docs.thisChat', { chat: targetChatName })}</option>
+                                    <option value="next">{t.bare('docs.nextChat')}</option>
+                                </select>
+                            </label>
+                        ) : (
+                            <span>{t('docs.nextChatOnly')}</span>
+                        )}
+                        <span className="doc-target-hint">{t('docs.hint')}</span>
+                    </div>
+
                     {/* Drop zone */}
                     <div
-                        className={`drop-zone ${isDragOver ? 'drag-over' : ''} ${isUploading ? 'uploading' : ''}`}
+                        className={`drop-zone ${isDragOver ? 'drag-over' : ''} ${isUploading ? 'uploading' : ''} ${documents.length > 0 ? 'drop-zone-compact' : ''}`}
                         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
                         onDragLeave={() => setIsDragOver(false)}
                         onDrop={handleDrop}
+                        role="button"
+                        tabIndex={isUploading ? -1 : 0}
+                        aria-label={t('docs.drop')}
+                        onClick={() => { if (!isUploading) fileInputRef.current?.click(); }}
+                        onKeyDown={(e) => {
+                            if (!isUploading && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+                                e.preventDefault();
+                                fileInputRef.current?.click();
+                            }
+                        }}
                     >
+                        <input ref={fileInputRef} type="file" multiple hidden onClick={(e) => e.stopPropagation()} onChange={handlePickedFiles} />
                         {isUploading ? (
                             <>
                                 <div className="upload-spinner" />
@@ -497,13 +847,14 @@ export function DocumentLibrary() {
                         ) : (
                             <>
                                 <Upload size={32} strokeWidth={1.5} />
-                                <p>Drop files here to index</p>
-                                <span className="drop-hint">PDF, TXT, MD, code files, and 50+ formats</span>
+                                <p>{t('docs.drop')}</p>
+                                <span className="drop-hint">{t('docs.dropHint')}</span>
                             </>
                         )}
                     </div>
 
                     {/* Path input for folder/file */}
+                    <p className="drop-hint path-hint">{t('docs.pathHint')}</p>
                     <form className="path-input-form" onSubmit={handleFolderSubmit}>
                         <FolderOpen size={16} className="path-icon" />
                         <input
@@ -511,90 +862,169 @@ export function DocumentLibrary() {
                             className="path-input"
                             value={folderPath}
                             onChange={(e) => setFolderPath(e.target.value)}
-                            placeholder="Or enter file path: C:\docs\manual.pdf"
-                            aria-label="File path to index"
+                            placeholder={examplePath()}
+                            aria-label={t('docs.pathAria')}
+                            dir="auto"
                         />
                         <button type="submit" className="btn-secondary" disabled={!folderPath.trim() || isUploading}>
-                            Index
+                            {t('docs.index')}
                         </button>
                         <button
                             type="button"
                             className="btn-secondary"
-                            onClick={() => { setShowDocLibrary(false); setShowFileBrowser(true); }}
-                            title="Browse files on this computer"
+                            onClick={openFileBrowserFromLibrary}
+                            title={t('docs.browseTitle')}
                         >
                             <Search size={14} />
-                            Browse Files
+                            {t('docs.browse')}
                         </button>
                     </form>
+                    <p className="doc-path-hint">{t('docs.pathSubfolders')}</p>
+
+                    {notice && <p className="doc-target-notice" role="status">{notice}</p>}
 
                     {/* Upload error toast */}
                     {uploadError && (
                         <UploadErrorToast
                             filename={uploadError.filename}
                             error={uploadError.error}
+                            status={uploadError.status}
+                            kind={uploadError.kind}
                             onDismiss={() => setUploadError(null)}
                         />
                     )}
 
-                    {/* Stats */}
-                    {documents.length > 0 && (
-                        <div className="doc-stats">
-                            <span>{documents.length} document{documents.length !== 1 ? 's' : ''}</span>
-                            <span>&middot;</span>
-                            <span>{totalChunks} chunk{totalChunks !== 1 ? 's' : ''}</span>
-                            <span>&middot;</span>
-                            <span>{formatSize(totalSize)}</span>
+                    {loadError && documents.length > 0 && (
+                        <div className="doc-folder-notice doc-action-error" role="alert">
+                            <AlertCircle size={14} />
+                            <span>{t('docs.loadFailed', { error: requestErrorParam(loadError.err) })}</span>
+                            <button type="button" className="btn-secondary" onClick={loadDocuments}>
+                                {t('docs.loadRetry')}
+                            </button>
                         </div>
+                    )}
+
+                    {actionError && (
+                        <div className="doc-folder-notice doc-action-error" role="alert">
+                            <AlertCircle size={14} />
+                            <span>{actionError}</span>
+                            <button className="btn-icon-sm" onClick={() => setActionError(null)} aria-label={t('docs.dismissError')}>
+                                <X size={12} />
+                            </button>
+                        </div>
+                    )}
+
+                    {pendingRemoval && (
+                        <div key={pendingRemoval.id} className="doc-folder-notice doc-removed-notice" role="status">
+                            <Trash2 size={14} />
+                            <span>{t('docs.removed', { name: pendingRemoval.name })}</span>
+                            {/* The Remove button just left with its row; keep keyboard focus in the dialog. */}
+                            <button type="button" className="doc-undo" onClick={undoRemoval} autoFocus>
+                                <Undo2 size={12} /> {t('docs.undo')}
+                            </button>
+                        </div>
+                    )}
+
+                    {folderNotice && (
+                        <div className="doc-folder-notice" role="status">
+                            <CheckCircle size={14} />
+                            <span>{folderNotice}</span>
+                            <button className="btn-icon-sm" onClick={() => setFolderNotice(null)} aria-label={t('docs.dismissFolder')}>
+                                <X size={12} />
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Stats */}
+                    {shownCount > 0 && (
+                        <div className="doc-stats">
+                            <span>{t.plural('docs.count', shownCount - failedDocs.length)}</span>
+                            {unreadableCount > 0 && (
+                                <span className="doc-stats-failed">{t.plural('docs.unreadable', unreadableCount)}</span>
+                            )}
+                            {serverWaitCount > 0 && (
+                                <span className="doc-stats-failed doc-stats-server">{t.plural('docs.serverWaiting', serverWaitCount)}</span>
+                            )}
+                            <span>&middot;</span>
+                            <bdi dir="ltr">{formatSize(totalSize)}</bdi>
+                        </div>
+                    )}
+
+                    {documents.length > FILTER_AFTER && (
+                        <div className="doc-filter">
+                            <Search size={14} className="doc-filter-icon" aria-hidden="true" />
+                            <input
+                                type="search"
+                                className="doc-filter-input"
+                                value={filter}
+                                onChange={(e) => setFilter(e.target.value)}
+                                placeholder={t('docs.filterPlaceholder')}
+                                aria-label={t('docs.filterAria')}
+                            />
+                        </div>
+                    )}
+                    {filterText && documents.length > 0 && !documents.some(matchesFilter) && (
+                        <p className="doc-filter-empty">{t('docs.filterNone', { text: filter.trim() })}</p>
                     )}
 
                     {/* Document list */}
                     <div className="doc-list">
-                        {documents.length === 0 && !isUploading && (
-                            <div className="empty-docs">
-                                <FileText size={32} strokeWidth={1} />
-                                <p>No documents indexed yet</p>
-                                <span>Drop files above or enter a file path</span>
+                        {loadError && documents.length === 0 && (
+                            <div className="empty-docs doc-load-error" role="alert">
+                                <AlertCircle size={32} strokeWidth={1} />
+                                <p>{t('docs.loadFailed', { error: requestErrorParam(loadError.err) })}</p>
+                                <button type="button" className="btn-secondary" onClick={loadDocuments}>
+                                    {t('docs.loadRetry')}
+                                </button>
                             </div>
                         )}
-                        {documents.map((doc) => (
-                            <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
+                        {documents.length === 0 && !isUploading && !loadError && (
+                            <div className="empty-docs">
+                                <FileText size={32} strokeWidth={1} />
+                                <p>{t('docs.empty')}</p>
+                                <span>{t('docs.emptyHint')}</span>
+                            </div>
+                        )}
+                        {documents.filter((d) => d.id !== pendingRemoval?.id).map((doc) => (
+                            <div key={doc.id} hidden={!matchesFilter(doc)} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
-                                    <span className="doc-name">{doc.filename}</span>
+                                    <DocName name={doc.filename} />
                                     {renderDocStatus(doc)}
+                                    {renderUsage(doc)}
                                 </div>
                                 <div className="doc-row-actions">
                                     {doc.filepath && (
                                         <button
                                             className="btn-icon-sm doc-open-folder"
                                             onClick={() => handleOpenFolder(doc.filepath, doc.filename)}
-                                            title={`Open folder: ${doc.filepath}`}
-                                            aria-label={`Open containing folder for ${doc.filename}`}
+                                            title={t('docs.openFolder', { path: doc.filepath })}
+                                            aria-label={t('docs.openFolderAria', { name: doc.filename })}
                                         >
                                             <FolderOpen size={14} />
                                         </button>
                                     )}
                                     {doc.indexing_status === 'complete' &&
-                                     !(currentSessionId
+                                     !(targetSessionId
                                         ? currentSession?.document_ids?.includes(doc.id)
                                         : draftDocumentIds.includes(doc.id)) && (
                                         <button
-                                            className="btn-icon-sm doc-attach"
+                                            className="doc-attach"
                                             onClick={() => handleAttachDoc(doc.id)}
-                                            title={currentSessionId ? 'Use in current session' : 'Use in your next chat'}
-                                            aria-label={currentSessionId
-                                                ? `Attach ${doc.filename} to current session`
-                                                : `Attach ${doc.filename} to your next chat`}
+                                            title={targetSessionId ? t('docs.useIn', { chat: targetChatName }) : t('docs.useNext')}
+                                            aria-label={targetSessionId
+                                                ? t('docs.attachAria', { name: doc.filename, chat: targetChatName })
+                                                : t('docs.attachNextAria', { name: doc.filename })}
                                         >
                                             <Link2 size={14} />
+                                            {targetSessionId ? t('docs.addToThisChat') : t('docs.addToNextChat')}
                                         </button>
                                     )}
                                     {doc.indexing_status !== 'indexing' && doc.indexing_status !== 'pending' && (
                                         <button
                                             className="btn-icon-sm doc-delete"
                                             onClick={() => handleDeleteDoc(doc.id)}
-                                            title="Remove"
-                                            aria-label={`Remove ${doc.filename}`}
+                                            title={t('docs.remove')}
+                                            aria-label={t('docs.removeAria', { name: doc.filename })}
                                         >
                                             <Trash2 size={14} />
                                         </button>

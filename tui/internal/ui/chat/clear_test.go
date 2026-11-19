@@ -60,7 +60,7 @@ func TestClearLegacyAndMockTransportsKeepsViewClearAvailable(t *testing.T) {
 	// Both --subprocess and --mock use the legacy SubprocessClient constructor.
 	for _, mode := range []string{"subprocess", "mock"} {
 		t.Run(mode, func(t *testing.T) {
-			c := client.NewSubprocessClient("unused-"+mode, nil)
+			c := client.NewSubprocessClient("unused-"+mode, nil, false)
 			m := NewChatModel(c, "legacy", "Legacy")
 			m.messages = []Message{{Role: RoleUser, Content: "old visible text"}}
 			next, cmd := m.submit("/clear")
@@ -82,11 +82,11 @@ func TestClearShowsFreshProgressWhileAwaitingAcknowledgment(t *testing.T) {
 	m.buffer = "old partial output"
 	m.queryStart = time.Now().Add(-time.Hour)
 	m.logPeakRows = 20
-	m.preScanRenderedThisTurn = true
+	m.goalFresh = true
 	started := time.Now()
 	next, cmd := m.submit("/clear")
 	m = next.(ChatModel)
-	if m.queryStart.Before(started) || m.buffer != "" || m.preScanRenderedThisTurn {
+	if m.queryStart.Before(started) || m.buffer != "" || m.goalFresh {
 		t.Fatal("clear retained timing or output from the previous turn")
 	}
 	view := m.View()

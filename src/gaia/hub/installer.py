@@ -30,8 +30,10 @@ Safety properties (CLAUDE.md — fail loudly, no silent fallbacks):
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -41,6 +43,8 @@ import sys
 import sysconfig
 import tempfile
 import threading
+import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -49,11 +53,20 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import gaia_agents_dir
 from gaia.daemon.sidecars.spec import builtin_specs
+from gaia.frozen import is_frozen
 from gaia.hub import catalog as catalog_mod
 from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
+from gaia.retired_agents import RETIRED_AGENT_IDS, retired_install_message
 from gaia.utils.archive import ArchiveError, safe_extract
+from gaia.utils.file_lock import (
+    FileLockTimeout,
+    HeldFileLock,
+    acquire_file_lock,
+    file_lock,
+    write_text_atomic,
+)
 from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 logger = get_logger(__name__)
@@ -73,7 +86,7 @@ SITE_PACKAGES_DIRNAME = "site-packages"
 # install --target` install is only importable via an explicit sys.path
 # mutation in the installing process (see _hot_register) -- a later, unrelated
 # process using the SAME interpreter/venv (e.g. the next `gaia chat`
-# invocation, which imports `gaia_agent_chat` directly rather than through
+# invocation, which imports `gaia_agent` directly rather than through
 # AgentRegistry) would otherwise never see it. Python's `site` module reads
 # every `.pth` file in site-packages at interpreter startup and appends each
 # line to sys.path, so one shared file with one absolute path per installed
@@ -109,6 +122,16 @@ PipRunner = Callable[[List[str]], None]
 
 class InstallError(RuntimeError):
     """Base class for install-lifecycle failures (actionable message)."""
+
+
+class RetiredAgentError(InstallError):
+    """The requested agent was removed from GAIA."""
+
+
+def refuse_retired_agent(agent_id: str) -> None:
+    """Raise :class:`RetiredAgentError` when *agent_id* was removed from GAIA."""
+    if agent_id in RETIRED_AGENT_IDS:
+        raise RetiredAgentError(retired_install_message(agent_id))
 
 
 class ChecksumError(InstallError):
@@ -191,8 +214,7 @@ def _require_safe_agent_id(agent_id: str) -> str:
         raise InstallError(
             f"Invalid agent id {agent_id!r}: agent ids must start with a letter "
             "or digit and contain only letters, digits, '.', '_' or '-' "
-            "(max 128 chars). Check the id against the hub catalog "
-            "('gaia agent list') or the package's gaia-agent.yaml."
+            "(max 128 chars). Check the id against the package's gaia-agent.yaml."
         )
     return agent_id
 
@@ -293,6 +315,22 @@ def read_sentinel(
     )
 
 
+def binary_changed(
+    agent_id: str,
+    before: Optional[InstalledAgent],
+    install_root: Optional[Path] = None,
+) -> bool:
+    """True when an install replaced *before* with different bytes.
+
+    A same-version reinstall writes the same artifact, so a running copy of it
+    has nothing to restart for.
+    """
+    if before is None:
+        return False
+    after = read_sentinel(agent_id, install_root)
+    return after is not None and after.artifact_sha256 != before.artifact_sha256
+
+
 def list_installed(install_root: Optional[Path] = None) -> Dict[str, InstalledAgent]:
     """Map ``agent_id -> InstalledAgent`` for every hub-installed agent."""
     root = install_root or default_install_root()
@@ -300,7 +338,8 @@ def list_installed(install_root: Optional[Path] = None) -> Dict[str, InstalledAg
     if not root.exists():
         return result
     for child in sorted(root.iterdir()):
-        if not child.is_dir() or child.name == BACKUP_DIRNAME:
+        # Dot-names are never agent ids: the backup and lock queue folders.
+        if not child.is_dir() or child.name.startswith("."):
             continue
         if not _AGENT_ID_SAFE_RE.match(child.name):
             # Not a directory this installer could have created — skip it
@@ -328,20 +367,103 @@ _GUARD_LOCK = threading.Lock()
 _IN_PROGRESS: set = set()
 
 
-@contextmanager
-def _install_slot(agent_id: str):
+class InstallSlot:
+    """A claimed install slot for one agent id; :meth:`release` frees it.
+
+    Not tied to a thread, so a request can claim it and hand it to the
+    background worker that runs the install.
+    """
+
+    def __init__(self, agent_id: str, root: Path, held: HeldFileLock):
+        self.agent_id = agent_id
+        self.root = root
+        self._held = held
+
+    @property
+    def held(self) -> bool:
+        return self._held.held
+
+    def release(self) -> None:
+        """Free the slot here and in every other process; a second call does nothing."""
+        if not self._held.held:
+            return
+        try:
+            self._held.release()
+        finally:
+            with _GUARD_LOCK:
+                _IN_PROGRESS.discard(self.agent_id)
+
+    def __enter__(self) -> "InstallSlot":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.release()
+
+
+def claim_install_slot(
+    agent_id: str, install_root: Optional[Path] = None
+) -> InstallSlot:
+    """Claim *agent_id* in this process and, through a file lock, in every other.
+
+    The Agent UI, the daemon and ``gaia hub`` can each start an install; the
+    file lock keeps two of them from writing one agent's directory at once.
+    The caller must :meth:`InstallSlot.release` it, or use it as a context manager.
+
+    Raises:
+        InstallInProgressError: this process or another one holds the slot.
+    """
+    root = install_root or default_install_root()
+    lock_target = root / f".{_require_safe_agent_id(agent_id)}.install"
     with _GUARD_LOCK:
         if agent_id in _IN_PROGRESS:
             raise InstallInProgressError(
-                f"An install for '{agent_id}' is already in progress. Wait for it "
-                f"to finish (poll GET /api/agents/{agent_id}/install-status)."
+                f"An install or uninstall of '{agent_id}' is already running in "
+                "this process. Wait for it to finish, then retry."
             )
         _IN_PROGRESS.add(agent_id)
     try:
-        yield
-    finally:
+        # Not 0: a waiter queued ahead for an instant must not reject a claim.
+        held = acquire_file_lock(lock_target, timeout=0.5)
+    except FileLockTimeout as exc:
         with _GUARD_LOCK:
             _IN_PROGRESS.discard(agent_id)
+        raise InstallInProgressError(
+            f"Another GAIA process (the Agent UI, the daemon or `gaia hub`) is "
+            f"installing or removing '{agent_id}': it holds {exc.lock_path}. Its "
+            "progress shows in that process, not this one. Wait for it to "
+            "finish, then retry."
+        ) from exc
+    except BaseException:
+        with _GUARD_LOCK:
+            _IN_PROGRESS.discard(agent_id)
+        raise
+    return InstallSlot(agent_id, root, held)
+
+
+@contextmanager
+def _install_slot(
+    agent_id: str,
+    install_root: Optional[Path] = None,
+    slot: Optional[InstallSlot] = None,
+):
+    """Hold *agent_id*'s slot for the block: *slot* if the caller claimed one."""
+    if slot is None:
+        with claim_install_slot(agent_id, install_root):
+            yield
+        return
+    root = install_root or default_install_root()
+    if slot.agent_id != agent_id or slot.root != root:
+        raise ValueError(
+            f"The install slot passed for '{agent_id}' under {root} belongs to "
+            f"'{slot.agent_id}' under {slot.root}; claim one for this agent "
+            "and root with claim_install_slot()."
+        )
+    if not slot.held:
+        raise ValueError(
+            f"The install slot passed for '{agent_id}' was already released; "
+            "claim a new one with claim_install_slot()."
+        )
+    yield
 
 
 def is_installing(agent_id: str) -> bool:
@@ -401,7 +523,13 @@ def clear_progress(agent_id: Optional[str] = None) -> None:
 def _download_and_verify(
     url: str, expected_sha256: str, fetcher: catalog_mod.Fetcher
 ) -> bytes:
-    data = fetcher(url)
+    if fetcher is catalog_mod.fetch_bytes:
+        try:
+            data = catalog_mod.download_artifact(url)
+        except catalog_mod.ArtifactDownloadError as exc:
+            raise InstallError(str(exc)) from exc
+    else:
+        data = fetcher(url)
     actual = hashlib.sha256(data).hexdigest()
     if actual != (expected_sha256 or "").lower():
         raise ChecksumError(
@@ -417,36 +545,453 @@ def _download_and_verify(
 # ---------------------------------------------------------------------------
 
 
-def _default_run_pip(args: List[str]) -> None:
-    """Install ``args`` via pip, trying frontends in order until one works.
+#: Default for how long one pip/uv install may go without any activity (CPU or
+#: disk, across its whole process tree) before it is stopped as stuck. A slow
+#: download still uses CPU; a process parked on a lock or a hung build does not.
+PIP_TIMEOUT_SECONDS = 900.0
 
-    The standalone ``uv`` binary leads (fastest, honours the active venv), then
-    ``python -m uv``, then ``python -m pip`` -- guaranteed present in any
-    venv, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
-    ``pip install amd-gaia`` user hitting ``gaia init --profile chat``)
-    still installs the wheel instead of hard-failing. Raises InstallError
-    only if every frontend fails.
-    """
-    frontends = [
+#: Overrides ``PIP_TIMEOUT_SECONDS``.
+PIP_TIMEOUT_ENV = "GAIA_HUB_PIP_TIMEOUT"
+
+#: Ceiling on one install however busy it is, so a process spinning forever
+#: (which never looks idle) still ends. Far above any real install.
+PIP_MAX_SECONDS = 7200.0
+
+#: Overrides ``PIP_MAX_SECONDS``.
+PIP_MAX_ENV = "GAIA_HUB_PIP_MAX_SECONDS"
+
+#: How long uv may wait for another install's package-cache lock. uv's own
+#: default (300 s), and always under the no-progress window, so uv's clear
+#: lock error arrives before GAIA would have to stop it as stuck.
+UV_LOCK_WAIT_SECONDS = 300
+
+#: How often a running install's process tree is sampled.
+_PIP_POLL_SECONDS = 1.0
+
+#: How long to wait for the output pipes after the installer exits; a stray
+#: descendant can hold them open.
+_PIP_PIPE_WAIT_SECONDS = 10.0
+
+#: What uv prints when another uv holds its package-cache lock: while waiting
+#: ("Waiting to acquire shared lock for ..."), and when it gives up.
+_UV_WAITING = re.compile(r"waiting to acquire (?:\w+ )?lock")
+_UV_GAVE_UP_MARKER = "could not acquire lock"
+
+# The agent whose install is running on this thread, so the pip runner can say
+# in its progress that it is waiting for another install.
+_install_context = threading.local()
+
+
+def _seconds_from_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0.0
+    if not math.isfinite(value) or value <= 0:
+        raise InstallError(
+            f"{name}={raw!r} is not a positive number of seconds. Set it to "
+            f"e.g. {default * 2:.0f}, or unset it for the {default:.0f}s default."
+        )
+    return value
+
+
+def _pip_timeout() -> float:
+    return _seconds_from_env(PIP_TIMEOUT_ENV, PIP_TIMEOUT_SECONDS)
+
+
+def _pip_frontends() -> List[List[str]]:
+    return [
         ["uv", "pip", "install"],
         [sys.executable, "-m", "uv", "pip", "install"],
         [sys.executable, "-m", "pip", "install"],
     ]
+
+
+def _mentions_uv_lock(output: str, *, still_running: bool = False) -> bool:
+    """True when uv gave up on its lock, or was stopped while still waiting.
+
+    A finished wait is not a lock failure: uv carries on once it gets the lock.
+    """
+    text = output.lower()
+    if _UV_GAVE_UP_MARKER in text:
+        return True
+    return still_running and _UV_WAITING.search(text) is not None
+
+
+def _uv_lock_timeout(window: float) -> str:
+    """The ``UV_LOCK_TIMEOUT`` for the child: a user's own value is kept only
+    when it is shorter, so uv always gives up before GAIA's window does."""
+    limit = max(1, min(UV_LOCK_WAIT_SECONDS, int(window * 0.5)))
+    raw = os.environ.get("UV_LOCK_TIMEOUT", "").strip()
+    try:
+        user = int(float(raw)) if raw else None
+    except ValueError:
+        user = None
+    if user is not None and 0 < user < limit:
+        return str(user)
+    return str(limit)
+
+
+def _tail(text: str, limit: int = 500) -> str:
+    """The last ``limit`` characters of ``text``, starting at a line."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[-limit:]
+    newline = cut.find("\n")
+    return cut[newline + 1 :] if 0 <= newline < len(cut) - 1 else cut
+
+
+def _report_lock_wait(agent_id: Optional[str]) -> None:
+    logger.warning(
+        "installer: %s is waiting for another install to finish (uv cache lock)",
+        agent_id or "a package install",
+    )
+    if agent_id is None:
+        return
+    state = get_install_status(agent_id) or {}
+    _set_progress(
+        agent_id,
+        status="running",
+        phase="waiting for another install to finish",
+        percent=int(state.get("percent") or 60),
+        version=state.get("version"),
+    )
+
+
+class _PipStuck(Exception):
+    def __init__(self, output: str, reason: str = "idle") -> None:
+        super().__init__(output)
+        self.output = output
+        self.reason = reason
+
+
+def _tree_activity(root, seen: Dict[int, Any]) -> float:
+    """A number that changes whenever anything in ``root``'s tree does work.
+
+    Every process ever seen stays in ``seen``, so a grandchild whose parent
+    exited (and which no longer shows up as a descendant) is still counted.
+    A process whose pid was reused since is dropped (``is_running`` compares
+    creation times).
+    """
+    import psutil
+
+    try:
+        for process in [root, *root.children(recursive=True)]:
+            seen.setdefault(process.pid, process)
+    except psutil.Error:
+        pass  # the root is exiting; the processes already seen are sampled
+    total = 0.0
+    for pid, process in list(seen.items()):
+        if not process.is_running():
+            del seen[pid]
+            continue
+        try:
+            cpu = process.cpu_times()
+            total += cpu.user + cpu.system
+            io = process.io_counters()
+        except (psutil.Error, AttributeError):
+            continue  # gone, or no I/O counters on this platform (macOS)
+        # CPU time is the main signal (a download decrypts and unpacks). The
+        # I/O counters add file activity; which socket traffic they include,
+        # if any, varies by platform, so nothing relies on it.
+        for name in ("read_bytes", "write_bytes", "read_chars", "write_chars"):
+            total += getattr(io, name, 0)
+        total += getattr(io, "other_bytes", 0)
+    return total
+
+
+def _job_error(call: str) -> InstallError:
+    # Not OSError: errno 2 would make it a FileNotFoundError, read as "not on PATH".
+    import ctypes
+
+    return InstallError(
+        f"Could not set up the process group for the pip install: {call} failed "
+        f"(Windows error {ctypes.get_last_error()}). Retry; if it keeps failing, "
+        "report it at https://github.com/amd/gaia/issues with `gaia diagnostics`."
+    )
+
+
+class _ProcessGroup:
+    """Everything an install starts, so it can all be killed together.
+
+    Windows: a Job Object with KILL_ON_JOB_CLOSE. The child starts suspended
+    and is assigned before it runs, so even a grandchild orphaned before the
+    first sample dies with the job. POSIX: the child leads its own session,
+    and ``killpg`` reaches every process left in it.
+    """
+
+    def __init__(self) -> None:
+        self._job = None
+
+    @staticmethod
+    def popen_kwargs() -> Dict[str, Any]:
+        if os.name == "nt":
+            return {"creationflags": 0x00000004}  # CREATE_SUSPENDED
+        return {"start_new_session": True}
+
+    def adopt(self, proc: "subprocess.Popen") -> None:
+        if os.name != "nt":
+            return
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        ntdll = ctypes.WinDLL("ntdll")
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [
+                (n, ctypes.c_ulonglong)
+                for n in (
+                    "ReadOperationCount",
+                    "WriteOperationCount",
+                    "OtherOperationCount",
+                    "ReadTransferCount",
+                    "WriteTransferCount",
+                    "OtherTransferCount",
+                )
+            ]
+
+        class _BasicLimits(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _ExtendedLimits(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimits),
+                ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        try:
+            job = kernel32.CreateJobObjectW(None, None)
+            if not job:
+                raise _job_error("CreateJobObjectW")
+            limits = _ExtendedLimits()
+            limits.BasicLimitInformation.LimitFlags = 0x00002000  # KILL_ON_JOB_CLOSE
+            if not kernel32.SetInformationJobObject(
+                job, 9, ctypes.byref(limits), ctypes.sizeof(limits)
+            ):
+                raise _job_error("SetInformationJobObject")
+            if not kernel32.AssignProcessToJobObject(
+                job, wintypes.HANDLE(int(proc._handle))
+            ):
+                raise _job_error("AssignProcessToJobObject")
+            self._job = job
+        finally:
+            # Always resumed: a child left suspended would never run.
+            ntdll.NtResumeProcess(wintypes.HANDLE(int(proc._handle)))
+
+    def kill(self, proc: "subprocess.Popen") -> None:
+        if os.name == "nt":
+            if self._job is not None:
+                import ctypes
+
+                kernel32 = ctypes.WinDLL("kernel32")
+                kernel32.TerminateJobObject(self._job, 1)
+        else:
+            try:
+                os.killpg(proc.pid, 9)
+            except OSError as e:
+                logger.debug("installer: process group already gone: %s", e)
+
+    def close(self) -> None:
+        if self._job is not None:
+            import ctypes
+
+            ctypes.WinDLL("kernel32").CloseHandle(self._job)
+            self._job = None
+
+
+def _kill_tree(
+    proc: "subprocess.Popen", seen: Dict[int, Any], group: _ProcessGroup
+) -> None:
+    import psutil
+
+    group.kill(proc)
+    if proc.returncode is None:  # once reaped, its pid may belong to another
+        try:
+            for process in psutil.Process(proc.pid).children(recursive=True):
+                seen.setdefault(process.pid, process)
+        except psutil.Error:
+            pass  # already gone; kill what was seen
+    for process in seen.values():
+        try:
+            process.kill()  # checks the pid was not reused
+        except psutil.Error:
+            continue
+    proc.kill()
+    _, alive = psutil.wait_procs(list(seen.values()), timeout=5)
+    for process in alive:
+        logger.error(
+            "installer: pip process %s survived a kill; end it by hand", process.pid
+        )
+
+
+def _run_frontend(cmd: List[str], timeout: float) -> subprocess.CompletedProcess:
+    """Run one pip frontend, stopping it after ``timeout`` seconds of no work.
+
+    Activity is sampled across the whole process tree (``python -m uv`` and a
+    ``uv`` shim run the real ``uv`` as a grandchild), so a long download keeps
+    it alive and a process waiting on a lock does not. A run is also capped at
+    ``GAIA_HUB_PIP_MAX_SECONDS`` however busy it looks. On any failure the
+    whole tree is killed (see :class:`_ProcessGroup`).
+    """
+    import psutil
+
+    ceiling = _seconds_from_env(PIP_MAX_ENV, PIP_MAX_SECONDS)
+    env = dict(os.environ)
+    env["UV_LOCK_TIMEOUT"] = _uv_lock_timeout(timeout)
+    # uv logs its lock wait only at info level; this enables just that module.
+    env.setdefault("RUST_LOG", "uv_fs=info")
+    group = _ProcessGroup()
+    proc = subprocess.Popen(  # noqa: S603 - args are constructed, not shell
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        env=env,
+        **group.popen_kwargs(),
+    )
+    output: Dict[str, List[str]] = {"stdout": [], "stderr": []}
+    # Read here: the context is per thread, and the readers run on their own.
+    agent_id = getattr(_install_context, "agent_id", None)
+
+    def read(name: str, stream) -> None:
+        reported = False
+        for line in iter(stream.readline, ""):
+            output[name].append(line)
+            if not reported and _UV_WAITING.search(line.lower()):
+                reported = True
+                _report_lock_wait(agent_id)
+
+    readers = []
+    seen: Dict[int, Any] = {}
+    try:
+        group.adopt(proc)
+        for name, stream in (("stdout", proc.stdout), ("stderr", proc.stderr)):
+            reader = threading.Thread(target=read, args=(name, stream), daemon=True)
+            reader.start()
+            readers.append(reader)
+        try:
+            root = psutil.Process(proc.pid)
+        except psutil.NoSuchProcess:
+            root = None  # finished before it could be sampled
+        started = last_change = time.monotonic()
+        last_activity: Optional[float] = None
+        while True:
+            try:
+                proc.wait(timeout=_PIP_POLL_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            activity = _tree_activity(root, seen) if root is not None else 0.0
+            now = time.monotonic()
+            if activity != last_activity:
+                last_activity, last_change = activity, now
+            elif now - last_change >= timeout:
+                raise _PipStuck("")
+            if now - started >= ceiling:
+                raise _PipStuck("", reason="ceiling")
+        for reader in readers:
+            reader.join(_PIP_PIPE_WAIT_SECONDS)
+        if any(reader.is_alive() for reader in readers):
+            # A stray descendant still holds the pipes after the installer
+            # exited. It is part of this install: end it, keep the result.
+            logger.warning(
+                "installer: a process left behind by %s kept its output open; "
+                "stopped it",
+                cmd[0],
+            )
+            _kill_tree(proc, seen, group)
+            for reader in readers:
+                reader.join(_PIP_PIPE_WAIT_SECONDS)
+    except BaseException as e:
+        _kill_tree(proc, seen, group)
+        for reader in readers:
+            reader.join(_PIP_PIPE_WAIT_SECONDS)
+        if isinstance(e, _PipStuck):
+            text = "".join(output["stderr"]) + "".join(output["stdout"])
+            raise _PipStuck(_tail(text), reason=e.reason) from None
+        raise
+    finally:
+        group.close()
+    return subprocess.CompletedProcess(
+        cmd, proc.returncode, "".join(output["stdout"]), "".join(output["stderr"])
+    )
+
+
+def _uv_lock_error(frontend: List[str], output: str) -> InstallError:
+    return InstallError(
+        f"'{' '.join(frontend)}' could not get the package cache: another install "
+        "is using it (another GAIA session, or a uv/pip command in a terminal). "
+        "Nothing was changed by this one. Wait for the other install to finish, "
+        "then retry." + (f"\nLast output: {output}" if output else "")
+    )
+
+
+def _default_run_pip(args: List[str]) -> None:
+    """Install ``args`` via pip, trying frontends in order until one works.
+
+    The standalone ``uv`` binary leads (fastest, honours the active venv), then
+    ``python -m uv``, then ``python -m pip`` -- present in any venv uv did not
+    create, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
+    ``pip install amd-gaia`` user hitting ``gaia init --profile chat``)
+    still installs the wheel instead of hard-failing. Raises InstallError
+    if every frontend fails, or at once when one is stuck or blocked on the
+    package-cache lock -- that is not handed to the next frontend, which
+    would wait on the same lock.
+    """
+    timeout = _pip_timeout()
     attempts: List[str] = []
-    for frontend in frontends:
+    for frontend in _pip_frontends():
         cmd = [*frontend, *args]
         try:
-            proc = subprocess.run(  # noqa: S603 - args are constructed, not shell
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            proc = _run_frontend(cmd, timeout)
         except FileNotFoundError:
             attempts.append(f"{frontend[0]} (not found on PATH)")
             continue
+        except _PipStuck as e:
+            if _mentions_uv_lock(e.output, still_running=True):
+                raise _uv_lock_error(frontend, e.output) from e
+            if e.reason == "ceiling":
+                raise InstallError(
+                    f"'{' '.join(frontend)}' was still running after "
+                    f"{_seconds_from_env(PIP_MAX_ENV, PIP_MAX_SECONDS):.0f}s and "
+                    "was stopped. No install takes that long; it is most likely "
+                    "stuck in a loop. Retry, or raise the ceiling with "
+                    f"{PIP_MAX_ENV}=<seconds>."
+                    + (f"\nLast output: {e.output}" if e.output else "")
+                ) from e
+            raise InstallError(
+                f"'{' '.join(frontend)}' did no work for {timeout:.0f}s (no CPU "
+                "or disk activity) and was stopped as stuck before it "
+                "finished. Retry; if a package build or a very slow connection "
+                f"needs longer, raise the limit with {PIP_TIMEOUT_ENV}=<seconds>."
+                + (f"\nLast output: {e.output}" if e.output else "")
+            ) from e
         if proc.returncode == 0:
             return
+        output = (proc.stderr or "") + (proc.stdout or "")
+        if _mentions_uv_lock(output):
+            raise _uv_lock_error(frontend, _tail(output))
         attempts.append(
             f"{' '.join(frontend)} (exit {proc.returncode}): "
             f"{proc.stderr.strip() or proc.stdout.strip()}"
@@ -526,12 +1071,13 @@ def _install_binary_artifact(
     """
     install_dir.mkdir(parents=True, exist_ok=True)
     target = install_dir / generic_name
+    _remove_replaced_binaries(target)
     tmp_fd, tmp_name = tempfile.mkstemp(dir=str(install_dir), prefix=".gaia-hub-tmp-")
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(tmp_fd, "wb") as f:
             f.write(artifact_bytes)
-        os.replace(str(tmp_path), str(target))
+        _replace_binary(tmp_path, target)
     except PermissionError as exc:
         tmp_path.unlink(missing_ok=True)
         raise InstallError(
@@ -545,6 +1091,53 @@ def _install_binary_artifact(
         mode = target.stat().st_mode
         target.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return target
+
+
+#: Prefix of a binary moved aside because a running process held it.
+_REPLACED_PREFIX = ".replaced-"
+
+
+def _replace_binary(new: Path, target: Path) -> None:
+    """Move *new* over *target*, even while *target* is running on Windows.
+
+    Windows refuses to overwrite a running executable but lets it be renamed,
+    so the old one moves aside (the running process keeps its image) and the
+    next install deletes it.
+    """
+    try:
+        os.replace(str(new), str(target))
+        return
+    except PermissionError:
+        if os.name != "nt" or not target.exists():
+            raise
+    aside = target.with_name(f"{_REPLACED_PREFIX}{uuid.uuid4().hex[:8]}-{target.name}")
+    os.replace(str(target), str(aside))
+    try:
+        os.replace(str(new), str(target))
+    except OSError as swap_error:
+        try:
+            os.replace(str(aside), str(target))
+        except OSError as restore_error:
+            raise InstallError(
+                f"Could not install the new {target.name} ({swap_error}) or put "
+                f"the previous one back ({restore_error}). The previous one is "
+                f"{aside}: rename it to {target.name}, or run the install again."
+            ) from swap_error
+        raise
+    logger.info("Replaced running %s; the old copy is %s", target, aside.name)
+
+
+def _remove_replaced_binaries(target: Path) -> None:
+    """Delete binaries earlier installs moved aside, except ones still running."""
+    for old in target.parent.glob(f"{_REPLACED_PREFIX}*-{target.name}"):
+        try:
+            old.unlink()
+        except PermissionError:
+            # Still the image of a process started before that install.
+            logger.info("Keeping %s: a running process still uses it", old)
+        except OSError as exc:
+            # A leftover is harmless; the next install tries again.
+            logger.warning("Could not delete the old copy %s: %s", old, exc)
 
 
 def _filename_matches_platform(filename: str, platform_key: str) -> bool:
@@ -684,8 +1277,7 @@ def resolve_installable_version(
         raise CoreTooOldError(
             f"No published version of '{agent_id}' runs on GAIA {core}: the "
             f"oldest needs GAIA {required} or newer. Upgrade with "
-            f"`{catalog_mod.CORE_UPGRADE_COMMAND}` (or re-run the installer from "
-            f"https://amd-gaia.ai), then install '{agent_id}' again.",
+            f"{catalog_mod.core_upgrade_hint()}, then install '{agent_id}' again.",
             required=required,
             core=core,
         )
@@ -700,12 +1292,35 @@ def resolve_installable_version(
         )
         raise CoreTooOldError(
             f"'{agent_id}' {version} needs GAIA {floor} or newer, and this is "
-            f"GAIA {core}. Upgrade with `{catalog_mod.CORE_UPGRADE_COMMAND}` (or "
-            f"re-run the installer from https://amd-gaia.ai), then retry.{hint}",
+            f"GAIA {core}. Upgrade with {catalog_mod.core_upgrade_hint()}, "
+            f"then retry.{hint}",
             required=floor,
             core=core,
         )
     return version
+
+
+def published_artifact_sha256(
+    agent_id: str,
+    *,
+    manifest: Optional[Dict[str, Any]] = None,
+    base_url: Optional[str] = None,
+    fetcher: Optional[catalog_mod.Fetcher] = None,
+    platform_key: Optional[str] = None,
+) -> str:
+    """The sha256 of the artifact :func:`install` would fetch for this machine now.
+
+    Same selection as an install with no *version*: the newest published
+    version this core can run, and its artifact for *platform_key*. Raises
+    :class:`catalog_mod.CatalogError` when the hub can't be read and
+    :class:`InstallError` when it has nothing for this machine.
+    """
+    if manifest is None:
+        manifest = catalog_mod.fetch_manifest(
+            agent_id, base_url=base_url, fetcher=fetcher
+        )
+    _, artifact = _resolve_version(manifest, None, platform_key=platform_key)
+    return str(artifact.get("sha256") or "")
 
 
 def _resolve_version(
@@ -827,7 +1442,7 @@ def _snapshot_backup(agent_id: str, install_root: Path) -> None:
 # _hot_register (below) makes a freshly-installed wheel importable in the
 # CALLING process only, via an in-memory sys.path mutation. Some callers
 # never construct an AgentRegistry at all -- e.g. `gaia chat`'s CLI handler
-# does a bare `from gaia_agent_chat.agent import ChatAgent` (cli.py) -- so a
+# does a bare `from gaia_agent.agent import GaiaAgent` (cli.py) -- so a
 # later, unrelated `gaia` invocation using the SAME interpreter/venv would
 # still fail to import a wheel agent installed by an earlier `gaia init`.
 # Writing one absolute site-packages path per installed wheel agent into a
@@ -860,24 +1475,13 @@ def _read_pth_lines(pth_path: Path) -> List[str]:
 
 
 def _write_pth_lines(pth_path: Path, lines: List[str]) -> None:
-    """Write *lines* to *pth_path* atomically (temp file + ``os.replace``),
-    so a crash mid-write never corrupts a ``.pth`` file other packages also
-    rely on. Deletes the file entirely when *lines* is empty."""
+    """Write *lines* to *pth_path* atomically, so a crash mid-write never
+    corrupts a ``.pth`` file other packages also rely on. Deletes the file
+    entirely when *lines* is empty. Caller holds :func:`file_lock` on it."""
     if not lines:
         pth_path.unlink(missing_ok=True)
         return
-    pth_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_fd, tmp_name = tempfile.mkstemp(
-        dir=str(pth_path.parent), prefix=".gaia-hub-pth-"
-    )
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-        os.replace(str(tmp_path), str(pth_path))
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
+    write_text_atomic(pth_path, "\n".join(lines) + "\n")
 
 
 def _add_wheel_agent_to_active_env_path(
@@ -895,11 +1499,14 @@ def _add_wheel_agent_to_active_env_path(
     pth_path = target_dir / ACTIVE_ENV_PTH_FILENAME
     line = str(site_packages)
     try:
-        lines = _read_pth_lines(pth_path)
-        if line in lines:
-            return
-        lines.append(line)
-        _write_pth_lines(pth_path, lines)
+        # Locked: two installs each re-writing the file from their own stale
+        # copy would drop the other's line.
+        with file_lock(pth_path):
+            lines = _read_pth_lines(pth_path)
+            if line in lines:
+                return
+            lines.append(line)
+            _write_pth_lines(pth_path, lines)
         logger.info(
             "installer: added %s to %s (wheel agent importable in any new "
             "process using this environment)",
@@ -929,11 +1536,12 @@ def _remove_wheel_agent_from_active_env_path(
     pth_path = target_dir / ACTIVE_ENV_PTH_FILENAME
     line = str(site_packages)
     try:
-        lines = _read_pth_lines(pth_path)
-        if line not in lines:
-            return
-        remaining = [entry for entry in lines if entry != line]
-        _write_pth_lines(pth_path, remaining)
+        with file_lock(pth_path):
+            lines = _read_pth_lines(pth_path)
+            if line not in lines:
+                return
+            remaining = [entry for entry in lines if entry != line]
+            _write_pth_lines(pth_path, remaining)
         logger.info("installer: removed %s from %s", line, pth_path)
     except OSError as exc:
         raise InstallError(
@@ -1023,6 +1631,7 @@ def register_installed_sidecars(registry: Any) -> None:
             category=spec.category,
             tags=list(spec.tags),
             icon=spec.icon,
+            consumes_mcp_servers=spec.consumes_mcp_servers,
         )
 
 
@@ -1086,6 +1695,82 @@ class InstallResult:
         }
 
 
+def _install_source(
+    agent_id: str,
+    version: Optional[str],
+    manifest: Optional[Dict[str, Any]],
+    base_url: str,
+    fetcher: catalog_mod.Fetcher,
+):
+    """The manifest, download origin and RC source :func:`install` uses."""
+    rc_source = None
+    if version is None:
+        try:
+            rc_fetcher = fetcher
+            if fetcher is catalog_mod.fetch_bytes:
+                rc_fetcher = functools.partial(
+                    catalog_mod.fetch_bytes,
+                    timeout=prerelease_mod.MANIFEST_READ_TIMEOUT_SECONDS,
+                )
+            rc_source = prerelease_mod.flagship_source(agent_id, fetcher=rc_fetcher)
+        except prerelease_mod.PrereleaseFlagshipError as exc:
+            raise InstallError(str(exc)) from exc
+    if rc_source is not None:
+        return rc_source.manifest, rc_source.base_url, rc_source
+    if manifest is None:
+        manifest = catalog_mod.fetch_manifest(
+            agent_id, base_url=base_url, fetcher=fetcher
+        )
+    return manifest, base_url, None
+
+
+def _machine_gate(
+    manifest: Dict[str, Any], artifact: Dict[str, Any], install_root: Path
+) -> None:
+    """Refuse a machine the manifest's requirements rule out, or a full disk."""
+    report = check_compatibility(
+        manifest.get("requirements"),
+        download_size_bytes=artifact.get("size_bytes", 0),
+        install_dir=install_root,
+        artifact_kind=artifact.get("artifact_kind", ARTIFACT_KIND_WHEEL),
+    )
+    if not report.compatible:
+        blockers = "; ".join(report.blockers)
+        if not report.disk_ok:
+            raise DiskSpaceError(blockers)
+        raise CompatibilityError(blockers)
+
+
+def no_build_reason(
+    agent_id: str,
+    *,
+    base_url: Optional[str] = None,
+    fetcher: Optional[catalog_mod.Fetcher] = None,
+    platform_key: Optional[str] = None,
+    install_root: Optional[Path] = None,
+) -> Optional[str]:
+    """Why :func:`install` would find no build of *agent_id* for this machine.
+
+    ``None`` when it has one. Runs install's own source, version, artifact and
+    machine checks, downloading nothing; these are the refusals
+    ``gaia init`` treats as "no build for this machine" rather than a failure.
+
+    Raises:
+        catalog_mod.CatalogError, InstallError, requests.RequestException: the
+            question could not be answered (hub unreachable, malformed
+            manifest, no version this core runs).
+    """
+    fetcher = fetcher or catalog_mod.fetch_bytes
+    base_url = (base_url or catalog_mod.get_hub_base_url()).rstrip("/")
+    manifest, _, _ = _install_source(agent_id, None, None, base_url, fetcher)
+    try:
+        _, artifact = _resolve_version(manifest, None, platform_key=platform_key)
+        _machine_gate(manifest, artifact, install_root or default_install_root())
+    except (UnsupportedPlatformError, CompatibilityError) as exc:
+        return str(exc)
+    return None
+
+
 def install(
     agent_id: str,
     *,
@@ -1100,6 +1785,7 @@ def install(
     trusted: bool = False,
     platform_key: Optional[str] = None,
     active_env_site_packages: Optional[Path] = None,
+    slot: Optional[InstallSlot] = None,
 ) -> InstallResult:
     """Download, verify, and install an agent from the hub.
 
@@ -1126,35 +1812,27 @@ def install(
             interpreter/venv (not just the calling process); defaults to this
             interpreter's own site-packages (``sysconfig``'s ``purelib``).
             Injectable so tests don't write into the real active environment.
+        slot: A slot the caller already claimed with :func:`claim_install_slot`.
+            The install runs under it, and the caller still releases it.
 
     Raises:
         InstallInProgressError, ChecksumError, DiskSpaceError,
         CompatibilityError, TrustRequiredError, InstallError.
     """
+    refuse_retired_agent(agent_id)
     fetcher = fetcher or catalog_mod.fetch_bytes
     run_pip = run_pip or _default_run_pip
     root = install_root or default_install_root()
     base_url = (base_url or catalog_mod.get_hub_base_url()).rstrip("/")
 
-    with _install_slot(agent_id):
+    with _install_slot(agent_id, root, slot):
         _set_progress(
             agent_id, status="running", phase="resolving", percent=5, version=version
         )
         try:
-            rc_source = None
-            if version is None:
-                try:
-                    rc_source = prerelease_mod.flagship_source(
-                        agent_id, fetcher=fetcher
-                    )
-                except prerelease_mod.PrereleaseFlagshipError as exc:
-                    raise InstallError(str(exc)) from exc
-            if rc_source is not None:
-                manifest, base_url = rc_source.manifest, rc_source.base_url
-            elif manifest is None:
-                manifest = catalog_mod.fetch_manifest(
-                    agent_id, base_url=base_url, fetcher=fetcher
-                )
+            manifest, base_url, rc_source = _install_source(
+                agent_id, version, manifest, base_url, fetcher
+            )
             language = manifest.get("language", "python")
 
             # Trust gate — refuse any non-verified package unless the caller
@@ -1175,6 +1853,14 @@ def install(
                 manifest, version, platform_key=platform_key
             )
             artifact_kind = artifact.get("artifact_kind", ARTIFACT_KIND_WHEEL)
+            if artifact_kind == ARTIFACT_KIND_WHEEL and is_frozen():
+                raise InstallError(
+                    f"'{agent_id}' {resolved_version} ships as a Python package, "
+                    "and this GAIA build can't install packages: it runs agents "
+                    "that ship as binaries. A wheel agent needs GAIA installed "
+                    "from PyPI or source; see "
+                    "https://amd-gaia.ai/docs/guides/custom-agent."
+                )
             effective_platform_key = platform_key or current_platform_key()
 
             # --- compatibility / disk gate ---
@@ -1186,16 +1872,7 @@ def install(
                 version=resolved_version,
             )
             if not skip_compatibility_check:
-                report = check_compatibility(
-                    manifest.get("requirements"),
-                    download_size_bytes=artifact.get("size_bytes", 0),
-                    install_dir=root,
-                )
-                if not report.compatible:
-                    blockers = "; ".join(report.blockers)
-                    if not report.disk_ok:
-                        raise DiskSpaceError(blockers)
-                    raise CompatibilityError(blockers)
+                _machine_gate(manifest, artifact, root)
 
             # --- download + verify ---
             _set_progress(
@@ -1236,9 +1913,13 @@ def install(
                     )
                     _install_binary_artifact(artifact_bytes, generic_name, install_dir)
                 elif language == "python":
-                    _install_python_artifact(
-                        artifact_bytes, artifact["filename"], install_dir, run_pip
-                    )
+                    _install_context.agent_id = agent_id
+                    try:
+                        _install_python_artifact(
+                            artifact_bytes, artifact["filename"], install_dir, run_pip
+                        )
+                    finally:
+                        _install_context.agent_id = None
                 else:
                     _install_cpp_artifact(
                         artifact_bytes, artifact["filename"], install_dir
@@ -1255,7 +1936,7 @@ def install(
                 # later, unrelated `gaia` invocation using the same
                 # interpreter/venv can import this wheel too (#2358) — closes
                 # the gap for call sites that never touch AgentRegistry (e.g.
-                # `gaia chat`'s hardcoded `import gaia_agent_chat`).
+                # `gaia chat`'s hardcoded `import gaia_agent`).
                 if artifact_kind == ARTIFACT_KIND_WHEEL:
                     _add_wheel_agent_to_active_env_path(
                         install_dir / SITE_PACKAGES_DIRNAME,
@@ -1275,19 +1956,25 @@ def install(
                     artifact_kind=artifact_kind,
                     executable=generic_name,
                 )
-            except Exception:
-                # Install failed mid-write — restore the backup if we made one so
-                # the user is left with a working previous version, not a stub.
-                _restore_backup_if_present(agent_id, root)
-                # Only a FIRST install is cleared. "No backup" is not the same
-                # question: binary agents deliberately skip the snapshot (they
-                # are replaced in place so a running sidecar's data directory
-                # is not moved out from under it), so treating a missing backup
-                # as a first install would delete a working binary agent and
-                # its sidecar state on a failed UPDATE — most likely when the
-                # agent is running and its executable cannot be replaced.
-                if not updated:
-                    _clear_failed_install(agent_id, root)
+            except Exception as failure:
+                try:
+                    # Install failed mid-write — restore the backup if we made
+                    # one so the user is left with a working previous version,
+                    # not a stub.
+                    _restore_backup_if_present(agent_id, root)
+                    # Only a FIRST install is cleared. "No backup" is not the
+                    # same question: binary agents deliberately skip the
+                    # snapshot (they are replaced in place so a running
+                    # sidecar's data directory is not moved out from under it),
+                    # so treating a missing backup as a first install would
+                    # delete a working binary agent and its sidecar state on a
+                    # failed UPDATE — most likely when the agent is running and
+                    # its executable cannot be replaced.
+                    if not updated:
+                        _clear_failed_install(agent_id, root)
+                except InstallError as cleanup:
+                    # The rollback's own problem must not hide why it ran.
+                    raise InstallError(f"{failure} Also: {cleanup}") from failure
                 raise
 
             # --- hot-register ---
@@ -1402,6 +2089,7 @@ def uninstall(
     install_root: Optional[Path] = None,
     registry: Any = None,
     active_env_site_packages: Optional[Path] = None,
+    slot: Optional[InstallSlot] = None,
 ) -> None:
     """Remove a hub-installed agent.
 
@@ -1409,11 +2097,23 @@ def uninstall(
         active_env_site_packages: Where the ``.pth`` entry added at install
             time lives; defaults to this interpreter's own site-packages.
             Injectable so tests don't touch the real active environment.
+        slot: A slot the caller already claimed with :func:`claim_install_slot`;
+            the caller still releases it.
 
     Raises:
         NotInstalledError: If the agent is not installed.
     """
     root = install_root or default_install_root()
+    with _install_slot(agent_id, root, slot):
+        _uninstall_locked(agent_id, root, registry, active_env_site_packages)
+
+
+def _uninstall_locked(
+    agent_id: str,
+    root: Path,
+    registry: Any,
+    active_env_site_packages: Optional[Path],
+) -> None:
     install_dir = agent_install_dir(agent_id, root)
     installed = read_sentinel(agent_id, root)
     if installed is None:
@@ -1454,6 +2154,11 @@ def rollback(
         InstallError: If there is no backup to restore.
     """
     root = install_root or default_install_root()
+    with _install_slot(agent_id, root):
+        return _rollback_locked(agent_id, root, registry)
+
+
+def _rollback_locked(agent_id: str, root: Path, registry: Any) -> InstalledAgent:
     current = read_sentinel(agent_id, root)
     if current is not None and current.artifact_kind == ARTIFACT_KIND_BINARY:
         raise InstallError(
@@ -1495,6 +2200,32 @@ def _discard_backup(agent_id: str, install_root: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
+def _remove_failed_dir(install_dir: Path, keep: Optional[Path] = None) -> None:
+    """Delete a failed install's directory, or fail naming what is left.
+
+    A process still holding a file (a pip child that outlived its kill) makes
+    the delete partial. Restoring a backup into a directory that still exists
+    would nest it inside (``demo/demo``), so that is refused, loudly.
+    """
+    if not install_dir.exists():
+        return
+    try:
+        shutil.rmtree(install_dir)
+    except OSError as e:
+        kept = f" The previous version is kept at {keep}." if keep else ""
+        raise InstallError(
+            f"Could not remove the failed install at {install_dir}: {e}. A "
+            f"process may still be using it; close it (or restart), delete "
+            f"that directory, then retry.{kept}"
+        ) from e
+    if install_dir.exists():
+        raise InstallError(
+            f"{install_dir} still exists after removing the failed install. "
+            f"Delete it, then retry."
+            + (f" The previous version is kept at {keep}." if keep else "")
+        )
+
+
 def _restore_backup_if_present(agent_id: str, install_root: Path) -> bool:
     """Roll back to the previous version. True when a backup was restored.
 
@@ -1505,8 +2236,7 @@ def _restore_backup_if_present(agent_id: str, install_root: Path) -> bool:
     if not backup.exists():
         return False
     install_dir = agent_install_dir(agent_id, install_root)
-    if install_dir.exists():
-        shutil.rmtree(install_dir, ignore_errors=True)
+    _remove_failed_dir(install_dir, keep=backup)
     shutil.move(str(backup), str(install_dir))
     logger.info("installer: restored %s from backup after failed install", agent_id)
     return True
@@ -1523,7 +2253,7 @@ def _clear_failed_install(agent_id: str, install_root: Path) -> None:
     install_dir = agent_install_dir(agent_id, install_root)
     if not install_dir.exists():
         return
-    shutil.rmtree(install_dir, ignore_errors=True)
+    _remove_failed_dir(install_dir)
     logger.info(
         "installer: removed the failed first install of %s so it is not "
         "reported as installed",
@@ -1787,8 +2517,3 @@ def run_setup(
 
     _persist()
     return SetupResult(steps=steps)
-
-
-def get_setup_status(install_root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    """Return the latest persisted setup state (for the polling endpoint)."""
-    return read_setup_state(default_setup_state_path(install_root))

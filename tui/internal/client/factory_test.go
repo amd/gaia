@@ -20,7 +20,7 @@ func TestFlagshipModelOverrideReachesSubprocessWithoutMutatingCatalog(t *testing
 			args := make([]string, 1, 8)
 			args[0] = "--json-events"
 			agent := catalog.Agent{ID: catalog.FlagshipID, BinaryPath: self, BinaryArgs: args, DevArgs: []string{"--dev"}, CanonicalEvents: true}
-			c, err := ForAgent(agent, ForAgentOptions{Model: model, Trace: testTrace(t)})
+			c, err := ForAgent(agent, ForAgentOptions{Model: model, Dev: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -53,7 +53,7 @@ func TestModelOverrideRejectsUnsupportedSubprocessAgent(t *testing.T) {
 }
 
 func TestForAgentBuildsTheDeclaredTransport(t *testing.T) {
-	daemonAgent := catalog.Agent{ID: "email", Transport: catalog.TransportDaemon}
+	daemonAgent := catalog.Agent{ID: "notes", Transport: catalog.TransportDaemon}
 	c, err := ForAgent(daemonAgent, ForAgentOptions{})
 	if err != nil {
 		t.Fatalf("ForAgent(daemon): %v", err)
@@ -132,7 +132,7 @@ func TestForAgentRejectsAnUnknownTransport(t *testing.T) {
 // Model / MaxSteps must reach the request body, not be silently dropped.
 func TestForAgentPlumbsModelAndMaxSteps(t *testing.T) {
 	c, err := ForAgent(
-		catalog.Agent{ID: "email", Transport: catalog.TransportDaemon},
+		catalog.Agent{ID: "notes", Transport: catalog.TransportDaemon},
 		ForAgentOptions{Model: "Gemma-4-E4B-it-GGUF", MaxSteps: 7},
 	)
 	if err != nil {
@@ -149,14 +149,14 @@ func TestForAgentPlumbsModelAndMaxSteps(t *testing.T) {
 	}
 }
 
-// A traced launch is the debugging one, so the child logs at DEBUG too: a trace
-// beside an agent log holding errors only is the half-state that sends people
-// looking in an empty log file. The screen is the same either way.
+// One --dev has to reach the child too: the TUI going verbose while the agent
+// it spawned keeps logging errors only is the half-state that sends people
+// looking in an empty log file.
 //
 // Opt-in per agent, because an agent that does not know the flag dies at exec
 // on an unknown argument — a verbosity switch must never become a launch
 // failure.
-func TestATracedLaunchForwardsDevArgsToTheChild(t *testing.T) {
+func TestDevModeForwardsDevArgsToTheChild(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable: %v", err)
@@ -165,19 +165,22 @@ func TestATracedLaunchForwardsDevArgsToTheChild(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		devArgs []string
+		dev     bool
 		traced  bool
 		want    []string
 	}{
-		{"untraced, so the child argv is untouched", []string{"--dev"}, false, []string{"--json-events"}},
-		{"traced, so the child logs at DEBUG too", []string{"--dev"}, true, []string{"--json-events", "--dev"}},
-		{"traced but the agent has no debug flag", nil, true, []string{"--json-events"}},
+		{"off, so the child argv is untouched", []string{"--dev"}, false, false, []string{"--json-events"}},
+		{"on, so the child goes verbose too", []string{"--dev"}, true, false, []string{"--json-events", "--dev"}},
+		{"on but the agent has no dev mode", nil, true, false, []string{"--json-events"}},
+		{"traced, so the child logs at DEBUG too", []string{"--dev"}, false, true, []string{"--json-events", "--dev"}},
+		{"traced and on, the flag goes once", []string{"--dev"}, true, true, []string{"--json-events", "--dev"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := catalog.Agent{
 				ID: "gaia", BinaryPath: self,
 				BinaryArgs: []string{"--json-events"}, DevArgs: tc.devArgs,
 			}
-			opts := ForAgentOptions{}
+			opts := ForAgentOptions{Dev: tc.dev}
 			if tc.traced {
 				opts.Trace = testTrace(t)
 			}
@@ -270,7 +273,7 @@ func TestForwardingUseClaudeDoesNotMutateTheCatalogEntry(t *testing.T) {
 // keeps using Lemonade.
 func TestUseClaudeOnTheDaemonTransportIsRefused(t *testing.T) {
 	_, err := ForAgent(
-		catalog.Agent{ID: "email", Transport: catalog.TransportDaemon},
+		catalog.Agent{ID: "notes", Transport: catalog.TransportDaemon},
 		ForAgentOptions{UseClaude: true},
 	)
 	if err == nil {
@@ -302,7 +305,7 @@ func TestClaudeModelWithoutUseClaudeIsRefused(t *testing.T) {
 
 // The catalog entry outlives the launch. Appending straight onto BinaryArgs
 // would let a slice with spare capacity alias the catalog's backing array, so
-// one traced launch would leave --dev on the entry for every later one.
+// one --dev launch would leave --dev on the entry for every later one.
 func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
 	self, err := os.Executable()
 	if err != nil {
@@ -313,7 +316,7 @@ func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
 		ID: "gaia", BinaryPath: self,
 		BinaryArgs: []string{"--json-events"}, DevArgs: []string{"--dev"},
 	}
-	c, err := ForAgent(agent, ForAgentOptions{Trace: testTrace(t)})
+	c, err := ForAgent(agent, ForAgentOptions{Dev: true})
 	if err != nil {
 		t.Fatalf("ForAgent: %v", err)
 	}
@@ -324,19 +327,8 @@ func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
 	}
 }
 
-// testTrace is a trace file in the test's temp dir, closed when it ends.
-func testTrace(t *testing.T) *event.TraceWriter {
-	t.Helper()
-	w, err := event.NewTraceWriter(filepath.Join(t.TempDir(), "trace.jsonl"))
-	if err != nil {
-		t.Fatalf("NewTraceWriter: %v", err)
-	}
-	t.Cleanup(func() { _ = w.Close() })
-	return w
-}
-
 func TestDaemonFullAccessFailsBeforeConnection(t *testing.T) {
-	for _, id := range []string{"gaia", "email"} {
+	for _, id := range []string{"gaia", "notes"} {
 		c, err := ForAgent(catalog.Agent{ID: id, Transport: catalog.TransportDaemon}, ForAgentOptions{FullAccess: true})
 		if c != nil {
 			c.Close()
@@ -359,4 +351,14 @@ func TestSubprocessFullAccessStillReachesAgent(t *testing.T) {
 	if !c.(*SubprocessClient).FullAccessAtLaunch() {
 		t.Fatal("subprocess full access was dropped")
 	}
+}
+
+func testTrace(t *testing.T) *event.TraceWriter {
+	t.Helper()
+	w, err := event.NewTraceWriter(filepath.Join(t.TempDir(), "trace.jsonl"))
+	if err != nil {
+		t.Fatalf("NewTraceWriter: %v", err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	return w
 }

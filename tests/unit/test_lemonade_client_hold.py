@@ -54,7 +54,7 @@ class TestRegisterCall:
         (tmp_path / "instance.json").write_text(
             json.dumps({"pid": 1, "port": 4321, "token": "OTHER", "api_version": "1.4"})
         )
-        monkeypatch.setattr(client, "is_live", lambda inst, timeout=1.5: True)
+        monkeypatch.setattr(client, "_answers", lambda inst, timeout=1.5, **_kw: True)
         response = mock.Mock(status_code=200)
         response.json.return_value = {"client_id": "abc"}
         with mock.patch("requests.post", return_value=response) as post:
@@ -401,8 +401,11 @@ class TestDaemonStop:
 
         with pytest.raises(SystemExit) as exc:
             self._stop(monkeypatch, _fail)
-        assert exc.value.code == 1
-        assert "killed nothing" in capsys.readouterr().out
+        # Its own exit code, so an installer doesn't report the daemon as stuck.
+        assert exc.value.code == 3
+        out = capsys.readouterr().out
+        assert "Lemonade Server did not stop" in out
+        assert "killed nothing" in out
 
 
 class TestDaemonRestart:

@@ -36,7 +36,7 @@ func Brief(err error) string {
 }
 
 // upgradeCoreBrief is the status-line form of UpgradeCoreHint.
-const upgradeCoreBrief = "GAIA's background service is out of date. Run `pip install --upgrade amd-gaia`."
+const upgradeCoreBrief = "GAIA's background service is out of date. Update GAIA."
 
 // NotRunningError means no daemon has registered itself at all — instance.json
 // is absent. Distinct from StaleError so a caller can decide to start one.
@@ -118,9 +118,9 @@ func (e *VersionError) Brief() string { return upgradeCoreBrief }
 
 // UpgradeCoreHint is the remedy for any host-API skew. It says a restart is not
 // the fix, so a user who tries one does not loop on it.
-const UpgradeCoreHint = "Upgrade the installed GAIA core so it matches this app: " +
-	"`pip install --upgrade amd-gaia`, or re-run the installer from https://amd-gaia.ai. " +
-	"The version comes from the installed core, so `gaia daemon restart` brings the same one back."
+const UpgradeCoreHint = "Update GAIA so its core matches this app: re-run the installer " +
+	"from https://amd-gaia.ai/#install. The version comes from the installed core, so " +
+	"`gaia daemon restart` brings the same one back."
 
 // StartError means we could not bring a daemon up (lock contention, launch
 // failure, or it never registered in time).
@@ -149,7 +149,7 @@ func (e *StartError) Brief() string {
 // about the daemon. Reporting the first as the second sends the user to check a
 // remote service over a local restart.
 type RouteMissingError struct {
-	// Op is what the caller was trying to do, e.g. "read the Agent Hub catalog".
+	// Op is what the caller was trying to do, e.g. "read the agent catalog".
 	Op string
 	// Path is the route the daemon does not have.
 	Path string
@@ -193,14 +193,30 @@ func IsRouteMissing(path string, status int, detail string) bool {
 }
 
 // RequestError is a transport or protocol failure talking to a live daemon.
-// Op names the call ("ensure the 'email' sidecar", "stream the 'email' query").
+// Op names the call ("ensure the 'gaia' sidecar", "stream the 'gaia' query").
 type RequestError struct {
 	Op     string
 	Detail string
+	// Err is the transport error behind Detail, when there is one.
+	Err error
 }
 
 func (e *RequestError) Error() string {
 	return fmt.Sprintf(
 		"could not %s: %s. Check `gaia daemon status` and the daemon log at %s.",
 		e.Op, e.Detail, logPathForMessage())
+}
+
+func (e *RequestError) Unwrap() error { return e.Err }
+
+// DaemonRestartedError is a call about a run or session that a daemon restart
+// ended: the new daemon starts fresh sidecars, so there is nothing to send it to.
+type DaemonRestartedError struct {
+	Op string
+}
+
+func (e *DaemonRestartedError) Error() string {
+	return fmt.Sprintf(
+		"could not %s: GAIA's daemon restarted, which ended the agent session this belonged to. "+
+			"Nothing was sent; your next message starts a fresh session", e.Op)
 }

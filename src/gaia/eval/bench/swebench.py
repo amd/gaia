@@ -495,7 +495,7 @@ def installed_copy(repo: str) -> Tuple[Path, ...]:
 
 @functools.lru_cache(maxsize=None)
 def gaia_imports(
-    roots: Tuple[str, ...] = ("amd-gaia", "gaia-agent", "gaia-agent-chat")
+    roots: Tuple[str, ...] = ("amd-gaia", "gaia-agent", "gaia-agent-gaia")
 ) -> frozenset:
     """Distributions GAIA's agent process may import: *roots* and what they require.
 
@@ -656,7 +656,8 @@ def harness_command(
         "--instance_ids",
         instance_id,
         "--predictions_path",
-        str(preds_path),
+        # Absolute: the harness runs with cwd=report_dir, not the caller's cwd.
+        str(preds_path.resolve()),
         "--run_id",
         RUN_ID,
         "--max_workers",
@@ -664,7 +665,7 @@ def harness_command(
         "--timeout",
         str(HARNESS_TIMEOUT_S),
         "--report_dir",
-        str(report_dir),
+        str(report_dir.resolve()),
     ]
 
 

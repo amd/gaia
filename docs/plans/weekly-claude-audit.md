@@ -20,12 +20,13 @@ review that files **one issue per defect** for a maintainer to triage and promot
   day-of-week is 7; also selectable via `workflow_dispatch`. Deep runs still file issues —
   that is the point of the sweep.
 
-> **Cadence update:** this shipped weekly and now runs **nightly** at 10:37 UTC
-> (≈3am Pacific), alongside `claude-security-audit.yml` at 09:13 UTC. The mode selector
-> moved from day-of-month to ISO day-of-week at the same time — under a nightly cron the
-> old `day-of-month ≤ 7` test would have matched the 1st–7th of every month and fired
-> seven consecutive deep sweeps. See the `weekly-audit-patterns` skill for current
-> invariants.
+> **Cadence update (October 2026):** this shipped weekly, went nightly, and now runs
+> **every third night**: `claude-audit-rotation.yml` dispatches one proactive audit a night
+> (code, security, doc walkthrough) at 10:13 UTC, because three nightly audits spent the
+> Claude weekly cap mid-week. The modes above are superseded: `normal` reviews everything
+> merged since the last successful rotation run, and `deep` runs whenever the last
+> successful deep sweep is over 8 days old (every third turn). See the
+> `weekly-audit-patterns` skill for current invariants.
 
 ## Dimensions (one read-only Claude job each, serialized)
 
@@ -53,8 +54,8 @@ Published agents are the project's shop window: an integrator installs them and 
 by them. In **both** modes, each lens double-checks any published agent explicitly and
 **bumps a gap up one severity** (never 🟡; a default-path break is 🔴). Published agents are
 detected by a `release_agent_<id>.yml` workflow, a shipped `SCORECARD.md`, or a released
-`version:` in `gaia-agent.yaml` — currently the **email agent** (`hub/agents/email/python/`
-+ `hub/agents/email/npm/`). The bar, per lens:
+`version:` in `gaia-agent.yaml` — currently the **gaia flagship agent** (`hub/agents/gaia/python/`
++ `hub/agents/gaia/npm/`). The bar, per lens:
 
 - **docs** — README (integrator-facing, high quality), `SPEC.md` (full reference), `SKILL.md`
   (AI-integration playbook), `CHANGELOG.md`, and any shipped contract spec, all present,
@@ -101,8 +102,9 @@ surviving defect it does exactly one of three things:
 - **Comment on an existing issue** — when a backlog candidate would be closed by the same
   fix. This is the #1077 fix, and synthesis is told to err toward it.
 - **File ONE issue** (🔴/🟠, labelled `weekly-audit`) listing **every** location of that
-  defect. It carries each location's `evidence` and an **auto-fixable** flag; a maintainer
-  promotes it with **`bug`** (→ existing `auto-fix` job) or permanently silences it with
+  defect. It carries each location's `evidence` and an **auto-fixable** flag. Auto-fixable
+  issues go to the existing `auto-fix` job (`scripts/audit/promote_autofix.py`, capped per
+  run); a maintainer can promote any other with **`bug`** or permanently silence one with
   **`audit-wontfix`**. No new PR-creation code.
 
 The per-run report — a one-line tally, then a section per dimension in fixed order
@@ -127,7 +129,7 @@ is not an issue, and the workflow never closes an issue.
   and `<!-- audit-key: … -->`; the dedup pass reads either and skips any key already on an
   *open* `weekly-audit` issue OR on any `audit-wontfix` issue (accepted debt).
 - **`weekly-audit` is a provenance label**, not a cadence one — it marks "a proactive
-  Claude audit filed this" and is shared with the genuinely-weekly doc walkthrough.
+  Claude audit filed this" and is shared with the doc walkthrough.
 - **Security is a separate workflow**: `claude-security-audit.yml` owns it; this audit files
   public issues, so it hands security off rather than disclosing it here.
 - **Skip-if-empty**: normal mode exits before any Claude call on a night with no commits.

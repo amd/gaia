@@ -745,15 +745,19 @@ def test_no_shipped_skill_has_a_section_named_after_its_own_sample_data():
 
 
 def test_the_broken_command_really_fails_on_this_platform():
-    """The premise. `gh` need not be installed for the quoting failure to bite.
+    """The premise: cmd.exe hands the real `gh` a broken argv.
 
     On Windows `shell_tools` passes the raw string to cmd.exe (shell=True); on
     POSIX it passes a pre-split argv with no shell. The POSIX-quoted form is
     only broken on the former, which is exactly why this belongs in a
     machine-local learned delta and not in the cross-platform authored skill.
+    Needs the real `gh`: without it cmd.exe stops at "'gh' is not recognized",
+    and a stand-in would only echo back the failure the test asserts.
     """
     if os.name != "nt":
         pytest.skip("the cmd.exe quoting failure is Windows-only by construction")
+    if shutil.which("gh") is None:
+        pytest.skip("gh CLI not installed")
 
     result = subprocess.run(
         BROKEN_INBOX_CMD,
@@ -1553,15 +1557,18 @@ class _TaintProbeAgent:
     the bodies behind them do.
     """
 
+    internet_off = Agent.internet_off
     _execute_tool = Agent._execute_tool
     _resolve_tool_name = Agent._resolve_tool_name
+    _execution_tool_registry = Agent._execution_tool_registry
     _policy_refusal = Agent._policy_refusal
     _tool_requires_confirmation = Agent._tool_requires_confirmation
+    _write_target_outside_scope = Agent._write_target_outside_scope
+    _read_validator = Agent._read_validator
     # __dict__ so the classmethod rebinds to this class's MRO rather than
     # staying bound to Agent.
     confirmation_hooks = Agent.__dict__["confirmation_hooks"]
     _call_is_pre_authorized = Agent._call_is_pre_authorized
-    _on_tool_invoked = Agent._on_tool_invoked
     _coerce_tool_args = Agent._coerce_tool_args
     _call_tool_bounded = Agent._call_tool_bounded
     _fold_tool_usage = Agent._fold_tool_usage
@@ -1872,3 +1879,123 @@ def test_the_tool_refuses_to_write_while_the_off_switch_is_on(store, monkeypatch
     assert "switched off" in result["message"]
     assert "GAIA_NO_LEARNED_SKILLS" in result["message"]
     assert store.search_deltas(base_name="github-triage", scope=SCOPE) == []
+
+
+# --------------------------------------------------------------------------
+# What the tool tells the model is true and runnable
+# --------------------------------------------------------------------------
+
+
+def _parse_gaia_skill(command: str):
+    """Parse *command* with the real ``gaia skill`` argparse tree."""
+    import argparse
+    import shlex
+
+    from gaia.skills import cli as skills_cli
+
+    parser = argparse.ArgumentParser(prog="gaia")
+    sub = parser.add_subparsers(dest="action")
+    skills_cli.add_subparser(sub)
+    argv = shlex.split(command)
+    assert argv[0] == "gaia", command
+    return parser.parse_args(argv[1:])
+
+
+def test_the_drop_section_command_the_refusal_names_carries_its_scope(store):
+    """``--drop-section`` without ``--scope`` exits 2, so the hint must carry it."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    result = agent.call(skill="github-triage", section="rules", corrected_text=" ")
+
+    command = result["message"].split("`")[1]
+    parsed = _parse_gaia_skill(command.replace("<section>", "rules"))
+
+    assert (parsed.skill_action, parsed.name) == ("deltas", "github-triage")
+    assert parsed.scope == SCOPE
+    assert parsed.drop_section == "rules"
+
+
+def test_an_unloaded_skill_refusal_says_when_the_lesson_can_be_saved(store):
+    """Loading the skill taints the turn, so "load it first" alone is untrue."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    result = agent.call(skill="not-loaded", section="procedure", corrected_text="x")
+
+    assert "load_skill" in result["message"]
+    assert "next message" in result["message"]
+
+
+def test_a_tainted_turn_refusal_says_a_tool_already_ran(store):
+    """The taint fires after harmless reads too, so it must not blame a web page."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    agent._turn_saw_external_content = True
+
+    result = agent.call(
+        skill="github-triage", section="procedure", corrected_text=INBOX_PROCEDURE
+    )
+
+    assert "A tool already ran this turn" in result["message"]
+    assert "arrived from a tool" not in result["message"]
+
+
+def test_a_refusal_without_provenance_does_not_claim_a_tool_ran():
+    delta = _delta(
+        KIND_REPLACE_SECTION, "procedure", {"body": INBOX_PROCEDURE}, provenance={}
+    )
+    with pytest.raises(DeltaRefused) as excinfo:
+        validate_delta(BASE_SKILL, delta)
+    assert "already ran" not in str(excinfo.value)
+
+
+def test_the_undo_notice_says_it_applies_on_the_next_start(store):
+    """A CLI revert never reaches a running agent's cached resolution."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    result = agent.call(
+        skill="github-triage", section="procedure", corrected_text=INBOX_PROCEDURE
+    )
+
+    assert "takes effect when GAIA next starts" in result["message"]
+    assert result["undo_command"] in result["message"]
+
+
+def test_changes_stored_under_an_agents_old_scope_still_apply(store):
+    """An agent that gained a registry id still reads what it learned without one."""
+    old = store.put_delta(
+        base_name="github-triage",
+        scope="GaiaAgent",
+        kind=KIND_REPLACE_SECTION,
+        anchor_section="procedure",
+        anchor_digest=_digest_of(BASE_SKILL, "procedure"),
+        payload={"body": "## Procedure\n\nOLD SCOPE LESSON."},
+        provenance=dict(TRUSTED),
+    )
+    store.approve_delta(old)
+    new = store.put_delta(
+        base_name="github-triage",
+        scope="installed:gaia",
+        kind=KIND_REPLACE_SECTION,
+        anchor_section="rules",
+        anchor_digest=_digest_of(BASE_SKILL, "rules"),
+        payload={"body": "## Rules\n\nNEW SCOPE LESSON."},
+        provenance=dict(TRUSTED),
+    )
+    store.approve_delta(new)
+
+    rows = store.search_deltas(
+        base_name="github-triage",
+        scope=("installed:gaia", "GaiaAgent"),
+        status=STATUS_ACTIVE,
+        limit=None,
+    )
+    assert [r["id"] for r in rows] == [old, new]
+    assert [r["id"] for r in store.search_deltas(scope="GaiaAgent")] == [old]
+
+
+def test_an_agent_reads_its_id_scope_then_its_class_scope():
+    class FlagshipLike(Agent):
+        def _register_tools(self):
+            pass
+
+    agent = FlagshipLike.__new__(FlagshipLike)
+    agent._gaia_namespaced_agent_id = "installed:gaia"
+    assert agent.learned_skill_scopes() == ("installed:gaia", "FlagshipLike")
+    del agent._gaia_namespaced_agent_id
+    assert agent.learned_skill_scopes() == ("FlagshipLike",)

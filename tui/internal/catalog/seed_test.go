@@ -14,13 +14,13 @@ import (
 // It used to ship StatusComingSoon with "not published on the Agent Hub yet",
 // which was already stale — gaia v0.1.1 IS published. With no daemon running
 // the live catalog could not load, the seed stood, and a new user was shown
-// "Available (1): Email" and no flagship at all.
+// another agent as "Available" and no flagship at all.
 func TestTheFlagshipShipsLaunchable(t *testing.T) {
 	gaia := NewCatalog().Get(FlagshipID)
 	if gaia == nil {
 		t.Fatalf("the seed catalog no longer has a %q entry", FlagshipID)
 	}
-	if !gaia.Status.IsLaunchable() {
+	if gaia.Status != StatusInstalled {
 		t.Errorf("the flagship ships as %s; it is what the TUI opens into", gaia.Status)
 	}
 	if gaia.Transport != TransportSubprocess {
@@ -34,14 +34,14 @@ func TestTheFlagshipShipsLaunchable(t *testing.T) {
 	}
 }
 
-// One agent on the launch path, and one reachable by id. Anything else in the
-// seed list is a row nothing can start.
-func TestTheSeedListIsTheTwoAgentsWeShip(t *testing.T) {
+// One agent on the launch path. Anything else in the seed list is a row
+// nothing can start.
+func TestTheSeedListIsTheAgentWeShip(t *testing.T) {
 	var ids []string
 	for _, a := range NewCatalog().All() {
 		ids = append(ids, a.ID)
 	}
-	want := map[string]bool{FlagshipID: true, "email": true}
+	want := map[string]bool{FlagshipID: true}
 	if len(ids) != len(want) {
 		t.Fatalf("seed ids = %v, want exactly %v", ids, want)
 	}
@@ -60,7 +60,7 @@ func TestSetMockBinaryMakesTheSubprocessAgentLaunchable(t *testing.T) {
 	c.SetMockBinary("/tmp/mock-agent")
 
 	gaia := c.Get(FlagshipID)
-	if !gaia.Status.IsLaunchable() {
+	if gaia.Status != StatusInstalled {
 		t.Errorf("with --mock, the flagship is %s, want launchable", gaia.Status)
 	}
 	if gaia.BinaryPath != "/tmp/mock-agent" {
@@ -101,7 +101,9 @@ func TestResolveExecutableNamesAnUnverifiedInstall(t *testing.T) {
 		t.Fatal("an unverified binary in the install root resolved successfully")
 	}
 	// Naming the file is what separates "finish the install" from "go download it".
-	for _, want := range []string{"gaia hub install", SentinelName, file} {
+	// The flagship's install finishes with `gaia init`, which installs it
+	// whenever no sentinel says it is there.
+	for _, want := range []string{"`gaia init`", SentinelName, file} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error does not mention %q:\n%s", want, err)
 		}
@@ -161,5 +163,23 @@ func TestResolveExecutableRefusesANonExecutableFile(t *testing.T) {
 	}
 	if _, err := ResolveExecutable(path, FlagshipID); err == nil {
 		t.Fatal("a non-executable file resolved successfully")
+	}
+}
+
+// The flagship installs with `gaia init`; every other agent keeps the
+// agent-scoped command, which `gaia init` cannot stand in for.
+func TestInstallCommandNamesInitOnlyForTheFlagship(t *testing.T) {
+	cases := map[string]string{
+		FlagshipID: "gaia init",
+		"<id>":     "gaia hub install <id>",
+	}
+	for id, want := range cases {
+		if got := InstallCommand(id); got != want {
+			t.Errorf("InstallCommand(%q) = %q, want %q", id, got, want)
+		}
+	}
+	// An update never routes through `gaia init`: it skips an installed agent.
+	if got := UpdateCommand(FlagshipID); got != "gaia hub install gaia" {
+		t.Errorf("UpdateCommand(%q) = %q, want the agent-scoped reinstall", FlagshipID, got)
 	}
 }

@@ -14,10 +14,10 @@ running as the user can drive the full flow.
 
 Scope assumption: the in-memory token cache is process-local. Two GAIA
 processes running concurrently (e.g. ``gaia chat --ui`` and ``gaia connectors
-status``) each maintain their own cache and share the keyring; if both refresh
-concurrently and the provider rotates the refresh token, one process may
-observe ``invalid_grant`` and reconnect transparently. See
-``docs/security/connections.mdx`` for the cross-process race discussion.
+status``) each maintain their own cache and share the keyring, so a refresh
+holds a per-provider file lock (shared with connect and disconnect) and
+re-reads the stored refresh token under it.
+See ``docs/security/connectors.mdx`` for the cross-process discussion.
 
 The internal modules (``tokens``, ``flow``, ``store``, ``grants``, ``pkce``,
 ``context``, ``events``) are NOT part of the public surface and may change
@@ -35,6 +35,7 @@ from gaia.connectors.context import agent_runtime_active, current_agent_id
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionBusyError,
     ConnectionRevokedError,
     ConnectorsError,
     ConsentDeniedError,
@@ -78,6 +79,7 @@ _API_NAMES: frozenset[str] = frozenset(
         "import_forwarded_connection",
         "is_agent_active",
         "list_agent_activations",
+        "list_accounts",
         "list_agent_grants",
         "list_connections",
         "load_activations",
@@ -86,6 +88,7 @@ _API_NAMES: frozenset[str] = frozenset(
         "revoke_agent_grant",
         "revoke_connection",
         "revoke_connection_async",
+        "set_default_account",
         "start_authorization",
         "start_device_flow",
         "tripwire_check",
@@ -111,6 +114,7 @@ __all__ = [
     # Errors
     "AuthRequiredError",
     "ConfigurationError",
+    "ConnectionBusyError",
     "ConnectionRevokedError",
     "ConnectorsError",
     "ConsentDeniedError",

@@ -13,11 +13,14 @@ where to look — no silent fallback to an unauthenticated response.
 
 from __future__ import annotations
 
+import asyncio
+import math
 import secrets
 import time
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
 
+from gaia.client_hangups import quiet_client_hangups
 from gaia.daemon.constants import (
     API_PREFIX,
     AUTH_SCHEME,
@@ -25,6 +28,8 @@ from gaia.daemon.constants import (
     SERVICE_ID,
 )
 from gaia.daemon.paths import instance_path
+from gaia.daemon.timeouts import agent_read_timeout
+from gaia.listener_guard import keep_listening_after_client_resets
 
 
 def build_require_token(token: str):
@@ -33,7 +38,10 @@ def build_require_token(token: str):
     router so the 401 contract never forks."""
     from fastapi import Header, HTTPException
 
-    def require_token(authorization: Optional[str] = Header(default=None)) -> None:
+    # Async: a sync dependency would take a worker-pool thread on every call.
+    async def require_token(
+        authorization: Optional[str] = Header(default=None),
+    ) -> None:
         where = f"the client token in {instance_path()}"
         if not authorization:
             raise HTTPException(
@@ -83,10 +91,12 @@ def create_app(
     broker=None,
     custody_auth=None,
     custody_store=None,
+    keychain_auth=None,
     clock=None,
     lemonade=None,
     lemonade_owner=None,
     lemonade_clients=None,
+    relay_turns=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -128,11 +138,20 @@ def create_app(
     *lemonade_clients* (a :class:`gaia.daemon.lemonade_clients.LemonadeClients`,
     given with *lemonade_owner*) mounts ``/daemon/v1/lemonade/clients``, where
     front ends register while they use GAIA's Lemonade and release on exit.
+
+    *relay_turns* (a :class:`gaia.daemon.relay.RelayTurns`) counts the relay's
+    open streams; pass the one *lemonade_clients* reads. One is made when
+    *registry* is given without it.
     """
+    import anyio
     from fastapi import Depends, FastAPI, HTTPException
 
     @asynccontextmanager
     async def lifespan(_app):
+        # A client quitting mid-connection is not an error here.
+        quiet_client_hangups(asyncio.get_running_loop())
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
         if on_startup is not None:
             on_startup()
         try:
@@ -151,9 +170,17 @@ def create_app(
     )
 
     require_token = build_require_token(token)
+    if registry is not None and relay_turns is None:
+        from gaia.daemon.relay import RelayTurns
+
+        relay_turns = RelayTurns()
+
+    # Clients read a status that misses their probe as a hung daemon, so it
+    # never queues for the worker pool that sync routes and lease waits share.
+    status_limiters = []
 
     @app.get(f"{API_PREFIX}/status")
-    def status(_: None = Depends(require_token)) -> dict:
+    async def status(_: None = Depends(require_token)) -> dict:
         now = time.time()
         payload = {
             "service": SERVICE_ID,
@@ -164,8 +191,22 @@ def create_app(
             "started_at": started_at,
             "uptime_seconds": max(0.0, now - started_at),
         }
+        # Thin clients wait on the relay; they need its budget, not their own shell's.
+        try:
+            budget = agent_read_timeout()
+            # null is "no limit": JSON has no infinity.
+            payload["agent_read_timeout_s"] = None if math.isinf(budget) else budget
+        except ValueError as exc:
+            payload["agent_read_timeout_error"] = str(exc)
+        if relay_turns is not None:
+            # An update's restart waits while a relayed turn is still open.
+            payload["relayed_turns"] = relay_turns.count
         if clock is not None:
-            counts = clock.job_counts()
+            if not status_limiters:  # created on the event loop, lazily
+                status_limiters.append(anyio.CapacityLimiter(4))
+            counts = await anyio.to_thread.run_sync(
+                clock.job_counts, limiter=status_limiters[0]
+            )
             payload["clock"] = {
                 "running": clock.running,
                 "last_poll_at": clock.last_poll_at,
@@ -200,8 +241,14 @@ def create_app(
         app.include_router(build_lemonade_router(token, lemonade))
 
     if lemonade_owner is not None:
-        from gaia.daemon.lemonade import LemonadeNotManaged
-        from gaia.llm.lemonade_embedded import EmbeddedLemonadeError
+        from gaia.daemon.lemonade import (
+            LEMONADE_RETRY_AFTER_SECONDS,
+            LemonadeNotManaged,
+        )
+        from gaia.llm.lemonade_embedded import (
+            EmbeddedLemonadeError,
+            EmbeddedLemonadeNotAnswering,
+        )
 
         @app.post(f"{API_PREFIX}/lemonade/ensure")
         def ensure_lemonade(_: None = Depends(require_token)) -> dict:
@@ -212,6 +259,13 @@ def create_app(
                 return lemonade_owner.ensure().to_dict()
             except (LemonadeNotManaged, LemonadeChoiceError, GaiaConfigError) as e:
                 raise HTTPException(status_code=409, detail=str(e)) from e
+            except EmbeddedLemonadeNotAnswering as e:
+                # Retry-After marks it transient: the caller may wait and ask again.
+                raise HTTPException(
+                    status_code=503,
+                    detail=str(e),
+                    headers={"Retry-After": str(LEMONADE_RETRY_AFTER_SECONDS)},
+                ) from e
             except EmbeddedLemonadeError as e:
                 raise HTTPException(status_code=503, detail=str(e)) from e
 
@@ -273,6 +327,14 @@ def create_app(
     from gaia.daemon.provider_key_routes import build_provider_key_router
 
     app.include_router(build_provider_key_router(token))
+    # The TUI's GPU memory step; the Agent UI serves the same under /api/gpu-memory.
+    from gaia.daemon.gpu_memory_routes import build_gpu_memory_router
+
+    app.include_router(build_gpu_memory_router(token))
+    # The TUI's model setup; the Agent UI serves the same under /api/setup.
+    from gaia.daemon.setup_routes import build_setup_router
+
+    app.include_router(build_setup_router(token))
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router
@@ -281,7 +343,7 @@ def create_app(
         app.include_router(build_agents_router(token, registry))
         # Data plane (#2150): ANY /v1/<agent>/* relays to the agent's sidecar
         # behind the SAME client-token guard as the control plane above.
-        app.include_router(build_relay_router(token, registry))
+        app.include_router(build_relay_router(token, registry, relay_turns))
 
         if forwarder is not None:
             # OAuth forward-out plane (#2154): forwards granted connector access
@@ -306,6 +368,10 @@ def create_app(
 
         install_custody_exception_handler(app)
         app.include_router(build_custody_router(custody_auth, custody_store))
+        if keychain_auth is not None:
+            from gaia.daemon.custody.keychain_routes import build_keychain_router
+
+            app.include_router(build_keychain_router(keychain_auth))
     elif custody_auth is not None or custody_store is not None:
         raise ValueError(
             "create_app requires custody_auth AND custody_store together to "

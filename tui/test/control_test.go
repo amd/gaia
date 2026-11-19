@@ -60,9 +60,6 @@ func startLiveTUI(t *testing.T) *liveTUI {
 func startLiveTUIWith(t *testing.T, adjust func(root.FlagshipModel) root.FlagshipModel) *liveTUI {
 	t.Helper()
 	t.Setenv(control.EnvHome, t.TempDir())
-	// The session log is held open for the process; release it before the
-	// temp dir holding it is removed (Windows will not delete an open file).
-	t.Cleanup(control.CloseLog)
 	isolateGaiaHome(t)
 	stubSetupCheck(t, 0)
 	t.Setenv("LEMONADE_BASE_URL", stubLemonade(t))
@@ -78,7 +75,7 @@ func startLiveTUIWith(t *testing.T, adjust func(root.FlagshipModel) root.Flagshi
 	}
 
 	state := control.NewState(nil)
-	model := adjust(root.NewFlagshipModel(*agent).
+	model := adjust(root.NewFlagshipModel(*agent, false).
 		WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath}).
 		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond}))
 	return runLiveTUI(t, tea.NewProgram(
@@ -168,16 +165,6 @@ func (l *liveTUI) screen() string {
 	}
 	text, _ := body["screen"].(string)
 	return text
-}
-
-func (l *liveTUI) state() map[string]any {
-	l.t.Helper()
-	status, body := l.call(http.MethodGet, "/status", nil)
-	if status != http.StatusOK {
-		l.t.Fatalf("GET /status: status %d (%v)", status, body)
-	}
-	st, _ := body["state"].(map[string]any)
-	return st
 }
 
 // frameContaining returns the first recorded frame holding text, or "" when
@@ -419,7 +406,7 @@ func startLiveTUIMissingAgent(t *testing.T) *liveTUI {
 	agent.BinaryPath = "gaia-agent-that-was-never-installed"
 
 	state := control.NewState(nil)
-	model := root.NewFlagshipModel(*agent).
+	model := root.NewFlagshipModel(*agent, false).
 		WithLocalPreflight(preflight.LocalOptions{Binary: agent.BinaryPath}).
 		WithPreflight(nil, preflight.Options{ReadyHold: time.Millisecond})
 	return runLiveTUI(t, tea.NewProgram(

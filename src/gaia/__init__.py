@@ -15,6 +15,12 @@ import typing as _typing
 # The REAL process environment, captured before ``.env`` is merged in.
 _PRE_DOTENV_ENVIRON = dict(_os.environ)
 
+# Before anything can load numpy or faiss: their OpenBLAS sizes its pool at load.
+# pylint: disable-next=wrong-import-position
+from gaia.blas_threads import cap_blas_threads as _cap_blas_threads  # noqa: E402
+
+_cap_blas_threads()
+
 
 def pre_dotenv_env(name: str) -> "_typing.Optional[str]":
     """Read a variable from the process environment as it was at startup.
@@ -26,6 +32,15 @@ def pre_dotenv_env(name: str) -> "_typing.Optional[str]":
     ``os.environ``; configuring the rest through ``.env`` is intended.
     """
     return _PRE_DOTENV_ENVIRON.get(name)
+
+
+def pre_dotenv_environ() -> "_typing.Dict[str, str]":
+    """A copy of the whole startup environment, before ``.env`` was merged in.
+
+    For spawning a process whose startup files must be the operator's own, not
+    a project directory's.
+    """
+    return dict(_PRE_DOTENV_ENVIRON)
 
 
 # pylint: disable=wrong-import-position

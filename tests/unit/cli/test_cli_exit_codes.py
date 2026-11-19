@@ -16,7 +16,11 @@ import types
 import pytest
 
 from gaia import cli
-from gaia.logger import AGENT_LOG_ENV, log_manager
+from gaia.logger import AGENT_LOG_ENV, configure
+
+# The chat path under test reconfigures handlers installed by an owning
+# process; `gaia.cli:main` does via configure(), so the tests do too.
+log_manager = configure()
 
 
 class _StubConfig:
@@ -64,23 +68,20 @@ def console_logging():
 
 @pytest.fixture
 def stub_chat(monkeypatch, console_logging, tmp_path):
-    """Install a stub agent in both the chat wheel and the flagship wheel."""
+    """Install a stub agent in the flagship wheel."""
     monkeypatch.setenv(AGENT_LOG_ENV, str(tmp_path / "agent.log"))
 
     def install(outcome):
         agent_cls = _stub_agent_class(outcome)
-        for pkg, cls, cfg in (
-            ("gaia_agent_chat", "ChatAgent", "ChatAgentConfig"),
-            ("gaia_agent", "GaiaAgent", "GaiaAgentConfig"),
-        ):
+        for pkg, cls, cfg in (("gaia_agent", "GaiaAgent", "GaiaAgentConfig"),):
             agent_mod = types.ModuleType(f"{pkg}.agent")
             setattr(agent_mod, cls, agent_cls)
             setattr(agent_mod, cfg, _StubConfig)
             monkeypatch.setitem(sys.modules, pkg, types.ModuleType(pkg))
             monkeypatch.setitem(sys.modules, f"{pkg}.agent", agent_mod)
-        app_mod = types.ModuleType("gaia_agent_chat.app")
+        app_mod = types.ModuleType("gaia_agent.interactive")
         app_mod.interactive_mode = lambda agent: None
-        monkeypatch.setitem(sys.modules, "gaia_agent_chat.app", app_mod)
+        monkeypatch.setitem(sys.modules, "gaia_agent.interactive", app_mod)
 
     return install
 
@@ -201,6 +202,17 @@ def test_prompt_stats_backend_error_exits_non_zero_after_the_answer(
     captured = capsys.readouterr()
     assert "the answer" in captured.out
     assert "Lemonade not reachable at http://localhost:1" in captured.err
+
+
+def test_prompt_model_call_error_exits_non_zero(monkeypatch, capsys):
+    class _FailingLLM:
+        def generate(self, **kwargs):
+            raise ConnectionError("Lemonade not reachable at http://localhost:1")
+
+    monkeypatch.setattr(cli, "create_client", lambda *args, **kwargs: _FailingLLM())
+
+    assert _run_main(monkeypatch, "prompt", "hi", "--no-lemonade-check") == 1
+    assert "Lemonade not reachable at http://localhost:1" in capsys.readouterr().out
 
 
 def test_stats_with_none_recorded_is_an_empty_state_not_an_error(

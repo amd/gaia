@@ -17,6 +17,7 @@ Coverage:
 from __future__ import annotations
 
 from unittest.mock import AsyncMock
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -27,6 +28,26 @@ from tests.unit.connectors.conftest import make_fake_agent_registry
 # ---------------------------------------------------------------------------
 
 UI_HEADER = {"x-gaia-ui": "1"}
+
+
+def _with_identity(connector_id, scopes):
+    """*scopes* plus the provider's identity and refresh scopes, as sign-in asks."""
+    from gaia.ui.routers import connectors as router
+
+    identity = router.REGISTRY.get(connector_id).default_scopes
+    return sorted(set(scopes) | set(identity))
+
+
+@pytest.fixture
+def fresh_google_provider():
+    """Drop the cached Google provider; restore the whole cache on teardown."""
+    from gaia.connectors.providers import _registry
+
+    saved = dict(_registry)
+    _registry.pop("google", None)
+    yield
+    _registry.clear()
+    _registry.update(saved)
 
 
 @pytest.fixture(autouse=True)
@@ -56,10 +77,9 @@ def isolated_registry(monkeypatch, tmp_path):
             # (#2603). TestAuthorizeGrantAgents declares gmail.modify via
             # make_fake_agent_registry; TestSidecarRegistrationEndToEnd and
             # TestSidecarInstallNoRestart run the REAL server lifespan against
-            # the real email daemon-sidecar spec (all 4 scopes, see
-            # gaia.daemon.sidecars.spec.builtin_specs()["email"]) — every
-            # scope either exercises must be inside this fixture's
-            # available_scopes or the ceiling would reject it.
+            # a toy daemon-sidecar spec (``_toy_sidecar_specs``) — every scope
+            # either exercises must be inside this fixture's available_scopes
+            # or the ceiling would reject it.
             available_scopes=(
                 "https://www.googleapis.com/auth/gmail.modify",
                 "https://www.googleapis.com/auth/gmail.send",
@@ -94,6 +114,8 @@ def isolated_registry(monkeypatch, tmp_path):
     monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.activations.Path.home", lambda: tmp_path)
     monkeypatch.setattr("gaia.connectors.mcp_server.Path.home", lambda: tmp_path)
+    # A caller's GAIA_HOME outranks Path.home, and mcp_servers.json follows it.
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / ".gaia"))
     yield fresh
 
 
@@ -121,6 +143,88 @@ class TestListConnectors:
         assert "configured" in entry
         assert "description" in entry
 
+    def test_a_failing_summary_is_listed_by_name_as_unavailable(
+        self, ui_api_client, monkeypatch
+    ):
+        from gaia.ui.routers import connectors as router
+
+        real = router._connector_summary
+
+        def summary(connector_id):
+            if connector_id == "google":
+                raise RuntimeError("keyring locked")
+            return real(connector_id)
+
+        monkeypatch.setattr(router, "_connector_summary", summary)
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        rows = {e["id"]: e for e in resp.json()["connectors"]}
+        assert rows["google"] == {
+            "id": "google",
+            "display_name": "Google",
+            "error": "unavailable",
+        }
+        assert rows["mcp-test"]["display_name"] == "MCP Test"
+
+    def test_a_corrupt_activations_file_is_named_on_every_unavailable_row(
+        self, ui_api_client
+    ):
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        rows = resp.json()["connectors"]
+        assert rows
+        for row in rows:
+            assert row["error"] == "unavailable"
+            assert row["reason"] == "activations_unreadable"
+            assert row["path"] == str(path)
+
+    @pytest.mark.parametrize("body", ["[]", '{"activations": []}'])
+    def test_a_wrong_shape_activations_file_is_named_too(self, ui_api_client, body):
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        rows = ui_api_client.get("/api/connectors").json()["connectors"]
+        assert rows and all(r["reason"] == "activations_unreadable" for r in rows)
+
+    def test_an_unreadable_but_valid_activations_file_is_not_called_corrupt(
+        self, ui_api_client, monkeypatch
+    ):
+        """A permissions error must not tell the user to delete the file."""
+        import builtins
+
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"version": 1, "activations": {}}', encoding="utf-8")
+        real_open = builtins.open
+
+        def deny(file, *a, **k):
+            if str(file) == str(path):
+                raise PermissionError(13, "Permission denied", str(file))
+            return real_open(file, *a, **k)
+
+        monkeypatch.setattr(builtins, "open", deny)
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        for row in resp.json()["connectors"]:
+            assert "reason" not in row
+            assert "path" not in row
+
+    def test_no_activations_file_adds_no_reason(self, ui_api_client):
+        from gaia.connectors.activations import _activations_path
+
+        assert not _activations_path().exists()
+        for row in ui_api_client.get("/api/connectors").json()["connectors"]:
+            assert "reason" not in row
+
     def test_unconfigured_connector_shows_configured_false(self, ui_api_client):
         resp = ui_api_client.get("/api/connectors")
         entry = next(e for e in resp.json()["connectors"] if e["id"] == "google")
@@ -136,14 +240,9 @@ class TestConfigurableField:
     """
 
     def test_configurable_false_when_provider_missing_env(
-        self, ui_api_client, monkeypatch
+        self, ui_api_client, monkeypatch, fresh_google_provider
     ):
-        # Ensure the provider can't init: clear the env var AND the
-        # cached provider instance from any earlier test that primed it.
         monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
-        from gaia.connectors.providers import _registry
-
-        _registry.pop("google", None)
 
         resp = ui_api_client.get("/api/connectors/google")
         assert resp.status_code == 200
@@ -151,11 +250,34 @@ class TestConfigurableField:
         assert body["configurable"] is False
         assert "GAIA_GOOGLE_CLIENT_ID" in (body["config_error"] or "")
 
-    def test_configurable_true_when_provider_ok(self, ui_api_client, monkeypatch):
-        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
-        from gaia.connectors.providers import _registry
+    def test_an_unconfigured_provider_is_logged_once_in_one_line(
+        self, ui_api_client, monkeypatch, fresh_google_provider, caplog
+    ):
+        """The Connect card polls the list; each poll must not repeat the
+        setup walkthrough into gaia.log."""
+        import logging
 
-        _registry.pop("google", None)
+        import gaia.ui.routers.connectors as router_mod
+
+        monkeypatch.setattr(router_mod, "_unconfigured_logged", set(), raising=False)
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
+        with caplog.at_level(logging.INFO, logger="gaia.ui.routers.connectors"):
+            for _ in range(3):
+                assert ui_api_client.get("/api/connectors").status_code == 200
+
+        shown = [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.INFO and "google" in r.getMessage()
+        ]
+        assert len(shown) == 1, [r.getMessage() for r in shown]
+        assert "\n" not in shown[0].getMessage()
+        assert "gaia connectors" not in shown[0].getMessage()
+
+    def test_configurable_true_when_provider_ok(
+        self, ui_api_client, monkeypatch, fresh_google_provider
+    ):
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
 
         resp = ui_api_client.get("/api/connectors/google")
         body = resp.json()
@@ -314,6 +436,50 @@ class TestConfigureEndpoint:
 # ---------------------------------------------------------------------------
 
 
+class TestAuthorizeColdPath:
+    """#3326: a never-connected account, through the real route and flow.
+
+    The other authorize tests stub ``start_authorization`` so they can check
+    what the route passes it. This one runs the real PKCE flow behind the
+    route, from an empty keyring, and checks the URL the user is sent to.
+    """
+
+    _SCOPES = ["openid", "https://www.googleapis.com/auth/gmail.modify"]
+
+    def test_authorize_from_an_empty_keyring_returns_a_pkce_url(
+        self, ui_api_client, google_provider, no_browser
+    ):
+        from gaia.connectors.store import list_connections
+
+        assert list_connections() == [], "the test must start never-connected"
+
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": self._SCOPES},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        info = resp.json()
+        try:
+            url = urlparse(info["authorization_url"])
+            assert info["authorization_url"].startswith(google_provider.auth_url)
+            params = parse_qs(url.query)
+            assert params["code_challenge_method"] == ["S256"]
+            assert params["code_challenge"][0], "no PKCE challenge in the URL"
+            assert params["client_id"] == ["test.apps.example"]
+            assert params["state"][0]
+            assert set(self._SCOPES) <= set(params["scope"][0].split())
+            assert urlparse(params["redirect_uri"][0]).hostname == "127.0.0.1"
+        finally:
+            # Close the flow's loopback listener; nothing completes it here.
+            cancel = ui_api_client.delete(
+                f"/api/connectors/_flows/{info['flow_id']}", headers=UI_HEADER
+            )
+            assert cancel.status_code == 204, cancel.text
+
+        assert list_connections() == [], "starting a flow must not store anything"
+
+
 class TestAuthorizeGrantAgents:
     _SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
@@ -325,18 +491,18 @@ class TestAuthorizeGrantAgents:
         )
         monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
         ui_api_client.app.state.agent_registry = make_fake_agent_registry(
-            "installed:email", "google", self._SCOPES
+            "installed:gaia", "google", self._SCOPES
         )
 
         resp = ui_api_client.post(
             "/api/connectors/google/authorize",
-            json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+            json={"scopes": ["openid"], "grant_agents": ["installed:gaia"]},
             headers=UI_HEADER,
         )
         assert resp.status_code == 200, resp.text
         # The resolved {agent_id: scopes} map is threaded into the flow.
         _, kwargs = mock_start.call_args
-        assert kwargs["grant_agents"] == {"installed:email": self._SCOPES}
+        assert kwargs["grant_agents"] == {"installed:gaia": self._SCOPES}
 
     def test_authorize_without_grant_agents_passes_none(
         self, ui_api_client, monkeypatch
@@ -356,7 +522,13 @@ class TestAuthorizeGrantAgents:
         assert kwargs["grant_agents"] is None
 
     @pytest.mark.allow_network
-    def test_authorize_explicit_scope_outside_catalog_is_rejected(self, ui_api_client):
+    def test_authorize_explicit_scope_outside_catalog_is_rejected(
+        self, ui_api_client, monkeypatch, fresh_google_provider
+    ):
+        # A configured client, so the request reaches the scope check rather
+        # than the "client not configured" 503 that comes first.
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_SECRET", "test-secret")
         bogus_scope = "https://www.googleapis.com/auth/not-in-catalog"
 
         resp = ui_api_client.post(
@@ -374,7 +546,7 @@ class TestAuthorizeGrantAgents:
     def test_authorize_unknown_agent_is_404(self, ui_api_client, monkeypatch):
         monkeypatch.setattr("gaia.connectors.start_authorization", AsyncMock())
         ui_api_client.app.state.agent_registry = make_fake_agent_registry(
-            "installed:email", "google", self._SCOPES
+            "installed:gaia", "google", self._SCOPES
         )
         resp = ui_api_client.post(
             "/api/connectors/google/authorize",
@@ -389,11 +561,11 @@ class TestAuthorizeGrantAgents:
         monkeypatch.setattr("gaia.connectors.start_authorization", AsyncMock())
         # The agent declares microsoft, not google — no scopes for this connector.
         ui_api_client.app.state.agent_registry = make_fake_agent_registry(
-            "installed:email", "microsoft", self._SCOPES
+            "installed:gaia", "microsoft", self._SCOPES
         )
         resp = ui_api_client.post(
             "/api/connectors/google/authorize",
-            json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+            json={"scopes": ["openid"], "grant_agents": ["installed:gaia"]},
             headers=UI_HEADER,
         )
         assert resp.status_code == 400
@@ -412,17 +584,17 @@ class TestAuthorizeGrantAgents:
         )
         monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
         ui_api_client.app.state.agent_registry = make_fake_agent_registry(
-            "installed:email", "google", self._SCOPES
+            "installed:gaia", "google", self._SCOPES
         )
 
         resp = ui_api_client.post(
             "/api/connectors/google/authorize",
-            json={"grant_agents": ["installed:email"]},
+            json={"grant_agents": ["installed:gaia"]},
             headers=UI_HEADER,
         )
         assert resp.status_code == 200, resp.text
         _, kwargs = mock_start.call_args
-        assert kwargs["scopes"] == self._SCOPES
+        assert kwargs["scopes"] == _with_identity("google", self._SCOPES)
 
     def test_authorize_empty_scopes_with_no_grant_agents_passes_through_empty(
         self, ui_api_client, monkeypatch
@@ -452,21 +624,46 @@ class TestAuthorizeGrantAgents:
 
         monkeypatch.setattr("gaia.ui.routers.connectors.configure", fake_configure)
         ui_api_client.app.state.agent_registry = make_fake_agent_registry(
-            "installed:email", "google", self._SCOPES
+            "installed:gaia", "google", self._SCOPES
         )
         resp = ui_api_client.post(
             "/api/connectors/google/configure",
             json={
                 "config": {
                     "scopes": ["openid"],
-                    "grant_agents": ["installed:email"],
+                    "grant_agents": ["installed:gaia"],
                 }
             },
             headers=UI_HEADER,
         )
         assert resp.status_code == 200, resp.text
         # The list of ids is resolved to the {id: scopes} map the flow expects.
-        assert captured["config"]["grant_agents"] == {"installed:email": self._SCOPES}
+        assert captured["config"]["grant_agents"] == {"installed:gaia": self._SCOPES}
+        # Explicit scopes are kept as sent.
+        assert captured["config"]["scopes"] == ["openid"]
+
+    def test_configure_with_no_scopes_asks_for_what_the_granted_agents_declare(
+        self, ui_api_client, monkeypatch
+    ):
+        """Settings' Save & Connect sends no scopes when it grants an agent;
+        sign-in must not fall back to identity only."""
+        captured = {}
+
+        async def fake_configure(connector_id, config):
+            captured["config"] = config
+            return {"configured": True, "flow_id": "f1"}
+
+        monkeypatch.setattr("gaia.ui.routers.connectors.configure", fake_configure)
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
+            "installed:gaia", "google", self._SCOPES
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/google/configure",
+            json={"config": {"scopes": [], "grant_agents": ["installed:gaia"]}},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        assert captured["config"]["scopes"] == _with_identity("google", self._SCOPES)
 
 
 # ---------------------------------------------------------------------------
@@ -476,27 +673,58 @@ class TestAuthorizeGrantAgents:
 # to unit-test _resolve_grant_scopes' own logic), these tests run the REAL
 # server lifespan (registry.discover() + the installer bridge) so they
 # reproduce the fresh-install failure at the HTTP boundary. A test that
-# plants `installed:email` directly into app.state.agent_registry passes
+# plants `installed:toy` directly into app.state.agent_registry passes
 # identically whether or not the sidecar is actually wired into discovery,
 # and proves nothing about this bug.
 # ---------------------------------------------------------------------------
 
+_TOY_GOOGLE_SCOPES = [
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/gmail.modify",
+]
 
+
+@pytest.fixture
+def toy_sidecar_spec(monkeypatch):
+    """A binary-only sidecar the daemon can supervise, declaring Google scopes.
+
+    The flagship's wheel is importable in a source checkout, so it resolves
+    without the installer bridge; a toy id exercises the bridge alone.
+    """
+    import dataclasses
+
+    from gaia.connectors.providers.base import ConnectorRequirement
+    from gaia.daemon.sidecars.spec import builtin_specs
+
+    real = builtin_specs()
+    toy = dataclasses.replace(
+        real["gaia"],
+        agent_id="toy",
+        service_id="gaia-agent-toy",
+        display_name="Toy",
+        cache_dir_name="toy",
+        required_connections=(
+            ConnectorRequirement(
+                connector_id="google", scopes=tuple(_TOY_GOOGLE_SCOPES)
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "gaia.hub.installer.builtin_specs", lambda: {**real, "toy": toy}
+    )
+
+
+@pytest.mark.usefixtures("toy_sidecar_spec")
 class TestSidecarRegistrationEndToEnd:
-    _GOOGLE_ALL_SCOPES = [
-        "https://www.googleapis.com/auth/gmail.modify",
-        "https://www.googleapis.com/auth/gmail.send",
-        "https://www.googleapis.com/auth/calendar.events",
-        "https://www.googleapis.com/auth/calendar.readonly",
-    ]
+    _GOOGLE_ALL_SCOPES = _TOY_GOOGLE_SCOPES
 
     @staticmethod
-    def _fake_installed_email():
+    def _fake_installed_toy():
         from gaia.hub.installer import ARTIFACT_KIND_BINARY, InstalledAgent
 
         return {
-            "email": InstalledAgent(
-                id="email",
+            "toy": InstalledAgent(
+                id="toy",
                 version="0.1.0",
                 language="python",
                 installed_at="2026-01-01T00:00:00Z",
@@ -516,7 +744,7 @@ class TestSidecarRegistrationEndToEnd:
 
         monkeypatch.setattr(
             "gaia.hub.installer.list_installed",
-            lambda *a, **kw: self._fake_installed_email(),
+            lambda *a, **kw: self._fake_installed_toy(),
         )
         mock_start = AsyncMock(
             return_value={"flow_id": "f1", "authorization_url": "https://auth"}
@@ -526,15 +754,147 @@ class TestSidecarRegistrationEndToEnd:
         with TestClient(create_app(db_path=":memory:")) as client:
             resp = client.post(
                 "/api/connectors/google/authorize",
-                json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+                json={"scopes": ["openid"], "grant_agents": ["installed:toy"]},
                 headers=UI_HEADER,
             )
 
         assert resp.status_code == 200, resp.text
         _, kwargs = mock_start.call_args
-        assert sorted(kwargs["grant_agents"]["installed:email"]) == sorted(
+        assert sorted(kwargs["grant_agents"]["installed:toy"]) == sorted(
             self._GOOGLE_ALL_SCOPES
         )
+
+    @pytest.mark.parametrize(
+        "connector_id, declared",
+        [
+            (
+                "google",
+                [
+                    "https://www.googleapis.com/auth/calendar.events",
+                    "https://www.googleapis.com/auth/gmail.compose",
+                    "https://www.googleapis.com/auth/gmail.readonly",
+                ],
+            ),
+            (
+                "microsoft",
+                [
+                    "https://graph.microsoft.com/Calendars.ReadWrite",
+                    "https://graph.microsoft.com/Mail.Read",
+                    "https://graph.microsoft.com/Mail.ReadWrite",
+                    "https://graph.microsoft.com/Mail.Send",
+                ],
+            ),
+        ],
+    )
+    def test_no_scopes_plus_the_flagship_asks_only_for_what_it_declares(
+        self, monkeypatch, connector_id, declared
+    ):
+        """The in-chat Connect card's request: no scopes, grant the flagship.
+        Sign-in must ask for the flagship's declared scopes and nothing else
+        from the connector's catalog (gmail.modify, Drive)."""
+        from starlette.testclient import TestClient
+
+        from gaia.connectors.catalog.google import GOOGLE_SPEC
+        from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
+        from gaia.connectors.registry import ConnectorRegistry
+        from gaia.hub.installer import ARTIFACT_KIND_BINARY, InstalledAgent
+        from gaia.ui.server import create_app
+
+        # The real catalog, so the declared scopes are checked against the
+        # ceiling a user's install has.
+        real = ConnectorRegistry()
+        real.register(GOOGLE_SPEC)
+        real.register(MICROSOFT_SPEC)
+        monkeypatch.setattr("gaia.connectors.registry.REGISTRY", real)
+        monkeypatch.setattr("gaia.ui.routers.connectors.REGISTRY", real)
+        monkeypatch.setattr(
+            "gaia.hub.installer.list_installed",
+            lambda *a, **kw: {
+                "gaia": InstalledAgent(
+                    id="gaia",
+                    version="0.1.0",
+                    language="python",
+                    installed_at="2026-01-01T00:00:00Z",
+                    artifact_kind=ARTIFACT_KIND_BINARY,
+                )
+            },
+        )
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+
+        with TestClient(create_app(db_path=":memory:")) as client:
+            resp = client.post(
+                f"/api/connectors/{connector_id}/authorize",
+                json={"scopes": [], "grant_agents": ["installed:gaia"]},
+                headers=UI_HEADER,
+            )
+
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_start.call_args
+        # Plus identity and refresh, without which Microsoft returns no refresh token.
+        assert kwargs["scopes"] == _with_identity(connector_id, declared)
+        if connector_id == "microsoft":
+            assert "offline_access" in kwargs["scopes"]
+        assert sorted(kwargs["grant_agents"]["installed:gaia"]) == declared
+        assert not any("gmail.modify" in s or "drive" in s for s in kwargs["scopes"])
+
+    @pytest.mark.parametrize(
+        "connector_id, read_scope",
+        [
+            ("google", "https://www.googleapis.com/auth/gmail.readonly"),
+            ("microsoft", "https://graph.microsoft.com/Mail.Read"),
+        ],
+    )
+    def test_the_cards_read_only_request_asks_to_read_and_nothing_more(
+        self, monkeypatch, connector_id, read_scope
+    ):
+        """ "What's in my inbox?" sends the read scope and the flagship: sign-in
+        asks for exactly that, and the flagship is granted it on success."""
+        from starlette.testclient import TestClient
+
+        from gaia.connectors.catalog.google import GOOGLE_SPEC
+        from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
+        from gaia.connectors.registry import ConnectorRegistry
+        from gaia.hub.installer import ARTIFACT_KIND_BINARY, InstalledAgent
+        from gaia.ui.server import create_app
+
+        real = ConnectorRegistry()
+        real.register(GOOGLE_SPEC)
+        real.register(MICROSOFT_SPEC)
+        monkeypatch.setattr("gaia.connectors.registry.REGISTRY", real)
+        monkeypatch.setattr("gaia.ui.routers.connectors.REGISTRY", real)
+        monkeypatch.setattr(
+            "gaia.hub.installer.list_installed",
+            lambda *a, **kw: {
+                "gaia": InstalledAgent(
+                    id="gaia",
+                    version="0.1.0",
+                    language="python",
+                    installed_at="2026-01-01T00:00:00Z",
+                    artifact_kind=ARTIFACT_KIND_BINARY,
+                )
+            },
+        )
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+
+        with TestClient(create_app(db_path=":memory:")) as client:
+            resp = client.post(
+                f"/api/connectors/{connector_id}/authorize",
+                json={"scopes": [read_scope], "grant_agents": ["installed:gaia"]},
+                headers=UI_HEADER,
+            )
+
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_start.call_args
+        assert kwargs["scopes"] == _with_identity(connector_id, [read_scope])
+        identity = _with_identity(connector_id, [])
+        assert [s for s in kwargs["scopes"] if s not in identity] == [read_scope]
+        assert read_scope in kwargs["grant_agents"]["installed:gaia"]
 
     def test_authorize_404s_when_the_bridge_is_not_wired(self, monkeypatch):
         """Sibling with the bridge itself disabled (not just 'not
@@ -546,7 +906,7 @@ class TestSidecarRegistrationEndToEnd:
 
         monkeypatch.setattr(
             "gaia.hub.installer.list_installed",
-            lambda *a, **kw: self._fake_installed_email(),
+            lambda *a, **kw: self._fake_installed_toy(),
         )
         monkeypatch.setattr(
             "gaia.hub.installer.register_installed_sidecars", lambda registry: None
@@ -556,7 +916,7 @@ class TestSidecarRegistrationEndToEnd:
         with TestClient(create_app(db_path=":memory:")) as client:
             resp = client.post(
                 "/api/connectors/google/authorize",
-                json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+                json={"scopes": ["openid"], "grant_agents": ["installed:toy"]},
                 headers=UI_HEADER,
             )
 
@@ -564,22 +924,23 @@ class TestSidecarRegistrationEndToEnd:
         assert resp.json()["detail"]["error"] == "unknown_agent"
 
 
+@pytest.mark.usefixtures("toy_sidecar_spec")
 class TestSidecarInstallNoRestart:
-    """Installing email from the Hub panel while the server is already
+    """Installing an agent from the Hub panel while the server is already
     running must register it into the SAME live registry the connectors
     router reads — no restart (#2408, the live-install trigger point)."""
 
     @staticmethod
     def _binary_manifest(sha256: str, size: int) -> dict:
         return {
-            "id": "email",
+            "id": "toy",
             "language": "python",
             "latest_version": "0.1.0",
             "versions": {
                 "0.1.0": {
                     "artifact": {
-                        "filename": "email-agent-linux-x64",
-                        "path": "agents/email/0.1.0/email-agent-linux-x64",
+                        "filename": "toy-agent-linux-x64",
+                        "path": "agents/toy/0.1.0/toy-agent-linux-x64",
                         "sha256": sha256,
                         "size_bytes": size,
                     }
@@ -595,17 +956,17 @@ class TestSidecarInstallNoRestart:
         from gaia.hub import installer as installer_mod
         from gaia.ui.server import create_app
 
-        artifact_bytes = b"fake-email-sidecar-binary"
+        artifact_bytes = b"fake-toy-sidecar-binary"
         sha256 = hashlib.sha256(artifact_bytes).hexdigest()
         manifest = self._binary_manifest(sha256, len(artifact_bytes))
 
         with TestClient(create_app(db_path=":memory:")) as client:
             registry = client.app.state.agent_registry
 
-            # Baseline: email is not installed yet, so the grant flow 404s.
+            # Baseline: toy is not installed yet, so the grant flow 404s.
             resp = client.post(
                 "/api/connectors/google/authorize",
-                json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+                json={"scopes": ["openid"], "grant_agents": ["installed:toy"]},
                 headers=UI_HEADER,
             )
             assert resp.status_code == 404
@@ -614,9 +975,9 @@ class TestSidecarInstallNoRestart:
             # makes (gaia.ui.routers.hub._run_install -> installer.install),
             # completing a binary-kind install against the same registry.
             # trusted=True mirrors the UI's "Trust & Install" confirmation that
-            # a non-verified (experimental) agent like email requires (#2410).
+            # a non-verified (experimental) agent requires (#2410).
             installer_mod.install(
-                "email",
+                "toy",
                 version="0.1.0",
                 manifest=manifest,
                 fetcher=lambda url: artifact_bytes,
@@ -637,7 +998,7 @@ class TestSidecarInstallNoRestart:
             )
             resp = client.post(
                 "/api/connectors/google/authorize",
-                json={"scopes": ["openid"], "grant_agents": ["installed:email"]},
+                json={"scopes": ["openid"], "grant_agents": ["installed:toy"]},
                 headers=UI_HEADER,
             )
 
@@ -659,7 +1020,29 @@ class TestAuthorizeDeviceEndpoint:
         "expires_in": 900,
         "interval": 5,
         "message": "Go to https://microsoft.com/devicelogin and enter ABCD-EFGH",
+        "intent": None,
     }
+
+    def test_carries_the_account_choice_to_the_sign_in(
+        self, ui_api_client, monkeypatch
+    ):
+        start = AsyncMock(return_value={**self._DEVICE_INFO, "intent": "INTENT"})
+        poll = AsyncMock(return_value={"account_email": "user@example.com"})
+        monkeypatch.setattr("gaia.connectors.start_device_flow", start)
+        monkeypatch.setattr("gaia.connectors.poll_device_flow", poll)
+
+        resp = ui_api_client.post(
+            "/api/connectors/microsoft/authorize-device",
+            json={"scopes": [], "add_account": True},
+            headers=UI_HEADER,
+        )
+
+        assert resp.status_code == 200, resp.text
+        assert start.await_args.kwargs["add_account"] is True
+        assert start.await_args.kwargs["account"] is None
+        assert "intent" not in resp.json()
+        poll.assert_awaited_once()
+        assert poll.await_args.kwargs["intent"] == "INTENT"
 
     def test_returns_display_fields_and_hides_device_code(
         self, ui_api_client, monkeypatch
@@ -700,7 +1083,7 @@ class TestAuthorizeDeviceEndpoint:
         )
         monkeypatch.setattr("gaia.connectors.poll_device_flow", AsyncMock())
         ui_api_client.app.state.agent_registry = make_fake_agent_registry(
-            "installed:email",
+            "installed:gaia",
             "microsoft",
             ["https://graph.microsoft.com/Mail.ReadWrite"],
         )
@@ -729,6 +1112,52 @@ class TestTestEndpoint:
         )
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
+
+
+class TestConnectorActionsLiftTheKeyringHold:
+    """A connectors-screen action may ask the OS to unlock the store again."""
+
+    @pytest.fixture(autouse=True)
+    def held(self):
+        from gaia.connectors import store
+
+        store._refuse(RuntimeError("Prompt dismissed"))
+        yield store
+        store.retry_keyring()
+
+    def test_test_lifts_the_hold(self, ui_api_client, monkeypatch, held):
+        seen = []
+
+        async def check(connector_id):
+            seen.append(held.keyring_refusal())
+            return {"ok": True, "detail": "token_valid"}
+
+        monkeypatch.setattr("gaia.ui.routers.connectors.health_check", check)
+        resp = ui_api_client.post("/api/connectors/google/test", headers=UI_HEADER)
+        assert resp.status_code == 200
+        assert seen == [None]
+
+    def test_authorize_lifts_the_hold(self, ui_api_client, monkeypatch, held):
+        seen = []
+
+        async def start(connector_id, scopes=None, grant_agents=None, **_account):
+            seen.append(held.keyring_refusal())
+            return {"flow_id": "f", "authorization_url": "https://x"}
+
+        monkeypatch.setattr(
+            "gaia.ui.routers.connectors.connections.start_authorization", start
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": []},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200
+        assert seen == [None]
+
+    def test_listing_does_not_lift_the_hold(self, ui_api_client, held):
+        ui_api_client.get("/api/connectors")
+        assert held.keyring_refusal() is not None
 
 
 # ---------------------------------------------------------------------------
@@ -783,7 +1212,7 @@ class TestGrantsEndpoints:
         a scope the connector never advertised became a grant the credential
         check would then honour. Same 400 shape /authorize returns (#3247)."""
         resp = ui_api_client.put(
-            "/api/connectors/google/grants/installed:email",
+            "/api/connectors/google/grants/installed:gaia",
             json={"scopes": ["https://mail.google.com/"]},
             headers=UI_HEADER,
         )
@@ -795,7 +1224,7 @@ class TestGrantsEndpoints:
 
         # And nothing was written.
         listing = ui_api_client.get("/api/connectors/google/grants").json()["grants"]
-        assert "installed:email" not in listing
+        assert "installed:gaia" not in listing
 
     def test_put_grant_for_an_unknown_connector_is_404(self, ui_api_client):
         """A typo'd id used to return 200 and persist a phantom ledger key.

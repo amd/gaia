@@ -39,6 +39,18 @@ class _DummyAgent(Agent):
         return AgentConsole()
 
 
+@pytest.fixture(autouse=True)
+def _no_edit_verification(monkeypatch):
+    """Opt out of the post-edit read-back.
+
+    The tools here are stubs that report success without touching the disk, so
+    the read-back would correctly find every file they named missing and spend
+    a repair step saying so. These tests script a fixed list of model replies
+    to pin unrelated recovery behaviour, and one extra call exhausts it.
+    """
+    monkeypatch.setenv("GAIA_AGENT_VERIFY_EDITS", "0")
+
+
 @pytest.fixture
 def agent():
     with patch("gaia.agents.base.agent.AgentSDK"):
@@ -269,6 +281,32 @@ class TestProcessQueryRecoversOnParseError:
             assert "Agent error" not in text
 
 
+def _with_an_old_tool_result(agent):
+    """History holding a large tool result, so the overflow shrink frees enough
+    to be worth one retry (#2780)."""
+    agent.conversation_history = [
+        {"role": "user", "content": "read the report"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "h1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "h1",
+            "name": "read_file",
+            "content": "lorem " * 4000,
+        },
+        {"role": "assistant", "content": "Read it."},
+    ]
+
+
 class TestProcessQueryRecoversOnContextOverflow:
     """When the multi-step loop accumulates tool messages past the context
     window, the agent should trim and retry once before giving up."""
@@ -305,6 +343,7 @@ class TestProcessQueryRecoversOnContextOverflow:
             RuntimeError("exceed_context_size: prompt + history exceeds 32768 tokens"),
             good,
         )
+        _with_an_old_tool_result(agent)
         result = agent.process_query("anything", max_steps=5)
         assert chat.send_messages.call_count == 2
         assert any(
@@ -418,6 +457,7 @@ class TestProcessQueryRecoversOnContextOverflow:
         chat = self._stub_chat_with_exception_then_answer(
             agent, RuntimeError(flm_error_text), good
         )
+        _with_an_old_tool_result(agent)
         result = agent.process_query("anything", max_steps=5)
         assert chat.send_messages.call_count == 2
         assert any(
@@ -463,6 +503,7 @@ class TestProcessQueryRecoversOnContextOverflowStreaming:
             return iter(good_stream)
 
         agent.chat.send_messages_stream = MagicMock(side_effect=_send_stream)
+        _with_an_old_tool_result(agent)
 
         result = agent.process_query("anything", max_steps=5)
 
@@ -495,6 +536,7 @@ class TestProcessQueryRecoversOnContextOverflowStreaming:
             raise RuntimeError("exceeds the available context size")
 
         agent.chat.send_messages_stream = MagicMock(side_effect=_send_stream)
+        _with_an_old_tool_result(agent)
 
         result = agent.process_query("anything", max_steps=5)
 
