@@ -357,11 +357,15 @@ def _backends(system_info: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return backends
 
 
-def _npu_status(capacity) -> Dict[str, Any]:
-    """Whether this PC has an NPU, and what stops a model running on it yet."""
+def _npu_status(capacity) -> Optional[Dict[str, Any]]:
+    """Whether this PC has an NPU, and what stops a model running on it yet.
+
+    None when capacity couldn't be read: unchecked, not "no NPU"."""
     from gaia.llm.model_fit import npu_problems
 
-    present = bool(capacity is not None and capacity.has_npu)
+    if capacity is None:
+        return None
+    present = bool(capacity.has_npu)
     problems = [p.as_dict() for p in npu_problems(capacity)]
     return {"present": present, "ready": present and not problems, "problems": problems}
 

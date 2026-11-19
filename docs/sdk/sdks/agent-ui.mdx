@@ -2774,7 +2774,8 @@ plan and make one set of choices.
     `npu` says whether this PC has an NPU (`present`), whether a model can run
     on it now (`ready`), and what stops it (`problems`, each `code`, `title`,
     `fix` and `params`); while it isn't ready, the NPU model's `fit_code` is
-    `npu`. `gaia init --plan --json` prints the same object; its
+    `npu`. `npu` is null when the PC's capacity couldn't be read: unchecked,
+    not "no NPU". `gaia init --plan --json` prints the same object; its
     [CLI reference](/reference/cli#choosing-models) lists every field.
   </Accordion>
 
