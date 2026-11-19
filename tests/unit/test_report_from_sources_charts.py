@@ -8,21 +8,18 @@ input; these tests also prove the comparison catches a chart that drifted.
 
 from __future__ import annotations
 
-import sys
 import zipfile
-from pathlib import Path
 
 import pytest
 
 pytest.importorskip("openpyxl")
 
-_SKILL = Path(__file__).resolve().parents[2] / "hub" / "skills" / "report-from-sources"
-if str(_SKILL) not in sys.path:
-    sys.path.insert(0, str(_SKILL))
+from tests.fixtures.report_from_sources_data import (  # noqa: E402
+    library_call,
+    skill_lib,
+)
 
-from report_from_sources_lib import xlsx_chart as X  # noqa: E402
-
-from tests.fixtures.report_from_sources_data import library_call  # noqa: E402
+X = skill_lib("xlsx_chart")
 
 CATS = ["2025Q3", "2025Q4", "2026Q1", "2026Q2"]
 SERIES = {"Net revenue": [10.5, 11.25, None, 12.0], "Costs": [7, 8, 9, 10]}

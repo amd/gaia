@@ -22,9 +22,7 @@ reports (precision/recall), and chart round-trip equality for .xlsx.
 
 from __future__ import annotations
 
-import sys
 from collections import defaultdict
-from pathlib import Path
 from typing import Dict
 
 import pytest
@@ -32,21 +30,17 @@ import pytest
 pytest.importorskip("openpyxl")
 pytest.importorskip("docx")
 
-_SKILL = Path(__file__).resolve().parents[2] / "hub" / "skills" / "report-from-sources"
-if str(_SKILL) not in sys.path:
-    sys.path.insert(0, str(_SKILL))
-
-from report_from_sources_lib.series import (  # noqa: E402
-    SeriesLookupError,
-    extract_series,
-    inventory_folder,
-)
-from report_from_sources_lib.xlsx_chart import write_workbook_chart  # noqa: E402
-
 from tests.fixtures.report_from_sources_data import (  # noqa: E402
     SCENARIOS,
     library_call,
+    skill_lib,
 )
+
+_series = skill_lib("series")
+SeriesLookupError = _series.SeriesLookupError
+extract_series = _series.extract_series
+inventory_folder = _series.inventory_folder
+write_workbook_chart = skill_lib("xlsx_chart").write_workbook_chart
 
 SEEDS = range(5)
 

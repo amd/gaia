@@ -11,24 +11,21 @@ from __future__ import annotations
 
 import csv
 import json
-import sys
 import time
 from datetime import date, datetime
-from pathlib import Path
 
 import pytest
 
 pytest.importorskip("openpyxl")
 
-_SKILL = Path(__file__).resolve().parents[2] / "hub" / "skills" / "report-from-sources"
-if str(_SKILL) not in sys.path:
-    sys.path.insert(0, str(_SKILL))
+from tests.fixtures.report_from_sources_data import (  # noqa: E402
+    library_call,
+    skill_lib,
+)
 
-from report_from_sources_lib import periods as P  # noqa: E402
-from report_from_sources_lib import series as S  # noqa: E402
-from report_from_sources_lib import tables as T  # noqa: E402
-
-from tests.fixtures.report_from_sources_data import library_call  # noqa: E402
+P = skill_lib("periods")
+S = skill_lib("series")
+T = skill_lib("tables")
 
 
 @pytest.fixture(autouse=True)

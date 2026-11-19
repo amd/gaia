@@ -11,14 +11,35 @@ which lookups are ambiguous and which series do not exist.
 from __future__ import annotations
 
 import csv
+import importlib
 import json
 import random
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterator, List, Optional, Tuple
+
+SKILL_DIR = (
+    Path(__file__).resolve().parents[2] / "hub" / "skills" / "report-from-sources"
+)
+
+
+def skill_lib(name: str):
+    """Import ``report_from_sources_lib.<name>`` as the skill loader would.
+
+    The skill folder is on ``sys.path`` only while the import runs. Left there,
+    its ``tools.py`` would answer a bare ``import tools`` for the rest of the
+    test process.
+    """
+    skill_dir = str(SKILL_DIR)
+    sys.path.insert(0, skill_dir)
+    try:
+        return importlib.import_module(f"report_from_sources_lib.{name}")
+    finally:
+        sys.path.remove(skill_dir)
 
 
 @contextmanager
