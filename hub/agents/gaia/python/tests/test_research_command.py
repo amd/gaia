@@ -98,8 +98,8 @@ def test_research_loads_the_skill_and_briefs_the_model(model_id):
         assert research.RESEARCH_BRIEF in sent
         assert sent.endswith("the RISC-V ISA")
         assert research.RESEARCH_SKILL in agent.loaded_skills
-        # Its instructions are in the prompt the model gets this turn.
-        assert "# Research Report" in agent.system_prompt
+        # Its instructions are in the session context the model gets this turn.
+        assert "# Research Report" in agent.session_context
 
 
 def test_memory_and_history_keep_the_topic_not_the_brief():
