@@ -353,6 +353,10 @@ def test_loading_mcp_tools_registers_search_tools_on_an_mcp_only_profile(
         assert "search_tools" not in off._tools_registry
         assert off._select_tools_for_turn("hello") is None
         assert off._thin_tool_schemas() is False
+    # The UI flips memory every turn; a chat built private stays out after.
+    off._incognito = False
+    assert off._select_tools_for_turn("hello") is None
+    assert off._unlisted_tools_menu() == ""
     on = tool_cost.build_doc_agent_skeleton(
         "web", dynamic_tools=True, embed_fn=lexical_embedder()
     )
@@ -363,3 +367,6 @@ def test_loading_mcp_tools_registers_search_tools_on_an_mcp_only_profile(
     names = on._select_tools_for_turn("hello")
     assert "mcp_files_move_file" not in names
     assert names == [n for n in on._tools_registry if n != "mcp_files_move_file"]
+    # Memory switched off mid-chat: the list doesn't change with the toggle.
+    on._incognito = True
+    assert on._select_tools_for_turn("hello") == names

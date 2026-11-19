@@ -1573,13 +1573,15 @@ class ChatAgent(
     def _loader_in_play(self) -> bool:
         """True when this session's list is the loader's to gate.
 
-        An MCP-only loader stays out with memory off, the UI's private and
-        memory-off sessions included: it must not load the embedder (#4756).
+        An MCP-only loader acts only if the agent was built with memory on and
+        MCP tools, which is when it registers ``search_tools``: memory off must
+        not load the embedder (#4756), and the UI flips ``_incognito`` every
+        turn, so deciding at build keeps the list from changing with it.
         """
         if getattr(self, "_memory_store", None) is None:
             return False
         if self.tool_loader.mcp_only:
-            return not self._memory_off() and self._mcp_tools_present()
+            return self._search_tools_registered and self._mcp_tools_present()
         return True
 
     def _memory_off(self) -> bool:
