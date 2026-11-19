@@ -3307,6 +3307,8 @@ class Agent(abc.ABC):
     _open_step: Optional[int] = None
     _open_step_stats: Optional[Dict[str, Any]] = None
     _step_stats_recorded: bool = False
+    # The last reply was cut off with nothing in it but thinking.
+    _thinking_cut_off: bool = False
     # Set by a caller with nobody watching (gaia -p): the model is told so.
     no_one_to_ask: bool = False
 
@@ -11003,7 +11005,18 @@ Do NOT wrap conversational replies in JSON.
             }
 
     def _reasoning_request_kwargs(self) -> Dict[str, Any]:
-        """The reasoning effort the agent chose (ReasoningEffortToolsMixin), if any."""
+        """The reasoning effort for the next model call, if any is asked for.
+
+        The agent's own choice (ReasoningEffortToolsMixin), except right after
+        a reply cut off with nothing but thinking in it.
+        """
+        if self._thinking_cut_off:
+            # Thinking used a whole reply: ask a cloud model for its least.
+            from gaia.llm.lemonade_client import cloud_lowest_reasoning_effort
+
+            effort = cloud_lowest_reasoning_effort(getattr(self, "model_id", None))
+            if effort:
+                return {"reasoning_effort": effort}
         chosen = getattr(self, "reasoning_effort_kwargs", None)
         return chosen() if chosen is not None else {}
 
@@ -12511,6 +12524,7 @@ Do NOT wrap conversational replies in JSON.
         self._open_step = None
         self._open_step_stats = None
         self._step_stats_recorded = False
+        self._thinking_cut_off = False
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
@@ -13743,17 +13757,23 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if response:
                     messages.append({"role": "assistant", "content": response})
+                self._thinking_cut_off = _was_all_thinking(
+                    response, reasoning, response_stats
+                )
                 messages.append(
                     {
                         "role": "user",
                         "content": (
                             _CUT_OFF_ALL_THINKING_PROMPT
-                            if _was_all_thinking(response, reasoning, response_stats)
+                            if self._thinking_cut_off
                             else _CUT_OFF_CONTINUE_PROMPT
                         ),
                     }
                 )
                 continue
+            # A reply that finished: the cut-off budget is for cut-offs in a row.
+            cut_off_continuations = 0
+            self._thinking_cut_off = False
 
             # Parse the response. Small models (e.g. 4B) sometimes emit malformed
             # tool_calls JSON — concatenated enum values, unterminated strings,
