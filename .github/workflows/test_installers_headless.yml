@@ -476,6 +476,8 @@ jobs:
               mkdir -p "${RUNNER_TEMP}/journey"
               docker run -d --name gaia-fedora --network host -v "${RUNNER_TEMP}/journey:/work" fedora:44 sleep infinity
               docker exec gaia-fedora cat /etc/os-release | head -n 3
+              # Fetched here so the timed install measures the package, not a slow mirror.
+              docker exec gaia-fedora dnf -q makecache
               ;;
           esac
       - name: Run the journey

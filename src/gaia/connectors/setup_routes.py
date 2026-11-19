@@ -59,8 +59,7 @@ class Step:
     #: check or a live probe) rather than taking the user's word for it.
     verifiable: bool
     #: Whether this step's answer is a credential, not a navigation choice.
-    #: Gates the free-text FAQ lane off entirely (see
-    #: ``gaia_agent_email.tools.setup_walkthrough``) — a credential prompt
+    #: Gates the free-text FAQ lane off entirely — a credential prompt
     #: must never be re-issued with ``allow_free_text=False`` on an
     #: options-less prompt, and must never receive the FAQ lane at all.
     collects_credential: bool = False

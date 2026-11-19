@@ -23,7 +23,7 @@ export type StreamEventType =
     | 'answer'       // Final answer from agent
     | 'agent_error'  // Agent-level error (non-fatal)
     | 'permission_request' // Tool confirmation request
-    | 'needs_confirmation' // Stateless confirmation card (email /query, #2109) — informational, non-blocking
+    | 'needs_confirmation' // Stateless confirmation card (sidecar relay, #2109) — informational, non-blocking
     | 'needs_input' // Mid-run question (#2595) — answerable; the run blocks until POST /chat/user-input
     | 'policy_alert' // Governance policy blocked a tool
     | 'mcp_status'   // MCP server connection status update
@@ -93,8 +93,8 @@ export interface StreamEvent {
     narration?: string;
     /** The skill a turn runs on (skill_use). */
     skill?: string;
-    /** How that skill came to be loaded (skill_use): 'model', 'auto' or 'loaded'. */
-    how?: 'model' | 'auto' | 'loaded';
+    /** How that skill came to be loaded (skill_use): 'model', 'user' (typed /name), 'auto' or 'loaded'. */
+    how?: 'model' | 'user' | 'auto' | 'loaded';
     /** Every skill now loaded in the chat (skill_use). */
     loaded?: string[];
     title?: string;

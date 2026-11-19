@@ -5,33 +5,78 @@
 An attachment is stored as ``<name><ext>``, so the agent reads and quotes the
 name the user knows it by. Only when that name is already taken does the copy
 become ``<id>_<name><ext>``, and answers cite ``<name><ext>`` either way.
+
+The stored name keeps the user's spaces, accents and non-Latin scripts. The
+browser link percent-encodes it, since a Markdown link ends at a space or ``)``
+and only one plain URL path segment can be served from ``uploads_dir()``.
 """
 
 import os
 import re
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import quote
 
 _ID_CHARS = 12
 _NAME_CHARS = 80
+# Leaves room under the 255-byte file name limit for the id prefix and extension.
+_NAME_BYTES = 200
 _FALLBACK_NAME = "attachment"
 _COPY_NAME_RE = re.compile(rf"[0-9a-f]{{{_ID_CHARS}}}_(?P<name>.+)")
 _SHORT_NAME_RE = re.compile(r"~\d")
+
+# Same rules the document library uses: legal across platforms, and never a
+# name that reads as a path, a shell fragment or a control character.
+_ILLEGAL_NAME_CHARS = '<>:"/\\|?*'
+_SHELL_QUOTING_CHARS = "'`"
+_SLASH_LOOKALIKES = "\u2044\u2215\u29f5\u29f8\u29f9\ufe68\uff0f\uff3c"
+_JOINERS = "\u200c\u200d"
+
+
+def _unsafe_name_char(c: str) -> bool:
+    """Whether *c* must not appear in a stored attachment name."""
+    return (
+        c in _ILLEGAL_NAME_CHARS
+        or c in _SHELL_QUOTING_CHARS
+        or c in _SLASH_LOOKALIKES
+        or (
+            unicodedata.category(c) in ("Cc", "Cf", "Cs", "Co", "Zl", "Zp")
+            and c not in _JOINERS
+        )
+    )
+
+
+def _clip_name(stem: str) -> str:
+    """Truncate *stem* to the character and UTF-8 byte limits."""
+    stem = stem[:_NAME_CHARS]
+    encoded = stem.encode("utf-8")
+    if len(encoded) > _NAME_BYTES:
+        stem = encoded[:_NAME_BYTES].decode("utf-8", "ignore")
+    return stem
 
 
 def upload_copy_stem(original_name: str) -> str:
     """Return the name, without extension, to store an attachment under.
 
-    Keeps only characters an attachment link can carry: the chat's Markdown
-    links end at a space or ``)``, and the web UI's ``UPLOAD_URL_RE`` serves
-    only ASCII letters, digits, ``.``, ``_`` and ``-``. A name with nothing
-    usable left, such as one in another script, becomes ``attachment``.
+    Spaces, accents and non-Latin scripts stay, so the agent and the user see
+    the name they picked. Characters that would read as a path, a shell
+    fragment or a control character become ``_``, and a name with nothing
+    usable left becomes ``attachment``.
     """
     base = re.split(r"[\\/]", original_name)[-1]
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(base).stem)
-    stem = stem.strip("._-")[:_NAME_CHARS].rstrip("._-")
+    stem = "".join(
+        "_" if _unsafe_name_char(c) else c
+        for c in unicodedata.normalize("NFC", Path(base).stem)
+    )
+    stem = _clip_name(stem).strip(" ._-")
     return stem or _FALLBACK_NAME
+
+
+def upload_url_name(file_name: str) -> str:
+    """Percent-encode *file_name* as the one path segment an upload link carries."""
+    return quote(file_name, safe="")
 
 
 # Names Windows maps to a device whatever the extension, compared before the first dot.
@@ -46,9 +91,9 @@ def _copy_name(stem: str, ext: str) -> str:
     name = f"{stem}{ext}"
     if (
         not stem
-        or name in (".", "..")
-        or any(c in "/\\:" or ord(c) < 32 for c in name)
-        or name != name.rstrip(" .")
+        or name.startswith(".")
+        or any(c in "/\\:" or ord(c) < 32 or ord(c) == 127 for c in name)
+        or name != name.strip(" .")
     ):
         raise ValueError(f"{name!r} is not a plain file name for a copy")
     return name

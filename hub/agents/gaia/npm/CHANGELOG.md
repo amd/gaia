@@ -8,6 +8,33 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
+### Changed
+
+- **Start a message with `/` and a skill's name to run that skill**, as in
+  Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
+  with the same checks as `load_skill` and follows it for the rest of the line.
+  A name that is not an installed skill is sent unchanged. Over stdio, the
+  model-state ping and `/skills` now carry the installed skills (`skills`), so
+  the terminal UI can list them when you type `/`.
+- **A command or snippet that starts a never-ending server is refused before it
+  runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
+  wait on it until the turn timed out; they now return an error that says so and
+  how to serve the folder instead. Code that only writes a server to a file still
+  runs. Each live-browser result now starts with where it ran, such as
+  `(headless browser)`.
+- **A chat in GAIA desktop can drive the browser pane beside it.** A new bundled
+  skill, `browser-pane`, adds nine tools that take a picture of the page, read
+  its console and network logs, press keys, answer page boxes, change screen
+  size, switch tabs, run several steps at once, run a short script on a
+  localhost page, and start a project's dev server on 127.0.0.1
+  (`browser-pane/dev_server`). The skill is offered only in a chat open in GAIA
+  desktop with the pane, and its tools join the list only once it loads, so the
+  registered tool count stays 105. `browser-pane/browser_eval` asks every time
+  and shows the whole script; the others ask before a site not yet approved, a
+  control that may not be undoable, or starting a server. Full access does not
+  skip the script or a new server: a person still approves them, and a run with
+  nobody to ask refuses them.
+
 ### Fixed
 
 - A reply that goes quiet partway through is requested again, up to twice,
@@ -15,6 +42,10 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 - In a `gaia -p` run the agent is told nobody can answer questions, so it
   settles an open choice itself and says what it assumed instead of ending on
   an offer to change it later.
+- `run_python` no longer drops long output without saying so. Output past
+  8,000 characters used to be cut silently, so a scan's later hits never
+  reached the agent. It now gets the start and end, is told how much was left
+  out, and can read the rest, as it already could for a script run from a file.
 
 ## [0.3.6]
 
@@ -306,6 +337,17 @@ Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Changed
 
+- **The standalone email agent is gone; mail is this agent's job.**
+  `@amd-gaia/agent-email` and `gaia-agent-email` are removed, along with
+  `gaia email`. This agent reads Gmail or Outlook through its eight read-only
+  mail tools and the `inbox-triage` skill, and drafts and sends through the
+  `send-email` skill, with the Google or Microsoft connector. Organizing,
+  undo, briefings and autonomous runs went with the old agent. See the Email
+  section in the README.
+  On upgrade GAIA removes the old agent's install folder when it is provably
+  that install, clears its leftover connector state, and names any
+  scheduled email that will no longer be sent. The old agent's data stays in
+  `~/.gaia/email/`. Installing the `email` agent id is refused.
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,

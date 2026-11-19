@@ -1,4 +1,18 @@
 {
+  "AccountUpdateRequest": {
+    "description": "Body for ``PATCH /api/connectors/{id}/accounts/{account_id}``. Only\n``true`` is accepted: to change the default, make another account it.",
+    "properties": {
+      "is_default": {
+        "title": "Is Default",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "is_default"
+    ],
+    "title": "AccountUpdateRequest",
+    "type": "object"
+  },
   "ActivationRequest": {
     "description": "Body for ``PUT /api/connectors/{id}/activations/{agent_id}``.\n\nValid only for ``mcp_server`` connectors — see ``_require_mcp_server``.\n\n``scopes`` is optional: when present and no grant exists for the pair,\nit is used to auto-create the grant (one-click convenience). When the\npair already has a grant the body is ignored — see issue #1005.",
     "properties": {
@@ -614,6 +628,22 @@
   },
   "AuthorizeRequest": {
     "properties": {
+      "account": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Account"
+      },
+      "add_account": {
+        "default": false,
+        "title": "Add Account",
+        "type": "boolean"
+      },
       "grant_agents": {
         "items": {
           "type": "string"
@@ -814,6 +844,21 @@
         "title": "Message",
         "type": "string"
       },
+      "page_elements": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/components/schemas/PageElement"
+            },
+            "maxItems": 8,
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Page Elements"
+      },
       "session_id": {
         "title": "Session Id",
         "type": "string"
@@ -907,6 +952,32 @@
       "message"
     ],
     "title": "CommitRequest",
+    "type": "object"
+  },
+  "Component": {
+    "additionalProperties": false,
+    "properties": {
+      "name": {
+        "maxLength": 120,
+        "minLength": 1,
+        "title": "Name",
+        "type": "string"
+      },
+      "source": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/SourceLoc"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "title": "Component",
     "type": "object"
   },
   "ConfigureRequest": {
@@ -1980,7 +2051,7 @@
     "type": "object"
   },
   "ForwardConnectionRequest": {
-    "description": "Body for ``POST /v1/connections/{provider}`` (#1292).\n\nA host app forwards the OAuth client it authenticated the user under\n(``client_id`` + ``client_secret``) plus the user's ``refresh_token``.\nGAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second\nOAuth, no consent step.\n\n``refresh_token`` / ``client_secret`` are secret INPUTS — they are never\nechoed back in any response. ``account_email`` is display-only in v1\n(the keyring slot is single-account per provider). ``grant_agents`` is\nthe list of namespaced agent ids (e.g. ``installed:email``) to grant the\nforwarded scopes so they can resolve the connection ambiently.",
+    "description": "Body for ``POST /v1/connections/{provider}`` (#1292).\n\nA host app forwards the OAuth client it authenticated the user under\n(``client_id`` + ``client_secret``) plus the user's ``refresh_token``.\nGAIA persists both and refreshes AS THE HOST APP'S CLIENT — no second\nOAuth, no consent step.\n\n``refresh_token`` / ``client_secret`` are secret INPUTS — they are never\nechoed back in any response. ``account_email`` picks which stored account\nthe forward replaces (the one with that address); with other accounts\nstored and no match, the forward is refused. ``grant_agents`` is\nthe list of namespaced agent ids (e.g. ``installed:email``) to grant the\nforwarded scopes so they can resolve the connection ambiently.",
     "properties": {
       "account_email": {
         "default": "",
@@ -3110,6 +3181,11 @@
         "title": "Created At",
         "type": "string"
       },
+      "failed": {
+        "default": false,
+        "title": "Failed",
+        "type": "boolean"
+      },
       "id": {
         "title": "Id",
         "type": "integer"
@@ -3127,6 +3203,20 @@
           }
         ],
         "title": "Library Notices"
+      },
+      "page_elements": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/components/schemas/PageElement"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Page Elements"
       },
       "rag_sources": {
         "anyOf": [
@@ -3451,6 +3541,122 @@
     "title": "OpenFileRequest",
     "type": "object"
   },
+  "PageElement": {
+    "additionalProperties": false,
+    "description": "One composer chip as the renderer sends it. A toggle that is off sends null.",
+    "properties": {
+      "component": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Component"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "cropUrl": {
+        "anyOf": [
+          {
+            "pattern": "^/api/files/uploads/[^/\\\\\\s)]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cropurl"
+      },
+      "label": {
+        "maxLength": 120,
+        "title": "Label",
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 200,
+        "title": "Name",
+        "type": "string"
+      },
+      "outerHTML": {
+        "anyOf": [
+          {
+            "maxLength": 1536,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Outerhtml"
+      },
+      "rect": {
+        "$ref": "#/components/schemas/PickedRect"
+      },
+      "ref": {
+        "pattern": "^p\\d{1,6}$",
+        "title": "Ref",
+        "type": "string"
+      },
+      "role": {
+        "maxLength": 40,
+        "title": "Role",
+        "type": "string"
+      },
+      "selector": {
+        "maxLength": 500,
+        "title": "Selector",
+        "type": "string"
+      },
+      "styles": {
+        "anyOf": [
+          {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Styles"
+      },
+      "tag": {
+        "pattern": "^[a-z][a-z0-9-]{0,39}$",
+        "title": "Tag",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 300,
+        "title": "Text",
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 300,
+        "title": "Title",
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 2000,
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "ref",
+      "url",
+      "title",
+      "tag",
+      "label",
+      "selector",
+      "role",
+      "name",
+      "text",
+      "rect"
+    ],
+    "title": "PageElement",
+    "type": "object"
+  },
   "ParseScheduleRequest": {
     "description": "Request to parse a natural language schedule description.",
     "properties": {
@@ -3593,6 +3799,37 @@
       "mode"
     ],
     "title": "PermissionModeRequest",
+    "type": "object"
+  },
+  "PickedRect": {
+    "additionalProperties": false,
+    "properties": {
+      "height": {
+        "minimum": 0.0,
+        "title": "Height",
+        "type": "number"
+      },
+      "width": {
+        "minimum": 0.0,
+        "title": "Width",
+        "type": "number"
+      },
+      "x": {
+        "title": "X",
+        "type": "number"
+      },
+      "y": {
+        "title": "Y",
+        "type": "number"
+      }
+    },
+    "required": [
+      "x",
+      "y",
+      "width",
+      "height"
+    ],
+    "title": "PickedRect",
     "type": "object"
   },
   "PolicyNotice": {
@@ -4971,6 +5208,27 @@
       "score"
     ],
     "title": "SourceInfo",
+    "type": "object"
+  },
+  "SourceLoc": {
+    "additionalProperties": false,
+    "properties": {
+      "file": {
+        "maxLength": 300,
+        "title": "File",
+        "type": "string"
+      },
+      "line": {
+        "minimum": 0.0,
+        "title": "Line",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "file",
+      "line"
+    ],
+    "title": "SourceLoc",
     "type": "object"
   },
   "SpeakRequest": {

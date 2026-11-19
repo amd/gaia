@@ -19,9 +19,9 @@ import (
 
 func newAutoModel(t *testing.T, f *fakeTransport) (Model, tea.Cmd) {
 	t.Helper()
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	m := New(f, testConfig(), Options{ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(t.Context(), f, EmailConfig())})
+	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(t.Context(), f, testConfig())})
 	return updated.(Model), cmd
 }
 
@@ -94,7 +94,7 @@ func TestAStoppedAgentIsStartedWithoutAKeypress(t *testing.T) {
 	if m.FocusKey() != KeySidecar || !m.Busy() {
 		t.Fatalf("the stopped agent was not started (focus %q, busy %v)", m.FocusKey(), m.Busy())
 	}
-	if !strings.Contains(ansi.Strip(m.View()), "Starting the Email agent") {
+	if !strings.Contains(ansi.Strip(m.View()), "Starting the GAIA agent") {
 		t.Errorf("the screen does not say what it is starting:\n%s", m.View())
 	}
 	m, _ = runAutoFix(t, m, cmd)
@@ -129,7 +129,7 @@ func TestAFailedAutoStartGivesTheRowBackWithItsKey(t *testing.T) {
 	}
 
 	// A re-check that finds it still down reports it; it does not start again.
-	updated, cmd := m.Update(reportMsg{rep: Check(t.Context(), f, EmailConfig())})
+	updated, cmd := m.Update(reportMsg{rep: Check(t.Context(), f, testConfig())})
 	m = updated.(Model)
 	if m.Busy() || cmd != nil {
 		t.Error("a start that already failed was attempted a second time")
