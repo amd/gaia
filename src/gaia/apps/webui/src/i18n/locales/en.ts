@@ -3692,6 +3692,7 @@ export const enMessages = {
     'mem.review.selectAll': 'Select all',
     'mem.review.none': 'None',
     'mem.log.found': 'Found: {content}',
+    'mem.log.foundSensitive': 'Found a sensitive item',
     'mem.log.insight': 'Insight: {content}',
     'mem.log.error': 'Error: {message}',
     'mem.log.discoveryDone': 'Done. {n} items discovered.',
