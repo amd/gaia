@@ -1,0 +1,148 @@
+// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+import { useEffect, useMemo, useState } from 'react';
+import { Check, Copy } from 'lucide-react';
+import { UnsupportedCard } from '../UnsupportedCard';
+import { copyGuide } from '../guide/guideActions';
+import {
+    currencySymbol,
+    formatCalculatorText,
+    formatValue,
+    isCalculatorWire,
+    specFor,
+    userLocale,
+} from './calculatorDoc';
+import type { CalculatorWire, FieldSpec, Money } from './calculatorDoc';
+import '../guide/guide.css';
+import './calculator.css';
+import { useT } from '../../../i18n/useT';
+
+const NOTICE_MS = 2500;
+
+export function CalculatorCard({ data }: { data: unknown }) {
+    if (!isCalculatorWire(data)) return <UnsupportedCard variant="invalid" render="calculator" data={data} />;
+    return <Calculator wire={data} />;
+}
+
+function Calculator({ wire }: { wire: CalculatorWire }) {
+    const t = useT();
+    const spec = specFor(wire.calculator);
+    const money = useMemo(() => ({ locale: userLocale(), currency: wire.currency }), [wire.currency]);
+    const [values, setValues] = useState<Record<string, number>>(() => ({ ...wire.inputs }));
+    const [notice, setNotice] = useState<string | null>(null);
+    const title = wire.title?.trim() || t(spec.defaultTitle);
+    const results = spec.results(values);
+    const copiedNotice = t('cards.copied');
+
+    useEffect(() => {
+        if (!notice) return;
+        const id = setTimeout(() => setNotice(null), NOTICE_MS);
+        return () => clearTimeout(id);
+    }, [notice]);
+
+    const onCopy = () => {
+        copyGuide(formatCalculatorText(title, spec, values, money, t)).then(
+            () => setNotice(copiedNotice),
+            (err: unknown) => setNotice(t('cards.copyFailed', { error: err instanceof Error ? err.message : String(err) })),
+        );
+    };
+
+    return (
+        <article className="render-guide render-calc" aria-label={title}>
+            <header className="render-calc__header">
+                <h3 className="render-guide__title">{title}</h3>
+                <button type="button" className="render-guide__icon" onClick={onCopy} aria-label={t('cards.copy')} title={t('cards.copy')}>
+                    {notice === copiedNotice ? <Check size={15} /> : <Copy size={15} />}
+                </button>
+            </header>
+            <p className="render-guide__notice" role="status">{notice}</p>
+
+            <div className="render-calc__fields">
+                {Object.entries(spec.fields).map(([key, field]) => (
+                    <NumberField
+                        key={key}
+                        field={field}
+                        value={values[key]}
+                        money={money}
+                        onChange={(n) => setValues((prev) => ({ ...prev, [key]: n }))}
+                    />
+                ))}
+            </div>
+
+            <dl className="render-calc__results" aria-live="polite">
+                {results.map((line) => (
+                    <div key={line.label} className={`render-calc__result${line.primary ? ' is-primary' : ''}`}>
+                        <dt>{t(line.label)}</dt>
+                        <dd>{formatValue(line.value, line.format, money, t)}</dd>
+                    </div>
+                ))}
+            </dl>
+        </article>
+    );
+}
+
+interface NumberFieldProps {
+    field: FieldSpec;
+    value: number;
+    money: Money;
+    onChange: (value: number) => void;
+}
+
+/** A typed box and a slider on one value. The box keeps what is typed until it reads as a number in range,
+ *  and shows the value with thousands separators until it is focused for editing. */
+function NumberField({ field, value, money, onChange }: NumberFieldProps) {
+    const t = useT();
+    const [draft, setDraft] = useState<string | null>(null);
+    const [focused, setFocused] = useState(false);
+    const sliderMax = Math.min(field.max, Math.max(field.sliderMax ?? field.max, value));
+    const prefix = field.format === 'currency' ? currencySymbol(money) : '';
+    const suffix = field.format === 'percent' ? '%' : field.format === 'years' ? t.bare('cards.yearsShort') : '';
+    const label = t(field.label);
+
+    const onType = (text: string) => {
+        setDraft(text);
+        const n = Number(text);
+        if (text.trim() === '' || !Number.isFinite(n) || n < field.min || n > field.max) return;
+        if (field.integer && !Number.isInteger(n)) return;
+        onChange(n);
+    };
+
+    return (
+        <div className="render-calc__field">
+            <label className="render-calc__label">
+                <span>{label}</span>
+                <span className="render-calc__box">
+                    {prefix && <span className="render-calc__affix">{prefix}</span>}
+                    <input
+                        type={focused ? 'number' : 'text'}
+                        inputMode="decimal"
+                        min={field.min}
+                        max={field.max}
+                        step={field.step}
+                        value={draft ?? (focused ? String(value) : new Intl.NumberFormat(money.locale, { maximumFractionDigits: 10 }).format(value))}
+                        aria-label={label}
+                        onChange={(e) => onType(e.target.value)}
+                        onFocus={() => setFocused(true)}
+                        onBlur={() => { setFocused(false); setDraft(null); }}
+                    />
+                    {suffix && <span className="render-calc__affix">{suffix}</span>}
+                </span>
+            </label>
+            <input
+                type="range"
+                className="render-calc__slider"
+                min={field.min}
+                max={sliderMax}
+                step={field.step}
+                value={value}
+                aria-label={t('cards.slider', { name: label })}
+                aria-valuetext={formatValue(value, field.format, money, t)}
+                onChange={(e) => {
+                    setDraft(null);
+                    onChange(Number(e.target.value));
+                }}
+            />
+        </div>
+    );
+}

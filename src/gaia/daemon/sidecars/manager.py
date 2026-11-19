@@ -1,8 +1,7 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """AgentSidecarManager — spawn / health / tree-kill a sidecar agent process,
-generalized from ``EmailSidecarManager`` (Node-free) to be spec-driven so the
-daemon can supervise more than one kind of sidecar (issue #2142, T1).
+spec-driven so the daemon can supervise more than one kind of sidecar.
 
 Modes (``spec.mode_env_var``):
   user (default) — spawn the verified frozen binary: a Hub-installed one when
@@ -10,8 +9,8 @@ Modes (``spec.mode_env_var``):
   dev            — spawn ``uvicorn <spec.dev_module> --app-dir
                    <spec.dev_src_dir>/<spec.dev_app_dir>`` from source. Loaded
                    as a TOP-LEVEL module (NOT ``packaging.server:app``, which
-                   would resolve to the PyPI ``packaging`` library — the
-                   email package's ``packaging/`` dir has no ``__init__.py``
+                   would resolve to the PyPI ``packaging`` library — an
+                   agent package's ``packaging/`` dir has no ``__init__.py``
                    by design).
 
 Both serve the identical sidecar contract; the mode only swaps which process
@@ -43,9 +42,10 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 from gaia.daemon.constants import (
+    DAEMON_PID_ENV_VAR,
     DAEMON_SUPERVISION_ENABLED_VALUE,
     DAEMON_SUPERVISION_ENV_VAR,
     RESERVED_PORT,
@@ -53,6 +53,8 @@ from gaia.daemon.constants import (
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
+    IntegrityError,
+    SidecarInhibitedError,
     SidecarNotRunningError,
     SidecarSpawnError,
     SidecarUnresponsiveError,
@@ -262,13 +264,12 @@ class AgentSidecarManager:
         self.resolved_mode: Optional[str] = None
         # Per-session caller-auth token handed to the sidecar on spawn (#1706).
         # Generated once per manager instance; the proxy replays it as a bearer
-        # token on every request. Delivered via a 0600 file (#2149) when the
-        # sidecar supports it, else the deprecated bare-env leg.
+        # token on every request. Delivered via a 0600 file (#2149).
         self.auth_token: str = secrets.token_urlsafe(32)
         # Installed binary version captured by build_spawn_command (user mode) —
         # the pre-spawn key for secret-delivery negotiation (#2149).
         self.installed_binary_version: Optional[str] = None
-        # The leg actually used at spawn time: "file" | "env".
+        # "file" once the secret has been delivered at spawn.
         self.secret_delivery: Optional[str] = None
         self._secret_path: Optional[Path] = None
         # Delegated-custody wiring (#2153), set by the registry at mint before
@@ -278,6 +279,12 @@ class AgentSidecarManager:
         # daemon resolves the caller's identity from it (never from the request).
         self.custody_url: Optional[str] = None
         self.custody_secret: Optional[str] = None
+        # Mints the /host/v1/keychain credential, delivered as a file the sidecar
+        # deletes. Per spawn: a reap revokes it, and this manager may start again.
+        self.mint_keychain_secret: Optional[Callable[[], str]] = None
+        self._keychain_secret_path: Optional[Path] = None
+        # LEMONADE_BASE_URL and GAIA_LEMONADE_EMBEDDED as the sidecar got them.
+        self._spawned_lemonade: Tuple[Optional[str], Optional[str]] = (None, None)
 
     @property
     def mode(self) -> str:
@@ -288,6 +295,13 @@ class AgentSidecarManager:
                 f"{_VALID_MODES}. There is no fallback — set it explicitly."
             )
         return m
+
+    @property
+    def uses_ignored_lemonade(self) -> bool:
+        """It was spawned with a ``LEMONADE_BASE_URL`` GAIA now ignores."""
+        from gaia.llm.lemonade_choice import is_ignored_env_value
+
+        return is_ignored_env_value(*self._spawned_lemonade)
 
     @property
     def is_running(self) -> bool:
@@ -382,9 +396,22 @@ class AgentSidecarManager:
                 )
             except Exception as e:  # re-raise with the user-mode remedy
                 docs = f" Docs: {self.spec.docs_url}." if self.spec.docs_url else ""
+                unrecorded = ""
+                placed = (
+                    fetch.installer_placed_flagship()
+                    if self.spec.agent_id == fetch.FLAGSHIP_AGENT_ID
+                    and not isinstance(e, IntegrityError)
+                    else None
+                )
+                if placed is not None:
+                    unrecorded = (
+                        f"The copy at {placed} has no install record to "
+                        "verify it against, so it is not started.\n"
+                    )
                 raise SidecarSpawnError(
                     f"Cannot start the {self.spec.display_name} agent: no verified "
                     f"sidecar binary is available in user mode. {e}\n"
+                    f"{unrecorded}"
                     "Fix it one of these ways:\n"
                     f"  * Install '{self.spec.agent_id}' — run "
                     f"`{fetch.install_command(self.spec.agent_id)}` (or click "
@@ -409,7 +436,7 @@ class AgentSidecarManager:
             raise SidecarSpawnError(
                 f"dev mode needs the {self.spec.agent_id} source at {app_dir} but "
                 "it is missing. Run from a source checkout, or install it: "
-                "`uv pip install -e hub/agents/email/python`."
+                f"`uv pip install -e hub/agents/{self.spec.agent_id}/python`."
             )
         # No ``--reload``: it makes uvicorn run its own multiprocessing-spawn
         # reload supervisor on top of a sidecar the daemon already supervises,
@@ -518,10 +545,26 @@ class AgentSidecarManager:
         group_kwargs = background_popen_kwargs()
         # Hand the sidecar its per-session caller-auth token (#1706). Merge over
         # the inherited env / any cwd already in popen_kwargs — never clobber
-        # them. Delivery leg (0600 file vs deprecated bare env) is negotiated
-        # pre-spawn (#2149), before the log opens so a refusal leaks nothing.
+        # them. The secret-file check runs pre-spawn (#2149), before the log
+        # opens so a refusal leaks nothing.
         # Not child_env(): a sidecar is GAIA itself and must receive its credentials.
-        spawn_env = {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+        from gaia.env import expose_shipped_gaia, unfreeze_loader_paths
+        from gaia.llm.lemonade_choice import child_lemonade_env
+
+        # A frozen sidecar is another bundle: it must not record ours as the
+        # user's library path and hand it to the commands it runs. Its skills
+        # run `gaia`, which the desktop app ships beside us, not on PATH.
+        spawn_env = child_lemonade_env(
+            expose_shipped_gaia(
+                unfreeze_loader_paths(
+                    {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+                )
+            )
+        )
+        self._spawned_lemonade = (
+            spawn_env.get("LEMONADE_BASE_URL"),
+            spawn_env.get("GAIA_LEMONADE_EMBEDDED"),
+        )
         self._apply_secret_delivery(spawn_env)
         # OAuth forward-out (#2154): when the spec declares a forwarded-mode
         # channel, boot the sidecar reading DAEMON-forwarded access tokens
@@ -544,6 +587,19 @@ class AgentSidecarManager:
 
             spawn_env[CUSTODY_URL_ENV_VAR] = self.custody_url
             spawn_env[CUSTODY_SECRET_ENV_VAR] = self.custody_secret
+        from gaia.daemon.custody.constants import KEYCHAIN_SECRET_FILE_ENV_VAR
+
+        spawn_env.pop(KEYCHAIN_SECRET_FILE_ENV_VAR, None)
+        if (
+            self.custody_url
+            and self.mint_keychain_secret
+            and self._binary_reads_keychain_file()
+        ):
+            self._cleanup_keychain_secret_file()
+            self._keychain_secret_path = self._create_secret_file(
+                self.mint_keychain_secret()
+            )
+            spawn_env[KEYCHAIN_SECRET_FILE_ENV_VAR] = str(self._keychain_secret_path)
         # Supervision handshake (V2-15, #2156): tell the sidecar the daemon owns
         # the clock so it gates its own embedded schedulers off — the daemon
         # drives them from the single reconciled clock. A sidecar spawned any
@@ -551,6 +607,7 @@ class AgentSidecarManager:
         # parity). Must land BEFORE the idle reaper flips on, or a reaped sidecar
         # drops a clock the daemon isn't yet driving.
         spawn_env[DAEMON_SUPERVISION_ENV_VAR] = DAEMON_SUPERVISION_ENABLED_VALUE
+        spawn_env[DAEMON_PID_ENV_VAR] = str(os.getpid())
         log_handle = self._open_log(port)
         try:
             self._proc = subprocess.Popen(
@@ -579,91 +636,89 @@ class AgentSidecarManager:
             atexit.register(self.shutdown)
             self._atexit_registered = True
 
-    def _resolve_secret_delivery(self) -> "tuple[str, str]":
-        """Pick the delivery leg ("file" | "env") BEFORE spawn, plus the reason.
+    def _binary_reads_keychain_file(self) -> bool:
+        minimum = self.spec.keychain_file_min_version
+        # Dev mode runs ``uvicorn server:app``, which never reaches entry.main()
+        # to read and delete the file. Its interpreter doesn't change on update.
+        if (self.resolved_mode or self.mode) == "dev":
+            return False
+        version = self.installed_binary_version
+        return bool(
+            minimum and version and _version_tuple(version) >= _version_tuple(minimum)
+        )
 
-        Keyed off what the parent already knows — the resolved mode and the
-        installed binary's version from the install manifest / lock. NOT the
-        runtime /version probe: that answers only after spawn, which is too late
-        to choose how the secret is delivered (#2149).
+    def _resolve_secret_delivery(self) -> str:
+        """Check BEFORE spawn that the sidecar reads its secret from a file.
+
+        Returns why it does. Keyed off what the parent already knows — the
+        resolved mode and the installed binary's version from the install
+        manifest / lock. NOT the runtime /version probe: that answers only
+        after spawn, which is too late (#2149).
         """
         spec = self.spec
         if not spec.token_file_env_var or not spec.secret_file_min_version:
-            return "env", f"the {spec.agent_id} spec declares no file-delivery contract"
+            raise SidecarSpawnError(
+                f"the {spec.agent_id} sidecar spec declares no secret-file "
+                "contract (token_file_env_var / secret_file_min_version), so "
+                "its launch secret has no safe way in. Add both to its entry "
+                "in gaia.daemon.sidecars.spec.builtin_specs()."
+            )
         mode = self.resolved_mode or self.mode
         if mode == "dev":
-            return "file", "dev mode runs from source, which reads the secret file"
+            return "dev mode runs from source, which reads the secret file"
         version = self.installed_binary_version
         if not version:
             raise SidecarSpawnError(
                 f"cannot negotiate secret delivery for the {spec.agent_id} "
                 "sidecar: the installed binary's version is unknown (no version "
                 "in the hub install sentinel or binaries.lock.json). Refusing to "
-                "guess which leg the binary understands — reinstall the agent "
+                "guess whether the binary reads the secret file — reinstall the agent "
                 "so its install metadata records a version."
             )
-        if _version_tuple(version) >= _version_tuple(spec.secret_file_min_version):
-            return (
-                "file",
-                f"installed binary {version} >= {spec.secret_file_min_version}",
+        if _version_tuple(version) < _version_tuple(spec.secret_file_min_version):
+            raise SidecarSpawnError(
+                f"the installed {spec.agent_id} sidecar binary {version} predates "
+                f"secret-file delivery (needs {spec.secret_file_min_version} or "
+                "later). Update GAIA, or reinstall the agent, to get a current "
+                "binary."
             )
-        return (
-            "env",
-            f"installed binary {version} predates file delivery "
-            f"(< {spec.secret_file_min_version})",
-        )
+        return f"installed binary {version} >= {spec.secret_file_min_version}"
 
     def _apply_secret_delivery(self, spawn_env: dict) -> None:
-        """Inject the launch secret into *spawn_env* via the negotiated leg.
+        """Hand the launch secret to the child through an owner-only file.
 
         The same secret doubles as the sidecar's model-slot broker credential
         (#2151 / V2-11): the sidecar presents ``self.auth_token`` to the host
         broker, and the registry authenticates it against this manager's token.
-        It rides the SAME delivery leg as the launch secret so file delivery
-        (#2149) is never undermined by a bare-env copy — for the file leg the
-        broker credential reuses the very same 0600 file.
+        It reuses the very same 0600 file, so file delivery (#2149) is never
+        undermined by a bare-env copy.
         """
         from gaia.daemon.constants import (
             BROKER_TOKEN_ENV_VAR,
             BROKER_TOKEN_FILE_ENV_VAR,
         )
 
-        leg, reason = self._resolve_secret_delivery()
-        self.secret_delivery = leg
-        if leg == "file":
-            secret_path = self._write_secret_file()
-            spawn_env[self.spec.token_file_env_var] = str(secret_path)
-            # The broker credential is the same secret — point the broker client
-            # at the same 0600 file rather than leaking a bare-env copy (#2149).
-            spawn_env[BROKER_TOKEN_FILE_ENV_VAR] = str(secret_path)
-            # Never let a stale inherited token env var ride into the child.
-            spawn_env.pop(self.spec.token_env_var, None)
-            spawn_env.pop(BROKER_TOKEN_ENV_VAR, None)
-            logger.info(
-                "%s sidecar: delivering launch secret via 0600 file %s (%s)",
-                self.spec.agent_id,
-                secret_path,
-                reason,
-            )
-        else:
-            spawn_env[self.spec.token_env_var] = self.auth_token
-            # Bare-env broker credential only on the already-deprecated bare-env
-            # leg (older binaries). No new secret surface beyond the launch token.
-            spawn_env[BROKER_TOKEN_ENV_VAR] = self.auth_token
-            spawn_env.pop(BROKER_TOKEN_FILE_ENV_VAR, None)
-            logger.warning(
-                "%s sidecar: DEPRECATED bare-env secret delivery via %s (%s). "
-                "The secret is visible to local process inspection "
-                "(/proc/<pid>/environ, ps eww); upgrade the installed sidecar "
-                "binary to get 0600-file delivery. Removal of this leg is "
-                "tracked in #2149.",
-                self.spec.agent_id,
-                self.spec.token_env_var,
-                reason,
-            )
+        reason = self._resolve_secret_delivery()
+        self.secret_delivery = "file"
+        secret_path = self._write_secret_file()
+        spawn_env[self.spec.token_file_env_var] = str(secret_path)
+        spawn_env[BROKER_TOKEN_FILE_ENV_VAR] = str(secret_path)
+        # Never let a stale inherited token env var ride into the child.
+        spawn_env.pop(self.spec.token_env_var, None)
+        spawn_env.pop(BROKER_TOKEN_ENV_VAR, None)
+        logger.info(
+            "%s sidecar: delivering launch secret via 0600 file %s (%s)",
+            self.spec.agent_id,
+            secret_path,
+            reason,
+        )
 
     def _write_secret_file(self) -> Path:
-        """Create the owner-only launch-secret file; loud error, no env fallback.
+        self._secret_path = self._create_secret_file(self.auth_token)
+        return self._secret_path
+
+    def _create_secret_file(self, secret: str) -> Path:
+        """Create an owner-only secret file; loud error, no env fallback.
 
         A fresh ``mkdtemp`` dir (0700) + ``O_CREAT|O_EXCL`` at 0600 means the
         secret never exists on disk with looser permissions, even mid-write.
@@ -682,7 +737,7 @@ class AgentSidecarManager:
             path = secret_dir / "launch-secret"
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
-                os.write(fd, self.auth_token.encode("utf-8"))
+                os.write(fd, secret.encode("utf-8"))
             finally:
                 os.close(fd)
             if os.name != "nt":
@@ -706,7 +761,6 @@ class AgentSidecarManager:
         except SidecarSpawnError:
             self._remove_secret_dir(secret_dir)
             raise
-        self._secret_path = path
         return path
 
     @staticmethod
@@ -721,9 +775,18 @@ class AgentSidecarManager:
 
     def _cleanup_secret_file(self) -> None:
         path = self._secret_path
+        self._secret_path = None
+        self._remove_secret_file(path)
+        self._cleanup_keychain_secret_file()
+
+    def _cleanup_keychain_secret_file(self) -> None:
+        path = self._keychain_secret_path
+        self._keychain_secret_path = None
+        self._remove_secret_file(path)
+
+    def _remove_secret_file(self, path: Optional[Path]) -> None:
         if path is None:
             return
-        self._secret_path = None
         try:
             path.unlink(missing_ok=True)
             path.parent.rmdir()
@@ -743,8 +806,32 @@ class AgentSidecarManager:
         each time. A genuine hang (``HealthTimeoutError``) is NOT retried — that
         would just multiply the wait — and surfaces loudly on the first attempt.
         """
-        with self._lock:
-            return self._start_locked(max_attempts)
+        try:
+            with self._lock:
+                return self._start_locked(max_attempts)
+        except SidecarInhibitedError:
+            raise
+        except (SidecarSpawnError, HealthTimeoutError) as e:
+            self._record_start_failure(e)
+            raise
+
+    def _record_start_failure(self, exc: BaseException) -> None:
+        """Save a local fault record for a sidecar that never came up."""
+        from gaia.llm.failure_record import record_local_failure
+
+        record_id = record_local_failure(
+            exc,
+            where="sidecar_start",
+            kind="sidecar_start",
+            agent=self.spec.agent_id,
+            extra={"mode": self.resolved_mode, "sidecar_url": self.base_url},
+        )
+        if record_id:
+            logger.error(
+                "%s sidecar failed to start; problem report saved as %s",
+                self.spec.agent_id,
+                record_id,
+            )
 
     def _start_locked(self, max_attempts: int) -> str:
         if self.is_running:
@@ -950,8 +1037,9 @@ class AgentSidecarManager:
                     self.spec.agent_id,
                 )
             return
-        self._proc = None
+        # Fire before clearing _proc so the hook can name the reaped pid.
         self._fire_reaped()
+        self._proc = None
         logger.info("%s sidecar: shut down", self.spec.agent_id)
 
     @staticmethod

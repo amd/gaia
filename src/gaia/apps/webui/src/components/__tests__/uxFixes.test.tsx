@@ -5,7 +5,7 @@ import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MessageBubble, escapeBareNumberLines } from '../MessageBubble';
 import { AgentActivity, formatArgsDisplay, formatToolLatency } from '../AgentActivity';
-import { isEchoOfFailedTool } from '../ChatView';
+import { isEchoOfFailedTool } from '../../utils/chatStream';
 import { PermissionPrompt } from '../PermissionPrompt';
 import { useChatStore } from '../../stores/chatStore';
 import { useNotificationStore } from '../../stores/notificationStore';

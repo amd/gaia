@@ -1,6 +1,6 @@
 ---
 name: contributor-triage
-description: "Load whenever the user is auditing, triaging, reviewing, or completing amd/gaia pull requests or issues — 'audit/triage PRs', 'what's outstanding', 'complete the ready PRs', 'merge what's ready', 'check third-party/external/community PRs or issues', 'approve workflows for contributors', 'what's left for the release', 'label good first issues', 'close stale issues', 'are contributor fixes in main/the release notes'. Outside contributors come first, bug fixes before features. A PR merges only with CI green, no conflicts, every comment addressed and an independent verifier pass. Runs a scanner for the ranked worklist, approves stalled fork CI for reviewed commits, drives the per-PR loop, and cuts release candidates at checkpoints. Parallel subagent mechanics: pr-backlog-triage. Reply wording: github-issue-response."
+description: "Load whenever the user is auditing, triaging, reviewing, or completing amd/gaia pull requests or issues — 'audit/triage PRs', 'what's outstanding', 'complete the ready PRs', 'merge what's ready', 'check third-party/external/community PRs or issues', 'approve workflows for contributors', 'what's left for the release', 'label good first issues', 'close stale issues', 'are contributor fixes in main/the release notes'. Outside contributors come first, bug fixes before features. A PR merges only with CI green, no conflicts, every comment addressed and an independent verifier pass, unless the user asks for the express lane (pr-backlog-triage). Runs a scanner for the ranked worklist, approves stalled fork CI for reviewed commits, drives the per-PR loop, and cuts release candidates at checkpoints. Parallel subagent mechanics: pr-backlog-triage. Reply wording: github-issue-response."
 ---
 
 # Contributor-first PR and issue triage
@@ -32,6 +32,9 @@ A PR is **ready** only when all four hold:
 
 The bar is strict by default and the **user** sets any waiver ("bug-only PRs, force-complete
 if comments are addressed"). A model never relaxes it on its own.
+The express lane in [`pr-backlog-triage`](../pr-backlog-triage/SKILL.md) is one such
+user-set waiver of the verifier and of unrelated CI failures, and applies only when the user
+asks for it.
 
 Authority: merge when the user has asked to complete PRs into `main`. Pushing a fix onto a
 PR branch is part of completing it. RC and final tags follow [`gaia-release`](../gaia-release/SKILL.md),
@@ -200,8 +203,13 @@ RC failed to publish, or (3) the shortlist is empty: this one is the final's can
    out, and note the `main` SHA you are about to test.
 2. **Wait for CI to finish and go green on that exact commit** (`gh run list --commit <sha>`).
    Tagging while main's CI still runs is the mistake that burned an RC before.
-3. **Dry-run the release train** on it: `gh workflow run release_train_dryrun.yml --ref main -f
-   rc_tag=vX.Y.Z-rcN`, and fix forward on `main` until it passes.
+3. **Dry-run the release train** on it. It runs nightly on `main` as the next unused RC, so
+   first look for a verified run of that SHA: `python util/release_train.py verified-run
+   --repo amd/gaia --sha <sha>` (empty output: none is still downloadable). If there is
+   none, dispatch it: `gh workflow run
+   release_train_dryrun.yml --ref main -f rc_tag=vX.Y.Z-rcN`. Fix forward on `main` until it
+   passes. A nightly built as another RC number still proves the commit, but its digests are
+   that number's; dispatch with the exact tag when you need digests that match the release.
 4. **Tag the RC** per [`gaia-release`](../gaia-release/SKILL.md) (ask first unless RC tags are pre-authorized). Watch the publish run to the end; an RC isn't done
    until its release, installers and website entry exist.
 5. **Report what is in it**: PRs since the previous RC, outside contributors first, so the user

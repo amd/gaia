@@ -15,8 +15,11 @@ so the two agents cannot drift into private dialects of the same contract.
 Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
-2.14), ``/sessions/{session_id}/bypass`` and ``/sessions/{session_id}/internet``
-(contract >= 2.23). ``needs_input`` is answered over
+2.14), ``/sessions/{session_id}/bypass``, ``/sessions/{session_id}/internet``
+(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26),
+``/sessions/{session_id}/tools`` (contract >= 2.27) and
+``DELETE /sessions/{session_id}`` (contract >= 2.30).
+``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
 hold the grant AND the caller declared it can answer (``can_confirm`` in
@@ -49,6 +52,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from gaia_agent import caller_auth
 from gaia_agent.entry import main as _entry_main
 from gaia_agent.memory_dump import build_memory_dump
+from gaia_agent.session import validate_session_id
 from gaia_agent.session_registry import (
     AGENT_BUILD_LOCK,
     PROVIDER_CLAUDE,
@@ -57,14 +61,20 @@ from gaia_agent.session_registry import (
     close_agent,
 )
 from gaia_agent.session_registry import registry as session_registry
-from gaia_agent_chat.session import validate_session_id
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 
 from gaia.agents.base import file_snapshots
 from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
+from gaia.agents.tools.rag_tools import (
+    _forget_evicted,
+    index_limit,
+    not_held,
+    not_loaded_summary,
+)
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
+from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
@@ -92,9 +102,17 @@ AGENT_ID = "gaia"
 #: 2.23 added ``/query``'s ``internet_off`` field and ``/sessions/{id}/internet``.
 #: 2.24 added ``working_directory`` to ``/query``.
 #: 2.25 added ``/query``'s ``turns`` field and ``final.model_messages``.
-API_VERSION = "2.25"
+#: 2.26 added ``GET``/``DELETE /sessions/{id}/grants`` to list and revoke a
+#: session's "always" answers, and ``/skills``' ``claude-project`` source.
+#: 2.27 added ``GET /sessions/{id}/tools``: the tools the session's agent has.
+#: 2.28 added the non-terminal ``context_usage`` event for a caller that sends
+#: ``turns``: the turn's first call is measured before the answer streams.
+#: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
+#: 2.30 added ``DELETE /sessions/{id}``: end a session and stop its MCP servers.
+API_VERSION = "2.30"
 
-#: How long ``final`` waits for the turn's context measurement before going without.
+#: How long the stream allows the turn's context measurement before naming the
+#: failure on ``final``, and how long the loop's own fallback measurement waits.
 _CONTEXT_WAIT_SECONDS = 15.0
 
 #: Budget for counting with the model's own tokenizer before the estimate stands in,
@@ -195,9 +213,13 @@ class QueryRequest(_Strict):
         description=(
             "Absolute paths of the files the user attached to this conversation "
             "(contract >= 2.16). Each is granted as that exact file, never its "
-            "folder, and indexed before the turn runs. Send the full set every "
-            "turn: files already indexed in a retained session are skipped, so "
-            "one attached mid-conversation is picked up on the next turn."
+            "folder, and indexed before the turn runs, up to 100 documents or "
+            "10,000 passages; the rest load when the agent is asked about one. "
+            "Send the full set every turn, an empty list when none are attached: "
+            "files already indexed in a retained session are skipped, so one "
+            "attached mid-conversation is picked up on the next turn, and one "
+            "sent before but left out now is removed from the session's index "
+            "and can no longer be read."
         ),
     )
 
@@ -375,6 +397,15 @@ class QueryRequest(_Strict):
 class QueryCancelResponse(_Strict):
     run_id: str
     cancelled: bool
+    documents_left: Optional[int] = Field(
+        default=None,
+        description=(
+            "How many of the turn's attached documents the cancel left "
+            "unloaded. null when the run was not loading documents or had "
+            "loaded them all. The stream a host closes on cancel never carries "
+            "the loading step's result, so this is where the count comes from."
+        ),
+    )
 
 
 class QueryRespondRequest(_Strict):
@@ -506,6 +537,71 @@ class InternetResponse(_Strict):
     internet_off: bool
 
 
+class GrantView(_Strict):
+    key: str = Field(description="The grant's handle, for revoking it.")
+    label: str = Field(description="What it allows, as the prompt worded it.")
+
+
+class GrantsResponse(_Strict):
+    """A session's "always" answers (contract >= 2.26)."""
+
+    session_id: str
+    grants: List[GrantView]
+
+
+class SessionDeletedResponse(_Strict):
+    """``DELETE /sessions/{id}`` (contract >= 2.30)."""
+
+    session_id: str
+    deleted: bool
+
+
+class ToolView(_Strict):
+    name: str = Field(description="The tool's registered name.")
+    description: str = Field(description="What it does, as the model is told.")
+    category: str = Field(
+        description=(
+            "Where it comes from: a KNOWN_TOOLS mixin name (rag, file_io, ...), "
+            "mcp, skill, or agent for a tool the agent defines itself."
+        )
+    )
+
+
+class ToolsResponse(_Strict):
+    """The tools a session's agent can call (contract >= 2.27)."""
+
+    session_id: str
+    tools: List[ToolView]
+
+
+class _DocumentLoad:
+    """How far a turn's attached documents have loaded, read in step with Stop."""
+
+    def __init__(self, total: int, cancel: Optional[threading.Event]) -> None:
+        self.total = total
+        self._started = 0
+        self._cancel = cancel
+        self._lock = threading.Lock()
+
+    def start_next(self) -> bool:
+        """Count the next document as started, unless the run was stopped."""
+        with self._lock:
+            if self._cancel is not None and self._cancel.is_set():
+                return False
+            self._started += 1
+            return True
+
+    def end_early(self) -> None:
+        """Count the rest as handled: a full index, not Stop, left them unloaded."""
+        with self._lock:
+            self._started = self.total
+
+    def left(self) -> int:
+        """Documents not started. Final once the cancel flag is set."""
+        with self._lock:
+            return self.total - self._started
+
+
 class _QueryRun:
     """One in-flight run: the agent, its output handler, and its cancel flag."""
 
@@ -525,6 +621,19 @@ class _QueryRun:
         #: Why measuring failed, when it did.
         self.context_error: Optional[str] = None
         self.context_done = threading.Event()
+        #: This turn's question, and the history it was fitted to, so the stream
+        #: can measure the sealed record even if the loop is still storing memory.
+        self.query = ""
+        self.pushed: List[Dict[str, Any]] = []
+        self.received_turns: Optional[List[List[Dict[str, Any]]]] = None
+        #: The turn's attached documents, while and after they load.
+        self.document_load: Optional[_DocumentLoad] = None
+
+    def documents_left(self) -> Optional[int]:
+        """Attached documents a cancel left unloaded, or None when there are none."""
+        load = self.document_load
+        left = load.left() if load is not None else 0
+        return left if left > 0 and self.cancel_event.is_set() else None
 
 
 class DuplicateRunError(RuntimeError):
@@ -547,10 +656,12 @@ _MAX_FINISHED = 256
 _MISSING = object()
 
 
-def _remember_bounded(store: Dict[str, None], key: str, cap: int) -> None:
+def _remember_bounded(
+    store: Dict[str, Optional[int]], key: str, cap: int, value: Optional[int] = None
+) -> None:
     """Record ``key`` as the newest entry, dropping the oldest past ``cap``."""
     store.pop(key, None)  # re-insert at the end, so this is the newest
-    store[key] = None
+    store[key] = value
     while len(store) > cap:
         store.pop(next(iter(store)))
 
@@ -563,9 +674,9 @@ class _RunRegistry:
         #: run_ids cancelled before their ``/query`` registered. Insertion
         #: ordered, so the oldest is the one evicted at the cap.
         self._precancelled: Dict[str, None] = {}
-        #: run_ids whose run has already ended. Same shape, and the reason
-        #: ``cancel`` does not tombstone them.
-        self._finished: Dict[str, None] = {}
+        #: run_ids whose run has already ended, and the reason ``cancel`` does
+        #: not tombstone them. Each keeps the documents a cancel left unloaded.
+        self._finished: Dict[str, Optional[int]] = {}
         self._lock = threading.Lock()
 
     def add(self, run: _QueryRun) -> bool:
@@ -615,12 +726,21 @@ class _RunRegistry:
                 _remember_bounded(self._precancelled, run_id, _MAX_PRECANCELLED)
             return False
 
+    def documents_left(self, run_id: str) -> Optional[int]:
+        """Attached documents a cancel of *run_id* left unloaded, live or just ended."""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is not None:
+                return run.documents_left()
+            return self._finished.get(run_id)
+
     def remove(self, run_id: str) -> None:
         """Retire a finished run, remembering the id so a late cancel knows it
         ended rather than treating it as one that has yet to start."""
         with self._lock:
-            self._runs.pop(run_id, None)
-            _remember_bounded(self._finished, run_id, _MAX_FINISHED)
+            run = self._runs.pop(run_id, None)
+            left = run.documents_left() if run is not None else None
+            _remember_bounded(self._finished, run_id, _MAX_FINISHED, left)
 
 
 _registry = _RunRegistry()
@@ -644,30 +764,38 @@ def _worded(event: Dict[str, Any], surface: str) -> Dict[str, Any]:
     }
 
 
-def _terminal_error_detail(exc: BaseException) -> str:
+def _terminal_error_detail(exc: BaseException, surface: str) -> str:
     """Actionable copy for a run-killing exception.
 
-    Lemonade being unreachable is by far the most common failure and its raw
-    urllib3 repr tells a user nothing, so it gets named copy with the fix.
-    Anything else is surfaced verbatim — a generic 'something went wrong' would
-    hide the one detail that makes a bug reportable.
+    A model-server failure gets its classified wording, which names the fix in
+    the caller's front-end. Anything else is surfaced verbatim — a generic
+    'something went wrong' would hide the one detail that makes a bug
+    reportable.
     """
-    text = f"{type(exc).__name__}: {exc}"
-    lowered = text.lower()
-    if any(
-        s in lowered
-        for s in (
-            "connection refused",
-            "max retries",
-            "failed to establish",
-            "newconnectionerror",
+    from gaia_agent.stdio import model_server_failure, model_server_message
+
+    typed = model_server_failure(exc)
+    if typed is not None:
+        return model_server_message(typed, surface)
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _start_failure(exc: BaseException, surface: str) -> HTTPException:
+    """The HTTP error for a run that failed before its loop started."""
+    from gaia_agent.stdio import model_server_failure, model_server_message
+
+    typed = model_server_failure(exc)
+    if typed is None:
+        return HTTPException(
+            status_code=500,
+            detail=surface_wording(f"Failed to start the query run: {exc}", surface),
         )
-    ):
-        return (
-            f"Local Lemonade Server is not reachable. {start_advice()} "
-            f"See {_DOCS_URL}. (underlying error: {text})"
-        )
-    return text
+    logger.warning("%s /query could not start: %s", AGENT_ID, exc)
+    # Not the caller's fault and not a bug: the model server is unavailable.
+    return HTTPException(
+        status_code=503,
+        detail=surface_wording(model_server_message(typed, surface), surface),
+    )
 
 
 def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -677,6 +805,8 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     message rather than raising, so a run can finish with no ``answer`` event.
     Surfacing that message beats inventing a generic error.
     """
+    from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN
+
     if isinstance(result, dict):
         if result.get("status") == "cancelled":
             # Stopped mid-generation: the loop returns no text by design, and
@@ -688,6 +818,8 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
                 final: Dict[str, Any] = {"type": "final", "answer": value}
                 if result.get("model_failed"):
                     final["failed"] = True
+                    if result.get("model_server_down"):
+                        final["failure"] = MODEL_SERVER_DOWN
                 return final
         error = result.get("error")
         if isinstance(error, str) and error.strip():
@@ -700,6 +832,21 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
         ),
         "status": 500,
     }
+
+
+def _run_route(run: "_QueryRun") -> Optional[Dict[str, Any]]:
+    """The route a ``hybrid`` session's turn took (contract >= 2.29), or None.
+
+    Read from the agent while the run's tail is still going: the route is
+    decided before the turn starts, so it is known by the time ``final`` is.
+    """
+    recorded = run.result.get("route") if isinstance(run.result, dict) else None
+    if isinstance(recorded, dict):
+        return recorded
+    if getattr(run.agent, "hybrid_router", None) is None:
+        return None
+    route = getattr(run.agent, "last_route", None)
+    return route.as_record() if route is not None else None
 
 
 def _run_answer(result: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -721,9 +868,13 @@ def _measure_turn_context(
     pushed: List[Dict[str, Any]],
     query: str,
     result: Optional[Dict[str, Any]],
+    received_turns: Optional[List[List[Dict[str, Any]]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """What the next model call holds: the pushed history plus this turn.
 
+    With *received_turns* (a caller that sends ``turns``), the measurement is
+    over those whole turns plus this turn as recorded, tool results included:
+    the same turns, in the same budget, the next ``/query`` is fitted from.
     None for a turn with no answer (stopped, or the model failed), which adds
     nothing the caller's next push would carry.
     """
@@ -732,11 +883,15 @@ def _measure_turn_context(
     answer = _run_answer(result)
     if answer is None:
         return None
-    messages = list(pushed) + [
+    exchange = [
         {"role": "user", "content": query},
         {"role": "assistant", "content": answer},
     ]
-    turns = pushed_turns(messages)
+    if received_turns is not None:
+        recorded = result.get("model_messages") if isinstance(result, dict) else None
+        turns = list(received_turns) + _as_model_turns(agent, [recorded or exchange])
+    else:
+        turns = pushed_turns(list(pushed) + exchange)
     model_id = getattr(agent, "model_id", None)
     box: Dict[str, Any] = {}
 
@@ -769,10 +924,41 @@ def _measure_turn_context(
     )
 
 
+def _context_timeout_message() -> str:
+    return (
+        "GAIA couldn't measure this chat's context: it did not finish within "
+        f"{_CONTEXT_WAIT_SECONDS:g}s."
+    )
+
+
+def _report_live_context(run: "_QueryRun") -> None:
+    """Stream what this turn's model call holds before the answer (contract 2.28).
+
+    The in-process path sends the same event at turn start, so a relayed chat's
+    composer fills during a long turn instead of reading "-" until ``final``.
+    The cheap estimate is deliberate: a live update must never hold up the turn.
+    """
+    from gaia.agents.base.history import context_usage
+
+    try:
+        usage = context_usage(run.agent, run.received_turns or [], run.query)
+    except Exception as exc:  # noqa: BLE001 - a meter must never fail the turn
+        logger.warning(
+            "live context measurement failed for run_id=%s: %s", run.run_id, exc
+        )
+        return
+    run.handler._emit({"type": "context_usage", **usage})
+
+
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
-    """Terminal refusal for a confirmation-gated tool (the stateless D1 stub)."""
+    """Terminal refusal for a confirmation-gated tool (the stateless D1 stub).
+
+    ``failed``: the request was not done, so a scripted caller must not read
+    it as a success.
+    """
     return {
         "type": "final",
+        "failed": True,
         "answer": (
             f"I stopped before running '{action}' because it needs your explicit "
             "approval, and this streaming surface cannot collect that yet. "
@@ -798,24 +984,133 @@ def _attach_refusal(agent: Any, path: str) -> str:
     return reason if blocked else ""
 
 
-def _index_attached_documents(agent: Any, documents: List[str], handler: Any) -> None:
+def _grant_unloaded(agent: Any, documents: List[str]) -> None:
+    """Grant attached documents the full index can't hold, so one loads on request."""
+    for doc in documents:
+        if not _attach_refusal(agent, doc):
+            agent.path_validator.add_allowed_path(doc)
+
+
+def _granted_only_as_gaias_copy(validator: Any, doc: str) -> bool:
+    """Whether *doc* is still readable only because it sits in GAIA's documents folder.
+
+    The Agent UI grants that whole folder to every chat as its scratch space,
+    and keeps the copy of every document dropped into it there. A folder the
+    user granted is any other entry, and keeps covering *doc*.
+    """
+    if not validator.is_path_allowed(doc, prompt_user=False):
+        return False
+    from gaia.ui.utils import UnsafeGaiaHomeError, managed_documents_dir
+
+    try:
+        managed = managed_documents_dir().resolve()
+    except UnsafeGaiaHomeError:
+        # The Agent UI refuses to run on this GAIA_HOME, so it keeps no copies.
+        return False
+    real = Path(os.path.realpath(doc))
+    if not real.is_relative_to(managed):
+        return False
+    return not any(
+        real.is_relative_to(Path(os.path.realpath(root)))
+        for root in validator.allowed_paths
+        if Path(os.path.realpath(root)) != managed
+    )
+
+
+def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
+    """Take the documents attached last turn but not this one out of the index.
+
+    Their grants go too: a grant left behind lets ``query_specific_file``
+    index the file again from disk. GAIA's own copy of a document is refused
+    until it is attached again, since its folder stays granted.
+    """
+    validator = agent.path_validator
+    withheld = getattr(agent, "_withheld_documents", set())
+    for doc in withheld & set(documents):
+        validator.release_path(doc)
+    withheld -= set(documents)
+    agent._withheld_documents = withheld
+    attached = getattr(agent, "_attached_documents", set())
+    dropped = attached - set(documents)
+    agent._attached_documents = set(documents)
+    if not dropped:
+        return
+    rag = agent.rag
+    for doc in sorted(dropped):
+        validator.remove_allowed_path(doc)
+        if _granted_only_as_gaias_copy(validator, doc):
+            validator.withhold_path(doc)
+            withheld.add(doc)
+        if doc not in agent.indexed_files:
+            continue
+        held = rag is not None and str(Path(doc).absolute()) in rag.indexed_files
+        if held and not rag.remove_document(doc):
+            raise RuntimeError(
+                f"{Path(doc).name} was taken off this conversation but could not "
+                "be removed from its document index. Start a new conversation; "
+                "the GAIA log has the details."
+            )
+        agent.indexed_files.discard(doc)
+    agent.rebuild_system_prompt()
+
+
+def _index_attached_documents(
+    agent: Any, documents: List[str], handler: Any, run: Optional[_QueryRun] = None
+) -> None:
     """Index the documents the caller attached to this conversation (>= 2.16).
 
     Grants each as that exact file, never its folder: the scope an in-process
     Agent UI agent gets. Files already indexed are skipped, so a retained
-    session pays only for documents attached since its last turn.
+    session pays only for documents attached since its last turn. Loading
+    stops once the index is full; the rest stay attached and load on request.
+    A document attached on an earlier turn and left out of *documents* is
+    dropped. *run* is told how far the load got, so its cancel can report
+    what was left.
     """
+    _drop_detached_documents(agent, documents)
+    agent.attached_documents = list(documents)
     indexed = agent.indexed_files
     pending = [d for d in documents if d not in indexed]
     if not pending:
         return
+    if agent.rag is not None and agent.rag.is_full():
+        # Already said when the index filled; the model is told every turn.
+        _grant_unloaded(agent, pending)
+        return
+    # Set before the step opens, so a Stop that lands now still gets its count.
+    load = _DocumentLoad(len(pending), getattr(agent, "_cancel_event", None))
+    if run is not None:
+        run.document_load = load
     handler.print_tool_usage(_ATTACH_TOOL)
     handler.pretty_print_json(
         {"documents": [Path(d).name for d in pending]}, title="Arguments"
     )
     rag = agent.rag
     lines: List[str] = []
-    for doc in pending:
+    stopped = False
+    filled = False
+    left = 0
+    stop_index = len(pending)
+    stop_line: Optional[int] = None
+    unreadable: set = set()
+    loaded_line: Dict[str, int] = {}
+    for position, doc in enumerate(pending):
+        # Stop ends the loading here; what is left stays attached for later.
+        if not load.start_next():
+            left = load.left()
+            stop_index = position
+            stop_line = len(lines)
+            lines.append(
+                "Stopped: "
+                + ("1 document was" if left == 1 else f"{left} documents were")
+                + " not loaded. They load with your next message."
+            )
+            stopped = True
+            break
+        if rag is not None and rag.is_full():
+            filled = True
+            load.end_early()
+            break
         name = Path(doc).name
         reason = (
             "document search is not available in this session"
@@ -823,6 +1118,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             else _attach_refusal(agent, doc)
         )
         if reason:
+            unreadable.add(doc)
             lines.append(f"{name}: not indexed: {reason}")
             continue
         agent.path_validator.add_allowed_path(doc)
@@ -830,18 +1126,48 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             result = rag.index_document(doc)
         except Exception as exc:  # reported in the visible step below
             logger.exception("Indexing attached document %s failed", doc)
+            unreadable.add(doc)
             lines.append(f"{name}: not indexed: {exc}")
             continue
         if result.get("success") and not result.get("error"):
+            filled = filled or bool(result.get("evicted"))
+            _forget_evicted(indexed, result.get("evicted", []))
             indexed.add(doc)
+            loaded_line[doc] = len(lines)
             lines.append(f"{name}: {result.get('num_chunks', 0)} chunks")
         else:
+            unreadable.add(doc)
             error = result.get("error") or "the indexer gave no reason"
             lines.append(f"{name}: not indexed: {error}")
+    # On a stop, report only what a load pushed out; the stop count covers the rest.
+    unloaded = []
+    if filled and rag is not None:
+        missed = not_held(rag, pending, unreadable)
+        if stopped:
+            attempted = set(pending[:stop_index])
+            unloaded = [d for d in missed if d in attempted]
+        else:
+            unloaded = missed
+    if stopped and rag is not None and rag.is_full() and stop_line is not None:
+        lines[stop_line] = (
+            "Stopped: "
+            + ("1 document was" if left == 1 else f"{left} documents were")
+            + " not loaded. "
+            + index_limit(rag).capitalize()
+            + "; they load only when you ask about one by name."
+        )
+    for doc in unloaded:
+        if doc in loaded_line:
+            lines[loaded_line[doc]] += " (then pushed out to fit the index)"
+    if unloaded:
+        lines.append(not_loaded_summary(rag, unloaded))
+        _grant_unloaded(agent, unloaded)
+    not_loaded = len(unloaded)
     succeeded = sum(1 for d in pending if d in indexed)
     if succeeded:
         agent.rebuild_system_prompt()
-    all_indexed = succeeded == len(pending)
+    all_indexed = succeeded == len(pending) - not_loaded
+    status = "stopped" if stopped else "indexed" if all_indexed else "not all indexed"
     handler._emit(
         {
             "type": "tool_result",
@@ -850,7 +1176,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             "success": all_indexed,
             # The status/message shape is what a relaying host summarizes from.
             "result_data": {
-                "status": "indexed" if all_indexed else "not all indexed",
+                "status": status,
                 "message": "; ".join(lines),
                 "success": all_indexed,
             },
@@ -1017,19 +1343,24 @@ async def init() -> Dict[str, Any]:
             f"See {_DOCS_URL}."
         )
     elif compatible is False:
+        from gaia.llm.lemonade_launcher import describe_upgrade_hint
+
+        upgrade = await asyncio.to_thread(describe_upgrade_hint, probe["base_url"])
         hint = (
             f"Lemonade {probe['version']} is older than the required "
-            f"{LEMONADE_MIN_VERSION}. Run `gaia init --force-reinstall`, then "
-            "re-check."
+            f"{LEMONADE_MIN_VERSION}. {upgrade}"
         )
     elif not probe["present"]:
         # `gaia download` takes no positional model — argparse exits 2 on it.
         from gaia.llm.lemonade_launcher import describe_client_hint
 
-        pull = describe_client_hint("pull", probe["model_id"]).instruction
+        pull = describe_client_hint("pull", probe["model_id"])
+        # With no client found, the instruction already says it is not downloaded.
         hint = (
             f"The model {probe['model_id']} is not downloaded. "
-            f"{pull.rstrip('.')}, then re-check."
+            f"{pull.instruction.rstrip('.')}, then re-check."
+            if pull.command
+            else pull.instruction
         )
 
     ready = bool(probe["reachable"] and probe["present"] and compatible is not False)
@@ -1181,9 +1512,9 @@ def _default_model_for(provider: str) -> str:
         from gaia_agent.agent import GaiaAgentConfig
 
         return GaiaAgentConfig.claude_model
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+    from gaia.llm.lemonade_client import resolve_default_chat_model
 
-    return DEFAULT_MODEL_NAME
+    return resolve_default_chat_model()
 
 
 def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:
@@ -1269,26 +1600,32 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
         checked_out[0].run_lock.release()
 
 
-#: How long a ``final`` waits for the loop to return its turn record. The
-#: answer is already streamed; only the record for later turns waits on it.
-_TURN_RECORD_WAIT_SECONDS = 15.0
+#: How long a ``final`` from a caller that sent ``turns`` waits for the loop's
+#: timings. A caller that sent no ``turns`` does not wait: its measurement and
+#: record are sealed at the answer, and its timings stay best-effort as before.
+_RUN_RESULT_WAIT_SECONDS = 15.0
+
+
+def _as_model_turns(
+    agent: Any, turns: List[List[Dict[str, Any]]]
+) -> List[List[Dict[str, Any]]]:
+    """*turns* as *agent*'s model reads them: tool calls as text without native tools."""
+    from gaia.agents.base.history import text_tool_history
+
+    uses_native = getattr(agent, "_uses_native_tool_calls", None)
+    if callable(uses_native) and not uses_native():
+        return text_tool_history(turns)
+    return turns
 
 
 def _history_from_turns(
     agent: Any, turns: List[List[Dict[str, Any]]], query: str, handler: Any
 ) -> List[Dict[str, Any]]:
     """The newest whole *turns* that fit *agent*'s window, as its model reads them."""
-    from gaia.agents.base.history import (
-        history_budget,
-        select_history,
-        text_tool_history,
-    )
+    from gaia.agents.base.history import history_budget, select_history
 
-    uses_native = getattr(agent, "_uses_native_tool_calls", None)
-    if callable(uses_native) and not uses_native():
-        turns = text_tool_history(turns)
     return select_history(
-        turns,
+        _as_model_turns(agent, turns),
         history_budget(agent, query),
         lambda cut: handler._emit({"type": "status", "message": cut.notice}),
     )
@@ -1301,25 +1638,82 @@ async def _with_turn_record(
 
     Only a caller that sent ``turns`` (*wanted*) gets it: the record carries
     every tool result in full, so it can outgrow a reader's frame limit.
-    The answer streams before the loop returns, so this waits for the record.
+    The agent seals the record as it prints the answer, so it is read from the
+    console; only a run with no sealed record waits for the loop's own copy.
     """
     if not wanted or event.get("type") != "final":
         return event
-    await asyncio.to_thread(thread.join, _TURN_RECORD_WAIT_SECONDS)
-    if thread.is_alive():
-        logger.warning(
-            "run_id=%s: the run had not finished %.0fs after its answer; this "
-            "turn is sent without its tool record, so later turns see only its text",
-            run.run_id,
-            _TURN_RECORD_WAIT_SECONDS,
+    messages = getattr(run.handler, "staged_model_messages", None)
+    if messages is None:
+        await asyncio.to_thread(thread.join, _RUN_RESULT_WAIT_SECONDS)
+        if thread.is_alive():
+            logger.warning(
+                "run_id=%s: the run had not finished %.0fs after its answer; this "
+                "turn is sent without its tool record, so later turns see only its "
+                "text",
+                run.run_id,
+                _RUN_RESULT_WAIT_SECONDS,
+            )
+            return event
+        messages = (
+            run.result.get("model_messages") if isinstance(run.result, dict) else None
         )
-        return event
-    messages = (
-        run.result.get("model_messages") if isinstance(run.result, dict) else None
-    )
     if messages is None:
         return event
     return {**event, "model_messages": messages}
+
+
+async def _final_context(
+    run: _QueryRun,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """The turn's measurement, or why it has none; never waits on the run tail.
+
+    With a record sealed at the answer, the measurement runs here, in the
+    stream's own time, over that record. Without one (a run that printed no
+    answer) the loop's own measurement is all there is, and its wait is the
+    only bound. A measurement that cannot finish is named in ``context_error``
+    rather than left blank, because a silent "-" is what made this look broken.
+    """
+    staged = getattr(run.handler, "staged_model_messages", None)
+    if staged is None:
+        deadline = time.monotonic() + _CONTEXT_WAIT_SECONDS
+        while not run.context_done.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        if not run.context_done.is_set():
+            logger.warning(
+                "run_id=%s: no context measurement within %ss",
+                run.run_id,
+                _CONTEXT_WAIT_SECONDS,
+            )
+            return None, _context_timeout_message()
+        return run.context, run.context_error
+    sealed = {
+        "answer": getattr(run.handler, "staged_answer", "") or "",
+        "model_messages": staged,
+    }
+    try:
+        context = await asyncio.wait_for(
+            asyncio.to_thread(
+                _measure_turn_context,
+                run.agent,
+                run.pushed,
+                run.query,
+                sealed,
+                run.received_turns,
+            ),
+            timeout=_CONTEXT_WAIT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "run_id=%s: the context measurement did not finish within %ss",
+            run.run_id,
+            _CONTEXT_WAIT_SECONDS,
+        )
+        return None, _context_timeout_message()
+    except Exception as exc:
+        logger.exception("Context measurement failed for run_id=%s", run.run_id)
+        return None, f"GAIA couldn't measure this chat's context: {exc}"
+    return context, None
 
 
 async def _finish_changes(run: _QueryRun) -> List[Dict[str, Any]]:
@@ -1347,12 +1741,16 @@ _QUERY_SSE_RESPONSES = {
         "description": (
             "Server-Sent Events stream (text/event-stream). Each `data:` line is "
             "one canonical event discriminated on `type`: status {message, "
-            "phase?, queue?} | token {delta} | tool_call {tool, args} | "
-            "tool_result {tool, data, render?} | needs_confirmation {run_id, "
-            "action, summary, confirm_id?, always_scope?, risk?, tool_label?, "
-            "args?, args_truncated?, prompt_context?} | needs_input {run_id, "
-            "request_id, question, options, allow_free_text, sensitive, "
-            "respond_url, timeout_seconds?} | final {answer, usage?, failed?, model_messages?} | "
+            "level?, phase?, queue?, retracts_answer?} | token {delta} | "
+            "reasoning {delta, retracts_answer?} | "
+            "tool_call {tool, args} | tool_result {tool, data, render?} | "
+            "context_usage {window, used, ...} | "
+            "needs_confirmation {run_id, action, summary, confirm_id?, "
+            "always_scope?, risk?, tool_label?, args?, args_truncated?, "
+            "prompt_context?} | needs_input {run_id, request_id, question, "
+            "options, allow_free_text, sensitive, respond_url, "
+            "timeout_seconds?} | final {answer, usage?, failed?, failure?, "
+            "performance?, context?, context_error?, model_messages?, route?} | "
             "error {detail, status}. A needs_confirmation's `args` are exactly "
             "the arguments the model sent for the gated call, each value capped "
             "at 64,000 characters (`args_truncated: true` when one was cut); "
@@ -1425,9 +1823,10 @@ async def query(request: QueryRequest):
             close_agent(one_shot_agent)
 
     try:
-        # Streaming is what turns the answer and a tool call being written into
-        # events as they happen; without it each lands in one frame at the end.
-        kwargs: Dict[str, Any] = {"streaming": True}
+        warm_up = _startup_warm_up
+        if not warm_up.done.is_set():
+            await asyncio.to_thread(warm_up.note_turn, _turn_model(request))
+        kwargs: Dict[str, Any] = {}
         if _effective_provider(request) == _CLAUDE_PROVIDER:
             # ``model`` names a CLAUDE model here, not a Lemonade one — putting
             # it in model_id would point the local client at an id it cannot
@@ -1467,6 +1866,14 @@ async def query(request: QueryRequest):
                         "Cancel that run or wait for it to finish, then retry."
                     ),
                 )
+            # The model server or MCP connectors changed in Settings since this agent was built.
+            if await _off_loop(
+                functools.partial(session.follow_settings, **kwargs),
+                on_abandon=lambda _rebuilt: _unwind_setup(),
+            ):
+                logger.info(
+                    "session %s rebuilt for changed settings", request.session_id
+                )
             target = _switch_target(session, request)
             if target is not None:
                 # Switched in place rather than refused. Rebuilding the agent
@@ -1500,6 +1907,15 @@ async def query(request: QueryRequest):
                     display,
                 )
             agent = session.agent
+            # A vision model chosen in Settings since the last turn applies now.
+            follow = getattr(agent, "follow_model_switch", None)
+            if callable(follow):
+                # Off the loop: it reads config.json and may ask Lemonade.
+                await _off_loop(follow)
+            # Skills added or removed in Settings since the catalogue was built.
+            follow_skills = getattr(agent, "follow_installed_skills", None)
+            if callable(follow_skills):
+                await _off_loop(follow_skills)
             if request.working_directory is not None:
                 config = getattr(agent, "config", None)
                 if config is not None:
@@ -1603,13 +2019,11 @@ async def query(request: QueryRequest):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         _unwind_setup()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to start the query run: {exc}"
-        ) from exc
+        raise _start_failure(exc, _wording_surface(request)) from exc
 
     def _process() -> None:
-        if request.documents:
-            _index_attached_documents(agent, request.documents, handler)
+        if request.documents is not None:
+            _index_attached_documents(agent, request.documents, handler, run)
         if request.turns is not None and hasattr(agent, "conversation_history"):
             # Sizing them can ask the model server for its window: never on the loop.
             agent.conversation_history = _history_from_turns(
@@ -1624,6 +2038,17 @@ async def query(request: QueryRequest):
                 lambda cut: handler.print_warning(cut.notice),
             )
         pushed = list(getattr(agent, "conversation_history", None) or [])
+        received_turns = (
+            _as_model_turns(agent, request.turns)
+            if request.turns is not None and hasattr(agent, "conversation_history")
+            else None
+        )
+        run.query = request.query
+        run.pushed = pushed
+        run.received_turns = received_turns
+        if received_turns is not None:
+            # Before the answer: the same live event an in-process turn streams.
+            _report_live_context(run)
         try:
             if request.max_steps is not None:
                 run.result = agent.process_query(
@@ -1631,13 +2056,19 @@ async def query(request: QueryRequest):
                 )
             else:
                 run.result = agent.process_query(request.query)
-            try:
-                run.context = _measure_turn_context(
-                    agent, pushed, request.query, run.result
-                )
-            except Exception as exc:  # the answer stands; the meter says why it's blank
-                logger.exception("Context measurement failed for run_id=%s", run.run_id)
-                run.context_error = f"GAIA couldn't measure this chat's context: {exc}"
+            if getattr(handler, "staged_model_messages", None) is None:
+                # No record was sealed at the answer, so this is the only chance.
+                try:
+                    run.context = _measure_turn_context(
+                        agent, pushed, request.query, run.result, received_turns
+                    )
+                except Exception as exc:  # the answer stands; the meter says why
+                    logger.exception(
+                        "Context measurement failed for run_id=%s", run.run_id
+                    )
+                    run.context_error = (
+                        f"GAIA couldn't measure this chat's context: {exc}"
+                    )
         finally:
             run.context_done.set()
 
@@ -1673,10 +2104,12 @@ async def query(request: QueryRequest):
                         process_error.__traceback__,
                     ),
                 )
-                handler.print_error(_terminal_error_detail(process_error))
+                handler.print_error(
+                    _terminal_error_detail(process_error, _wording_surface(request))
+                )
         except Exception as exc:  # surface loudly as a terminal error event
             logger.exception("%s /query run failed for run_id=%s", AGENT_ID, run.run_id)
-            handler.print_error(_terminal_error_detail(exc))
+            handler.print_error(_terminal_error_detail(exc, _wording_surface(request)))
         finally:
             run.context_done.set()
             handler.signal_done()
@@ -1737,32 +2170,37 @@ async def query(request: QueryRequest):
         return _sse(_worded(event, _wording_surface(request)))
 
     async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
-        """``final`` carrying the turn's context measurement (contract >= 2.21) and timings."""
+        """``final`` carrying the turn's context measurement (>= 2.21), timings and route."""
         if final.get("type") != "final":
             return final
-        # ``final`` is printed inside process_query; the measurement follows it.
-        deadline = time.monotonic() + _CONTEXT_WAIT_SECONDS
-        while not run.context_done.is_set() and time.monotonic() < deadline:
-            await asyncio.sleep(0.05)
+        if run.result is None and thread.is_alive() and run.received_turns is not None:
+            # Timings are sealed only when the loop returns, and only a caller
+            # that sent ``turns`` is owed them: the TUI's final keeps its
+            # earlier bound, because the record and the measurement no longer
+            # wait on this tail either.
+            await asyncio.to_thread(thread.join, _RUN_RESULT_WAIT_SECONDS)
         performance = turn_record(run.result)
         if performance is not None:
             final = {**final, "performance": performance}
-        if not run.context_done.is_set():
-            logger.warning(
-                "run_id=%s: no context measurement within %ss; final goes without it",
-                run.run_id,
-                _CONTEXT_WAIT_SECONDS,
-            )
+        route = _run_route(run)
+        if route is not None:
+            # The host bills and labels the turn by the model that ran it.
+            final = {**final, "route": route}
+        if final.get("failed"):
+            # A failure notice is not a turn the next push carries.
             return final
-        if run.context_error is not None:
-            return {**final, "context_error": run.context_error}
-        if run.context is None:
+        context, error = await _final_context(run)
+        if error is not None:
+            return {**final, "context_error": error}
+        if context is None:
             return final
-        return {**final, "context": run.context}
+        return {**final, "context": context}
 
     async def _stream():
         translator = CanonicalTranslator(
-            request.run_id, agent_id=AGENT_ID, reasoning=request.reasoning
+            request.run_id,
+            agent_id=AGENT_ID,
+            reasoning=request.reasoning,
         )
         terminated = False
         last_write = time.monotonic()
@@ -1817,9 +2255,22 @@ async def query(request: QueryRequest):
                         # ever see.
                         for warning in await _finish_changes(run):
                             yield _emit(warning)
-                        yield _emit(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
+                        refusal = _confirmation_refusal(canonical.get("action", ""))
+                        # The steps and tokens spent before the stop are known
+                        # once the cancelled loop returns.
+                        await asyncio.to_thread(thread.join, _RUN_RESULT_WAIT_SECONDS)
+                        if not thread.is_alive():
+                            from gaia_agent.stdio import _usage_from_result
+
+                            usage = _usage_from_result(run.result)
+                            if usage:
+                                refusal["usage"] = usage
+                        route = _run_route(run)
+                        if route is not None:
+                            refusal["route"] = route
+                        yield _emit(refusal)
                         terminated = True
                         return
                     if ctype in TERMINAL_TYPES:
@@ -1878,7 +2329,12 @@ async def cancel_query(run_id: str) -> QueryCancelResponse:
     cancelled: the caller mints ``run_id`` before it POSTs ``/query``, which
     makes cancel-arrives-first a real ordering, not a hypothetical one.
     """
-    return QueryCancelResponse(run_id=run_id, cancelled=_registry.cancel(run_id))
+    cancelled = _registry.cancel(run_id)
+    return QueryCancelResponse(
+        run_id=run_id,
+        cancelled=cancelled,
+        documents_left=_registry.documents_left(run_id),
+    )
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -2047,6 +2503,96 @@ async def set_internet(session_id: str, body: InternetRequest):
     return InternetResponse(session_id=session_id, internet_off=body.internet_off)
 
 
+def _existing_session(session_id: str) -> Any:
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists, so it holds no grants. It "
+                "may have ended or been evicted; its grants went with it."
+            ),
+        )
+    return session
+
+
+@router.get("/sessions/{session_id}/grants", response_model=GrantsResponse)
+async def list_grants(session_id: str) -> GrantsResponse:
+    """The calls the user answered "always" to in this session, so far.
+
+    Includes answers given in a turn still running, which is where a caller
+    shows the user what it may now do without asking.
+    """
+    session = _existing_session(session_id)
+    return GrantsResponse(session_id=session_id, grants=session.permissions.grants())
+
+
+@router.get("/sessions/{session_id}/tools", response_model=ToolsResponse)
+async def list_tools(session_id: str) -> ToolsResponse:
+    """The tools the session's agent can call now, skills loaded so far included.
+
+    Read from the session's own agent, so it is what the next turn is offered.
+    An unknown session is a 404: building an agent just to list tools would
+    describe a different agent than the one the chat talks to.
+    """
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists, so it has no agent to list "
+                "tools for. Send a query on that session first."
+            ),
+        )
+    tools = await asyncio.to_thread(session.agent.describe_tools)
+    return ToolsResponse(session_id=session_id, tools=tools)
+
+
+@router.delete("/sessions/{session_id}", response_model=SessionDeletedResponse)
+async def delete_session(session_id: str) -> SessionDeletedResponse:
+    """End a session and close its agent, stopping its MCP servers.
+
+    A session running a turn is a 409, not a quiet success: its agent and
+    servers are still alive, so the caller must not believe they are gone.
+    """
+    _require_valid_session_id(session_id)
+    if not await asyncio.to_thread(session_registry.delete, session_id):
+        # delete() is False for both; only a session still present is busy.
+        if session_registry.get(session_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No session {session_id!r} exists; it may have ended already.",
+            )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Session {session_id!r} is running a turn. Cancel it, then "
+                "delete the session again."
+            ),
+        )
+    return SessionDeletedResponse(session_id=session_id, deleted=True)
+
+
+@router.delete("/sessions/{session_id}/grants", response_model=GrantsResponse)
+async def revoke_grants(session_id: str, key: Optional[str] = None) -> GrantsResponse:
+    """Revoke one "always" answer (``?key=``), or all of them.
+
+    Applies from the very next gated call, including one in a running turn.
+    An unknown key is a 404 rather than a quiet success: a caller that thinks
+    it revoked something must not be left believing it.
+    """
+    session = _existing_session(session_id)
+    removed = session.permissions.revoke(key)
+    if key is not None and removed == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session {session_id!r} has no grant {key!r}.",
+        )
+    return GrantsResponse(session_id=session_id, grants=session.permissions.grants())
+
+
 def _log_caller_auth_state(auth_config: Any) -> None:
     """Report which caller-auth channel this server came up on.
 
@@ -2105,9 +2651,14 @@ def build_app() -> FastAPI:
         Without this the first turn pays the model load *and* the first pass
         over a large system prompt, which reads as a 60-90s "Getting started"
         hang on a freshly opened chat. Backgrounded so readiness is not
-        delayed, and never fatal — a cold first turn is slow, not broken.
+        delayed, and never fatal — a cold first turn is slow, not broken. A
+        turn on another model stops it (:class:`_StartupWarmUp`).
         """
         _log_caller_auth_state(auth_config)
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
+        global _startup_warm_up
+        _startup_warm_up = _StartupWarmUp()
         task = asyncio.create_task(asyncio.to_thread(_warmup_blocking))
         # Held so it is not garbage-collected while in flight.
         _app.state.warmup_task = task
@@ -2148,30 +2699,106 @@ def build_app() -> FastAPI:
     return app
 
 
-def _default_model_is_servable() -> bool:
-    """Whether warming the default model would load it rather than download it.
+def _model_to_warm() -> Optional[str]:
+    """The model the first turn runs on, or None when the warm-up should skip.
 
-    Building the warm-up agent preloads its model, and Lemonade downloads a
-    missing one on load — gigabytes the user never asked for when they chose
-    a cloud model and skipped the local one.
+    That is the model chat reopens on (``last_model``, else ``default_model``),
+    as in the Agent UI and TUI: warming any other one makes Lemonade, which
+    keeps one chat model loaded, evict the user's pick for it. Skipped like the
+    Agent UI's own warm-up on a PC small enough to load on the first message,
+    for Claude, and for a model not downloaded: Lemonade downloads a missing
+    one on load, gigabytes the user never asked for.
     """
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         cloud_model_provider,
-        resolve_default_chat_model,
+        resolve_chat_model,
     )
+    from gaia.ui.warmup import preload_skip_reason
 
-    model = resolve_default_chat_model()
+    low_memory = preload_skip_reason()
+    if low_memory:
+        logger.info("GAIA sidecar: warm-up skipped (%s)", low_memory)
+        return None
+    model = resolve_chat_model()
+    if model.startswith("claude-"):
+        logger.info("GAIA sidecar: warm-up skipped (chat runs on Claude, %s)", model)
+        return None
     if cloud_model_provider(model):
-        return True
+        return model
     if not LemonadeClient(verbose=False).get_model_info(model)["downloaded"]:
         logger.info(
             "GAIA sidecar: warm-up skipped (%s is not downloaded; a turn that "
             "uses it downloads it)",
             model,
         )
-        return False
-    return True
+        return None
+    return model
+
+
+class _StartupWarmUp:
+    """The start-up warm-up's model, and the switch that stops it for a turn
+    on any other model.
+
+    The model server reads one prompt at a time, so a turn on a cloud or other
+    local model would wait out the whole warm-up, and a warm-up that then loads
+    its model would evict the one that turn uses. A turn on the warmed model
+    leaves it running and reads the prefix it caches.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._model: Optional[str] = None
+        self._turn_models: List[str] = []
+        self.cancel = threading.Event()
+        self.done = threading.Event()
+
+    def aim(self, model: str) -> None:
+        """Record the model the warm-up loads."""
+        with self._lock:
+            self._model = model
+            self._stop_for_another_model()
+
+    def note_turn(self, model: Optional[str]) -> None:
+        """A turn starts on *model*; None runs ``default_model``, which need not
+        be the warm-up's (that follows the user's last pick)."""
+        if self.done.is_set():
+            return
+        if model is None:
+            from gaia.llm.lemonade_client import resolve_default_chat_model
+
+            model = resolve_default_chat_model()
+        from gaia.llm.hybrid import start_model
+
+        model = start_model(model)
+        with self._lock:
+            self._turn_models.append(model)
+            self._stop_for_another_model()
+
+    def _stop_for_another_model(self) -> None:
+        from gaia.llm.lemonade_client import _model_ids_match
+
+        if self._model is None or self.cancel.is_set():
+            return
+        for model in self._turn_models:
+            if not _model_ids_match(model, self._model):
+                logger.info(
+                    "GAIA sidecar: stopping the warm-up of %s; a turn uses %s",
+                    self._model,
+                    model,
+                )
+                self.cancel.set()
+                return
+
+
+_startup_warm_up = _StartupWarmUp()
+
+
+def _turn_model(request: "QueryRequest") -> Optional[str]:
+    """The model *request* runs on, or None for the sidecar's default."""
+    if _effective_provider(request) == _CLAUDE_PROVIDER:
+        return f"{_CLAUDE_PROVIDER}:{request.model or ''}"
+    return request.model or None
 
 
 def _warmup_blocking() -> None:
@@ -2185,14 +2812,33 @@ def _warmup_blocking() -> None:
     the first question in any session reads it from Lemonade's cache.
 
     Never fatal — a cold first turn is slow, not broken — but a failure is
-    logged as a warning with its cause, not hidden.
+    logged as a warning with its cause, not hidden. Stops as soon as a turn
+    starts on another model (:class:`_StartupWarmUp`).
     """
+    state = _startup_warm_up
+    try:
+        _warm_chat_model(state)
+    finally:
+        state.done.set()
+
+
+def _warm_chat_model(state: _StartupWarmUp) -> None:
     from gaia_agent.session_registry import build_session_agent
 
+    from gaia.chat.sdk import LLMCallCancelled
+    from gaia.llm.lemonade_client import cloud_model_provider
+
     try:
-        if not _default_model_is_servable():
+        model = _model_to_warm()
+        if model is None:
             return
-        agent = build_session_agent()
+        state.aim(model)
+        if state.cancel.is_set():
+            return
+        # No preload while building: only warm_up's load can be stopped by a turn.
+        agent = build_session_agent(
+            model_id=model, skip_lemonade=not cloud_model_provider(model)
+        )
     except Exception as e:  # noqa: BLE001 - reported, and chat still works
         logger.warning(
             "GAIA sidecar: warm-up failed before the model was reached (%s). "
@@ -2203,13 +2849,27 @@ def _warmup_blocking() -> None:
         )
         return
     try:
-        result = agent.warm_up()
+        result = agent.warm_up(cancel=state.cancel)
+        if result.get("primed") is False:
+            logger.info(
+                "GAIA sidecar: loaded %s in %ss (its prompt is read by the first "
+                "turn: FastFlowLM keeps no cache a new chat can reuse)",
+                getattr(agent, "model_id", "?"),
+                result.get("seconds"),
+            )
+            return
         logger.info(
             "GAIA sidecar: warmed %s in %ss (%s of %s prompt tokens cached)",
             getattr(agent, "model_id", "?"),
             result.get("seconds"),
             result.get("cached_tokens", "?"),
             result.get("prompt_tokens", "?"),
+        )
+    except LLMCallCancelled as e:
+        logger.info(
+            "GAIA sidecar: warm-up of %s stopped for a turn on another model (%s)",
+            getattr(agent, "model_id", "?"),
+            e,
         )
     except Exception as e:  # noqa: BLE001 - reported, and chat still works
         logger.warning(
@@ -2226,6 +2886,17 @@ def _warmup_blocking() -> None:
 app = build_app()
 
 
+def _add_serve_args(parser) -> None:
+    """The flags the daemon passes when it spawns this sidecar."""
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="Serve the HTTP sidecar (implied by --host/--port).",
+    )
+    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
+
+
 def serve_http(argv: List[str]) -> int:
     """Run the sidecar over HTTP. Bound to loopback by default — this speaks for
     the user's documents and memory and has no business on a LAN interface."""
@@ -2236,13 +2907,7 @@ def serve_http(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="gaia-agent --serve", description="GAIA flagship agent HTTP sidecar"
     )
-    parser.add_argument(
-        "--serve",
-        action="store_true",
-        help="Serve the HTTP sidecar (implied by --host/--port).",
-    )
-    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
+    _add_serve_args(parser)
     args = parser.parse_args(argv)
 
     # The warm-up swallows agent-build errors, so a stale GAIA_SKILL_SET or a
@@ -2258,6 +2923,22 @@ def serve_http(argv: List[str]) -> int:
     except (SkillSetError, AllowedPathsEnvError) as exc:
         print(f"gaia-agent: {exc}", file=sys.stderr)
         return 2
+
+    try:
+        from gaia.sidecar import parent_watch
+    except ImportError:  # amd-gaia older than the daemon watch; the pin allows it
+        print(
+            "WARNING: this amd-gaia cannot watch the GAIA daemon, so this agent "
+            "keeps running if the daemon is killed. "
+            "Fix: pip install --upgrade amd-gaia",
+            file=sys.stderr,
+        )
+    else:
+        try:
+            parent_watch.start()
+        except ValueError as exc:
+            print(f"gaia-agent: {exc}", file=sys.stderr)
+            return 2
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

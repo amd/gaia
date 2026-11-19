@@ -4,6 +4,7 @@
 package chat
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/update"
 )
 
@@ -116,6 +118,109 @@ func TestLaunchCheckOffersTheUpdateWhenAutoUpdateIsOff(t *testing.T) {
 	got := lastStatus(t, next.(ChatModel))
 	if !strings.Contains(got, "v0.26.0 is available") || !strings.Contains(got, "/update now") {
 		t.Errorf("offer = %q", got)
+	}
+}
+
+func TestLaunchCheckThatCannotReachGitHubSaysNothing(t *testing.T) {
+	m := updateModel(t)
+	before := len(m.messages)
+	t.Cleanup(control.CloseLog)
+	failure := update.RemoteError{Err: errors.New("cannot reach GitHub")}
+	next, cmd := m.handleUpdateChecked(updateCheckedMsg{err: failure, launch: true})
+	if cmd != nil || len(next.(ChatModel).messages) != before {
+		t.Fatalf("a launch check that failed spoke up: %+v", next.(ChatModel).messages[before:])
+	}
+}
+
+func TestAskedForCheckStillReportsTheFailure(t *testing.T) {
+	m := updateModel(t)
+	failure := update.RemoteError{Err: errors.New("cannot reach GitHub")}
+	for _, then := range []string{"", "now", "list", "setting"} {
+		next, _ := m.handleUpdateChecked(updateCheckedMsg{err: failure, then: then})
+		if got := lastError(t, next.(ChatModel)); !strings.Contains(got, "cannot reach GitHub") {
+			t.Errorf("then=%q: error = %q", then, got)
+		}
+	}
+}
+
+func TestLaunchCheckStillReportsABrokenSettingsFile(t *testing.T) {
+	m := updateModel(t)
+	next, _ := m.handleUpdateChecked(updateCheckedMsg{err: errors.New("update-config.json cannot be read"), launch: true})
+	if got := lastError(t, next.(ChatModel)); !strings.Contains(got, "update-config.json") {
+		t.Errorf("error = %q", got)
+	}
+}
+
+func TestChannelSettingsCheckAtOnce(t *testing.T) {
+	for _, arg := range []string{"/update rc on", "/update auto on"} {
+		m := updateModel(t)
+		_, cmd := m.submit(arg)
+		_, check := m.Update(cmd())
+		if check == nil {
+			t.Fatalf("%s saved the setting and left the old answer standing", arg)
+		}
+	}
+	m := updateModel(t)
+	_, cmd := m.submit("/update rc off")
+	if _, check := m.Update(cmd()); check != nil {
+		t.Error("/update rc off has nothing new to check for")
+	}
+}
+
+func TestSettingCheckTellsTheOutcome(t *testing.T) {
+	m := updateModel(t)
+	next, cmd := m.handleUpdateChecked(updateCheckedMsg{status: available(false, ""), then: "setting"})
+	got := lastStatus(t, next.(ChatModel))
+	if cmd != nil || !strings.Contains(got, "v0.26.0 is available") || !strings.Contains(got, "/update now") {
+		t.Errorf("status = %q, cmd = %v", got, cmd != nil)
+	}
+	next, _ = m.handleUpdateChecked(updateCheckedMsg{status: update.Status{Current: "0.25.0"}, then: "setting"})
+	if got := lastStatus(t, next.(ChatModel)); !strings.Contains(got, "up to date") {
+		t.Errorf("status = %q", got)
+	}
+}
+
+func TestSettingCheckWithAutoUpdateQueuesForQuit(t *testing.T) {
+	m := updateModel(t)
+	_, cmd := m.handleUpdateChecked(updateCheckedMsg{status: available(true, ""), then: "setting"})
+	if cmd == nil {
+		t.Fatal("auto-update promises an install on quit, so the release must be planned")
+	}
+	if msg, ok := cmd().(updatePlannedMsg); !ok || !msg.scheduledOnly {
+		t.Fatalf("msg = %+v; an install must wait for quit", msg)
+	}
+	if _, cmd := m.handleUpdateChecked(updateCheckedMsg{status: available(true, "v0.24.0"), then: "setting"}); cmd != nil {
+		t.Error("a pin must stop the install being queued")
+	}
+}
+
+func TestRCOffDropsAQueuedCandidateOnly(t *testing.T) {
+	m := updateModel(t)
+	update.Schedule(update.Plan{Tag: "v0.26.0-rc1", Release: update.Release{Tag: "v0.26.0-rc1", Prerelease: true}})
+	_, cmd := m.submit("/update rc off")
+	m.Update(cmd())
+	if _, ok := update.Pending(); ok {
+		t.Fatal("a candidate still installs on quit after /update rc off")
+	}
+	update.Schedule(update.Plan{Tag: "v0.26.0", Release: update.Release{Tag: "v0.26.0"}})
+	_, cmd = m.submit("/update rc off")
+	m.Update(cmd())
+	if _, ok := update.Pending(); !ok {
+		t.Fatal("a queued final was dropped")
+	}
+}
+
+func TestReleaseListShowsTheDateWhenKnown(t *testing.T) {
+	updateModel(t)
+	got := releaseList(update.Status{Current: "0.25.0", Releases: []update.Release{
+		{Tag: "v0.26.0", Updated: "2026-11-01T22:05:25Z"},
+		{Tag: "v0.25.0"},
+	}})
+	if !strings.Contains(got, "v0.26.0  2026-11-01") {
+		t.Errorf("list = %q", got)
+	}
+	if !strings.Contains(got, "v0.25.0  ← running") {
+		t.Errorf("an undated release must not leave a gap: %q", got)
 	}
 }
 
@@ -366,5 +471,25 @@ func TestTwoWindowsDoNotShareOneResumeFile(t *testing.T) {
 	got, _ = TakeResumedConversation()
 	if got[0].Content != "other window" {
 		t.Fatalf("the other window's conversation was lost: %+v", got)
+	}
+	if last := got[len(got)-1].Content; strings.Contains(last, "after updating") || !strings.Contains(last, "saved ") {
+		t.Errorf("an hour-old save must say when it was made, not claim a fresh update: %q", last)
+	}
+}
+
+func TestUnreadableResumeFileIsKeptAndReportedOnce(t *testing.T) {
+	updateModel(t)
+	dir, _ := resumeDir()
+	os.MkdirAll(dir, 0o700)
+	bad := filepath.Join(dir, "7.json")
+	os.WriteFile(bad, []byte("{truncated"), 0o600)
+	if _, err := TakeResumedConversation(); err == nil || !strings.Contains(err.Error(), "kept at") {
+		t.Fatalf("want an error naming where the file is kept, got %v", err)
+	}
+	if _, err := os.Stat(bad + ".unreadable"); err != nil {
+		t.Errorf("the unreadable save was deleted: %v", err)
+	}
+	if got, err := TakeResumedConversation(); err != nil || got != nil {
+		t.Errorf("reported again on the next launch: %v, %v", got, err)
 	}
 }

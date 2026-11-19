@@ -113,12 +113,18 @@ def test_no_frozen_change_passes(monkeypatch):
 
 
 def test_the_frozen_inputs_cover_the_agent_code():
-    for path in ("src/gaia", "hub/agents/gaia/python", "hub/agents/chat/python"):
+    for path in ("src/gaia", "hub/agents/gaia/python"):
         assert path in gate.FROZEN_INPUTS
 
 
+def test_the_chat_shim_is_not_a_frozen_input():
+    """ChatAgent moved into the flagship package (#6099); the freeze no longer
+    reads hub/agents/chat/python, so a change there must not demand a release."""
+    assert not any("hub/agents/chat" in path for path in gate.FROZEN_INPUTS)
+
+
 def test_the_frozen_inputs_include_bundled_prompts_and_apps():
-    # freeze.py bundles skill prompts and gaia.agents imports gaia.apps.llm.
+    # freeze.py bundles skill prompts; only the web frontend is left out of src/gaia.
     tracked = gate._git("ls-files", "--", *gate.FROZEN_INPUTS).split()
     assert any(
         p.startswith("hub/agents/gaia/python/gaia_agent/skills/")

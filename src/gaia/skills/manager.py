@@ -28,12 +28,12 @@ resolves bundled files on demand (level 3).
 
 from __future__ import annotations
 
-import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from gaia.config import gaia_home
 from gaia.logger import get_logger
 from gaia.skills.errors import (
     DOCS_URL,
@@ -44,6 +44,7 @@ from gaia.skills.errors import (
 from gaia.skills.format import (
     SKILL_FILENAME,
     Skill,
+    parse_project_skill_file,
     parse_skill_file,
     parse_skill_metadata,
 )
@@ -54,9 +55,12 @@ log = get_logger(__name__)
 ROOT_AGENT_BUNDLED = "agent-bundled"
 ROOT_USER = "user"
 ROOT_CLAUDE_IMPORT = "claude-import"
-
-#: Environment override for the user root's parent (shared with the rest of GAIA).
-GAIA_CONFIG_DIR_ENV = "GAIA_CONFIG_DIR"
+#: The ``.claude/skills`` of the project the agent was started in. Listed in the
+#: skill catalogue, unlike ``claude-import``, and parsed the way Claude Code
+#: parses it (:func:`gaia.skills.format.parse_project_skill_file`).
+ROOT_CLAUDE_PROJECT = "claude-project"
+#: Both ``.claude/skills`` labels: another host's skills, never GAIA-audited.
+CLAUDE_ROOTS = frozenset({ROOT_CLAUDE_IMPORT, ROOT_CLAUDE_PROJECT})
 
 # Invalid third-party imports already warned about; discovery reruns every turn.
 _WARNED_IMPORT_ERRORS: set[tuple[str, str]] = set()
@@ -87,13 +91,26 @@ class SkillRoot:
 
 
 def user_skills_dir() -> Path:
-    """Return ``~/.gaia/skills`` (honoring ``GAIA_CONFIG_DIR``).
+    """Return ``<gaia_home>/skills`` (honoring ``GAIA_HOME`` and ``GAIA_CONFIG_DIR``).
 
     Read at call time, not import time, so tests can point it at a tmp_path
     without reloading the module.
     """
-    base = os.getenv(GAIA_CONFIG_DIR_ENV) or str(Path.home() / ".gaia")
-    return Path(base) / "skills"
+    return gaia_home() / "skills"
+
+
+def _parse(entry: Path, root: SkillRoot) -> Skill:
+    if root.label == ROOT_CLAUDE_PROJECT:
+        return parse_project_skill_file(entry, root=root.label, read_only=True)
+    return parse_skill_metadata(entry, root=root.label, read_only=root.read_only)
+
+
+def default_project_dir() -> Optional[Path]:
+    """The project an agent started here would map, so tools list its skills alike."""
+    from gaia.agents.base.project_map import resolve_project_root
+
+    root = resolve_project_root()
+    return Path(root) if root else None
 
 
 def claude_skills_dirs(project_dir: Optional[Path] = None) -> list[Path]:
@@ -121,7 +138,9 @@ class SkillManager:
             agent_skill_dirs: Agent-bundled ``skills/`` directories (precedence 1).
             user_skills_root: Overrides ``~/.gaia/skills`` (precedence 2).
             claude_skill_dirs: Overrides the ``.claude/skills`` roots (precedence 3).
-            project_dir: Working directory used to locate ``./.claude/skills``.
+            project_dir: The project root. Its ``.claude/skills`` is labelled
+                ``claude-project`` and listed in the catalogue; when omitted the
+                working directory's is used, as an unlisted ``claude-import``.
             include_claude_roots: Set False to skip the read-only import roots.
             excluded_names: Host-disabled skills, omitted from all discovery roots.
         """
@@ -169,8 +188,18 @@ class SkillManager:
                 if self._claude_dirs is not None
                 else claude_skills_dirs(self._project_dir)
             )
+            project_skills = (
+                claude_skills_dirs(self._project_dir)[0]
+                if self._project_dir is not None and self._claude_dirs is None
+                else None
+            )
             roots.extend(
-                SkillRoot(ROOT_CLAUDE_IMPORT, Path(d), read_only=True) for d in claude
+                SkillRoot(
+                    ROOT_CLAUDE_PROJECT if d == project_skills else ROOT_CLAUDE_IMPORT,
+                    Path(d),
+                    read_only=True,
+                )
+                for d in claude
             )
         return roots
 
@@ -202,12 +231,11 @@ class SkillManager:
                     if not entry.is_dir() or not (entry / SKILL_FILENAME).is_file():
                         continue
                     try:
-                        skill = parse_skill_metadata(
-                            entry, root=root.label, read_only=root.read_only
-                        )
+                        skill = _parse(entry, root)
+                        skill.body = ""
                     except SkillError as exc:
                         errors[str(entry)] = str(exc)
-                        if root.label == ROOT_CLAUDE_IMPORT:
+                        if root.label in CLAUDE_ROOTS:
                             import_errors[str(entry)] = str(exc)
                             _warn_invalid_import_once(entry, str(exc))
                         else:
@@ -312,9 +340,12 @@ class SkillManager:
         """
         metadata = self.get(name)
         assert metadata.path is not None  # discovery always sets it
-        skill = parse_skill_file(
-            metadata.path, root=metadata.root, read_only=metadata.read_only
+        parse = (
+            parse_project_skill_file
+            if metadata.root == ROOT_CLAUDE_PROJECT
+            else parse_skill_file
         )
+        skill = parse(metadata.path, root=metadata.root, read_only=metadata.read_only)
         if metadata.root == ROOT_USER:
             # Deferred: keeps the marketplace modules off the import path of
             # every agent that merely composes a bundled skill.
@@ -372,7 +403,7 @@ class SkillManager:
         if not WATCHDOG_AVAILABLE:
             raise SkillError(
                 "Skill hot-reload needs the 'watchdog' package, which is not "
-                "installed. Install it with: pip install 'watchdog>=2.1.0' (or "
+                "installed. Install it with: pip install 'watchdog>=2.1.0,<7' (or "
                 "uv pip install -e '.[dev]'), or call SkillManager.reload() manually."
             )
 

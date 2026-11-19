@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gaia import config as config_mod
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME
 from gaia.ui import warmup
 from gaia.ui.database import ChatDatabase
@@ -202,13 +203,36 @@ def test_local_list_reports_state_device_fit_and_speed(client, lemonade, db):
     assert gemma["placement"]["label"] == "GPU · Vulkan"
     assert gemma["placement"]["source"] == "reported"
     assert gemma["fits"] is True
-    assert gemma["size_gb"] == 5.6
+    assert gemma["size_gb"] == 6.0
     assert gemma["tokens_per_second"] == 38.0
     assert gemma["display_name"] == "Gemma 4 E4B"
     # The large default is offered even before it is downloaded.
     assert by_id[LARGE_DEFAULT_MODEL_NAME]["state"] == "not_downloaded"
     assert by_id[LARGE_DEFAULT_MODEL_NAME]["available"] is True
     assert body["memory_source"] == "AMD iGPU"
+    # 96 + 16 GiB from Lemonade, in the decimal GB the GPU memory pane uses.
+    assert body["memory_gb"] == round(112 * GB_PER_GIB, 1)
+
+
+def test_a_model_shows_the_size_setup_shows(client, lemonade):
+    """Lemonade lists Qwen3.6 at 21.7 (GiB); setup says 23.3 GB, and so must the picker."""
+    lemonade.models[1]["downloaded"] = True
+    lemonade.models.append(
+        {
+            "id": "Unknown-To-Gaia-GGUF",
+            "recipe": "llamacpp",
+            "downloaded": True,
+            "size": 4.2,
+            "labels": ["chat"],
+        }
+    )
+    by_id = {m["id"]: m for m in providers._list_models(providers.LOCAL)}
+    assert by_id[LARGE_DEFAULT_MODEL_NAME]["size_gb"] == 23.3
+    assert by_id["Unknown-To-Gaia-GGUF"]["size_gb"] == 4.2
+    body = client.get("/api/providers/local/models").json()
+    shown = {m["id"]: m["size_gb"] for m in body["models"]}
+    assert shown[LARGE_DEFAULT_MODEL_NAME] == 23.3
+    assert shown["Unknown-To-Gaia-GGUF"] == 4.2
 
 
 def test_cloud_list_is_unchanged(client, lemonade):
@@ -280,6 +304,24 @@ def test_a_size_change_never_reloads_mid_reply(client, lemonade, jobs):
     assert jobs == []
 
 
+def test_a_size_chosen_mid_reply_applies_once_the_reply_ends(client, lemonade, jobs):
+    """A smaller window was otherwise never applied: turns only reload to grow."""
+    lemonade.loaded = [
+        {**_entry(LARGE_DEFAULT_MODEL_NAME, ctx=262144), "is_busy": True}
+    ]
+    client.put(
+        "/api/providers/local/context",
+        json={"model": LARGE_DEFAULT_MODEL_NAME, "ctx_size": 131072},
+    )
+    assert providers.apply_pending_context_reload() == [], "still answering"
+
+    lemonade.loaded = [_entry(LARGE_DEFAULT_MODEL_NAME, ctx=262144)]
+    assert providers.apply_pending_context_reload() == [LARGE_DEFAULT_MODEL_NAME]
+    _join_restart()
+    assert jobs == [(LARGE_DEFAULT_MODEL_NAME, True)]
+    assert providers.apply_pending_context_reload() == [], "applied once"
+
+
 def test_a_size_change_waits_for_the_new_chat_warm_up(
     client, lemonade, jobs, monkeypatch
 ):
@@ -344,6 +386,121 @@ def test_an_unsized_model_offers_only_automatic_at_its_flat_window(
     assert "keeps the automatic size" in body["note"]
 
 
+UNREGISTERED = "Unlisted-Dense-30B-GGUF"
+
+
+@pytest.fixture
+def unregistered(lemonade):
+    lemonade.models.append(
+        {
+            "id": UNREGISTERED,
+            "recipe": "llamacpp",
+            "downloaded": True,
+            "size": 19.9,
+            "labels": ["chat"],
+            "max_context_window": 131072,
+        }
+    )
+    return lemonade
+
+
+def test_an_unregistered_model_offers_32k_up_to_its_trained_window(
+    client, unregistered
+):
+    body = client.get(
+        "/api/providers/local/context", params={"model": UNREGISTERED}
+    ).json()
+    assert body["options"] == [32768, 65536, 131072]
+    assert body["automatic"] == 65536
+    assert "can't check these fit" in body["note"]
+
+
+def test_an_unregistered_model_saves_a_chosen_size(client, unregistered):
+    resp = client.put(
+        "/api/providers/local/context",
+        json={"model": UNREGISTERED, "ctx_size": 131072},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["chosen"] == 131072
+    saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+    assert saved["context_sizes"] == {UNREGISTERED: 131072}
+
+
+@pytest.mark.parametrize("ctx_size", [16384, 262144])
+def test_an_unregistered_model_refuses_sizes_outside_its_range(
+    client, unregistered, ctx_size
+):
+    resp = client.put(
+        "/api/providers/local/context",
+        json={"model": UNREGISTERED, "ctx_size": ctx_size},
+    )
+    assert resp.status_code == 422
+    assert "not offered" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize("window", [None, 0, -1, True, "131072", 131072.0])
+def test_an_unregistered_model_with_no_usable_trained_window_keeps_automatic(
+    client, unregistered, window
+):
+    unregistered.models[-1]["max_context_window"] = window
+    body = client.get(
+        "/api/providers/local/context", params={"model": UNREGISTERED}
+    ).json()
+    assert body["options"] == []
+    assert "keeps the automatic size" in body["note"]
+
+
+def test_an_unregistered_model_trained_below_32k_keeps_automatic(client, unregistered):
+    unregistered.models[-1]["max_context_window"] = 16384
+    body = client.get(
+        "/api/providers/local/context", params={"model": UNREGISTERED}
+    ).json()
+    assert body["options"] == []
+
+
+@pytest.mark.parametrize("method", ["get", "put"])
+def test_a_catalog_error_fails_the_context_view_loudly(
+    client, unregistered, monkeypatch, method
+):
+    def failing(m, path, payload=None):
+        if path == "models?show_all=true":
+            return 500, {}
+        return unregistered(m, path, payload)
+
+    monkeypatch.setattr(providers, "_lemonade", failing)
+    if method == "get":
+        resp = client.get(
+            "/api/providers/local/context", params={"model": UNREGISTERED}
+        )
+    else:
+        resp = client.put(
+            "/api/providers/local/context",
+            json={"model": UNREGISTERED, "ctx_size": 65536},
+        )
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "HTTP 500" in detail and UNREGISTERED in detail
+    if config_mod.GAIA_CONFIG_FILE.exists():
+        assert UNREGISTERED not in config_mod.GAIA_CONFIG_FILE.read_text(
+            encoding="utf-8"
+        )
+
+
+def test_a_registered_model_never_reads_the_catalog_for_its_window(
+    client, lemonade, monkeypatch
+):
+    def no_catalog(m, path, payload=None):
+        assert path != "models?show_all=true", "a registered model needs no catalog"
+        return lemonade(m, path, payload)
+
+    monkeypatch.setattr(providers, "_lemonade", no_catalog)
+    resp = client.get(
+        "/api/providers/local/context", params={"model": DEFAULT_MODEL_NAME}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["options"]
+
+
 def test_cloud_models_have_no_context_choice(client, lemonade):
     resp = client.get("/api/providers/local/context", params={"model": "fireworks.glm"})
     assert resp.status_code == 422
@@ -361,6 +518,7 @@ def test_status_loaded(client, lemonade):
     assert body["ctx_size"] == 65536
     assert body["memory"]["total_gb"] == 112.0
     assert body["memory"]["model_gb"] > 5
+    assert body["error_cause"] is None
 
 
 def test_status_stopped(client, lemonade):
@@ -369,6 +527,20 @@ def test_status_stopped(client, lemonade):
     assert body["state"] == "stopped"
     assert body["error"].startswith(f"The model server isn't answering at {BASE}.")
     assert "not reachable" in body["error_detail"]
+    assert body["error_cause"] == "model_server_down"
+
+
+def test_status_names_no_cause_for_another_failure(client, lemonade, monkeypatch):
+    """Only the server not answering is worded by the UI; the rest keep their text."""
+
+    def refuse(method, path, payload=None):
+        raise providers.ProviderError("Lemonade answered /health with HTTP 404.", 502)
+
+    monkeypatch.setattr(providers, "_lemonade", refuse)
+    body = client.get("/api/providers/local/status").json()
+    assert body["state"] == "stopped"
+    assert body["error"] == "Lemonade answered /health with HTTP 404."
+    assert body["error_cause"] is None
 
 
 def test_status_idle_and_warming(client, lemonade, monkeypatch):
@@ -438,6 +610,26 @@ def test_restart_starts_a_stopped_server_with_the_active_model(client, lemonade,
     assert resp.status_code == 202
     _join_restart()
     assert jobs == [(DEFAULT_MODEL_NAME, False)]
+
+
+def test_restart_starts_a_stopped_server_for_a_cloud_model(client, db, lemonade, jobs):
+    """Cloud models go through the local server, so a stopped one needs starting."""
+    db.set_setting("custom_model", "fireworks.glm")
+    lemonade.down = True
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 202
+    assert resp.json()["starting_server"] is True
+    _join_restart()
+    assert jobs == [("fireworks.glm", False)]
+
+
+def test_restart_of_a_running_server_for_a_cloud_model_is_refused(
+    client, db, lemonade, jobs
+):
+    db.set_setting("custom_model", "fireworks.glm")
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 422
+    assert jobs == []
 
 
 def test_restart_refuses_while_the_model_answers(client, lemonade, jobs):
@@ -676,3 +868,18 @@ def test_free_memory_never_exceeds_the_total(client, lemonade, monkeypatch):
 def test_active_says_where_a_new_chat_runs_before_any_chat(client, lemonade):
     body = client.get("/api/providers/active").json()
     assert body["inference_remote"] is False
+
+
+@pytest.mark.parametrize("models", ["x", ["Unlisted-Dense-30B-GGUF"], None])
+def test_a_malformed_model_list_names_itself_for_an_unregistered_model(
+    client, lemonade, models
+):
+    lemonade.models = models
+    get = client.get("/api/providers/local/context", params={"model": UNREGISTERED})
+    put = client.put(
+        "/api/providers/local/context",
+        json={"model": UNREGISTERED, "ctx_size": 131072},
+    )
+    for resp in (get, put):
+        assert resp.status_code == 502, resp.text
+        assert "model list came back in an unexpected shape" in resp.json()["detail"]

@@ -35,8 +35,12 @@ function loadInstaller({ platform = "darwin", sitePackages = {}, venvLibs = ["py
     queueMicrotask(() => child.emit("exit", 0));
     return child;
   });
-  // What spawnSync returns when its timeout kills a slow `gaia --version`.
-  const spawnSync = jest.fn(() => ({ status: null, signal: "SIGTERM", stdout: "", error: new Error("spawnSync ETIMEDOUT") }));
+  // The PATH lookup (`sh -c command -v` / `where`) finds uv; any other spawnSync is a slow `gaia --version` its timeout killed.
+  const spawnSync = jest.fn((file) =>
+    file === "sh" || file === "where"
+      ? { status: 0 }
+      : { status: null, signal: "SIGTERM", stdout: "", error: new Error("spawnSync ETIMEDOUT") }
+  );
   const fakeFs = {
     ...fs,
     existsSync: (file) =>

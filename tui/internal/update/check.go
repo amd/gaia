@@ -6,6 +6,7 @@ package update
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -17,9 +18,12 @@ var Current = "dev"
 type Status struct {
 	Current   string
 	Config    Config
-	Latest    Release // zero when GitHub listed no release for this channel
-	Available bool    // Latest is newer than Current
-	Releases  []Release
+	Latest    Release // the newest installable release; zero when nothing newer is
+	Available bool    // Latest is set
+	// Unsupported is a newer release on this channel that ships nothing this
+	// machine can install (Windows arm64, an arm64 .deb); zero otherwise.
+	Unsupported Release
+	Releases    []Release
 }
 
 // IsDevBuild reports whether the running binary is an unreleased build.
@@ -38,25 +42,53 @@ func Check(ctx context.Context) (Status, error) {
 	if IsDevBuild() {
 		return st, nil
 	}
-	rs, err := ListReleases(ctx)
+	rs, err := ListReleases(ctx, Current)
 	if err != nil {
-		return st, err
+		return st, RemoteError{err}
 	}
 	st.Releases = rs
 	// Offer only a release this machine can install; NewPlan says why when
 	// the install itself can't replace this binary.
 	kind, _ := DetectKind()
-	var installable []Release
+	var installable, published []Release
 	for _, r := range rs {
+		if len(r.Assets) > 0 {
+			published = append(published, r)
+		}
 		if Installable(r, kind) {
 			installable = append(installable, r)
 		}
 	}
-	if latest, ok := Latest(installable, Current, cfg.Prereleases); ok {
-		st.Latest = latest
-		st.Available = Newer(latest.Tag, Current)
+	for {
+		latest, ok := Latest(installable, Current, cfg.Prereleases)
+		if !ok {
+			break
+		}
+		file, err := installFile(latest, kind)
+		if err != nil {
+			return st, err
+		}
+		up, err := uploaded(ctx, file)
+		if err != nil {
+			return st, RemoteError{err}
+		}
+		if up {
+			st.Latest, st.Available = latest, true
+			break
+		}
+		// Still publishing: neither on offer nor "no installer for this machine".
+		installable = without(installable, latest.Tag)
+		published = without(published, latest.Tag)
+	}
+	if newest, ok := Latest(published, Current, cfg.Prereleases); ok && Newer(newest.Tag, Current) &&
+		(!st.Available || Newer(newest.Tag, st.Latest.Tag)) {
+		st.Unsupported = newest
 	}
 	return st, nil
+}
+
+func without(rs []Release, tag string) []Release {
+	return slices.DeleteFunc(slices.Clone(rs), func(r Release) bool { return r.Tag == tag })
 }
 
 // Summary is the one status line /update prints.
@@ -70,6 +102,9 @@ func (s Status) Summary() string {
 		fmt.Fprintf(&b, " GAIA %s is out, but you pinned %s, so updates are paused.", s.Latest.Tag, s.Config.PinnedVersion)
 	case s.Available:
 		fmt.Fprintf(&b, " GAIA %s is available.", s.Latest.Tag)
+	case s.Unsupported.Tag != "":
+		fmt.Fprintf(&b, " GAIA %s is out, but it has no installer for this machine — see %s.",
+			s.Unsupported.Tag, ReleasesPage)
 	default:
 		b.WriteString(" It is up to date.")
 	}

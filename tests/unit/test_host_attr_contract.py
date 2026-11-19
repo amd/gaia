@@ -267,11 +267,15 @@ def test_generate_diff_raises_when_path_validator_unbound(tmp_path):
         _get_tool("generate_diff")(file_path=str(tmp_path / "x.py"), new_content="x")
 
 
-def test_update_gaia_md_raises_when_path_validator_unbound(tmp_path):
+def test_update_gaia_md_denies_when_path_validator_unbound(tmp_path):
+    """A write tool: reports the missing setup like the others, writes nothing."""
     _make_agent(_FileIOAgentNoValidator)
 
-    with pytest.raises(MissingHostAttributeError):
-        _get_tool("update_gaia_md")(project_root=str(tmp_path))
+    result = _get_tool("update_gaia_md")(project_root=str(tmp_path))
+
+    assert result["status"] == "error"
+    assert "never binds self.path_validator" in result["error"]
+    assert not (tmp_path / "GAIA.md").exists()
 
 
 def test_file_io_error_message_names_mixin_and_doc_anchor(tmp_path):

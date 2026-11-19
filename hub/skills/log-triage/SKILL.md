@@ -1,6 +1,6 @@
 ---
 name: log-triage
-description: Find what actually went wrong in log files. Use when the user asks for a root cause, an incident summary, anomalies, errors, failures or "what happened" in system, application, server, cluster, device or audit logs. Covers each file's full time range, groups messages into templates, ranks by severity, rarity and number of hosts hit rather than by volume, finds bursts, and gives exact first and last timestamps.
+description: Find what actually went wrong in log files. Use when the user asks for a root cause, an incident summary, anomalies, errors, failures or "what happened" in system, application, server, device or audit logs. Covers each file's full time range, ranks message templates by severity, rarity and hosts hit rather than volume, and pins burst timestamps.
 license: MIT
 version: 1.0.0
 metadata:
@@ -49,8 +49,8 @@ incident.
    timestamp, how many lines, how many distinct hosts, and which templates
    occur only there (`share_of_all` near 1.0).
 6. **Read around the first burst line.** With the burst's `file` and `line`,
-   `read_file(file_path, start_line=line - 30, end_line=line + 10)` shows what
-   happened just before. The cause comes before its symptoms. A flood of
+   `read_file(file_path, start_line=max(1, line - 30), end_line=line + 10)`
+   shows what happened just before. The cause comes before its symptoms. A flood of
    timeouts after a hardware fault is the effect, not the root cause.
 7. **Check the numbers add up.** Template counts sum to the parsed line count
    (the snippet asserts this). Per-level counts sum to the same total. Hosts

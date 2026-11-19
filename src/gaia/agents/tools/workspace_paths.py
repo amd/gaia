@@ -40,3 +40,8 @@ def _project_target_for(host: Any, args: dict) -> Path:
         args.get("project_dir"),
         _workspace_default(host),
     )
+
+
+def _workspace_target(host: Any, path: str) -> Path:
+    """Resolve a tool path relative to the active chat workspace."""
+    return _resolve_target(path, None, _workspace_default(host))

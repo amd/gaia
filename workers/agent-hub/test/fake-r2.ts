@@ -15,6 +15,7 @@ interface StoredObject {
   bytes: Uint8Array;
   contentType: string;
   uploaded: Date;
+  etag: string;
 }
 
 function toBytes(value: string | ArrayBuffer | ArrayBufferView | Uint8Array): Uint8Array {
@@ -32,7 +33,8 @@ function makeBody(obj: StoredObject) {
   return {
     key: obj.key,
     size: bytes.byteLength,
-    httpEtag: `"${obj.key}:${bytes.byteLength}"`,
+    etag: obj.etag,
+    httpEtag: `"${obj.etag}"`,
     httpMetadata: { contentType: obj.contentType },
     uploaded: obj.uploaded,
     async arrayBuffer(): Promise<ArrayBuffer> {
@@ -62,9 +64,33 @@ function hexToBuffer(hex: string): ArrayBuffer {
 
 export class FakeR2 {
   private store = new Map<string, StoredObject>();
+  private generation = 0;
+
+  /**
+   * Test hook run before every put, ahead of the precondition check. Throw to
+   * simulate a failed write; write through `this` to simulate a concurrent
+   * writer landing in between a read and its conditional write.
+   */
+  beforePut?: (key: string) => void | Promise<void>;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async put(key: string, value: any, options?: any): Promise<any> {
+    if (this.beforePut) await this.beforePut(key);
+    // R2's onlyIf: a failed precondition stores nothing and returns null.
+    const onlyIf = options?.onlyIf;
+    if (onlyIf) {
+      const current = this.store.get(key);
+      if (onlyIf.etagMatches !== undefined) {
+        if (!current || (onlyIf.etagMatches !== "*" && onlyIf.etagMatches !== current.etag)) {
+          return null;
+        }
+      }
+      if (onlyIf.etagDoesNotMatch !== undefined && current) {
+        if (onlyIf.etagDoesNotMatch === "*" || onlyIf.etagDoesNotMatch === current.etag) {
+          return null;
+        }
+      }
+    }
     const bytes = toBytes(value);
     const contentType = options?.httpMetadata?.contentType ?? "application/octet-stream";
     // Honour R2's optional sha256 integrity check so tests catch mismatches.
@@ -77,7 +103,13 @@ export class FakeR2 {
         throw new Error(`put sha256 mismatch: expected ${options.sha256}, got ${hex}`);
       }
     }
-    const obj: StoredObject = { key, bytes, contentType, uploaded: new Date() };
+    const obj: StoredObject = {
+      key,
+      bytes,
+      contentType,
+      uploaded: new Date(),
+      etag: `etag-${++this.generation}`,
+    };
     // R2 records a whole-object SHA-256 only when one was supplied (binding
     // `sha256` option, or x-amz-checksum-sha256 on a single-part S3 PUT). A
     // multipart upload has none — modelled by simply not setting it.
@@ -101,6 +133,7 @@ export class FakeR2 {
     return {
       key: body.key,
       size: body.size,
+      etag: body.etag,
       httpEtag: body.httpEtag,
       uploaded: body.uploaded,
       // Real R2 hands back raw bytes, not hex — the Worker hex-encodes them.
@@ -190,9 +223,11 @@ export function publishByRefRequest(opts: {
   contentType?: string;
   readme?: string;
   changelog?: string;
+  channel?: string;
 }): Request {
   const form = new FormData();
   form.set("manifest", opts.manifestYaml);
+  if (opts.channel !== undefined) form.set("channel", opts.channel);
   if (opts.readme !== undefined) form.set("readme", opts.readme);
   if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
   form.set("artifact_ref_filename", opts.filename);
@@ -226,9 +261,11 @@ export function publishRequest(opts: {
   evalScorecard?: string;
   capabilityMatrix?: string;
   packageFiles?: string;
+  channel?: string;
 }): Request {
   const form = new FormData();
   form.set("manifest", opts.manifestYaml);
+  if (opts.channel !== undefined) form.set("channel", opts.channel);
   if (opts.readme !== undefined) form.set("readme", opts.readme);
   if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
   if (opts.spec !== undefined) form.set("spec", opts.spec);

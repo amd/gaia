@@ -1,0 +1,23 @@
+{
+  "name": "gaia-admin-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker serving the GAIA admin dashboard: nightly public-data snapshots (GitHub, npm, PyPI) in D1, behind Cloudflare Access.",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev --local --local-upstream localhost:8787",
+    "deploy": "wrangler deploy",
+    "migrate:local": "wrangler d1 migrations apply gaia-admin --local",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250129.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8",
+    "wrangler": "^3.114.14"
+  }
+}

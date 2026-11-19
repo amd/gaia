@@ -1,0 +1,46 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* What a write or edit will leave in the file, read as text rather than code. */
+.perm-card-change {
+    margin-top: 8px;
+}
+
+.perm-card-change-label {
+    color: var(--text-secondary);
+    font-size: 12.5px;
+}
+
+/* A file may hold Arabic in any app language; a sans before `monospace` keeps its letters joined. */
+.perm-card-change :is(.perm-card-code, .perm-card-diff) {
+    font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', 'Segoe UI', 'Noto Sans Arabic', 'Noto Naskh Arabic', Tahoma, monospace;
+}
+
+.perm-card-change .perm-card-code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    /* Left to right, isolated: no character in the file can flip the order it reads in. */
+    direction: ltr;
+    unicode-bidi: isolate;
+    text-align: left;
+}
+
+.perm-card-diff {
+    margin-top: 6px;
+    padding: 6px 0;
+    max-height: 50vh;
+    overflow: auto;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+    font-size: 12px;
+    direction: ltr;
+    unicode-bidi: isolate;
+    text-align: left;
+}
+
+.perm-card-diff .render-diff__line {
+    padding-inline: 10px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}

@@ -14,21 +14,21 @@ import (
 // native: `gaia connectors connect …`, marked "no Agent UI required". Left to
 // the model to relay, it came back as "use Settings → Connections in the Agent
 // UI" — a GUI a terminal user cannot reach. It has to reach stderr verbatim.
-const connectorRemedy = "`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:email`"
+const connectorRemedy = "`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:gaia`"
 
 func toolErrorPayload() []byte {
 	return []byte(`{"status":"error","code":"CONNECTOR_ERROR","error":` +
-		`"no forwarded 'google' credential is available to the email sidecar.\n` +
+		`"no forwarded 'google' credential is available to GAIA.\n` +
 		`Connect and grant it in one command — no Agent UI required:\n` +
 		connectorRemedy + `"}`)
 }
 
 func TestFailedToolPrintsItsOwnRemedyVerbatim(t *testing.T) {
 	_, out, errW := captureOneShot(t,
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "email_pre_scan"},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
 		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "email_pre_scan",
-			Render: "email_pre_scan", Data: toolErrorPayload(),
+			Type: "tool_result", Tool: "list_inbox",
+			Render: "table", Data: toolErrorPayload(),
 		},
 		event.CanonicalFinalEvent{
 			Type:   "final",
@@ -42,7 +42,7 @@ func TestFailedToolPrintsItsOwnRemedyVerbatim(t *testing.T) {
 	if !strings.Contains(errW, "CONNECTOR_ERROR") {
 		t.Errorf("stderr does not carry the error code:\n%s", errW)
 	}
-	if strings.Contains(errW, "email_pre_scan returned") {
+	if strings.Contains(errW, "list_inbox returned") {
 		t.Errorf("a failed tool was reported as having returned normally:\n%s", errW)
 	}
 	// The model's paraphrase is still the answer — this is about the remedy
@@ -98,10 +98,10 @@ func TestDebugLoggerReceivesEveryEventWithItsRawPayload(t *testing.T) {
 	RunOneShot(context.Background(), &scriptedClient{events: []interface{}{
 		event.CanonicalStatusEvent{Type: "status", Message: "Scanning inbox"},
 		event.CanonicalToolCallEvent{
-			Type: "tool_call", Tool: "email_pre_scan", Args: []byte(`{"folder":"INBOX"}`),
+			Type: "tool_call", Tool: "list_inbox", Args: []byte(`{"folder":"INBOX"}`),
 		},
 		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "email_pre_scan", Data: toolErrorPayload(),
+			Type: "tool_result", Tool: "list_inbox", Data: toolErrorPayload(),
 		},
 		event.CanonicalFinalEvent{Type: "final", Answer: "done"},
 	}}, "triage", &out, &errW, true, func(format string, args ...any) {

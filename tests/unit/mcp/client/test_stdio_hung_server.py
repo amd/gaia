@@ -33,6 +33,17 @@ _PRELUDE = textwrap.dedent("""
     """)
 
 
+def _reap_stubs(psutil_module, procs):
+    """Stop the stubs a test left behind, then fail if any is still running."""
+    for proc in procs:
+        try:
+            proc.kill()
+        except (psutil_module.NoSuchProcess, psutil_module.AccessDenied):
+            continue  # gone, or exiting and no longer killable on Windows
+    _, alive = psutil_module.wait_procs(procs, timeout=5)
+    assert not alive, f"stub processes outlived the test: {alive}"
+
+
 @pytest.fixture(autouse=True)
 def _no_stub_outlives_its_test():
     """A failed assertion can skip disconnect(); stop what this test started."""
@@ -42,12 +53,39 @@ def _no_stub_outlives_its_test():
     leftover = [
         p for p in psutil.Process().children(recursive=True) if p.pid not in before
     ]
-    for proc in leftover:
-        try:
-            proc.kill()
-        except psutil.NoSuchProcess:
-            continue  # it exited on its own
-    psutil.wait_procs(leftover, timeout=5)
+    _reap_stubs(psutil, leftover)
+
+
+class _StubProcess:
+    """A child process stand-in whose kill() can fail the way Windows does."""
+
+    def __init__(self, kill_error=None):
+        self._kill_error = kill_error
+
+    def kill(self):
+        if self._kill_error is not None:
+            raise self._kill_error
+
+
+def test_the_cleanup_tolerates_a_stub_that_is_already_exiting(monkeypatch):
+    """Windows raises AccessDenied for a stub caught mid-exit (#8376)."""
+    psutil = pytest.importorskip("psutil")
+    monkeypatch.setattr(psutil, "wait_procs", lambda procs, timeout=None: ([], []))
+    _reap_stubs(
+        psutil,
+        [
+            _StubProcess(psutil.AccessDenied(1)),
+            _StubProcess(psutil.NoSuchProcess(2)),
+        ],
+    )
+
+
+def test_the_cleanup_fails_when_a_stub_outlives_the_test(monkeypatch):
+    psutil = pytest.importorskip("psutil")
+    stuck = _StubProcess(psutil.AccessDenied(3))
+    monkeypatch.setattr(psutil, "wait_procs", lambda procs, timeout=None: ([], procs))
+    with pytest.raises(AssertionError, match="outlived the test"):
+        _reap_stubs(psutil, [stuck])
 
 
 def _stub(tmp_path, body):
@@ -406,7 +444,8 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "method": echo})
         send({"jsonrpc": "2.0", "id": echo, "result": {}})
         send({"jsonrpc": "2.0", "id": req["id"],
-              "result": {"serverInfo": {"name": echo}, "note": echo}})
+              "result": {"protocolVersion": "2025-11-25",
+                         "serverInfo": {"name": echo}, "note": echo}})
     elif mode == "result":  # a successful result, echoing as value and key
         send({"jsonrpc": "2.0", "id": req["id"],
               "result": {"content": [{"type": "text", "text": echo}], echo: echo}})
@@ -492,7 +531,8 @@ def test_ordinary_words_in_a_server_error_stay_readable(tmp_path):
         + textwrap.indent(
             textwrap.dedent("""
         if req["method"] == "initialize":
-            send({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+            send({"jsonrpc": "2.0", "id": req["id"],
+                  "result": {"protocolVersion": "2025-11-25"}})
         else:
             send({"jsonrpc": "2.0", "id": req["id"], "error": {
                 "code": -32000,
@@ -851,6 +891,9 @@ class _FakeClient:
     def connect(self):
         time.sleep(self.connect_s)
         return self.connects
+
+    def list_tools(self):
+        return []
 
     def disconnect(self):
         self.disconnected.set()
@@ -1263,9 +1306,11 @@ def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
         upper = os.environ.get("STUB_UPPER_HEX") == "1"
         for line in sys.stdin:
             req = json.loads(line)
+            if "id" not in req:
+                continue
             if req["method"] == "initialize":
                 sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"],
-                                             "result": {}}) + "\\n")
+                    "result": {"protocolVersion": "2025-11-25"}}) + "\\n")
             elif req["method"] == "tools/list":  # a non-object JSON line
                 # UTF-8 bytes, as Node writes them whatever the console code page.
                 line = json.dumps("leaked " + secret, ensure_ascii=ascii_only)
@@ -1332,7 +1377,8 @@ def test_a_validation_error_never_echoes_a_secret_from_the_tool_schema(
             textwrap.dedent("""
         conf = " ".join(sys.argv)
         if req["method"] == "initialize":
-            send({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+            send({"jsonrpc": "2.0", "id": req["id"],
+                  "result": {"protocolVersion": "2025-11-25"}})
         elif req["method"] == "tools/list":
             send({"jsonrpc": "2.0", "id": req["id"], "result": {"tools": [
                 {"name": "x", "inputSchema": {"description": conf,

@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gaia.eval import runner
+from gaia.eval import claude_credential, runner
 from gaia.eval.claude_usage import (
     aggregate_usage,
     merge_scenario_usage,
@@ -102,7 +102,16 @@ def test_garbage_counts_are_not_summed():
 # --- the runner records it ---------------------------------------------------
 
 
+def _sign_in(monkeypatch):
+    monkeypatch.setattr(claude_credential, "_claude_bin", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(
+        claude_credential, "_auth_status", lambda _b, _e: {"loggedIn": True}
+    )
+
+
 def _run(tmp_path, monkeypatch, stdout, returncode=0):
+    # The driver needs a credential: a logged-in CLI, as on a dev box.
+    _sign_in(monkeypatch)
     monkeypatch.setattr(
         runner,
         "_run_driver",

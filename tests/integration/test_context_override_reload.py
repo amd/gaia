@@ -13,6 +13,7 @@ import pytest
 from gaia.cli import initialize_lemonade_for_agent
 from gaia.llm.lemonade_client import LemonadeClient
 from gaia.llm.lemonade_manager import LemonadeManager
+from gaia.version import LEMONADE_VERSION
 
 
 @pytest.mark.parametrize("window", [16384, 131072])
@@ -43,7 +44,13 @@ def test_startup_then_eviction_preserves_requested_window(monkeypatch, window):
 
         def do_GET(self):  # pylint: disable=invalid-name
             if self.path == "/api/v1/health":
-                self.reply({"status": "ok", "all_models_loaded": loaded})
+                self.reply(
+                    {
+                        "status": "ok",
+                        "version": LEMONADE_VERSION,
+                        "all_models_loaded": loaded,
+                    }
+                )
             elif self.path == "/api/v1/models":
                 self.reply({"data": []})
             else:

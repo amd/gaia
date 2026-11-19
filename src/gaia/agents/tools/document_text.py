@@ -12,13 +12,16 @@ import math
 import os
 from typing import Any, Dict, Optional, Tuple
 
+from gaia.utils.document_formats import (
+    UNSUPPORTED_DOCUMENTS,
+    unsupported_document_message,
+)
+
 #: Extensions read_file extracts text from, and the file_type it reports.
 READABLE_DOCUMENTS = {".docx": "docx", ".pdf": "pdf", ".xlsx": "xlsx"}
 
-#: Binary document formats only index_document can read.
-INDEX_ONLY_DOCUMENTS = frozenset(
-    {".doc", ".pptx", ".ppt", ".xls", ".odt", ".ods", ".odp", ".epub"}
-)
+#: Document formats only index_document can read.
+INDEX_ONLY_DOCUMENTS = frozenset({".pptx", ".epub"})
 
 #: Chars one read returns when the host has no model-sized budget.
 DEFAULT_READ_CHARS = 20000
@@ -50,6 +53,8 @@ def document_type(path: str) -> Optional[str]:
 def index_only_error(path: str) -> Optional[Dict[str, Any]]:
     """The error for a binary document read_file cannot extract, else ``None``."""
     ext = os.path.splitext(path)[1].lower()
+    if ext in UNSUPPORTED_DOCUMENTS:
+        return {"status": "error", "error": unsupported_document_message(path, ext)}
     if ext not in INDEX_ONLY_DOCUMENTS:
         return None
     return {
@@ -72,13 +77,32 @@ def _too_long(path: str) -> ValueError:
 
 def _pdf_text(path: str) -> Tuple[str, Dict[str, Any]]:
     try:
-        from pypdf import PdfReader  # pylint: disable=import-outside-toplevel
-        from pypdf.errors import PdfReadError  # pylint: disable=import-outside-toplevel
+        from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+            LimitReachedError,
+        )
     except ImportError as e:
         raise ImportError(
             "Reading PDF text requires pypdf. Install it with: "
             'uv pip install -e ".[rag]"'
         ) from e
+    from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+        pdf_parse_limits,
+    )
+
+    try:
+        with pdf_parse_limits():
+            return _read_pdf_pages(path)
+    except LimitReachedError as e:
+        raise ValueError(
+            f"{os.path.basename(path)} is too complex for GAIA to read safely "
+            f"({e}). Ask the user to print it to a new PDF, or split it, and "
+            "share that file."
+        ) from e
+
+
+def _read_pdf_pages(path: str) -> Tuple[str, Dict[str, Any]]:
+    from pypdf import PdfReader  # pylint: disable=import-outside-toplevel
+    from pypdf.errors import PdfReadError  # pylint: disable=import-outside-toplevel
 
     name = os.path.basename(path)
     try:

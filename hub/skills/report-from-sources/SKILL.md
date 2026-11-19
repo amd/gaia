@@ -1,6 +1,6 @@
 ---
 name: report-from-sources
-description: Build a report, deck, brief, memo, workbook or chart from the user's own files without missing what the sources stress. Use when the user asks to turn documents, spreadsheets or exports into a report, slides, a one-pager, a summary, charts or a dashboard. Pins the newest file per dataset, keeps a key-facts ledger per source, puts source and period on every figure, and checks every requested item before handing over.
+description: Build a report, deck, brief, workbook or chart from the user's own files without missing what the sources stress. Use when the user asks to turn documents, spreadsheets or exports into a report, slides, a one-pager, a summary or charts. Uses the newest file per dataset, cites source and period on every figure, and checks every requested item before handing over.
 license: MIT
 version: 1.0.0
 metadata:
@@ -12,7 +12,6 @@ metadata:
       - run_python
     pairs_with:
       - office-docs
-      - slide-decks
       - data-explore
     provenance:
       source: starter-pack
@@ -23,8 +22,7 @@ metadata:
 A deliverable can read well and still be wrong by omission: it skips the count
 of failures the source led with, drops the "down 8% from last year", or charts
 last year's file when this year's sat beside it. This skill is the order of
-work that prevents that. Use it together with whatever builds the file: for a
-deck, `slide-decks` builds and checks the .pptx from the ledger.
+work that prevents that. Use it together with whatever builds the file.
 
 ## 1. Inventory the inputs
 

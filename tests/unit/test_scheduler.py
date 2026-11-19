@@ -11,6 +11,7 @@ Tests cover:
 """
 
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -293,6 +294,24 @@ class TestSchedulerExecution:
         assert contents[-2:] == ["Summarize", "ran: Summarize"]
 
     @pytest.mark.asyncio
+    async def test_a_failed_run_is_saved_failed(self, fake_db):
+        """The UIs show a failure off the saved flag, not the reply's text."""
+
+        async def model_gave_up(prompt):
+            raise RuntimeError("The model stopped responding at step 3")
+
+        sched = Scheduler(db=fake_db, executor=model_gave_up)
+        await sched.start()
+        await sched.create_task("digest", "every 1h", "Summarize")
+        task = sched._tasks["digest"]
+
+        await sched._execute_task(task)
+        await sched.shutdown()
+
+        reply = fake_db.get_messages(task.session_id)[-1]
+        assert reply["role"] == "assistant" and reply["failed"]
+
+    @pytest.mark.asyncio
     async def test_results_stored(self, fake_db):
         """Execution results should be stored in schedule_results."""
 
@@ -462,3 +481,157 @@ class TestScheduleConfigFromJson:
     def test_from_json_unknown_key_raises(self):
         with pytest.raises(ValueError, match="Invalid schedule_config"):
             ScheduleConfig.from_json('{"bogus_key": 1}')
+
+
+class TestRunNow:
+    """Run now runs a task once without moving its schedule (#5718)."""
+
+    async def test_runs_once_and_keeps_the_next_scheduled_time(self, scheduler):
+        await scheduler.create_task("ping", "every 1h", "Say PING")
+        before = scheduler.get_task("ping")["next_run_at"]
+
+        started = await scheduler.run_task_now("ping")
+        assert started["running"] is True
+        await asyncio.gather(*scheduler._manual_runs)
+
+        after = scheduler.get_task("ping")
+        assert after["running"] is False
+        assert after["run_count"] == 1
+        assert after["last_result"] == "ran: Say PING"
+        assert after["next_run_at"] == before
+        messages = scheduler._db.get_messages(after["session_id"])
+        assert messages[-1]["content"] == "ran: Say PING"
+
+    async def test_refuses_a_second_run_while_one_is_in_flight(self, fake_db):
+        release = asyncio.Event()
+
+        async def slow(prompt):
+            await release.wait()
+            return "done"
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        try:
+            await sched.create_task("slow", "every 1h", "P")
+            await sched.run_task_now("slow")
+            with pytest.raises(ValueError, match="already running"):
+                await sched.run_task_now("slow")
+
+            # A timed run landing meanwhile is skipped, not run twice.
+            await asyncio.sleep(0)
+            task = sched._tasks["slow"]
+            await sched._execute_task(task)
+
+            release.set()
+            await asyncio.gather(*sched._manual_runs)
+            assert task.run_count == 1
+            assert sched.get_task("slow")["running"] is False
+        finally:
+            await sched.shutdown()
+
+    async def test_run_is_not_counted_until_it_ends(self, fake_db):
+        release = asyncio.Event()
+
+        async def slow(prompt):
+            await release.wait()
+            raise RuntimeError("boom")
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        try:
+            await sched.create_task("slow", "every 1h", "P")
+            await sched.run_task_now("slow")
+            await asyncio.sleep(0)
+
+            running = sched.get_task("slow")
+            assert running["running"] is True
+            assert running["run_count"] == 0
+            assert running["last_run_at"] is None
+
+            await asyncio.sleep(0.02)
+            mid_run = datetime.now(timezone.utc)
+            release.set()
+            await asyncio.gather(*sched._manual_runs)
+            done = sched.get_task("slow")
+            assert done["run_count"] == 1
+            assert datetime.fromisoformat(done["last_run_at"]) >= mid_run
+            assert done["error_count"] == 1
+        finally:
+            await sched.shutdown()
+
+    async def test_unknown_task(self, scheduler):
+        with pytest.raises(KeyError):
+            await scheduler.run_task_now("nope")
+
+
+class TestRunNowStops:
+    """Deleting a schedule or stopping GAIA stops its Run now, like its timer."""
+
+    async def _start_slow(self, fake_db):
+        async def slow(prompt):
+            await asyncio.Event().wait()
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        await sched.create_task("slow", "every 1h", "P")
+        await sched.run_task_now("slow")
+        await asyncio.sleep(0)
+        return sched, next(iter(sched._manual_runs))
+
+    async def test_delete_cancels_it(self, fake_db):
+        sched, run = await self._start_slow(fake_db)
+        try:
+            await sched.delete_task("slow")
+            assert run.cancelled()
+        finally:
+            await sched.shutdown()
+
+    async def test_shutdown_cancels_it(self, fake_db):
+        sched, run = await self._start_slow(fake_db)
+        await sched.shutdown()
+        assert run.cancelled()
+
+
+class TestRunCutShortByTheSchedule:
+    """A run stopped by deleting or pausing its schedule closes its chat turn."""
+
+    @staticmethod
+    async def _running(fake_db):
+        started = asyncio.Event()
+
+        async def slow(_prompt):
+            started.set()
+            await asyncio.Event().wait()
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        await sched.create_task("heartbeat", "every 1h", "Write a file")
+        task = sched._tasks["heartbeat"]
+        task._timer_task.cancel()
+        task._timer_task = asyncio.create_task(sched._execute_task_once(task, True))
+        await asyncio.wait_for(started.wait(), 5)
+        return sched, task
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stop, notice",
+        [
+            ("delete_task", scheduler_module.RUN_STOPPED_SCHEDULE_DELETED),
+            ("pause_task", scheduler_module.RUN_STOPPED_SCHEDULE_PAUSED),
+        ],
+    )
+    async def test_the_run_says_why_it_stopped(self, fake_db, stop, notice):
+        sched, task = await self._running(fake_db)
+        await getattr(sched, stop)("heartbeat")
+        messages = fake_db.get_messages(task.session_id)
+        assert [m["content"] for m in messages][-2:] == ["Write a file", notice]
+        assert fake_db.turns_in_progress() == []
+        await sched.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_a_shutdown_leaves_the_run_to_restart_recovery(self, fake_db):
+        sched, task = await self._running(fake_db)
+        await sched.shutdown()
+        assert [t["session_id"] for t in fake_db.turns_in_progress()] == [
+            task.session_id
+        ]

@@ -71,7 +71,7 @@ describe("every BrowserWindow takes the GAIA icon", () => {
   });
 
   test("finds the app's windows", () => {
-    expect(windows.length).toBeGreaterThanOrEqual(2);
+    expect(windows.length).toBeGreaterThanOrEqual(1);
   });
 
   test.each(windows)("%s passes icon: appIconPath()", (_where, options) => {

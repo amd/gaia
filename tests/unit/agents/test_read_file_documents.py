@@ -207,7 +207,7 @@ def test_formulas_without_saved_values_are_flagged_not_silently_blank(
     assert "1 formula cell(s) have no saved value" in result["warning"]
 
 
-@pytest.mark.parametrize("extension", [".pptx", ".doc", ".odt"])
+@pytest.mark.parametrize("extension", [".pptx", ".epub"])
 def test_formats_it_cannot_extract_point_at_index_document(
     read_file, tmp_path, extension
 ):
@@ -216,6 +216,16 @@ def test_formats_it_cannot_extract_point_at_index_document(
     result = read_file(str(path))
     assert result["status"] == "error"
     assert "index_document" in result["error"]
+
+
+@pytest.mark.parametrize("extension", [".doc", ".odt"])
+def test_formats_nothing_can_read_say_to_convert(read_file, tmp_path, extension):
+    path = tmp_path / f"deck{extension}"
+    path.write_bytes(b"PK\x03\x04")
+    result = read_file(str(path))
+    assert result["status"] == "error"
+    assert "index_document" not in result["error"]
+    assert "Re-save it as .docx or PDF" in result["error"]
 
 
 def test_paging_does_not_re_extract_an_unchanged_file(read_file, tmp_path, monkeypatch):

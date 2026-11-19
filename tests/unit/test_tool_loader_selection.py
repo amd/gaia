@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Unit tests for the semantic ToolLoader (#1449, parent #688).
+"""Unit tests for the ToolLoader's session list (#1449, parent #688).
 
 Pure loader logic — no Lemonade backend. A deterministic fake embedder gives
 exact control over cosine scores: every tool's doc embeds to a distinct
@@ -19,13 +19,19 @@ import logging
 import numpy as np
 import pytest
 
-from gaia.agents.base.tool_loader import ToolBundle, ToolLoader
+from gaia.agents.base.tool_loader import (
+    DEFAULT_THRESHOLD,
+    JUMP_MARGIN,
+    SEARCH_FLOOR,
+    ToolBundle,
+    ToolLoader,
+)
 
 DIM = 768
 
 
-def _make_embed_fn(tools: list[str], query_scores: dict[str, dict[str, float]]):
-    """Build a deterministic embedder over a fixed tool set.
+class _Embedder:
+    """Deterministic embedder over a fixed tool set; records what it embedded.
 
     Args:
         tools: tool names; each gets a distinct one-hot embedding axis.
@@ -33,651 +39,418 @@ def _make_embed_fn(tools: list[str], query_scores: dict[str, dict[str, float]]):
             embeds to the coordinate vector with those scores; ``dot`` with a
             tool's one-hot axis recovers the score exactly.
     """
-    axis = {name: i for i, name in enumerate(tools)}
-    assert len(tools) <= DIM
-    docs = {f"{name}: does {name}": name for name in tools}
 
-    def embed(text: str) -> np.ndarray:
+    def __init__(self, tools: list[str], query_scores: dict[str, dict[str, float]]):
+        assert len(tools) <= DIM
+        self._axis = {name: i for i, name in enumerate(tools)}
+        self._docs = {f"{name}: does {name}": name for name in tools}
+        self._query_scores = query_scores
+        self.calls: list[str] = []
+
+    def __call__(self, text: str) -> np.ndarray:
+        self.calls.append(text)
         v = np.zeros(DIM, dtype=np.float32)
-        if text in docs:
-            v[axis[docs[text]]] = 1.0
+        if text in self._docs:
+            v[self._axis[self._docs[text]]] = 1.0
             return v
-        if text in query_scores:
-            for tool, score in query_scores[text].items():
-                v[axis[tool]] = score
+        if text in self._query_scores:
+            for tool, score in self._query_scores[text].items():
+                v[self._axis[tool]] = score
             return v
         raise AssertionError(f"unexpected text embedded: {text!r}")
-
-    return embed
 
 
 def _registry(tools: list[str]) -> dict[str, dict]:
     return {name: {"description": f"does {name}"} for name in tools}
 
 
-# ── threshold boundary ───────────────────────────────────────────────────
+def _loader(tools, query_scores, core=(), threshold=0.55, **kwargs):
+    embed = _Embedder(tools, query_scores)
+    return ToolLoader(frozenset(core), [], embed, threshold=threshold, **kwargs), embed
 
 
-def test_threshold_boundary_is_inclusive():
-    """score == threshold matches (inclusive); just below does not."""
-    tools = ["hit", "miss"]
-    embed = _make_embed_fn(tools, {"q": {"hit": 0.55, "miss": 0.5499}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
-    assert loader.select("q", _registry(tools)) == ["hit"]
+# ── core ─────────────────────────────────────────────────────────────────
 
 
-# ── bundle pull-in ───────────────────────────────────────────────────────
+def test_the_jump_bar_is_the_tuned_values():
+    assert (DEFAULT_THRESHOLD, JUMP_MARGIN) == (0.40, 0.03)
 
 
-def test_bundle_pull_in_and_mate_admission_score():
-    """A matched member pulls its whole bundle; the mate inherits the bundle score.
-
-    a1 matches at 0.9 and pulls its non-matching mate a2 (own score 0.1). The
-    mate's admission score is lifted to 0.9, so under a 2-slot cap a2 outranks
-    the independently-matched b1 (0.6) and b1 is skipped.
-    """
-    tools = ["a1", "a2", "b1"]
-    embed = _make_embed_fn(tools, {"q": {"a1": 0.9, "a2": 0.1, "b1": 0.6}})
-    bundles = [ToolBundle(name="A", members=frozenset({"a1", "a2"}))]
-    loader = ToolLoader(frozenset(), bundles, embed, threshold=0.55, max_tools=2)
-    assert loader.select("q", _registry(tools)) == ["a1", "a2"]
+def test_a_session_starts_on_core_in_registry_order():
+    tools = ["z_core", "a_tool", "a_core"]
+    loader, _ = _loader(tools, {"q": {}}, core={"a_core", "z_core"})
+    assert loader.offered(_registry(tools)) == ["z_core", "a_core"]
+    assert loader.select("q", _registry(tools)) == ["z_core", "a_core"]
 
 
-def test_bundle_pull_in_skips_members_absent_from_registry():
-    """A bundle member not present in the registry is silently not pulled."""
-    tools = ["a1"]
-    embed = _make_embed_fn(tools, {"q": {"a1": 0.9}})
-    bundles = [ToolBundle(name="A", members=frozenset({"a1", "ghost"}))]
-    loader = ToolLoader(frozenset(), bundles, embed, threshold=0.55, max_tools=14)
-    assert loader.select("q", _registry(tools)) == ["a1"]
+def test_a_core_name_missing_from_the_registry_is_left_off():
+    tools = ["c1"]
+    loader, _ = _loader(tools, {"q": {}}, core={"c1", "optional_tool"})
+    assert loader.select("q", _registry(tools)) == ["c1"]
 
 
-# ── CORE ─────────────────────────────────────────────────────────────────
+# ── retrieval jump ───────────────────────────────────────────────────────
 
 
-def test_core_always_admitted_even_without_match():
-    """CORE tools are admitted unconditionally, regardless of score."""
+def test_an_outside_tool_at_the_threshold_that_beats_the_list_jumps():
+    """The bar is inclusive, and the jump lands on every tool, registry order."""
+    tools = ["c1", "d2", "d1"]
+    loader, _ = _loader(
+        tools, {"q": {"c1": 0.1, "d1": 0.5, "d2": 0.0}}, core={"c1"}, threshold=0.5
+    )
+    assert loader.select("q", _registry(tools)) == ["c1", "d2", "d1"]
+    assert loader.jumped is True
+
+
+def test_an_outside_tool_just_below_the_threshold_does_not_jump():
     tools = ["c1", "d1"]
-    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "d1": 0.7}})
-    loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=14)
-    assert loader.select("q", _registry(tools)) == ["c1", "d1"]
+    loader, _ = _loader(
+        tools, {"q": {"c1": 0.1, "d1": 0.4999}}, core={"c1"}, threshold=0.5
+    )
+    assert loader.select("q", _registry(tools)) == ["c1"]
+    assert loader.jumped is False
 
 
-# ── monotonic growth ─────────────────────────────────────────────────────
+@pytest.mark.parametrize(
+    "inside",
+    [0.9, 0.8, 0.8 - JUMP_MARGIN + 0.001],
+    ids=["listed-beats", "tie", "inside-the-margin"],
+)
+def test_an_outside_tool_must_beat_every_listed_tool_by_the_margin(inside):
+    """Small talk scores about the same on everything; only a clear win is a need."""
+    tools = ["c1", "c2", "d1"]
+    scores = {"q": {"c1": 0.1, "c2": inside, "d1": 0.8}}
+    loader, _ = _loader(tools, scores, core={"c1", "c2"})
+    assert loader.select("q", _registry(tools)) == ["c1", "c2"]
+    assert loader.jumped is False
 
 
-def test_monotonic_growth_no_pruning_on_score_drop():
-    """Once loaded, a tool stays even when a later turn no longer matches it."""
+def test_an_outside_tool_past_the_margin_jumps():
+    tools = ["c1", "c2", "d1"]
+    scores = {"q": {"c1": 0.1, "c2": 0.8 - JUMP_MARGIN - 0.001, "d1": 0.8}}
+    loader, _ = _loader(tools, scores, core={"c1", "c2"})
+    assert loader.select("q", _registry(tools)) == tools
+
+
+def test_nothing_outside_the_list_never_jumps():
+    tools = ["c1", "c2"]
+    loader, _ = _loader(tools, {"q": {"c1": 0.99, "c2": 0.99}}, core=set(tools))
+    assert loader.select("q", _registry(tools)) == ["c1", "c2"]
+    assert loader.jumped is False
+
+
+def test_an_empty_list_jumps_on_a_tool_above_the_threshold():
     tools = ["d1", "d2"]
-    embed = _make_embed_fn(
-        tools,
-        {
-            "q1": {"d1": 0.7, "d2": 0.0},  # turn 1 matches d1
-            "q2": {"d1": 0.0, "d2": 0.8},  # turn 2 matches d2, not d1
-        },
-    )
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
+    loader, _ = _loader(tools, {"q": {"d1": 0.7, "d2": 0.0}})
+    assert loader.select("q", _registry(tools)) == ["d1", "d2"]
+
+
+def test_a_jump_offers_every_tool_however_many_there_are():
+    """No cap: the full list is the whole registry."""
+    tools = [f"tool_{i}" for i in range(300)]
+    loader, _ = _loader(tools, {"q": {"tool_299": 0.9}}, core={"tool_0"})
+    assert loader.select("q", _registry(tools)) == tools
+
+
+def test_a_skill_tool_on_the_list_does_not_count_as_outside():
+    tools = ["c1", "d1"]
+    loader, _ = _loader(tools, {"q": {"c1": 0.0, "d1": 0.9}}, core={"c1"})
+    assert loader.select("q", _registry(tools), skill_tools=["d1"]) == ["c1", "d1"]
+    assert loader.jumped is False
+
+
+# ── after a jump ─────────────────────────────────────────────────────────
+
+
+def test_after_a_jump_the_list_is_frozen_and_nothing_is_embedded():
+    tools = ["c1", "d1", "d2"]
+    loader, embed = _loader(tools, {"q1": {"d1": 0.9}}, core={"c1"})
     reg = _registry(tools)
-    assert loader.select("q1", reg) == ["d1"]
-    assert loader.select("q2", reg) == ["d1", "d2"]  # monotonic union, d1 kept
+    first = loader.select("q1", reg)
+    assert first == tools
+
+    embed.calls.clear()
+    second = loader.select("q2 never seen by the embedder", reg)
+
+    assert second == first
+    assert embed.calls == []
 
 
-def test_repeat_query_is_deterministic_and_identical():
-    """The same query yields a byte-identical sorted set on repeat (KV-warm)."""
-    tools = ["core_a", "d1", "d2", "d3"]
-    embed = _make_embed_fn(
-        tools, {"q": {"core_a": 0.0, "d1": 0.8, "d2": 0.7, "d3": 0.6}}
-    )
-    loader = ToolLoader(frozenset({"core_a"}), [], embed, threshold=0.55, max_tools=14)
+def test_a_tool_registered_after_a_jump_joins_the_list_in_registry_order():
+    tools = ["c1", "d1"]
+    loader, _ = _loader(tools, {"q": {"d1": 0.9}}, core={"c1"})
     reg = _registry(tools)
-    first = loader.select("q", reg)
-    second = loader.select("q", reg)
-    assert first == second == sorted(first)
-    assert first == ["core_a", "d1", "d2", "d3"]
-
-
-# ── LRU at cap ───────────────────────────────────────────────────────────
-
-
-def test_skip_at_cap_when_nothing_evictable():
-    """When every slot is a this-turn admission, excess candidates are skipped+logged."""
-    tools = ["d1", "d2", "d3", "d4"]
-    embed = _make_embed_fn(tools, {"q": {"d1": 0.9, "d2": 0.8, "d3": 0.7, "d4": 0.6}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=2)
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loaded = loader.select("q", _registry(tools))
-    assert loaded == ["d1", "d2"]  # top-2 by score
-    assert set(_selection_payload(records)["skipped_at_cap"]) == {"d3", "d4"}
-
-
-def test_core_never_evicted_at_cap():
-    """A CORE tool is never chosen as an eviction victim."""
-    tools = ["c1", "d1", "d2", "d3"]
-    embed = _make_embed_fn(
-        tools,
-        {
-            "q1": {"c1": 0.0, "d1": 0.9, "d2": 0.8, "d3": 0.0},
-            "q2": {"c1": 0.0, "d1": 0.0, "d2": 0.0, "d3": 0.9},
-        },
-    )
-    loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=3)
-    reg = _registry(tools)
-    assert loader.select("q1", reg) == ["c1", "d1", "d2"]  # at cap 3
-    loaded = loader.select("q2", reg)  # d3 forces eviction of a non-CORE
-    assert "c1" in loaded and "d3" in loaded and len(loaded) == 3
-
-
-def test_lru_evicts_oldest_last_call():
-    """At cap, the least-recently-called non-CORE tool is evicted first."""
-    tools = ["d1", "d2", "d3"]
-    embed = _make_embed_fn(
-        tools,
-        {
-            "q1": {"d1": 0.9, "d2": 0.8, "d3": 0.0},
-            "q2": {"d1": 0.0, "d2": 0.0, "d3": 0.9},
-        },
-    )
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=2)
-    reg = _registry(tools)
-    assert loader.select("q1", reg) == ["d1", "d2"]
-
-    # d1 called recently, d2 long ago → d2 is the victim.
-    loader._loaded["d1"].last_call_ts = 5000.0
-    loader._loaded["d2"].last_call_ts = 1000.0
-    assert loader.select("q2", reg) == ["d1", "d3"]
-
-
-def test_lru_falls_back_to_load_time_for_never_called():
-    """Never-called tools are ranked by load time (oldest loaded evicted first)."""
-    tools = ["d1", "d2", "d3"]
-    embed = _make_embed_fn(
-        tools,
-        {
-            "q1": {"d1": 0.9, "d2": 0.8, "d3": 0.0},
-            "q2": {"d1": 0.0, "d2": 0.0, "d3": 0.9},
-        },
-    )
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=2)
-    reg = _registry(tools)
-    assert loader.select("q1", reg) == ["d1", "d2"]
-
-    # Neither called; make d1 the older load → d1 evicted first.
-    loader._loaded["d1"].loaded_at = 1000.0
-    loader._loaded["d2"].loaded_at = 2000.0
-    assert loader.select("q2", reg) == ["d2", "d3"]
-
-
-def test_evicted_tool_can_be_readmitted():
-    """An evicted tool re-enters when it matches again (the monotonicity exception)."""
-    tools = ["d1", "d2", "d3"]
-    embed = _make_embed_fn(
-        tools,
-        {
-            "q1": {"d1": 0.9, "d2": 0.8, "d3": 0.0},
-            "q2": {"d1": 0.0, "d2": 0.0, "d3": 0.9},  # evicts d1
-            "q3": {"d1": 0.95, "d2": 0.0, "d3": 0.0},  # d1 matches again
-        },
-    )
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=2)
-    reg = _registry(tools)
-    loader.select("q1", reg)
-    loader._loaded["d1"].loaded_at = 1000.0
-    loader._loaded["d2"].loaded_at = 2000.0
-    assert "d1" not in loader.select("q2", reg)  # d1 evicted
-
-    loader._loaded["d2"].loaded_at = 1500.0
-    loader._loaded["d3"].loaded_at = 3000.0
-    assert "d1" in loader.select("q3", reg)  # re-admitted
-
-
-# ── record_tool_use ──────────────────────────────────────────────────────
-
-
-def test_record_tool_use_updates_recency_for_loaded():
-    tools = ["d1"]
-    embed = _make_embed_fn(tools, {"q": {"d1": 0.9}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
-    loader.select("q", _registry(tools))
-    assert loader._loaded["d1"].last_call_ts is None
-    loader.record_tool_use("d1")
-    assert loader._loaded["d1"].last_call_ts is not None
-
-
-def test_record_tool_use_logs_escape_hatch_for_unloaded():
-    """Executing an unlisted tool logs the escape-hatch signal (no auto-load)."""
-    tools = ["d1"]
-    embed = _make_embed_fn(tools, {"q": {"d1": 0.9}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
-    loader.select("q", _registry(tools))
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loader.record_tool_use("never_loaded")
-    assert "never_loaded" not in loader._loaded
-    assert any("TOOL_LOADER_ESCAPE_HATCH" in r.getMessage() for r in records)
-
-
-# ── SKILL tier (Part 3, #1451) ─────────────────────────────────────────────
-
-
-def test_skill_tool_admitted_ahead_of_semantic_at_cap():
-    """At cap, a SKILL tool wins the last slot over a higher-scored semantic tool.
-
-    One free slot, two candidates: the recalled recipe's ``x`` (no semantic
-    match) and ``hi`` (semantic 0.9). SKILL is admitted before semantic, so ``x``
-    takes the slot and the higher-scored ``hi`` is skipped — the precise
-    realization of "ahead of semantic" (precedence CORE > SKILL > SEMANTIC).
-    """
-    tools = ["x", "hi"]
-    embed = _make_embed_fn(tools, {"q": {"x": 0.0, "hi": 0.9}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loaded = loader.select("q", _registry(tools), skill_tools=["x"])
-    assert loaded == ["x"]  # SKILL took the only slot
-    payload = _selection_payload(records)
-    assert payload["skill"] == ["x"]
-    assert "hi" in payload["skipped_at_cap"]  # higher-scored semantic, skipped
-
-
-def test_over_cap_skill_request_settles_instead_of_rotating():
-    """A SKILL request larger than the free slots keeps the same tools every turn.
-
-    One slot, two requested tools. Without holding already-loaded requested
-    tools, turn 2 evicts ``t1`` for ``t2``, turn 3 swaps back — the prompt
-    changes every turn and neither tool stays. A semantic match cannot take a
-    still-requested tool's slot either (SKILL > SEMANTIC).
-    """
-    tools = ["t1", "t2", "hi"]
-    embed = _make_embed_fn(tools, {"q": {"t1": 0.0, "t2": 0.0, "hi": 0.9}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
-    turns = [
-        loader.select("q", _registry(tools), skill_tools=["t1", "t2"]) for _ in range(3)
+    loader.select("q", reg)
+    assert loader.offered({**reg, "mcp_tool": {"description": "x"}}) == [
+        "c1",
+        "d1",
+        "mcp_tool",
     ]
-    assert turns == [["t1"], ["t1"], ["t1"]]
 
 
-def test_skill_tool_avoids_escape_hatch_activation():
-    """Pre-loading the recipe's tool keeps the escape-hatch counter at 0.
-
-    ``needed`` has no semantic match, so without the SKILL signal it would be
-    absent and executing it would log the escape hatch. The recalled recipe
-    pre-loads it, so the same execution is a normal recency update.
-    """
-    tools = ["needed"]
-    embed = _make_embed_fn(tools, {"q": {"needed": 0.0}})
-
-    # Control: no skill signal → tool absent → execution escape-hatches.
-    control = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
-    assert control.select("q", _registry(tools)) == []
-    control.record_tool_use("needed")
-    assert control._escape_hatch_count == 1
-
-    # SKILL signal pre-loads it → execution is a plain recency update.
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
-    assert loader.select("q", _registry(tools), skill_tools=["needed"]) == ["needed"]
-    loader.record_tool_use("needed")
-    assert loader._escape_hatch_count == 0
+def test_a_tool_a_skill_required_stays_on_the_full_list_after_unloading():
+    tools = ["c1", "d1", "d2"]
+    loader, _ = _loader(tools, {"q": {"d2": 0.9}}, core={"c1"})
+    reg = _registry(tools)
+    loader.admit_tools(["d1"], reg)
+    loader.select("q", reg)
+    assert loader.remove_tools(["d1"], reg) == tools
 
 
-def test_a_still_named_skill_tool_is_not_evicted_on_the_next_turn():
-    """The tier used to decay to nothing after the turn that admitted it.
-
-    ``keep`` is named by the signal on both turns and never called. On turn 2 it
-    was already loaded, so the tier skipped it — which also left it out of the
-    this-turn protected set, making an uncalled row the LRU's first pick. The
-    recipe's own tools evicted while the recipe was still being followed.
-    """
-    tools = ["keep", "hot"]
-    embed = _make_embed_fn(
-        tools, {"q1": {"keep": 0.0, "hot": 0.0}, "q2": {"keep": 0.0, "hot": 0.9}}
-    )
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
-
-    assert loader.select("q1", _registry(tools), skill_tools=["keep"]) == ["keep"]
+def test_a_second_jump_changes_nothing_and_logs_nothing():
+    loader, _ = _loader(["c1"], {}, core={"c1"})
     with _capture("gaia.agents.base.tool_loader") as records:
-        loaded = loader.select("q2", _registry(tools), skill_tools=["keep"])
-
-    assert loaded == ["keep"]
-    payload = _selection_payload(records)
-    assert payload["skill"] == ["keep"]  # reported on every turn it is named
-    assert payload["evicted"] == []
-    assert "hot" in payload["skipped_at_cap"]
+        loader.jump("search")
+        loader.jump("retrieval")
+    assert [p for p in _loader_payloads(records) if p.get("event") == "jump"] == [
+        {"turn": 0, "event": "jump", "reason": "search"}
+    ]
 
 
-def test_a_skill_tool_the_signal_stops_naming_becomes_evictable_again():
-    """Protection is per-turn, not permanent — the tier still self-heals."""
-    tools = ["stale", "hot"]
-    embed = _make_embed_fn(
-        tools, {"q1": {"stale": 0.0, "hot": 0.0}, "q2": {"stale": 0.0, "hot": 0.9}}
-    )
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=1)
-
-    assert loader.select("q1", _registry(tools), skill_tools=["stale"]) == ["stale"]
-    assert loader.select("q2", _registry(tools)) == ["hot"]
+# ── requested tools ──────────────────────────────────────────────────────
 
 
-def test_skill_signal_absent_is_byte_identical():
-    """``skill_tools`` None / [] / omitted give the same loaded set and log bytes.
+def test_a_requested_tool_outside_the_list_jumps_without_embedding():
+    tools = ["c1", "asked"]
+    loader, embed = _loader(tools, {}, core={"c1"})
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loaded = loader.select("q", _registry(tools), requested_tools=["asked"])
+    assert loaded == ["c1", "asked"]
+    assert embed.calls == []
+    assert _jump_reason(records) == "requested"
 
-    Graceful absence: the SKILL signal off must be byte-for-byte Parts 0-2 — same
-    loaded set, same ``TOOL_LOADER`` payload, and no ``skill`` key.
-    """
+
+def test_a_requested_tool_on_the_list_is_no_jump():
     tools = ["c1", "d1"]
-    scores = {"q": {"c1": 0.0, "d1": 0.7}}
-
-    def _run(**kwargs):
-        embed = _make_embed_fn(tools, scores)
-        loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=14)
-        with _capture("gaia.agents.base.tool_loader") as records:
-            loaded = loader.select("q", _registry(tools), **kwargs)
-        return loaded, _selection_payload(records)
-
-    base_loaded, base_payload = _run()
-    none_loaded, none_payload = _run(skill_tools=None)
-    empty_loaded, empty_payload = _run(skill_tools=[])
-
-    assert base_loaded == none_loaded == empty_loaded == ["c1", "d1"]
-    assert base_payload == none_payload == empty_payload
-    assert "skill" not in base_payload
+    loader, _ = _loader(tools, {"q": {"c1": 0.0, "d1": 0.0}}, core={"c1"})
+    assert loader.select("q", _registry(tools), requested_tools=["c1"]) == ["c1"]
+    assert loader.jumped is False
 
 
-def test_skill_tool_not_in_registry_is_dropped():
-    """A recalled tool absent from the registry is dropped, not raised."""
-    tools = ["d1"]
-    embed = _make_embed_fn(tools, {"q": {"d1": 0.7}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loaded = loader.select("q", _registry(tools), skill_tools=["ghost"])
-    assert "ghost" not in loaded
-    assert loaded == ["d1"]  # semantic match still loads
-    assert "skill" not in _selection_payload(records)  # ghost dropped, nothing fired
-
-
-def test_skill_tool_in_core_is_noop():
-    """A recalled tool already in CORE is not double-admitted nor SKILL-logged."""
+def test_a_requested_tool_absent_from_the_registry_is_no_jump():
+    """A recalled procedure may name a tool this agent lacks."""
     tools = ["c1", "d1"]
-    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "d1": 0.0}})
-    loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=14)
+    loader, _ = _loader(tools, {"q": {"c1": 0.0, "d1": 0.0}}, core={"c1"})
+    assert loader.select("q", _registry(tools), requested_tools=["ghost"]) == ["c1"]
+    assert loader.jumped is False
+
+
+@pytest.mark.parametrize(
+    "kwargs", [{}, {"requested_tools": None}, {"requested_tools": []}]
+)
+def test_no_requested_tools_falls_through_to_retrieval(kwargs):
+    tools = ["c1", "d1"]
+    loader, _ = _loader(tools, {"q": {"c1": 0.0, "d1": 0.9}}, core={"c1"})
     with _capture("gaia.agents.base.tool_loader") as records:
-        loaded = loader.select("q", _registry(tools), skill_tools=["c1"])
-    assert loaded == ["c1"]
-    payload = _selection_payload(records)
-    assert payload["admitted"] == ["c1"]  # admitted once, by CORE
-    assert "skill" not in payload  # CORE already covered it; SKILL did not fire
+        loader.select("q", _registry(tools), **kwargs)
+    assert _jump_reason(records) == "retrieval"
 
 
-def test_skill_log_key_present_only_when_skill_fires():
-    """The ``skill`` log key appears only on a turn the SKILL signal contributes."""
-    tools = ["x"]
-    embed = _make_embed_fn(tools, {"q": {"x": 0.0}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
-
-    with _capture("gaia.agents.base.tool_loader") as fired:
-        loader.select("q", _registry(tools), skill_tools=["x"])
-    assert _selection_payload(fired)["skill"] == ["x"]
-
-    # A later turn with no recall must not carry the key (x already loaded).
-    with _capture("gaia.agents.base.tool_loader") as quiet:
-        loader.select("q", _registry(tools), skill_tools=[])
-    assert "skill" not in _selection_payload(quiet)
+def test_a_skill_tool_is_on_the_list_before_requested_tools_are_checked():
+    """A skill's tool is both: it joins the list, so it is no reason to jump."""
+    tools = ["c1", "needed"]
+    loader, _ = _loader(tools, {"q": {"c1": 0.0, "needed": 0.0}}, core={"c1"})
+    loaded = loader.select(
+        "q", _registry(tools), skill_tools=["needed"], requested_tools=["needed"]
+    )
+    assert loaded == ["c1", "needed"]
+    assert loader.jumped is False
 
 
-# ── load_bundle / menu / counters (Part 2, #1450) ──────────────────────────
+# ── skill tools ──────────────────────────────────────────────────────────
 
 
-def _loader_with_bundles(max_tools: int = 14):
-    """A loader over a tiny CORE + two bundles, with a never-matching embedder."""
+def _skill_loader():
+    """Tiny CORE, two outside tools, and an embedder that scores all of it zero."""
     tools = ["c1", "a1", "a2", "b1"]
-    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "a1": 0.0, "a2": 0.0, "b1": 0.0}})
-    bundles = [
-        ToolBundle(name="A", members=frozenset({"a1", "a2"}), description="A tools"),
-        ToolBundle(name="B", members=frozenset({"b1"}), description="B tools"),
-    ]
-    loader = ToolLoader(
-        frozenset({"c1"}), bundles, embed, threshold=0.55, max_tools=max_tools
+    return (
+        _loader(tools, {"q": {name: 0.0 for name in tools}}, core={"c1"})[0],
+        _registry(tools),
     )
-    return loader, _registry(tools)
 
 
-def test_bundle_names_are_sorted():
-    loader, _ = _loader_with_bundles()
-    assert loader.bundle_names() == ["A", "B"]
+def test_skill_tools_join_without_a_jump():
+    loader, reg = _skill_loader()
+    assert loader.select("q", reg, skill_tools=["b1", "a1"]) == ["c1", "b1", "a1"]
+    assert loader.jumped is False
 
 
-def test_format_bundle_menu_lists_name_and_description():
-    loader, _ = _loader_with_bundles()
-    menu = loader.format_bundle_menu()
-    assert "- A: A tools" in menu
-    assert "- B: B tools" in menu
+def test_skill_tools_stay_for_the_session_once_admitted():
+    loader, reg = _skill_loader()
+    loader.select("q", reg, skill_tools=["a1"])
+    assert loader.select("q", reg) == ["c1", "a1"]
 
 
-def test_load_bundle_by_bundle_name_admits_members():
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)  # turn 1: CORE only (c1)
-    loaded = loader.load_bundle("A", reg)
-    assert {"c1", "a1", "a2"} <= set(loaded)
-    assert loader._load_tools_count == 1
+@pytest.mark.parametrize("kwargs", [{}, {"skill_tools": None}, {"skill_tools": []}])
+def test_no_skill_tools_leaves_the_list_alone(kwargs):
+    loader, reg = _skill_loader()
+    assert loader.select("q", reg, **kwargs) == ["c1"]
 
 
-def test_load_bundle_by_tool_name_resolves_to_owning_bundle():
-    loader, reg = _loader_with_bundles()
+def test_a_skill_tool_absent_from_the_registry_is_dropped_not_raised():
+    loader, reg = _skill_loader()
+    assert loader.select("q", reg, skill_tools=["ghost"]) == ["c1"]
+    assert loader._added == []  # pylint: disable=protected-access
+
+
+def test_a_skill_tool_in_core_is_not_listed_twice():
+    loader, reg = _skill_loader()
+    assert loader.select("q", reg, skill_tools=["c1"]) == ["c1"]
+
+
+def test_admit_tools_appends_in_the_order_given():
+    loader, reg = _skill_loader()
     loader.select("q", reg)
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loaded = loader.load_bundle("a1", reg)  # bare tool name → bundle A
-    assert {"a1", "a2"} <= set(loaded)
-    # The log records the resolved bundle ("A"), not the bare tool name ("a1").
-    events = [p for p in _loader_payloads(records) if p.get("event") == "load_tools"]
-    assert events and events[0]["bundle"] == "A"
-
-
-def test_load_bundle_unknown_name_raises_keyerror():
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)
-    with pytest.raises(KeyError):
-        loader.load_bundle("does_not_exist", reg)
-
-
-def test_load_bundle_skips_members_absent_from_registry():
-    tools = ["c1", "a1"]
-    embed = _make_embed_fn(tools, {"q": {"c1": 0.0, "a1": 0.0}})
-    bundles = [ToolBundle(name="A", members=frozenset({"a1", "ghost"}))]
-    loader = ToolLoader(frozenset({"c1"}), bundles, embed, threshold=0.55, max_tools=14)
-    reg = _registry(tools)
-    loader.select("q", reg)
-    loaded = loader.load_bundle("A", reg)
-    assert "a1" in loaded and "ghost" not in loaded
-
-
-def test_load_bundle_overshoots_the_cap_then_the_next_turn_trims():
-    """Mid-turn load_bundle is add-only; the cap is restored at the turn boundary.
-
-    Evicting mid-turn would drop a tool from the middle of the offered list and
-    re-prefill everything after it, so the overshoot rides until the next
-    ``select``, which trims LRU-first.
-    """
-    tools = ["c1", "d1", "a1", "a2"]
-    embed = _make_embed_fn(
-        tools,
-        {
-            "q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0},
-            "q2": {"c1": 0.0, "d1": 0.0, "a1": 0.0, "a2": 0.0},
-        },
-    )
-    bundles = [ToolBundle(name="A", members=frozenset({"a1", "a2"}), description="A")]
-    loader = ToolLoader(frozenset({"c1"}), bundles, embed, threshold=0.55, max_tools=3)
-    reg = _registry(tools)
-    assert loader.select("q", reg) == ["c1", "d1"]  # CORE + matched d1 (2 of 3)
-    loaded = loader.load_bundle("A", reg)  # wants a1,a2 with 1 slot free
-    assert loaded == ["c1", "d1", "a1", "a2"]  # add-only: d1 keeps its slot
-    assert loader.select("q2", reg) == ["c1", "a1", "a2"]  # cap restored, d1 LRU
-
-
-def test_load_bundle_emits_same_turn_loaded_superset_line():
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loader.load_bundle("A", reg)
-    events = [p for p in _loader_payloads(records) if p.get("event") == "load_tools"]
-    assert events, "no load_tools TOOL_LOADER line captured"
-    assert events[0]["turn"] == loader._turn
-    assert {"a1", "a2"} <= set(events[0]["loaded"])
-
-
-def test_load_bundle_reports_evictions_from_the_selection_not_a_literal():
-    """The eviction fields must read from the scratch object.
-
-    load_bundle is add-only today, so a hardcoded ``[]`` looks correct — and
-    would keep claiming "nothing evicted" if eviction returned to this path.
-    """
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)
-
-    real_admit = loader._admit
-
-    def _admit_and_evict(name, sel):
-        sel.evicted.append(f"victim_of_{name}")
-        sel.skipped_at_cap.append(f"skipped_for_{name}")
-        return real_admit(name, sel)
-
-    loader._admit = _admit_and_evict
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loader.load_bundle("A", reg)
-
-    events = [p for p in _loader_payloads(records) if p.get("event") == "load_tools"]
-    assert events, "no load_tools TOOL_LOADER line captured"
-    assert events[0]["evicted"] == ["victim_of_a1", "victim_of_a2"]
-    assert events[0]["skipped_at_cap"] == ["skipped_for_a1", "skipped_for_a2"]
-
-
-def test_escape_hatch_and_load_counters_increment():
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)
-    loader.record_tool_use("never_loaded")  # free recovery
-    loader.load_bundle("A", reg)  # explicit recovery
-    assert loader._escape_hatch_count == 1
-    assert loader._load_tools_count == 1
-
-
-def test_reset_session_emits_summary_then_zeroes_counters():
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)
-    loader.record_tool_use("never_loaded")
-    loader.load_bundle("A", reg)
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loader.reset_session()
-    summary = _session_payload(records)
-    assert summary["turns"] == 1
-    assert summary["escape_hatch_count"] == 1
-    assert summary["load_tools_count"] == 1
-    assert summary["escape_hatch_rate"] == pytest.approx(2.0)  # (1+1)/1
-    assert loader._escape_hatch_count == 0
-    assert loader._load_tools_count == 0
-
-
-def test_reset_session_emits_no_summary_when_no_turns():
-    loader, _ = _loader_with_bundles()
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loader.reset_session()  # turn == 0 → nothing to summarize
-    assert not any("TOOL_LOADER_SESSION" in r.getMessage() for r in records)
-
-
-# ── admit_tools (a skill loaded mid-turn) ──────────────────────────────────
-
-
-def test_admit_tools_admits_exact_names_in_order():
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)  # turn 1: CORE only (c1)
-    loaded = loader.admit_tools(["b1", "a1"], reg)
-    # Admission order, not sorted: a re-sorted list voids the cached prefix.
-    assert loaded == ["c1", "b1", "a1"]
+    # Appended, not sorted: a re-sorted list voids the cached prefix.
+    assert loader.admit_tools(["b1", "a1"], reg) == ["c1", "b1", "a1"]
 
 
 def test_admit_tools_skips_names_absent_from_the_registry():
     """A skill may name a tool this agent lacks; the loader must not invent it."""
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)
+    loader, reg = _skill_loader()
     assert loader.admit_tools(["a1", "no_such_tool"], reg) == ["c1", "a1"]
 
 
-def test_admit_tools_is_idempotent_for_already_loaded_names():
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)
+def test_admit_tools_is_idempotent():
+    loader, reg = _skill_loader()
     loader.admit_tools(["a1", "a1"], reg)
     assert loader.admit_tools(["a1"], reg) == ["c1", "a1"]
 
 
-def test_admit_tools_overshoots_the_cap_then_the_next_turn_trims():
-    """Add-only like ``load_bundle`` — it runs mid-turn, where eviction costs a re-prefill.
-
-    Evicting here would drop a tool the current prompt already offers: the model
-    could still call it, which would register as a spurious escape hatch, and
-    the next turn's list would have a hole in the middle.
-    """
-    tools = ["c1", "d1", "a1", "a2"]
-    embed = _make_embed_fn(
-        tools,
-        {
-            "q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0},
-            "q2": {"c1": 0.0, "d1": 0.0, "a1": 0.0, "a2": 0.0},
-        },
-    )
-    loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=3)
-    reg = _registry(tools)
-    assert loader.select("q", reg) == ["c1", "d1"]
-
-    loaded = loader.admit_tools(["a1", "a2"], reg)  # two names, one free slot
-
-    assert loaded == ["c1", "d1", "a1", "a2"]  # d1 keeps its slot
-    assert loader.select("q2", reg) == ["c1", "a1", "a2"]  # cap restored, d1 LRU
-
-
-def test_tools_loaded_in_one_clock_tick_are_evicted_oldest_first(monkeypatch):
-    """Windows' clock repeats for milliseconds; d1 is still older than a1."""
-    from gaia.agents.base import tool_loader as tool_loader_module
-
-    monkeypatch.setattr(tool_loader_module.time, "time", lambda: 1000.0)
-    tools = ["c1", "d1", "a1", "a2"]
-    embed = _make_embed_fn(
-        tools,
-        {
-            "q": {"c1": 0.0, "d1": 0.9, "a1": 0.0, "a2": 0.0},
-            "q2": {"c1": 0.0, "d1": 0.0, "a1": 0.0, "a2": 0.0},
-        },
-    )
-    loader = ToolLoader(frozenset({"c1"}), [], embed, threshold=0.55, max_tools=3)
-    reg = _registry(tools)
-    loader.select("q", reg)
-    loader.admit_tools(["a1", "a2"], reg)
-
-    assert loader.select("q2", reg) == ["c1", "a1", "a2"]
-
-
-def test_admit_tools_does_not_count_as_an_escape_hatch():
-    """The point of the feature: the skill's tools arrive without a recovery event."""
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)
+def test_admit_tools_alone_is_not_a_jump():
+    loader, reg = _skill_loader()
     loader.admit_tools(["a1"], reg)
-    assert loader._load_tools_count == 0
+    assert loader.jumped is False
 
 
-def test_admit_tools_logs_the_loaded_set_in_admission_order():
-    """The recall parser reads ``loaded`` from this line; sorting it would lie."""
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loader.admit_tools(["b1", "a1"], reg)
-    events = [
-        p for p in _loader_payloads(records) if p.get("event") == "admit_skill_tools"
-    ]
-    assert events and events[0]["loaded"] == ["c1", "b1", "a1"]
+def test_remove_tools_takes_only_the_named_tools():
+    loader, reg = _skill_loader()
+    loader.admit_tools(["b1", "a1", "a2"], reg)
+    assert loader.remove_tools(["a1"], reg) == ["c1", "b1", "a2"]
 
 
-def test_admit_tools_stays_quiet_when_there_is_nothing_to_admit():
-    loader, reg = _loader_with_bundles()
-    loader.select("q", reg)
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loader.admit_tools(["c1", "ghost"], reg)  # already loaded / unknown
-    assert not [
-        p for p in _loader_payloads(records) if p.get("event") == "admit_skill_tools"
-    ]
+def test_remove_tools_never_removes_core():
+    loader, reg = _skill_loader()
+    loader.admit_tools(["c1", "a1"], reg)
+    assert loader.remove_tools(["c1", "a1"], reg) == ["c1"]
+
+
+def test_a_removed_tool_can_be_admitted_again():
+    loader, reg = _skill_loader()
+    loader.admit_tools(["a1", "b1"], reg)
+    loader.remove_tools(["a1"], reg)
+    assert loader.admit_tools(["a1"], reg) == ["c1", "b1", "a1"]
+
+
+# ── rank (search_tools) ──────────────────────────────────────────────────
+
+
+def test_rank_returns_the_best_scores_first_up_to_the_limit():
+    tools = ["d1", "d2", "d3"]
+    loader, _ = _loader(tools, {"q": {"d1": 0.3, "d2": 0.9, "d3": 0.6}})
+    ranked = loader.rank("q", loader.tool_docs(_registry(tools)), 2)
+    assert [name for name, _ in ranked] == ["d2", "d3"]
+    assert [score for _, score in ranked] == pytest.approx([0.9, 0.6])
+
+
+def test_rank_breaks_ties_by_name():
+    tools = ["z1", "a1"]
+    loader, _ = _loader(tools, {"q": {"z1": 0.5, "a1": 0.5}})
+    ranked = loader.rank("q", loader.tool_docs(_registry(tools)), 2)
+    assert [name for name, _ in ranked] == ["a1", "z1"]
+
+
+def test_rank_leaves_out_what_is_below_the_floor():
+    tools = ["hit", "at_floor", "under"]
+    loader, _ = _loader(
+        tools,
+        {"q": {"hit": 0.9, "at_floor": SEARCH_FLOOR, "under": SEARCH_FLOOR - 0.01}},
+    )
+    ranked = loader.rank("q", loader.tool_docs(_registry(tools)), 3)
+    assert [name for name, _ in ranked] == ["hit", "at_floor"]
+
+
+@pytest.mark.parametrize(
+    "docs, limit", [({}, 5), ({"d1": "d1: does d1"}, 0)], ids=["no-docs", "no-limit"]
+)
+def test_rank_of_nothing_embeds_nothing(docs, limit):
+    loader, embed = _loader(["d1"], {})
+    assert loader.rank("q", docs, limit) == []
+    assert embed.calls == []
+
+
+def test_rank_raises_when_the_embedder_fails():
+    """A search tool must say so rather than report no matches."""
+
+    def boom(_text):
+        raise ConnectionError("embedder down")
+
+    loader = ToolLoader(frozenset(), [], boom)
+    with pytest.raises(ConnectionError):
+        loader.rank("q", {"d1": "d1: does d1"}, 5)
+    assert loader.session_disabled is False
+
+
+def test_rank_does_not_touch_the_list():
+    tools = ["c1", "d1"]
+    loader, _ = _loader(tools, {"q": {"d1": 0.9}}, core={"c1"})
+    reg = _registry(tools)
+    loader.rank("q", loader.tool_docs(reg), 5)
+    assert loader.jumped is False
+    assert loader.offered(reg) == ["c1"]
+
+
+def test_tool_docs_are_the_embedded_text_for_every_tool():
+    tools = ["d1"]
+    loader, _ = _loader(tools, {})
+    registry = {
+        "d1": {"description": "\n   First line.  \nSecond line."},
+        "bare": {"description": ""},
+        "none": {},
+    }
+    assert loader.tool_docs(registry) == {
+        "d1": "d1: First line.",
+        "bare": "bare",
+        "none": "none",
+    }
+
+
+# ── embeddings ───────────────────────────────────────────────────────────
+
+
+def test_tool_docs_embed_once_across_turns():
+    tools = ["c1", "d1"]
+    loader, embed = _loader(tools, {"q1": {"d1": 0.0}, "q2": {"d1": 0.1}}, core={"c1"})
+    reg = _registry(tools)
+    loader.select("q1", reg)
+    loader.select("q2", reg)
+    assert embed.calls == ["c1: does c1", "d1: does d1", "q1", "q2"]
+
+
+def test_the_batch_embedder_is_preferred_for_tool_docs():
+    tools = ["d1", "d2"]
+    embed = _Embedder(tools, {"q": {}})
+    batches: list[list[str]] = []
+
+    def batch(texts):
+        batches.append(list(texts))
+        return np.stack([embed(t) for t in texts])
+
+    loader = ToolLoader(frozenset(), [], embed, embed_batch_fn=batch)
+    loader.select("q", _registry(tools))
+    assert batches == [["d1: does d1", "d2: does d2"]]
+
+
+def test_a_short_batch_disables_the_session_instead_of_dropping_tools():
+    tools = ["d1", "d2"]
+    embed = _Embedder(tools, {"q": {}})
+    loader = ToolLoader(
+        frozenset(), [], embed, embed_batch_fn=lambda _t: np.zeros((1, DIM))
+    )
+    with _capture("gaia.agents.base.tool_loader", level=logging.WARNING) as records:
+        assert loader.select("q", _registry(tools)) is None
+    assert loader.session_disabled is True
+    assert any("returned 1 vectors for 2 texts" in r.getMessage() for r in records)
 
 
 # ── embedder failure ─────────────────────────────────────────────────────
@@ -685,35 +458,144 @@ def test_admit_tools_stays_quiet_when_there_is_nothing_to_admit():
 
 def test_embedder_failure_session_disables_loudly():
     """A raising embedder disables selection for the session with a WARNING."""
+    calls: list[str] = []
 
     def boom(text: str) -> np.ndarray:
+        calls.append(text)
         raise RuntimeError("lemonade down")
 
-    loader = ToolLoader(frozenset(), [], boom, threshold=0.55, max_tools=14)
+    loader = ToolLoader(frozenset(), [], boom, threshold=0.55)
     reg = _registry(["d1"])
     with _capture("gaia.agents.base.tool_loader", level=logging.WARNING) as records:
         assert loader.select("q", reg) is None
     assert loader.session_disabled is True
     assert any("disabled for this session" in r.getMessage() for r in records)
     # Stays disabled — returns None without re-trying the embedder.
+    tried = len(calls)
     assert loader.select("q", reg) is None
+    assert len(calls) == tried
+
+
+def test_a_requested_tool_needs_no_embedder():
+    """The jump is decided before the first embed, so a dead embedder cannot stop it."""
+
+    def boom(_text):
+        raise RuntimeError("lemonade down")
+
+    tools = ["c1", "asked"]
+    loader = ToolLoader(frozenset({"c1"}), [], boom)
+    assert loader.select("q", _registry(tools), requested_tools=["asked"]) == tools
+    assert loader.session_disabled is False
+
+
+def test_a_disabled_session_ignores_skill_and_requested_tools():
+    def boom(_text):
+        raise RuntimeError("lemonade down")
+
+    tools = ["c1", "asked"]
+    loader = ToolLoader(frozenset({"c1"}), [], boom)
+    reg = _registry(tools)
+    loader.select("q", reg)
+    assert (
+        loader.select("q", reg, skill_tools=["asked"], requested_tools=["asked"])
+        is None
+    )
+    assert loader.jumped is False
+    assert loader._added == []  # pylint: disable=protected-access
+
+
+# ── logging ──────────────────────────────────────────────────────────────
+
+
+def test_each_select_logs_its_scores_and_list():
+    tools = ["c1", "d1"]
+    loader, _ = _loader(tools, {"q": {"c1": 0.25, "d1": 0.5}}, core={"c1"})
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.select("q", _registry(tools))
+    payload = _selection_payload(records)
+    assert payload["turn"] == 1
+    assert payload["threshold"] == 0.55
+    assert payload["scores"] == {"c1": 0.25, "d1": 0.5}
+    assert payload["jump"] is None
+    assert payload["loaded"] == ["c1"]
+    assert len(payload["query_sha"]) == 12
+
+
+def test_the_jump_turn_names_its_reason_and_the_list_it_landed_on():
+    tools = ["c1", "d1"]
+    loader, _ = _loader(tools, {"q": {"c1": 0.0, "d1": 0.9}}, core={"c1"})
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.select("q", _registry(tools))
+    assert _jump_reason(records) == "retrieval"
+    payload = _selection_payload(records)
+    assert payload["jump"] == "retrieval"
+    assert payload["loaded"] == tools
+
+
+def test_a_turn_after_the_jump_logs_no_scores():
+    tools = ["c1", "d1"]
+    loader, _ = _loader(tools, {}, core={"c1"})
+    loader.jump("search")
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.select("anything", _registry(tools))
+    assert _selection_payload(records)["scores"] == {}
 
 
 # ── reset / validate ─────────────────────────────────────────────────────
 
 
 def test_reset_session_clears_state_but_keeps_cache():
-    tools = ["d1"]
-    embed = _make_embed_fn(tools, {"q": {"d1": 0.9}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
-    loader.select("q", _registry(tools))
-    assert loader._loaded
-    cache_size = len(loader._embed_cache)
+    tools = ["c1", "d1", "d2"]
+    loader, embed = _loader(
+        tools, {"q": {"c1": 0.0, "d1": 0.9, "d2": 0.0}}, core={"c1"}
+    )
+    reg = _registry(tools)
+    loader.admit_tools(["d2"], reg)
+    loader.select("q", reg)
+    assert loader.jumped is True
+
+    embed.calls.clear()
     loader.reset_session()
-    assert not loader._loaded
-    assert loader._turn == 0
+
+    assert loader.jumped is False
+    assert loader.offered(reg) == ["c1"]
+    assert loader._turn == 0  # pylint: disable=protected-access
+    assert loader.select("q", reg) == tools
+    assert embed.calls == ["q"]  # content cache survives
+
+
+def test_reset_session_re_enables_a_disabled_session():
+    outcomes = iter([RuntimeError("down")])
+
+    def flaky(_text):
+        outcome = next(outcomes, None)
+        if outcome is not None:
+            raise outcome
+        return np.zeros(DIM, dtype=np.float32)
+
+    tools = ["c1"]
+    loader = ToolLoader(frozenset({"c1"}), [], flaky)
+    reg = _registry(tools)
+    assert loader.select("q", reg) is None
+    loader.reset_session()
     assert loader.session_disabled is False
-    assert len(loader._embed_cache) == cache_size  # content cache survives
+    assert loader.select("q", reg) == ["c1"]
+
+
+def test_reset_session_summarises_the_session_it_ends():
+    tools = ["c1", "d1"]
+    loader, _ = _loader(tools, {"q": {"c1": 0.0, "d1": 0.9}}, core={"c1"})
+    loader.select("q", _registry(tools))
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.reset_session()
+    assert _session_payload(records) == {"turns": 1, "jump": "retrieval"}
+
+
+def test_reset_session_emits_no_summary_when_no_turns():
+    loader, _ = _loader(["c1"], {}, core={"c1"})
+    with _capture("gaia.agents.base.tool_loader") as records:
+        loader.reset_session()
+    assert not any("TOOL_LOADER_SESSION" in r.getMessage() for r in records)
 
 
 def test_validate_registry_raises_with_missing_names():
@@ -722,7 +604,6 @@ def test_validate_registry_raises_with_missing_names():
         [ToolBundle(name="B", members=frozenset({"missing_member"}))],
         lambda t: np.zeros(DIM, dtype=np.float32),
         threshold=0.55,
-        max_tools=14,
     )
     with pytest.raises(ValueError) as exc:
         loader.validate_registry(_registry(["d1"]))
@@ -736,9 +617,21 @@ def test_validate_registry_passes_when_covered():
         [ToolBundle(name="B", members=frozenset({"d2"}))],
         lambda t: np.zeros(DIM, dtype=np.float32),
         threshold=0.55,
-        max_tools=14,
     )
     loader.validate_registry(_registry(["d1", "d2"]))  # no raise
+
+
+def test_validate_registry_exempts_optional_tools_only():
+    loader = ToolLoader(
+        frozenset({"d1", "maybe"}),
+        [ToolBundle(name="B", members=frozenset({"gone"}))],
+        lambda t: np.zeros(DIM, dtype=np.float32),
+        optional_tools=["maybe"],
+    )
+    with pytest.raises(ValueError) as exc:
+        loader.validate_registry(_registry(["d1"]))
+    msg = str(exc.value)
+    assert "gone" in msg and "maybe" not in msg
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -769,7 +662,7 @@ class _capture:
 
 
 def _loader_payloads(records: list[logging.LogRecord]) -> list[dict]:
-    """All JSON payloads from ``TOOL_LOADER {...}`` lines (selection + load_tools)."""
+    """All JSON payloads from ``TOOL_LOADER {...}`` lines (selection + jump)."""
     out: list[dict] = []
     for r in records:
         msg = r.getMessage()
@@ -781,9 +674,17 @@ def _loader_payloads(records: list[logging.LogRecord]) -> list[dict]:
 def _selection_payload(records: list[logging.LogRecord]) -> dict:
     """Extract the JSON payload from the TOOL_LOADER selection log line."""
     for payload in _loader_payloads(records):
-        if "event" not in payload:  # the per-turn select line (not load_tools)
+        if "event" not in payload:  # the per-turn select line (not a jump)
             return payload
     raise AssertionError("no TOOL_LOADER selection line captured")
+
+
+def _jump_reason(records: list[logging.LogRecord]) -> str:
+    """The reason on the TOOL_LOADER jump line."""
+    for payload in _loader_payloads(records):
+        if payload.get("event") == "jump":
+            return payload["reason"]
+    raise AssertionError("no TOOL_LOADER jump line captured")
 
 
 def _session_payload(records: list[logging.LogRecord]) -> dict:
@@ -793,36 +694,3 @@ def _session_payload(records: list[logging.LogRecord]) -> dict:
         if msg.startswith("TOOL_LOADER_SESSION {"):
             return json.loads(msg[len("TOOL_LOADER_SESSION ") :])
     raise AssertionError("no TOOL_LOADER_SESSION line captured")
-
-
-# ── REQUESTED tier ─────────────────────────────────────────────────────────
-
-
-def test_requested_tool_wins_the_slot_over_skill_and_semantic():
-    """A tool the user named beats a recalled recipe and a higher semantic score.
-
-    The flagship failure: dozens of tools cleared the threshold, the cap filled
-    with file browsers, and ``run_shell_command`` — the tool the user asked for
-    by name — was skipped.
-    """
-    tools = ["asked", "recipe", "hi"]
-    embed = _make_embed_fn(tools, {"q": {"asked": 0.3, "recipe": 0.0, "hi": 0.9}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.2, max_tools=1)
-    with _capture("gaia.agents.base.tool_loader") as records:
-        loaded = loader.select(
-            "q", _registry(tools), skill_tools=["recipe"], requested_tools=["asked"]
-        )
-    assert loaded == ["asked"]
-    payload = _selection_payload(records)
-    assert payload["requested"] == ["asked"]
-    assert {"recipe", "hi"} <= set(payload["skipped_at_cap"])
-
-
-def test_requested_signal_absent_emits_no_key():
-    """No request leaves the log payload exactly as before the tier existed."""
-    tools = ["d1"]
-    embed = _make_embed_fn(tools, {"q": {"d1": 0.7}})
-    loader = ToolLoader(frozenset(), [], embed, threshold=0.55, max_tools=14)
-    with _capture("gaia.agents.base.tool_loader") as records:
-        assert loader.select("q", _registry(tools), requested_tools=[]) == ["d1"]
-    assert "requested" not in _selection_payload(records)

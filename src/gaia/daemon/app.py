@@ -13,12 +13,14 @@ where to look — no silent fallback to an unauthenticated response.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import secrets
 import time
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
 
+from gaia.client_hangups import quiet_client_hangups
 from gaia.daemon.constants import (
     API_PREFIX,
     AUTH_SCHEME,
@@ -27,6 +29,7 @@ from gaia.daemon.constants import (
 )
 from gaia.daemon.paths import instance_path
 from gaia.daemon.timeouts import agent_read_timeout
+from gaia.listener_guard import keep_listening_after_client_resets
 
 
 def build_require_token(token: str):
@@ -88,6 +91,7 @@ def create_app(
     broker=None,
     custody_auth=None,
     custody_store=None,
+    keychain_auth=None,
     clock=None,
     lemonade=None,
     lemonade_owner=None,
@@ -139,6 +143,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app):
+        # A client quitting mid-connection is not an error here.
+        quiet_client_hangups(asyncio.get_running_loop())
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
         if on_startup is not None:
             on_startup()
         try:
@@ -315,6 +323,14 @@ def create_app(
     from gaia.daemon.provider_key_routes import build_provider_key_router
 
     app.include_router(build_provider_key_router(token))
+    # The TUI's GPU memory step; the Agent UI serves the same under /api/gpu-memory.
+    from gaia.daemon.gpu_memory_routes import build_gpu_memory_router
+
+    app.include_router(build_gpu_memory_router(token))
+    # The TUI's model setup; the Agent UI serves the same under /api/setup.
+    from gaia.daemon.setup_routes import build_setup_router
+
+    app.include_router(build_setup_router(token))
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router
@@ -348,6 +364,10 @@ def create_app(
 
         install_custody_exception_handler(app)
         app.include_router(build_custody_router(custody_auth, custody_store))
+        if keychain_auth is not None:
+            from gaia.daemon.custody.keychain_routes import build_keychain_router
+
+            app.include_router(build_keychain_router(keychain_auth))
     elif custody_auth is not None or custody_store is not None:
         raise ValueError(
             "create_app requires custody_auth AND custody_store together to "

@@ -20,6 +20,7 @@ from gaia.llm.lemonade_client import REQUEST_BUDGET_ENV
 from gaia.llm.lemonade_embedded import (
     _ASSET_TEMPLATES,
     EMBEDDABLE_SHA256,
+    OWN,
     EmbeddedLemonade,
     EmbeddedLemonadeError,
     UnsupportedPlatformError,
@@ -124,6 +125,114 @@ class TestChecksumPinning:
         archive = tmp_path / "asset.zip"
         archive.write_bytes(payload)
         manager._verify(archive, hashlib.sha256(payload).hexdigest())
+
+
+def _embeddable_zip(path):
+    """Write a Windows-layout archive with its usual single wrapper directory."""
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("lemonade-embeddable/lemond.exe", b"daemon")
+        archive.writestr("lemonade-embeddable/resources/kokoro.txt", b"resource")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class TestBundledArchive:
+    """The desktop app's copy replaces the download, never the verification."""
+
+    @pytest.fixture
+    def bundle(self, monkeypatch, tmp_path):
+        """The app's archive directory, wired up the way main.cjs does it."""
+        _fake_platform(monkeypatch, "Windows", "AMD64")
+        directory = tmp_path / "resources" / "vendor" / "lemonade"
+        directory.mkdir(parents=True)
+        monkeypatch.setenv(lemonade_embedded.BUNDLED_ARCHIVE_DIR_ENV, str(directory))
+        return directory
+
+    @staticmethod
+    def _pin(monkeypatch, digest):
+        monkeypatch.setitem(EMBEDDABLE_SHA256, asset_name(LEMONADE_VERSION), digest)
+
+    @staticmethod
+    def _forbid_network(monkeypatch):
+        def refuse(*args, **kwargs):
+            raise AssertionError("a bundled install must not touch the network")
+
+        monkeypatch.setattr(lemonade_embedded.urllib.request, "urlopen", refuse)
+
+    def test_installs_from_the_bundle_with_no_network(
+        self, manager, bundle, monkeypatch
+    ):
+        self._pin(monkeypatch, _embeddable_zip(bundle / asset_name(LEMONADE_VERSION)))
+        self._forbid_network(monkeypatch)
+
+        dist = manager.install()
+
+        assert (dist / "lemond.exe").read_bytes() == b"daemon"
+        assert (dist / "resources" / "kokoro.txt").read_bytes() == b"resource"
+        assert manager.is_installed()
+        assert (bundle / asset_name(LEMONADE_VERSION)).is_file()
+
+    def test_a_wrong_hash_raises_rather_than_downloading(
+        self, manager, bundle, monkeypatch
+    ):
+        _embeddable_zip(bundle / asset_name(LEMONADE_VERSION))
+        self._pin(monkeypatch, "0" * 64)
+        self._forbid_network(monkeypatch)
+
+        with pytest.raises(EmbeddedLemonadeError) as exc:
+            manager.install()
+
+        assert "Checksum mismatch" in str(exc.value)
+        assert "Reinstall the GAIA desktop app" in str(exc.value)
+        assert not manager.is_installed()
+
+    def test_an_unreadable_bundle_raises_rather_than_downloading(
+        self, manager, bundle, monkeypatch
+    ):
+        self._pin(monkeypatch, _embeddable_zip(bundle / asset_name(LEMONADE_VERSION)))
+        self._forbid_network(monkeypatch)
+
+        def denied(*args, **kwargs):
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(lemonade_embedded.shutil, "copyfile", denied)
+        with pytest.raises(EmbeddedLemonadeError, match="Reinstall the GAIA desktop"):
+            manager.install()
+
+    def test_another_versions_bundle_is_ignored_and_it_downloads(
+        self, manager, bundle, monkeypatch, tmp_path
+    ):
+        # A pip upgrade moved past the app: the app's archive is the old version,
+        # and deliberately corrupt here to prove it is never opened.
+        (bundle / asset_name("2020.1.1")).write_bytes(b"the app's older copy")
+        published = tmp_path / "published.zip"
+        self._pin(monkeypatch, _embeddable_zip(published))
+        urls = []
+
+        def download(url, dest):
+            urls.append(url)
+            dest.write_bytes(published.read_bytes())
+
+        monkeypatch.setattr(manager, "_download", download)
+
+        dist = manager.install()
+
+        assert urls == [asset_url(LEMONADE_VERSION)]
+        assert (dist / "lemond.exe").read_bytes() == b"daemon"
+
+    def test_with_no_bundle_configured_it_downloads(
+        self, manager, monkeypatch, tmp_path
+    ):
+        _fake_platform(monkeypatch, "Windows", "AMD64")
+        monkeypatch.delenv(lemonade_embedded.BUNDLED_ARCHIVE_DIR_ENV, raising=False)
+        published = tmp_path / "published.zip"
+        self._pin(monkeypatch, _embeddable_zip(published))
+        monkeypatch.setattr(
+            manager,
+            "_download",
+            lambda url, dest: dest.write_bytes(published.read_bytes()),
+        )
+
+        assert (manager.install() / "lemond.exe").read_bytes() == b"daemon"
 
 
 class TestArchiveSafety:
@@ -444,6 +553,31 @@ class TestStatus:
         assert manager.recorded_health() == (True, {"status": "ok"})
         assert asked == [(4321, "k")]
 
+    def test_recorded_health_of_an_exited_server_is_no_server(
+        self, manager, monkeypatch
+    ):
+        """A stopped server must not read as one too busy to answer."""
+        import psutil
+
+        manager._write_state({"pid": 1, "port": 4321, "api_key": "k"})
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda self, port, key: None)
+
+        def gone(pid):
+            raise psutil.NoSuchProcess(pid)
+
+        monkeypatch.setattr(psutil, "Process", gone)
+        assert manager.recorded_health() == (False, None)
+
+    def test_recorded_health_of_a_live_unanswering_server_is_recorded(
+        self, manager, monkeypatch
+    ):
+        manager._write_state({"pid": 1, "port": 4321, "api_key": "k"})
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda self, port, key: None)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "_identify", lambda self, pid, port, key: OWN
+        )
+        assert manager.recorded_health() == (True, None)
+
     def test_unreadable_state_file_is_discarded(self, manager):
         manager.root.mkdir(parents=True, exist_ok=True)
         manager.state_path.write_text("{ not json", encoding="utf-8")
@@ -499,6 +633,35 @@ class TestStatus:
 
         assert spawned and "GGML_VK_DISABLE_COOPMAT" not in spawned[0]
 
+    def test_start_on_linux_warns_when_lemond_has_no_ca_file(
+        self, manager, monkeypatch, caplog
+    ):
+        """#7226: still starts, since local models need no HTTPS, but says why
+        cloud models and downloads will fail."""
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(
+            "gaia.llm.npu_linux.raise_memlock_soft_limit", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_tls.ca_store_problem", lambda **_: "no CA file"
+        )
+        monkeypatch.setattr(manager, "is_installed", lambda: True)
+        monkeypatch.setattr(manager, "write_config", lambda: None)
+        monkeypatch.setattr(manager, "_health", lambda *a, **k: {"status": "ok"})
+        spawned = []
+
+        def fake_popen(argv, **kwargs):
+            spawned.append(argv)
+            return SimpleNamespace(pid=4321, poll=lambda: None, returncode=None)
+
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.subprocess.Popen", fake_popen)
+
+        with caplog.at_level("WARNING"):
+            manager.start(port=65530)
+
+        assert spawned
+        assert "no CA file" in caplog.text
+
     def test_start_refuses_to_spawn_a_second_daemon(self, manager, monkeypatch):
         manager._write_state(
             {"pid": 4321, "port": 65535, "api_key": "k", "version": manager.version}
@@ -530,17 +693,133 @@ class TestStatus:
         assert killed == [4321], "stalled daemon was never signalled"
         assert not manager.state_path.exists()
 
-    def test_start_refuses_when_a_different_version_is_running(
+    def test_failed_repair_leaves_a_newer_running_version_up(
         self, manager, monkeypatch
     ):
         manager._write_state(
-            {"pid": 1, "port": 4321, "api_key": "k", "version": "11.7.0"}
+            {"pid": 1, "port": 4321, "api_key": "k", "version": "9999.1.0"}
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: {"ok": True})
-        with pytest.raises(EmbeddedLemonadeError) as exc:
+
+        def failed_install(self, force=False):
+            raise EmbeddedLemonadeError("download failed")
+
+        monkeypatch.setattr(EmbeddedLemonade, "install", failed_install)
+        with pytest.raises(EmbeddedLemonadeError, match="still running") as exc:
             manager.start()
-        assert "11.7.0" in str(exc.value)
-        assert "stop" in str(exc.value)
+        assert "9999.1.0" in str(exc.value)
+        assert "download failed" in str(exc.value)
+
+    def _other_running(self, manager, monkeypatch, events, version="11.7.0"):
+        manager._write_state(
+            {"pid": 1, "port": 4321, "api_key": "k", "version": version}
+        )
+        monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: {"ok": True})
+
+        def fake_stop(self, timeout):
+            events.append("stop")
+            self._clear_state()
+            return True
+
+        monkeypatch.setattr(EmbeddedLemonade, "_stop_locked", fake_stop)
+
+    def test_start_replaces_a_different_running_version(self, manager, monkeypatch):
+        """GAIA repairs its own server in place; the user runs nothing."""
+        events = []
+        self._other_running(manager, monkeypatch, events)
+
+        class Reached(Exception):
+            pass
+
+        def fake_install(self, force=False):
+            events.append("install")
+
+        def reached_spawn(self, *a, **k):
+            raise Reached
+
+        monkeypatch.setattr(EmbeddedLemonade, "install", fake_install)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "is_installed", lambda self: "install" in events
+        )
+        monkeypatch.setattr(EmbeddedLemonade, "_spawn", reached_spawn)
+        with pytest.raises(Reached):
+            manager.start(install_if_missing=False, upgrade_mismatch=True)
+        assert events == ["install", "stop"]
+
+    def test_a_failed_repair_download_leaves_the_running_server_up(
+        self, manager, monkeypatch
+    ):
+        events = []
+        self._other_running(manager, monkeypatch, events)
+
+        def failing_install(self, force=False):
+            raise EmbeddedLemonadeError("download failed")
+
+        monkeypatch.setattr(EmbeddedLemonade, "install", failing_install)
+        with pytest.raises(EmbeddedLemonadeError, match="download failed") as exc:
+            manager.start(upgrade_mismatch=True)
+        assert events == []
+        message = str(exc.value)
+        assert "11.7.0 is still running on port 4321" in message
+        assert manager.version in message
+
+    def test_no_install_never_downloads_an_upgrade(self, manager, monkeypatch):
+        """`gaia lemonade embedded start --no-install` must not download."""
+        events = []
+        self._other_running(manager, monkeypatch, events)
+
+        def refused_install(self, force=False):
+            raise AssertionError("downloaded despite --no-install")
+
+        monkeypatch.setattr(EmbeddedLemonade, "install", refused_install)
+        with pytest.raises(EmbeddedLemonadeError, match="not installed"):
+            manager.start(install_if_missing=False)
+        assert events == []
+
+    def test_start_replaces_a_newer_running_version(self, manager, monkeypatch):
+        """A newer incompatible build is also repaired to the pinned version."""
+        events = []
+        self._other_running(manager, monkeypatch, events, version="2026.45.3")
+
+        class Reached(Exception):
+            pass
+
+        def fake_install(self, force=False):
+            events.append("install")
+
+        def reached_spawn(self, *args, **kwargs):
+            raise Reached
+
+        monkeypatch.setattr(EmbeddedLemonade, "install", fake_install)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "is_installed", lambda self: "install" in events
+        )
+        monkeypatch.setattr(EmbeddedLemonade, "_spawn", reached_spawn)
+        with pytest.raises(Reached):
+            manager.start(install_if_missing=False, upgrade_mismatch=True)
+        assert events == ["install", "stop"]
+
+    def test_another_install_is_repaired_when_asked(self, manager, monkeypatch):
+        (manager.root / "dist" / "2026.45.3").mkdir(parents=True)
+        assert manager.replaces_other_install()
+
+        class Reached(Exception):
+            pass
+
+        def reached_install(self, force=False):
+            raise Reached
+
+        monkeypatch.setattr(EmbeddedLemonade, "install", reached_install)
+        with pytest.raises(Reached):
+            manager.start(install_if_missing=False, upgrade_mismatch=True)
+        with pytest.raises(EmbeddedLemonadeError, match="not installed"):
+            manager.start(install_if_missing=False)
+
+    def test_any_parseable_other_install_requires_repair(self, manager):
+        (manager.root / "dist" / manager.version).mkdir(parents=True)
+        (manager.root / "dist" / "2026.45.3").mkdir(parents=True)
+        (manager.root / "dist" / "not-a-version").mkdir(parents=True)
+        assert manager.replaces_other_install()
 
     def test_live_instance_is_reported_with_its_base_url(self, manager, monkeypatch):
         manager._write_state(

@@ -175,6 +175,18 @@ INJECTION_RULES: tuple[InjectionRule, ...] = (
         "third-party endpoint is exfiltration regardless of the stated purpose.",
     ),
     _rule(
+        "body.injection.outbound_url",
+        "high",
+        r"\b(?:send|sent|post|upload|forward|transmit|submit)"
+        r"(?:s|ed|ted|ing|ting)?\b"
+        r"[^.\n]{0,80}?\b(?:to|at|into|via)\b[^.\n]{0,40}?"
+        r"(?:https?://|\bwebhook\b)",
+        "Instructs the model to send content to an external endpoint.",
+        "Remove the outbound transmission instruction or make the destination "
+        "an explicit, user-approved connector capability. A skill must not "
+        "silently send user content to an arbitrary URL.",
+    ),
+    _rule(
         "body.injection.tool_coercion",
         "medium",
         r"\balways call\b[^.\n]{0,40}?\b(?:regardless|no matter|even if|"

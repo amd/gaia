@@ -43,13 +43,11 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     find_model_requirement,
-    lemonade_server_version,
 )
 from gaia.llm.model_fit import (
     ModelFitError,
     capacity_from_system_info,
     check_fit,
-    check_server_supports,
     kv_cache_gb,
 )
 
@@ -328,7 +326,6 @@ def compare(models, ctx: int, suite: Optional[str], judge: bool, out: Path):
             f"Lemonade Server at {client.base_url} could not describe this PC: "
             f"{e}. Run `gaia init` first, then retry."
         ) from e
-    server_version = lemonade_server_version(client)
 
     results = []
     for model in models:
@@ -352,13 +349,6 @@ def compare(models, ctx: int, suite: Optional[str], judge: bool, out: Path):
         result.fits, result.fit_reason = verdict.fits, verdict.reason
         if not verdict.fits:
             print(f"\n== {model}: skipped, {verdict.reason}")
-            continue
-        supported = check_server_supports(
-            mr.min_lemonade_version if mr else None, server_version
-        )
-        if not supported.fits:
-            result.fits, result.fit_reason = False, supported.reason
-            print(f"\n== {model}: skipped, {supported.reason}")
             continue
         print(f"\n== {model}")
         try:

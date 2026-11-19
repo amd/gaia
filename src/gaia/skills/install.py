@@ -61,6 +61,7 @@ from gaia.skills.hub import (
     fetch_skill_doc,
     fetch_skill_manifest,
 )
+from gaia.skills.human_only import require_user_terminal
 from gaia.skills.lock import SOURCE_HUB, LockEntry, SkillLock
 from gaia.skills.manager import SkillManager
 from gaia.skills.naming import artifact_path, skill_directory
@@ -92,6 +93,10 @@ Confirmer = Callable[[str], bool]
 
 class SkillInstallError(SkillError):
     """An install was refused, or could not complete."""
+
+
+class SkillBundleMismatchError(SkillValidationError):
+    """What the hub served for a skill does not agree with its own bundle."""
 
 
 def parse_skill_ref(reference: str) -> tuple[str, str]:
@@ -187,6 +192,9 @@ def install_skill(
         SkillSignatureError: a present signature does not verify.
         SkillNotFoundError: no published version satisfies the pin.
     """
+    if allow_experimental or assume_yes:
+        # Unsigned code, or a dangerous grant nobody is asked about.
+        require_user_terminal("gaia skill install")
     name, spec = parse_skill_ref(reference)
     resolver = manager if manager is not None else SkillManager()
     destination_root = resolver.user_root
@@ -236,13 +244,13 @@ def install_skill(
         _assert_matches_bundle(skill, source_dir, name=name, version=version)
 
         if skill.name != name:
-            raise SkillValidationError(
+            raise SkillBundleMismatchError(
                 f"The hub served SKILL.md for '{skill.name}' under the name "
                 f"'{name}'. Refusing to install a skill whose manifest disagrees "
                 "with the catalog — report this with both names."
             )
         if skill.version and skill.version != version:
-            raise SkillValidationError(
+            raise SkillBundleMismatchError(
                 f"The SKILL.md the hub served for '{name}' {version} declares "
                 f"version {skill.version!r}. Refusing to install a version "
                 "mismatch — report this with the skill name and both versions."
@@ -548,7 +556,7 @@ def _assert_matches_bundle(
         or bundled_skill.security_tier != skill.security_tier
         or sorted(bundled_skill.gaia.permissions) != sorted(skill.gaia.permissions)
     ):
-        raise SkillValidationError(
+        raise SkillBundleMismatchError(
             f"The {SKILL_FILENAME} inside the bundle for '{name}' {version} "
             "disagrees with the one the hub serves (name, security_tier, or "
             "permissions differ). One of them was modified after publish — "
@@ -673,6 +681,7 @@ __all__ = [
     "Confirmer",
     "InstallResult",
     "RemoveResult",
+    "SkillBundleMismatchError",
     "SkillInstallError",
     "install_skill",
     "installed_provenance",

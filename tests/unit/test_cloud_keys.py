@@ -222,7 +222,7 @@ def test_readiness_replays_a_fireworks_key(monkeypatch):
 
     seen = []
     monkeypatch.setattr(
-        "gaia.llm.cloud_keys.ensure_authenticated", lambda p: seen.append(p) or True
+        "gaia.llm.cloud_keys.reconnect_provider", lambda p: seen.append(p) or True
     )
     assert readiness._replay_cloud_key("fireworks.deepseek-v4p1-flash") is True
     assert readiness._replay_cloud_key("amd.gpt-5") is True

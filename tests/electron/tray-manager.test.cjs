@@ -172,37 +172,38 @@ describe("TrayManager icon loading", () => {
   });
 });
 
+// Shared by the Linux and macOS tray-asset checks below.
+const realFs = jest.requireActual("fs");
+const zlib = require("zlib");
+const path = require("path");
+const { assertTrayLogoPng, assertTrayTemplatePng } = require("./_helpers/tray-icon-png.cjs");
+
+const WEBUI = path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui");
+const ASSETS = path.join(WEBUI, "assets");
+
+function solidPng(size, rgba) {
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    // The decoder under test skips CRCs, so a zero CRC is fine here.
+    return Buffer.concat([len, Buffer.from(type, "ascii"), data, Buffer.alloc(4)]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 4).fill(Buffer.from(rgba))]);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr),
+    chunk("IDAT", zlib.deflateSync(Buffer.concat(Array(size).fill(row)))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
 // The Linux tray shipped a flat red 16px square as its "logo" (#5268).
 describe("Linux tray-icon asset", () => {
-  const realFs = jest.requireActual("fs");
-  const zlib = require("zlib");
-  const path = require("path");
-  const { assertTrayLogoPng } = require("./_helpers/tray-icon-png.cjs");
-
-  const WEBUI = path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui");
-  const ASSETS = path.join(WEBUI, "assets");
-
-  function solidPng(size, rgba) {
-    const chunk = (type, data) => {
-      const len = Buffer.alloc(4);
-      len.writeUInt32BE(data.length);
-      // The decoder under test skips CRCs, so a zero CRC is fine here.
-      return Buffer.concat([len, Buffer.from(type, "ascii"), data, Buffer.alloc(4)]);
-    };
-    const ihdr = Buffer.alloc(13);
-    ihdr.writeUInt32BE(size, 0);
-    ihdr.writeUInt32BE(size, 4);
-    ihdr[8] = 8;
-    ihdr[9] = 6;
-    const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(size * 4).fill(Buffer.from(rgba))]);
-    return Buffer.concat([
-      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-      chunk("IHDR", ihdr),
-      chunk("IDAT", zlib.deflateSync(Buffer.concat(Array(size).fill(row)))),
-      chunk("IEND", Buffer.alloc(0)),
-    ]);
-  }
-
   test.each([
     ["tray-icon.png", 32],
     ["tray-icon@2x.png", 64],
@@ -238,6 +239,42 @@ describe("Linux tray-icon asset", () => {
     const builderYml = realFs.readFileSync(path.join(WEBUI, "electron-builder.yml"), "utf8");
     expect(builderYml).toMatch(/^\s*-\s*services\/\*\*\/\*\s*$/m);
     expect(builderYml).toMatch(/^\s*-\s*assets\/\*\*\/\*\s*$/m);
+  });
+});
+
+// The macOS menu-bar template icons shipped as flat white squares (#5281).
+// macOS draws a template image from its alpha channel only, so a fully
+// opaque file shows as a filled square in the menu bar.
+describe("macOS tray template asset", () => {
+  test.each([
+    ["tray-iconTemplate.png", 16],
+    ["tray-iconTemplate@2x.png", 32],
+  ])("%s is a %ipx black glyph on transparency, not a placeholder", (file, size) => {
+    const buf = realFs.readFileSync(path.join(ASSETS, file));
+    expect(() => assertTrayTemplatePng(buf, size, file)).not.toThrow();
+  });
+
+  test("the check rejects the old flat white square", () => {
+    expect(() => assertTrayTemplatePng(solidPng(16, [255, 255, 255, 255]), 16, "white")).toThrow(
+      /corner .* is opaque/
+    );
+  });
+
+  test("the check rejects a coloured glyph", () => {
+    const buf = realFs.readFileSync(path.join(ASSETS, "tray-icon.png"));
+    expect(() => assertTrayTemplatePng(buf, 32, "colour")).toThrow(/is not black/);
+  });
+
+  test("the check rejects an empty icon", () => {
+    expect(() => assertTrayTemplatePng(solidPng(16, [0, 0, 0, 0]), 16, "empty")).toThrow(
+      /covers 0% of the icon/
+    );
+  });
+
+  test("the check rejects a wrong-sized icon", () => {
+    expect(() => assertTrayTemplatePng(solidPng(32, [0, 0, 0, 0]), 16, "big")).toThrow(
+      /expected 16x16, got 32x32/
+    );
   });
 });
 

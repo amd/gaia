@@ -31,7 +31,6 @@ from gaia.daemon.sidecars.spec import builtin_specs
 #: every entry in ``builtin_specs()``; the completeness test below enforces it.
 _REGISTRATION_BUILDERS = {
     "gaia": "gaia_agent:build_gaia",
-    "email": "gaia_agent_email:build_registration",
 }
 
 
@@ -74,6 +73,13 @@ def test_category_tags_and_icon_match(spec_and_registration):
     assert spec.category == registration.category
     assert list(spec.tags) == list(registration.tags)
     assert spec.icon == registration.icon
+
+
+def test_mcp_consumption_matches(spec_and_registration):
+    """A mismatch hides the per-agent MCP switch, so a connected Slack or GitHub
+    tile can never be turned on for a binary-installed flagship."""
+    _, spec, registration = spec_and_registration
+    assert spec.consumes_mcp_servers == registration.consumes_mcp_servers
 
 
 def test_card_is_actually_populated(spec_and_registration):

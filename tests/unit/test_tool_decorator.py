@@ -259,7 +259,7 @@ class TestToolDecorator:
 
         assert str(exc_info.value) == (
             f"@tool(...) got unexpected keyword argument '{unexpected}' for tool "
-            "'demo_tool'. Accepted: atomic, display_label, draft_argument, timeout, timeout_arg, "
-            "preflight, registry."
+            "'demo_tool'. Accepted: atomic, display_label, draft_argument, timeout, "
+            "timeout_arg, preflight, dedup_key, model_view, registry, override."
         )
         assert "demo_tool" not in _TOOL_REGISTRY

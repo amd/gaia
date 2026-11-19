@@ -7,13 +7,13 @@
 ;   Desktop app  runs the embedded, unmodified electron-builder setup
 ;                (gaia-agent-ui-<v>-x64-setup.exe /S /currentuser). That setup
 ;                stays the app's owner -- its files, Installed-apps entry,
-;                shortcuts, autostart and uninstaller -- because electron-updater
+;                shortcuts and uninstaller -- because electron-updater
 ;                re-runs exactly that file to update the app. A second owner here
 ;                would be duplicated by the first auto-update.
-;   Terminal     gaia-tui + gaia-agent, PATH, Windows Terminal profile, shortcuts,
-;                shown as "GAIA Terminal UI". Its registry keys and folder keep
-;                the TUI-only setup's "Terminal Hub" ids, so upgrading from it
-;                replaces it in place.
+;   Terminal     gaia-cli + gaia-agent, PATH, Windows Terminal profile, shortcuts,
+;                shown as "GAIA Terminal UI", installed under gaia-tui ids. An
+;                install an earlier setup made under the "Terminal Hub" ids is
+;                moved onto them on upgrade (MigrateLegacyInstall).
 ;
 ; No suite-level Installed-apps entry is written: each component is removed from
 ; its own entry, so nothing here can be left orphaned.
@@ -27,21 +27,17 @@
 ; through it would mean carrying an Electron app's assumptions (asar, an app
 ; bundle, a chrome-sandbox) for two files that need none of them. The
 ; conventions this repo already established for the Agent UI installer --
-; per-user install, the pinned Lemonade MSI, "leave ~/.gaia alone unless asked"
-; -- are followed here; see installer/nsis/installer.nsh for their original
-; statement and rationale.
+; per-user install, "leave ~/.gaia alone unless asked" -- are followed here; see
+; installer/nsis/installer.nsh for their original statement and rationale.
 ;
-; Nothing is downloaded at INSTALL time -- the Lemonade MSI is bundled -- so the
-; install itself works offline and behind a proxy. Lemonade's -minimal MSI is a
-; bootstrap that fetches its runtime on first run, so running a model still
-; needs the network once.
+; Nothing is downloaded at INSTALL time, so the install itself works offline and
+; behind a proxy. GAIA's own Lemonade Server and models come with first-run setup
+; in the app; no system-wide Lemonade is installed.
 ;
 ; Build:
 ;   makensis -DVERSION=<x.y.z, or x.y.z-rc.N for a release candidate> \
 ;            -DVERSION_QUAD=<x.y.z.0, VERSION's four-integer form> \
-;            -DPAYLOAD_DIR=<dir with gaia-tui.exe, gaia-agent.exe, LICENSE.md> \
-;            -DLEMONADE_MSI=<path to lemonade-server-minimal.msi> \
-;            -DLEMONADE_VERSION=<LEMONADE_VERSION from src/gaia/version.py> \
+;            -DPAYLOAD_DIR=<dir with gaia-cli.exe, gaia-agent.exe, LICENSE.md, core\> \
 ;            -DICON=<path to gaia.ico> \
 ;            -DFONTS_DIR=<dir staged by installer/tui/fetch_fonts.py> \
 ;            -DAGENT_UI_SETUP=<path to gaia-agent-ui-<v>-x64-setup.exe> \
@@ -61,13 +57,7 @@ Unicode true
   !error "VERSION_QUAD is required: -DVERSION_QUAD=<x.y.z.0>, the four integers Windows stores the version as"
 !endif
 !ifndef PAYLOAD_DIR
-  !error "PAYLOAD_DIR is required: the directory holding gaia-tui.exe, gaia-agent.exe and LICENSE.md"
-!endif
-!ifndef LEMONADE_MSI
-  !error "LEMONADE_MSI is required: the pinned lemonade-server-minimal.msi to bundle. This installer is offline by contract, so the MSI must be downloaded and verified by the build, not fetched at install time."
-!endif
-!ifndef LEMONADE_VERSION
-  !error "LEMONADE_VERSION is required: the version of the bundled MSI, shown to the user during install"
+  !error "PAYLOAD_DIR is required: the directory holding gaia-cli.exe, gaia-agent.exe, LICENSE.md and core\ (the frozen gaia)"
 !endif
 !ifndef ICON
   !error "ICON is required: -DICON=src/gaia/img/gaia.ico"
@@ -88,17 +78,28 @@ Unicode true
 !define SETUP_NAME        "GAIA"
 ; The terminal component's display name -- its Installed-apps entry and shortcuts.
 !define PRODUCT_NAME      "GAIA Terminal UI"
-; The display name earlier setups used; its shortcuts are removed on upgrade.
-!define LEGACY_PRODUCT_NAME "GAIA Terminal Hub"
 !define PRODUCT_PUBLISHER "Advanced Micro Devices, Inc."
 !define PRODUCT_URL       "https://amd-gaia.ai"
 !define DOCS_URL          "https://amd-gaia.ai/docs"
-!define INSTALL_DOCS_URL  "https://amd-gaia.ai/docs/guides/install"
-; Kept from the TUI-only setup so an upgrade lands on the same Installed-apps entry.
-!define UNINST_KEY        "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub"
-!define TUI_EXE           "gaia-tui.exe"
+!define UNINST_KEY        "Software\Microsoft\Windows\CurrentVersion\Uninstall\gaia-tui"
+; Where the terminal is installed and which fonts are ours; read by gaia-cli's
+; self-updater (tui/internal/update/setupdir_windows.go).
+!define SETTINGS_KEY      "Software\GAIA\gaia-tui"
+
+; The ids earlier setups used. Read only, to move an install made under them
+; onto the ids above on upgrade, and to clean up after it on uninstall.
+!define LEGACY_PRODUCT_NAME "GAIA Terminal Hub"
+!define LEGACY_SETTINGS_KEY "Software\GAIA\TerminalHub"
+!define LEGACY_UNINST_KEY   "Software\Microsoft\Windows\CurrentVersion\Uninstall\GAIATerminalHub"
+!define LEGACY_FONTS_KEY    "${LEGACY_SETTINGS_KEY}\Fonts"
+!define LEGACY_DEFAULT_DIR  "$LOCALAPPDATA\Programs\GAIA Terminal Hub"
+
+!define TUI_EXE           "gaia-cli.exe"
+; The terminal's exe before it became gaia-cli: an upgrade removes it.
+!define LEGACY_TUI_EXE    "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
-!define LEMONADE_MSI_NAME "lemonade-server-minimal.msi"
+; The frozen gaia core; its _internal folder sits beside it.
+!define CORE_EXE          "gaia.exe"
 
 ; The desktop app's registry identity, as electron-builder derives it:
 ; UUIDv5(appId "ai.amd.gaia", electron-builder's namespace). Pinned by
@@ -109,7 +110,7 @@ Unicode true
 !define UI_EXE            "gaia-desktop.exe"
 !define UI_SETUP_NAME     "gaia-agent-ui-setup.exe"
 
-; The developer build (installer/nsis/gaia.nsi) puts its own gaia-tui on PATH
+; The developer build (installer/nsis/gaia.nsi) puts its own gaia-cli on PATH
 ; under its own "GAIA" Installed-apps entry, so beside this setup there would be
 ; two of each. Setup refuses rather than guess which copy the user wants.
 !define DEV_SETTINGS_KEY  "Software\AMD\GAIA"
@@ -129,7 +130,7 @@ Unicode true
 !define USER_FONTS_DIR    "$LOCALAPPDATA\Microsoft\Windows\Fonts"
 !define FONTS_REG         "Software\Microsoft\Windows NT\CurrentVersion\Fonts"
 ; Which faces THIS setup installed, so uninstall never removes a copy the user had.
-!define GAIA_FONTS_KEY    "Software\GAIA\TerminalHub\Fonts"
+!define GAIA_FONTS_KEY    "${SETTINGS_KEY}\Fonts"
 !define FONT_LICENSE      "IBM-Plex-Mono-OFL.txt"
 
 Name "${SETUP_NAME} ${VERSION}"
@@ -138,12 +139,12 @@ OutFile "${OUTFILE}"
 ; the user's own profile. A machine-wide install would need elevation for a
 ; tool one user runs in their own terminal.
 RequestExecutionLevel user
-; NOT "...\Programs\GAIA": that is byte-for-byte where the Agent UI's
-; electron-builder setup lands (productName "GAIA", perMachine false), and its
-; uninstaller removes $INSTDIR recursively. The legacy folder and registry
-; names are kept until an upgrade can migrate them (#5204).
-InstallDir "$LOCALAPPDATA\Programs\GAIA Terminal Hub"
-InstallDirRegKey HKCU "Software\GAIA\TerminalHub" "InstallDir"
+; NOT "...\Programs\gaia": Windows paths ignore case, so that can be the Agent
+; UI's electron-builder folder (productName "GAIA", perMachine false), and its
+; uninstaller removes its folder recursively.
+!define DEFAULT_DIR       "$LOCALAPPDATA\Programs\gaia-tui"
+InstallDir "${DEFAULT_DIR}"
+InstallDirRegKey HKCU "${SETTINGS_KEY}" "InstallDir"
 ShowInstDetails show
 ShowUnInstDetails show
 SetCompressor /SOLID lzma
@@ -169,13 +170,16 @@ VIAddVersionKey "LegalCopyright"  "Copyright (C) 2025-2026 ${PRODUCT_PUBLISHER}"
 !insertmacro GetSize
 
 ; What the shortcuts and the Finish page launch: wt.exe with the GAIA profile
-; when Windows Terminal is present, gaia-tui.exe directly otherwise.
+; when Windows Terminal is present, gaia-cli.exe directly otherwise.
 Var LaunchExe
 Var LaunchArgs
 ; Where the desktop app landed, read back from electron-builder's own key.
 Var UiDir
 ; 1 once a chosen component failed, so the exit code says so after the rest ran.
 Var Failed
+; The folder an earlier setup installed the terminal to under the legacy ids,
+; emptied on upgrade; "" when there is none to move.
+Var LegacyDir
 
 !define MUI_ICON   "${ICON}"
 !define MUI_UNICON "${ICON}"
@@ -200,7 +204,7 @@ Var Failed
 
 ; The folder choice is the terminal's; the desktop app's setup picks its own.
 !define MUI_PAGE_CUSTOMFUNCTION_PRE DirectoryPre
-!define MUI_DIRECTORYPAGE_TEXT_TOP "Setup will install the GAIA terminal (gaia-tui) in the following folder. The desktop app installs to its own folder."
+!define MUI_DIRECTORYPAGE_TEXT_TOP "Setup will install the GAIA terminal (gaia-cli) in the following folder. The desktop app installs to its own folder."
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW FinishShow
@@ -263,8 +267,8 @@ Function ${UN}PathSegmentPresent
   ; in : $R1 = the full PATH, $R2 = the directory to look for
   ; out: $R0 = 1 when present, 0 when not
   ;
-  ; Matched as ";<dir>;" inside ";<PATH>;" so ...\GAIA Terminal Hub-old never
-  ; counts as ...\GAIA Terminal Hub.
+  ; Matched as ";<dir>;" inside ";<PATH>;" so ...\gaia-tui-old never counts
+  ; as ...\gaia-tui.
   Push $R3
   Push $R4
   Push $R5
@@ -296,9 +300,9 @@ FunctionEnd
 !insertmacro PathSegmentPresent ""
 !insertmacro PathSegmentPresent "un."
 
-; Only the uninstaller drops a segment, so this one is not generated for the
-; installer -- an unused copy there is dead code makensis warns about.
-Function un.PathWithoutSegment
+; The installer drops the legacy folder on upgrade; the uninstaller drops $INSTDIR.
+!macro PathWithoutSegment UN
+Function ${UN}PathWithoutSegment
   ; in : $R1 = the full PATH, $R2 = the directory to drop
   ; out: $R0 = the PATH with every occurrence of $R2 removed
   ;
@@ -343,6 +347,9 @@ Function un.PathWithoutSegment
   Pop $R4
   Pop $R3
 FunctionEnd
+!macroend
+!insertmacro PathWithoutSegment ""
+!insertmacro PathWithoutSegment "un."
 
 ; Tell every running process the environment changed, so a NEW cmd.exe or
 ; PowerShell picks the PATH up without a sign-out. Already-open shells keep the
@@ -354,12 +361,12 @@ FunctionEnd
 ; ─── Install ───────────────────────────────────────────────────────────────
 ;
 ; Section order is execution order and the components-page order: preflight,
-; Lemonade, desktop app, terminal, terminal profile. .onInit and the selection
+; desktop app, terminal, terminal profile. .onInit and the selection
 ; logic sit after the last section because a section's index only exists below
 ; its own Section line.
 
 ; Windows refuses write access to a running image, so `File` over a live
-; gaia-tui.exe fails mid-extraction and leaves a half-written install -- and
+; gaia-cli.exe fails mid-extraction and leaves a half-written install -- and
 ; under /S there is no dialog to notice it. Opening for append is the same test
 ; the extractor would make, one step before anything has been changed.
 Function AbortIfRunning
@@ -390,7 +397,7 @@ wait_for_file:
   ; /SD IDCANCEL: a silent install must fail rather than block on an invisible
   ; dialog, and must fail HERE, with the previous install still intact.
   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
-    "GAIA is still running, so Setup cannot replace $R8.$\r$\n$\r$\nClose GAIA - quit gaia-tui and the desktop app (including its icon in the notification area), and end any gaia-agent left behind - then click Retry.$\r$\n$\r$\nNothing has been changed; your existing installation is intact." \
+    "GAIA is still running, so Setup cannot replace $R8.$\r$\n$\r$\nClose GAIA - quit gaia-cli and the desktop app (including its icon in the notification area), and end any gaia-agent left behind - then click Retry.$\r$\n$\r$\nNothing has been changed; your existing installation is intact." \
     /SD IDCANCEL IDRETRY retry
   SetErrorLevel ${EXIT_RUNNING}
   Abort "GAIA is running. Close it and run Setup again - nothing was changed."
@@ -400,42 +407,6 @@ FunctionEnd
 ; setup leaves the machine exactly as it found it.
 Section "-Preflight" SecPreflight
   Call Preflight
-SectionEnd
-
-Section "-Lemonade" SecLemonade
-  ; The local inference server GAIA runs models on. Bundled rather than
-  ; downloaded so this installer works offline; $PLUGINSDIR is auto-deleted on
-  ; exit, so the MSI does not linger on disk.
-  ;
-  ; A Lemonade failure does not abort the GAIA install -- both front ends walk
-  ; the user through finishing setup -- but it is never swallowed: the
-  ; real-failure branch raises a dialog naming the exit code and what to do
-  ; next. Same contract as installer/nsis/installer.nsh, made visible rather
-  ; than log-only. Runs before the desktop app, whose own setup then re-runs the
-  ; same MSI as a no-op (0, or 1638 when this one is newer).
-  SetOutPath "$PLUGINSDIR"
-  File "/oname=${LEMONADE_MSI_NAME}" "${LEMONADE_MSI}"
-  DetailPrint "Installing Lemonade Server ${LEMONADE_VERSION}..."
-  ClearErrors
-  ExecWait 'msiexec /i "$PLUGINSDIR\${LEMONADE_MSI_NAME}" /qn /norestart' $0
-  ${If} $0 == 0
-    DetailPrint "Lemonade Server installed successfully."
-  ${ElseIf} $0 == 1638
-    ; ERROR_PRODUCT_VERSION — a newer Lemonade is already installed.
-    DetailPrint "Lemonade Server: a newer version is already installed (bundled MSI skipped)."
-  ${ElseIf} $0 == 3010
-    ; ERROR_SUCCESS_REBOOT_REQUIRED — installed; reboot pending.
-    DetailPrint "Lemonade Server installed (reboot pending)."
-  ${Else}
-    DetailPrint "Lemonade Server install FAILED with exit code $0."
-    ; /SD IDOK or a silent install blocks here forever on an invisible dialog.
-    MessageBox MB_OK|MB_ICONEXCLAMATION \
-      "The bundled Lemonade Server did not install (msiexec exit code $0). Setup will still install the rest of GAIA.$\r$\n$\r$\nGAIA needs Lemonade to run models locally. When Setup finishes, open GAIA - the desktop app, or gaia-tui in a new terminal - and it will offer to finish the setup.$\r$\n$\r$\nDetails: ${INSTALL_DOCS_URL}" \
-      /SD IDOK
-  ${EndIf}
-  ; Not back to $INSTDIR: SetOutPath creates the folder, and a desktop-app-only
-  ; install must not leave an empty terminal folder. The terminal section sets
-  ; its own.
 SectionEnd
 
 Section "GAIA Agent UI (desktop app)" SecUI
@@ -479,11 +450,18 @@ Section "GAIA Terminal UI (terminal)" SecMain
   File "${PAYLOAD_DIR}\${TUI_EXE}"
   File "${PAYLOAD_DIR}\${AGENT_EXE}"
   File "${PAYLOAD_DIR}\LICENSE.md"
+  ; The frozen gaia core: gaia.exe and its _internal folder, beside gaia-cli so
+  ; the terminal UI and PATH both find it. An update's files replace all of it.
+  RMDir /r "$INSTDIR\_internal"
+  File /r "${PAYLOAD_DIR}\core\*.*"
   File "/oname=gaia.ico" "${ICON}"
   File "${FONTS_DIR}\${FONT_LICENSE}"
 
-  WriteRegStr HKCU "Software\GAIA\TerminalHub" "InstallDir" "$INSTDIR"
-  WriteRegStr HKCU "Software\GAIA\TerminalHub" "Version"    "${VERSION}"
+  ; After the new files land, so a failed extraction leaves the old install.
+  Delete "$INSTDIR\${LEGACY_TUI_EXE}"
+  Call MigrateLegacyInstall
+  WriteRegStr HKCU "${SETTINGS_KEY}" "InstallDir" "$INSTDIR"
+  WriteRegStr HKCU "${SETTINGS_KEY}" "Version"    "${VERSION}"
 
   ; ── Add/Remove Programs ──
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -502,6 +480,94 @@ Section "GAIA Terminal UI (terminal)" SecMain
 
   Call AddToUserPath
 SectionEnd
+
+; ─── Upgrading an install made under the legacy ids ────────────────────────
+
+; Finds an install an earlier setup made under the legacy ids. Only its default
+; folder moves to the new default; a folder the user chose stays theirs, unless
+; /D= names another. Clobbers $R0 and $R1.
+Function FindLegacyInstall
+  StrCpy $LegacyDir ""
+  ReadRegStr $R0 HKCU "${LEGACY_SETTINGS_KEY}" "InstallDir"
+  ${If} $R0 == ""
+    Return
+  ${EndIf}
+  ${If} $R0 == "${LEGACY_DEFAULT_DIR}"
+    StrCpy $LegacyDir "$R0"
+    Return
+  ${EndIf}
+  ; A current install already chose its folder through InstallDirRegKey, and
+  ; /D= leaves $INSTDIR off the default: either one wins over the old folder.
+  ReadRegStr $R1 HKCU "${SETTINGS_KEY}" "InstallDir"
+  ${If} $R1 == ""
+  ${AndIf} $INSTDIR == "${DEFAULT_DIR}"
+    StrCpy $INSTDIR "$R0"
+  ${EndIf}
+FunctionEnd
+
+!macro MoveFontRecord FILE
+  ClearErrors
+  ReadRegStr $R0 HKCU "${LEGACY_FONTS_KEY}" "${FILE}"
+  ${IfNot} ${Errors}
+    WriteRegStr HKCU "${GAIA_FONTS_KEY}" "${FILE}" "$R0"
+  ${EndIf}
+!macroend
+
+; Moves an install made under the legacy ids onto the current ones: the record
+; of which fonts are ours, then its files, PATH entry, Installed-apps entry and
+; keys. Its own uninstaller is not run -- it would edit PATH while this does.
+Function MigrateLegacyInstall
+  !insertmacro MoveFontRecord "IBMPlexMono-Regular.ttf"
+  !insertmacro MoveFontRecord "IBMPlexMono-Bold.ttf"
+  !insertmacro MoveFontRecord "IBMPlexMono-Italic.ttf"
+  !insertmacro MoveFontRecord "IBMPlexMono-BoldItalic.ttf"
+  ${If} $LegacyDir != ""
+  ${AndIf} $LegacyDir != $INSTDIR
+    DetailPrint "Moving GAIA Terminal UI from $LegacyDir to $INSTDIR."
+    Delete "$LegacyDir\${TUI_EXE}"
+    Delete "$LegacyDir\${LEGACY_TUI_EXE}"
+    Delete "$LegacyDir\${AGENT_EXE}"
+    Delete "$LegacyDir\${CORE_EXE}"
+    RMDir /r "$LegacyDir\_internal"
+    Delete "$LegacyDir\LICENSE.md"
+    Delete "$LegacyDir\gaia.ico"
+    Delete "$LegacyDir\${FONT_LICENSE}"
+    Delete "$LegacyDir\Uninstall.exe"
+    ; Without /r: anything the user put there stays, and so does the folder.
+    RMDir "$LegacyDir"
+    ${If} ${FileExists} "$LegacyDir\*.*"
+      DetailPrint "Left $LegacyDir in place: it still holds files. Delete it by hand once you no longer need them."
+    ${EndIf}
+    Call RemoveLegacyFromUserPath
+  ${EndIf}
+  DeleteRegKey HKCU "${LEGACY_UNINST_KEY}"
+  DeleteRegKey HKCU "${LEGACY_SETTINGS_KEY}"
+FunctionEnd
+
+Function RemoveLegacyFromUserPath
+  Call ReadUserPath
+  ; A PATH too long to read whole is one a rewrite would destroy.
+  ${If} $R0 == 1
+    DetailPrint "Your user PATH is longer than Setup can hold - leaving it untouched. Remove $LegacyDir from it by hand."
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "GAIA Terminal UI moved to $INSTDIR, but your PATH still lists its old folder:$\r$\n$\r$\n$LegacyDir$\r$\n$\r$\nIt is too long for Setup to edit without losing entries, so remove that one line by hand." \
+      /SD IDOK
+    Return
+  ${EndIf}
+  StrCpy $R2 "$LegacyDir"
+  Call PathSegmentPresent
+  ${If} $R0 != 1
+    Return
+  ${EndIf}
+  Call PathWithoutSegment
+  ${If} $R0 == ""
+    DeleteRegValue HKCU "Environment" "Path"
+  ${Else}
+    WriteRegExpandStr HKCU "Environment" "Path" "$R0"
+  ${EndIf}
+  !insertmacro BroadcastEnvChange
+  DetailPrint "Removed $LegacyDir from your PATH."
+FunctionEnd
 
 ; ─── Terminal profile: font, Windows Terminal fragment, shortcuts ──────────
 
@@ -703,14 +769,14 @@ Section "-Terminal profile" SecTerminalProfile
     DetailPrint "Could not write the Windows Terminal profile to ${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}."
     ; /SD IDOK, or a silent install blocks forever on a dialog nobody can see.
     MessageBox MB_OK|MB_ICONEXCLAMATION \
-      "GAIA is installed, but Setup could not write its Windows Terminal profile to:$\r$\n$\r$\n${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}$\r$\n$\r$\nThe shortcuts will run gaia-tui in the default console instead. Check that folder is writable, then run Setup again." \
+      "GAIA is installed, but Setup could not write its Windows Terminal profile to:$\r$\n$\r$\n${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE}$\r$\n$\r$\nThe shortcuts will run gaia-cli in the default console instead. Check that folder is writable, then run Setup again." \
       /SD IDOK
   ${Else}
     DetailPrint "Added the GAIA profile to Windows Terminal (${WT_FRAGMENT_DIR}\${WT_FRAGMENT_FILE})."
   ${EndIf}
 
   ; ── Shortcuts ──
-  ; cobra's Explorer guard is disabled in gaia-tui (tui/internal/cli/root.go);
+  ; cobra's Explorer guard is disabled in gaia-cli (tui/internal/cli/root.go);
   ; left at its default, a shortcut that runs it directly would print "This is
   ; a command line tool" and exit, because a shortcut launches via Explorer.
   Call FindWindowsTerminal
@@ -724,9 +790,9 @@ Section "-Terminal profile" SecTerminalProfile
     StrCpy $LaunchArgs ""
     ${If} $R0 == ""
       ; Explicit, not a fallback: the console host cannot load a WT profile.
-      DetailPrint "Windows Terminal is not installed - shortcuts run gaia-tui in the default console, without the GAIA font and colours. Install Windows Terminal and re-run Setup to use the GAIA profile."
+      DetailPrint "Windows Terminal is not installed - shortcuts run gaia-cli in the default console, without the GAIA font and colours. Install Windows Terminal and re-run Setup to use the GAIA profile."
     ${Else}
-      DetailPrint "Shortcuts run gaia-tui in the default console because the Windows Terminal profile could not be written."
+      DetailPrint "Shortcuts run gaia-cli in the default console because the Windows Terminal profile could not be written."
     ${EndIf}
   ${EndIf}
   ; Shortcuts under the old name would sit beside the new ones after an upgrade.
@@ -744,7 +810,7 @@ SectionEnd
   ; /SD IDOK, or a silent install (/S, GPO, SCCM) blocks forever on a dialog
   ; nobody can see.
   MessageBox MB_OK|MB_ICONEXCLAMATION \
-    "GAIA is installed, but Setup could not safely update your PATH: it is longer than the 1023 characters this installer can hold, and rewriting it would lose the rest.$\r$\n$\r$\nAdd this folder to your PATH by hand to run gaia-tui from any terminal:$\r$\n$\r$\n$INSTDIR" \
+    "GAIA is installed, but Setup could not safely update your PATH: it is longer than the 1023 characters this installer can hold, and rewriting it would lose the rest.$\r$\n$\r$\nAdd this folder to your PATH by hand to run gaia-cli from any terminal:$\r$\n$\r$\n$INSTDIR" \
     /SD IDOK
 !macroend
 
@@ -797,8 +863,8 @@ SectionEnd
 ; ─── Component selection ───────────────────────────────────────────────────
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecUI} "GAIA Agent UI, the desktop app: a window with chat, your documents and files, and every tool call shown as it runs. Adds a GAIA shortcut to the desktop and Start menu, and starts with Windows (turn that off in the app's tray menu)."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "GAIA Terminal UI (gaia-tui): the same agent in your terminal, on your PATH, with a GAIA profile for Windows Terminal. Adds a GAIA Terminal UI shortcut to the desktop and Start menu."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecUI} "GAIA Agent UI, the desktop app: a window with chat, your documents and files, and every tool call shown as it runs. Adds a GAIA shortcut to the desktop and Start menu."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "GAIA Terminal UI (gaia-cli): the same agent in your terminal, on your PATH, with a GAIA profile for Windows Terminal. Adds a GAIA Terminal UI shortcut to the desktop and Start menu."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 !macro RefuseUsage MSG
@@ -854,11 +920,9 @@ Function HasAllUsersUi
 FunctionEnd
 
 Function .onInit
-  ; $PLUGINSDIR is where the bundled Lemonade MSI is unpacked, and it does not
-  ; exist until something asks for it. MUI2 alone never does -- the Agent UI's
-  ; installer.nsh gets away with omitting this only because electron-builder's
-  ; generated script calls it first. Without it SetOutPath lands on "" and the
-  ; MSI install fails for every user.
+  ; $PLUGINSDIR is where the desktop app setup is unpacked, and it does not
+  ; exist until something asks for it. MUI2 alone never does. Without it
+  ; SetOutPath lands on "" and the desktop app install fails for every user.
   InitPluginsDir
   ; electron-builder writes the desktop app's all-users key in the 64-bit view;
   ; a 32-bit NSIS process would otherwise read WOW6432Node and never see it.
@@ -867,6 +931,7 @@ Function .onInit
   ${EndIf}
   StrCpy $Failed 0
   StrCpy $UiDir ""
+  Call FindLegacyInstall
 
   ; Its files, not just its keys: a folder deleted by hand leaves keys behind
   ; and an uninstaller that cannot run, which must not block Setup forever.
@@ -874,11 +939,16 @@ Function .onInit
   ${If} $R0 == ""
     ReadRegStr $R0 HKCU "${DEV_UNINST_KEY}" "InstallLocation"
   ${EndIf}
+  ; A developer build from before the terminal became gaia-cli has gaia-tui.exe.
   ${If} $R0 != ""
-  ${AndIf} ${FileExists} "$R0\gaia-tui.exe"
+  ${AndIfNot} ${FileExists} "$R0\${TUI_EXE}"
+  ${AndIfNot} ${FileExists} "$R0\${LEGACY_TUI_EXE}"
+    StrCpy $R0 ""
+  ${EndIf}
+  ${If} $R0 != ""
     ; /SD IDOK: under /S the exit code is the message.
     MessageBox MB_OK|MB_ICONSTOP \
-      "A GAIA developer build is installed (Installed apps: GAIA).$\r$\n$\r$\nInstalled beside it, GAIA would have two gaia-tui programs on your PATH and two GAIA entries in Installed apps. Uninstall it from Settings > Apps > Installed apps, then run Setup again.$\r$\n$\r$\nNothing was installed." \
+      "A GAIA developer build is installed (Installed apps: GAIA).$\r$\n$\r$\nInstalled beside it, GAIA would have two gaia-cli programs on your PATH and two GAIA entries in Installed apps. Uninstall it from Settings > Apps > Installed apps, then run Setup again.$\r$\n$\r$\nNothing was installed." \
       /SD IDOK
     SetErrorLevel ${EXIT_CONFLICT}
     Quit
@@ -887,7 +957,10 @@ Function .onInit
   ; Start from what is installed, so re-running Setup -- or a silent upgrade --
   ; updates what the user has rather than adding what they did not choose. A
   ; fresh machine gets both. An all-users desktop app is not ours to update.
-  ReadRegStr $R2 HKCU "Software\GAIA\TerminalHub" "InstallDir"
+  ReadRegStr $R2 HKCU "${SETTINGS_KEY}" "InstallDir"
+  ${If} $R2 == ""
+    ReadRegStr $R2 HKCU "${LEGACY_SETTINGS_KEY}" "InstallDir"
+  ${EndIf}
   ReadRegStr $R3 HKCU "${UI_INSTALL_KEY}" "InstallLocation"
   StrCpy $R0 0
   StrCpy $R1 0
@@ -996,20 +1069,82 @@ Function Preflight
     ${EndIf}
   ${EndIf}
   ${If} ${SectionIsSelected} ${SecMain}
+    ; The daemon runs this gaia.exe and has no window to close, so stop it here.
+    Call StopDaemon
     StrCpy $R7 "$INSTDIR"
     StrCpy $R8 "${TUI_EXE}"
     Call AbortIfRunning
+    StrCpy $R8 "${LEGACY_TUI_EXE}"
+    Call AbortIfRunning
     StrCpy $R8 "${AGENT_EXE}"
     Call AbortIfRunning
+    StrCpy $R8 "${CORE_EXE}"
+    Call AbortIfRunning
+    ; An upgrade empties the legacy folder too, so what runs from there counts.
+    ${If} $LegacyDir != ""
+    ${AndIf} $LegacyDir != $INSTDIR
+      Call StopLegacyDaemon
+      StrCpy $R7 "$LegacyDir"
+      StrCpy $R8 "${TUI_EXE}"
+      Call AbortIfRunning
+      StrCpy $R8 "${LEGACY_TUI_EXE}"
+      Call AbortIfRunning
+      StrCpy $R8 "${AGENT_EXE}"
+      Call AbortIfRunning
+      StrCpy $R8 "${CORE_EXE}"
+      Call AbortIfRunning
+    ${EndIf}
   ${EndIf}
+FunctionEnd
+
+; Stops the GAIA daemon (and the agents it runs) through the gaia.exe in DIR,
+; which it runs from. A failure is logged; AbortIfRunning then says the file is
+; still in use.
+!macro STOP_DAEMON_BODY DIR
+  ${If} ${FileExists} "${DIR}\${CORE_EXE}"
+    DetailPrint "Stopping the GAIA daemon and its agents"
+    ; gaia prints emoji, which the captured pipe's code page can't encode.
+    System::Call 'Kernel32::SetEnvironmentVariable(t "PYTHONIOENCODING", t "utf-8")i'
+    nsExec::ExecToLog /TIMEOUT=120000 '"${DIR}\${CORE_EXE}" daemon stop'
+    Pop $0
+    ; 3: the daemon stopped; only GAIA's Lemonade Server did not.
+    ${If} $0 == 3
+      DetailPrint "The GAIA daemon stopped, but GAIA's Lemonade Server did not."
+    ${ElseIf} $0 != 0
+      DetailPrint "Could not stop the GAIA daemon (gaia daemon stop returned $0)."
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+Function StopDaemon
+  Push $0
+  !insertmacro STOP_DAEMON_BODY "$INSTDIR"
+  Pop $0
+FunctionEnd
+
+Function StopLegacyDaemon
+  Push $0
+  !insertmacro STOP_DAEMON_BODY "$LegacyDir"
+  Pop $0
+FunctionEnd
+
+Function un.StopDaemon
+  Push $0
+  !insertmacro STOP_DAEMON_BODY "$INSTDIR"
+  Pop $0
 FunctionEnd
 
 ; ─── Uninstall ─────────────────────────────────────────────────────────────
 
-; Removes a face only when this setup recorded installing it.
+; Removes a face only when this setup, or one under the legacy ids, recorded
+; installing it.
 !macro UninstallFontFace FILE FULL_NAME
   ClearErrors
   ReadRegStr $R0 HKCU "${GAIA_FONTS_KEY}" "${FILE}"
+  ${If} ${Errors}
+    ClearErrors
+    ReadRegStr $R0 HKCU "${LEGACY_FONTS_KEY}" "${FILE}"
+  ${EndIf}
   ${IfNot} ${Errors}
     System::Call 'gdi32::RemoveFontResourceW(w "${USER_FONTS_DIR}\${FILE}") i .r0'
     Delete "${USER_FONTS_DIR}\${FILE}"
@@ -1025,8 +1160,12 @@ FunctionEnd
 !macroend
 
 Section "Uninstall"
+  Call un.StopDaemon
   Delete "$INSTDIR\${TUI_EXE}"
+  Delete "$INSTDIR\${LEGACY_TUI_EXE}"
   Delete "$INSTDIR\${AGENT_EXE}"
+  Delete "$INSTDIR\${CORE_EXE}"
+  RMDir /r "$INSTDIR\_internal"
   Delete "$INSTDIR\LICENSE.md"
   Delete "$INSTDIR\gaia.ico"
   Delete "$INSTDIR\${FONT_LICENSE}"
@@ -1072,14 +1211,17 @@ Section "Uninstall"
   Delete "$DESKTOP\${LEGACY_PRODUCT_NAME}.lnk"
 
   DeleteRegKey HKCU "${UNINST_KEY}"
-  DeleteRegKey HKCU "Software\GAIA\TerminalHub"
+  DeleteRegKey HKCU "${SETTINGS_KEY}"
+  ; Whatever an install under the legacy ids left; harmless when absent.
+  DeleteRegKey HKCU "${LEGACY_UNINST_KEY}"
+  DeleteRegKey HKCU "${LEGACY_SETTINGS_KEY}"
+  DeleteRegKey /ifempty HKCU "Software\GAIA"
 
   Call un.RemoveFromUserPath
 
-  ; Lemonade Server is deliberately NOT uninstalled: the MSI registers it as an
-  ; independent Windows product other things may be using, and it is removed the
-  ; same way whether it arrived here or from a standalone MSI --
-  ; `gaia uninstall --purge-lemonade`. Same contract as installer/nsis/installer.nsh.
+  ; Lemonade Server is not uninstalled here. GAIA's own copy lives in ~/.gaia, so
+  ; it goes only if the user agrees to delete that below; a system Lemonade an
+  ; older setup added stays. Same contract as installer/nsis/installer.nsh.
 
   ; Optional cleanup deletes the entire shared GAIA home, including other
   ; installations' runtimes. Interactive and silent defaults preserve it.

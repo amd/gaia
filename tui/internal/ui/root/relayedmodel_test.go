@@ -65,8 +65,7 @@ func TestSubprocessFlagshipStillConfirmsTheRestoreWithTheAgent(t *testing.T) {
 		WithModelMemory(func(_, model string) error { saved = append(saved, model); return nil }).
 		WithSavedModel(preflight.LastModel{Provider: "amd", Model: gatewayModel})
 
-	updated, _ := m.launchAgent(agent, true)
-	m = updated.(FlagshipModel)
+	m.launchAgent(agent, true)
 
 	if len(saved) != 0 {
 		t.Fatalf("a restore was saved before the agent confirmed it: %v", saved)
