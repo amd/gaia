@@ -23,6 +23,7 @@ from gaia.agents.base.skill_suggester import (
     DEFAULT_AUTOLOAD_MARGIN,
     DEFAULT_AUTOLOAD_THRESHOLD,
     DEFAULT_SUGGEST_THRESHOLD,
+    DOC_PROMPT,
     SkillMatches,
     SkillSuggester,
 )
@@ -238,7 +239,7 @@ def test_a_real_suggester_reaches_the_turn_context(monkeypatch):
         )
         for name in ("image-gen", "coding")
     }
-    axis = {"image-gen: does image-gen": 0, "coding: does coding": 1}
+    axis = {f"{DOC_PROMPT}does image-gen": 0, f"{DOC_PROMPT}does coding": 1}
 
     def embed(text):
         v = np.zeros(4, dtype=np.float32)
@@ -695,7 +696,7 @@ def _plain(name, pairs=()):
 
 def _scoring(names, scores):
     """An embedder giving each skill in *names* its score for any request."""
-    axis = {f"{name}: does {name}": i for i, name in enumerate(names)}
+    axis = {f"{DOC_PROMPT}does {name}": i for i, name in enumerate(names)}
 
     def embed(text):
         v = np.zeros(len(names) + 1, dtype=np.float32)
