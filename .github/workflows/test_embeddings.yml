@@ -100,9 +100,10 @@ on:
           - stx-test
         default: devlab
 
-# Cancel in-progress runs when a new run is triggered
+# Cancel in-progress runs when a new run is triggered. The runner label keeps a
+# dispatch to one stx box from cancelling a run on the other or on the pool.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}-${{ inputs.runner_label }}
   cancel-in-progress: true
 
 permissions:

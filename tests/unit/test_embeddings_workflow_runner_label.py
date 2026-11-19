@@ -82,3 +82,11 @@ def test_every_dispatch_option_resolves_to_a_runner(embeddings):
     for opt in _dispatch_input(embeddings)["options"]:
         resolved = _resolve_runs_on(expr, opt)
         assert resolved == (DEVLAB_POOL if opt == "devlab" else [opt]), opt
+
+
+def test_runs_on_different_boxes_do_not_cancel_each_other(embeddings):
+    group = embeddings["concurrency"]["group"]
+    assert "inputs.runner_label" in group, (
+        "concurrency group ignores the target box, so a dispatch to stx-test "
+        "cancels a run on stx or on the pool"
+    )
