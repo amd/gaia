@@ -310,7 +310,6 @@ class BrowserUseToolsMixin:
         driver = self._ensure_driver()
         approved = self._take_site_approval(tool_name)
         if isinstance(driver, PaneDriver):
-            approved = [o for o in approved if not self._unasked_local(tool_name, o)]
             with driver.scoped(approved, self._granted_frames(tool_name)):
                 yield driver
         else:
@@ -380,12 +379,28 @@ class BrowserUseToolsMixin:
         ) and not self._unasked_local(tool_name, origin)
 
     def _take_site_approval(self, tool_name: str) -> List[str]:
-        """The origins this call's gate asked about, once. Only a running tool body takes them."""
+        """The origins this call's gate asked about, once. Only a running tool body takes them.
+
+        A local site Full access passed without asking is dropped, whatever the caller.
+        """
         pending, self._site_pending = self._site_pending, None
         session = self._call_key(tool_name, None)[0]
         if pending and pending[:2] == (session, tool_name):
-            return list(pending[2])
+            return [o for o in pending[2] if not self._unasked_local(tool_name, o)]
         return []
+
+    def _local_open_refusal(self, pane, url: str) -> Optional[str]:
+        """Why the pane must not open ``url`` unasked: a local site that is not this chat's dev server."""
+        from gaia.browser._pane_bridge import origin_of
+
+        origin = origin_of(url)
+        if (
+            origin
+            and self._unasked_local("browser_open", origin)
+            and origin not in pane.trusted_origins()
+        ):
+            return self._check_navigable(url)
+        return None
 
     def _pane_site(
         self, pane, tool_name: str, tool_args: Optional[dict]
@@ -1181,15 +1196,9 @@ class BrowserUseToolsMixin:
                     "or https://."
                 )
             else:
-                from gaia.browser._pane_bridge import origin_of
-
-                origin = origin_of(url)
-                if (
-                    origin
-                    and mixin._unasked_local("browser_open", origin)
-                    and origin not in pane.trusted_origins()
-                ):
-                    raise _Refused(mixin._check_navigable(url))
+                refusal = mixin._local_open_refusal(pane, url)
+                if refusal:
+                    raise _Refused(refusal)
             with mixin._reading("browser_open") as driver:
                 snap = driver.goto(url)
             _seen(snap)
@@ -1614,6 +1623,9 @@ class BrowserUseToolsMixin:
                 url = str(args["url"])
                 if not url.startswith(("http://", "https://")):
                     raise _Refused(f"invalid URL {url!r}; it must start with http://")
+                refusal = mixin._local_open_refusal(driver, url)
+                if refusal:
+                    raise _Refused(refusal)
                 snap = driver.goto(url)
                 return f"Opened {site_words(snap.get('url') or url)}.", snap
             if name == "browser_back":

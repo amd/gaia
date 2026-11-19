@@ -329,6 +329,9 @@ posix("logs", () => {
     const port = await freePort();
     await sup.ensure(KEY, spec(port), "chat-1");
     await fetch(`http://localhost:${port}/`);
+    // The server logs the request on its own stdout, which can land after the response.
+    const getLines = () => sup.logs(KEY, { errorsOnly: false, pattern: "get /", limit: 50 }).lines;
+    expect(await waitFor(() => getLines().length > 0)).toBe(true);
     const errors = sup.logs(KEY, { errorsOnly: true, pattern: null, limit: 50 });
     expect(errors.lines).toEqual([]);
     const gets = sup.logs(KEY, { errorsOnly: false, pattern: "get /", limit: 50 });

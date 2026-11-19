@@ -1073,3 +1073,103 @@ def test_eval_is_not_a_batch_step(agent, bridge):
     )
     assert out.startswith("Error: step 1 uses browser_eval")
     assert "script" not in bridge.ops()
+
+
+# ------------------------------------- Full access and local sites, batched too
+
+LOCAL_SITES = [
+    "http://169.254.169.254",
+    "http://127.0.0.1:6000",
+    "http://192.168.1.1",
+    "http://[::1]:6000",
+]
+
+
+def _loads(bridge, before):
+    """The requests after ``before`` that would load a page in the pane."""
+    return [
+        r
+        for r in bridge.requests[before:]
+        if r["op"] == "navigate"
+        or (r["op"] == "tabs" and r["body"].get("op") == "open")
+    ]
+
+
+def _batch_open(agent, url):
+    return tool(agent, "browser_batch")(steps=[{"tool": "browser_open", "url": url}])
+
+
+@pytest.mark.parametrize("site", LOCAL_SITES)
+def test_full_access_batch_does_not_open_a_local_site_nobody_approved(
+    agent, bridge, site
+):
+    agent.console.auto_approve_gated_tools = True
+    before = len(bridge.requests)
+    out = _batch_open(agent, f"{site}/latest/meta-data/")
+    assert "Step 1 (browser_open) failed" in out
+    assert not _loads(bridge, before)
+
+
+@pytest.mark.parametrize("site", LOCAL_SITES)
+def test_full_access_open_does_not_open_a_local_site_nobody_approved(
+    agent, bridge, site
+):
+    agent.console.auto_approve_gated_tools = True
+    read(agent, "browser_open", url=f"{site}/")
+    before = len(bridge.requests)
+    out = tool(agent, "browser_open")(url=f"{site}/")
+    assert out.startswith("Error: refusing to open")
+    assert not _loads(bridge, before)
+
+
+@pytest.mark.parametrize("site", LOCAL_SITES)
+def test_full_access_batch_snapshot_does_not_read_a_local_page(agent, bridge, site):
+    agent.console.auto_approve_gated_tools = True
+    page_frames(bridge, page=site)
+    tool(agent, "browser_batch")(steps=[{"tool": "browser_snapshot"}])
+    assert site not in bridge.last("evaluate")["body"]["allowedOrigins"]
+
+
+def test_full_access_batch_after_an_act_does_not_reread_a_local_page(agent, bridge):
+    agent.console.auto_approve_gated_tools = True
+    page_frames(bridge, page="http://192.168.1.1")
+    tool(agent, "browser_batch")(steps=[{"tool": "browser_click", "ref": "g1e2"}])
+    allowed = bridge.last("evaluate")["body"]["allowedOrigins"]
+    assert "http://192.168.1.1" not in allowed
+
+
+def test_full_access_batch_still_opens_the_chats_dev_server(agent, bridge):
+    agent.console.auto_approve_gated_tools = True
+    before = len(bridge.requests)
+    out = _batch_open(agent, "http://127.0.0.1:5000/")
+    assert "failed" not in out
+    assert _loads(bridge, before)
+
+
+def test_full_access_batch_opens_a_local_site_granted_always(agent, bridge):
+    site = "http://192.168.1.1"
+    agent.console.auto_approve_gated_tools = True
+    agent.console.grant_call_for_session("browser_open", {SITE_ARG: site})
+    before = len(bridge.requests)
+    out = _batch_open(agent, f"{site}/admin")
+    assert "failed" not in out
+    loads = _loads(bridge, before)
+    assert loads and site in loads[0]["body"]["allowedOrigins"]
+
+
+def test_full_access_batch_snapshot_reads_a_local_page_granted_always(agent, bridge):
+    site = "http://192.168.1.1"
+    agent.console.auto_approve_gated_tools = True
+    agent.console.grant_call_for_session("browser_snapshot", {SITE_ARG: site})
+    page_frames(bridge, page=site)
+    tool(agent, "browser_batch")(steps=[{"tool": "browser_snapshot"}])
+    assert site in bridge.last("evaluate")["body"]["allowedOrigins"]
+
+
+def test_an_approved_local_site_is_read_when_the_user_was_asked(agent, bridge):
+    site = "http://192.168.1.1"
+    page_frames(bridge, page=site)
+    _, asks = read(agent, "browser_snapshot")
+    assert asks is True
+    tool(agent, "browser_snapshot")()
+    assert site in bridge.last("evaluate")["body"]["allowedOrigins"]
