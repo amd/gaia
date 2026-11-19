@@ -11,8 +11,20 @@ describe('splitUploadedImages', () => {
         expect(images).toEqual([{ src: '/api/files/uploads/cat.png', name: 'cat.png' }]);
     });
 
+    it('decodes the file name when the link has no label', () => {
+        const { images } = splitUploadedImages('![Q3 plan (final).pdf](/api/files/uploads/Q3%20plan%20%28final%29.pdf)');
+        expect(images).toEqual([
+            { src: '/api/files/uploads/Q3%20plan%20%28final%29.pdf', name: 'Q3 plan (final).pdf' },
+        ]);
+    });
+
     it('leaves an image line inside a code block alone', () => {
         const content = '```md\n![x](/api/files/uploads/y.png)\n```';
+        expect(splitUploadedImages(content)).toEqual({ text: content, images: [] });
+    });
+
+    it('leaves a traversal link in the text', () => {
+        const content = '![x](/api/files/uploads/..%2F..%2Fsecret.png)';
         expect(splitUploadedImages(content)).toEqual({ text: content, images: [] });
     });
 });

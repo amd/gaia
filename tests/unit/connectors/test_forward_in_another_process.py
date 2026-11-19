@@ -138,7 +138,12 @@ def connected_under_old_client(shared_keyring):
 def lock_held_elsewhere(shared_keyring):
     """Another OS process holding the google connection lock."""
     holder = subprocess.Popen(
-        [sys.executable, "-c", _HOLDER, str(_refresh_lock.lock_path("google"))],
+        [
+            sys.executable,
+            "-c",
+            _HOLDER,
+            str(_refresh_lock.account_lock_path("google", "default")),
+        ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -403,7 +408,7 @@ def _busy_error():
 
     with pytest.raises(ConnectionBusyError) as exc:
         _authorize_access(
-            provider="google", scopes=[GMAIL], agent_id=None, account_email="default"
+            provider="google", scopes=[GMAIL], agent_id=None, slot="default"
         )
     return exc.value
 
@@ -456,7 +461,7 @@ def test_the_daemon_keeps_its_forward_while_the_connection_is_busy(busy_mismatch
 
     def mint(*, provider, scopes, agent_id):
         _authorize_access(
-            provider=provider, scopes=scopes, agent_id=None, account_email="default"
+            provider=provider, scopes=scopes, agent_id=None, slot="default"
         )
         return ("token", 1_900_000_000.0)
 
@@ -644,7 +649,7 @@ def test_a_mismatch_is_not_cleared_while_another_thread_here_holds_the_lock(
     holding, release = threading.Event(), threading.Event()
 
     def hold():
-        with _refresh_lock.held_sync("google"):
+        with _refresh_lock.held_account_sync("google", "default"):
             holding.set()
             release.wait(_CHILD_TIMEOUT)
 
@@ -657,7 +662,7 @@ def test_a_mismatch_is_not_cleared_while_another_thread_here_holds_the_lock(
                 provider="google",
                 scopes=[GMAIL],
                 agent_id=None,
-                account_email="default",
+                slot="default",
             )
         assert _stored_refresh_token() == "forwarded-refresh"
     finally:

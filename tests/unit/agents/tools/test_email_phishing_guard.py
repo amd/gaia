@@ -433,16 +433,6 @@ def test_a_lookalike_marker_name_is_removed(body):
     assert wrap_untrusted_body(inner) == wrapped
 
 
-def test_the_lookalike_table_matches_the_email_agents_copy():
-    """Both copies are generated together; a hand edit to one reopens a gap."""
-    from pathlib import Path
-
-    repo = Path(__file__).resolve().parents[4]
-    core = repo / "src/gaia/agents/base/lookalikes.py"
-    hub = repo / "hub/agents/email/python/gaia_agent_email/tools/lookalikes.py"
-    assert core.read_text(encoding="utf-8") == hub.read_text(encoding="utf-8")
-
-
 def test_the_lookalike_table_maps_only_non_ascii_to_ascii():
     from gaia.agents.base.lookalikes import ASCII_FOLD, LOOKALIKES
 

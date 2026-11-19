@@ -5,11 +5,6 @@
 The read client lists, searches and reads, under the narrowest scope the
 connection carries. The write client adds drafts and sending, and is built only
 when a write is asked for. Neither organizes or deletes received mail.
-
-This is a lean reimplementation of ``gaia_agent_email.outlook_backend``, not an
-import of it: the flagship must not
-depend on the standalone email package it is meant to replace. The wire
-contract (Graph ``message`` resource) is the shared truth, not the Python.
 """
 
 from __future__ import annotations

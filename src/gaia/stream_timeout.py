@@ -33,7 +33,7 @@ def stream_timeout_from_env() -> int:
         f"Set it to a whole number of seconds from 1 to "
         f"{MAX_STREAM_TIMEOUT_SECONDS} (e.g. {STREAM_TIMEOUT_ENV}=1800), or "
         f"unset it for the {DEFAULT_STREAM_TIMEOUT_SECONDS}s default. See "
-        "https://amd-gaia.ai/docs/guides/agent-ui#long-responses"
+        "https://amd-gaia.ai/docs/guides/agent-ui/chat#long-responses"
     )
     try:
         value = int(raw)
