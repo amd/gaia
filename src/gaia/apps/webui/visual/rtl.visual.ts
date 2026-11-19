@@ -517,6 +517,42 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+const SKILL_LIST = [
+    { name: 'pdf', description: 'Make and edit PDF files. Use when the user asks for a report.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
+    { name: 'pptx', description: 'ابنِ عروض الشرائح من ملاحظاتك. استخدمها عند طلب عرض.', version: '1.0.0', tier: 'verified', tools: [], path: 'agent-bundled', source: 'agent-bundled' },
+    { name: 'web-research', description: 'Research a topic on the web and cite every source it uses, with a long description that has to be cut short.', version: '1.0.0', tier: 'verified', tools: [], path: 'user', source: 'user' },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`typing / lists the skills above the message box (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/skills', (route) =>
+            route.fulfill({ json: { skills: SKILL_LIST, invalid: {} } })));
+        const box = page.locator('.new-chat textarea').first();
+        await box.fill('/');
+        const menu = page.locator('.skill-menu');
+        await expect(menu.getByRole('option')).toHaveCount(3);
+        await shot(page, `skill-menu-${locale}`);
+
+        const [menuBox, composerBox] = [(await menu.boundingBox())!, (await page.locator('.new-chat .composer').boundingBox())!];
+        expect(menuBox.y + menuBox.height, 'the list covers the message box').toBeLessThanOrEqual(composerBox.y + 1);
+        expect(menuBox.y, 'the list runs off the top of the window').toBeGreaterThanOrEqual(0);
+
+        // The /name is Latin: it reads left to right and sits on the row's start edge.
+        const row = menu.getByRole('option').first();
+        const [rowBox, nameBox] = [(await row.boundingBox())!, (await row.locator('.skill-menu-name').boundingBox())!];
+        const startGap = locale === 'ar' ? rowBox.x + rowBox.width - (nameBox.x + nameBox.width) : nameBox.x - rowBox.x;
+        expect(startGap, 'the skill name is not at the start of its row').toBeLessThan(16);
+        await expect(row.locator('.skill-menu-name')).toHaveText('/pdf');
+
+        await box.fill('/pp');
+        await expect(menu.getByRole('option')).toHaveCount(1);
+        await box.press('Enter');
+        await expect(box).toHaveValue('/pptx ');
+        await expect(menu).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
     id: `lib-${i}`, filename: `meeting-notes-${i}.txt`, filepath: `C:/library/meeting-notes-${i}.txt`, file_size: 512,
     chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0,
@@ -1509,7 +1545,8 @@ test('resource usage strip', async ({ page }) => {
     const strip = page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' });
     await expect(strip.locator('li')).toHaveCount(5);
     await expect(strip.getByText('45.0/63.6 GB')).toBeVisible();
-    await expect(strip.locator('li').last()).toContainText(/↑.*0.*↓.*8\.0.*Kbps/);
+    // The unit follows the Arabic figures, not only the English in brackets, which a narrow tile cuts.
+    await expect(strip.locator('li').last()).toContainText(/↑[^(]*0[^(]*↓[^(]*8\.0[^(]*Kbps/);
     // The close button sits at the row's end, which is the left in rtl.
     const closeBox = (await strip.getByRole('button').boundingBox())!;
     const firstTile = (await strip.locator('li').first().boundingBox())!;
@@ -1517,6 +1554,17 @@ test('resource usage strip', async ({ page }) => {
     await expectClearOfPanel(page);
     expect(await audit(page)).toEqual([]);
     await page.screenshot({ path: 'visual/test-results/resource-strip-ar.png' });
+});
+
+test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`);
+    await page.getByRole('region', { name: 'استخدام الموارد على هذا الجهاز' }).getByRole('button').click();
+    const note = page.locator('.resource-hidden-note');
+    await expect(note).toContainText('أيقونة النبض');
+    await expect(note.getByRole('button')).toBeVisible();
+    await expectClearOfPanel(page);
+    expect(await audit(page)).toEqual([]);
+    await page.screenshot({ path: 'visual/test-results/resource-strip-ar-closed.png' });
 });
 
 test('resource usage strip with no GPU counters keeps CPU and memory', async ({ page }) => {
@@ -2080,6 +2128,18 @@ test.describe('English', () => {
         await page.screenshot({ path: 'visual/test-results/resource-strip-en.png' });
     });
 
+    test('closing the resource usage strip says how to bring it back', async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en');
+        await page.getByRole('button', { name: 'Hide resource usage' }).click();
+        const note = page.locator('.resource-hidden-note');
+        await expect(note).toContainText('pulse icon');
+        await expectClearOfPanel(page);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: 'visual/test-results/resource-strip-en-closed.png' });
+        await note.getByRole('button', { name: 'Show resource usage' }).click();
+        await expect(page.getByRole('region', { name: 'Resource usage on this PC' })).toBeVisible();
+    });
+
     test('resource usage strip on a wide window is one row', async ({ page }) => {
         await page.setViewportSize({ width: 1920, height: 1000 });
         await open(page, `#${ANSWER_SESSION}`, 'en');
@@ -2567,6 +2627,57 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+// Opening and switching ease in on purpose; with reduced motion asked for, nothing moves.
+test.describe('arrivals ease in (en)', () => {
+    const openSkills = async (page: Page, motion: 'no-preference' | 'reduce') => {
+        await open(page, '', 'en', withSettingsPanes);
+        await page.emulateMedia({ reducedMotion: motion });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        await expect(page.locator('.settings-pane-title')).toBeVisible();
+    };
+
+    // The section's height on each of the 20 frames after its summary is clicked.
+    const openFrames = (page: Page) => page.locator('.settings-pane details:not([open])').first().evaluate((el) =>
+        new Promise<number[]>((done) => {
+            const heights: number[] = [];
+            (el.querySelector('summary') as HTMLElement).click();
+            const tick = () => {
+                heights.push(el.getBoundingClientRect().height);
+                if (heights.length < 20) requestAnimationFrame(tick);
+                else done(heights);
+            };
+            requestAnimationFrame(tick);
+        }));
+
+    test('a section grows open over several frames instead of jumping', async ({ page }) => {
+        await openSkills(page, 'no-preference');
+        const heights = await openFrames(page);
+        const full = heights[heights.length - 1];
+        const between = heights.filter((h) => h > heights[0] + 1 && h < full - 1);
+        expect(between.length, `heights: ${heights.map(Math.round).join(' ')}`).toBeGreaterThanOrEqual(3);
+    });
+
+    test('with reduced motion a section opens at once', async ({ page }) => {
+        await openSkills(page, 'reduce');
+        const heights = await openFrames(page);
+        // It may snap a frame late under load, but never passes through a height in between.
+        const full = heights[heights.length - 1];
+        const between = heights.filter((h) => h > heights[0] + 1 && h < full - 1);
+        expect(between, `heights: ${heights.map(Math.round).join(' ')}`).toEqual([]);
+    });
+
+    test('a Settings tab fades in when picked', async ({ page }) => {
+        await openSkills(page, 'no-preference');
+        await page.locator('.settings-pane').evaluate((el) => el.setAttribute('data-was', 'skills'));
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        // A new pane element, so its entry animation plays again, and that animation is the fade.
+        const pane = page.locator('.settings-pane');
+        await expect(pane).not.toHaveAttribute('data-was', 'skills');
+        expect(await pane.evaluate((el) => getComputedStyle(el).animationName)).toBe('fadeIn');
+    });
+});
+
 for (const locale of ['en', 'ar']) {
     test(`the model menu leads with the provider in use and asks before a download (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
@@ -2591,6 +2702,16 @@ for (const locale of ['en', 'ar']) {
         expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
     });
 }
+
+/** A Google connector holding these accounts, as GET /api/connectors sends it. */
+const MULTI_ACCOUNT_GOOGLE = (accounts: Array<{ account_id: string; email: string; status: string; is_default: boolean }>) => ({
+    id: 'google', display_name: 'Google', type: 'oauth_pkce', icon: null, category: 'email', tier: 'core',
+    description: 'Connect GAIA to your Google account for Gmail, Calendar, Drive, and more.', product_url: 'https://example.com', docs_url: null,
+    configured: accounts.some((a) => a.status === 'ok'), configurable: true, enabled: true,
+    account_id: accounts.find((a) => a.is_default && a.status === 'ok')?.email ?? null, accounts,
+    scopes: ['openid'], default_scopes: [], available_scopes: [], mcp_env_keys: [], oauth_setup_fields: [], supports_device_code: false,
+    oauth_client: { source: 'env', client_id: 'example-client', has_secret: false },
+});
 
 for (const locale of ['ar', 'en']) {
     test.describe(`settings connectors (${locale})`, () => {
@@ -2765,6 +2886,83 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `connectors-${locale}-check-slow`);
             expect(await audit(page)).toEqual([]);
             if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+        });
+
+        test('several accounts: a row each, one expired, a long address, and the disconnect question', async ({ page }) => {
+            const accounts = [
+                { account_id: 'a1', email: 'jane.with.a.rather.long.name@example.com', status: 'ok', is_default: true },
+                { account_id: 'a2', email: 'jane.work@example.com', status: 'ok', is_default: false },
+                { account_id: 'a3', email: 'jane@outlook-example.com', status: 'reauth_required', is_default: false },
+            ];
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE(accounts)]);
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await expect(tile.locator('.connector-status.failed')).toBeVisible();
+            await tile.locator('.connector-tile-header').click();
+            await expect(tile.locator('.connector-account')).toHaveCount(3);
+            await tile.locator('.connector-accounts').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-accounts-open`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', 'bdi, pre, .mcp-key-label')).toEqual([]);
+            // Each address keeps to the start edge of its row, cut in its middle, whole on hover.
+            const address = tile.locator('.account-address').first();
+            await expect(address).toHaveAttribute('title', accounts[0].email);
+            await expect(address).toHaveText(/…@example\.com$/);
+            const edge = await tile.locator('.connector-account').first().evaluate((row) => {
+                const a = row.querySelector('.account-address')!.getBoundingClientRect();
+                const r = row.getBoundingClientRect();
+                return getComputedStyle(row).direction === 'rtl' ? r.right - a.right : a.left - r.left;
+            });
+            expect(edge, 'the address drifted off the start edge').toBeLessThan(16);
+            // Long Arabic labels push the actions to a second line rather than over the address.
+            const spilled = await tile.locator('.connector-account').evaluateAll((rows) => rows.flatMap((row) => {
+                const r = row.getBoundingClientRect();
+                return [...row.querySelectorAll('.connector-account-who, .account-address, .connector-status, button')].filter((el) => {
+                    const b = el.getBoundingClientRect();
+                    const range = document.createRange();
+                    range.selectNodeContents(el);
+                    const text = range.getBoundingClientRect();
+                    return Math.min(b.left, text.left) < r.left - 1 || Math.max(b.right, text.right) > r.right + 1
+                        || (el.scrollWidth > el.clientWidth + 1 && el.clientWidth > 0);
+                }).map((el) => `${el.className || el.tagName}: ${el.textContent}`);
+            }));
+            expect(spilled, 'an account row spills out of its box').toEqual([]);
+
+            await tile.locator('.connector-account').nth(1).locator('.connector-account-actions .btn-secondary').last().click();
+            const ask = page.locator('.confirm-sheet');
+            await expect(ask).toContainText('jane.work@example.com');
+            await shot(page, `connectors-${locale}-accounts-disconnect`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('one account: unchanged, plus a quiet link to add another', async ({ page }) => {
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE([{ account_id: 'a1', email: 'jane@example.com', status: 'ok', is_default: true }])]);
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await tile.locator('.connector-tile-header').click();
+            await expect(tile.locator('.connector-add-account')).toBeVisible();
+            await expect(tile.locator('.connector-account')).toHaveCount(0);
+            await tile.locator('.configure-actions').scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-accounts-one`);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a Disconnect that finds several accounts names them all and asks first', async ({ page }) => {
+            await openConnectors(page, [MULTI_ACCOUNT_GOOGLE([{ account_id: 'a1', email: 'jane@example.com', status: 'ok', is_default: true }])]);
+            // Another window added sam@ since this tile loaded, so the server refuses a plain disconnect.
+            await page.route('**/api/connectors/google', (route) => (route.request().method() === 'DELETE' ? route.fulfill({
+                status: 409,
+                json: { detail: {
+                    error: 'account_choice_required', connector_id: 'google', choices: ['jane@example.com', 'sam@example.com'],
+                    message: 'google has 2 connected accounts (jane@example.com, sam@example.com). Choose one to disconnect, or disconnect them all.',
+                } },
+            }) : route.fallback()));
+            const tile = page.locator('.connector-tile', { hasText: 'Google' });
+            await tile.locator('.connector-tile-header').click();
+            await tile.locator('.configure-actions .btn-secondary').click();
+            const ask = page.getByRole('alertdialog');
+            await expect(ask.locator('.confirm-accounts li')).toHaveCount(2);
+            await shot(page, `connectors-${locale}-disconnect-all`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.confirm-sheet', 'bdi')).toEqual([]);
         });
 
         test('phone width: a long account stays on screen', async ({ page }) => {
@@ -3740,6 +3938,11 @@ for (const locale of ['ar', 'en']) {
         const row = page.locator('.status-row--has-hint').first();
         await expect(row).toBeVisible();
         await expect(row).not.toContainText(/gaia init|Cloud providers still work/);
+        // The backend's sentence is worded in the app's language, in the row and in the banner.
+        if (locale === 'ar') {
+            await expect(row).toContainText('لا يشغّل خادم النماذج هذا');
+            await expect(page.locator('.connection-banner')).toContainText('لا يشغّل خادم النماذج هذا');
+        }
         await expect(page.getByRole('dialog').locator('.settings-card .btn-primary')).toHaveCount(0);
         await expect(page.locator('.connection-banner')).not.toContainText('gaia init');
         await shot(page, `advanced-${locale}-server-down`);
@@ -5189,7 +5392,8 @@ test('the library path row fits a phone', async ({ page }) => {
 });
 
 test('each line of an email being approved takes its own direction', async ({ page }) => {
-    const text = 'To: dana@example.com\nSubject: Hello\n\nمرحبا، هذا اختبار.';
+    // The header becomes labelled rows; the body keeps a line per direction.
+    const text = 'To: dana@example.com\nSubject: Hello\n\nHello Dana,\nمرحبا، هذا اختبار.';
     const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
     // The prompt lasts only while its stream is open, which a routed response can't do.
     await open(page, `#${ANSWER_SESSION}`, 'ar', (p) =>
@@ -5226,6 +5430,33 @@ test('each line of an email being approved takes its own direction', async ({ pa
     expect(gaps.english).toBeLessThan(40);
     expect(gaps.arabic).toBeLessThan(40);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`an email being approved names its sending account on its own row (${locale})`, async ({ page }) => {
+        const text = 'From: jane.work@example.com\nTo: priya@example.com\nSubject: The deck\n\nHi Priya, the deck is attached.';
+        const event = { type: 'permission_request', tool: 'send_now', args: { _exact_text: text }, confirm_id: 'c1' };
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.addInitScript((line) => {
+                const realFetch = window.fetch;
+                window.fetch = (input, init) =>
+                    String(input).endsWith('/chat/send')
+                        ? Promise.resolve(new Response(new ReadableStream({
+                            start: (controller) => controller.enqueue(new TextEncoder().encode(line)),
+                        }), { headers: { 'Content-Type': 'text/event-stream' } }))
+                        : realFetch(input, init);
+            }, `data: ${JSON.stringify(event)}\n\n`),
+        );
+        await page.locator('textarea').last().fill('send it');
+        await page.keyboard.press('Enter');
+        const header = page.getByTestId('perm-mail-header');
+        await expect(header).toBeVisible();
+        await expect(header.locator('.perm-mail-from bdi')).toHaveAttribute('dir', 'ltr');
+        if (locale === 'ar') await expect(header.locator('dt').first()).toContainText('من');
+        await page.locator('.perm-card').scrollIntoViewIfNeeded();
+        await shot(page, `approval-from-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 /** The desktop app's updater in a given state; the browser preview has none. */
 function withUpdater(update: Record<string, unknown>) {

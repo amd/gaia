@@ -19,7 +19,7 @@ import (
 // looks exactly like never having installed it.
 func TestStatusNamesAnUnreadableInstallWithTheServiceDown(t *testing.T) {
 	home := t.TempDir()
-	dir := filepath.Join(home, ".gaia", "agents", "email")
+	dir := filepath.Join(home, ".gaia", "agents", "notes")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestStatusNamesAnUnreadableInstallWithTheServiceDown(t *testing.T) {
 
 	got := out.String()
 	if !strings.Contains(got, "Not listed:") ||
-		!strings.Contains(got, "'email' is not listed as installed") ||
+		!strings.Contains(got, "'notes' is not listed as installed") ||
 		!strings.Contains(got, "reinstall it") {
 		t.Fatalf("status did not name the unreadable install:\n%s", got)
 	}

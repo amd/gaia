@@ -4,6 +4,7 @@
 /** Pure helpers ChatView uses to turn the chat stream into messages. */
 
 import type { AgentStep, Message, RenderCardData, StreamEvent } from '../types';
+import { addCard } from './connectCards';
 
 /**
  * Safety-net regex to strip raw tool-call JSON from streaming content.
@@ -69,7 +70,7 @@ export function isEchoOfFailedTool(event: StreamEvent, steps: AgentStep[]): bool
 function cardsFromSteps(steps: AgentStep[] | undefined): RenderCardData[] | undefined {
     const cards = (steps || [])
         .filter((s) => typeof s.render === 'string' && s.render.length > 0)
-        .map((s) => ({ render: s.render as string, data: s.data }));
+        .reduce<RenderCardData[]>((acc, s) => addCard(acc, { render: s.render as string, data: s.data }), []);
     return cards.length > 0 ? cards : undefined;
 }
 

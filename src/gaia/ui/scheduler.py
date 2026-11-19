@@ -1657,7 +1657,11 @@ class Scheduler:
             try:
                 content = f"Error: {error}" if error else (result or "(no output)")
                 self._db.add_message(
-                    task.session_id, "assistant", content, ends_turn=True
+                    task.session_id,
+                    "assistant",
+                    content,
+                    ends_turn=True,
+                    failed=error is not None,
                 )
             except Exception as exc:
                 logger.error(

@@ -460,7 +460,7 @@ export interface PackageFile {
 
 /** The downloadable whole-package zip + its contents. */
 export interface PackageInfo {
-  /** Zip artifact filename, e.g. "agent-email-0.2.1.zip" (downloaded from the version dir). */
+  /** Zip artifact filename, e.g. "agent-gaia-0.2.1.zip" (downloaded from the version dir). */
   filename: string;
   /** Zip size in bytes; 0 if the artifact isn't found. */
   size_bytes: number;

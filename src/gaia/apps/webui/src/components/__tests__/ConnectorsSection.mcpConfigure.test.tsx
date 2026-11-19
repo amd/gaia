@@ -326,6 +326,24 @@ describe('MCP connector configure panel', () => {
         expect(within(tile).queryByText('Connected')).not.toBeInTheDocument();
     });
 
+    it('says Connected only once a check has started the server (#8360)', async () => {
+        let finish: (r: { ok: boolean; detail: string }) => void = () => {};
+        mocked.testConnector.mockReturnValue(new Promise((resolve) => { finish = resolve; }) as never);
+        await openTile(mcpRow({ id: 'mcp-memory', display_name: 'Memory', configured: true }));
+        const tile = document.querySelector('[data-connector-id="mcp-memory"]') as HTMLElement;
+        const status = () => tile.querySelector('.connector-status')?.textContent;
+
+        // Turned on, but nothing has started it yet.
+        expect(status()).toBe('Turned on');
+        expect(within(tile).queryByText('Connected')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+        await waitFor(() => expect(status()).toBe('Checking…'));
+
+        finish({ ok: true, detail: 'started, 1 tool' });
+        await waitFor(() => expect(status()).toBe('Connected'));
+    });
+
     it('does not blame the token when the server was only slow to start', async () => {
         mocked.testConnector.mockResolvedValue({
             ok: false,
