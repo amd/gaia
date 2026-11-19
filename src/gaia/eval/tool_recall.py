@@ -419,6 +419,36 @@ def measure_mcp_recall(agent, entries: Dict[str, Dict], probes) -> MCPRecallRepo
     return MCPRecallReport(len(probes), listed, jumps, misses)
 
 
+def search_reach(agent, entries: Dict[str, Dict], misses, hits: int) -> int:
+    """How many missed MCP tools ``search_tools`` would return for their request.
+
+    The menu of unlisted MCP tools tells the model to call ``search_tools``
+    when its list lacks a tool. This replays the tool half of that search,
+    ``ToolLoader.rank`` over every tool but ``search_tools``, top *hits*, for
+    each ``(tool, request)`` in *misses*. Whether a model makes the call is
+    model behavior, which only ``gaia eval agent`` measures.
+
+    Raises:
+        ValueError: *agent* has no loader to rank with.
+    """
+    from gaia.eval.tool_cost import with_mcp_tools
+
+    loader = agent.tool_loader
+    if loader is None:
+        raise ValueError("search_reach needs an agent with a tool loader")
+    found = 0
+    with with_mcp_tools(agent, entries):
+        docs = {
+            name: text
+            for name, text in loader.tool_docs(agent._tools_registry).items()
+            if name != "search_tools"
+        }
+        for tool, request in misses:
+            if tool in (name for name, _ in loader.rank(request, docs, hits)):
+                found += 1
+    return found
+
+
 def check_mcp_recall(
     on: MCPRecallReport,
     off: MCPRecallReport,

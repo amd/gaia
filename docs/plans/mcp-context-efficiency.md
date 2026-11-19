@@ -1,6 +1,6 @@
 # MCP Context Efficiency — Progressive Disclosure & Result Handling
 
-**Status:** Draft / not started
+**Status:** WS1 implemented (#1972). Measurement harness merged (#1971, #8294).
 **Related issues:** #688 (tool loader parent), #1449–#1451 (loader parts), #976/#1005 (MCP connectors + per-agent activation)
 **Source motivation:** [Anthropic — Code execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp)
 
@@ -105,6 +105,60 @@ selection and tool-wrapper layers — not the mechanism.
 *connected*. Target: on a session with ≥3 connected servers, first-turn MCP tool
 tokens drop ≥60% vs. eager registration, with no recall regression.
 
+### As built (#1972)
+
+The loader changed after this design was written (#6449): it no longer evicts.
+A session starts on CORE and moves to every tool at most once, and
+`search_tools` (in CORE) replaced `load_tools`. So on the flagship with memory
+on, MCP tools were already off the first turn. WS1 as shipped:
+
+- **MCP-only loader.** A profile with no `PROFILE_TOOL_CONFIGS` entry (`file`,
+  `data`, `web`) gets a loader whose core is every non-`_mcp_server` tool, read
+  from the live registry. It does nothing until the agent has MCP tools, and
+  never thins schemas: the agent's own tools go out exactly as without it,
+  plus `search_tools` once MCP tools are present. `chat` registers no
+  MCP tools and gets no loader.
+- **Memory off is unchanged.** The design's step 3 (drop the `_memory_store`
+  requirement when MCP tools are present) was left out: #4756 made memory off
+  skip the ~300 MB embedding model on purpose. The MCP-only loader stays out
+  with memory disabled and in the Agent UI's private and memory-off chats
+  (`_incognito`). Not changed here: on `doc`/`full`, a UI memory-off chat keeps
+  its memory store, so the profile loader runs there and loads the embedder,
+  as it has since #6449.
+- **Menu.** `format_unlisted_mcp_tools` (`src/gaia/mcp/mixin.py`) names the MCP
+  tools the list leaves out, one line per server with bare tool names
+  (`- calendar: create_event, list_events`), and points at `search_tools`,
+  which returns a tool's description when the model needs it. At most 40
+  names; past that a server's other tools are counted, names over 80 chars are
+  counted not shown, and the cut is logged. This replaces the design's
+  name + 60-char description per tool, which cost about 3x as much on 3 servers x 5
+  tools. `Agent._compose_system_prompt` renders it
+  last, after the filtered tool block, and only under a filter. It is empty on the full list,
+  so the slot primed for a jump still matches the jump's prompt.
+- **Activation lives in two packages.** Scoring and the MCP-only mode are in
+  core (`tool_loader.py`), the menu and its prompt position in core
+  (`mcp/mixin.py`, `agent.py`), and the activation rules in the flagship
+  package (`hub/agents/gaia/python/gaia_agent/chat_agent.py`).
+
+Measured with `python -m gaia.eval.tool_cost --mcp` (cl100k_base proxy
+tokenizer; selection uses the word-overlap stand-in embedder, so recall shows
+MCP tools take part in selection, not how well a real embedder ranks them):
+
+| Path, 3 servers x 5 tools | Native before | Native after | Text before | Text after |
+|---|--:|--:|--:|--:|
+| `web` profile, loader on | 1681 | 229 (−86%) | 516 | 132 (−74%) |
+| Flagship, memory on | 0 | 110 (menu) | 0 | 110 (menu) |
+
+- "After" is everything MCP tools add: the menu, and on the `web` path also
+  `search_tools`, which only MCP tools register there.
+- The flagship with memory on already sent no MCP tools on the first turn, so
+  there the menu is a new cost (72 / 110 / 148 tokens on 1 / 3 / 5 servers),
+  paid so a native model can learn a connector tool exists.
+- Recall on 5 x 5 is unchanged on the flagship (72%, all by moving to every
+  tool); 76% on the `web` path, against 100% when it sent everything. Every
+  first turn there still lists all of the agent's own tools. `search_tools` returns all 7 tools the flagship's first turn
+  missed, in its top 5, for the same request (same stand-in embedder).
+
 ### Design
 
 1. **Tag MCP tools as dynamically-covered.** MCP registry entries already carry
@@ -130,11 +184,11 @@ tokens drop ≥60% vs. eager registration, with no recall regression.
    - **Fix:** add an **MCP-only gating mode**. When the loader is activated *by
      MCP presence* (rather than the doc-profile toggle), the effective CORE is
      "all non-MCP registry tools" (static tools always pass through), and only
-     `_mcp_server`-tagged tools are subject to selection/eviction. The doc-profile
-     path is unchanged.
-   - Build the loader when `_mcp_manager` has ≥1 connected server *and* an embedder
-     is available, independent of `prompt_profile`. Additional trigger, not a
-     replacement for the doc toggle.
+     `_mcp_server`-tagged tools wait for a jump (the loader no longer evicts).
+     The doc-profile path is unchanged.
+   - Build the loader when the toggle is on, independent of `prompt_profile`;
+     it acts once the agent has ≥1 MCP tool. An embedder failure session-disables
+     it loudly and the agent offers every tool, as on the other profiles.
    - `_dynamic_tools_active` currently also requires `_memory_store`. Memory gates
      only the SKILL signal; the loader runs fine on CORE+SEMANTIC without it.
      Decouple **only** under the MCP-present condition, to avoid perturbing the
@@ -143,6 +197,7 @@ tokens drop ≥60% vs. eager registration, with no recall regression.
 4. **Compact "unloaded MCP tools" menu — placed in the volatile tail, NOT the
    mixin head (critical correction).** Mirror the article's name + truncated
    (~60 char) menu so unloaded tool *names* stay discoverable at ~1 line each.
+   (As built it is one line per server with names only; see "As built".)
    **Placement matters:** mixin fragments compose at the **front** of the prompt
    (`_compose_system_prompt`, `agent.py:611-614`) while the tool block is placed
    **last** to keep the KV prefix warm (`agent.py:621-647`). A per-turn-changing
@@ -150,11 +205,11 @@ tokens drop ≥60% vs. eager registration, with no recall regression.
    the cache on every expansion — defeating the loader. Render the menu **inside
    the tools block region** (adjacent to the loaded-tool list, in the volatile
    tail) so it moves with the filter, not against the cache.
-   - The instruction points only at **`load_tools`** (the Part 2 escape hatch).
-     `search_tools` does not exist in GAIA — do not reference it.
+   - The instruction points only at **`search_tools`**, which replaced
+     `load_tools` in #6449 and is in every profile's CORE.
    - **This menu is the only discovery channel for native tool-calling models:**
      an unloaded MCP tool is absent from `_openai_tools`, so the model literally
-     cannot emit it and must `load_tools` first. Menu correctness + placement are
+     cannot emit it and must call `search_tools` first. Menu correctness + placement are
      therefore load-bearing, not polish.
    - Cap the menu (e.g. 40 tools) and `log()` truncation — no silent cap.
 
@@ -163,13 +218,14 @@ tokens drop ≥60% vs. eager registration, with no recall regression.
    (`tool_loader.py:177`) already handles new/removed tools across `reload()`.
 
 ### Integration points
-- `src/gaia/mcp/mixin.py` — menu fragment in `get_mcp_client_system_prompt`;
-  no change to registration (tools stay in the global registry, loader gates
+- `src/gaia/mcp/mixin.py` — `format_unlisted_mcp_tools`, the menu text; no
+  change to registration (tools stay in the registry, the loader gates
   rendering only).
-- `src/gaia/agents/base/tool_loader.py` — MCP-aware `validate_registry`.
-- `hub/agents/chat/python/gaia_agent_chat/agent.py` — additional activation
-  trigger in `_maybe_build_tool_loader` / `_dynamic_tools_active`.
-- Base `Agent` — no interface change; `_select_tools_for_turn` already the hook.
+- `src/gaia/agents/base/tool_loader.py` — `mcp_only` mode; no
+  `validate_registry` change.
+- `src/gaia/agents/base/agent.py` — `_unlisted_tools_menu` hook, rendered last.
+- `hub/agents/gaia/python/gaia_agent/chat_agent.py` — activation in
+  `_maybe_build_tool_loader` / `_dynamic_tools_active`, and the menu override.
 
 ### Edge cases
 - MCP tools that share a bundle-like cohesion (a server's read+write pair):

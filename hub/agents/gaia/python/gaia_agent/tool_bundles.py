@@ -680,9 +680,8 @@ class ProfileToolConfig:
     optional: FrozenSet[str] = frozenset()
 
 
-#: Profiles that support dynamic tool loading. A profile absent from this map
-#: gets no loader at all (``_maybe_build_tool_loader`` returns ``None``) and
-#: stays on the full-registry legacy path.
+#: Profiles whose own tools the loader gates. A profile absent from this map
+#: gets an MCP-only loader that gates MCP tools alone (``chat`` gets none).
 PROFILE_TOOL_CONFIGS: Dict[str, ProfileToolConfig] = {
     "doc": ProfileToolConfig(core=DOC_CORE_TOOLS, bundles=DOC_BUNDLES),
     "full": ProfileToolConfig(

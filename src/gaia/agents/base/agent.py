@@ -4192,7 +4192,19 @@ Do NOT wrap conversational replies in JSON.
         if tool_filter is not None and tools_block is not None:
             parts.append(tools_block)
 
+        # Changes with the filter, so it follows everything that does not.
+        if tool_filter is not None:
+            parts.append(self._unlisted_tools_menu())
+
         return "\n\n".join(p for p in parts if p)
+
+    def _unlisted_tools_menu(self) -> str:
+        """Text naming tools a filtered list leaves out, for the prompt's end.
+
+        Default: none. It must depend only on the active filter and the
+        registry, so an unchanged list renders the same bytes.
+        """
+        return ""
 
     # ── per-turn performance recording (dev mode, opt-in) ──────────────────
 

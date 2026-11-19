@@ -333,6 +333,10 @@ adds the tools it needs, and unloading it takes them away unless another loaded 
 them. The agent gets a tool's full documentation from `search_tools`, or automatically if it
 calls a tool with the wrong arguments.
 
+Tools from connected MCP servers wait the same way. Until a turn needs one, the prompt ends
+with a short menu naming them, one line per server, so the agent knows to find one with
+`search_tools`. The agent's own tools are never held back for them.
+
 This applies to local models, where every token is read on your hardware. Cloud models
 keep every tool in full. If the embedder is unreachable, the session offers every tool
 and logs a warning. Precedence is `GAIA_DYNAMIC_TOOLS`, then an explicit
