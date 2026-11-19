@@ -1,6 +1,6 @@
 ---
 name: office-docs
-description: Build real Office files with Python and check them before handing them over - Excel workbooks with live formulas and native charts, PowerPoint decks with native editable charts, Word documents with real headings and tables, and in-place .docx edits. Use when the user asks for a spreadsheet, workbook, financial model, summary or pivot-style table, a deck or slides, or a memo or report as a Word file.
+description: Create or edit Excel and Word files with Python and check them - .xlsx workbooks, invoices, trackers, budgets and pivot-style summaries with live formulas and native charts; .docx memos, letters, reports and filled-in templates with real headings and tables. Use when the user asks for a spreadsheet, workbook, Excel file, Word document, memo or .docx/.xlsx file. For presentations use slide-decks.
 license: MIT
 version: 1.0.0
 metadata:
@@ -27,33 +27,48 @@ metadata:
         returns:
           type: object
         atomic: true
+      - name: verify_document
+        description: Confirm a .docx or .pptx is a real Word or PowerPoint file and count its headings, tables, pictures, slides and charts. Never writes the file.
+        parameters:
+          file_path:
+            type: string
+            required: true
+        returns:
+          type: object
+        atomic: true
     provenance:
       source: starter-pack
 ---
 
 # Office Docs
 
-The deliverable is a file the user opens in Excel, PowerPoint or Word, not a
-description of one. Build it with code through `run_python`, then prove it
-works by checking the saved file: a file that opens is not yet a file that is
-right.
+The deliverable is a file the user opens in Excel, Word or PowerPoint, not a
+description of one. Build it with code through `run_python`, then check the
+saved file with this skill's tools: a file that opens is not yet a file that
+is right.
 
 ## Hard rules
 
-- **Excel results are formulas, not hard-coded values.** Raw data goes on its
-  own sheet; every total, ratio and pivot-style figure is a formula over it
-  (`=SUMIFS(...)`, `=SUM(...)`), so the workbook stays live when the user
-  edits it. Never compute a result in Python and write the number into the
-  cell.
-- **Verify before handing over.** For a workbook call
+- **Save with the library** (`Workbook.save`, `Document.save`,
+  `Presentation.save`). Never use write_file to create a .docx, .xlsx or
+  .pptx, and never save text, CSV, Markdown or hand-written XML under one of
+  those names.
+- **Excel totals are formulas, not hard-coded values.** Totals inside the
+  workbook are formulas over a data sheet (`=SUMIFS(...)`, `=SUM(...)`), so
+  it stays live when the user edits it. For inputs too large for a sheet,
+  write the pandas aggregate and label it as computed.
+- **Verify before handing over.** Workbook: call
   `office-docs/verify_workbook(file_path=...)`, fix every error it names,
-  rebuild and call it again; report numbers from its `computed_values`. For a
-  .pptx or .docx, reopen the saved file in a separate `run_python` call with
-  the check in its reference file.
-- **Compute every number from the source data** inside the snippet. Never
-  type figures you read off a page.
-- **The real file or nothing.** Never substitute CSV, Markdown or
-  hand-written XML and call it the requested file.
+  rebuild and call it again until `ok` is true. Report numbers from its
+  `computed_values`. When it returns `next` instead (LibreOffice is not
+  installed, so nothing was recalculated), compute the same figures with
+  pandas in `run_python`, report those, and say the workbook's formulas were
+  not recalculated. Word or PowerPoint file: call
+  `office-docs/verify_document(file_path=...)`; an error means the file is
+  not a real .docx or .pptx, so build it again with the library. Check its
+  counts against what you meant to build.
+- **Numbers come from the source data**, read by the snippet. Never type
+  figures you read off a page.
 - **Native charts**: `openpyxl.chart` in Excel, `shapes.add_chart` in
   PowerPoint. A matplotlib picture is not a chart.
 
@@ -75,7 +90,8 @@ right.
    the one their sources are in) and print it.
 4. Keep each `run_python` call small: build a big file in steps, each call
    opening the file the previous one saved.
-5. Verify the saved file, fix what it reports, and verify again.
+5. Verify the saved file with the tool, fix what it reports, and verify
+   again.
 6. Report only what the verification showed: the path, what is in the file,
    the key numbers as computed, and anything you could not do.
 
@@ -86,17 +102,15 @@ summary.append([name, f"=SUMIFS({sales},{region},A{i})"])  # right: a live formu
 summary.append([name, 270])                                 # wrong: a hard-coded value
 ```
 
-For a presentation of several slides, load the `slide-decks` skill if it is
-among the installed skills; otherwise read `references/powerpoint.md`.
+For any slide or deck, load the `slide-decks` skill if it is among the
+installed skills; otherwise read `references/powerpoint.md`.
 
 ## References (paths relative to this skill's folder)
 
 - `references/excel.md` - read before building any workbook: formula
-  references, `_xlfn.` functions, number formats, charts, a full example and
-  large data.
-- `references/powerpoint.md` - read before a one-off slide or short deck
-  when `slide-decks` is not available: 16:9 base, font sizes, chart styling,
-  alt text and the reopen check.
+  references, `_xlfn.` functions, number formats, charts, a full example,
+  what the check returns and large data.
 - `references/word.md` - read before creating or editing a .docx: heading
-  and list styles, table header rows, alt text, run-level edits and the
-  reopen check.
+  and list styles, table header rows, alt text and run-level edits.
+- `references/powerpoint.md` - the fallback when `slide-decks` is not
+  installed: a 16:9 base, font sizes, a native chart and alt text.

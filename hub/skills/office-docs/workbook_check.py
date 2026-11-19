@@ -20,6 +20,12 @@ Two passes:
   sheets that do not exist, literal error values, circular references,
   numeric functions over text or empty cells, SUMIFS-style ranges of different
   sizes, criteria that match no row, and arithmetic on text or empty cells.
+
+A finding that depends on what a cell evaluates to (a division by an empty
+cell, arithmetic on text) is an error only when a computed value confirms it.
+Without a recalculation it is a warning: Excel reads ``"5%"`` and
+``"2024-03-01"`` as numbers, and an empty cell is often an input the user has
+yet to fill in.
 """
 
 from __future__ import annotations
@@ -27,10 +33,12 @@ from __future__ import annotations
 import fnmatch
 import re
 import subprocess
+import zipfile
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import IO, Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from gaia.logger import get_logger
 from gaia.skills.context import (
@@ -92,9 +100,28 @@ _CONDITIONAL = {
 }
 _SINGLE_CONDITION = frozenset({"SUMIF", "AVERAGEIF", "COUNTIF"})
 
-#: Where a formula's result is far more often wrong than the formula looks.
+#: Functions whose result is a total or a count: the values worth reporting.
+AGGREGATE_FUNCTIONS = (
+    NUMERIC_FUNCTIONS
+    | frozenset(_CONDITIONAL)
+    | _SINGLE_CONDITION
+    | frozenset({"COUNT", "COUNTA", "COUNTBLANK", "AVERAGEA", "SUBTOTAL", "AGGREGATE"})
+)
+
+#: A formula inside one of these may never evaluate the branch that looks
+#: broken, so value-dependent guesses about it are not made.
+_GUARDS = frozenset(
+    {"IFERROR", "IFNA", "IF", "IFS", "ISERROR", "ISERR", "ISNA", "ISNUMBER", "ISBLANK"}
+)
+#: Functions whose arguments name their own variables.
+_BINDERS = frozenset({"LET", "LAMBDA"})
+
 MAX_REPORTED = 50
 MAX_VALUES = 60
+#: Above these the workbook is refused: it is loaded twice, and a check that
+#: outlasts the tool's time limit tells the agent nothing.
+MAX_FILE_BYTES = 50 * 1024 * 1024
+MAX_CELLS = 500_000
 #: LibreOffice's first start creates its profile, which takes a while.
 RECALC_TIMEOUT_S = 180
 
@@ -114,6 +141,20 @@ _COLS = re.compile(r"^([A-Z]{1,3}):([A-Z]{1,3})$")
 _ROWS = re.compile(r"^(\d{1,7}):(\d{1,7})$")
 _CRITERION_OP = re.compile(r"^(<=|>=|<>|=|<|>)(.*)$", re.DOTALL)
 _PREFIXES = ("_xlfn._xlws.", "_xlfn.", "_xlws.")
+#: How Excel stores a LET or LAMBDA variable in the file.
+_PARAMETER_PREFIX = "_xlpm."
+_SHEET_XML = re.compile(r"^xl/worksheets/[^/]+\.xml$")
+_CELL_TAG = re.compile(rb"<c[ >]")
+_TOTAL_LABEL = re.compile(r"\b(grand\s+)?(sub)?totals?\b", re.IGNORECASE)
+_SUMMARY_SHEET = re.compile(r"summary|total|dashboard|overview|report", re.IGNORECASE)
+
+
+class NotAWorkbook(Exception):
+    """The file cannot be opened as an .xlsx workbook."""
+
+
+class WorkbookTooLarge(Exception):
+    """The workbook is over :data:`MAX_FILE_BYTES` or :data:`MAX_CELLS`."""
 
 
 @dataclass(frozen=True)
@@ -212,6 +253,10 @@ class _Sheets:
         self.cells: Dict[str, Dict[Tuple[int, int], Any]] = {}
         self.bounds: Dict[str, Tuple[int, int]] = {}
         self.formulas: Dict[str, Dict[Tuple[int, int], str]] = {}
+        # Rows holding a formula, per sheet and column, sorted: what lets a
+        # reference find the formulas it covers without scanning the sheet.
+        self.formula_rows: Dict[str, Dict[int, List[int]]] = {}
+        self.cell_count = 0
         for ws in wb.worksheets:
             values: Dict[Tuple[int, int], Any] = {}
             formulas: Dict[Tuple[int, int], str] = {}
@@ -225,8 +270,16 @@ class _Sheets:
                         formulas[(cell.row, cell.column)] = text
             self.cells[ws.title] = values
             self.formulas[ws.title] = formulas
+            by_col: Dict[int, List[int]] = {}
+            for r, c in formulas:
+                by_col.setdefault(c, []).append(r)
+            for rows in by_col.values():
+                rows.sort()
+            self.formula_rows[ws.title] = by_col
+            self.cell_count += len(values)
             self.bounds[ws.title] = (ws.max_row or 1, ws.max_column or 1)
         self.names = _defined_names(wb)
+        self.tables = _table_bodies(wb)
 
     def sheet(self, name: Optional[str], default: str) -> Optional[str]:
         if name is None:
@@ -249,6 +302,21 @@ class _Sheets:
         for (r, c), value in sorted(cells.items()):
             if ref.min_row <= r <= ref.max_row and ref.min_col <= c <= ref.max_col:
                 yield (r, c), value
+
+    def formulas_in(self, ref: Ref) -> Iterable[Tuple[int, int]]:
+        """``(row, col)`` of every formula cell inside *ref*."""
+        by_col = self.formula_rows.get(ref.sheet, {})
+        if ref.max_col - ref.min_col + 1 <= len(by_col):
+            cols: Iterable[int] = range(ref.min_col, ref.max_col + 1)
+        else:
+            cols = [c for c in by_col if ref.min_col <= c <= ref.max_col]
+        for c in cols:
+            rows = by_col.get(c)
+            if not rows:
+                continue
+            start = bisect_left(rows, ref.min_row)
+            for r in rows[start : bisect_right(rows, ref.max_row)]:
+                yield r, c
 
     def parse_ref(self, text: str, current: str) -> Tuple[Optional[Ref], Optional[str]]:
         """``(Ref, None)``, ``(None, problem)``, or ``(None, None)`` when unknowable.
@@ -307,11 +375,13 @@ class _Sheets:
     def _resolve_name(
         self, name: str, current: str
     ) -> Tuple[Optional[Ref], Optional[str]]:
+        if name.lower() in self.tables:
+            return self.tables[name.lower()], None
         target = self.names.get(name.lower())
         if target is None:
             return None, (
-                f"uses the name '{name}', which is not a cell reference or a "
-                "defined name in this workbook — #NAME?"
+                f"uses the name '{name}', which is not a cell reference, a "
+                "defined name or a table in this workbook — #NAME?"
             )
         if "!" not in target:
             return None, None
@@ -331,6 +401,25 @@ def _defined_names(wb: Any) -> Dict[str, str]:
             text = getattr(defined, "attr_text", None) or getattr(defined, "value", "")
             names[str(key).lower()] = str(text)
     return names
+
+
+def _table_bodies(wb: Any) -> Dict[str, Optional[Ref]]:
+    """Each table's data rows by lower-cased name: what ``=ROWS(Sales)`` means."""
+    from openpyxl.utils import range_boundaries
+
+    tables: Dict[str, Optional[Ref]] = {}
+    for ws in wb.worksheets:
+        for table in ws.tables.values():
+            min_col, min_row, max_col, max_row = range_boundaries(table.ref)
+            # An absent headerRowCount means one header row.
+            header = table.headerRowCount
+            min_row += 1 if header is None else int(header)
+            max_row -= int(table.totalsRowCount or 0)
+            body = None
+            if min_row <= max_row:
+                body = Ref(ws.title, min_col, min_row, max_col, max_row)
+            tables[str(table.name).lower()] = body
+    return tables
 
 
 def _function_name(token_value: str) -> str:
@@ -358,13 +447,18 @@ class _Call:
     args: List[List[Any]]
 
 
-def _tokenize(formula: str) -> Tuple[List[Any], List[_Call]]:
-    """The formula's tokens and its function calls with their direct arguments."""
+def _tokenize(formula: str) -> Tuple[List[Any], List[_Call], set]:
+    """The formula's tokens, its function calls, and the guarded tokens.
+
+    A call lists its direct arguments. A token is guarded (by ``id``) when it
+    sits inside a :data:`_GUARDS` call.
+    """
     from openpyxl.formula.tokenizer import Token, Tokenizer
 
     tokens = [t for t in Tokenizer(formula).items if t.type != Token.WSPACE]
     calls: List[_Call] = []
     stack: List[_Call] = []
+    guarded: set = set()
     for token in tokens:
         if token.type == Token.FUNC and token.subtype == Token.OPEN:
             call = _Call(_function_name(token.value), [[]])
@@ -379,7 +473,24 @@ def _tokenize(formula: str) -> Tuple[List[Any], List[_Call]]:
             stack[-1].args.append([])
         elif stack:
             stack[-1].args[-1].append(token)
-    return tokens, calls
+            if any(call.name in _GUARDS for call in stack):
+                guarded.add(id(token))
+    return tokens, calls, guarded
+
+
+def _local_names(calls: List[_Call]) -> set:
+    """Lower-cased variables that LET and LAMBDA calls declare."""
+    names: set = set()
+    for call in calls:
+        if call.name not in _BINDERS:
+            continue
+        # LET(name, value, ..., result); LAMBDA(parameter, ..., body).
+        step = 2 if call.name == "LET" else 1
+        for arg in call.args[:-1][::step]:
+            token = _single_operand(arg)
+            if token is not None:
+                names.add(str(token.value).lower())
+    return names
 
 
 def _single_operand(arg: List[Any]) -> Optional[Any]:
@@ -424,9 +535,19 @@ class _Checker:
         self.sheets = sheets
         self.errors: List[Dict[str, Any]] = []
         self.warnings: List[Dict[str, Any]] = []
+        # Errors only if the cell evaluates to one; _settle decides each.
+        self.guesses: List[Tuple[Tuple[str, int, int], Dict[str, Any]]] = []
         self.deps: Dict[Tuple[str, int, int], set] = {}
+        self.aggregates: set = set()
+        self._seen: set = set()
+        self._profiles: Dict[Ref, Dict[str, Any]] = {}
 
-    def _add(self, bucket, sheet, row, col, formula, problem, error=None):
+    def _entry(self, sheet, row, col, formula, problem, error=None):
+        """A finding, or None when this cell already has the same one."""
+        key = (sheet, row, col, problem)
+        if key in self._seen:
+            return None
+        self._seen.add(key)
         entry = {
             "cell": cell_label(sheet, row, col),
             "formula": formula,
@@ -434,7 +555,12 @@ class _Checker:
         }
         if error:
             entry["error"] = error
-        bucket.append(entry)
+        return entry
+
+    def _add(self, bucket, sheet, row, col, formula, problem, error=None):
+        entry = self._entry(sheet, row, col, formula, problem, error)
+        if entry is not None:
+            bucket.append(entry)
 
     def run(self) -> None:
         for sheet, formulas in self.sheets.formulas.items():
@@ -445,7 +571,7 @@ class _Checker:
         from openpyxl.formula.tokenizer import Token, TokenizerError
 
         try:
-            tokens, calls = _tokenize(formula)
+            tokens, calls, guarded = _tokenize(formula)
         except TokenizerError as e:
             self._add(self.errors, sheet, row, col, formula, f"cannot be parsed: {e}")
             return
@@ -453,10 +579,18 @@ class _Checker:
         def error(problem: str, code: Optional[str] = None) -> None:
             self._add(self.errors, sheet, row, col, formula, problem, code)
 
+        def guess(problem: str, code: str) -> None:
+            entry = self._entry(sheet, row, col, formula, problem, code)
+            if entry is not None:
+                self.guesses.append(((sheet, row, col), entry))
+
         def warn(problem: str) -> None:
             self._add(self.warnings, sheet, row, col, formula, problem)
 
         deps = self.deps.setdefault((sheet, row, col), set())
+        local = _local_names(calls)
+        if any(call.name in AGGREGATE_FUNCTIONS for call in calls):
+            self.aggregates.add((sheet, row, col))
 
         refs: Dict[int, Ref] = {}
         for token in tokens:
@@ -477,28 +611,28 @@ class _Checker:
                     token.value if token.value in ERROR_VALUES else None,
                 )
             elif token.type == Token.OPERAND and token.subtype == Token.RANGE:
+                name = token.value.lower()
+                if name in local or name.startswith(_PARAMETER_PREFIX):
+                    continue
                 ref, problem = self.sheets.parse_ref(token.value, sheet)
                 if problem:
                     error(problem, "#NAME?" if "#NAME?" in problem else "#REF!")
                 if ref is not None:
                     refs[id(token)] = ref
-                    self._note_deps(deps, ref)
+                    deps.update(
+                        (ref.sheet, r, c) for r, c in self.sheets.formulas_in(ref)
+                    )
 
-        self._check_arithmetic(tokens, refs, error, warn)
+        self._check_arithmetic(tokens, refs, guarded, guess, warn)
         for call in calls:
             self._check_call(call, refs, error, warn)
 
-    def _note_deps(self, deps: set, ref: Ref) -> None:
-        for r, c in self.sheets.formulas.get(ref.sheet, {}):
-            if ref.contains(ref.sheet, r, c):
-                deps.add((ref.sheet, r, c))
-
-    def _check_arithmetic(self, tokens, refs, error, warn) -> None:
+    def _check_arithmetic(self, tokens, refs, guarded, guess, warn) -> None:
         from openpyxl.formula.tokenizer import Token
 
         for i, token in enumerate(tokens):
             ref = refs.get(id(token))
-            if ref is None or not ref.is_cell:
+            if ref is None or not ref.is_cell or id(token) in guarded:
                 continue
             value = self.sheets.value(ref.sheet, ref.min_row, ref.min_col)
             prev = tokens[i - 1] if i > 0 else None
@@ -514,7 +648,7 @@ class _Checker:
             divisor = infix(prev) and prev.value == "/"
             if value is None:
                 if divisor:
-                    error(
+                    guess(
                         f"divides by {ref.label()}, which is empty — #DIV/0!", "#DIV/0!"
                     )
                 elif in_arithmetic:
@@ -526,16 +660,19 @@ class _Checker:
             if _formula_text(value):
                 continue
             if divisor and _as_number(value) == 0 and not isinstance(value, str):
-                error(f"divides by {ref.label()}, which is 0 — #DIV/0!", "#DIV/0!")
+                guess(f"divides by {ref.label()}, which is 0 — #DIV/0!", "#DIV/0!")
             elif in_arithmetic and isinstance(value, str) and _as_number(value) is None:
-                error(
+                guess(
                     f"does arithmetic with {ref.label()}, which holds the text "
-                    f"{value[:40]!r} — #VALUE!",
+                    f"{value[:40]!r} — #VALUE! unless Excel can read that text "
+                    "as a number or a date. Store it as a number or a date.",
                     "#VALUE!",
                 )
 
     def _range_profile(self, ref: Ref) -> Dict[str, Any]:
         """Counts of numbers, formulas and text in *ref* (header text excluded)."""
+        if ref in self._profiles:
+            return self._profiles[ref]
         numbers = formulas = 0
         text: List[Tuple[Tuple[int, int], Any]] = []
         first_data_row = None
@@ -552,12 +689,14 @@ class _Checker:
         body_text = [
             t for t in text if first_data_row is not None and t[0][0] > first_data_row
         ]
-        return {
+        profile = {
             "numbers": numbers,
             "formulas": formulas,
             "text": text,
             "body_text": body_text,
         }
+        self._profiles[ref] = profile
+        return profile
 
     def _check_numeric_range(self, fn: str, ref: Ref, error, warn) -> None:
         profile = self._range_profile(ref)
@@ -579,9 +718,11 @@ class _Checker:
                 "returns 0. It probably points at the wrong column or rows."
             )
         else:
-            error(
+            # A template's entry cells are empty until the user fills them in.
+            warn(
                 f"{fn} over {ref.label()} covers only empty cells, so it returns "
-                "0. It probably points at the wrong column or rows."
+                "0. That is fine for cells the user will fill in; otherwise it "
+                "points at the wrong column or rows."
             )
 
     def _check_call(self, call: _Call, refs, error, warn) -> None:
@@ -774,10 +915,68 @@ def recalculate(path: Path) -> Path:
     return result
 
 
-def _computed_values(path: Path) -> Dict[str, Dict[Tuple[int, int], Any]]:
-    from openpyxl import load_workbook
+def _refuse_if_too_large(path: Path, stream: IO[bytes]) -> None:
+    """Raise unless the workbook is small enough to load and check in time.
 
-    wb = load_workbook(path, data_only=True)
+    Cells are counted from the sheets' XML without parsing it, so a workbook
+    that would take minutes to load is refused in a second or two.
+    """
+    smaller = (
+        "Save the summary sheets and the rows they are built from as a "
+        "smaller workbook and check that, and say the full workbook was not "
+        "checked."
+    )
+    size = stream.seek(0, 2)
+    stream.seek(0)
+    if size > MAX_FILE_BYTES:
+        raise WorkbookTooLarge(
+            f"{path} is {size / 1048576:.0f} MB; verify_workbook checks "
+            f"workbooks up to {MAX_FILE_BYTES // 1048576} MB. {smaller}"
+        )
+    cells = 0
+    try:
+        with zipfile.ZipFile(stream) as archive:
+            for info in archive.infolist():
+                if not _SHEET_XML.match(info.filename):
+                    continue
+                with archive.open(info) as part:
+                    tail = b""
+                    while chunk := part.read(1 << 20):
+                        # The tail catches a tag split across two chunks.
+                        cells += len(_CELL_TAG.findall(tail + chunk))
+                        tail = chunk[-2:]
+                        if cells > MAX_CELLS:
+                            raise WorkbookTooLarge(
+                                f"{path} has more than {MAX_CELLS:,} cells, "
+                                f"the most verify_workbook checks. {smaller}"
+                            )
+    except zipfile.BadZipFile as e:
+        raise NotAWorkbook(str(e)) from e
+    finally:
+        stream.seek(0)
+
+
+def _load(source: Any, *, data_only: bool = False) -> Any:
+    """``load_workbook``, with an unreadable file reported as :class:`NotAWorkbook`."""
+    from openpyxl import load_workbook
+    from openpyxl.utils.exceptions import InvalidFileException
+
+    try:
+        return load_workbook(source, data_only=data_only)
+    except (
+        InvalidFileException,
+        zipfile.BadZipFile,
+        KeyError,
+        ValueError,
+        OSError,
+    ) as e:
+        # What openpyxl raises for a file that is not a valid workbook.
+        raise NotAWorkbook(str(e) or type(e).__name__) from e
+
+
+def _computed_values(source: Any) -> Dict[str, Dict[Tuple[int, int], Any]]:
+    """Each cell's stored value, from a path or an open binary file."""
+    wb = _load(source, data_only=True)
     try:
         return {
             ws.title: {
@@ -800,95 +999,166 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-#: Static guesses a computed value can overrule: whether text or an empty cell
-#: actually reaches the arithmetic depends on branches (IF, IFERROR) the static
-#: pass does not evaluate.
-_EVALUATION_DEPENDENT = frozenset({"#VALUE!", "#DIV/0!"})
+def _is_error_value(value: Any) -> bool:
+    return isinstance(value, str) and value in ERROR_VALUES
 
 
-def _reconcile(
+def _settle(
     checker: _Checker,
     sheets: _Sheets,
-    computed: Dict[str, Dict[Tuple[int, int], Any]],
-) -> Dict[str, Any]:
-    """Fold computed values into the findings; return a sample of them."""
+    computed: Optional[Dict[str, Dict[Tuple[int, int], Any]]],
+) -> None:
+    """Decide each value-dependent guess, then add the error values computed.
+
+    A guess is an error when the cell's computed value is an error, and a
+    warning otherwise: whether text or an empty cell actually breaks the
+    arithmetic depends on how the spreadsheet evaluates it.
+    """
+    for (sheet, r, c), entry in checker.guesses:
+        value = None if computed is None else computed.get(sheet, {}).get((r, c))
+        if _is_error_value(value):
+            entry["computed"] = value
+            checker.errors.append(entry)
+            continue
+        code = entry.pop("error")
+        if value is None:
+            entry["possible_error"] = code
+            entry[
+                "problem"
+            ] += " The formulas were not recalculated, so this is not confirmed."
+        else:
+            entry["problem"] += (
+                f" The computed value is {_jsonable(value)!r}, not an error; "
+                "check the cell it names holds what the formula expects."
+            )
+        checker.warnings.append(entry)
+    if computed is None:
+        return
     by_cell: Dict[str, List[Dict[str, Any]]] = {}
     for entry in checker.errors:
         by_cell.setdefault(entry["cell"], []).append(entry)
-    values: Dict[str, Any] = {}
-    overruled: List[Tuple[Dict[str, Any], Any]] = []
     for sheet, formulas in sheets.formulas.items():
+        values = computed.get(sheet, {})
         for (r, c), formula in formulas.items():
-            value = computed.get(sheet, {}).get((r, c))
-            label = cell_label(sheet, r, c)
-            is_error = isinstance(value, str) and value in ERROR_VALUES
-            if is_error and label not in by_cell:
+            value = values.get((r, c))
+            if not _is_error_value(value):
+                continue
+            known = by_cell.get(cell_label(sheet, r, c))
+            if known is None:
                 checker._add(
                     checker.errors, sheet, r, c, formula, f"evaluates to {value}", value
                 )
-            for entry in by_cell.get(label, []):
-                if is_error:
+            else:
+                for entry in known:
                     entry["computed"] = value
-                elif entry.get("error") in _EVALUATION_DEPENDENT:
-                    overruled.append((entry, value))
-            if len(values) < MAX_VALUES:
-                values[label] = _jsonable(value)
-    for entry, value in overruled:
-        checker.errors.remove(entry)
-        entry["problem"] += (
-            f"; the recalculation computed {_jsonable(value)!r} "
-            "without an error, so check whether that branch can be reached"
-        )
-        entry.pop("error", None)
-        checker.warnings.append(entry)
-    return values
 
 
+def _reported_values(
+    checker: _Checker,
+    sheets: _Sheets,
+    computed: Dict[str, Dict[Tuple[int, int], Any]],
+) -> Tuple[Dict[str, Any], int]:
+    """Up to :data:`MAX_VALUES` computed values and how many there are in all.
+
+    When there are more, the ones a person reports come first: aggregate
+    formulas, rows labelled as totals and summary sheets, then later sheets.
+    """
+    cells = [
+        (index, sheet, r, c)
+        for index, (sheet, formulas) in enumerate(sheets.formulas.items())
+        for (r, c) in formulas
+        if computed.get(sheet, {}).get((r, c)) is not None
+    ]
+    total = len(cells)
+    if total > MAX_VALUES:
+        total_rows = {
+            sheet: {
+                r
+                for (r, _), value in values.items()
+                if isinstance(value, str)
+                and not value.startswith("=")
+                and _TOTAL_LABEL.search(value)
+            }
+            for sheet, values in sheets.cells.items()
+        }
+
+        def rank(cell: Tuple[int, str, int, int]) -> Tuple[int, int, int, int]:
+            index, sheet, r, c = cell
+            score = (
+                2 * ((sheet, r, c) in checker.aggregates)
+                + 2 * (r in total_rows[sheet])
+                + bool(_SUMMARY_SHEET.search(sheet))
+            )
+            return (-score, -index, r, c)
+
+        cells = sorted(sorted(cells, key=rank)[:MAX_VALUES])
+    return {
+        cell_label(sheet, r, c): _jsonable(computed[sheet][(r, c)])
+        for _, sheet, r, c in cells
+    }, total
+
+
+#: What ``summary`` says for a workbook of typed numbers.
+NO_FORMULAS = (
+    "No formulas: every total here is a typed value. Rewrite totals as "
+    "formulas over the data, or state that they were computed in Python."
+)
 #: Why the formulas were not computed, when the caller passes no recalculator.
-STATIC_ONLY_NOTE = "Recalculation was not requested; static checks only."
-NO_LIBREOFFICE_NOTE = (
-    "LibreOffice is not installed, so the formulas were not computed. "
-    "Static checks ran; an error that only shows in a computed value "
-    "can still be missed."
+NOT_REQUESTED = "recalculation was not requested"
+NO_LIBREOFFICE = "LibreOffice is not installed"
+#: What to do when there are no computed values to report from.
+NOT_RECALCULATED_NEXT = (
+    "Formulas were not recalculated ({reason}). Compute the same figures with "
+    "pandas in run_python and report those; say the workbook's formulas were "
+    "not recalculated."
 )
 
 
 def check_workbook(
     path: Path,
     *,
+    opener: Callable[[Path], IO[bytes]],
     recalculator: Optional[Callable[[Path], Path]] = None,
-    no_recalc_note: str = STATIC_ONLY_NOTE,
+    not_recalculated: str = NOT_REQUESTED,
 ) -> Dict[str, Any]:
     """Recalculate (when given a recalculator) and check every formula in *path*.
 
     Args:
         path: An existing .xlsx or .xlsm file.
+        opener: Opens *path* for reading bytes. The tool passes the skill
+            context's ``open_read``, so the file is read only if the agent
+            may read it.
         recalculator: Returns a recalculated copy of *path*, normally
             :func:`recalculate`. ``None`` runs the static checks only.
-        no_recalc_note: What the result says when there is no recalculator.
+        not_recalculated: Why there is no recalculator, for the result.
 
     Returns:
-        The tool result: errors, warnings, circular references, computed
-        values and whether a recalculation happened.
-    """
-    from openpyxl import load_workbook
+        The tool result: ``status`` (``success``, ``errors_found`` or
+        ``no_formulas``), ``ok``, errors, warnings, circular references,
+        computed values and whether a recalculation happened.
 
-    wb = load_workbook(path)
-    try:
-        sheets = _Sheets(wb)
-        sheet_info = [
-            {
-                "name": ws.title,
-                "rows": ws.max_row,
-                "columns": ws.max_column,
-                "formulas": len(sheets.formulas[ws.title]),
-                "charts": len(getattr(ws, "_charts", [])),
-                "images": len(getattr(ws, "_images", [])),
-            }
-            for ws in wb.worksheets
-        ]
-    finally:
-        wb.close()
+    Raises:
+        NotAWorkbook: *path* is not a workbook openpyxl can open.
+        WorkbookTooLarge: *path* is over the size or cell limit.
+    """
+    with opener(path) as stream:
+        _refuse_if_too_large(path, stream)
+        wb = _load(stream)
+        try:
+            sheets = _Sheets(wb)
+            sheet_info = [
+                {
+                    "name": ws.title,
+                    "rows": ws.max_row,
+                    "columns": ws.max_column,
+                    "formulas": len(sheets.formulas[ws.title]),
+                    "charts": len(getattr(ws, "_charts", [])),
+                    "images": len(getattr(ws, "_images", [])),
+                }
+                for ws in wb.worksheets
+            ]
+        finally:
+            wb.close()
 
     checker = _Checker(sheets)
     checker.run()
@@ -909,6 +1179,7 @@ def check_workbook(
     formula_count = sum(len(f) for f in sheets.formulas.values())
     result: Dict[str, Any] = {
         "status": "success",
+        "ok": True,
         "file_path": str(path),
         "sheets": sheet_info,
         "formula_count": formula_count,
@@ -916,22 +1187,23 @@ def check_workbook(
     }
 
     computed: Optional[Dict[str, Dict[Tuple[int, int], Any]]] = None
-    if formula_count and recalculator is None:
-        result["recalc_note"] = no_recalc_note
-    elif formula_count:
+    reason = not_recalculated
+    if formula_count and recalculator is not None:
         try:
             computed = _computed_values(recalculator(path))
             result["recalculated"] = True
             result["recalculated_with"] = "LibreOffice"
         except (RuntimeError, OSError) as e:
             logger.warning("Workbook recalculation failed for %s: %s", path, e)
+            reason = "the recalculation failed"
             result["recalc_error"] = (
                 f"Recalculation failed: {e}. Static checks ran; values were not "
                 "computed."
             )
 
     if computed is None and formula_count:
-        cached = _computed_values(path)
+        with opener(path) as stream:
+            cached = _computed_values(stream)
         if any(
             (r, c) in cached.get(sheet, {})
             for sheet, formulas in sheets.formulas.items()
@@ -940,11 +1212,20 @@ def check_workbook(
             computed = cached
             result["values_source"] = (
                 "cached values saved in the file by the last program that "
-                "calculated it"
+                "calculated it; they are stale if a cell was edited since"
             )
+        else:
+            result["next"] = NOT_RECALCULATED_NEXT.format(reason=reason)
 
+    _settle(checker, sheets, computed)
     if computed is not None:
-        result["computed_values"] = _reconcile(checker, sheets, computed)
+        values, total = _reported_values(checker, sheets, computed)
+        result["computed_values"] = values
+        if total > len(values):
+            result["computed_values_note"] = (
+                f"{len(values)} of {total} shown: totals and aggregate "
+                "formulas first, then later sheets."
+            )
 
     errors, warnings = checker.errors, checker.warnings
     result.update(
@@ -964,10 +1245,20 @@ def check_workbook(
             f"{len(errors)} and {len(warnings)}."
         )
     if not formula_count:
-        result["summary"] = (
-            "The workbook has no formulas, so there is nothing to check."
+        typed_numbers = any(
+            _is_number(value)
+            for cells in sheets.cells.values()
+            for value in cells.values()
         )
+        if typed_numbers:
+            result.update(status="no_formulas", ok=False, summary=NO_FORMULAS)
+        else:
+            result["summary"] = (
+                "The workbook has no formulas and no numbers, so there is "
+                "nothing to check."
+            )
     elif errors:
+        result.update(status="errors_found", ok=False)
         result["summary"] = (
             f"{len(errors)} formula error(s) and {len(warnings)} warning(s). Fix "
             "the formulas that build this workbook, save it, and run "

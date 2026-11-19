@@ -48,6 +48,11 @@ doc.save(path)
 print(path)
 ```
 
+Then call `office-docs/verify_document(file_path=path)`. An error means the
+file is not a real .docx: build it again with the code above, never with
+`write_file`. Compare its heading, table and picture counts with what you
+built.
+
 To edit an existing document, change the text of its runs so fonts and styles
 survive, cover table cells too, and save to a new name unless told to
 overwrite. A phrase split across two runs is missed by a run-level edit, so the
@@ -75,8 +80,9 @@ left = [m for p in paragraphs for m in pattern.findall(p.text)]
 print("replaced", hits, "left over", left)
 ```
 
-Verify by reopening, in a separate `run_python` call, then check any text the
-user asked to be present or removed:
+`verify_document` counts what is in the file. For a report, also check its
+structure in a separate `run_python` call (heading order, table header rows,
+alt text), and any text the user asked to be present or removed:
 
 ```python
 from docx import Document

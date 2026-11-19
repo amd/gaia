@@ -1,7 +1,8 @@
 # Excel workbooks (openpyxl)
 
-- Raw data on its own sheet, results on another. Results are **formulas** over
-  the data, so the workbook stays live when the user edits it.
+- Raw data on its own sheet, results on another. Totals inside the workbook
+  are **formulas** over the data sheet, so it stays live when the user edits
+  it.
 - A pivot-style table is grouped rows of `SUMIFS`/`COUNTIFS` over the data
   sheet. The criteria range must be the column that holds the criteria values,
   and the sum range the column with the numbers — compute the column letters
@@ -18,12 +19,8 @@
 - Charts come from `openpyxl.chart` (`BarChart`, `LineChart`, `PieChart`),
   referencing cells — never a pasted image.
 - openpyxl does not compute formulas. Run this skill's own tool,
-  `office-docs/verify_workbook`, on the saved file: it recalculates a copy,
-  returns the computed values, and names every cell with `#REF!`, `#VALUE!`,
-  `#DIV/0!`, `#NAME?`, a circular reference, a SUM over text or empty cells, or
-  a criterion that matches no row. Fix the code that builds the workbook,
-  rebuild, and run it again until it reports no errors. Report numbers from its
-  `computed_values`.
+  `office-docs/verify_workbook`, on the saved file. "What the check returns"
+  below says how to read its result.
 
 ```python
 from openpyxl import Workbook
@@ -64,9 +61,29 @@ print(path)
 
 Then call `office-docs/verify_workbook(file_path=path)`.
 
+## What the check returns
+
+- `status: errors_found` and `ok: false`: `errors` names each broken cell
+  (`#REF!`, `#NAME?`, a circular reference, a SUM over text, SUMIFS ranges of
+  different sizes, or an error value the recalculation computed). Fix the code
+  that builds the workbook, rebuild, and run it again until `ok` is true.
+- `warnings` name cells whose result may not be what you meant: a criterion
+  that matches no row, a division by an empty cell, arithmetic on text, a SUM
+  over empty cells (fine for cells the user fills in). Read each one.
+- `status: no_formulas`: every number is a typed value. Rewrite the totals as
+  formulas, or say in your answer that they were computed in Python.
+- `computed_values` holds the recalculated results when LibreOffice is
+  installed, totals and aggregates first. Report numbers from it.
+- `next` appears when nothing was recalculated (LibreOffice is not installed).
+  There are no `computed_values` then: compute the same figures with pandas in
+  `run_python`, report those, and say the workbook's formulas were not
+  recalculated.
+
 ## Large data
 
-A sheet holds at most 1,048,576 rows. Aggregate big inputs with pandas inside
-`run_python` and write only the summary and the rows it is built from; read a
-big .xlsx once with `load_workbook(path, read_only=True)` and
-`iter_rows(values_only=True)`. For heavy jobs raise `run_python`'s `timeout`.
+A sheet holds at most 1,048,576 rows, and `verify_workbook` checks workbooks
+of up to 500,000 cells. For inputs too large for a sheet, aggregate with
+pandas inside `run_python`, write the aggregate and label it as computed (a
+note cell such as "Computed in Python from orders.csv"). Read a big .xlsx once
+with `load_workbook(path, read_only=True)` and `iter_rows(values_only=True)`.
+For heavy jobs raise `run_python`'s `timeout`.
