@@ -822,3 +822,39 @@ def test_there_is_nothing_to_switch_to(monkeypatch, env):
         monkeypatch.setattr("gaia.eval.claude_credential.shutil.which", lambda _: None)
     assert switch_to_backup_account({"kind": QUOTA}) is None
     assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == PRIMARY_TOKEN
+
+
+def test_a_rerun_after_the_switch_starts_without_the_skill_the_refused_run_left(
+    two_accounts, monkeypatch
+):
+    """``setup.skills_absent`` is applied again before the re-run on the backup."""
+    home = two_accounts.tmp / "eval-home"
+    monkeypatch.setenv("GAIA_HOME", str(home))
+    charlie = two_accounts.tmp / "scenarios" / "charlie.yaml"
+    data = yaml.safe_load(charlie.read_text("utf-8"))
+    data["setup"]["skills_absent"] = ["unit-convert"]
+    charlie.write_text(yaml.dump(data), encoding="utf-8")
+    skill = home / "skills" / "unit-convert"
+    present_at_start = []
+
+    class InstallsTheSkill(TwoAccountClaude):
+        def __call__(self, cmd, **kw):
+            sid = re.search(r"^id: (\S+)$", kw["input"], re.MULTILINE).group(1)
+            if sid == "charlie":
+                present_at_start.append(skill.is_dir())
+            # The agent installs it before the account runs dry.
+            skill.mkdir(parents=True, exist_ok=True)
+            (skill / "SKILL.md").write_text(
+                "---\nname: unit-convert\ndescription: x\n---\n", "utf-8"
+            )
+            return super().__call__(cmd, **kw)
+
+    fake = InstallsTheSkill({PRIMARY_TOKEN: 2, BACKUP_TOKEN: 99})
+    two_accounts.use(fake)
+    card = AgentEvalRunner(results_dir=two_accounts.tmp / "results")._run_locked(
+        category="cat_a"
+    )
+
+    assert fake.calls.count("charlie") == 2
+    assert present_at_start == [False, False]
+    assert [s["status"] for s in card["scenarios"]] == ["PASS"] * 5

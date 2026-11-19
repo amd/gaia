@@ -3714,6 +3714,7 @@ const messages: Messages = {
     'mem.review.selectAll': 'تحديد الكل',
     'mem.review.none': 'لا شيء',
     'mem.log.found': 'وُجد: {content}',
+    'mem.log.foundSensitive': 'وُجد عنصر حساس',
     'mem.log.insight': 'استنتاج: {content}',
     'mem.log.error': 'خطأ: {message}',
     'mem.log.discoveryDone': 'اكتمل. العناصر المكتشفة: {n}.',
