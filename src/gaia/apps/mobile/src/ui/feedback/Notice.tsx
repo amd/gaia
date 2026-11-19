@@ -79,7 +79,7 @@ export function Notice({ tone, title, message, action, onDismiss, role, variant 
                             </Text>
                         ) : null}
                     </View>
-                    {action ? <Button variant="secondary" label={action.label} onPress={action.onPress} /> : null}
+                    {action ? <Button variant="secondary" label={action.label} onPress={action.onPress} shrink={false} /> : null}
                 </View>
                 {onDismiss ? <IconButton icon={X} size="sm" label={t('banner.dismiss')} onPress={onDismiss} /> : null}
             </Row>

@@ -22,12 +22,17 @@ export interface ButtonProps {
     busy?: boolean;
     disabled?: boolean;
     full?: boolean;
-    /** Let a long label take more lines instead of truncating. */
+    /** False keeps the button at its own width; set it beside a text that should wrap first. */
+    shrink?: boolean;
+    /** Pad a multi-line label, for a tall answer button; any label too wide for its row wraps rather than run off the screen. */
     wrap?: boolean;
     /** What a screen reader says instead of the visible label. */
     accessibilityLabel?: string;
     testID?: string;
 }
+
+/** A shrinking button keeps its icon and a short word. */
+export const BUTTON_MIN_WIDTH = 88;
 
 export function Button({
     label,
@@ -39,6 +44,7 @@ export function Button({
     busy,
     disabled,
     full,
+    shrink = true,
     wrap,
     accessibilityLabel,
     testID,
@@ -56,7 +62,7 @@ export function Button({
     return (
         <View
             style={[
-                full ? { alignSelf: 'stretch' } : { alignSelf: 'flex-start' },
+                full ? { alignSelf: 'stretch' } : shrink ? { alignSelf: 'flex-start', flexShrink: 1, minWidth: BUTTON_MIN_WIDTH, maxWidth: '100%' } : { alignSelf: 'flex-start', flexShrink: 0 },
                 // A regular button's shape fills its target, so the ripple is clipped here; a small one clips its own shape.
                 RIPPLE && size !== 'sm' ? { borderRadius: radius.md, overflow: 'hidden' } : null,
             ]}
@@ -89,17 +95,11 @@ export function Button({
                         ) : icon ? (
                             <Icon icon={icon} size="sm" tone={v.tone} />
                         ) : null}
-                        {wrap || largeText ? (
-                            <View style={{ flexShrink: 1, paddingVertical: 10 }}>
-                                <Text role={size === 'sm' ? 'caption' : 'ui'} weight="medium" tone={v.tone} align="center" glossInline>
-                                    {label}
-                                </Text>
-                            </View>
-                        ) : (
-                            <Text role={size === 'sm' ? 'caption' : 'ui'} weight="medium" tone={v.tone} numberOfLines={1}>
+                        <View style={{ flexShrink: 1, minWidth: 0, paddingVertical: wrap || largeText ? 10 : size === 'sm' ? 2 : 4 }}>
+                            <Text role={size === 'sm' ? 'caption' : 'ui'} weight="medium" tone={v.tone} align="center" glossInline>
                                 {label}
                             </Text>
-                        )}
+                        </View>
                         {iconEnd && !busy ? <Icon icon={iconEnd} size="sm" tone={v.tone} /> : null}
                     </Row>
                 </View>

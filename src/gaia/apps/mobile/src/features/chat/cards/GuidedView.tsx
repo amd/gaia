@@ -157,7 +157,7 @@ export function GuidedView({ open, doc, state, timers, onClose }: { open: boolea
                                 {t(done >= sets.sets ? 'cards.setAllDone' : 'cards.setProgress', { n: Math.min(done + 1, sets.sets), total: sets.sets })}
                             </Text>
                         </Stack>
-                        <Button label={t.bare('cards.setDone')} accessibilityLabel={t('cards.setDone')} disabled={done >= sets.sets} onPress={finishSet} testID="guided-set-done" />
+                        <Button label={t.bare('cards.setDone')} accessibilityLabel={t('cards.setDone')} disabled={done >= sets.sets} shrink={false} onPress={finishSet} testID="guided-set-done" />
                     </Row>
                 ) : null}
 
