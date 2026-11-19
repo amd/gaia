@@ -249,7 +249,9 @@ def fleet_fault_burst(tmp: Path, seed: int = 1) -> Scenario:
         node = hit[k % len(hit)]
         msg = f"storage controller reset on slot {rng.randint(0, 11)}"
         events.append(
-            Event(ts, "cluster.log", line(ts, node, "FATAL", msg), kind="controller_reset")
+            Event(
+                ts, "cluster.log", line(ts, node, "FATAL", msg), kind="controller_reset"
+            )
         )
         first = ts if first is None else min(first, ts)
         last = ts if last is None else max(last, ts)
