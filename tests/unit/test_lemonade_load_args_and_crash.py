@@ -239,7 +239,7 @@ def test_the_embedder_keeps_its_own_args(client, monkeypatch):
         [_entry("embeddinggemma-300m-GGUF", llamacpp_args=USER_ARGS)],
         ctx_size=2048,
     )
-    assert bodies[0]["llamacpp_args"] == EMBEDDER_LLAMACPP_ARGS
+    assert bodies[0]["llamacpp_args"].startswith(EMBEDDER_LLAMACPP_ARGS)
 
 
 def test_slot_count_reads_one_slot_from_the_users_args(client):

@@ -697,6 +697,23 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
+#: llama.cpp otherwise keeps a second copy of the token table in host RAM.
+#: Names a Vulkan device, so any other backend refuses to start with it.
+EMBEDDER_VULKAN_TABLE_ARGS = "-ot token_embd.weight=Vulkan0"
+
+
+def embedder_llamacpp_args(backend: Optional[str]) -> str:
+    """GAIA's llama.cpp args for an embedder loaded on *backend*."""
+    if backend == "vulkan":
+        return f"{EMBEDDER_LLAMACPP_ARGS} {EMBEDDER_VULKAN_TABLE_ARGS}"
+    return EMBEDDER_LLAMACPP_ARGS
+
+
+def without_embedder_table_args(args: str) -> str:
+    """*args* with the Vulkan-only token-table override removed."""
+    return " ".join(args.replace(EMBEDDER_VULKAN_TABLE_ARGS, " ").split())
+
+
 #: A reranker scores query + chunk as one input, which must fit one ubatch; the
 #: ubatch cannot exceed the batch (default 2048), so both are raised together.
 RERANKER_BATCH_TOKENS = 4096
@@ -6596,6 +6613,10 @@ class LemonadeClient:
             with _PINNED_BACKENDS_LOCK:
                 _CPU_FALLBACK_EMBEDDERS.add((self.base_url, model_name))
             request_data["llamacpp_backend"] = "cpu"
+            if request_data.get("llamacpp_args"):
+                request_data["llamacpp_args"] = without_embedder_table_args(
+                    request_data["llamacpp_args"]
+                )
             return self._post_load_with_transient_retry(
                 url, request_data, timeout, model_name, load_retries
             )
@@ -10318,6 +10339,8 @@ class LemonadeClient:
                 backend = "cpu"
             if backend:
                 request_data["llamacpp_backend"] = backend
+            if llamacpp_args == EMBEDDER_LLAMACPP_ARGS:
+                llamacpp_args = embedder_llamacpp_args(backend)
         if model_name in EMBEDDER_MODELS:
             # Saved so Lemonade's own auto-loads (``/embeddings``) keep the
             # ubatch too; never into the config of a server the user runs.
