@@ -1835,6 +1835,13 @@ class Analyzer:
         self.custom_entities = entity_re is not None
         self.bucket_s: float = parse_bucket(options.bucket) or 60.0
         self.bucket_fixed = options.bucket not in (None, "")
+        self.bucket_asked = self.bucket_s
+        # Lowest and highest bucket seen while streaming, and how many
+        # buckets may lie between them before they are widened.
+        self.bmin: Optional[int] = None
+        self.bmax = 0
+        self.bucket_cap = MAX_BUCKETS * (20 if self.bucket_fixed else 1)
+        self.coarsened = False
         self.origin = 0.0
         self.tpls: Dict[str, _Tpl] = {}
         self.overflow: Optional[_Tpl] = None
@@ -2097,6 +2104,15 @@ class Analyzer:
                 if ff is not None or len(tpl.file_first) < 64:
                     tpl.file_first[ctx.idx] = (ts, n)
             bucket = self._bucket(ts)
+            if self.bmin is None:
+                self.bmin = self.bmax = bucket
+            elif bucket < self.bmin:
+                self.bmin = bucket
+            elif bucket > self.bmax:
+                self.bmax = bucket
+            if self.bmax - self.bmin >= self.bucket_cap:
+                self._coarsen()
+                bucket = self._bucket(ts)
             cell = tpl.cells.get(bucket)
             if cell is None:
                 tpl.cells[bucket] = [1, ts, ts, loc, {host}]
@@ -2169,6 +2185,26 @@ class Analyzer:
 
     # -- post-processing ---------------------------------------------------
 
+    def _coarsen(self) -> None:
+        """Widen the buckets mid-stream so their number stays bounded.
+
+        The bucket comes from a sample, and a compressed file is sampled from
+        its head only: a multi-day ``.gz`` starts at buckets of a second or
+        two. Without this every template would keep one cell per second until
+        the file ends.
+        """
+        span_s = (self.bmax - self.bmin + 1) * self.bucket_s
+        factor = 2
+        if not self.bucket_fixed:
+            factor = max(2, int(math.ceil(choose_bucket(span_s) / self.bucket_s)))
+        self._rebase(self.bmin, factor)
+        self.bmax = (self.bmax - self.bmin) // factor
+        self.bmin = 0
+        self.coarsened = True
+        self.ent_pairs = sum(
+            len(marks) for t in self._all_templates() for marks in t.ents.values()
+        )
+
     def finalize(self) -> None:
         """Rebucket if the sample misjudged the range, then merge templates."""
         self._unify_id_shapes()
@@ -2177,16 +2213,15 @@ class Analyzer:
         lo = self._bucket(self.gmin)
         hi = self._bucket(self.gmax)
         factor = 1
-        if not self.bucket_fixed and (hi - lo + 1) > MAX_BUCKETS:
+        if not self.bucket_fixed and (self.coarsened or hi - lo + 1 > MAX_BUCKETS):
             target = choose_bucket(max(self.gmax - self.gmin, 1.0))
             factor = max(1, int(math.ceil(target / self.bucket_s)))
-        elif self.bucket_fixed and (hi - lo + 1) > 20 * MAX_BUCKETS:
-            factor = int(math.ceil((hi - lo + 1) / (20 * MAX_BUCKETS)))
-            self.warnings.append(
-                f"bucket {self.opt.bucket} gave {hi - lo + 1} buckets; widened {factor}x "
-                f"to {self._fmt_duration(self.bucket_s * factor)}."
-            )
         self._rebase(lo, factor)
+        if self.bucket_fixed and self.bucket_s != self.bucket_asked:
+            self.warnings.append(
+                f"bucket {self.opt.bucket} gave more than {self.bucket_cap} buckets; "
+                f"widened to {self._fmt_duration(self.bucket_s)}."
+            )
         self._merge_templates()
 
     def _unify_id_shapes(self) -> None:

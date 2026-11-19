@@ -864,6 +864,61 @@ def test_large_generated_file_is_fully_read_in_bounded_structures(tmp_path):
     assert len(json.dumps(res.compact(), default=str)) < 12_000
 
 
+def _days_of_ticks(path: Path, n: int = 60_000, step: float = 5.0) -> Path:
+    """One line every ``step`` seconds: 60,000 lines cover about 3.5 days."""
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        for i in range(n):
+            f.write(f"{_iso(T0 + i * step)} app-01 INFO tick {i}\n")
+    return path
+
+
+def test_a_multi_day_gz_keeps_its_buckets_bounded_while_streaming(tmp_path):
+    """A .gz is sampled from its head, so its first bucket is far too small."""
+    path = _days_of_ticks(tmp_path / "days.log.gz")
+    an = lt.Analyzer(lt.TriageOptions())
+    ((_, ctx, _info),) = an.prepare([path])
+    assert an.bucket_s == 5  # the head sample covers about half an hour
+    sizes = []
+    real_coarsen = an._coarsen
+
+    def coarsen():
+        sizes.append(max(len(t.cells) for t in an.tpls.values()))
+        real_coarsen()
+
+    an._coarsen = coarsen
+    an.run_file(path, ctx)
+    sizes.append(max(len(t.cells) for t in an.tpls.values()))
+    assert len(sizes) > 1, "the buckets were never widened"
+    assert max(sizes) <= lt.MAX_BUCKETS + 1
+    an.finalize()
+    assert an.bucket_s == lt.choose_bucket(60_000 * 5.0) == 600
+    (tpl,) = an.tpls.values()
+    assert sum(cell[0] for cell in tpl.cells.values()) == 60_000
+    assert len(tpl.cells) == 500
+
+
+def test_a_multi_day_gz_gives_the_same_result_as_the_plain_file(tmp_path):
+    gz = _days_of_ticks(tmp_path / "days.log.gz", n=20_000, step=15.0)
+    plain = tmp_path / "plain" / "days.log"
+    plain.parent.mkdir()
+    with gzip.open(gz, "rt", encoding="utf-8") as src:
+        plain.write_text(src.read(), encoding="utf-8", newline="\n")
+    a = lt.triage([str(gz)])
+    b = lt.triage([str(plain)])
+    assert a.an.bucket_s == b.an.bucket_s
+    assert a.checks["ok"] and a.an.entries == b.an.entries == 20_000
+    assert [t.cls for t in a.an.tpls.values()] == [t.cls for t in b.an.tpls.values()]
+    assert a.compact()["baseline"] == b.compact()["baseline"]
+
+
+def test_a_fixed_bucket_that_is_far_too_small_is_widened_and_says_so(tmp_path):
+    path = _days_of_ticks(tmp_path / "days.log.gz", n=20_000, step=15.0)
+    res = lt.triage([str(path)], lt.TriageOptions(bucket="1s"))
+    assert res.an.bucket_s > 1 and res.checks["ok"]
+    assert max(len(t.cells) for t in res.an.tpls.values()) <= 20 * lt.MAX_BUCKETS
+    assert any("widened to" in w for w in res.warnings)
+
+
 def test_a_file_with_no_line_breaks_is_never_read_whole(tmp_path, monkeypatch):
     """A one-line export is cut at the line cap, not loaded into memory."""
     path = tmp_path / "export.json"
