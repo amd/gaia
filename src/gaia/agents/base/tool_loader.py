@@ -253,23 +253,6 @@ class ToolLoader:
         """True when only MCP tools are gated and every other tool is core."""
         return self._mcp_only
 
-    def as_mcp_only(self) -> "ToolLoader":
-        """An MCP-only loader with this one's embedders, threshold and embed cache.
-
-        For an agent that loses what its profile CORE relies on (memory) but
-        still has MCP tools to gate. Per-session state starts fresh.
-        """
-        twin = ToolLoader(
-            (),
-            (),
-            self._embed_fn,
-            embed_batch_fn=self._embed_batch_fn,
-            threshold=self._threshold,
-            mcp_only=True,
-        )
-        twin._embed_cache = self._embed_cache
-        return twin
-
     def validate_registry(
         self, registry: Dict[str, dict], withheld: Iterable[str] = ()
     ) -> None:

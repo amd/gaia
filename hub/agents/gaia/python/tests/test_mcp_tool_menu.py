@@ -137,50 +137,32 @@ def test_mcp_tools_leave_the_core_list_alone(flagship):
 # ── off-states and edge cases ─────────────────────────────────────────────
 
 
-def test_memory_off_no_longer_sends_every_mcp_tool(flagship):
-    agent, _model, _doc = flagship
-    agent._memory_store = None
-    assert agent._select_tools_for_turn("hello") is None, "no MCP tools: as before"
-
-    entries = _connect(agent)
-    agent.tool_loader.reset_session()
-    agent._refresh_active_tool_filter("hello")
-
-    assert agent.tool_loader.mcp_only is True
-    own = [n for n in agent._tools_registry if n not in entries]
-    assert agent._active_tool_filter == own, "memory off must not hide own tools"
-    assert _menu_names(agent.system_prompt) == list(entries)
-
-
-def test_memory_off_warm_up_primes_the_first_turn_after_the_switch(flagship):
-    agent, model, _doc = flagship
-    agent._memory_store = None
-    entries = _connect(agent)
-    core, full = _warm_up(agent, model)
-
-    assert agent.tool_loader.mcp_only is True
-    assert _tool_names(core) == [n for n in agent._tools_registry if n not in entries]
-    assert MCP_MENU_HEADER not in _system(full)
-
-    _turn(agent, model, "hello", ["Hi."])
-    _assert_same_prefix(core, model.requests[-1])
-
-
 @pytest.mark.parametrize(
-    "reason", ["model_not_pulled", "model_load_failed", "service_unreachable"]
+    "reason",
+    ["disabled_by_env", "model_not_pulled", "model_load_failed", "service_unreachable"],
 )
-def test_memory_off_for_a_dead_embedder_sends_every_tool(flagship, reason):
-    """Nothing to select with, so as on main: every tool, no menu."""
-    agent, _model, _doc = flagship
+def test_memory_off_sends_every_tool_and_never_loads_the_embedder(
+    flagship, monkeypatch, reason
+):
+    """Memory off must not load the embedder (#4756), MCP tools or not."""
+    agent, model, _doc = flagship
     agent._memory_store = None
     agent._memory_unavailable_reason = reason
     _connect(agent)
 
-    agent._refresh_active_tool_filter("hello")
+    def must_not_embed(*_args):
+        raise AssertionError("memory off loaded the embedder")
 
-    assert agent._active_tool_filter is None
-    assert agent.tool_loader.mcp_only is False
-    assert MCP_MENU_HEADER not in agent.system_prompt
+    monkeypatch.setattr(MemoryMixin, "_embed_text", must_not_embed)
+    monkeypatch.setattr(ChatAgent, "_embed_texts_batch", must_not_embed)
+    agent.tool_loader._embed_fn = must_not_embed
+    agent.tool_loader._embed_batch_fn = must_not_embed
+
+    assert agent._warm_tool_filter() is None
+    _turn(agent, model, "Add two numbers with the fixture server.", ["Done."])
+
+    assert _tool_names(model.requests[-1]) == list(agent._tools_registry)
+    assert MCP_MENU_HEADER not in _system(model.requests[-1])
 
 
 def test_an_agent_built_later_without_the_loader_drops_the_first_ones_search_tools(
@@ -331,6 +313,10 @@ def test_loading_mcp_tools_registers_search_tools_on_an_mcp_only_profile(
         agent._own_mcp_tools = {"mcp_files_move_file"}
 
     monkeypatch.setattr(ChatAgent, "_load_mcp_tools", load)
+    off = tool_cost.build_doc_agent_skeleton("web", dynamic_tools=True, memory=False)
+    # With memory off nothing changes: search_tools would load the embedder.
+    assert "search_tools" not in off._tools_registry
+    assert off._select_tools_for_turn("hello") is None
     on = tool_cost.build_doc_agent_skeleton(
         "web", dynamic_tools=True, embed_fn=lexical_embedder()
     )

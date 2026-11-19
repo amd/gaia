@@ -118,11 +118,10 @@ on, MCP tools were already off the first turn. WS1 as shipped:
   never thins schemas: the agent's own tools go out exactly as without it,
   plus `search_tools` once MCP tools are present. `chat` registers no
   MCP tools and gets no loader.
-- **Memory.** With memory off and MCP tools present, the flagship's loader
-  switches to MCP-only mode (`ToolLoader.as_mcp_only`) instead of idling, so
-  MCP tools wait and every other tool stays listed. Only while the embedder
-  works: memory off because it is missing or unreachable still sends every
-  tool. Without MCP tools nothing changes.
+- **Memory off is unchanged.** It still sends every tool and never loads the
+  embedder, on every profile, so #4756's "memory off doesn't load the ~300 MB
+  embedding model" holds. The design's step 3 (drop the `_memory_store`
+  requirement when MCP tools are present) was left out for that reason.
 - **Menu.** `format_unlisted_mcp_tools` (`src/gaia/mcp/mixin.py`) names the MCP
   tools the list leaves out, one line per server with bare tool names
   (`- calendar: create_event, list_events`), and points at `search_tools`,
@@ -130,8 +129,8 @@ on, MCP tools were already off the first turn. WS1 as shipped:
   names; past that a server's other tools are counted, names over 80 chars are
   counted not shown, and the cut is logged. This replaces the design's
   name + 60-char description per tool, which cost 3x as much (317 against 99
-  tokens on 3 servers x 5 tools). `Agent._compose_system_prompt` renders it last, after the
-  filtered tool block, and only under a filter. It is empty on the full list,
+  tokens on 3 servers x 5 tools). `Agent._compose_system_prompt` renders it
+  last, after the filtered tool block, and only under a filter. It is empty on the full list,
   so the slot primed for a jump still matches the jump's prompt.
 - **Activation lives in two packages.** Scoring and the MCP-only mode are in
   core (`tool_loader.py`), the menu and its prompt position in core
@@ -145,7 +144,6 @@ MCP tools take part in selection, not how well a real embedder ranks them):
 | Path, 3 servers x 5 tools | Native before | Native after | Text before | Text after |
 |---|--:|--:|--:|--:|
 | `web` profile, loader on | 1681 | 218 (−87%) | 516 | 121 (−77%) |
-| Flagship, memory off | 1304 | 99 (−92%) | 516 | 99 (−81%) |
 | Flagship, memory on | 0 | 99 (menu) | 0 | 99 (menu) |
 
 - "After" is everything MCP tools add: the menu, and on the `web` path also
@@ -154,9 +152,8 @@ MCP tools take part in selection, not how well a real embedder ranks them):
   there the menu is a new cost (61 / 99 / 137 tokens on 1 / 3 / 5 servers),
   paid so a native model can learn a connector tool exists.
 - Recall on 5 x 5 is unchanged on the flagship (72%, all by moving to every
-  tool); 76% on the `web` path and 72% with memory off, against 100% when they
-  sent everything. Both paths list every one of the agent's own tools on every
-  first turn. `search_tools` returns all 7 tools the flagship's first turn
+  tool); 76% on the `web` path, against 100% when it sent everything. Every
+  first turn there still lists all of the agent's own tools. `search_tools` returns all 7 tools the flagship's first turn
   missed, in its top 5, for the same request (same stand-in embedder).
 
 ### Design

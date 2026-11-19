@@ -152,15 +152,6 @@ def test_an_mcp_only_loader_refuses_a_core_or_bundles(core, bundles):
         ToolLoader(core, bundles, _embedder({}), mcp_only=True)
 
 
-def test_as_mcp_only_keeps_the_embedder_and_its_cache():
-    profile = ToolLoader(frozenset({"read_file"}), [], _embedder({}), threshold=0.5)
-    profile.warm(_registry())
-    twin = profile.as_mcp_only()
-    assert twin.mcp_only is True and twin._threshold == 0.5
-    assert twin._embed_cache is profile._embed_cache
-    assert twin.offered(_registry()) == STATIC
-
-
 def test_a_profile_loader_ignores_the_mcp_tag():
     """The doc and full profiles keep their CORE exactly, MCP-tagged or not."""
     registry = _registry()

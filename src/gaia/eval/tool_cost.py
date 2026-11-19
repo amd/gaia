@@ -31,8 +31,8 @@ from :mod:`gaia.eval.mcp_fixture` go through GAIA's own MCP conversion, and the
 report gives the first-turn tokens they add per render path with the loader
 off and on (on counts the menu of unlisted MCP tools too), plus the loader's
 MCP tool recall (:func:`gaia.eval.tool_recall.measure_mcp_recall`). Since
-#1972 it also measures the two paths that used to send every MCP tool: a
-profile with an MCP-only loader, and the flagship with memory off.
+#1972 it also measures a profile with an MCP-only loader, which used to send
+every MCP tool.
 
 Coupling note: this harness deliberately drives the real ``Agent`` renderers so
 it measures exactly what ships, not a reimplementation. It depends on these
@@ -216,6 +216,7 @@ def build_doc_agent_skeleton(
     deterministic: bool = True,
     dynamic_tools: bool = False,
     embed_fn=None,
+    memory: bool = True,
 ) -> "ChatAgent":
     """Build a ChatAgent skeleton with the *profile* tools registered.
 
@@ -238,6 +239,7 @@ def build_doc_agent_skeleton(
     additionally carry those tools when their backends are present.
 
     *embed_fn* is the loader's embedder, as in :func:`build_full_agent_skeleton`.
+    ``memory=False`` builds it as with memory off.
     A profile with no loader config (``chat``, ``file``, ``data``, ``web``) gets
     the MCP-only loader the agent builds for it.
 
@@ -275,7 +277,8 @@ def build_doc_agent_skeleton(
                 agent.config = cfg
                 agent._instance_tools = None
                 agent.model_id = "Gemma-4-E4B-it-GGUF"
-                agent._memory_store = MagicMock()  # non-None -> memory tools register
+                # non-None -> memory tools register
+                agent._memory_store = MagicMock() if memory else None
                 agent.rag = MagicMock()
                 agent.console = MagicMock()
                 # Satisfy ChatAgent.__del__ so GC of the skeleton stays quiet.
@@ -825,17 +828,6 @@ def build_mcp_only_agents(embed_fn=None) -> Tuple["ChatAgent", "ChatAgent"]:
     return off, on
 
 
-def build_memory_off_agent(embed_fn=None) -> "ChatAgent":
-    """The flagship skeleton with the loader on and memory disabled."""
-    from gaia.eval.mcp_fixture import lexical_embedder
-
-    agent = build_full_agent_skeleton(
-        dynamic_tools=True, deterministic=True, embed_fn=embed_fn or lexical_embedder()
-    )
-    agent._memory_store = None
-    return agent
-
-
 def _own_tools_kept(agent: "ChatAgent", entries, probes) -> bool:
     """True when every first turn lists every tool that is not an MCP tool."""
     with with_mcp_tools(agent, entries):
@@ -847,23 +839,20 @@ def _own_tools_kept(agent: "ChatAgent", entries, probes) -> bool:
     return True
 
 
-def measure_gating_paths(
+def measure_mcp_only_profile(
     server_counts: Tuple[int, ...],
     tools_per_server: Tuple[int, ...],
     tok: Optional[Any] = None,
     query: str = MCP_FIRST_TURN_QUERY,
 ) -> Dict[str, Any]:
-    """MCP cost and recall on the two paths that sent every MCP tool before #1972.
+    """MCP cost and recall on :data:`MCP_ONLY_PROFILE` with the toggle on.
 
-    * ``mcp_only``: :data:`MCP_ONLY_PROFILE` with the toggle on. It had no
-      loader, so every tool went out in full; "before" is the toggle-off render.
-    * ``memory_off``: the flagship with memory disabled. Its loader stood
-      aside, so every tool went out, thinned; "before" is that render.
-
-    Each row's "after" is what MCP tools add to the first turn: the MCP tools
-    listed, the menu, and ``search_tools`` where only MCP tools register it.
-    Recall is measured on the largest grid point; ``own_tools_kept`` says, per
-    path, whether every first turn still listed all of the agent's own tools.
+    Before #1972 the profile had no loader, so every MCP tool went out in full;
+    "before" is the toggle-off render. Each row's "after" is what MCP tools add
+    to the first turn: the MCP tools listed, the menu, and ``search_tools``,
+    which only MCP tools register here. Recall is measured on the largest grid
+    point; ``own_tools_kept`` says whether every first turn still listed all
+    of the agent's own tools.
     """
     from gaia.eval.mcp_fixture import (
         build_mock_servers,
@@ -872,99 +861,70 @@ def measure_gating_paths(
     )
     from gaia.eval.tool_recall import measure_mcp_recall
 
-    off_only, on_only = build_mcp_only_agents()
-    memory_off = build_memory_off_agent()
-    paths = {
-        "mcp_only": (off_only, on_only),
-        "memory_off": (memory_off, memory_off),
-    }
+    off, on = build_mcp_only_agents()
+    base_before = _sizes(*_render_offered(off, None), tok)
     rows: List[Dict[str, Any]] = []
-    for path, (before_agent, after_agent) in paths.items():
-        base_before = _sizes(*_render_offered(before_agent, None), tok)
-        for n in server_counts:
-            for k in tools_per_server:
-                entries = convert_mock_servers(before_agent, build_mock_servers(n, k))
-                with with_mcp_tools(before_agent, entries):
-                    before = _sizes(*_render_offered(before_agent, None), tok)
-                with with_mcp_tools(after_agent, entries):
-                    after, names, menu = _first_turn_sizes(after_agent, query, tok)
-                    # Same list and schema form, minus what MCP tools brought
-                    # (themselves, the menu, and search_tools where only they
-                    # register it): thinning own tools is not an MCP saving.
-                    listed = (
-                        list(after_agent._tools_registry) if names is None else names
-                    )
-                    had = before_agent._tools_registry
-                    own = [n for n in listed if n in had and n not in entries]
-                    base_after = _sizes(*_render_offered(after_agent, own), tok)
-                rows.append(
-                    {
-                        "path": path,
-                        "servers": n,
-                        "tools_per_server": k,
-                        "mcp_tools": len(entries),
-                        "menu": {
-                            "tokens": _count_tokens(menu, tok),
-                            "chars": len(menu),
-                        },
-                        "off": _minus(before, base_before),
-                        "on": _minus(after, base_after),
-                    }
-                )
+    for n in server_counts:
+        for k in tools_per_server:
+            entries = convert_mock_servers(off, build_mock_servers(n, k))
+            with with_mcp_tools(off, entries):
+                before = _sizes(*_render_offered(off, None), tok)
+            with with_mcp_tools(on, entries):
+                after, names, menu = _first_turn_sizes(on, query, tok)
+                # Same list minus what MCP tools brought: themselves, the menu
+                # and search_tools.
+                listed = list(on._tools_registry) if names is None else names
+                had = off._tools_registry
+                own = [name for name in listed if name in had and name not in entries]
+                base_after = _sizes(*_render_offered(on, own), tok)
+            rows.append(
+                {
+                    "servers": n,
+                    "tools_per_server": k,
+                    "mcp_tools": len(entries),
+                    "menu": {"tokens": _count_tokens(menu, tok), "chars": len(menu)},
+                    "off": _minus(before, base_before),
+                    "on": _minus(after, base_after),
+                }
+            )
 
     servers = build_mock_servers(max(server_counts), max(tools_per_server))
-    entries = convert_mock_servers(off_only, servers)
+    entries = convert_mock_servers(off, servers)
     probes = recall_probes(servers)
-    recall = {
-        path: measure_mcp_recall(after_agent, entries, probes)
-        for path, (_before, after_agent) in paths.items()
-    }
-    own_before = _sizes(*_render_offered(off_only, None), tok)
-    with with_mcp_tools(on_only, entries):
+    own_before = _sizes(*_render_offered(off, None), tok)
+    with with_mcp_tools(on, entries):
         own_after = _sizes(
-            *_render_offered(
-                on_only, [n for n in on_only._tools_registry if n not in entries]
-            ),
+            *_render_offered(on, [n for n in on._tools_registry if n not in entries]),
             tok,
         )
     return {
         "rows": rows,
-        "recall": recall,
-        "own_tools_kept": {
-            path: _own_tools_kept(after_agent, entries, probes)
-            for path, (_before, after_agent) in paths.items()
-        },
-        # The MCP-only path's own tools, without and with MCP tools connected.
+        "recall": measure_mcp_recall(on, entries, probes),
+        "own_tools_kept": _own_tools_kept(on, entries, probes),
+        # The profile's own tools, without and with MCP tools connected.
         "own_tools": {"before": own_before, "after": own_after},
         "recall_servers": len(servers),
         "recall_tools": len(entries),
     }
 
 
-_PATH_LABELS = {
-    "mcp_only": f"`{MCP_ONLY_PROFILE}` profile, loader on",
-    "memory_off": "flagship, memory off",
-}
-
-
-def _gating_paths_lines(paths: Dict[str, Any], unit: str) -> List[str]:
-    """The report section for :func:`measure_gating_paths`."""
+def _mcp_only_profile_lines(result: Dict[str, Any], unit: str) -> List[str]:
+    """The report section for :func:`measure_mcp_only_profile`."""
     lines = [
         "",
-        f"## Paths that sent every MCP tool before #1972 ({unit})",
+        f"## The `{MCP_ONLY_PROFILE}` profile with dynamic tools on ({unit})",
         "",
-        "A profile with no loader config had no loader, and the flagship with "
-        "memory off kept its loader idle, so both sent every MCP tool on every "
-        'turn. Now both gate MCP tools: "before" is what they sent, "after" '
-        "the first turn's MCP tools plus the menu.",
+        "Before #1972 a profile with no loader config had no loader and sent every "
+        'MCP tool on every turn. "Before" is what it sent, "after" what MCP tools '
+        "add now: the menu and `search_tools`. Memory off is unchanged on every "
+        "profile: every tool, and no embedder.",
         "",
-        "| Path | Servers x tools | MCP tools | Menu | Native before | Native after "
+        "| Servers x tools | MCP tools | Menu | Native before | Native after "
         "| Native cut | Text before | Text after | Text cut |",
-        "|---|---|--:|--:|--:|--:|--:|--:|--:|--:|",
+        "|---|--:|--:|--:|--:|--:|--:|--:|--:|",
     ]
-    for row in paths["rows"]:
+    for row in result["rows"]:
         lines.append(
-            f"| {_PATH_LABELS[row['path']]} "
             f"| {row['servers']} x {row['tools_per_server']} | {row['mcp_tools']} "
             f"| {_fmt(row['menu'][unit])} "
             f"| {_fmt(row['off']['native_' + unit])} "
@@ -974,28 +934,17 @@ def _gating_paths_lines(paths: Dict[str, Any], unit: str) -> List[str]:
             f"| {_fmt(row['on']['text_' + unit])} "
             f"| {_pct(mcp_reduction(row, 'text_' + unit))} |"
         )
-    own = paths["own_tools"]
+    report, own = result["recall"], result["own_tools"]
+    kept = "yes" if result["own_tools_kept"] else "**NO**"
     lines += [
         "",
-        f"Recall ({paths['recall_servers']} servers, {paths['recall_tools']} MCP "
-        "tools), measured as above. Before, both paths sent every tool: 100%.",
+        f"Recall ({result['recall_servers']} servers, {result['recall_tools']} MCP "
+        f"tools), measured as above: {report.recall:.0%}, {report.listed} listed, "
+        f"{report.jumps} by moving to every tool. Before, every tool was sent: "
+        "100%.",
         "",
-        "| Path | Recall | Listed | Moved to every tool |",
-        "|---|--:|--:|--:|",
-    ]
-    for path, report in paths["recall"].items():
-        lines.append(
-            f"| {_PATH_LABELS[path]} | {report.recall:.0%} | {report.listed} "
-            f"| {report.jumps} ({report.jump_rate:.0%}) |"
-        )
-    kept = ", ".join(
-        f"{_PATH_LABELS[path]}: {'yes' if ok else '**NO**'}"
-        for path, ok in paths["own_tools_kept"].items()
-    )
-    lines += [
-        "",
-        f"Every first turn lists all of the agent's own tools ({kept}). On the "
-        f"`{MCP_ONLY_PROFILE}` path they go out unchanged, plus `search_tools`: "
+        f"Every first turn lists all of the agent's own tools: {kept}. They go out "
+        "unchanged, plus `search_tools`: "
         f"{_fmt(own['before']['native_' + unit])} native {unit} before, "
         f"{_fmt(own['after']['native_' + unit])} after.",
     ]
@@ -1121,8 +1070,8 @@ def format_mcp_report(
             "",
         ]
         lines += [f"- `{tool}`: {request}" for tool, request in recall_on.misses]
-    lines += _gating_paths_lines(
-        measure_gating_paths(server_counts, tools_per_server, tok=tok), unit
+    lines += _mcp_only_profile_lines(
+        measure_mcp_only_profile(server_counts, tools_per_server, tok=tok), unit
     )
     if failure:
         lines += ["", f"**FAIL:** {failure}"]

@@ -36,11 +36,10 @@ from gaia.eval.tool_recall import (  # noqa: E402
 MCP_RECALL_FLOOR = 18 / 25
 MCP_JUMP_RATE_CEILING = 18 / 25
 
-# The same measurement on the two paths #1972 started gating: the `web` profile
-# with its MCP-only loader, and the flagship with memory off. Same caveats and
-# same way to re-pin. Each one sent every MCP tool before, so 100% then.
+# The same measurement on the `web` profile, which #1972 started gating with
+# an MCP-only loader. Same caveats and same way to re-pin. It sent every MCP
+# tool before, so 100% then.
 MCP_ONLY_RECALL = 19 / 25
-MEMORY_OFF_RECALL = 18 / 25
 
 # The issue's bar: on 3+ servers the loader-on first turn, menu included, costs
 # at most 40% of what eager registration sent on the native path.
@@ -198,7 +197,7 @@ def test_cli_prints_the_report_and_passes(capsys):
     assert tool_cost.main(["--mcp", "--servers", "1", "--min-mcp-recall", "0"]) == 0
     out = capsys.readouterr().out
     assert "First-turn tokens the MCP tools add" in out
-    assert "Paths that sent every MCP tool before #1972" in out
+    assert "The `web` profile with dynamic tools on" in out
     assert "| 1 x 5 | 5 |" in out
     assert "the loader still thins native schemas" in out
     assert "**FAIL:**" not in out
@@ -231,29 +230,22 @@ def test_cli_rejects_bad_mcp_flags(argv):
 
 
 @pytest.fixture(scope="module")
-def gating_paths():
-    return tool_cost.measure_gating_paths((1, 3, 5), (5,))
+def mcp_only():
+    return tool_cost.measure_mcp_only_profile((1, 3, 5), (5,))
 
 
-def test_newly_gated_paths_cut_the_first_turn_on_three_or_more_servers(gating_paths):
-    rows = gating_paths["rows"]
-    assert {r["path"] for r in rows} == {"mcp_only", "memory_off"}
-    for row in rows:
-        menu = row["menu"]["chars"] + len(MENU_SEPARATOR)
-        if row["path"] == "memory_off":
-            assert row["on"]["native_chars"] == menu
-        else:
-            # search_tools registers only once MCP tools arrive, so it is MCP cost.
-            assert row["on"]["native_chars"] > menu
+def test_an_mcp_only_profile_cuts_the_first_turn_on_three_or_more_servers(mcp_only):
+    for row in mcp_only["rows"]:
+        # search_tools registers only once MCP tools arrive, so it is MCP cost.
+        assert row["on"]["native_chars"] > row["menu"]["chars"] + len(MENU_SEPARATOR)
         if row["servers"] >= 3:
             assert tool_cost.mcp_reduction(row, "native_chars") >= MIN_NATIVE_CUT
 
 
-def test_newly_gated_paths_hold_their_recall_and_keep_every_own_tool(gating_paths):
-    recall = gating_paths["recall"]
-    assert recall["mcp_only"].recall >= MCP_ONLY_RECALL, recall["mcp_only"].misses
-    assert recall["memory_off"].recall >= MEMORY_OFF_RECALL, recall["memory_off"].misses
-    assert gating_paths["own_tools_kept"] == {"mcp_only": True, "memory_off": True}
+def test_an_mcp_only_profile_holds_its_recall_and_keeps_every_own_tool(mcp_only):
+    recall = mcp_only["recall"]
+    assert recall.recall >= MCP_ONLY_RECALL, recall.misses
+    assert mcp_only["own_tools_kept"] is True
 
 
 def test_search_tools_reaches_every_tool_the_first_turn_missed(agents, largest):

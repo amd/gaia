@@ -87,12 +87,7 @@ from gaia.agents.base.file_snapshots import (
     watch_script_folders,
 )
 from gaia.agents.base.goal_store import GOAL_OUTCOMES
-from gaia.agents.base.memory import (
-    MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED,
-    MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
-    MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
-    MemoryMixin,
-)
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
     FEATURE_TOOLS,
     features_for_model,
@@ -217,15 +212,6 @@ def _no_answer_result(timeout_seconds: int, default: Optional[str]) -> str:
 MAX_TOOL_SEARCHES = 3
 MAX_TOOL_SEARCH_CHARS = 500
 TOOL_SEARCH_HITS = 5
-
-#: Why memory can be off with no embedder to select tools with.
-_EMBEDDER_DOWN = frozenset(
-    {
-        MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
-        MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED,
-        MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
-    }
-)
 SKILL_SEARCH_HITS = 3
 EXTRACTION_TOOLS = ("extract_document_items", "save_extracted_items")
 TOOL_SEARCH_DOCS = 2
@@ -1587,38 +1573,11 @@ class ChatAgent(
     def _loader_in_play(self) -> bool:
         """True when this session's list is the loader's to gate.
 
-        Memory feeds only the skill signal, so MCP tools are gated without it,
-        as long as the embedder works: memory off because it is down leaves
-        nothing to select with, so every tool goes out.
+        Never with memory off: that path must not load the embedder (#4756).
         """
-        mcp = self._mcp_tools_present() and not self._embedder_down()
-        if self.tool_loader.mcp_only:
-            return mcp
-        return getattr(self, "_memory_store", None) is not None or mcp
-
-    def _embedder_down(self) -> bool:
-        """True when memory found the embedder missing or unreachable."""
-        return getattr(self, "_memory_unavailable_reason", None) in _EMBEDDER_DOWN
-
-    def _gate_only_mcp_without_memory(self) -> None:
-        """With memory off, hold back MCP tools only: the agent's own stay listed.
-
-        The profile CORE assumes memory's skill signal; without it, turning
-        memory off must never cost the agent one of its own tools.
-        """
-        # Safe only because init_memory settles _memory_store before warm-up.
-        loader = self.tool_loader
-        if (
-            loader.mcp_only
-            or getattr(self, "_memory_store", None) is not None
-            or not self._mcp_tools_present()
-        ):
-            return
-        self.tool_loader = loader.as_mcp_only()
-        logger.info(
-            "Memory is off: the tool loader holds back MCP tools only, and "
-            "lists every other tool."
-        )
+        if getattr(self, "_memory_store", None) is None:
+            return False
+        return not self.tool_loader.mcp_only or self._mcp_tools_present()
 
     def _tool_docs(self, names: List[str]) -> str:
         """Render *names* as ``[Tool docs: ...]`` blocks and note them as sent."""
@@ -1671,7 +1630,6 @@ class ChatAgent(
         """
         if not self._dynamic_tools_active():
             return None
-        self._gate_only_mcp_without_memory()
         self._validate_tool_config()
         # A rebuilt agent can't know what this chat's list was, and its slot is
         # most likely gone: one re-read now beats a second one at the next tool.
@@ -1781,7 +1739,6 @@ class ChatAgent(
         """The core list, with the tool embeddings built for the first turn."""
         if not self._dynamic_tools_active():
             return super()._warm_tool_filter()
-        self._gate_only_mcp_without_memory()
         self._validate_tool_config()
         self.tool_loader.admit_tools(self._standing_skill_tools(), self._tools_registry)
         return self.tool_loader.warm(self._tools_registry)
@@ -4016,9 +3973,15 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
         # Must run last so MCP tools don't bloat context before we know the base count.
         self._load_mcp_tools()
-        # Without MCP tools an MCP-only loader stays off, and the tools stay as they were.
+        # Without MCP tools or memory an MCP-only loader stays off, and the
+        # tools stay as they were: search_tools would load the embedder.
         loader = self.tool_loader
-        if loader is not None and loader.mcp_only and self._own_mcp_tools:
+        if (
+            loader is not None
+            and loader.mcp_only
+            and self._own_mcp_tools
+            and getattr(self, "_memory_store", None) is not None
+        ):
             self._register_search_tools()
 
         # Snapshot: freeze this agent's tool set so mutations by other agents
