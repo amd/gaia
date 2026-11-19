@@ -14,7 +14,6 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 #: Gemma's reserved vocabulary slots. They are never trained, so a model that
 #: samples one is no longer producing language.
-RESERVED_TOKEN_RE = re.compile(r"<unused\d+>")
 _ONLY_RESERVED_RE = re.compile(r"\s*(?:<unused\d+>\s*)+")
 
 #: Identical text pieces in a row that end a reply. Tokenizers merge runs of a
