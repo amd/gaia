@@ -50,6 +50,9 @@ export interface ReleaseStats {
   // `releases`/`totalReleaseCount` (main tags only): don't "fix" it into
   // false consistency.
   totalDownloadCount: number;
+  // The newest stable release and its downloads so far, leaving out update
+  // feeds, checksums and signatures (see sumInstallDownloads). Null before the first.
+  latestRelease: { tag: string; installDownloads: number } | null;
 }
 
 export interface NpmDownloadStats {
@@ -334,6 +337,23 @@ export function sumAssetDownloads(assets: { download_count: number }[]): number 
   return assets.reduce((sum, a) => sum + a.download_count, 0);
 }
 
+// Files that are not GAIA itself: the desktop app's update feeds (fetched on
+// every start), differential-update data, checksums and signatures. Installer
+// files an app downloads to update itself (the macOS .zip) still count. Kept in
+// step with META_PATTERNS in workers/admin/src/classify.ts.
+const NOT_INSTALL_FILES: RegExp[] = [
+  /^latest(-[a-z]+)?\.yml$/i,
+  /\.blockmap$/i,
+  /\.sigstore\.json$/i,
+  /sha256sums/i,
+  /^gaia-agent-release\.json$/i,
+  /^gaia-agent\.yaml$/i,
+];
+
+export function sumInstallDownloads(assets: { name: string; download_count: number }[]): number {
+  return sumAssetDownloads(assets.filter((a) => !NOT_INSTALL_FILES.some((p) => p.test(a.name))));
+}
+
 // Whole calendar days between two dates, computed in UTC (not the build
 // machine's local timezone) so the result doesn't shift depending on where
 // the site happens to build — GitHub's published_at is already UTC.
@@ -604,10 +624,14 @@ export async function getReleaseStats(): Promise<ReleaseStats> {
   releaseStatsPromise ??= (async () => {
     const all = await getAllReleases();
     const nonDraft = all.filter((r) => !r.draft);
+    const latest = latestStable(all);
     return {
       releases: streamReleases(all),
       totalReleaseCount: nonDraft.filter((r) => isMainReleaseTag(r.tag_name)).length,
       totalDownloadCount: sumAssetDownloads(nonDraft.flatMap((r) => r.assets)),
+      latestRelease: latest
+        ? { tag: latest.tag_name, installDownloads: sumInstallDownloads(latest.assets) }
+        : null,
     };
   })();
   return releaseStatsPromise;
