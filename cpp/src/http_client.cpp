@@ -271,6 +271,7 @@ struct HttpClient::Impl {
             cli = std::make_unique<httplib::ClientImpl>(t.host, t.port);
         }
         cli->set_keep_alive(true);
+        if (!config.hostAddresses.empty()) cli->set_hostname_addr_map(config.hostAddresses);
         return cli;
     }
 

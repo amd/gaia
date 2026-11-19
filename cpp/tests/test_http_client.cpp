@@ -830,3 +830,13 @@ TEST(HttpClientTest, ACancelCheckEndsARequestThatCannotBeInterrupted) {
     }
     EXPECT_LT(waited, std::chrono::milliseconds(2000)) << "the caller waited for a request it had cancelled";
 }
+
+TEST(HttpClientTest, AHostNameCanBePinnedToAnAddress) {
+    bench::MockLlmServer server;
+    const std::string port = server.baseUrl().substr(server.baseUrl().rfind(':'));
+    HttpClientConfig cfg;
+    cfg.baseUrl       = "http://pinned.invalid" + port;  // a name no resolver answers
+    cfg.hostAddresses = {{"pinned.invalid", "127.0.0.1"}};
+    HttpClient http(cfg);
+    EXPECT_TRUE(http.get("/api/v1/health").ok());
+}

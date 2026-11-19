@@ -120,6 +120,11 @@ struct GAIA_API HttpClientConfig {
     /// Log method and URL to stderr.
     bool debug = false;
 
+    /// Host name to address: connect to this address for that name instead of
+    /// looking the name up, so a check made on an address still holds for the
+    /// request. The name is still sent as Host and used for TLS.
+    std::map<std::string, std::string> hostAddresses;
+
     /// GET only: stop reading a response body at this many bytes and return what
     /// arrived, so a huge or endless page can't fill memory. 0 reads it all.
     std::size_t maxResponseBytes = 0;
