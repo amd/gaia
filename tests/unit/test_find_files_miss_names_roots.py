@@ -9,6 +9,7 @@ shows the search was complete.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -68,17 +69,39 @@ def test_a_content_miss_lists_the_searched_folder(home):
     assert f"Searched: {home.resolve()}." in out
 
 
+def _searched_roots(out):
+    return out.split("Searched: ", 1)[1].split(". Repeating", 1)[0].split(", ")
+
+
 def test_smart_scope_lists_every_existing_root_once(home):
-    (home / "Downloads").mkdir()
+    # Projects, not Downloads: macOS guards Downloads, so it is not searched there.
+    (home / "Projects").mkdir()
     out = _find_files([str(home)])("no_such_file_xyz", scope="smart")
 
     searched = out.split("Searched: ", 1)[1].split(". Repeating", 1)[0]
     roots = searched.split(", ")
     assert str((home / "Work").resolve()) in roots
-    assert str((home / "Downloads").resolve()) in roots
+    assert str((home / "Projects").resolve()) in roots
     assert len(roots) == len(set(roots))
     # A folder that does not exist was never searched, so it is not named.
     assert "Desktop" not in searched
+
+
+def test_smart_scope_lists_downloads_off_macos(home, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    (home / "Downloads").mkdir()
+    out = _find_files([str(home)])("no_such_file_xyz", scope="smart")
+
+    assert str((home / "Downloads").resolve()) in _searched_roots(out)
+
+
+def test_smart_scope_on_macos_skips_downloads_and_says_so(home, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    (home / "Downloads").mkdir()
+    out = _find_files([str(home)])("no_such_file_xyz", scope="smart")
+
+    assert str((home / "Downloads").resolve()) not in _searched_roots(out)
+    assert "Skipped ~/Downloads: macOS asks for permission" in out
 
 
 def test_a_hit_does_not_list_searched_folders(home):
