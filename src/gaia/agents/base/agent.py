@@ -27,6 +27,7 @@ import time
 import uuid
 from collections import ChainMap
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -251,6 +252,23 @@ logger = get_logger(__name__)
 
 #: A message this long is also saved to a file the model can read with tools.
 LONG_MESSAGE_CHARS = 20_000
+
+
+def _tool_name_matches(name: str, patterns: Sequence[str]) -> bool:
+    """Whether *name*, or its bare name without a skill namespace, matches a glob."""
+    bare = bare_tool_name(name)
+    return any(fnmatchcase(name, p) or fnmatchcase(bare, p) for p in patterns)
+
+
+def _tool_permitted(agent: Any, name: str) -> bool:
+    """Whether *agent* may offer and run *name*: inside its scope and not denied.
+
+    getattr for both fields: test doubles call Agent's methods unbound.
+    """
+    scope = getattr(agent, "_tool_scope", None)
+    if scope is not None and name not in scope:
+        return False
+    return not _tool_name_matches(name, getattr(agent, "_denied_tool_patterns", ()))
 
 
 def _skill_validation_error(message: str) -> Exception:
@@ -3225,6 +3243,10 @@ class Agent(abc.ABC):
     # unrestricted behavior; an empty set deliberately permits no tools.
     _tool_scope: Optional[FrozenSet[str]] = None
 
+    # Glob patterns for tools this agent never offers or runs, including ones
+    # registered later (a skill's tools). Empty preserves unrestricted behavior.
+    _denied_tool_patterns: Tuple[str, ...] = ()
+
     # Class-level so a subclass that never runs ``__init__`` still increments.
     _turn_seq: int = 0
 
@@ -5049,10 +5071,45 @@ Do NOT wrap conversational replies in JSON.
         callers.
         """
         registry = self._tools_registry
-        scope = getattr(self, "_tool_scope", None)
-        if scope is None:
+        if getattr(self, "_tool_scope", None) is None and not getattr(
+            self, "_denied_tool_patterns", ()
+        ):
             return registry
-        return {name: entry for name, entry in registry.items() if name in scope}
+        return {
+            name: entry
+            for name, entry in registry.items()
+            if _tool_permitted(self, name)
+        }
+
+    def deny_tools(self, patterns: Sequence[str]) -> List[str]:
+        """Never offer or run a tool whose name matches a glob in *patterns*.
+
+        Applies to tools registered later too. Returns the names it withholds
+        now; raises ``ValueError`` for a pattern that matches none of them, so a
+        typo can't leave a tool on that the caller meant to turn off.
+        """
+        if isinstance(patterns, (str, bytes)):
+            raise TypeError("patterns must be a sequence of globs, not a string")
+        patterns = tuple(p.strip() for p in patterns if p and p.strip())
+        names = list(self._tools_registry)
+        unmatched = [
+            p
+            for p in patterns
+            if not any(_tool_name_matches(name, (p,)) for name in names)
+        ]
+        if unmatched:
+            raise ValueError(
+                f"No tool matches {', '.join(unmatched)}. This agent's tools: "
+                f"{', '.join(sorted(names))}."
+            )
+        self._denied_tool_patterns = (*self._denied_tool_patterns, *patterns)
+        if hasattr(self, "_system_prompt_cache"):
+            del self._system_prompt_cache
+        return sorted(n for n in names if _tool_name_matches(n, patterns))
+
+    def _tool_permitted(self, name: str) -> bool:
+        """Whether *name* is inside this agent's scope and not denied."""
+        return _tool_permitted(self, name)
 
     def _format_tools_for_prompt(self, filter_to: Optional[List[str]] = None) -> str:
         """Format the registered tools into a string for the prompt.
@@ -5070,9 +5127,7 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
-        scope = getattr(self, "_tool_scope", None)
-        if scope is not None:
-            items = [(n, info) for n, info in items if n in scope]
+        items = [(n, info) for n, info in items if _tool_permitted(self, n)]
 
         for name, tool_info in items:
             params_str = ", ".join(
@@ -5608,8 +5663,9 @@ Do NOT wrap conversational replies in JSON.
     def _announce_skill(self, name: str, how: str) -> None:
         """Tell the console a turn runs on *name*, once per skill per turn.
 
-        *how* is ``"model"`` (the model called ``load_skill``), ``"auto"`` (GAIA
-        loaded it for a ``loads_with`` tool) or ``"loaded"`` (already loaded).
+        *how* is ``"model"`` (the model called ``load_skill``), ``"user"`` (the
+        user typed ``/<name>``), ``"auto"`` (GAIA loaded it for a ``loads_with``
+        tool) or ``"loaded"`` (already loaded).
         """
         seq = getattr(self, "_turn_seq", 0)
         if self._skills_announced is None or self._skills_announced_turn != seq:
@@ -5627,7 +5683,7 @@ Do NOT wrap conversational replies in JSON.
     def describe_skills(self) -> List[Dict[str, str]]:
         """``[{"name", "how"}]`` for each loaded skill, in load order.
 
-        *how* is ``"model"`` or ``"auto"`` as in :meth:`_announce_skill`, or
+        *how* is ``"model"``, ``"user"`` or ``"auto"`` as in :meth:`_announce_skill`, or
         ``"always"`` for a skill the agent loads on its own at startup.
         """
         origins = self._skill_origins or {}
@@ -6023,6 +6079,10 @@ Do NOT wrap conversational replies in JSON.
             self._active_skill_filter = [
                 n for n in self._active_skill_filter if n != name
             ]
+        # A later load reports who asked then, not who asked the first time.
+        origins = getattr(self, "_skill_origins", None)
+        if origins:
+            origins.pop(name, None)
         self.rebuild_system_prompt()
         logger.info(
             "Unloaded skill '%s'%s",
@@ -6447,11 +6507,15 @@ Do NOT wrap conversational replies in JSON.
         """Get information about tools available to this agent."""
         scope = getattr(self, "_tool_scope", None)
         if scope is None:
-            return self._tools_registry
+            return {
+                name: info
+                for name, info in self._tools_registry.items()
+                if _tool_permitted(self, name)
+            }
         return {
             name: self._tools_registry[name]
             for name in scope
-            if name in self._tools_registry
+            if name in self._tools_registry and _tool_permitted(self, name)
         }
 
     def get_tools(self) -> List[Dict[str, Any]]:
@@ -7279,9 +7343,7 @@ Do NOT wrap conversational replies in JSON.
         else:
             registry = self._tools_registry
             items = [(n, registry[n]) for n in filter_to if n in registry]
-        scope = getattr(self, "_tool_scope", None)
-        if scope is not None:
-            items = [(n, info) for n, info in items if n in scope]
+        items = [(n, info) for n, info in items if _tool_permitted(self, n)]
 
         schemas = []
         for name, tool_info in items:
@@ -8804,11 +8866,7 @@ Do NOT wrap conversational replies in JSON.
         # when a tool name was registered globally but not shown here.
         if tool_name not in execution_registry:
             tool_name = tool_name.replace("-", "_")
-        if (
-            getattr(self, "_tool_scope", None) is not None
-            and tool_name in self._tools_registry
-            and tool_name not in execution_registry
-        ):
+        if tool_name in self._tools_registry and tool_name not in execution_registry:
             return {
                 **NOT_EXECUTED,
                 "status": "error",
@@ -12060,6 +12118,7 @@ Do NOT wrap conversational replies in JSON.
                     self._console_cancelled if stoppable else None,
                 ),
             ):
+                user_input = self._expand_skill_command(user_input)
                 return self._process_query_impl(user_input, max_steps, trace, filename)
         finally:
             # The impl re-raises on purpose (the wrong-ctx reload its caller
@@ -12072,6 +12131,38 @@ Do NOT wrap conversational replies in JSON.
             # backdate the next one.
             self._pre_turn_spans = None
             self._run_turn_end_hooks()
+
+    def _expand_skill_command(self, user_input: Any) -> Any:
+        """Run ``/<skill-name> request`` on that skill, as Claude Code does.
+
+        A message that does not start with an installed skill's name is
+        returned unchanged, so a path like ``/tmp`` still reads as text. Only an
+        agent with the skill library (``activate_skill``) takes commands.
+        """
+        activate = getattr(self, "activate_skill", None)
+        if not callable(activate) or not isinstance(user_input, str):
+            return user_input
+        from gaia.agents.base.history import (
+            MEMORY_CONTEXT_FOOTER,
+            MEMORY_CONTEXT_HEADER,
+        )
+        from gaia.skills.command import parse_skill_command, skill_command_message
+
+        # MemoryMixin puts its per-turn block before the user's text; keep it.
+        memory, typed = "", user_input
+        fence = MEMORY_CONTEXT_FOOTER + "\n\n"
+        if user_input.startswith(MEMORY_CONTEXT_HEADER) and fence in user_input:
+            head, _, typed = user_input.partition(fence)
+            memory = head + fence
+        command = parse_skill_command(typed)
+        if command is None:
+            return user_input
+        # Rescanned: the user may have added the skill since this chat began.
+        if command.name not in self.skill_manager.discover(force=True):
+            return user_input
+        return memory + skill_command_message(
+            command, activate(command.name, how="user")
+        )
 
     def _flush_post_turn_record(self) -> None:
         """Write the post-answer spans and stop routing waits to this turn."""
@@ -15104,11 +15195,19 @@ Do NOT wrap conversational replies in JSON.
                         )
                         # The next answer replaces this one wholesale, so it
                         # must carry the whole answer, not just the fixed claim.
+                        # With the time limit up no run can start: don't ask for one.
+                        remedy = (
+                            "The time limit is up and no tool can run, so drop "
+                            "the claim, or say when the check last ran and "
+                            "that it was not repeated. "
+                            if self.time_capped_run_seconds(1) == 0
+                            else "Either run the check now, or drop the claim. "
+                        )
                         correction = {
                             "role": "user",
                             "content": (
                                 f'Your answer says "{claim}", but {why}. '
-                                "Either run the check now, or drop the claim. "
+                                f"{remedy}"
                                 "Then give your complete answer again: it "
                                 "replaces the one above, which the user will "
                                 "not see."

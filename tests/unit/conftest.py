@@ -124,16 +124,20 @@ def _restore_environ():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_gaia_config(tmp_path, monkeypatch):
+def _isolate_gaia_config(tmp_path_factory, monkeypatch):
     """Keep unit tests off the developer's real ``~/.gaia/config.json``.
 
     ``GAIA_CONFIG_FILE`` is resolved at import time, so patching ``HOME`` is
     not enough.
+
+    The config gets its own folder, not ``tmp_path``: any config read leaves
+    ``config.json.lock`` beside the file, and ``tmp_path`` belongs to the test.
     """
     from gaia import config as config_mod
 
-    monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", tmp_path)
-    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
+    config_dir = tmp_path_factory.mktemp("gaia-config")
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", config_dir / "config.json")
 
 
 @pytest.fixture(autouse=True)

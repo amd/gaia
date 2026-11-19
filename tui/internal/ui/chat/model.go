@@ -255,7 +255,10 @@ type ChatModel struct {
 	// name a different build than the one answering.
 	agentVersion string
 	gaiaVersion  string
-	dev          bool
+	// skillCommands are the installed skills the agent reported; the "/"
+	// palette lists each as /<name>, which the agent runs on that skill.
+	skillCommands []event.SkillCommand
+	dev           bool
 
 	width  int
 	height int

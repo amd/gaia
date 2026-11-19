@@ -571,3 +571,26 @@ func TestStatsLineSingularForOne(t *testing.T) {
 		t.Errorf("stats line missing \"1 step · 1 tool\":\n%s", rendered)
 	}
 }
+
+// The agent's skill list fills the "/" palette, and a later list replaces it.
+func TestCanonicalSkillListFillsThePalette(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	before := len(m.messages)
+	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Skills: []event.SkillCommand{
+		{Name: "pdf", Description: "Make PDF files."},
+		{Name: "pptx", Description: "Make slide decks."},
+	}})
+	if len(m.messages) != before {
+		t.Errorf("a skills-only status added %d transcript lines", len(m.messages)-before)
+	}
+	m.input.SetValue("/pp")
+	got := m.paletteFiltered()
+	if len(got) != 1 || got[0].Name != "/pptx" {
+		t.Fatalf("palette for /pp = %+v, want /pptx", got)
+	}
+	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Skills: []event.SkillCommand{}})
+	if got := m.paletteFiltered(); len(got) != 0 {
+		t.Errorf("a removed skill is still offered: %+v", got)
+	}
+}
