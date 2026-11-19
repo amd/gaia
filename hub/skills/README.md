@@ -12,7 +12,8 @@ generation, and skills that ship their own tools: `rss-digest`; `calendar` and
 `send-email`, whose writes always ask the user first; `browser-pane`, which
 drives GAIA desktop's browser pane; and `guides` and
 `calculators`, whose tools draw a card in the client) or a working practice
-(checking a report against its sources, log triage, action tracking). They are meant to be copied and edited,
+(checking a report against its sources, log triage with its own
+`triage_logs` tool, action tracking). They are meant to be copied and edited,
 not used verbatim — see the
 [starter skills guide](https://amd-gaia.ai/docs/guides/starter-skills).
 

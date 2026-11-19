@@ -117,3 +117,9 @@ timeouts are baseline: steady across the whole range."*
 - `references/fallback-python.md` - read only when `triage_logs` is not
   available or a file stays unparsed with `timestamp_regex`. It inventories
   with `list_files`, samples with `read_file` and parses with `run_python`.
+
+## Fork this
+
+Pin `timestamp_regex`, `level_regex`, `host_regex` and `entity_regex` in step 1
+to your platform's log format, and add the templates your team already knows
+are harmless to a baseline list, so the report starts from the unfamiliar.
