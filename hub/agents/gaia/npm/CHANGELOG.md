@@ -10,6 +10,12 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 
 ### Changed
 
+- **Start a message with `/` and a skill's name to run that skill**, as in
+  Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
+  with the same checks as `load_skill` and follows it for the rest of the line.
+  A name that is not an installed skill is sent unchanged. Over stdio, the
+  model-state ping and `/skills` now carry the installed skills (`skills`), so
+  the terminal UI can list them when you type `/`.
 - **A command or snippet that starts a never-ending server is refused before it
   runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
   wait on it until the turn timed out; they now return an error that says so and
@@ -36,6 +42,9 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
 - A file a script wrote and the agent then showed whole with `cat` counts as
   read back. Before, the answer still carried "has not been read back
   completely" and the turn was marked unfinished.
+- In a `gaia -p` run the agent is told nobody can answer questions, so it
+  settles an open choice itself and says what it assumed instead of ending on
+  an offer to change it later.
 - `run_python` no longer drops long output without saying so. Output past
   8,000 characters used to be cut silently, so a scan's later hits never
   reached the agent. It now gets the start and end, is told how much was left

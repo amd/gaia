@@ -43,6 +43,13 @@ type modelSwitchRecorder interface {
 func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bool) {
 	switch e := evt.(type) {
 	case event.CanonicalStatusEvent:
+		// Replaced whole: a skill removed since the last report must not linger.
+		if e.Skills != nil {
+			m.skillCommands = e.Skills
+			if e.ModelID == "" && e.Message == "" {
+				break
+			}
+		}
 		// The model-state ping (ModelID set) is header metadata, not turn
 		// progress — it never touches the activity log. Sent once at agent
 		// startup and again after every `/model` switch, so the header always
