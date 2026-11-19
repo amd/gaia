@@ -1102,7 +1102,7 @@ class CompletionEvidence:
 
     def read_by_framework(self, key: str) -> None:
         """The framework read this output in full after its latest write."""
-        item = self.files.get(key)
+        item = self.files.get(key) or self._written_by_executor(key)
         if item is not None and item.written:
             item.verified = True
 

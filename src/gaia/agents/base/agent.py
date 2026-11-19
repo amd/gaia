@@ -1158,6 +1158,8 @@ class _ClosingOverflow(RuntimeError):
 # Stands in for a call the loop stopped before it ran, so the transcript
 # accounts for every id the model asked for.
 _UNRUN_TOOL_CALL_NOTE = "Not run — the turn stopped before this call."
+# A shell line that only prints one file: `cat path`, nothing piped or chained.
+_PLAIN_CAT = re.compile(r"""^\s*cat\s+("[^"]+"|'[^']+'|[^\s|;&<>`$()'"]+)\s*$""")
 _REPEAT_NOT_RUN_NOTE = "Not run — the same call was just repeated."
 
 #: Longest repeating cycle of calls the loop guard recognises (A, B, A, B, …).
@@ -3334,6 +3336,8 @@ class Agent(abc.ABC):
     _step_stats_recorded: bool = False
     # True only while the time-limit closing step's one tool call runs.
     _closing_tool_running: bool = False
+    # The last reply was cut off with nothing in it but thinking.
+    _thinking_cut_off: bool = False
     # Set by a caller with nobody watching (gaia -p): the model is told so.
     no_one_to_ask: bool = False
 
@@ -11107,7 +11111,18 @@ Do NOT wrap conversational replies in JSON.
             }
 
     def _reasoning_request_kwargs(self) -> Dict[str, Any]:
-        """The reasoning effort the agent chose (ReasoningEffortToolsMixin), if any."""
+        """The reasoning effort for the next model call, if any is asked for.
+
+        The agent's own choice (ReasoningEffortToolsMixin), except right after
+        a reply cut off with nothing but thinking in it.
+        """
+        if self._thinking_cut_off:
+            # Thinking used a whole reply: ask a cloud model for its least.
+            from gaia.llm.lemonade_client import cloud_lowest_reasoning_effort
+
+            effort = cloud_lowest_reasoning_effort(getattr(self, "model_id", None))
+            if effort:
+                return {"reasoning_effort": effort}
         chosen = getattr(self, "reasoning_effort_kwargs", None)
         return chosen() if chosen is not None else {}
 
@@ -11581,6 +11596,7 @@ Do NOT wrap conversational replies in JSON.
             )
             if record["ran"] and not record["failed"]:
                 self._verify_whole_write(evidence, tool_name, record["args"])
+                self._verify_shown_file(evidence, tool_name, record["args"], result)
 
     #: Above this a written file is left for the model to check in parts.
     _MAX_FRAMEWORK_READBACK = 4 * 1024 * 1024
@@ -11610,6 +11626,41 @@ Do NOT wrap conversational replies in JSON.
             logger.debug("No framework read-back of %s: %s", target, e)
             return
         if on_disk.replace("\r\n", "\n") == content.replace("\r\n", "\n"):
+            evidence.read_by_framework(key)
+
+    def _verify_shown_file(
+        self, evidence: Any, tool_name: str, args: dict, result: Any
+    ) -> None:
+        """A shell ``cat`` that printed all of one file is a full read-back of it.
+
+        Without this a file a script wrote, then shown whole with ``cat``,
+        was still reported as never read back.
+        """
+        command = args.get("command")
+        if tool_name != "run_shell_command" or not isinstance(command, str):
+            return
+        found = _PLAIN_CAT.match(command)
+        shown = result.get("stdout") if isinstance(result, dict) else None
+        if not found or not isinstance(shown, str) or result.get("output_truncated"):
+            return
+        # The folder the line ran in: a relative path means that one, not the project root.
+        ran_in = result.get("cwd") or args.get("working_directory")
+        key = evidence.key(found.group(1).strip("\"'"), ran_in)
+        if key.startswith(("\\\\", "//")):
+            return  # a network share: no round trip from the agent loop
+        target = Path(key)
+        try:
+            if target.stat().st_size > self._MAX_FRAMEWORK_READBACK:
+                return
+            on_disk = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            logger.debug("No framework read-back of %s: %s", target, e)
+            return
+
+        def _text(value: str) -> str:
+            return value.replace("\r\n", "\n").rstrip("\n")
+
+        if _text(on_disk) == _text(shown):
             evidence.read_by_framework(key)
 
     def _verification_project_root(self) -> Optional[str]:
@@ -12669,6 +12720,7 @@ Do NOT wrap conversational replies in JSON.
         self._open_step = None
         self._open_step_stats = None
         self._step_stats_recorded = False
+        self._thinking_cut_off = False
 
         # Store query for error context (used in _execute_tool for error formatting)
         self._current_query = user_input
@@ -13904,17 +13956,23 @@ Do NOT wrap conversational replies in JSON.
                 )
                 if response:
                     messages.append({"role": "assistant", "content": response})
+                self._thinking_cut_off = _was_all_thinking(
+                    response, reasoning, response_stats
+                )
                 messages.append(
                     {
                         "role": "user",
                         "content": (
                             _CUT_OFF_ALL_THINKING_PROMPT
-                            if _was_all_thinking(response, reasoning, response_stats)
+                            if self._thinking_cut_off
                             else _CUT_OFF_CONTINUE_PROMPT
                         ),
                     }
                 )
                 continue
+            # A reply that finished: the cut-off budget is for cut-offs in a row.
+            cut_off_continuations = 0
+            self._thinking_cut_off = False
 
             # Parse the response. Small models (e.g. 4B) sometimes emit malformed
             # tool_calls JSON — concatenated enum values, unterminated strings,
