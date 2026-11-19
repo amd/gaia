@@ -568,12 +568,26 @@
 .models-apply { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
 /* ── The download chip in the sidebar ──────────────────────────── */
+.download-chip-row {
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    inline-size: calc(100% - 16px);
+    margin: 0 8px 6px;
+}
+.download-chip-row.is-main { inline-size: calc(100% - 24px); margin: 8px 12px 0; }
+/* Clear of the floating menu button that a closed sidebar leaves in the corner. */
+.sidebar-toggle ~ .main-content .download-chip-row.is-main {
+    inline-size: calc(100% - var(--sidebar-toggle-clearance) - 12px);
+    margin-inline-start: var(--sidebar-toggle-clearance);
+    margin-block-start: 12px;
+}
 .download-chip {
     display: flex;
     align-items: center;
     gap: 8px;
-    inline-size: calc(100% - 16px);
-    margin: 0 8px 6px;
+    flex: 1;
+    min-inline-size: 0;
     padding: 6px 10px;
     border: 1px solid var(--border-light);
     border-radius: var(--radius-md);
@@ -582,17 +596,22 @@
     text-align: start;
     animation: setupStepIn var(--duration) var(--ease);
 }
-.download-chip.is-main { inline-size: calc(100% - 24px); margin: 8px 12px 0; }
-/* Clear of the floating menu button that a closed sidebar leaves in the corner. */
-.sidebar-toggle ~ .main-content .download-chip.is-main {
-    inline-size: calc(100% - var(--sidebar-toggle-clearance) - 12px);
-    margin-inline-start: var(--sidebar-toggle-clearance);
-    margin-block-start: 12px;
-}
 .download-chip:hover { background: var(--bg-hover); }
 .download-chip-bar { flex: 1; block-size: 4px; min-inline-size: 30px; position: relative; overflow: hidden; border-radius: var(--radius-full); background: var(--bg-tertiary); }
 .download-chip-bar > span { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--accent); transition: inline-size var(--duration-slow) var(--ease-linear); }
 .download-chip.is-failed { border-color: var(--danger); }
+.download-chip-dismiss {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 6px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    background: transparent;
+    cursor: pointer;
+}
+.download-chip-dismiss:hover { background: var(--bg-hover); }
 
 /* Pinned, the summary covers a quarter of a short window and leaves one model row. */
 @media (max-height: 700px) {

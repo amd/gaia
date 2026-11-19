@@ -1774,6 +1774,40 @@ class DownloadModelRequest(BaseModel):
     load_after: bool = False
 
 
+def _dismiss_download_failure(model_name: str) -> int:
+    """Drop the failed entry for `model_name`; return how many were dropped.
+
+    Only ``error`` entries go: an active download for the same model, and every
+    other model's entry, must survive a dismissal.
+    """
+    with _download_progress_lock:
+        stale = [
+            name
+            for name, entry in _download_progress.items()
+            if entry.get("state") == "error" and _model_ids_match(name, model_name)
+        ]
+        for name in stale:
+            _download_progress.pop(name, None)
+    return len(stale)
+
+
+class DismissDownloadRequest(BaseModel):
+    model_name: str
+
+
+@router.post("/api/system/download-progress/dismiss")
+async def dismiss_download_failure(body: DismissDownloadRequest):
+    """Forget a failed download so its warning stays gone after a reload."""
+    model_name = body.model_name.strip()
+    if not model_name:
+        raise HTTPException(status_code=400, detail="model_name must not be empty")
+    cleared = _dismiss_download_failure(model_name)
+    return {
+        "status": "dismissed" if cleared else "unchanged",
+        "model": model_name,
+    }
+
+
 @router.post("/api/system/download-model", status_code=202)
 async def download_model_endpoint(body: DownloadModelRequest):
     """Trigger downloading a model via Lemonade server (non-blocking).

@@ -11,6 +11,7 @@ import asyncio
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from gaia.llm import lemonade_client as lc
 from gaia.ui.routers import system
@@ -603,3 +604,67 @@ def test_a_stream_error_event_keeps_its_message_after_the_close(monkeypatch):
     assert system._get_download_progress("Some-Unknown-GGUF")["message"] == (
         "disk full"
     )
+
+
+def _dismiss(model_name: str):
+    return asyncio.run(
+        system.dismiss_download_failure(
+            system.DismissDownloadRequest(model_name=model_name)
+        )
+    )
+
+
+def test_dismiss_clears_only_the_failed_entry_for_that_model(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress("settings-GGUF", _progress("settings-GGUF", "error"))
+    system._set_download_progress("other-GGUF", _progress("other-GGUF", "error"))
+    system._set_download_progress(
+        "active-GGUF", _progress("active-GGUF", "downloading")
+    )
+
+    assert _dismiss("settings-GGUF") == {
+        "status": "dismissed",
+        "model": "settings-GGUF",
+    }
+    assert system._get_download_progress("settings-GGUF") is None
+    assert system._get_download_progress("other-GGUF")["state"] == "error"
+    assert system._get_download_progress("active-GGUF")["state"] == "downloading"
+
+
+def test_a_dismissed_failure_is_gone_from_the_next_status_read(monkeypatch):
+    """The dismissal lives on the server, so a reload's status poll stays clean."""
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress("settings-GGUF", _progress("settings-GGUF", "error"))
+
+    _dismiss("settings-GGUF")
+
+    assert system._surface_download_progress(None) is None
+
+
+def test_dismiss_matches_the_name_lemonade_lists_without_the_user_prefix(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress(
+        lc.GPT_OSS_20B_MODEL_NAME,
+        _progress(lc.GPT_OSS_20B_MODEL_NAME, "error"),
+    )
+
+    listed = lc.GPT_OSS_20B_MODEL_NAME[len("user.") :]
+    assert _dismiss(listed)["status"] == "dismissed"
+    assert system._get_download_progress(listed) is None
+
+
+def test_dismiss_never_clears_an_active_download_of_the_same_model(monkeypatch):
+    monkeypatch.setattr(system, "_download_progress", {})
+    system._set_download_progress(
+        "retrying-GGUF", _progress("retrying-GGUF", "downloading")
+    )
+
+    assert _dismiss("retrying-GGUF")["status"] == "unchanged"
+    assert system._get_download_progress("retrying-GGUF")["state"] == "downloading"
+
+
+def test_dismiss_requires_a_model_name():
+    with pytest.raises(HTTPException) as err:
+        _dismiss("   ")
+
+    assert err.value.status_code == 400

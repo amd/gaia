@@ -38,6 +38,7 @@ export interface ApiSchemas {
   DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
+  DismissDownloadRequest: DismissDownloadRequest;
   DocumentListResponse: DocumentListResponse;
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
@@ -498,6 +499,9 @@ export interface DiscoveryCommitItem {
   due_at?: string | null;
   entity?: string | null;
   sensitive?: boolean;
+}
+export interface DismissDownloadRequest {
+  model_name: string;
 }
 /**
  * List of documents.
