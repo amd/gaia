@@ -44,6 +44,7 @@ export interface ApiSchemas {
   DocumentResponse: DocumentResponse;
   DocumentUploadRequest: DocumentUploadRequest;
   DownloadProgress: DownloadProgress;
+  EditScheduleRequest: EditScheduleRequest;
   EvalMailboxRequest: EvalMailboxRequest;
   FileEntry: FileEntry;
   FileListResponse: FileListResponse;
@@ -273,6 +274,7 @@ export interface AgentStepResponse {
   policyVersion?: string | null;
   reason?: string | null;
   receiptId?: string | null;
+  refused?: boolean | null;
   render?: string | null;
   result?: string | null;
   ruleIds?: string[] | null;
@@ -613,6 +615,23 @@ export interface DownloadProgress {
   state: string;
   total_bytes?: number;
   total_files?: number;
+}
+/**
+ * Request to change when a scheduled task runs and what it asks.
+ */
+export interface EditScheduleRequest {
+  /**
+   * New schedule, in the words the create form accepts
+   */
+  interval: string;
+  /**
+   * New prompt to execute on each run
+   */
+  prompt: string;
+  /**
+   * IANA time zone the schedule's times are in. Defaults to the server machine's zone.
+   */
+  timezone?: string | null;
 }
 export interface EvalMailboxRequest {
   attached: boolean;

@@ -128,12 +128,13 @@ the same time.
 
 ## Step 4 — Per-agent grants
 
-The connect panel shows **"Grant access to these agents when you
-connect"** — a default-on checkbox for every installed agent that
-declares Microsoft access. Checked agents are granted their declared
-Graph scopes automatically the moment the OAuth flow completes, so a
-fresh connect needs no follow-up command. Uncheck an agent before
-connecting to withhold its grant.
+Every installed agent that declares Microsoft access is granted its
+declared Graph scopes automatically the moment the OAuth flow completes,
+so a fresh connect needs no follow-up command. When more than one such
+agent is installed, the connect panel shows **"Grant access to these agents
+when you connect"** with a default-on checkbox per agent; uncheck one before
+connecting to withhold its grant. With GAIA the only agent, the list is
+hidden.
 
 You can adjust or revoke grants at any time from the same tile's
 **Per-agent grants** section, or via the CLI:

@@ -404,7 +404,7 @@ textarea:focus-visible {
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     height: 32px; padding: 0 12px;
     border-radius: var(--radius-md);
-    font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: 600;
+    font-family: var(--font-sans); font-size: var(--fs-ui); font-weight: 500;
     white-space: nowrap;
     transition:
         background var(--duration-fast) var(--ease),
@@ -467,7 +467,7 @@ textarea:focus-visible {
     padding: 0 7px;
     font-family: var(--font-sans);
     font-size: var(--fs-caption);
-    font-weight: 600;
+    font-weight: 500;
     border-radius: var(--radius-xs);
     background: var(--bg-tertiary);
     color: var(--text-secondary);
@@ -503,7 +503,7 @@ textarea:focus-visible {
     flex-shrink: 0;
 }
 .modal-header h3 {
-    font-size: var(--fs-title); font-weight: 600; font-family: var(--font-sans);
+    font-size: var(--fs-title); font-weight: 500; font-family: var(--font-sans);
     letter-spacing: -0.015em;
     color: var(--text-primary);
 }
@@ -519,6 +519,31 @@ textarea:focus-visible {
 .modal-body::-webkit-scrollbar-track { background: transparent; }
 .modal-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-full); }
 .modal-body::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* Cut text fades out at its end rather than ending in "…". The scroll timeline
+ * is inactive when nothing overflows, so text that fits is never faded. */
+:root {
+    --fade-size: 2.5em;
+}
+/* :dir() resolves dir="auto" text by its own letters; vite.config's cssTarget keeps it native. */
+*:dir(ltr) {
+    --fade-to: right;
+}
+*:dir(rtl) {
+    --fade-to: left;
+}
+@keyframes fade-cut-inline {
+    from, to {
+        -webkit-mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
+        mask-image: linear-gradient(to var(--fade-to), #000 calc(100% - var(--fade-size)), transparent);
+    }
+}
+@keyframes fade-cut-block {
+    from, to {
+        -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+        mask-image: linear-gradient(to bottom, #000 calc(100% - 1.4em), transparent);
+    }
+}
 
 /* ── AnimatedPresence exit animations ──────────────────────────── */
 
@@ -773,7 +798,7 @@ textarea:focus-visible {
     text-align: center;
     color: var(--text-primary);
 }
-.error-boundary-title { font-size: 15px; font-weight: 600; }
+.error-boundary-title { font-size: 15px; font-weight: 500; }
 .error-boundary-body { color: var(--text-secondary); font-size: var(--fs-ui); }
 .error-boundary-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
 .error-boundary-compact {

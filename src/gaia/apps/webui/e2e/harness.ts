@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test as base, type Page } from '@playwright/test';
 
 import { translate, type MessageKey, type Params } from '../src/i18n/registry';
+import { HUB_URL } from './hub';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..', '..', '..', '..', '..');
@@ -192,6 +193,7 @@ export class Journey {
             PYTHONUTF8: '1',
             PYTHONIOENCODING: 'utf-8',
             ...(process.env.GAIA_E2E_PYTHONPATH ? { PYTHONPATH: process.env.GAIA_E2E_PYTHONPATH } : {}),
+            ...(HUB_URL ? { GAIA_HUB_URL: HUB_URL } : {}),
             ...extra,
         };
     }

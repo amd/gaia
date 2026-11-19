@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
 import types
 from unittest.mock import MagicMock, patch
 
@@ -1343,6 +1345,11 @@ def test_main_forwards_time_limit(monkeypatch):
     assert run.call_args.kwargs["time_limit"] == 900
 
 
+def test_the_agent_is_told_nobody_can_answer(stub_env):
+    print_mode.run("q", model="m1")
+    assert _agent().no_one_to_ask is True
+
+
 def test_no_time_limit_arms_nothing(stub_env):
     print_mode.run("q", model="m1")
     agent = _agent()
@@ -1381,6 +1388,43 @@ def test_a_turn_still_running_at_the_limit_is_stopped_and_reported(stub_env, cap
     assert code == 1
     assert "1-second time limit" in record["result"]
     assert record["time_limit_reached"] is True
+
+
+def test_a_model_call_outliving_the_limit_is_abandoned_with_a_record(
+    stub_env, capsys, monkeypatch
+):
+    """A call already sent ignores the stop; the run still ends and reports."""
+    monkeypatch.setattr(print_mode, "HARD_STOP_GRACE_S", 0.2)
+    release = threading.Event()
+
+    def _stuck_in_a_model_call(self, text):
+        self.queries.append(text)
+        release.wait(30)
+        return {"status": "success", "result": "too late"}
+
+    def _abandoned(self, message):
+        return {"status": "incomplete", "result": message, "time_limit_reached": True}
+
+    try:
+        with (
+            patch.object(_StubAgent, "process_query", _stuck_in_a_model_call),
+            patch.object(
+                _StubAgent, "time_limit_abandoned_result", _abandoned, create=True
+            ),
+        ):
+            started = time.monotonic()
+            code = print_mode.run("q", model="m1", output_format="json", time_limit=1)
+            elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    record = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert code == 1
+    assert elapsed < 5
+    assert record["time_limit_reached"] is True
+    assert "while a model call was still running" in record["result"]
+    # The abandoned turn still holds the model: no memory pass waits on it.
+    assert not _agent().drained
 
 
 def test_summarize_reports_a_time_limit_stop():
