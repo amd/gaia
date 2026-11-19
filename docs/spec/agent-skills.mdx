@@ -703,6 +703,14 @@ Loaded report-from-sources because it matches this request — its instructions
 are in the system prompt.
 ```
 
+Other matches, a companion of the loaded skill among them, are then named as
+an offer, not an instruction:
+
+```
+Also available: office-docs. Call load_skill for one only if this request
+needs it.
+```
+
 It is **off by default**. Turn it on with `GAIA_SKILL_AUTOLOAD=1` or
 `GaiaAgentConfig(skill_autoload=True)`; `GAIA_SKILL_AUTOLOAD=0` wins over the
 config. It needs suggestions on, and weaker matches are suggested exactly as
@@ -712,20 +720,25 @@ they are without it.
   and leads every skill it does not pair with, loaded or not, by **0.03**.
 - **Companions.** Skills that pair (`pairs_with`, in either direction) score
   alike by design, so a companion close behind the best match is not a reason
-  to hold back. The best-scoring companion that also reaches 0.40 loads with
-  it. At most two skills load per turn; further matches stay suggestions.
+  to hold back. Pairing does not load the companion, though: a skill loaded
+  only because its partner matched cost context on every step and its tools
+  went unused. The best-scoring companion loads with the best match only when
+  it reaches 0.40 and leads every remaining skill by 0.03 itself; otherwise
+  it is named as available. At most two skills load per turn.
   Example: `slide-decks` 0.62, `report-from-sources` 0.60 and `office-docs`
-  0.595, all paired, load `slide-decks` and `report-from-sources`.
+  0.595, all paired, load `slide-decks` and name the other two. On the tuning
+  half, 1 of the 7 companions loaded under the earlier rule (reaching 0.40
+  was enough) was a skill the request was labelled with.
 - **Settings.** `skill_autoload_threshold` (`GAIA_SKILL_AUTOLOAD_TAU`) sets the
   floor and `skill_autoload_margin` (`GAIA_SKILL_AUTOLOAD_MARGIN`) the lead.
   The env values win, and one that is not a number stops startup.
 - **Calibration.** On the held-out half of the labelled set (120 requests, 29
-  of them needing no skill), `embeddinggemma-300m` at 0.40 and 0.03 loaded 65
-  skills, 5 of them outside the request's labels: precision 0.92, recall 0.59.
-  On the tuning half: 74 loads, 7 wrong, precision 0.90, recall 0.73. The
+  of them needing no skill), `embeddinggemma-300m` at 0.40 and 0.03 loaded 60
+  skills, 4 of them outside the request's labels: precision 0.93, recall 0.59.
+  On the tuning half: 68 loads, 6 wrong, precision 0.91, recall 0.72. The
   earlier defaults (0.55 and 0.03, with the skill's name in the text and no
   prompts) loaded 12 on the held-out half before `office-docs` joined it, for
-  recall 0.11. 4 of the 5 wrong loads
+  recall 0.11. All 4 wrong loads
   were on requests that need no skill: questions *about* a skill's topic, such
   as "What is RSS and how do RSS feeds work?", score as high as real requests.
   A wrong load costs context, not correctness, which is why a few are
