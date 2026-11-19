@@ -18,7 +18,9 @@ possibly a CLI grant. The model still decides.
 Auto-load is the opt-in exception (:meth:`SkillSuggester.select`): local models
 often ignore even a correct suggestion, so a host may ask for the matches far
 above the suggestion floor, and clearly ahead of every other skill, to load
-before the turn. Everything below that bar is suggested exactly as before.
+before the turn. Skills that pair with the best match (``pairs_with``) are
+expected to score close to it, so they do not count as a rival, and one of
+them may load with it. Everything below that bar is only suggested.
 
 Cheap by construction: each skill's ``"name: first line of description"`` is
 embedded once and cached by content, and a turn costs one query embedding. When
@@ -26,13 +28,19 @@ the embedder is unavailable the turn simply gets no suggestion — the catalogue
 is still there — and selection backs off for a minute instead of retrying on
 every turn.
 
-Calibration (``tests/fixtures/skills/skill_suggestion_cases.json``, 54 invented
-requests over the 20 hub skills, 12 of them requests no skill should match, 5
-of those near misses such as "what is a pivot table?"), with
-``embeddinggemma-300m``: the best match on a positive request scores 0.30-0.67.
-The defaults below measured precision 0.84 and recall 0.93, and 3 of the 12
-negatives got a suggestion — all near misses, which score as high as real
-requests (0.35-0.44), so no threshold separates them without losing recall.
+Calibration set: ``tests/fixtures/skills/skill_suggestion_cases.json`` holds
+invented requests labelled with the hub skills they should suggest; a request
+with no label should match nothing. It has grown since the numbers below were
+taken and now covers every hub skill; ``tests/unit/test_skill_suggester.py``
+reads it as it is.
+
+Old measurement, not repeated on the current set: 54 requests over 20 hub
+skills, 12 of them negatives (5 near misses such as "what is a pivot
+table?"), with ``embeddinggemma-300m``. The best match on a positive request
+scored 0.30-0.67. The suggestion defaults below measured precision 0.84 and
+recall 0.93, and 3 of the 12 negatives got a suggestion — all near misses,
+which score as high as real requests (0.35-0.44), so no threshold separates
+them without losing recall.
 
 Companions from ``pairs_with`` are added only when they score
 :data:`DEFAULT_COMPANION_THRESHOLD` against the request themselves. Pairing is
@@ -40,11 +48,13 @@ mutual, so a hub skill like ``office-docs`` pairs with five others; added
 unconditionally, companions dropped precision to 0.52. Scores are
 embedder-specific: another embedding model needs its own calibration.
 
-Auto-load was measured on an earlier 71-request set (26 negatives) with the
-same embedder: at :data:`DEFAULT_AUTOLOAD_THRESHOLD` and
-:data:`DEFAULT_AUTOLOAD_MARGIN` it picked 11 skills on 10 requests, none
-outside a request's labels and none on a negative, for recall 0.21. It has not
-been re-measured on the current set, which is why it is off by default.
+Auto-load, also an old measurement: on an earlier 71-request set (26
+negatives) with the same embedder, :data:`DEFAULT_AUTOLOAD_THRESHOLD` and
+:data:`DEFAULT_AUTOLOAD_MARGIN` picked 11 skills on 10 requests, none outside
+a request's labels and none on a negative, for recall 0.21. That was before
+companions stopped counting as rivals, and it has not been re-measured on the
+current set, which is why auto-load is off by default. The opt-in calibration
+test prints a threshold-by-margin table for choosing new defaults.
 """
 
 from __future__ import annotations
@@ -80,6 +90,11 @@ SUGGEST_ENV = "GAIA_SKILL_SUGGEST"
 #: Env override for auto-loading. Unset = the agent's config decides.
 AUTOLOAD_ENV = "GAIA_SKILL_AUTOLOAD"
 
+#: Env overrides for the auto-load floor and lead, named like
+#: ``GAIA_DYNAMIC_SKILLS_TAU``. Unset = the agent's config decides.
+AUTOLOAD_THRESHOLD_ENV = "GAIA_SKILL_AUTOLOAD_TAU"
+AUTOLOAD_MARGIN_ENV = "GAIA_SKILL_AUTOLOAD_MARGIN"
+
 #: Inclusive cosine floor a skill must reach to be suggested: the lowest best
 #: match on a positive request in the calibration set.
 DEFAULT_SUGGEST_THRESHOLD = 0.30
@@ -99,10 +114,14 @@ DEFAULT_SUGGEST_TOP_K = 3
 #: opts in. The highest negative measured scored 0.524.
 DEFAULT_AUTOLOAD_THRESHOLD = 0.55
 
-#: The best auto-load must lead every skill that is not auto-loaded, loaded or
-#: not, by this much: two skills scoring alike means the request is ambiguous,
-#: so the model picks.
+#: The best auto-load must lead every skill it does not pair with, loaded or
+#: not, by this much: two unrelated skills scoring alike means the request is
+#: ambiguous, so the model picks.
 DEFAULT_AUTOLOAD_MARGIN = 0.03
+
+#: Slack on the lead comparison, so a lead of exactly the margin counts:
+#: 0.58 - 0.55 is 0.0299999... in floating point.
+AUTOLOAD_LEAD_EPSILON = 1e-6
 
 #: Most skills auto-loaded on one turn.
 MAX_AUTOLOADS_PER_TURN = 2
@@ -129,6 +148,34 @@ def autoload_env_override() -> Optional[bool]:
     return _env_flag(AUTOLOAD_ENV)
 
 
+def _env_float(name: str) -> Optional[float]:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError as e:
+        raise ValueError(f"{name} must be a float, got {raw!r}") from e
+
+
+def autoload_threshold_env_override() -> Optional[float]:
+    """Parse :data:`AUTOLOAD_THRESHOLD_ENV`, or ``None`` when it is unset.
+
+    Raises:
+        ValueError: the value is not a number.
+    """
+    return _env_float(AUTOLOAD_THRESHOLD_ENV)
+
+
+def autoload_margin_env_override() -> Optional[float]:
+    """Parse :data:`AUTOLOAD_MARGIN_ENV`, or ``None`` when it is unset.
+
+    Raises:
+        ValueError: the value is not a number.
+    """
+    return _env_float(AUTOLOAD_MARGIN_ENV)
+
+
 @dataclass
 class SkillMatches:
     """One turn's matches: skills to load before the turn, and to suggest."""
@@ -143,16 +190,18 @@ def render_suggestion(names: Sequence[str]) -> str:
     It goes into the user's message, never the system prompt: the system prompt
     has to stay byte-identical from turn to turn for the server's prompt cache.
 
-    A near miss scores as high as a real match, so the line offers the names
-    and leaves the decision to the model.
+    The best match is an instruction, because a small local model passes over
+    a line that only offers names. The rest keep their order and stay an offer.
     """
     if not names:
         return ""
-    return (
-        "Skills that may fit this request and are not loaded yet: "
-        f"{', '.join(names)} — use load_skill for the ones that cover what was "
-        "asked and ignore the rest."
+    line = (
+        f"Call load_skill('{names[0]}') before you start: it covers this kind "
+        "of request."
     )
+    if len(names) > 1:
+        line += f" Also consider: {', '.join(names[1:])}."
+    return line
 
 
 def render_autoloaded(names: Sequence[str]) -> str:
@@ -211,7 +260,7 @@ class SkillSuggester:
             autoload_threshold: Inclusive cosine floor for an auto-load, or
                 ``None`` (the default) to never auto-load.
             autoload_margin: How far the best auto-load must lead every skill
-                that is not auto-loaded.
+                it does not pair with.
             max_autoloads: Most skills auto-loaded per turn.
         """
         if top_k < 1:
@@ -290,14 +339,15 @@ class SkillSuggester:
     ) -> SkillMatches:
         """What :meth:`suggest` returns, split into auto-loads and suggestions.
 
-        Up to :attr:`max_autoloads` of the matches scoring at least
-        :attr:`autoload_threshold` become auto-loads, provided the best of them
-        leads every other skill, loaded or not, by :attr:`autoload_margin`. The
-        rest stay suggestions, in the same order. With no
-        :attr:`autoload_threshold` nothing is ever an auto-load.
+        The best match scoring at least :attr:`autoload_threshold` becomes an
+        auto-load when it leads every skill it does not pair with, loaded or
+        not, by :attr:`autoload_margin`. Its best-scoring companion that also
+        clears :attr:`autoload_threshold` loads with it, up to
+        :attr:`max_autoloads`. The rest stay suggestions, in the same order.
+        With no :attr:`autoload_threshold` nothing is ever an auto-load.
         """
         matched, scored = self._match(query, skills, loaded, list_project)
-        auto = self._auto_loads(matched, scored)
+        auto = self._auto_loads(matched, scored, skills, list_project)
         result = SkillMatches(
             auto_load=auto, suggest=[name for name in matched if name not in auto]
         )
@@ -309,23 +359,42 @@ class SkillSuggester:
             )
         return result
 
-    def _auto_loads(self, matched: List[str], scored: Dict[str, float]) -> List[str]:
-        """The *matched* names to load before the turn, best first."""
+    def _auto_loads(
+        self,
+        matched: List[str],
+        scored: Dict[str, float],
+        skills: Dict[str, "Skill"],
+        list_project: bool = False,
+    ) -> List[str]:
+        """The *matched* names to load before the turn, best first.
+
+        A companion of the leader is expected to score close to it, so it is
+        not a rival: only skills the leader does not pair with are held to the
+        margin.
+        """
         if self.autoload_threshold is None or self.max_autoloads == 0:
             return []
-        auto = sorted(
+        eligible = sorted(
             (name for name in matched if scored[name] >= self.autoload_threshold),
             key=lambda name: (-scored[name], name),
-        )[: self.max_autoloads]
-        if not auto:
+        )
+        if not eligible:
             return []
+        leader = eligible[0]
+        mates = set(companions(skills, leader, list_project))
         runner_up = max(
-            (score for name, score in scored.items() if name not in auto),
+            (
+                score
+                for name, score in scored.items()
+                if name != leader and name not in mates
+            ),
             default=float("-inf"),
         )
-        if scored[auto[0]] - runner_up < self.autoload_margin:
+        if scored[leader] - runner_up + AUTOLOAD_LEAD_EPSILON < self.autoload_margin:
             return []
-        return auto
+        # At most one companion: a second body is a lot of prompt to add unasked.
+        mate = [name for name in eligible[1:] if name in mates][:1]
+        return ([leader] + mate)[: self.max_autoloads]
 
     def _match(
         self,
@@ -397,6 +466,9 @@ class SkillSuggester:
 
 __all__ = [
     "AUTOLOAD_ENV",
+    "AUTOLOAD_LEAD_EPSILON",
+    "AUTOLOAD_MARGIN_ENV",
+    "AUTOLOAD_THRESHOLD_ENV",
     "DEFAULT_AUTOLOAD_MARGIN",
     "DEFAULT_AUTOLOAD_THRESHOLD",
     "DEFAULT_COMPANION_THRESHOLD",
@@ -408,6 +480,8 @@ __all__ = [
     "SkillMatches",
     "SkillSuggester",
     "autoload_env_override",
+    "autoload_margin_env_override",
+    "autoload_threshold_env_override",
     "render_autoloaded",
     "render_suggestion",
     "suggest_env_override",
