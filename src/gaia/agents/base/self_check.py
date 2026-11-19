@@ -228,20 +228,23 @@ def mechanical_findings(
     written: Sequence[str],
     pending: Sequence[str] = (),
     prose: str = "",
+    empty_ok: Sequence[str] = (),
 ) -> List[str]:
     """What is wrong with *written* that needs no model to see.
 
     Each entry states what the file holds and what the request says, so the
     reader can tell a real miss from a request this code misread. *pending*
     are files the request names that nothing wrote; *prose* is the text of
-    the one prose file among *written*, when there is exactly one.
+    the one prose file among *written*, when there is exactly one; *empty_ok*
+    are files among *written* that are meant to be empty.
     """
     findings: List[str] = []
     for path in written:
         try:
             suffix = os.path.splitext(path)[1].lower()
             if os.path.getsize(path) == 0:
-                findings.append(f"`{_name(path)}` is empty.")
+                if path not in empty_ok:
+                    findings.append(f"`{_name(path)}` is empty.")
             elif suffix in _OFFICE_KINDS and not zipfile.is_zipfile(path):
                 findings.append(
                     f"`{_name(path)}` is not a {_OFFICE_KINDS[suffix]}: it holds "

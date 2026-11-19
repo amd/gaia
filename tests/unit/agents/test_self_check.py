@@ -637,3 +637,13 @@ def test_text_saved_under_an_office_name_is_raised_not_fatal(tmp_path):
         "`deck.pptx` is not a presentation: it holds plain text under a .pptx "
         "name, so it will not open.",
     ]
+
+
+def test_an_empty_file_that_is_meant_to_be_empty_is_not_raised(tmp_path):
+    notes = str(tmp_path / "notes.txt")
+    Path(notes).write_text("", encoding="utf-8")
+    assert mechanical_findings("Create notes.txt", [notes]) == ["`notes.txt` is empty."]
+    assert (
+        mechanical_findings("Create an empty notes.txt", [notes], empty_ok=[notes])
+        == []
+    )
