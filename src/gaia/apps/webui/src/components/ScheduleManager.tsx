@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useState, useCallback, useRef, useId } from 'react';
-import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSquare, Zap } from 'lucide-react';
+import { X, Plus, Clock, Play, Pause, Trash2, ChevronDown, ChevronUp, MessageSquare, Zap, Pencil } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useScheduleStore } from '../stores/scheduleStore';
 import { log } from '../utils/logger';
 import type { Schedule, ScheduleResult, ParsedSchedule, ScheduleDescription } from '../types';
-import { ApiError, parseScheduleInput } from '../services/api';
+import { ApiError } from '../services/api';
+import { parseScheduleInput } from '../services/scheduleApi';
 import { isMessageKey, stripIsolates, type MessageKey, type Say } from '../i18n/registry';
 import { dateLocale, tEn, translator, useT, type Translate } from '../i18n/useT';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
@@ -141,7 +142,28 @@ function formatDays(days: number[], say: Say): string {
     return days.map((d) => say(`schedules.day.${d}` as MessageKey)).join(say('schedules.days.join'));
 }
 
-function ScheduleCard({ schedule }: { schedule: Schedule }) {
+/** Quick picks for "When to run"; the value is what the schedule parser reads. */
+const WHEN_PRESETS: Array<{ label: MessageKey; value: string }> = [
+    { label: 'schedules.preset.morning', value: 'daily at 8am' },
+    { label: 'schedules.preset.weekdays', value: 'weekdays at 9am' },
+    { label: 'schedules.preset.hourly', value: 'every 1h' },
+];
+
+/** What the user typed when the schedule was made, so Edit starts from their own words. */
+export function scheduleInputText(schedule: Schedule): string {
+    if (schedule.schedule_config) {
+        try {
+            const raw = (JSON.parse(schedule.schedule_config) as { raw_input?: unknown }).raw_input;
+            if (typeof raw === 'string' && raw.trim()) return raw;
+        } catch (err) {
+            log.ui.warn(`Schedule "${schedule.name}" has an unreadable schedule_config`, err);
+        }
+    }
+    // Rows saved before the input was kept: the description reads back for most shapes, and the preview says if not.
+    return schedule.description;
+}
+
+function ScheduleCard({ schedule, onEdit }: { schedule: Schedule; onEdit: (schedule: Schedule) => void }) {
     const t = useT();
     const { selectedSchedule, selectSchedule, updateScheduleStatus, runScheduleNow, deleteSchedule, results, resultsLoading, loadSchedules, loadResults } = useScheduleStore();
     const { setCurrentSession, setShowSchedules } = useChatStore();
@@ -211,6 +233,16 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
         void deleteSchedule(schedule.name);
     }, [schedule.name, deleteSchedule]);
 
+    const handleEdit = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        onEdit(schedule);
+    }, [onEdit, schedule]);
+
+    const handleToggleHistory = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        selectSchedule(isSelected ? null : schedule.name);
+    }, [isSelected, schedule.name, selectSchedule]);
+
     const handleOpenChat = useCallback((e: React.MouseEvent) => {
         e.stopPropagation();
         if (schedule.session_id) {
@@ -260,8 +292,14 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                         ? <><Pause size={11} /> {t('schedules.card.pause')}</>
                         : <><Play size={11} /> {t('schedules.card.resume')}</>}
                 </button>
+                <button className="btn-sm" onClick={handleEdit} disabled={schedule.running} title={t('schedules.card.editTitle')}>
+                    <Pencil size={11} /> {t('schedules.card.edit')}
+                </button>
                 <button className={`btn-sm danger`} onClick={handleDelete} title={t('schedules.card.delete')}>
                     <Trash2 size={11} /> {t('schedules.card.delete')}
+                </button>
+                <button className="btn-sm schedule-history-toggle" onClick={handleToggleHistory} aria-expanded={isSelected}>
+                    {isSelected ? <ChevronUp size={11} /> : <ChevronDown size={11} />} {t('schedules.card.pastRuns')}
                 </button>
             </div>
             {askingDelete && (
@@ -309,7 +347,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
 export function ScheduleManager() {
     const t = useT();
     const { setShowSchedules } = useChatStore();
-    const { schedules, loading, error, actionError, loadSchedules, createSchedule, dismissActionError } = useScheduleStore();
+    const { schedules, loading, error, actionError, loadSchedules, createSchedule, editSchedule, dismissActionError } = useScheduleStore();
     const close = useCallback(() => setShowSchedules(false), [setShowSchedules]);
     useEscapeToClose(true, close);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -326,6 +364,9 @@ export function ScheduleManager() {
     const [parsing, setParsing] = useState(false);
     const [creating, setCreating] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
+    // The schedule the form is changing; null when it makes a new one.
+    const [editing, setEditing] = useState<string | null>(null);
+    const formRef = useRef<HTMLDivElement>(null);
     const [nameTaken, setNameTaken] = useState(false);
     const fieldId = useId();
     const scheduleFieldId = `${fieldId}-when`;
@@ -339,9 +380,11 @@ export function ScheduleManager() {
     const showRejectReason = scheduleRejected && /[A-Za-z]/.test(nlInput);
 
     useEffect(() => {
+        // A draft is an unsaved new schedule; an edit in progress is not one.
+        if (editing) return;
         const filled = nlInput.trim() || scheduleName.trim() || schedulePrompt.trim();
         useScheduleStore.getState().setDraft(filled ? { when: nlInput, name: scheduleName, prompt: schedulePrompt } : null);
-    }, [nlInput, scheduleName, schedulePrompt]);
+    }, [editing, nlInput, scheduleName, schedulePrompt]);
 
     // Debounced parse of NL input
     const parseTimerRef = useRef<number | null>(null);
@@ -384,6 +427,32 @@ export function ScheduleManager() {
     const canCreate = nlInput.trim() && scheduleName.trim() && schedulePrompt.trim()
         && (parsed === null || parsed.valid);  // block only if parse explicitly returned invalid
 
+    const closeForm = useCallback(() => {
+        setShowCreate(false);
+        setEditing(null);
+        setFormError(null);
+        setNameTaken(false);
+        setParsed(null);
+        setNlInput('');
+        setScheduleName('');
+        setSchedulePrompt('');
+    }, []);
+
+    const startEdit = useCallback((schedule: Schedule) => {
+        setEditing(schedule.name);
+        setScheduleName(schedule.name);
+        setSchedulePrompt(schedule.prompt);
+        setNlInput(scheduleInputText(schedule));
+        setFormError(null);
+        setShowCreate(true);
+        log.ui.info(`Editing schedule "${schedule.name}"`);
+    }, []);
+
+    // The form sits above the list, so bring it into view when a card opens it.
+    useEffect(() => {
+        if (editing) formRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }, [editing]);
+
     const handleCreate = useCallback(async () => {
         if (!canCreate) return;
         setCreating(true);
@@ -391,21 +460,22 @@ export function ScheduleManager() {
         setNameTaken(false);
         try {
             // Pass the raw NL input as interval - backend will re-parse it
-            await createSchedule(scheduleName.trim(), nlInput.trim(), schedulePrompt.trim());
-            useScheduleStore.getState().setDraft(null);
-            setNlInput('');
-            setScheduleName('');
-            setSchedulePrompt('');
-            setParsed(null);
-            setShowCreate(false);
-            log.ui.info(`Schedule "${scheduleName}" created`);
+            if (editing) {
+                await editSchedule(editing, nlInput.trim(), schedulePrompt.trim());
+                log.ui.info(`Schedule "${editing}" edited`);
+            } else {
+                await createSchedule(scheduleName.trim(), nlInput.trim(), schedulePrompt.trim());
+                useScheduleStore.getState().setDraft(null);
+                log.ui.info(`Schedule "${scheduleName}" created`);
+            }
+            closeForm();
         } catch (err) {
-            if (err instanceof ApiError && err.httpStatus === 409) setNameTaken(true);
-            else setFormError(err instanceof Error ? err.message : t('schedules.createFailed'));
+            if (!editing && err instanceof ApiError && err.httpStatus === 409) setNameTaken(true);
+            else setFormError(err instanceof Error ? err.message : t(editing ? 'schedules.editFailed' : 'schedules.createFailed'));
         } finally {
             setCreating(false);
         }
-    }, [canCreate, scheduleName, nlInput, schedulePrompt, createSchedule, t]);
+    }, [canCreate, editing, scheduleName, nlInput, schedulePrompt, createSchedule, editSchedule, closeForm, t]);
 
     return (
         <div ref={dialogRef} className="modal-overlay" onClick={() => setShowSchedules(false)} role="dialog" aria-modal="true" aria-label={t('schedules.title')}>
@@ -425,10 +495,24 @@ export function ScheduleManager() {
                                 <Plus size={14} /> {t('schedules.new')}
                             </button>
                         ) : (
-                            <div className="schedule-create-form">
+                            <div className="schedule-create-form" ref={formRef}>
+                                {editing && <h4 className="schedule-form-title">{t('schedules.editingTitle', { name: editing })}</h4>}
                                 {/* NL input */}
                                 <div className="schedule-field">
                                     <label className="schedule-field-label" htmlFor={scheduleFieldId}>{t('schedules.when')}</label>
+                                    <div className="schedule-presets">
+                                        {WHEN_PRESETS.map((preset) => (
+                                            <button
+                                                key={preset.value}
+                                                type="button"
+                                                className={`schedule-preset${nlInput.trim() === preset.value ? ' is-picked' : ''}`}
+                                                onClick={() => setNlInput(preset.value)}
+                                                aria-pressed={nlInput.trim() === preset.value}
+                                            >
+                                                {t(preset.label)}
+                                            </button>
+                                        ))}
+                                    </div>
                                     <textarea
                                         id={scheduleFieldId}
                                         className="schedule-nl-input"
@@ -502,6 +586,7 @@ export function ScheduleManager() {
                                             placeholder={t('schedules.namePlaceholder')}
                                             value={scheduleName}
                                             onChange={(e) => { setScheduleName(e.target.value); setNameTaken(false); }}
+                                            readOnly={editing !== null}
                                             className={!scheduleName.trim() && nlInput.trim() ? 'schedule-field-missing' : ''}
                                             aria-invalid={nameTaken}
                                             aria-describedby={nameTaken ? nameErrorId : undefined}
@@ -523,11 +608,13 @@ export function ScheduleManager() {
 
                                 {formError && <p className="schedule-form-error"><bdi>{formError}</bdi></p>}
                                 <div className="schedule-create-actions">
-                                    <button className="btn-secondary" onClick={() => { setShowCreate(false); setFormError(null); setNameTaken(false); setParsed(null); setNlInput(''); setScheduleName(''); setSchedulePrompt(''); }}>
+                                    <button className="btn-secondary" onClick={closeForm}>
                                         {t('schedules.cancel')}
                                     </button>
                                     <button className="btn-primary" onClick={handleCreate} disabled={!canCreate || creating}>
-                                        {t(creating ? 'schedules.creating' : 'schedules.create')}
+                                        {editing
+                                            ? t(creating ? 'schedules.saving' : 'schedules.save')
+                                            : t(creating ? 'schedules.creating' : 'schedules.create')}
                                     </button>
                                 </div>
                             </div>
@@ -554,7 +641,7 @@ export function ScheduleManager() {
                         ) : (
                             <div className="schedule-list">
                                 {schedules.map((s) => (
-                                    <ScheduleCard key={s.id} schedule={s} />
+                                    <ScheduleCard key={s.id} schedule={s} onEdit={startEdit} />
                                 ))}
                             </div>
                         )}
