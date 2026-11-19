@@ -91,14 +91,30 @@ def ancestor_pids(pid: int) -> List[int]:
     """The pids of *pid*'s parent, its parent's parent, and so on.
 
     ``psutil`` only names a parent started before the child, so a recycled
-    Windows parent pid is never mistaken for the real one.
+    Windows parent pid is never mistaken for the real one. A walk cut short
+    keeps the ancestors found so far and is logged: a lease it misses holds
+    the models as if a user held it.
     """
     import psutil
 
+    found: List[int] = []
     try:
-        return [p.pid for p in psutil.Process(pid).parents()]
-    except psutil.Error:
-        return []
+        proc = psutil.Process(pid).parent()
+        while proc is not None:
+            found.append(proc.pid)
+            proc = proc.parent()
+    except psutil.NoSuchProcess:
+        pass
+    except psutil.Error as e:
+        logger.warning(
+            "lemonade clients: could not read the parents of pid %d past %s: %s. "
+            "If it runs inside a sidecar agent, its lease keeps the models "
+            "loaded until it exits.",
+            pid,
+            found or "itself",
+            e,
+        )
+    return found
 
 
 def idle_timeout_seconds() -> Optional[float]:
@@ -258,6 +274,7 @@ class LemonadeClients:
             name=name or kind,
             processes=processes,
             renewed_at=self._clock(),
+            # Decided once: a sidecar's pid is known from its spawn, before it can lease.
             agent=self._in_agent([pid for pid, _ in processes]),
         )
         with self._lock:

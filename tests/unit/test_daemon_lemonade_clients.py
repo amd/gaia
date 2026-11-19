@@ -404,6 +404,43 @@ class TestAncestorPids:
             child.kill()
             child.wait(timeout=10)
 
+    @staticmethod
+    def _chain(failure):
+        """A process whose parent is 2, whose parent read raises *failure*."""
+        grandparent = mock.Mock(pid=2)
+        grandparent.parent.side_effect = failure
+        child = mock.Mock(pid=3)
+        child.parent.return_value = grandparent
+        return child
+
+    def test_a_denied_walk_keeps_the_parents_found_and_says_so(self, caplog):
+        import psutil
+
+        from gaia.daemon.lemonade_clients import ancestor_pids
+
+        child = self._chain(psutil.AccessDenied(2))
+        with mock.patch("psutil.Process", return_value=child):
+            assert ancestor_pids(3) == [2]
+        assert "could not read the parents of pid 3" in caplog.text
+
+    def test_a_process_gone_mid_walk_is_not_an_error(self, caplog):
+        import psutil
+
+        from gaia.daemon.lemonade_clients import ancestor_pids
+
+        child = self._chain(psutil.NoSuchProcess(2))
+        with mock.patch("psutil.Process", return_value=child):
+            assert ancestor_pids(3) == [2]
+        assert "could not read" not in caplog.text
+
+    def test_a_process_already_gone_has_no_ancestors(self):
+        import psutil
+
+        from gaia.daemon.lemonade_clients import ancestor_pids
+
+        with mock.patch("psutil.Process", side_effect=psutil.NoSuchProcess(9)):
+            assert ancestor_pids(9) == []
+
 
 class TestIdleTimeout:
     def test_fires_once_the_timeout_passes_with_nobody_connected(self, world):
