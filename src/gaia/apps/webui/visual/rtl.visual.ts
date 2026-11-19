@@ -2578,6 +2578,57 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+// Opening and switching ease in on purpose; with reduced motion asked for, nothing moves.
+test.describe('arrivals ease in (en)', () => {
+    const openSkills = async (page: Page, motion: 'no-preference' | 'reduce') => {
+        await open(page, '', 'en', withSettingsPanes);
+        await page.emulateMedia({ reducedMotion: motion });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        await expect(page.locator('.settings-pane-title')).toBeVisible();
+    };
+
+    // The section's height on each of the 20 frames after its summary is clicked.
+    const openFrames = (page: Page) => page.locator('.settings-pane details:not([open])').first().evaluate((el) =>
+        new Promise<number[]>((done) => {
+            const heights: number[] = [];
+            (el.querySelector('summary') as HTMLElement).click();
+            const tick = () => {
+                heights.push(el.getBoundingClientRect().height);
+                if (heights.length < 20) requestAnimationFrame(tick);
+                else done(heights);
+            };
+            requestAnimationFrame(tick);
+        }));
+
+    test('a section grows open over several frames instead of jumping', async ({ page }) => {
+        await openSkills(page, 'no-preference');
+        const heights = await openFrames(page);
+        const full = heights[heights.length - 1];
+        const between = heights.filter((h) => h > heights[0] + 1 && h < full - 1);
+        expect(between.length, `heights: ${heights.map(Math.round).join(' ')}`).toBeGreaterThanOrEqual(3);
+    });
+
+    test('with reduced motion a section opens at once', async ({ page }) => {
+        await openSkills(page, 'reduce');
+        const heights = await openFrames(page);
+        // It may snap a frame late under load, but never passes through a height in between.
+        const full = heights[heights.length - 1];
+        const between = heights.filter((h) => h > heights[0] + 1 && h < full - 1);
+        expect(between, `heights: ${heights.map(Math.round).join(' ')}`).toEqual([]);
+    });
+
+    test('a Settings tab fades in when picked', async ({ page }) => {
+        await openSkills(page, 'no-preference');
+        await page.locator('.settings-pane').evaluate((el) => el.setAttribute('data-was', 'skills'));
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        // A new pane element, so its entry animation plays again, and that animation is the fade.
+        const pane = page.locator('.settings-pane');
+        await expect(pane).not.toHaveAttribute('data-was', 'skills');
+        expect(await pane.evaluate((el) => getComputedStyle(el).animationName)).toBe('fadeIn');
+    });
+});
+
 for (const locale of ['en', 'ar']) {
     test(`the model menu leads with the provider in use and asks before a download (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
