@@ -175,6 +175,10 @@ func (m ChatModel) statusHints() []hint {
 			hint{text: "type ahead", rank: rankAffordance},
 			hint{text: "Esc show chat", rank: rankInterrupt},
 		)
+	} else if m.startup.inFlight && m.startup.kind == StartupRestore {
+		// Typing ahead of the saved model coming back is not useful; say what
+		// the wait is.
+		hints = append(hints, hint{text: "restoring " + m.startup.model + "…", rank: rankAffordance})
 	} else if m.streaming {
 		// Worth advertising exactly when it applies: someone who believes the
 		// composer is frozen never tries it.
