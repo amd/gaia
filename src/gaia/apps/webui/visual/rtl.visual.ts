@@ -63,8 +63,13 @@ async function open(page: Page, hash = '', locale = 'ar', before?: (page: Page) 
 }
 
 /** Every rule break on the page, as readable lines. */
-const audit = (page: Page): Promise<string[]> =>
-    page.evaluate(() => {
+// A cut text's fade follows a scroll timeline, which picks up new text on the next frame.
+const nextFrames = (page: Page) =>
+    page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+
+const audit = async (page: Page): Promise<string[]> => {
+    await nextFrames(page);
+    return page.evaluate(() => {
         const problems: string[] = [];
         const label = (el: Element) =>
             `<${el.tagName.toLowerCase()} class="${String(el.className).slice(0, 40)}"> "${(el.textContent ?? '').trim().slice(0, 40)}"`;
@@ -119,18 +124,29 @@ const audit = (page: Page): Promise<string[]> =>
                 // Aligned to its end, the last line's "…" lands past the edge and is clipped: "preparation a."
                 const toEnd = style.textAlign === 'end' || style.textAlign === (style.direction === 'rtl' ? 'left' : 'right');
                 if (toEnd) problems.push(`clamped text aligned to its end hides its "…": ${label(el)}`);
+                // A fade down the block is taller than one line, so a one-line clamp would dim all of it.
+                const mask = style.maskImage || style.getPropertyValue('-webkit-mask-image');
+                const oneLine = el.clientHeight < 2 * (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2);
+                if (oneLine && mask !== 'none' && !/to (left|right)/.test(mask)) problems.push(`one-line clamp faded top to bottom: ${label(el)}`);
             }
 
             const text = el.textContent?.trim() ?? '';
             if (el.querySelector(':scope > :not(i18n-label)') || !text) continue;
 
+            // Cut text fades out at its end; a "…" is the old look, and a hard cut hides that more exists.
+            const faded = (style.maskImage || style.getPropertyValue('-webkit-mask-image')) !== 'none';
+            const cut = !srOnly && box.width > 2 && style.whiteSpace === 'nowrap' && style.overflowX === 'hidden'
+                && el.scrollWidth > el.clientWidth + 1;
+            if (style.textOverflow === 'ellipsis') problems.push(`ends in "…" instead of fading: ${label(el)}`);
+            else if (cut && !faded) problems.push(`cut off with no fade: ${label(el)}`);
+
             // A long name that shrinks to nothing tells the reader nothing.
-            if (style.textOverflow === 'ellipsis' && box.width < 40 && el.scrollWidth > box.width + 1) {
+            if (cut && box.width < 40) {
                 problems.push(`text squeezed to ${Math.round(box.width)}px: ${label(el)}`);
             }
 
             // An English name cut off in rtl keeps its end and loses its start.
-            if (style.textOverflow === 'ellipsis' && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
+            if (cut && style.direction === 'rtl' && latin.test(text) && !arabic.test(text)) {
                 problems.push(`Latin text truncates from its start: ${label(el)}`);
             }
 
@@ -341,6 +357,7 @@ const audit = (page: Page): Promise<string[]> =>
         }
         return [...new Set(problems)];
     });
+};
 
 // A reply that never ends, so the card stays up for the screenshot.
 const RECORDING_EVENTS = [
@@ -618,6 +635,17 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the keyboard shortcuts sheet (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.locator('textarea').first().focus();
+        await page.keyboard.press('Control+/');
+        await expect(page.locator('.shortcuts-dialog')).toBeVisible();
+        await shot(page, `shortcuts-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const LONG_TITLES = {
     latin: 'My own typed question Give me a banana bread recipe with walnuts and brown butter',
     arabic: 'سؤالي الذي كتبته بنفسي أعطني وصفة خبز الموز مع الجوز والزبدة البنية',
@@ -884,6 +912,38 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         await page.locator('.msg-assistant').hover();
         await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`failed-answer-${locale}.png`) });
+    });
+}
+
+/** A turn that ran two winget commands Undo cannot reverse. */
+async function withUntrackedCommands(page: Page): Promise<void> {
+    await withFailedAnswer(page);
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/changes`, (route) =>
+        route.fulfill({
+            json: {
+                turns: [{
+                    turn_id: 't1', session_id: ANSWER_SESSION, message_id: 2, started_at: NOW.toISOString(),
+                    finished_at: NOW.toISOString(), restored_at: null, files: [], incomplete: true,
+                    untracked: [
+                        { kind: 'shell', detail: 'winget install --id Git.Git --exact', paths: [] },
+                        { kind: 'shell', detail: 'winget install --id Git.Git --exact --source winget', paths: [] },
+                    ],
+                }],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the undo footer says what Undo cannot reverse, in the UI language (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withUntrackedCommands);
+        const warning = page.locator('.turn-changes-warning');
+        await expect(warning).toContainText(locale === 'en' ? 'GAIA ran 2 commands. Undo only restores' : 'التراجع يعيد فقط');
+        await expect(warning).not.toContainText("can't track");
+        expect(await audit(page)).toEqual([]);
+        await warning.screenshot({ path: info.outputPath(`undo-footer-${locale}.png`) });
+        const dir = process.env.GAIA_VISUAL_SHOTS;
+        if (dir) await warning.screenshot({ path: `${dir}/undo-footer-${locale}.png` });
     });
 }
 
@@ -1233,6 +1293,78 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.md-table tr').nth(1).locator('td').nth(1)).toHaveClass('is-numeric');
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath(`answer-polish-${locale}.png`) });
+    });
+}
+
+async function withFormula(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'How much does a columnar scan save?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'The scan amplification is\n\n$$R = \\frac{C_{\\text{row}}}{C_{\\text{col}}} \\approx \\frac{W}{w}$$\n\nWith 50 columns and 4 read, $R \\approx 12.5$, and the bill drops from $5 to $0.40.',
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a formula in an answer is drawn, left to right (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFormula);
+        const answer = page.locator('.msg-assistant').last();
+        await expect(answer.locator('.md-math math')).toHaveCount(2);
+        await expect(answer).toContainText('from $5 to $0.40');
+        await expect(answer.locator('.md-math').first()).toHaveAttribute('dir', 'ltr');
+        expect(await audit(page)).toEqual([]);
+        await answer.screenshot({ path: info.outputPath(`formula-${locale}.png`) });
+    });
+}
+
+const LONG_SUM = `$$${Array.from({ length: 30 }, (_, i) => `a_{${i + 1}}`).join(' + ')} = S$$`;
+const LONG_FORMULA_TEXT = `The quadratic formula is $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$ inline, and a very long one ${LONG_SUM} in the same paragraph.\n\n$$A = P\\left(1 + \\frac{r}{n}\\right)^{nt}$$`;
+
+async function withLongFormula(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: LONG_FORMULA_TEXT, created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: LONG_FORMULA_TEXT, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const theme of ['light', 'dark'] as const) {
+    test(`a formula wider than its line scrolls in its own box, and one that fits has no scrollbar (${theme})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en', withLongFormula, theme);
+        const list = page.locator('.messages-scroll');
+        await expect(page.locator('.md-math-wide')).toHaveCount(2);
+        expect(await list.evaluate((el) => el.scrollWidth - el.clientWidth), 'the chat scrolls sideways').toBeLessThanOrEqual(1);
+        for (const bubble of ['.msg-user', '.msg-assistant']) {
+            const spill = await page.locator(bubble).last().evaluate((el) => {
+                const edge = el.getBoundingClientRect().right;
+                const math = el.querySelector('.md-math-wide')!.getBoundingClientRect();
+                return math.right - edge;
+            });
+            expect(spill, `${bubble}: the formula's box runs past its message`).toBeLessThanOrEqual(1);
+        }
+        // The short formulas stay as they were: in the line, and with nothing to scroll.
+        const fits = await page.locator('.msg-assistant').last().evaluate((el) =>
+            [...el.querySelectorAll('.md-math:not(.md-math-wide)')].map((m) => ({
+                display: m.classList.contains('md-math-display'),
+                scrollsDown: m.scrollHeight > m.clientHeight && getComputedStyle(m).overflowY !== 'hidden',
+            })));
+        expect(fits).toEqual([{ display: false, scrollsDown: false }, { display: true, scrollsDown: false }]);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.messages-column').screenshot({ path: info.outputPath(`formula-long-${theme}.png`) });
     });
 }
 
@@ -1633,6 +1765,27 @@ test('document being indexed', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    // A long library: one-line drop zone, a filter, and which chats each document is in.
+    test(`a long document library says where each document is used (${locale})`, async ({ page }) => {
+        const docs = ['q3-board.pdf', 'lease-agreement-final.pdf', 'garden-notes.txt', 'تقرير الميزانية.xlsx', 'meeting-notes.md', 'recipes.docx', 'taxes-2025.pdf']
+            .map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096 * (i + 1), chunk_count: i + 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: i % 3 }));
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: { documents: docs, total: docs.length, total_size_bytes: 1, total_chunks: 1 } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-usage')).toHaveCount(docs.length);
+        await expect(page.locator('.doc-filter-input')).toBeVisible();
+        await page.locator('.doc-row').nth(1).hover();
+        await shot(page, `documents-${locale}-long-library`);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.doc-filter-input').fill('notes');
+        await expect(page.locator('.doc-row:visible')).toHaveCount(2);
+        await shot(page, `documents-${locale}-filtered`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
     // The dialog was centred on its content, so its title and path box jumped as rows came and went.
     test(`the document library stays put as rows arrive, and long names keep their end (${locale})`, async ({ page }) => {
         const names = [
@@ -1665,6 +1818,10 @@ for (const locale of ['en', 'ar']) {
         const tail = page.locator('.doc-name-tail').first();
         await expect(tail).toHaveText(/finance\)\.pdf$/);
         await expect(tail).toBeInViewport();
+        // A cut name fades at its own end: the right for an English name, the left for an Arabic one, in either UI.
+        const fades = await page.locator('.doc-name-head').evaluateAll((els) =>
+            els.map((el) => getComputedStyle(el).getPropertyValue('--fade-to').trim()));
+        expect(fades).toEqual(['right', 'left']);
         // A name in the other script still starts at the UI's own edge.
         const other = page.locator('.doc-name-split').nth(locale === 'ar' ? 0 : 1);
         const [textBox, infoBox] = await other.evaluate((el) => {
@@ -2782,7 +2939,7 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
-        test('a keyed server shows its label, help and setup link', async ({ page }) => {
+        test('a keyed server walks through its setup in steps', async ({ page }) => {
             await openConnectors(page, [{
                 id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
                 configured: false, configurable: true, enabled: true, mcp_env_keys: ['SLACK_MCP_XOXB_TOKEN'], oauth_setup_fields: [],
@@ -2794,11 +2951,13 @@ for (const locale of ['ar', 'en']) {
             }]);
             await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await page.locator('.connector-tile-header', { hasText: 'Slack' }).click();
-            await expect(page.locator('.connector-setup-link')).toBeVisible();
-            await expect(page.locator('.mcp-key-help code')).toBeVisible();
+            // The steps carry the catalog link; the long hint and the separate button would repeat them.
+            await expect(page.locator('.connector-guide .setup-step')).toHaveCount(4);
+            await expect(page.locator('.setup-step-link')).toHaveAttribute('href', /api\.slack\.com\/apps/);
+            await expect(page.locator('.connector-setup-link')).toHaveCount(0);
+            await expect(page.locator('.mcp-key-help')).toHaveCount(0);
             await expect(page.locator('.mcp-key-input')).toHaveAttribute('dir', 'ltr');
-            await expect(page.locator('.mcp-key-help')).toHaveAttribute('dir', 'auto');
-            await page.locator('.mcp-key-help').scrollIntoViewIfNeeded();
+            await page.locator('.connector-guide').scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-mcp-setup`);
             expect(await audit(page)).toEqual([]);
         });
@@ -3473,6 +3632,15 @@ for (const locale of ['ar', 'en']) {
             await check(page, 'form-valid');
         });
 
+        // A schedule couldn't be changed: you deleted it and typed it in again.
+        test('editing a schedule', async ({ page }) => {
+            await openSchedules(page);
+            await page.locator('.schedule-card').first().getByRole('button', { name: locale === 'ar' ? /تعديل/ : /^Edit$/ }).click();
+            await expect(page.locator('.schedule-form-title')).toBeVisible();
+            await expect(page.locator('.schedule-nl-input')).toHaveValue('Weekdays at 8:00 AM');
+            await check(page, 'form-edit');
+        });
+
         test('new schedule with a "when" GAIA cannot read', async ({ page }) => {
             await openSchedules(page);
             await page.locator('.schedule-modal .btn-primary').click();
@@ -3537,6 +3705,8 @@ test.describe('clamped English in Arabic ends with its own "…"', () => {
         await shot(page, 'clamped-skill-ar');
         expect(await clampedBlocks(page)).toContain('skill-row-desc ltr');
         expect(await audit(page)).toEqual([]);
+        // English in the Arabic UI fades at its own end, the right.
+        expect(await page.locator('.skill-row-desc').first().evaluate((el) => getComputedStyle(el).maskImage)).toContain('to right');
     });
 
     test('a schedule prompt', async ({ page }) => {
@@ -4983,6 +5153,32 @@ for (const locale of ['ar', 'en'] as const) {
         await expect(page.locator('.flow-tool-label').filter({ hasText: /run python|request user input/ })).toHaveCount(0);
         expect(await audit(page)).toEqual([]);
         await shot(page, `declined-steps-${locale}`);
+    });
+}
+
+const REFUSED_STEPS = [
+    { type: 'tool_start', tool: 'run_shell_command', narration: 'Running git clone' },
+    {
+        type: 'tool_result', success: false, status: 'denied', denied_by: 'policy',
+        summary: 'Not run: this reaches github.com, and `git clone` was refused earlier in this request.',
+    },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a call GAIA blocked is not shown as the user's no (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, REFUSED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('clone the repo');
+        await page.keyboard.press('Enter');
+        const rows = page.locator('.flow-steps.live .flow-tool');
+        await expect(rows).toHaveCount(2);
+        await expect(rows.nth(0)).toHaveClass(/declined/);
+        if (locale === 'en') await expect(rows.nth(0).locator('.flow-tool-label')).toHaveText('Blocked by GAIA: Running command');
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') await expect(rows.nth(0).locator('.flow-tool-label')).toContainText('حظرها GAIA');
+        await shot(page, `refused-step-${locale}`);
     });
 }
 

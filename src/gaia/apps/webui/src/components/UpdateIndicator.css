@@ -46,7 +46,9 @@
 
 .update-chip__label {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .update-chip__action {

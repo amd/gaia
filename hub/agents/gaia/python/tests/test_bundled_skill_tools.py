@@ -435,3 +435,27 @@ def test_the_freeze_still_bundles_a_guarded_import_that_is_installed(tmp_path):
         hidden = freeze.skill_code_hidden_imports([skill_dir])
 
     assert "gaia.web.client" in hidden
+
+
+def test_the_freeze_scans_the_modules_tools_py_imports(tmp_path):
+    """A skill's own package is local, and what that package imports must ship."""
+    skill_dir = tmp_path / "split"
+    (skill_dir / "engine").mkdir(parents=True)
+    (skill_dir / "tools.py").write_text("from engine.core import run\n")
+    (skill_dir / "engine" / "__init__.py").write_text("")
+    (skill_dir / "engine" / "core.py").write_text(
+        "import gaia.web.client\nfrom .helpers import x\n"
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(freeze, "REPO_ROOT", tmp_path)
+        hidden = freeze.skill_code_hidden_imports([skill_dir])
+
+    assert "gaia.web.client" in hidden
+    assert not any(name.startswith("engine") for name in hidden)
+
+    (skill_dir / "engine" / "core.py").write_text("import gaia_no_such_module_xyz\n")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(freeze, "REPO_ROOT", tmp_path)
+        with pytest.raises(SystemExit, match="gaia_no_such_module_xyz"):
+            freeze.skill_code_hidden_imports([skill_dir])

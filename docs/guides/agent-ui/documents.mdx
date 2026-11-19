@@ -214,7 +214,8 @@ Folders**.
 
 GAIA can't copy what a shell command, a Python snippet or a connected (MCP)
 tool is about to change. When a turn ran one that could have changed files,
-the answer says so — "GAIA ran 2 Python snippets it can't track" — and lists
+the answer says so — "GAIA ran 2 Python snippets. Undo only restores files
+GAIA edited itself, so anything they changed or installed stays." — and lists
 them, identical ones once. A snippet or script is left out only when GAIA can
 tell from its code that it just reads files, and no files changed in the folders
 it ran in. When in doubt — a library GAIA doesn't know, a file opened in a mode
@@ -224,14 +225,20 @@ A plain shell delete of named files in your workspace, such as `del notes.txt`,
 `rm notes.txt` or `powershell Remove-Item notes.txt`, is the exception: GAIA copies those
 files first, so they show as deleted files with a diff and Undo puts them back.
 A delete with a wildcard, a variable, a folder or a file outside the workspace
-is still listed as a command GAIA can't track.
+is still listed as a command Undo can't reverse.
+
+A step that never ran says why. "You declined" means you said no at a prompt,
+"Timed out" means nobody answered it, "Not run, not needed for this request"
+means GAIA judged the step unnecessary, and "Blocked by GAIA" means one of
+GAIA's own rules stopped it without asking. A folded run of steps says how many
+failed, for example "Ran command ×3 (1 failed)".
 
 A Python snippet or script that may change files gets the same care for the
 folders its code names by full path, such as a "tidy my inbox folder" snippet
 that moves and renames files into subfolders: GAIA copies the files in those
 folders before it runs, so Undo puts each file back under its old name and
 removes the new files and folders. Up to 1,000 files and 128 MB are copied
-for one run; a folder past that, or with a file another app has locked, isn't. The snippet is still listed as one GAIA can't track,
+for one run; a folder past that, or with a file another app has locked, isn't. The snippet is still listed as one Undo can't reverse,
 because it could also have changed files somewhere else.
 
 **Settings → Privacy → Undo history** sets how long copies are kept (7 days by
@@ -247,7 +254,7 @@ much they use now.
   **Needs you** at the top holds chats waiting on a permission or a question;
   **Pinned** comes next, then Today, Yesterday, Previous 7 days
   and older. A dot on each chat says whether it is running, waiting for you, done
-  or failed, and a chat with a reply you haven't read shows in bold. Eval and
+  or failed; a finished chat keeps its dot until you open it. Eval and
   scheduled runs are hidden behind **Show background runs** at the end of
   the list. To rename a chat, double-click it or click the pencil on its row;
   Enter saves, Escape cancels. On a phone, each chat has one **⋯** button instead
@@ -290,6 +297,7 @@ you from it stays under **About you** in Memory; the delete confirmation says so
 | `Ctrl+Shift+O` | New chat |
 | `Ctrl+B` | Show or hide the sidebar |
 | `Ctrl+,` | Settings |
+| `Ctrl+/` | List these shortcuts |
 | `Ctrl+Shift+B` | Show or hide the [browser pane](/guides/agent-ui/desktop#browser-pane) (desktop app) |
 | `Ctrl+Shift+S` | [Select an element](/guides/agent-ui/desktop#send-page-elements-to-the-chat) in the browser pane |
 
