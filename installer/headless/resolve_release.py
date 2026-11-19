@@ -26,6 +26,7 @@ installers as broken that simply are not there yet.
 from __future__ import annotations
 
 import argparse
+import email.utils
 import json
 import os
 import re
@@ -142,13 +143,103 @@ def required(tag: str) -> List[str]:
     return ids
 
 
+_RETRY_STATUSES = (403, 429)
+_RETRY_LIMIT_MAX = 5
+_RETRY_WAIT_CAP_S = 30.0
+_RETRY_WAIT_BUDGET_S = 30.0
+
+
+def _retry_limit() -> int:
+    """GITHUB_FETCH_RETRIES, default 0, clamped to 0 through 5."""
+    raw = os.environ.get("GITHUB_FETCH_RETRIES", "").strip()
+    if not raw:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        return 0
+    return max(0, min(value, _RETRY_LIMIT_MAX))
+
+
+def _clamp_wait(seconds: float) -> float:
+    return max(0.0, min(seconds, _RETRY_WAIT_CAP_S))
+
+
+def _retry_delay(exc: urllib.error.HTTPError, attempt: int) -> float:
+    """How long to wait before the next attempt, never more than 30 s."""
+    headers = getattr(exc, "headers", None)
+    retry_after = headers.get("Retry-After") if headers else None
+    if retry_after:
+        text = str(retry_after).strip()
+        try:
+            return _clamp_wait(float(text))
+        except ValueError:
+            pass
+        try:
+            when = email.utils.parsedate_to_datetime(text)
+        except (TypeError, ValueError):
+            when = None
+        if when is not None:
+            return _clamp_wait(when.timestamp() - time.time())
+    reset = headers.get("X-RateLimit-Reset") if headers else None
+    if reset:
+        try:
+            return _clamp_wait(float(reset) - time.time())
+        except (TypeError, ValueError):
+            pass
+    return _clamp_wait(0.5 * 2 ** (attempt - 1))
+
+
 def _get(url: str) -> Any:
-    req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp)
+    retries = _retry_limit()
+    attempt = 1
+    waited = 0.0
+    while True:
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/vnd.github+json"}
+        )
+        token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in _RETRY_STATUSES or attempt > retries:
+                if attempt > 1:
+                    if exc.code in _RETRY_STATUSES:
+                        hint = (
+                            "GH_TOKEN/GITHUB_TOKEN is set, so this is likely "
+                            "GitHub's secondary rate limit"
+                            if token
+                            else "set GH_TOKEN or GITHUB_TOKEN"
+                        )
+                    else:
+                        hint = "this status is not retried"
+                    raise RuntimeError(
+                        f"{url} returned HTTP {exc.code} after {attempt} attempt(s) "
+                        f"with GITHUB_FETCH_RETRIES={retries}; {hint}. Nothing was tested."
+                    ) from exc
+                raise
+            delay = _retry_delay(exc, attempt)
+            remaining = _RETRY_WAIT_BUDGET_S - waited
+            # Stop before a wait that would reach the budget, so the total wait
+            # stays under 30 s even when the final delay is the largest one.
+            if delay >= remaining:
+                raise RuntimeError(
+                    f"{url} returned HTTP {exc.code} after {attempt} attempt(s); "
+                    f"the next retry would wait {delay:.1f}s and reach the "
+                    f"{_RETRY_WAIT_BUDGET_S:.0f}s wait budget "
+                    f"(GITHUB_FETCH_RETRIES={retries}). Nothing was tested."
+                ) from exc
+            print(
+                f"{url}: HTTP {exc.code}, retrying in {delay:.1f}s "
+                f"(attempt {attempt} of {retries})",
+                flush=True,
+            )
+            time.sleep(delay)
+            waited += delay
+            attempt += 1
 
 
 def list_releases() -> List[Dict[str, Any]]:

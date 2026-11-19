@@ -9,12 +9,14 @@ remove real software and refuse to run outside CI; this checks that they refuse.
 
 from __future__ import annotations
 
+import email.utils
 import importlib.util
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -189,6 +191,182 @@ class TestReleaseNaming:
         assert names["tui-pkg-darwin-arm64"] == built["darwin-arm64-pkg"]
         assert names["tui-pkg-darwin-x64"] == built["darwin-x64-pkg"]
         assert names["win-setup"] == built["win-x64-setup"]
+
+
+# ── releases API retries ─────────────────────────────────────────────────────
+
+
+RETRY_URL = "https://api.github.com/repos/amd/gaia/releases?per_page=100&page=1"
+
+
+def _http_error(status: int, headers=None) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(RETRY_URL, status, "error", headers or {}, None)
+
+
+class _JsonResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class TestResolveReleaseRetries:
+    URL = RETRY_URL
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env(self, monkeypatch):
+        for name in ("GITHUB_FETCH_RETRIES", "GH_TOKEN", "GITHUB_TOKEN"):
+            monkeypatch.delenv(name, raising=False)
+        self.sleeps = []
+        self.requests = []
+        monkeypatch.setattr(resolve.time, "sleep", self.sleeps.append)
+
+    def _urlopen(self, monkeypatch, *responses):
+        """urlopen returning or raising each response in turn."""
+        pending = list(responses)
+
+        def fake(req, timeout):
+            self.requests.append(req)
+            item = pending.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        monkeypatch.setattr(resolve.urllib.request, "urlopen", fake)
+
+    def test_retries_a_403_then_returns_the_json(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "2")
+        self._urlopen(
+            monkeypatch,
+            _http_error(403, {"Retry-After": "1"}),
+            _JsonResponse(b'[{"tag_name": "v1.0.0"}]'),
+        )
+
+        assert resolve._get(self.URL) == [{"tag_name": "v1.0.0"}]
+        assert len(self.requests) == 2
+        assert self.sleeps == [1.0]
+
+    def test_retries_a_429(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "1")
+        self._urlopen(
+            monkeypatch,
+            _http_error(429, {"Retry-After": "0"}),
+            _JsonResponse(b"[]"),
+        )
+
+        assert resolve._get(self.URL) == []
+        assert len(self.requests) == 2
+
+    def test_exhausted_retries_name_the_url_status_attempts_and_setting(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "2")
+        monkeypatch.setenv("GH_TOKEN", "test-token")
+        self._urlopen(
+            monkeypatch,
+            *[_http_error(403, {"Retry-After": "0"}) for _ in range(3)],
+        )
+
+        with pytest.raises(RuntimeError) as caught:
+            resolve._get(self.URL)
+        message = str(caught.value)
+        assert self.URL in message
+        assert "HTTP 403" in message
+        assert "3 attempt" in message
+        assert "GITHUB_FETCH_RETRIES=2" in message
+        assert "secondary rate limit" in message
+        assert isinstance(caught.value.__cause__, urllib.error.HTTPError)
+        assert len(self.requests) == 3
+        assert self.sleeps == [0.0, 0.0]
+
+    def test_default_is_no_retry_and_the_original_error_propagates(self, monkeypatch):
+        error = _http_error(403)
+        self._urlopen(monkeypatch, error)
+
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            resolve._get(self.URL)
+        assert caught.value is error
+        assert len(self.requests) == 1
+        assert self.sleeps == []
+
+    def test_a_500_is_not_retried(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "3")
+        error = _http_error(500)
+        self._urlopen(monkeypatch, error)
+
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            resolve._get(self.URL)
+        assert caught.value is error
+        assert len(self.requests) == 1
+        assert self.sleeps == []
+
+    def test_a_wait_that_would_reach_the_budget_stops_without_sleeping(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "3")
+        self._urlopen(monkeypatch, _http_error(403, {"Retry-After": "30"}))
+
+        with pytest.raises(RuntimeError, match="wait budget"):
+            resolve._get(self.URL)
+        assert len(self.requests) == 1
+        assert self.sleeps == []
+
+    def test_cumulative_waits_cannot_be_pushed_over_the_budget_by_the_last_delay(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("GITHUB_FETCH_RETRIES", "3")
+        self._urlopen(
+            monkeypatch,
+            _http_error(403, {"Retry-After": "20"}),
+            _http_error(403, {"Retry-After": "10"}),
+        )
+
+        with pytest.raises(RuntimeError, match="wait budget"):
+            resolve._get(self.URL)
+        assert sum(self.sleeps) == 20.0
+        assert len(self.requests) == 2
+
+    @pytest.mark.parametrize(
+        "env, expected",
+        [
+            ({"GITHUB_TOKEN": "g"}, "Bearer g"),
+            ({"GH_TOKEN": "h"}, "Bearer h"),
+            ({"GH_TOKEN": "h", "GITHUB_TOKEN": "g"}, "Bearer h"),
+            ({}, None),
+        ],
+    )
+    def test_token_header(self, monkeypatch, env, expected):
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        self._urlopen(monkeypatch, _JsonResponse(b"[]"))
+
+        resolve._get(self.URL)
+        assert self.requests[0].get_header("Authorization") == expected
+
+    def test_delay_prefers_retry_after_seconds(self):
+        assert resolve._retry_delay(_http_error(403, {"Retry-After": "5"}), 1) == 5.0
+
+    def test_delay_accepts_retry_after_as_an_http_date(self):
+        when = email.utils.formatdate(time.time() + 5, usegmt=True)
+        delay = resolve._retry_delay(_http_error(403, {"Retry-After": when}), 1)
+        assert 3.0 <= delay <= 5.0
+
+    def test_delay_uses_the_rate_limit_reset_epoch(self):
+        reset = str(int(time.time()) + 10)
+        delay = resolve._retry_delay(_http_error(403, {"X-RateLimit-Reset": reset}), 1)
+        assert 8.0 <= delay <= 10.0
+
+    def test_delay_falls_back_and_caps_at_30_seconds(self):
+        assert resolve._retry_delay(_http_error(403), 1) == 0.5
+        assert resolve._retry_delay(_http_error(403), 3) == 2.0
+        assert resolve._retry_delay(_http_error(403, {"Retry-After": "600"}), 1) == 30.0
 
 
 # ── phase records and the gate ───────────────────────────────────────────────
@@ -769,6 +947,13 @@ class TestWorkflow:
     def test_pull_request_trigger_has_no_base_branch_filter(self):
         wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         assert "branches" not in wf[True]["pull_request"]
+
+    def test_resolve_step_passes_both_tokens_and_bounded_retries(self):
+        wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        step = next(s for s in wf["jobs"]["resolve"]["steps"] if s.get("id") == "r")
+        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+        assert step["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+        assert step["env"]["GITHUB_FETCH_RETRIES"] == "3"
 
 
 class TestScriptsRefuseOutsideCi:

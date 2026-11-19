@@ -282,6 +282,42 @@ function trimZero(n: number): string {
   return n.toFixed(1).replace(/\.0$/, "");
 }
 
+// Opt-in only: website-ci.yml sets GITHUB_FETCH_RETRIES=3 on its build step.
+// Deploys and local builds leave it unset, so a real failure still fails on the
+// first response rather than hiding behind a wait.
+const MAX_RETRIES = 5;
+const RETRY_WAIT_CAP_MS = 30_000;
+const RETRY_WAIT_BUDGET_MS = 30_000;
+
+function githubFetchRetries(): number {
+  const raw = (process.env.GITHUB_FETCH_RETRIES ?? "").trim();
+  if (!raw) return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n)) return 0;
+  return Math.max(0, Math.min(n, MAX_RETRIES));
+}
+
+/** How long to wait before the next attempt, never more than 30 s. */
+export function retryDelayMs(res: Response, attempt: number): number {
+  const retryAfter = res.headers.get("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return clampWait(seconds * 1000);
+    const when = Date.parse(retryAfter);
+    if (!Number.isNaN(when)) return clampWait(when - Date.now());
+  }
+  const reset = res.headers.get("x-ratelimit-reset");
+  if (reset) {
+    const epochSeconds = Number(reset);
+    if (Number.isFinite(epochSeconds)) return clampWait(epochSeconds * 1000 - Date.now());
+  }
+  return clampWait(500 * 2 ** (attempt - 1));
+}
+
+function clampWait(ms: number): number {
+  return Math.max(0, Math.min(ms, RETRY_WAIT_CAP_MS));
+}
+
 function githubHeaders(): Record<string, string> {
   const headers: Record<string, string> = { Accept: "application/vnd.github+json" };
   const token = process.env.GITHUB_TOKEN;
@@ -297,23 +333,53 @@ function githubHeaders(): Record<string, string> {
   return headers;
 }
 
+function rateLimitError(url: string, status: number, attempts: number): Error {
+  if (process.env.GITHUB_TOKEN) {
+    return new Error(
+      `[github] Request to ${url} returned HTTP ${status} after ${attempts} attempt(s). ` +
+        `GITHUB_TOKEN is set, so this is GitHub's secondary rate limit, not a missing ` +
+        `token. Try again later, or raise GITHUB_FETCH_RETRIES to wait and retry.`,
+    );
+  }
+  return new Error(
+    `[github] Request to ${url} returned HTTP ${status}. If this is a ` +
+      `rate limit (403), set GITHUB_TOKEN in the build environment.`,
+  );
+}
+
 async function githubFetch(url: string): Promise<Response> {
-  let res: Response;
-  try {
-    res = await fetch(url, { headers: githubHeaders() });
-  } catch (e) {
-    throw new Error(
-      `[github] Failed to fetch ${url}: ${(e as Error).message}. Check network ` +
-        `connectivity; the download links and stats row have no bundled fallback.`,
-    );
+  const retries = githubFetchRetries();
+  const headers = githubHeaders();
+  let waitedMs = 0;
+
+  for (let attempt = 1; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { headers });
+    } catch (e) {
+      throw new Error(
+        `[github] Failed to fetch ${url}: ${(e as Error).message}. Check network ` +
+          `connectivity; the download links and stats row have no bundled fallback.`,
+      );
+    }
+    if (res.ok) return res;
+
+    if (res.status !== 403 && res.status !== 429) {
+      throw new Error(
+        `[github] Request to ${url} returned HTTP ${res.status}. If this is a ` +
+          `rate limit (403), set GITHUB_TOKEN in the build environment.`,
+      );
+    }
+    if (attempt > retries) throw rateLimitError(url, res.status, attempt);
+
+    const delayMs = retryDelayMs(res, attempt);
+    const remainingMs = RETRY_WAIT_BUDGET_MS - waitedMs;
+    // Stop before a wait that would reach the budget, so the total wait stays
+    // under 30 s even when the final delay is the largest one.
+    if (delayMs >= remainingMs) throw rateLimitError(url, res.status, attempt);
+    waitedMs += delayMs;
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
-  if (!res.ok) {
-    throw new Error(
-      `[github] Request to ${url} returned HTTP ${res.status}. If this is a ` +
-        `rate limit (403), set GITHUB_TOKEN in the build environment.`,
-    );
-  }
-  return res;
 }
 
 async function fetchRepo(): Promise<RepoStats> {

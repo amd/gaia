@@ -142,6 +142,10 @@ jobs:
         name: Pick the release and wait for its assets
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          # Bounded, opt-in retries for the releases API: a secondary rate
+          # limit can 403 even with a token (run 44443909497).
+          GITHUB_FETCH_RETRIES: '3'
           TAG_INPUT: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || '' }}
           WAIT: ${{ github.ref_type == 'tag' && '300' || '0' }}
         run: python installer/headless/resolve_release.py --tag "${TAG_INPUT}" --wait-minutes "${WAIT}" --out release.json

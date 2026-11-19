@@ -14,6 +14,7 @@ import {
   isReleaseCandidateTag,
   pickReleaseCandidate,
   pickStableRelease,
+  retryDelayMs,
   streamReleases,
   sumAssetDownloads,
   type GithubRelease,
@@ -98,6 +99,7 @@ describe('formatCount', () => {
 describe('getReleaseStats — pagination and error handling', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.resetModules();
   });
 
@@ -134,15 +136,20 @@ describe('getReleaseStats — pagination and error handling', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('throws a [github]-prefixed error naming the endpoint on a non-200 response', async () => {
+  it('names the secondary rate limit on a 403 when a token is set', async () => {
     vi.resetModules();
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '0');
     const fetchMock = vi.fn(
       async () => new Response('rate limited', { status: 403, statusText: 'Forbidden' }),
     );
     vi.stubGlobal('fetch', fetchMock);
 
     const mod = await import('./github');
-    await expect(mod.getReleaseStats()).rejects.toThrow(/\[github\].*releases.*HTTP 403/s);
+    await expect(mod.getReleaseStats()).rejects.toThrow(
+      /\[github\].*releases.*HTTP 403 after 1 attempt.*secondary rate limit/s,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -425,11 +432,14 @@ describe('pickStableRelease', () => {
 describe('getStableRelease', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.resetModules();
   });
 
-  it('fails loudly, naming the fix, when the GitHub API is rate limited', async () => {
+  it('fails loudly, naming the fix, when the GitHub API is rate limited and no token is set', async () => {
     vi.resetModules();
+    vi.stubEnv('GITHUB_TOKEN', '');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '0');
     vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 403 })));
     const mod = await import('./github');
     await expect(mod.getStableRelease()).rejects.toThrow(/HTTP 403.*set GITHUB_TOKEN/s);
@@ -440,5 +450,119 @@ describe('getStableRelease', () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json([])));
     const mod = await import('./github');
     await expect(mod.getStableRelease()).rejects.toThrow(/no published stable release/);
+  });
+});
+
+describe('githubFetch retries', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.resetModules();
+  });
+
+  it('retries a 403 and resolves once the next response is 200', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '3');
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response('', { status: 403, headers: { 'retry-after': '0' } }),
+      )
+      .mockResolvedValueOnce(Response.json([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    const stats = await mod.getReleaseStats();
+
+    expect(stats.totalReleaseCount).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops after the configured retries and names the attempt count', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '2');
+    const fetchMock = vi.fn(
+      async () => new Response('', { status: 403, headers: { 'retry-after': '0' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(
+      /HTTP 403 after 3 attempt.*secondary rate limit/s,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry unless GITHUB_FETCH_RETRIES opts in', async () => {
+    vi.stubEnv('GITHUB_TOKEN', '');
+    const fetchMock = vi.fn(async () => new Response('', { status: 403 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(/HTTP 403.*set GITHUB_TOKEN/s);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a 500 even with retries enabled', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '3');
+    const fetchMock = vi.fn(async () => new Response('', { status: 500 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(/HTTP 500/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not wait a delay that would reach the 30 s budget', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '1');
+    const fetchMock = vi.fn(
+      async () => new Response('', { status: 429, headers: { 'retry-after': '60' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const mod = await import('./github');
+    await expect(mod.getReleaseStats()).rejects.toThrow(/HTTP 429 after 1 attempt/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('retryDelayMs', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('honors Retry-After seconds', () => {
+    const res = new Response('', { status: 403, headers: { 'retry-after': '2' } });
+    expect(retryDelayMs(res, 1)).toBe(2000);
+  });
+
+  it('honors Retry-After as an HTTP date', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-19T00:00:00Z'));
+    const res = new Response('', {
+      status: 403,
+      headers: { 'retry-after': 'Thu, 19 Nov 2026 00:00:05 GMT' },
+    });
+    expect(retryDelayMs(res, 1)).toBe(5000);
+  });
+
+  it('falls back to the rate limit reset', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-19T00:00:00Z'));
+    const reset = Math.floor(Date.now() / 1000) + 10;
+    const res = new Response('', {
+      status: 403,
+      headers: { 'x-ratelimit-reset': String(reset) },
+    });
+    expect(retryDelayMs(res, 1)).toBe(10_000);
+  });
+
+  it('caps the wait at 30 s and backs off exponentially without headers', () => {
+    const capped = new Response('', { status: 403, headers: { 'retry-after': '60' } });
+    expect(retryDelayMs(capped, 1)).toBe(30_000);
+    const bare = new Response('', { status: 403 });
+    expect(retryDelayMs(bare, 1)).toBe(500);
+    expect(retryDelayMs(bare, 3)).toBe(2000);
   });
 });

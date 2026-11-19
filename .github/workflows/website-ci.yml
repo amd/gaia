@@ -86,7 +86,13 @@ jobs:
       - name: Unit tests (vitest)
         run: npm test
 
+      # Opt-in retries for the build's GitHub API reads only: a transient 403
+      # (secondary rate limit) fails the run otherwise. Step-level so `npm test`
+      # keeps the default of no retries. Deploy builds set no opt-in and still
+      # fail on the first 403, which is what a production build should do.
       - name: Build (astro build)
+        env:
+          GITHUB_FETCH_RETRIES: '3'
         run: npx astro build
 
       # Production's start command was previously never exercised by CI, so a
