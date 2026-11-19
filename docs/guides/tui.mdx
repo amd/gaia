@@ -44,7 +44,7 @@ gaia-cli
 
 <Warning>
   This binary boots straight into the flagship, and it does not install, uninstall,
-  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email` for the email agent).
+  search, or vote on agents — that stays the Python CLI's job (`gaia init` installs the flagship).
   An earlier version of the TUI opened on an agent browser that did all of that,
   with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
   `uninstall` / `hub` subcommands that drove it, are gone for good.
@@ -715,9 +715,13 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
 | `/slack` | Connect this agent to Slack, or show the connection's status. See [Slack](/guides/slack) |
 | `/automations` | List the reminders, summaries, alerts and triggers GAIA runs on its own, numbered. `/automations pause 2`, `resume 2` or `remove 2` changes one; a name works too. See [Automations](/guides/automations) |
-| `/connectors` | List your connected apps (Gmail, Slack, GitHub…). Also a clickable entry in the status bar. See [Connectors](/connectors) |
+| `/connectors` | List your connected apps (Gmail, Slack, GitHub…). A connector with several accounts lists each one, marking the default and any whose sign-in expired. Also a clickable entry in the status bar. See [Connectors](/connectors) |
 | `/connectors personalize <id>` | Optional: let GAIA read a connected app's recent activity, save what it learns to memory, and suggest automations. Told only to read; creates no schedules. GAIA keeps access to the app afterwards |
-| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…), such as the access Personalize leaves on |
+| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…), such as the access Personalize leaves on. Google and Microsoft access comes with signing in, so use `/connectors remove` for those |
+| `/connectors remove <id> [address]` | Sign a Google or Microsoft account out of GAIA. With several accounts connected, name the one to remove, or GAIA lists them |
+| `/connectors add <id>` | Sign another Google or Microsoft account in beside the ones already connected. Your browser opens the provider's account picker; GAIA waits up to 15 minutes |
+| `/connectors reconnect <id> <address>` | Sign an account in again after its sign-in expired. `/connectors` marks expired accounts |
+| `/connectors default <id> <address>` | Choose the account GAIA uses when you don't name one |
 | `/full-access` | Explain full access; `/full-access confirm` then turns it on for this session (off by default) |
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
@@ -1020,24 +1024,18 @@ under `~/.gaia/tui/history/`. When the agent is an installed binary that runs
 through the background service instead, it doesn't keep them yet: `/sessions`
 and `--resume` say so rather than showing an empty list.
 
-## Running another agent
+## Running an agent by id
 
-The flagship is the default, but `gaia-cli` can also drive `email` by id — it keeps
-its own five-row readiness gate:
-
-```bash
-gaia-cli run email
-gaia-cli run email --query "triage my inbox"   # one-shot: answer on stdout
-gaia-cli chat --agent email                    # same thing, via `chat`
-```
-
-Installing or removing it is the Python CLI's job:
+The flagship is the default, and `gaia-cli` can also drive an agent by its id:
 
 ```bash
-gaia hub list
-gaia hub install email
-gaia hub uninstall email
+gaia-cli run gaia
+gaia-cli run gaia --query "summarize my inbox"  # one-shot: answer on stdout
+gaia-cli chat --agent gaia                     # same thing, via `chat`
 ```
+
+Installing or removing an agent is the Python CLI's job (`gaia init` for the
+flagship, `gaia hub` for scripted installs).
 
 ## Colours (light vs dark terminals)
 

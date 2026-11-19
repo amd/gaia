@@ -100,9 +100,7 @@ class TestGetCredential:
         mock_refresh = AsyncMock(return_value="tok")
         with patch("gaia.connectors.oauth_pkce.get_or_refresh", new=mock_refresh):
             await handler.get_credential(spec)
-        mock_refresh.assert_called_once_with(
-            "google", account_email=mock_refresh.call_args[1]["account_email"]
-        )
+        mock_refresh.assert_called_once_with("google", slot="default")
 
     @pytest.mark.asyncio
     async def test_falls_back_to_spec_id_when_no_provider_ref(self):
@@ -111,9 +109,7 @@ class TestGetCredential:
         mock_refresh = AsyncMock(return_value="tok")
         with patch("gaia.connectors.oauth_pkce.get_or_refresh", new=mock_refresh):
             await handler.get_credential(spec)
-        mock_refresh.assert_called_once_with(
-            "myconnector", account_email=mock_refresh.call_args[1]["account_email"]
-        )
+        mock_refresh.assert_called_once_with("myconnector", slot="default")
 
 
 # ---------------------------------------------------------------------------
@@ -381,28 +377,48 @@ class TestConfigure:
 # ---------------------------------------------------------------------------
 
 
+def _revoked(remaining=0):
+    return AsyncMock(
+        return_value={
+            "remaining_accounts": remaining,
+            "revoke_supported": True,
+            "revoked_remotely": True,
+        }
+    )
+
+
 class TestDisconnect:
     @pytest.mark.asyncio
-    async def test_deletes_connection(self):
-        # The keyring blob IS the configured-state for OAuth connectors
-        # (no separate state.json), so disconnect just needs to delete
-        # the keyring entry. peek_connection returning None afterward is
-        # what makes the catalog UI flip back to "not configured".
+    async def test_no_account_removes_every_account(self):
         spec = _make_spec()
         handler = OAuthPkceHandler()
-        with patch("gaia.connectors.oauth_pkce.delete_connection") as mock_del:
+        revoke = _revoked()
+        with patch("gaia.connectors.api.revoke_connection_async", new=revoke):
             await handler.disconnect(spec)
-        mock_del.assert_called_once()
+        revoke.assert_called_once_with(spec.id, None, all_accounts=True)
 
     @pytest.mark.asyncio
     async def test_disconnect_uses_provider_ref(self):
         spec = _make_spec(id="gmail", oauth_provider_ref="google")
         handler = OAuthPkceHandler()
-        with patch("gaia.connectors.oauth_pkce.delete_connection") as mock_del:
+        revoke = _revoked()
+        with patch("gaia.connectors.api.revoke_connection_async", new=revoke):
             await handler.disconnect(spec)
-        # provider_id passed to delete_connection should be "google", not "gmail"
-        args = mock_del.call_args[0]
-        assert args[0] == "google"
+        # The keyring is keyed by the provider, "google", not the connector id.
+        assert revoke.call_args[0][0] == "google"
+
+    @pytest.mark.asyncio
+    async def test_one_account_keeps_grants_while_others_remain(self, monkeypatch):
+        spec = _make_spec(id="gmail", oauth_provider_ref="google")
+        wiped = []
+        monkeypatch.setattr(
+            "gaia.connectors.grants.revoke_all_grants_for", wiped.append
+        )
+        with patch(
+            "gaia.connectors.api.revoke_connection_async", new=_revoked(remaining=1)
+        ):
+            await OAuthPkceHandler().disconnect(spec, account_id="a@example.com")
+        assert wiped == []
 
 
 # ---------------------------------------------------------------------------

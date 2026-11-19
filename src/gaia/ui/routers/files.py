@@ -26,7 +26,12 @@ from starlette.requests import ClientDisconnect
 
 from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
 from gaia.env import child_env
-from gaia.upload_names import place_copy, reserve_copy_path, upload_copy_stem
+from gaia.upload_names import (
+    place_copy,
+    reserve_copy_path,
+    upload_copy_stem,
+    upload_url_name,
+)
 from gaia.utils.text_decoding import file_encoding
 from gaia.utils.user_folders import documents_dir
 
@@ -137,7 +142,7 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
             f"{upload_root} for this recording.",
         )
 
-    stem = upload_copy_stem(name)[:_MEDIA_NAME_CHARS].rstrip("._-")
+    stem = upload_copy_stem(name)[:_MEDIA_NAME_CHARS].rstrip(" ._-") or "attachment"
     dest_path: Optional[Path] = None
     file_size = 0
     try:
@@ -179,7 +184,7 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
     return FileUploadResponse(
         filename=unique_name,
         original_name=name,
-        url=f"/api/files/uploads/{unique_name}",
+        url=f"/api/files/uploads/{upload_url_name(unique_name)}",
         size=file_size,
         content_type="application/octet-stream",
         is_image=False,
@@ -289,7 +294,7 @@ async def upload_file(file: UploadFile = File(...)):
     return FileUploadResponse(
         filename=unique_name,
         original_name=original_name,
-        url=f"/api/files/uploads/{unique_name}",
+        url=f"/api/files/uploads/{upload_url_name(unique_name)}",
         size=file_size,
         content_type=content_type,
         is_image=is_image,

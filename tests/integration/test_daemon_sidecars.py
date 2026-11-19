@@ -7,7 +7,7 @@ Drives a real ``python -m gaia.daemon`` process and a toy sidecar (see
 ``GAIA_DAEMON_EXTRA_SPECS`` seam — the daemon reads this env var once at
 startup and merges the specs it points at over ``builtin_specs()``. Nothing
 here mocks the manager/registry/ledger: it exercises the real HTTP control
-plane, the real ``gaia.ui.email_sidecar.daemon_client`` module, and the real
+plane, the real ``gaia.ui.sidecar.daemon_client`` module, and the real
 ``gaia daemon ...`` CLI subcommands.
 
 Covers the T4 acceptance criteria:
@@ -68,6 +68,8 @@ _TOY_SPEC = {
     "display_name": "Toy",
     "expected_api_major": "1",
     "token_env_var": "GAIA_TOY_SIDECAR_TOKEN",
+    "token_file_env_var": "GAIA_TOY_SIDECAR_TOKEN_FILE",
+    "secret_file_min_version": "0.0.1",
     "mode_env_var": "GAIA_TOY_AGENT_MODE",
     "cache_dir_name": "toy",
 }
@@ -309,7 +311,7 @@ def test_client_exit_leaves_sidecar_running(toy_env):
     inst = None
     try:
         code = textwrap.dedent("""
-            from gaia.ui.email_sidecar.daemon_client import acquire_handle
+            from gaia.ui.sidecar.daemon_client import acquire_handle
             h = acquire_handle("toy")
             print("PID=%d" % h.pid)
             print("BASE_URL=%s" % h.base_url)
@@ -342,9 +344,9 @@ def test_client_exit_leaves_sidecar_running(toy_env):
 
 
 def test_real_daemon_client_roundtrip(toy_env):
-    """The one automated place `gaia.ui.email_sidecar.daemon_client` runs for
+    """The one automated place `gaia.ui.sidecar.daemon_client` runs for
     real (unmocked): acquire_handle + stop_sidecar against the toy spec."""
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     inst = None
     try:
@@ -503,6 +505,8 @@ _TOY_DEV_SPEC = {
     "display_name": "Toy Dev",
     "expected_api_major": "1",
     "token_env_var": "GAIA_TOY_DEV_SIDECAR_TOKEN",
+    "token_file_env_var": "GAIA_TOY_DEV_SIDECAR_TOKEN_FILE",
+    "secret_file_min_version": "0.0.1",
     "mode_env_var": "GAIA_TOY_DEV_AGENT_MODE",
     "cache_dir_name": "toy-dev",
     "dev_src_dir": str(_TOY_DEV_FIXTURE_DIR),

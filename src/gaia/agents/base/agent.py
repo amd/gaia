@@ -149,6 +149,7 @@ from gaia.agents.base.tool_grants import (
     PATH_TOOLS,
     RESOLVED_PATH_ARG,
     SCRATCH_ARG,
+    SITE_ARG,
     command_reaches_folder,
     is_inside_folder,
 )
@@ -1550,6 +1551,9 @@ _TOOL_CALL_MARKUP_PATTERN = re.compile(
     r"<invoke\s+name\s*=|<parameter\s+name\s*=|\{\s*\"tool\"\s*:"
 )
 _ENVELOPE_KEYS = ("thought", "goal", "tool", "tool_args", "plan")
+# Every field the loop reads off a decoded reply. A JSON object carrying none
+# of them is the model's data, not a protocol envelope.
+_PROTOCOL_KEYS = frozenset(_ENVELOPE_KEYS) | {"answer", "tool_calls", "needs_plan"}
 # "Index my reports folder", "please re-index ~/docs": the verb opens a clause
 # and takes a path or a folder/file object, so "index.html" or "S&P 500 index"
 # never count.
@@ -3168,6 +3172,31 @@ def _split_cause_and_advice(message: str) -> Tuple[str, Optional[str]]:
     return text[: match.start()], text[match.end() :].strip() or None
 
 
+#: The shape of every ``ArtifactStore`` handle (uuid4 hex or a sha256 prefix).
+_OUTPUT_HANDLE_RE = re.compile(r"output_[0-9a-f]{32}")
+
+
+def _resolve_output_handles(agent, value):
+    """Replace every whole-string output handle in ``value`` with its archived text.
+
+    Raises ``ValueError`` naming the handle when one is unknown or expired.
+    Returns ``value`` itself when it holds no handle.
+    """
+    if isinstance(value, str):
+        if not _OUTPUT_HANDLE_RE.fullmatch(value):
+            return value
+        from gaia.agents.base.artifacts import store_for
+
+        return store_for(agent).resolve(value)
+    if isinstance(value, dict):
+        resolved = {k: _resolve_output_handles(agent, v) for k, v in value.items()}
+        return value if all(resolved[k] is value[k] for k in value) else resolved
+    if isinstance(value, list):
+        resolved = [_resolve_output_handles(agent, v) for v in value]
+        return value if all(a is b for a, b in zip(resolved, value)) else resolved
+    return value
+
+
 class Agent(abc.ABC):
     """
     Base Agent class that provides core functionality for domain-specific agents.
@@ -3395,6 +3424,10 @@ class Agent(abc.ABC):
     #: a scaffolded agent composing that mixin is gated by construction rather
     #: than by remembering to copy an override.
     CONFIRMATION_HOOKS: ClassVar[tuple] = ()
+
+    #: Methods a mixin runs when each turn ends, whatever ended it. Unioned
+    #: over the MRO like ``CONFIRMATION_HOOKS``.
+    TURN_END_HOOKS: ClassVar[tuple] = ()
 
     # ``get_*_system_prompt`` fragments whose text differs between sessions or
     # changes during one. They ride at the start of the first user message
@@ -7311,6 +7344,13 @@ Do NOT wrap conversational replies in JSON.
         return parsed
 
     def _decode_llm_response(self, response: str) -> Dict[str, Any]:
+        """Decode a reply; a JSON object with no protocol field is the answer."""
+        parsed = self._decode_llm_response_fields(response)
+        if isinstance(parsed, dict) and not _PROTOCOL_KEYS.intersection(parsed):
+            return {"thought": "", "goal": "", "answer": (response or "").strip()}
+        return parsed
+
+    def _decode_llm_response_fields(self, response: str) -> Dict[str, Any]:
         """
         Parse the LLM response to extract tool calls or conversational answers.
 
@@ -8088,6 +8128,23 @@ Do NOT wrap conversational replies in JSON.
         return holder.get("result")
 
     @classmethod
+    def turn_end_hooks(cls) -> tuple:
+        """Every ``TURN_END_HOOKS`` entry declared across this class's MRO."""
+        seen: list = []
+        for klass in cls.__mro__:
+            for name in getattr(klass, "TURN_END_HOOKS", ()) or ():
+                if name not in seen:
+                    seen.append(name)
+        return tuple(seen)
+
+    def _run_turn_end_hooks(self) -> None:
+        for name in self.turn_end_hooks():
+            try:
+                getattr(self, name)()
+            except Exception as e:  # noqa: BLE001 - cleanup must not fail a turn
+                logger.warning("turn-end hook %s failed: %s", name, e)
+
+    @classmethod
     def confirmation_hooks(cls) -> tuple:
         """Every ``CONFIRMATION_HOOKS`` entry declared across this class's MRO.
 
@@ -8516,6 +8573,20 @@ Do NOT wrap conversational replies in JSON.
         ``_execute_tool`` has — refusals, unknown names, declined confirmations
         — so a refused call's latency is never misfiled as agent overhead.
         """
+        # Before every check, so policy, scope and the prompt see the real text.
+        # read_tool_output is the one tool that takes the handle itself.
+        bare_name = str(tool_name or "").strip().removesuffix("()").strip()
+        if bare_name.replace("-", "_").lower() != "read_tool_output":
+            try:
+                tool_args = _resolve_output_handles(self, tool_args)
+            except ValueError as exc:
+                logger.error("%s not run: %s", tool_name, exc)
+                return {
+                    **NOT_EXECUTED,
+                    "status": "error",
+                    "error_type": "invalid_arguments",
+                    "error": str(exc),
+                }
         refused = self._refuse_inventory_hand_edit(tool_name, tool_args)
         if refused is not None:
             return refused
@@ -8831,6 +8902,7 @@ Do NOT wrap conversational replies in JSON.
                 NEEDS_PERSON_ARG,
                 EXACT_TEXT_ARG,
                 RESOLVED_PATH_ARG,
+                SITE_ARG,
             )
         )
         if reserved:
@@ -10573,12 +10645,14 @@ Do NOT wrap conversational replies in JSON.
         """Say the turn is unfinished, why, what already ran, and what next.
 
         *headline* replaces the opening "The model stopped responding at step
-        N" when the caller knows better what happened.
+        N" when the caller knows better what happened. Marks the turn failed,
+        so front-ends never have to recognize this answer by its text.
         """
         from collections import Counter
 
         from gaia.llm.failure_record import record_note
 
+        self._turn_model_retries["failed"] = True
         what = "stopped responding" if stopped_responding else "call failed"
         cause = cause.strip().rstrip(".")
         cause = cause[:1].upper() + cause[1:]
@@ -12035,6 +12109,7 @@ Do NOT wrap conversational replies in JSON.
             # Spans a mixin parked for a turn that never opened must not
             # backdate the next one.
             self._pre_turn_spans = None
+            self._run_turn_end_hooks()
 
     def _flush_post_turn_record(self) -> None:
         """Write the post-answer spans and stop routing waits to this turn."""
@@ -15067,11 +15142,19 @@ Do NOT wrap conversational replies in JSON.
                         )
                         # The next answer replaces this one wholesale, so it
                         # must carry the whole answer, not just the fixed claim.
+                        # With the time limit up no run can start: don't ask for one.
+                        remedy = (
+                            "The time limit is up and no tool can run, so drop "
+                            "the claim, or say when the check last ran and "
+                            "that it was not repeated. "
+                            if self.time_capped_run_seconds(1) == 0
+                            else "Either run the check now, or drop the claim. "
+                        )
                         correction = {
                             "role": "user",
                             "content": (
                                 f'Your answer says "{claim}", but {why}. '
-                                "Either run the check now, or drop the claim. "
+                                f"{remedy}"
                                 "Then give your complete answer again: it "
                                 "replaces the one above, which the user will "
                                 "not see."
