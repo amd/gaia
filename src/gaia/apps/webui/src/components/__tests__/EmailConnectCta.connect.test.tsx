@@ -11,6 +11,7 @@ import type { AgentInfo } from '../../types';
 import { EmailConnectCta } from '../email/EmailConnectCta';
 
 vi.mock('../../services/api');
+vi.mock('../../hooks/useConnectorsSSE', () => ({ useConnectorsSSE: () => {} }));
 
 const mocked = vi.mocked(api);
 
@@ -22,9 +23,17 @@ const FLAGSHIP = {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    mocked.listConnectors.mockResolvedValue({ connectors: [] });
     mocked.authorizeConnector.mockResolvedValue({ flow_id: 'f', authorization_url: 'https://accounts.example/auth' });
     vi.spyOn(window, 'open').mockReturnValue(null);
 });
+
+/** The button once the accounts are known; before that a click does nothing. */
+async function enabled(name: string): Promise<HTMLElement> {
+    const button = await screen.findByRole('button', { name });
+    await waitFor(() => expect(button).toBeEnabled());
+    return button;
+}
 
 afterEach(() => {
     act(() => useChatStore.getState().setAgents([]));
@@ -36,7 +45,7 @@ describe('EmailConnectCta connect request', () => {
         act(() => useChatStore.getState().setAgents([FLAGSHIP]));
         render(<EmailConnectCta content="NOT_CONNECTED: google is not currently connected." />);
 
-        fireEvent.click(screen.getByRole('button', { name: 'Connect Google' }));
+        fireEvent.click(await enabled('Connect Google'));
 
         await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledTimes(1));
         expect(mocked.authorizeConnector).toHaveBeenCalledWith('google', [], ['installed:gaia']);
@@ -48,7 +57,7 @@ describe('EmailConnectCta connect request', () => {
     it('grants no one when GAIA is not in the agent list', async () => {
         render(<EmailConnectCta content="NOT_CONNECTED: microsoft is not currently connected." />);
 
-        fireEvent.click(screen.getByRole('button', { name: 'Connect Microsoft' }));
+        fireEvent.click(await enabled('Connect Microsoft'));
 
         await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledWith('microsoft', [], []));
     });
@@ -57,15 +66,16 @@ describe('EmailConnectCta connect request', () => {
         mocked.authorizeConnector.mockRejectedValue(new Error('Google sign-in is not set up on this PC.'));
         render(<EmailConnectCta content="NOT_CONNECTED: google is not currently connected." />);
 
-        fireEvent.click(screen.getByRole('button', { name: 'Connect Google' }));
+        fireEvent.click(await enabled('Connect Google'));
 
         expect((await screen.findByRole('alert')).textContent).toContain('Google sign-in is not set up on this PC.');
         expect(screen.getByRole('button', { name: 'Connect Google' })).toBeTruthy();
     });
 
-    it('offers Google and Microsoft only', () => {
+    it('offers Google and Microsoft only', async () => {
         render(<EmailConnectCta content="AUTH_REQUIRED: connect an email account to continue." />);
 
+        await enabled('Connect Google');
         expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Connect Google', 'Connect Microsoft']);
     });
 });

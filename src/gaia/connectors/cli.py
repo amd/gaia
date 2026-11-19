@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from typing import Sequence
 
@@ -114,6 +115,17 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
             "Use the device-code flow (enter a short code at a URL) instead of "
             "the browser redirect. Needed for zero-setup Microsoft sign-in "
             "(no Azure app registration). Provider must support device code."
+        ),
+    )
+    p_conn.add_argument(
+        "--callback-port",
+        type=int,
+        dest="callback_port",
+        metavar="PORT",
+        help=(
+            "Port on 127.0.0.1 to listen on for the OAuth callback. "
+            "Useful for remote or headless sessions over SSH port-forwarding. "
+            "If omitted, an ephemeral port is chosen automatically."
         ),
     )
 
@@ -542,22 +554,50 @@ def _handle_connect(args: argparse.Namespace) -> int:
     if getattr(args, "device", False):
         return _handle_connect_device(args, scopes=scopes, grant_agents=grant_agents)
 
+    callback_port = getattr(args, "callback_port", None)
+    if callback_port is not None and (callback_port < 1 or callback_port > 65535):
+        sys.stderr.write(
+            f"Invalid --callback-port {callback_port}: port must be between 1 and 65535.\n"
+        )
+        return 2
+
     async def _run() -> dict:
+        auth_kwargs: dict = {}
+        if callback_port is not None:
+            auth_kwargs["callback_port"] = callback_port
         info = await start_authorization(
             args.connector_id,
             scopes=scopes,
             grant_agents=grant_agents,
             add_account=getattr(args, "add_account", False),
             account=getattr(args, "account", None),
+            **auth_kwargs,
+        )
+        port = info["callback_port"]
+        is_remote = any(
+            os.environ.get(var) for var in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY")
         )
         sys.stdout.write(
             f"Open this URL to authorize {args.connector_id}:\n"
-            f"  {info['authorization_url']}\n"
-            "Sign-in completes via a callback to 127.0.0.1 on THIS machine. On a "
-            "remote/headless box, open the URL in a browser here, or forward the "
-            "callback port over SSH — a browser on another machine cannot reach "
-            "this loopback and the flow will time out.\n"
+            f"  {info['authorization_url']}\n\n"
+            f"Sign-in completes via a callback to 127.0.0.1:{port} on this machine.\n"
         )
+        if is_remote:
+            ssh_conn = os.environ.get("SSH_CONNECTION", "").split()
+            host = ssh_conn[2] if len(ssh_conn) >= 3 else "<host>"
+            user = os.environ.get("USER") or "<user>"
+            sys.stdout.write(
+                f"Remote session detected (SSH). To complete sign-in from your local browser:\n"
+                f"  1. Forward the callback port from your local machine:\n"
+                f"       ssh -L {port}:127.0.0.1:{port} {user}@{host}\n"
+                f"  2. Open the authorization URL above in your local browser.\n\n"
+            )
+        else:
+            sys.stdout.write(
+                f"On a remote/headless box, forward port {port} over SSH:\n"
+                f"  ssh -L {port}:127.0.0.1:{port} <user>@<host>\n"
+                "Then open the authorization URL in your local browser.\n\n"
+            )
         sys.stdout.flush()
         result = await complete_authorization(info["flow_id"])
         return result

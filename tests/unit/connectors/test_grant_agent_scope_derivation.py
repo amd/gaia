@@ -302,7 +302,11 @@ class TestSharedResolverCallSites:
         _stub_registry_chain(monkeypatch, regs=[])
 
         async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "alice@example.com"}
@@ -402,7 +406,11 @@ class TestFlagshipSidecarGrantDerivation:
 
         async def _fake_start(connector_id, *, scopes, grant_agents=None, **_account):
             captured["grant_agents"] = grant_agents
-            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+            return {
+                "flow_id": "F1",
+                "authorization_url": "https://auth.example",
+                "callback_port": 8085,
+            }
 
         async def _fake_complete(flow_id):
             return {"account_email": "alice@example.com"}
