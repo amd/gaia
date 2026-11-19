@@ -200,4 +200,70 @@ describe('a file the model server could not embed', () => {
         expect(row).toHaveTextContent("GAIA's model server isn't answering");
         expect(row.textContent).not.toMatch(/HTTPConnectionPool|WinError|Lemonade/);
     });
+
+    it('marks its row as waiting, matching the header, not as failed', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [DOWN], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('third.md');
+        const badge = document.querySelector('.doc-failure .doc-status-badge')!;
+        expect(badge).toHaveTextContent('Waiting');
+        expect(badge).not.toHaveClass('doc-status-failed');
+        expect(badge.getAttribute('aria-label')).toMatch(/^Waiting: /);
+    });
+
+    it('marks it waiting in Arabic too', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            mockedApi.listDocuments.mockResolvedValue({ documents: [DOWN], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+            render(<DocumentLibrary />);
+
+            await screen.findByText('third.md');
+            const badge = document.querySelector('.doc-failure .doc-status-badge')!;
+            expect(badge).toHaveTextContent('قيد الانتظار');
+            expect(badge.getAttribute('aria-label')).toContain('قيد الانتظار: ');
+            expect(badge.getAttribute('aria-label')).not.toContain('فشلت');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
+    });
+});
+
+describe('a file the model server was too busy to embed', () => {
+    // GAIA retries these only after an outage, so the row must not promise it will.
+    const BUSY: Document = {
+        ...BROKEN,
+        id: 'doc-busy',
+        filename: 'busy.md',
+        filepath: '/tmp/busy.md',
+        error_kind: 'model_server_busy',
+        last_error: 'RAG indexing failed for busy.md: Lemonade Server timed out',
+    };
+
+    it('stays Failed with Retry, not Waiting', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [BUSY], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('busy.md');
+        const badge = document.querySelector('.doc-failure .doc-status-badge')!;
+        expect(badge).toHaveClass('doc-status-failed');
+        expect(badge).toHaveTextContent('Failed');
+        const row = document.querySelector('.doc-failure')!;
+        expect(row).toHaveTextContent('Retry in a moment');
+        expect(row).not.toHaveTextContent('when the server is back');
+    });
+
+    it('asks for a Retry when the add fails, instead of promising GAIA adds it later', async () => {
+        mockedApi.uploadDocumentByPath.mockResolvedValue(BUSY);
+        mockedApi.listDocuments
+            .mockResolvedValueOnce({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 })
+            .mockResolvedValue({ documents: [BUSY], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        addByPath('/tmp/busy.md');
+
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent("busy.md couldn't be added: GAIA's model server was busy. Retry on its row in a moment.");
+        expect(alert).not.toHaveTextContent('when the server is back');
+    });
 });

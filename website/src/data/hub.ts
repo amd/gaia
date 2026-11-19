@@ -3,10 +3,10 @@
 
 // The skills lane of the Agent Hub catalog, for the /hub page.
 //
-// Fetched at build time because hub.amd-gaia.ai sends no CORS headers. Same
-// contract as github.ts: no bundled fixture and no silent fallback — an
-// unreachable hub or a malformed catalog fails the build. An empty skills lane
-// is a real state, not a failure, and the page renders it as one.
+// Fetched at build time because hub.amd-gaia.ai sends no CORS headers. Like
+// github.ts, this has no silent fallback: an unreachable hub or a malformed
+// catalog fails the build. An empty skills lane is a real state, not a failure,
+// and the page renders it as one.
 //
 // The entry shape is the Worker's `IndexEntry` (workers/agent-hub/src/types.ts),
 // read the way `gaia skill search` reads it (skill_library_tools.py).

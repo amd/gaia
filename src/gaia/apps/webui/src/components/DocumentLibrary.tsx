@@ -23,7 +23,7 @@ import type { Document, IndexFolderResponse } from '../types';
 import { useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
-import { isServerFailure, serverFailureText } from '../utils/documentFailure';
+import { isServerFailure, serverFailureText, serverNotAddedText, waitsForServerReturn } from '../utils/documentFailure';
 import './DocumentLibrary.css';
 
 /** One sentence on what folder indexing added, skipped and couldn't read. */
@@ -51,6 +51,9 @@ function describeFolderResult(t: Translate, folderName: string, result: IndexFol
         return parts.join(' ');
     });
 }
+
+/** A library longer than this gets a filter box. */
+const FILTER_AFTER = 5;
 
 interface PendingRemoval { id: string; name: string }
 
@@ -105,6 +108,9 @@ export function DocumentLibrary() {
     const targetSessionId = target === 'chat' ? currentSessionId : null;
     const targetChatName = `“${currentSession?.title || t('docs.untitledChat')}”`;
     const [notice, setNotice] = useState('');
+    const [filter, setFilter] = useState('');
+    const filterText = documents.length > FILTER_AFTER ? filter.trim().toLowerCase() : '';
+    const matchesFilter = (doc: Document) => !filterText || doc.filename.toLowerCase().includes(filterText);
     /** The document the notice is about, so removing it takes the notice with it. */
     const noticeDocId = useRef<string | null>(null);
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
@@ -282,6 +288,11 @@ export function DocumentLibrary() {
             updateSessionInList(targetSessionId, {
                 document_ids: [...existing, docId],
             });
+            // The listed count predates this attach; without it the row says one chat too few.
+            const store = useChatStore.getState();
+            store.setDocuments(store.documents.map((d) => (
+                d.id === docId ? { ...d, sessions_using: (d.sessions_using ?? 0) + 1 } : d
+            )));
         }
         setNotice(t('docs.attached', { name: filename, chat: targetChatName }));
         log.doc.info(`Attached "${filename}" to session ${targetSessionId}`);
@@ -348,9 +359,7 @@ export function DocumentLibrary() {
                 // Its row carries the reason and Retry; attaching it would promise a chat a file it can't search.
                 log.doc.warn(`"${filename}" couldn't be added (${doc.error_kind ?? 'unreadable'}); not attaching it`);
                 const name = doc.filename || filename;
-                setActionError(serverFailureText(doc.error_kind, t)
-                    ? t('docs.notAddedServer', { name })
-                    : t('docs.notAdded', { name }));
+                setActionError(serverNotAddedText(doc.error_kind, name, t) ?? t('docs.notAdded', { name }));
             } else if (doc?.id) {
                 try {
                     await attachToTarget(doc.id, doc.filename || filename);
@@ -627,17 +636,18 @@ export function DocumentLibrary() {
             case 'failed': {
                 const hint = failureHint(t, doc.error_kind);
                 const serverReason = serverFailureText(doc.error_kind, t);
+                const waiting = waitsForServerReturn(doc.error_kind);
                 const lastError = serverReason ?? doc.last_error;
                 const reason = lastError ? splitFailureReason(lastError) : null;
                 return (
                     <div className="doc-failure">
                         <div className="doc-indexing-status">
                             <span
-                                className="doc-status-badge doc-status-failed"
+                                className={waiting ? 'doc-status-badge doc-status-waiting' : 'doc-status-badge doc-status-failed'}
                                 title={lastError || undefined}
-                                aria-label={lastError ? t('docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
+                                aria-label={lastError ? t(waiting ? 'docs.waitingAria' : 'docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
                             >
-                                <AlertCircle size={12} /> {hint ? t('docs.cantRead') : t('docs.failed')}
+                                <AlertCircle size={12} /> {hint ? t('docs.cantRead') : waiting ? t('docs.waiting') : t('docs.failed')}
                             </span>
                             <button
                                 className={hint ? 'btn-retry btn-retry-quiet' : 'btn-retry'}
@@ -699,6 +709,22 @@ export function DocumentLibrary() {
         }
     };
 
+    /** Which chats a readable document is in, from the open chat and the server's count. */
+    const renderUsage = (doc: Document) => {
+        if (doc.indexing_status && doc.indexing_status !== 'complete') return null;
+        const inThisChat = !!currentSession?.document_ids?.includes(doc.id);
+        const others = Math.max((doc.sessions_using ?? 0) - (inThisChat ? 1 : 0), 0);
+        let label: string;
+        if (inThisChat) {
+            label = others > 0 ? t.plural('docs.usage.hereAndOthers', others) : t('docs.usage.here');
+        } else if (draftDocumentIds.includes(doc.id)) {
+            label = t('docs.usage.next');
+        } else {
+            label = others > 0 ? t.plural('docs.usage.chats', others) : t('docs.usage.none');
+        }
+        return <span className={`doc-usage${inThisChat ? ' is-here' : ''}`}>{label}</span>;
+    };
+
     return (
         <div ref={dialogRef} className="modal-overlay" onClick={() => setShowDocLibrary(false)} role="dialog" aria-modal="true" aria-label={t('docs.title')}>
             <div className="modal-panel doc-modal" onClick={(e) => e.stopPropagation()}>
@@ -730,7 +756,7 @@ export function DocumentLibrary() {
 
                     {/* Drop zone */}
                     <div
-                        className={`drop-zone ${isDragOver ? 'drag-over' : ''} ${isUploading ? 'uploading' : ''}`}
+                        className={`drop-zone ${isDragOver ? 'drag-over' : ''} ${isUploading ? 'uploading' : ''} ${documents.length > 0 ? 'drop-zone-compact' : ''}`}
                         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
                         onDragLeave={() => setIsDragOver(false)}
                         onDrop={handleDrop}
@@ -857,6 +883,23 @@ export function DocumentLibrary() {
                         </div>
                     )}
 
+                    {documents.length > FILTER_AFTER && (
+                        <div className="doc-filter">
+                            <Search size={14} className="doc-filter-icon" aria-hidden="true" />
+                            <input
+                                type="search"
+                                className="doc-filter-input"
+                                value={filter}
+                                onChange={(e) => setFilter(e.target.value)}
+                                placeholder={t('docs.filterPlaceholder')}
+                                aria-label={t('docs.filterAria')}
+                            />
+                        </div>
+                    )}
+                    {filterText && documents.length > 0 && !documents.some(matchesFilter) && (
+                        <p className="doc-filter-empty">{t('docs.filterNone', { text: filter.trim() })}</p>
+                    )}
+
                     {/* Document list */}
                     <div className="doc-list">
                         {loadError && documents.length === 0 && (
@@ -876,10 +919,11 @@ export function DocumentLibrary() {
                             </div>
                         )}
                         {documents.filter((d) => d.id !== pendingRemoval?.id).map((doc) => (
-                            <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
+                            <div key={doc.id} hidden={!matchesFilter(doc)} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
                                     <DocName name={doc.filename} />
                                     {renderDocStatus(doc)}
+                                    {renderUsage(doc)}
                                 </div>
                                 <div className="doc-row-actions">
                                     {doc.filepath && (
@@ -897,7 +941,7 @@ export function DocumentLibrary() {
                                         ? currentSession?.document_ids?.includes(doc.id)
                                         : draftDocumentIds.includes(doc.id)) && (
                                         <button
-                                            className="btn-icon-sm doc-attach"
+                                            className="doc-attach"
                                             onClick={() => handleAttachDoc(doc.id)}
                                             title={targetSessionId ? t('docs.useIn', { chat: targetChatName }) : t('docs.useNext')}
                                             aria-label={targetSessionId
@@ -905,6 +949,7 @@ export function DocumentLibrary() {
                                                 : t('docs.attachNextAria', { name: doc.filename })}
                                         >
                                             <Link2 size={14} />
+                                            {targetSessionId ? t('docs.addToThisChat') : t('docs.addToNextChat')}
                                         </button>
                                     )}
                                     {doc.indexing_status !== 'indexing' && doc.indexing_status !== 'pending' && (

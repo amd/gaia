@@ -64,18 +64,18 @@ updates:
         patterns:
           - "*"
 
-  # JavaScript - standalone npm packages outside the root workspace: the two
-  # published hub sidecars, the website, the docs proxy, the Cloudflare workers,
+  # JavaScript - standalone npm packages outside the root workspace: the
+  # published flagship hub sidecar, the website, the docs proxy, the Cloudflare workers,
   # the VS Code extension and the mobile app. util/check_dependabot.py fails lint if a tracked
   # lockfile is missing here (#3525). One grouped PR per directory.
   - package-ecosystem: "npm"
     directories:
-      - "/hub/agents/email/npm"
       - "/hub/agents/gaia/npm"
       - "/website"
       - "/docs"
       - "/workers/agent-hub"
       - "/workers/admin"
+      - "/.claude/skills/oss-dashboard/template"
       - "/workers/website-router"
       - "/src/vscode/gaia"
       - "/src/gaia/apps/mobile"

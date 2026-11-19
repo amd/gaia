@@ -32,6 +32,7 @@ from gaia.agents.base.denied_effects import (
     _tokens,
     effects_of_call,
 )
+from gaia.agents.base.tool_grants import pane_tool_name
 from gaia.agents.base.verification import NOT_EXECUTED
 
 #: Tools whose whole job is fetching from the internet.
@@ -407,7 +408,7 @@ def offline_refusal(
             what = f"the web tool {name}"
     elif name in ONLINE_SERVICE_TOOLS:
         what = f"{name}, which calls an online service"
-    elif name.startswith("browser_"):
+    elif pane_tool_name(name).startswith("browser_"):
         if not url_is_local:
             what = "the browser"
     elif name == "transcribe_media":

@@ -117,6 +117,23 @@ def test_turn_that_ended_without_a_reply_reads_as_withdrawn(db):
     assert helpers.model_context_messages(db, sid)[-1]["content"] == CUT_OFF
 
 
+@pytest.mark.parametrize("partial", ["The sea was calm that morning.", ""])
+def test_turn_the_agent_crashed_on_reads_as_withdrawn(db, partial):
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
+
+    crashed = (
+        GAIA_PROFILE.stream_ended_message
+        + " The details are in this log folder: C:\\Users\\me\\.gaia\\agents\\gaia\\logs"
+    )
+    sid = _session(db)
+    db.add_message(sid, "user", "Write a 3000-word story about a sailor.")
+    db.add_message(sid, "assistant", f"{partial}\n\n{crashed}" if partial else crashed)
+
+    reply = helpers.model_context_messages(db, sid)[-1]["content"]
+
+    assert reply == (f"{partial}\n\n{CUT_OFF}" if partial else CUT_OFF)
+
+
 def test_answered_turns_are_left_alone(db):
     sid = _session(db)
     db.add_message(sid, "user", "Capital of Mongolia?")

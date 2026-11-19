@@ -23,11 +23,18 @@ function mergeConnect(a: ConnectAccountPayload, b: ConnectAccountPayload): Conne
         const named = [a, b].filter((c) => c.providers.includes(p)).map((c) => c.scopes?.[p]);
         if (named.every((s) => s !== undefined)) scopes[p] = [...new Set(named.flat() as string[])];
     }
+    const account: Record<string, string> = {};
+    for (const p of providers) {
+        const named = new Set([a, b].map((c) => c.account?.[p]).filter((x): x is string => !!x));
+        if (named.size === 1) account[p] = [...named][0];
+    }
     const merged: ConnectAccountPayload = { ...a, providers };
     if (reconnect.length > 0) merged.reconnect = reconnect;
     else delete merged.reconnect;
     if (Object.keys(scopes).length > 0) merged.scopes = scopes;
     else delete merged.scopes;
+    if (Object.keys(account).length > 0) merged.account = account;
+    else delete merged.account;
     return merged;
 }
 

@@ -14,12 +14,16 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from pypdf import PdfWriter
-from pypdf.generic import ArrayObject, NameObject, NumberObject
-from reportlab.pdfgen import canvas
 
-from gaia.rag import pdf_utils
-from gaia.rag.sdk import RAGSDK, PDFExtractionError, RAGConfig
+pytest.importorskip("pypdf")
+pytest.importorskip("reportlab")
+
+from pypdf import PdfWriter  # noqa: E402
+from pypdf.generic import ArrayObject, NameObject, NumberObject  # noqa: E402
+from reportlab.pdfgen import canvas  # noqa: E402
+
+from gaia.rag import pdf_utils  # noqa: E402
+from gaia.rag.sdk import RAGSDK, PDFExtractionError, RAGConfig  # noqa: E402
 
 _CORPUS = Path(os.environ.get("GAIA_REAL_CORPUS", "C:/gtest/mdqa/real/docs"))
 _MSFT_10K = _CORPUS / "finance" / "microsoft_10k_fy2025.pdf"

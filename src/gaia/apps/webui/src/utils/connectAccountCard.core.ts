@@ -15,6 +15,8 @@ export interface ConnectAccountPayload {
     reconnect?: string[];
     /** Per provider, the access the failed call needs. */
     scopes?: Record<string, string[]>;
+    /** Per provider, the account the failed call used: its stable id or its address. */
+    account?: Record<string, string>;
 }
 
 function isScopeMap(value: unknown, providers: unknown[]): boolean {
@@ -38,6 +40,13 @@ export function requestScopes(needed: string[] | undefined, held: string[] | und
     return [...new Set([...(held ?? []), ...needed])];
 }
 
+function isAccountMap(value: unknown, providers: unknown[]): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    return Object.entries(value as Record<string, unknown>).every(
+        ([p, a]) => providers.includes(p) && typeof a === 'string' && a.length > 0,
+    );
+}
+
 export function isConnectAccountPayload(value: unknown): value is ConnectAccountPayload {
     if (!value || typeof value !== 'object') return false;
     const v = value as Record<string, unknown>;
@@ -49,7 +58,8 @@ export function isConnectAccountPayload(value: unknown): value is ConnectAccount
         (v.agent_id === undefined || typeof v.agent_id === 'string') &&
         (v.reconnect === undefined
             || (Array.isArray(v.reconnect) && v.reconnect.every((p) => typeof p === 'string'))) &&
-        (v.scopes === undefined || isScopeMap(v.scopes, v.providers))
+        (v.scopes === undefined || isScopeMap(v.scopes, v.providers)) &&
+        (v.account === undefined || isAccountMap(v.account, v.providers))
     );
 }
 
@@ -71,6 +81,17 @@ export function connectCardProviders(message: Pick<Message, 'cards'> | undefined
         }
     }
     return [...found];
+}
+
+/** Per provider, the account a message's Connect card offered to sign in to again. */
+export function connectCardAccounts(message: Pick<Message, 'cards'> | undefined): Record<string, string> {
+    const named: Record<string, string> = {};
+    for (const card of message?.cards ?? []) {
+        if (card.render === CONNECT_ACCOUNT_RENDER && isConnectAccountPayload(card.data)) {
+            Object.assign(named, card.data.account);
+        }
+    }
+    return named;
 }
 
 /** Whether a message carries a Connect card at all. */

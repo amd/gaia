@@ -17,3 +17,15 @@ export function serverFailureText(kind: string | null | undefined, t: Translate)
     if (kind === 'model_server_busy') return t('docs.serverBusy');
     return null;
 }
+
+/** True when GAIA retries the document by itself once the model server is back; a busy one waits on the user's Retry. */
+export function waitsForServerReturn(kind: string | null | undefined): boolean {
+    return kind === 'model_server_down';
+}
+
+/** The "couldn't be added" line for a model-server failure, or null for any other failure. */
+export function serverNotAddedText(kind: string | null | undefined, name: string, t: Translate): string | null {
+    if (kind === 'model_server_down') return t('docs.notAddedServer', { name });
+    if (kind === 'model_server_busy') return t('docs.notAddedServerBusy', { name });
+    return null;
+}

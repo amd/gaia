@@ -22,7 +22,7 @@ export function CalendarApproval({ tool, args }: { tool: string; args: Record<st
                 <Fragment key={label}>
                     <dt>{label}</dt>
                     <dd>
-                        {value.kind === 'text' ? <Name value={value.text} /> : <When when={value.when} />}
+                        {value.kind === 'when' ? <When when={value.when} /> : value.ltr ? <bdi dir="ltr">{value.text}</bdi> : <Name value={value.text} />}
                     </dd>
                 </Fragment>
             ))}

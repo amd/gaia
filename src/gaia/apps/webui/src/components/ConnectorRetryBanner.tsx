@@ -20,38 +20,47 @@ import { CheckCircle2, RefreshCw } from 'lucide-react';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import type { ConnectorListEntry } from '../types';
+import { useT } from '../i18n/useT';
+import { useConnectorPoll } from '../hooks/useConnectorPoll';
 import { connectedProviderLabel, referencedProviderConnected } from '../utils/connectorRetry.core';
 import './ConnectorRetryBanner.css';
 
 export { connectedProviderLabel, referencedProviderConnected };
 
-const POLL_MS = 4000;
-
 export function ConnectorRetryBanner({
     content,
     providers = [],
+    accounts,
     onRetry,
 }: {
     /** The last assistant message content (the connector-error reply). */
     content: string;
     /** The connectors that reply's Connect card offered, when it had one. */
     providers?: string[];
+    /** Per provider, the account that card offered to sign in to again. */
+    accounts?: Record<string, string>;
     /** Re-run the previous question. */
     onRetry: () => void;
 }) {
+    const t = useT();
     const [connectors, setConnectors] = useState<ConnectorListEntry[]>([]);
+    // The connectors as this reply first saw them: only a change since counts as the fix.
+    const [before, setBefore] = useState<ConnectorListEntry[] | null>(null);
     const [dismissed, setDismissed] = useState(false);
 
     const refresh = useCallback(() => {
         api.listConnectors()
-            .then((data) => setConnectors(data.connectors || []))
+            .then((data) => {
+                const rows = data.connectors || [];
+                setConnectors(rows);
+                setBefore((prev) => prev ?? rows);
+            })
             .catch((err) => log.ui.warn('ConnectorRetryBanner: connector fetch failed', err));
     }, []);
 
-    const connected = referencedProviderConnected(content, connectors, providers);
+    const connected = before !== null && referencedProviderConnected(content, connectors, providers, before, accounts);
 
-    // Re-check on mount, on window focus (returning from OAuth), and poll until
-    // connected. Stop the poll once connected to avoid needless traffic.
+    // Re-check on mount, on window focus (returning from OAuth), and poll until connected.
     useEffect(() => {
         refresh();
         const onFocus = () => refresh();
@@ -59,21 +68,17 @@ export function ConnectorRetryBanner({
         return () => window.removeEventListener('focus', onFocus);
     }, [refresh]);
 
-    useEffect(() => {
-        if (connected) return; // no need to keep polling once it's connected
-        const timer = setInterval(refresh, POLL_MS);
-        return () => clearInterval(timer);
-    }, [connected, refresh]);
+    useConnectorPoll(!connected, refresh);
 
     if (!connected || dismissed) return null;
 
-    const label = connectedProviderLabel(content, connectors, providers);
+    const label = connectedProviderLabel(content, connectors, providers, before ?? [], accounts);
 
     return (
         <div className="connector-retry-banner" role="status">
             <CheckCircle2 size={14} className="connector-retry-banner__icon" />
             <span className="connector-retry-banner__text">
-                {label} connected since this reply — ask again to run it now.
+                {t('retryBanner.connected', { name: label })}
             </span>
             <button
                 type="button"
@@ -81,13 +86,13 @@ export function ConnectorRetryBanner({
                 onClick={() => { setDismissed(true); onRetry(); }}
             >
                 <RefreshCw size={12} />
-                <span>Ask again</span>
+                <span>{t('retryBanner.askAgain')}</span>
             </button>
             <button
                 type="button"
                 className="connector-retry-banner__dismiss"
                 onClick={() => setDismissed(true)}
-                aria-label="Dismiss"
+                aria-label={t('retryBanner.dismiss')}
             >
                 ×
             </button>

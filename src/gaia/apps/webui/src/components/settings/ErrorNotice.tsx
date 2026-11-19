@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { ChevronDown } from 'lucide-react';
-import { useT } from '../../i18n/useT';
+import { useT, type Translate } from '../../i18n/useT';
 import { useChatStore } from '../../stores/chatStore';
 import { isServerDown } from '../../utils/serverDown';
 import type { SystemStatus } from '../../types';
@@ -12,6 +12,15 @@ export { isServerDown };
 /** True for a remedy that sends a person to a terminal for GAIA's own setup, which the app handles. */
 export function namesSetupCommand(text: string | null | undefined): boolean {
     return /gaia init/i.test(text ?? '');
+}
+
+/** The backend's sentence for a model server GAIA doesn't run (`OTHER_SERVER_START_HINT`). */
+const OTHER_SERVER_START_HINT = "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.";
+
+/** The backend's English start instruction in the app's language; one with a command or path in it shows as written. */
+export function startInstructionText(t: Translate, text: string | null | undefined): string | null {
+    if (!text) return null;
+    return text === OTHER_SERVER_START_HINT ? t('server.otherServerStart') : text;
 }
 
 /** True when this PC has no model server yet, the one case setup, not waiting, fixes. */

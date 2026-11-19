@@ -31,7 +31,7 @@
 .perm-card-title {
     color: var(--text-primary);
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.45;
 }
 
@@ -155,7 +155,7 @@
     margin-top: 6px;
     color: var(--text-primary);
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .perm-card-actions {
@@ -210,4 +210,9 @@
 .perm-card-error {
     color: var(--danger);
     font-size: 13px;
+}
+
+/* The account an email goes out from: its own row, set apart from the recipients. */
+.perm-mail-header .perm-mail-from {
+    font-weight: 500;
 }

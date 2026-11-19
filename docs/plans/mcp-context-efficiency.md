@@ -192,6 +192,20 @@ tokens drop ≥60% vs. eager registration, with no recall regression.
   (KV-cache guard).
 - Eval: extend `src/gaia/eval/tool_cost.py` / `tool_recall.py` with a fixture of
   N connected mock MCP servers; assert token reduction and recall parity.
+  The harness (#1971): `python -m gaia.eval.tool_cost --mcp [--servers 1,3,5]
+  [--tools-per-server 5] [--min-mcp-recall R] [--max-mcp-jump-rate J]` prints
+  the first-turn tool-block tokens MCP tools add per render path, loader off
+  and on, and MCP tool recall split into tools already listed and tools reached
+  by moving to every tool. `tests/unit/eval/test_mcp_tool_cost.py` pins the
+  recall floor and jump-rate ceiling WS1 must hold.
+  Its first measurement moves the WS1 target: on the flagship with a local
+  model and the loader on, a session already opens without MCP tools, so they
+  add no first-turn tokens. The cost is on the turn that needs one: the loader
+  reaches the tool only by moving the session to every tool (72% recall on 5
+  mock servers with the word-overlap stand-in embedder, all of it by that
+  move). So WS1's win would show as listed recall going up and the jump rate
+  going down. Hosted models run without the loader and still send every MCP
+  tool.
 - **Agent eval required** (CLAUDE.md rule — this touches prompt assembly + tool
   schema): run `gaia eval agent` on the relevant category, compare to baseline
   before merge.

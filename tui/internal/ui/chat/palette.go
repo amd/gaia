@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -35,7 +36,7 @@ var paletteCommands = []paletteCommand{
 	{"/memory", "View this agent's memory"},
 	{"/full-access", "Run every tool without asking first — shows a warning before it turns on"},
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
-	{"/connectors", "See connected apps; /connectors personalize <id> learns from one, revoke <id> ends access"},
+	{"/connectors", "See connected apps and accounts; then personalize, revoke, add, remove, reconnect or default <id>"},
 	{"/models", "Choose the models on this PC: download, skip, or pick the chat model"},
 	{"/gpu", "Give the GPU more memory so bigger models fit (integrated-GPU PCs)"},
 	{"/slack", "Connect this agent to Slack, or show the connection's status"},
@@ -154,7 +155,49 @@ type commandPalette struct {
 // paletteFiltered is the command list for the composer's CURRENT text,
 // narrowed to what this session's agent actually supports (availability.go).
 func (m ChatModel) paletteFiltered() []paletteCommand {
-	return filterPaletteCommands(m.input.Value(), m.availableCommandSet())
+	value := m.input.Value()
+	out := filterPaletteCommands(value, m.availableCommandSet())
+	return append(out, filterSkillCommands(value, m.skillCommands, out)...)
+}
+
+// skillDescMax keeps a skill's row short: skill descriptions are written for
+// models and often run to a paragraph.
+const skillDescMax = 56
+
+// filterSkillCommands is one palette row per installed skill whose /<name>
+// starts with what is typed, skipping a name a built-in command already uses
+// (submit runs the built-in, so the skill row would lie). Picking a row sends
+// /<name>, which the agent runs on that skill.
+func filterSkillCommands(value string, skills []event.SkillCommand, builtins []paletteCommand) []paletteCommand {
+	q := strings.ToLower(strings.TrimSpace(value))
+	if strings.Contains(q, " ") {
+		return nil
+	}
+	taken := make(map[string]bool, len(paletteCommands))
+	for _, c := range paletteCommands {
+		taken[c.Name] = true
+	}
+	for _, c := range builtins {
+		taken[c.Name] = true
+	}
+	var out []paletteCommand
+	for _, s := range skills {
+		name := "/" + s.Name
+		if taken[name] || !strings.HasPrefix(name, q) {
+			continue
+		}
+		out = append(out, paletteCommand{Name: name, Desc: "Skill · " + skillSummary(s.Description)})
+	}
+	return out
+}
+
+// skillSummary is a description's first sentence, cut to skillDescMax.
+func skillSummary(desc string) string {
+	desc = strings.Join(strings.Fields(desc), " ")
+	if i := strings.Index(desc, ". "); i >= 0 {
+		desc = desc[:i+1]
+	}
+	return ansi.Truncate(desc, skillDescMax, "…")
 }
 
 // syncPalette opens, filters, or closes the palette to match the composer's
@@ -176,7 +219,7 @@ func (m *ChatModel) syncPalette() {
 		m.palette.selected = 0
 		return
 	}
-	if len(filterPaletteCommands(value, m.availableCommandSet())) == 0 {
+	if len(m.paletteFiltered()) == 0 {
 		m.palette.open = false
 		m.palette.selected = 0
 		return
@@ -393,7 +436,7 @@ const paletteChromeRows = 0
 // at all. query is the raw composer text, echoed at the top of the box so
 // the reader can still see what they typed once it takes over the screen.
 func renderCommandPalette(background, query string, items []paletteCommand, selected, width, height int) string {
-	box, ok := buildPaletteBox(query, items, selected, width, height)
+	box, _, ok := buildPaletteBox(query, items, selected, width, height)
 	if !ok {
 		return background
 	}
@@ -405,9 +448,9 @@ func renderCommandPalette(background, query string, items []paletteCommand, sele
 // (which places it on screen) and paletteHitTest (which has to know exactly
 // where it landed to map a click back to a row). ok is false when there is no
 // room to draw at all, mirroring renderCommandPalette's background fallback.
-func buildPaletteBox(query string, items []paletteCommand, selected, width, height int) (box string, ok bool) {
+func buildPaletteBox(query string, items []paletteCommand, selected, width, height int) (box string, start int, ok bool) {
 	if len(items) == 0 {
-		return "", false
+		return "", 0, false
 	}
 
 	// Wider than the usual cap only to show descriptions whole, never past the window.
@@ -420,26 +463,40 @@ func buildPaletteBox(query string, items []paletteCommand, selected, width, heig
 	}
 	inner := boxWidth - 4
 	if inner < 1 || height < 3 {
-		return "", false
+		return "", 0, false
 	}
 
-	lines := paletteBodyLines(query, items, selected, inner)
-	if len(lines)+paletteChromeRows > height {
-		// No scrolling here (unlike help): the list is a handful of commands
-		// long, so a window too short to hold it is too short for a usable
-		// palette at all — leave the composer visible instead of clipping.
-		return "", false
+	// Installed skills can make the list longer than the window, so it shows
+	// the rows around the selection. Fewer than paletteMinRows is too short to
+	// use: leave the composer visible instead.
+	for rows := len(items); rows >= min(paletteMinRows, len(items)); rows-- {
+		start = paletteWindowStart(len(items), selected, rows)
+		lines := paletteBodyLines(query, items[start:start+rows], selected-start, inner)
+		box = paletteBoxStyle.Width(boxWidth).Render(strings.Join(lines, "\n"))
+		// Measured, not counted: Width() soft-wraps any line wider than the
+		// box, so a title too long for a narrow terminal costs a row a line
+		// count cannot see.
+		if lipgloss.Height(box)+paletteChromeRows <= height {
+			return box, start, true
+		}
 	}
+	return "", 0, false
+}
 
-	box = paletteBoxStyle.Width(boxWidth).Render(strings.Join(lines, "\n"))
-	// Measured, not counted: Width() soft-wraps any line wider than the box,
-	// so a title too long for a narrow terminal costs a row the line count
-	// above cannot see — and an overflowing box pushes the frame past the
-	// window it was handed.
-	if lipgloss.Height(box)+paletteChromeRows > height {
-		return "", false
+// paletteMinRows is the fewest item rows the palette will draw.
+const paletteMinRows = 3
+
+// paletteWindowStart is the first of rows visible items that keeps selected
+// in view, scrolling only once the selection passes the bottom row.
+func paletteWindowStart(n, selected, rows int) int {
+	if rows >= n || selected < rows {
+		return 0
 	}
-	return box, true
+	start := selected - rows + 1
+	if start > n-rows {
+		start = n - rows
+	}
+	return start
 }
 
 // paletteBodyPrefixRows is how many rendered lines (title, divider, echoed
@@ -467,7 +524,7 @@ func centerOffset(outer, inner int) int {
 // box entirely (the click-outside-closes case); row is -1 when insideBox is
 // true but the row is chrome (title, divider, blank) rather than an item.
 func paletteHitTest(query string, items []paletteCommand, selected, width, height, x, y int) (row int, insideBox bool) {
-	box, ok := buildPaletteBox(query, items, selected, width, height)
+	box, start, ok := buildPaletteBox(query, items, selected, width, height)
 	if !ok {
 		return -1, false
 	}
@@ -482,11 +539,12 @@ func paletteHitTest(query string, items []paletteCommand, selected, width, heigh
 	// Padding(0, 2) adds no rows above the content, so the box's first
 	// screen row is already lines[0] — no chrome offset to subtract.
 	bodyLine := y - top
+	shown := lipgloss.Height(box) - paletteBodyPrefixRows
 	item := bodyLine - paletteBodyPrefixRows
-	if item < 0 || item >= len(items) {
+	if item < 0 || item >= shown || start+item >= len(items) {
 		return -1, true
 	}
-	return item, true
+	return start + item, true
 }
 
 // paletteColumn is where descriptions start: past the widest listed name, so

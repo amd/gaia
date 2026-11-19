@@ -77,7 +77,7 @@
     gap: 8px;
     color: var(--text-primary);
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: 0.02em;
 }
 
@@ -114,7 +114,7 @@
     background: var(--text-primary);
     color: var(--bg-primary);
     font-size: 9.5px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 15px;
     text-align: center;
 }
@@ -197,7 +197,7 @@
     padding: 6px 8px 4px;
     color: var(--text-muted);
     font-size: 11.5px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .sb-group ul {
@@ -290,9 +290,11 @@
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
-/* dir="auto" gives each title its own text order, so the ellipsis lands at the
+/* dir="auto" gives each title its own text order, so the fade lands at the
  * end of its own text. The row, not the title, decides the side it sits on. */
 .sb-row-main:dir(rtl) .sb-row-title {
     text-align: right;
@@ -344,9 +346,6 @@
     .sb-dot.is-running { animation: none; }
 }
 
-.sb-row.is-unread .sb-row-title {
-    font-weight: 600;
-}
 
 /* ── Search results ── */
 .sb-row.is-kbd-active {
@@ -366,7 +365,9 @@
     color: var(--text-muted);
     font-size: 12px;
     white-space: nowrap;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .sb-hit {
@@ -461,7 +462,7 @@
 
 .sb-row-delete-label {
     font-size: 11.5px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 /* Phone: one ⋯ per row, sized to a 44px touch target. */
@@ -581,7 +582,9 @@
 .sb-location-name {
     overflow: hidden;
     white-space: nowrap;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
 }
 
 .sb-location:hover {

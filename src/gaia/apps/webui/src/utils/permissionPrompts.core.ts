@@ -191,7 +191,8 @@ export function repeatedAllowCount(notifications: GaiaNotification[], prompt: Ga
 /** One-line description of a tool call, e.g. `run_shell_command · git status`. */
 export function summarize(n: GaiaNotification): string {
   const args = n.toolArgs ?? {};
-  const primary = ['command', 'file_path', 'path', 'url', 'query', 'name']
+  // _site: the site a browser-pane read would show the model (SITE_ARG in tool_grants.py).
+  const primary = ['command', 'file_path', 'path', 'url', '_site', 'query', 'name']
     .map((k) => args[k])
     .find((v) => typeof v === 'string' && v.trim());
   return typeof primary === 'string' ? primary : '';

@@ -1,0 +1,33 @@
+# Cloudflare Worker for the project dashboard. Deploy steps are in README.md.
+# Nothing here is a secret: GITHUB_TOKEN and MAINTAINER_LOGINS are Worker
+# secrets, and an empty ACCESS_* value makes the Worker refuse every request.
+
+name = "__WORKER_NAME__"
+main = "src/index.ts"
+compatibility_date = "2025-01-29"
+
+# __ROUTE_BLOCK__
+# Preview URLs would be more hostnames for the Access policy to cover.
+preview_urls = false
+
+# A first collection or a CI backfill reads many job logs; the default 30 s of CPU is not enough.
+[limits]
+cpu_ms = 300000
+
+[[d1_databases]]
+binding = "DB"
+database_name = "__WORKER_NAME__"
+# Printed by `npx wrangler d1 create __WORKER_NAME__`; the all-zero id fails the deploy.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Nightly collection, off the :00 mark so it does not queue behind everyone else's.
+[triggers]
+crons = ["17 3 * * *"]
+
+[vars]
+# The Access team domain (<team>.cloudflareaccess.com) and the application's
+# AUD tag. Left empty so an unconfigured deploy refuses to serve rather than
+# serving the dashboard unauthenticated.
+ACCESS_TEAM_DOMAIN = ""
+ACCESS_AUD = ""

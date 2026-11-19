@@ -19,18 +19,18 @@ from gaia.daemon.sidecars.registry import SidecarRegistry
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
 
 _SPEC = AgentSidecarSpec(
-    agent_id="email",
-    service_id="gaia-agent-email",
-    display_name="Email",
+    agent_id="toy",
+    service_id="gaia-agent-toy",
+    display_name="Toy",
     expected_api_major="1",
     token_env_var="GAIA_LOCKTEST_SIDECAR_TOKEN",
     mode_env_var="GAIA_LOCKTEST_AGENT_MODE",
-    cache_dir_name="email",
+    cache_dir_name="toy",
 )
 
 
 def _write_lock(repo_root: Path, version: str) -> Path:
-    lock = spec_mod.agent_binary_lock_path(repo_root, "email")
+    lock = spec_mod.agent_binary_lock_path(repo_root, "toy")
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text('{"agentVersion": "%s", "binaries": {}}' % version)
     return lock
@@ -67,13 +67,13 @@ class _Manager:
 @pytest.fixture
 def daemon_lock(tmp_path, monkeypatch):
     lock = _write_lock(tmp_path / "daemon-checkout", "1.0.0")
-    monkeypatch.setattr(plat, "default_lock_path", lambda agent_id="email": lock)
+    monkeypatch.setattr(plat, "default_lock_path", lambda agent_id="toy": lock)
     return lock
 
 
 @pytest.fixture
 def registry():
-    reg = SidecarRegistry({"email": _SPEC})
+    reg = SidecarRegistry({"toy": _SPEC})
     reg._manager_factory = _Manager
     return reg
 
@@ -82,32 +82,30 @@ def registry():
 
 
 def test_lock_path_and_repo_root_invert_each_other(tmp_path):
-    lock = spec_mod.agent_binary_lock_path(tmp_path, "email")
+    lock = spec_mod.agent_binary_lock_path(tmp_path, "toy")
     assert lock == tmp_path.joinpath(
-        "hub", "agents", "email", "npm", "binaries.lock.json"
+        "hub", "agents", "toy", "npm", "binaries.lock.json"
     )
-    assert spec_mod.repo_root_from_agent_binary_lock_path(lock, "email") == tmp_path
+    assert spec_mod.repo_root_from_agent_binary_lock_path(lock, "toy") == tmp_path
 
 
 @pytest.mark.parametrize(
     "tail",
     [
-        ("hub", "agents", "email", "npm", "other.json"),
+        ("hub", "agents", "toy", "npm", "other.json"),
         ("hub", "agents", "gaia", "npm", "binaries.lock.json"),
         ("binaries.lock.json",),
     ],
 )
 def test_repo_root_refuses_a_mis_shaped_lock_path(tmp_path, tail):
     with pytest.raises(DevSrcDirResolutionError, match="expected"):
-        spec_mod.repo_root_from_agent_binary_lock_path(
-            tmp_path.joinpath(*tail), "email"
-        )
+        spec_mod.repo_root_from_agent_binary_lock_path(tmp_path.joinpath(*tail), "toy")
 
 
-def test_default_lock_path_is_this_checkouts_email_lock():
+def test_default_lock_path_is_this_checkouts_gaia_lock():
     repo_root = Path(spec_mod.__file__).resolve().parents[4]
     assert plat.default_lock_path() == spec_mod.agent_binary_lock_path(
-        repo_root, "email"
+        repo_root, "gaia"
     )
 
 
@@ -125,13 +123,13 @@ def test_caller_lock_is_found_from_a_subdirectory_of_the_checkout(tmp_path):
     lock = _write_lock(repo, "2.0.0")
     sub = repo / "src" / "deep"
     sub.mkdir(parents=True)
-    assert spec_mod.resolve_caller_binary_lock("email", cwd=sub) == lock.resolve()
+    assert spec_mod.resolve_caller_binary_lock("toy", cwd=sub) == lock.resolve()
 
 
 def test_caller_in_a_checkout_without_a_lock_sends_nothing(tmp_path):
     repo = tmp_path / "unrelated-repo"
     _git_init(repo)
-    assert spec_mod.resolve_caller_binary_lock("email", cwd=repo) is None
+    assert spec_mod.resolve_caller_binary_lock("toy", cwd=repo) is None
 
 
 def test_caller_outside_any_checkout_sends_nothing(tmp_path, monkeypatch):
@@ -139,14 +137,14 @@ def test_caller_outside_any_checkout_sends_nothing(tmp_path, monkeypatch):
         raise FileNotFoundError("git")
 
     monkeypatch.setattr(spec_mod.subprocess, "run", _no_git)
-    assert spec_mod.resolve_caller_binary_lock("email", cwd=tmp_path) is None
+    assert spec_mod.resolve_caller_binary_lock("toy", cwd=tmp_path) is None
 
 
 def test_caller_lock_that_is_a_directory_is_not_a_pin(tmp_path):
     repo = tmp_path / "caller"
     _git_init(repo)
-    spec_mod.agent_binary_lock_path(repo, "email").mkdir(parents=True)
-    assert spec_mod.resolve_caller_binary_lock("email", cwd=repo) is None
+    spec_mod.agent_binary_lock_path(repo, "toy").mkdir(parents=True)
+    assert spec_mod.resolve_caller_binary_lock("toy", cwd=repo) is None
 
 
 # --- daemon-side comparison -------------------------------------------------
@@ -154,10 +152,10 @@ def test_caller_lock_that_is_a_directory_is_not_a_pin(tmp_path):
 
 def test_matching_pin_is_served_and_the_digest_echoed(registry, daemon_lock):
     entry = registry.ensure(
-        "email",
+        "toy",
         mode="user",
         binary_lock_sha256=_sha(daemon_lock),
-        binary_lock_path="/elsewhere/hub/agents/email/npm/binaries.lock.json",
+        binary_lock_path="/elsewhere/hub/agents/toy/npm/binaries.lock.json",
     )
     assert entry["state"] == "running"
     assert entry["binary_lock_sha256"] == _sha(daemon_lock)
@@ -165,7 +163,7 @@ def test_matching_pin_is_served_and_the_digest_echoed(registry, daemon_lock):
 
 def test_digest_comparison_ignores_hex_case(registry, daemon_lock):
     entry = registry.ensure(
-        "email", mode="user", binary_lock_sha256=_sha(daemon_lock).upper()
+        "toy", mode="user", binary_lock_sha256=_sha(daemon_lock).upper()
     )
     assert entry["binary_lock_sha256"] == _sha(daemon_lock)
 
@@ -176,7 +174,7 @@ def test_mismatched_pin_is_refused_naming_both_locks_and_the_repo_root(
     caller = _write_lock(tmp_path / "caller-checkout", "2.0.0")
     with pytest.raises(ModeConflictError) as exc:
         registry.ensure(
-            "email",
+            "toy",
             mode="user",
             binary_lock_sha256=_sha(caller),
             binary_lock_path=str(caller),
@@ -185,16 +183,16 @@ def test_mismatched_pin_is_refused_naming_both_locks_and_the_repo_root(
     assert str(caller) in msg
     assert str(daemon_lock) in msg
     assert f"rooted at {tmp_path / 'caller-checkout'}." in msg
-    manager, _ = registry._managers["email"]
+    manager, _ = registry._managers["toy"]
     assert manager.start_calls == 0
 
 
 def test_mismatched_pin_is_refused_on_attach_too(registry, daemon_lock, tmp_path):
-    registry.ensure("email", mode="user")
+    registry.ensure("toy", mode="user")
     caller = _write_lock(tmp_path / "caller-checkout", "2.0.0")
     with pytest.raises(ModeConflictError):
         registry.ensure(
-            "email",
+            "toy",
             mode="user",
             binary_lock_sha256=_sha(caller),
             binary_lock_path=str(caller),
@@ -204,12 +202,12 @@ def test_mismatched_pin_is_refused_on_attach_too(registry, daemon_lock, tmp_path
 def test_daemon_without_a_lock_refuses_a_pinning_caller(
     registry, tmp_path, monkeypatch
 ):
-    missing = spec_mod.agent_binary_lock_path(tmp_path / "wheel", "email")
-    monkeypatch.setattr(plat, "default_lock_path", lambda agent_id="email": missing)
+    missing = spec_mod.agent_binary_lock_path(tmp_path / "wheel", "toy")
+    monkeypatch.setattr(plat, "default_lock_path", lambda agent_id="toy": missing)
     caller = _write_lock(tmp_path / "caller-checkout", "2.0.0")
     with pytest.raises(ModeConflictError, match="has no binaries.lock.json"):
         registry.ensure(
-            "email",
+            "toy",
             mode="user",
             binary_lock_sha256=_sha(caller),
             binary_lock_path=str(caller),
@@ -220,16 +218,16 @@ def test_an_explicit_manager_lock_wins_over_the_default(
     registry, daemon_lock, tmp_path
 ):
     override = _write_lock(tmp_path / "override", "3.0.0")
-    holder = registry._holder("email", _SPEC)
+    holder = registry._holder("toy", _SPEC)
     holder[0].lock_path = override
-    entry = registry.ensure("email", mode="user", binary_lock_sha256=_sha(override))
+    entry = registry.ensure("toy", mode="user", binary_lock_sha256=_sha(override))
     assert entry["binary_lock_sha256"] == _sha(override)
 
 
 def test_mis_shaped_caller_path_is_rejected_not_guessed(registry, daemon_lock):
     with pytest.raises(DevSrcDirResolutionError):
         registry.ensure(
-            "email",
+            "toy",
             mode="user",
             binary_lock_sha256="0" * 64,
             binary_lock_path="/tmp/not-a-lock.json",
@@ -240,15 +238,15 @@ def test_no_caller_digest_means_no_check_and_no_echo(registry, tmp_path, monkeyp
     monkeypatch.setattr(
         plat,
         "default_lock_path",
-        lambda agent_id="email": tmp_path / "absent" / "lock.json",
+        lambda agent_id="toy": tmp_path / "absent" / "lock.json",
     )
-    entry = registry.ensure("email", mode="user")
+    entry = registry.ensure("toy", mode="user")
     assert entry["state"] == "running"
     assert "binary_lock_sha256" not in entry
 
 
 def test_dev_mode_ignores_the_lock_digest(registry, daemon_lock):
-    entry = registry.ensure("email", mode="dev", binary_lock_sha256="0" * 64)
+    entry = registry.ensure("toy", mode="dev", binary_lock_sha256="0" * 64)
     assert "binary_lock_sha256" not in entry
 
 
@@ -280,7 +278,7 @@ def _client(reg):
 
 def _post(reg, body):
     return _client(reg).post(
-        "/daemon/v1/agents/email/ensure",
+        "/daemon/v1/agents/toy/ensure",
         headers={"Authorization": "Bearer tok"},
         json=body,
     )
@@ -295,7 +293,7 @@ def test_route_forwards_the_digest_and_path_to_the_registry():
     assert r.status_code == 200
     assert reg.calls == [
         (
-            "email",
+            "toy",
             {
                 "mode": "user",
                 "dev_src_dir": None,
@@ -309,7 +307,7 @@ def test_route_forwards_the_digest_and_path_to_the_registry():
 def test_route_omits_lock_kwargs_when_the_caller_sends_none():
     reg = _RecordingRegistry()
     assert _post(reg, {"mode": "user"}).status_code == 200
-    assert reg.calls == [("email", {"mode": "user", "dev_src_dir": None})]
+    assert reg.calls == [("toy", {"mode": "user", "dev_src_dir": None})]
 
 
 @pytest.mark.parametrize(
@@ -372,13 +370,13 @@ def _run_cli(monkeypatch, tmp_path, payload, *, mode="user"):
     post = _Post(payload(caller) if callable(payload) else payload)
     monkeypatch.setattr(requests, "post", post)
     cli._handle_daemon_start_agent(
-        argparse.Namespace(agent_id="email", mode=mode, dev_src_dir=None)
+        argparse.Namespace(agent_id="toy", mode=mode, dev_src_dir=None)
     )
     return caller, post
 
 
 def _ok(**extra):
-    base = {"agent_id": "email", "state": "running", "mode": "user", "pid": 1}
+    base = {"agent_id": "toy", "state": "running", "mode": "user", "pid": 1}
     base.update(extra)
     return base
 
@@ -439,15 +437,15 @@ _GAIA_SPEC = AgentSidecarSpec(
 
 @pytest.fixture
 def daemon_checkout(tmp_path, monkeypatch):
-    """A daemon checkout whose email and gaia agents pin different binaries."""
+    """A daemon checkout whose toy and gaia agents pin different binaries."""
     repo = tmp_path / "daemon-checkout"
     monkeypatch.setattr(
         spec_mod,
-        "_default_email_src_dir",
-        lambda: spec_mod.agent_dev_src_dir(repo, "email"),
+        "_default_gaia_src_dir",
+        lambda: spec_mod.agent_dev_src_dir(repo, "gaia"),
     )
     return {
-        "email": _write_lock(repo, "1.0.0"),
+        "toy": _write_lock(repo, "1.0.0"),
         "gaia": _write_gaia_lock(repo, "9.9.9"),
     }
 
@@ -461,14 +459,15 @@ def _write_gaia_lock(repo_root: Path, version: str) -> Path:
 
 @pytest.fixture
 def two_agent_registry():
-    reg = SidecarRegistry({"email": _SPEC, "gaia": _GAIA_SPEC})
+    reg = SidecarRegistry({"toy": _SPEC, "gaia": _GAIA_SPEC})
     reg._manager_factory = _Manager
     return reg
 
 
 def test_default_lock_path_is_per_agent(daemon_checkout):
     assert plat.default_lock_path("gaia") == daemon_checkout["gaia"]
-    assert plat.default_lock_path() == daemon_checkout["email"]
+    assert plat.default_lock_path("toy") == daemon_checkout["toy"]
+    assert plat.default_lock_path() == daemon_checkout["gaia"]
 
 
 def test_gaia_from_the_daemons_own_checkout_is_served(
@@ -484,20 +483,20 @@ def test_gaia_from_the_daemons_own_checkout_is_served(
     assert entry["binary_lock_sha256"] == _sha(gaia_lock)
 
 
-def test_gaia_is_never_compared_against_the_email_lock(
+def test_gaia_is_never_compared_against_the_toy_lock(
     two_agent_registry, daemon_checkout
 ):
-    email_lock = daemon_checkout["email"]
+    toy_lock = daemon_checkout["toy"]
     caller_gaia = str(daemon_checkout["gaia"])
     with pytest.raises(ModeConflictError) as exc:
         two_agent_registry.ensure(
             "gaia",
             mode="user",
-            binary_lock_sha256=_sha(email_lock),
+            binary_lock_sha256=_sha(toy_lock),
             binary_lock_path=caller_gaia,
         )
     assert str(daemon_checkout["gaia"]) in str(exc.value)
-    assert str(email_lock) not in str(exc.value)
+    assert str(toy_lock) not in str(exc.value)
 
 
 def test_cli_tells_the_user_an_old_daemon_left_the_agent_running(
@@ -506,5 +505,5 @@ def test_cli_tells_the_user_an_old_daemon_left_the_agent_running(
     with pytest.raises(SystemExit):
         _run_cli(monkeypatch, tmp_path, _ok())
     out = capsys.readouterr().out
-    assert "started agent 'email' anyway" in out
-    assert "gaia daemon stop-agent email" in out
+    assert "started agent 'toy' anyway" in out
+    assert "gaia daemon stop-agent toy" in out

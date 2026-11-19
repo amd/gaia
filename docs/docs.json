@@ -479,6 +479,8 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.27.0",
+              "releases/v0.26.1",
               "releases/v0.26.0",
               "releases/v0.25.4",
               "releases/v0.25.3",
@@ -546,7 +548,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.26.0 \u00b7 Lemonade 2026.44.1",
+        "label": "v0.27.0 \u00b7 Lemonade 2026.44.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {
@@ -583,6 +585,18 @@
     {
       "source": "/spec/electron-integration",
       "destination": "/sdk/sdks/agent-ui"
+    },
+    {
+      "source": "/plans/email-triage-agent",
+      "destination": "/guides/email"
+    },
+    {
+      "source": "/plans/email-agent-packaging",
+      "destination": "/guides/email"
+    },
+    {
+      "source": "/plans/email-calendar-integration",
+      "destination": "/guides/email"
     },
     {
       "source": "/guides/hub-publishing",
