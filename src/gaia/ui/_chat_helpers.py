@@ -6527,6 +6527,7 @@ async def _index_document(
         progress["at"] = _time.monotonic()
 
     def _do_index():
+        from gaia.agents.registry import machine_embedding_model
         from gaia.daemon.broker_client import lease_cancel_scope, lease_wait_listener
         from gaia.rag.sdk import RAGSDK, RAGConfig
 
@@ -6537,7 +6538,10 @@ async def _index_document(
         # Allow access to the file's directory (and user home) since the UI
         # explicitly selected this file via the file browser.
         allowed = [str(filepath.parent), str(Path.home())]
-        config = RAGConfig(allowed_paths=allowed)
+        # The embedder chat searches with, so the upload's vectors are reused.
+        config = RAGConfig(
+            allowed_paths=allowed, embedding_model=machine_embedding_model()
+        )
         rag = RAGSDK(config)
         loaded = batch.pop("embedder", None) if batch is not None else None
         if loaded is not None:

@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
+- **Every chat on a PC embeds with one embedder, the GPU one.** The embedder
+  was chosen per session, so a chat on the other device could clear all of
+  memory's vectors. It is now one per PC, on an NPU PC too: FastFlowLM's NPU
+  embedder (`embed-gemma-300m-FLM`) ranked text no better than chance on
+  FastFlowLM 1.0.7, so `gaia init --profile npu` downloads the GPU embedder
+  instead. A choice saved in Settings › Memory reaches open sessions on their
+  next turn, keeping the conversation and loaded skills.
 - **`gaia -p --time-limit` uses the time it is given.** One slow step made the
   agent stop with minutes left, so a found answer often never reached the
   requested file. It now stops two typical steps short of the limit, is always

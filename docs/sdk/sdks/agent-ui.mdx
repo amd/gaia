@@ -2295,6 +2295,26 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
     system-context refresh.
   </Accordion>
 
+  <Accordion title="GET /api/memory/embedder">
+    Where every chat embeds documents and memory: `device` (`gpu`, or `npu`
+    from a choice saved before it was withdrawn), `chosen` (true when the user
+    picked it), `default_device` (`gpu`), and `options`, one per device with
+    its `model`, `display_name`, `proven` (false for a device GAIA hasn't
+    proven, which can't be chosen), `available` and `reason` (null while the
+    model server is starting) and `downloaded`.
+  </Accordion>
+
+  <Accordion title="PUT /api/memory/embedder">
+    Body `{"device": "gpu" | null}`; `null` is the default, the GPU.
+    Saves `embedding_device` in `~/.gaia/config.json`. Each open chat moves to
+    the new embedder with its next message, keeping its conversation and loaded
+    skills. Stored memory is re-embedded as chats use it, or at once with
+    `POST /api/memory/rebuild-embeddings`. Returns the view above plus
+    `changed`, false when the embedder stayed the same. **409** while a reply
+    runs, for `npu` (not proven), or for a device this PC's hardware can't run; **503** while the model
+    server is starting.
+  </Accordion>
+
   <Accordion title="POST /api/memory/admin/clear">
     **Eval-only**, gated by `GAIA_MEMORY_ADMIN=1` (403 otherwise). Wipes
     memory for a scenario reset — `scope` is `all` / `knowledge` /

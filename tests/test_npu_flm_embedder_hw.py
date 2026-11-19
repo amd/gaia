@@ -200,5 +200,107 @@ class TestFlmCoresidency:
         )
 
 
+#: Six questions, each with a paraphrase. The paraphrases are the "documents".
+_PARAPHRASES = [
+    (
+        "How do I change my password?",
+        "Steps to reset the password on your account.",
+    ),
+    (
+        "What do penguins eat?",
+        "Penguins feed on fish, krill and squid they catch while diving.",
+    ),
+    (
+        "Why did revenue grow last quarter?",
+        "Sales rose in the third quarter because European orders increased.",
+    ),
+    (
+        "How long should I boil an egg?",
+        "Cook eggs in boiling water for about nine minutes for a firm yolk.",
+    ),
+    (
+        "Which port does the web server listen on?",
+        "The gateway accepts HTTP connections on port 8080.",
+    ),
+    (
+        "When does the library open on weekends?",
+        "On Saturdays and Sundays the library opens at 10 a.m.",
+    ),
+]
+
+
+def _finds_each_paraphrase(client: LemonadeClient, model: str) -> list:
+    """Questions whose nearest paraphrase isn't their own (empty when all are)."""
+
+    def vectors(texts):
+        data = client.embeddings(texts, model=model, timeout=300)["data"]
+        out = []
+        for item in sorted(data, key=lambda d: d["index"]):
+            v = item["embedding"]
+            n = math.sqrt(sum(x * x for x in v))
+            out.append([x / n for x in v])
+        return out
+
+    # A first call after load can differ from the rest (FLM 1.0.7); warm up.
+    vectors(["warm-up"])
+    questions = vectors([q for q, _ in _PARAPHRASES])
+    answers = vectors([a for _, a in _PARAPHRASES])
+    missed = []
+    for i, q in enumerate(questions):
+        scores = [sum(x * y for x, y in zip(q, a)) for a in answers]
+        if max(range(len(scores)), key=scores.__getitem__) != i:
+            missed.append(_PARAPHRASES[i][0])
+    return missed
+
+
+class TestSearchQuality:
+    """Vectors of the right shape prove nothing about search. Each question's
+    nearest paraphrase must be its own; chance gets all six right ~1 in 47,000."""
+
+    def test_the_gpu_embedder_finds_each_paraphrase(self, client, require_lemonade):
+        from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL
+
+        client.load_model(DEFAULT_EMBEDDING_MODEL, auto_download=True, prompt=False)
+        assert _finds_each_paraphrase(client, DEFAULT_EMBEDDING_MODEL) == []
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason="embed-gemma-300m-FLM ranks text no better than chance on FastFlowLM "
+        "1.0.7, so GAIA embeds on the GPU. Passing means a newer build fixed it: "
+        "prove it on a full recall run, then add npu to "
+        "GaiaConfig.TESTED_EMBEDDING_DEVICES and drop this marker.",
+    )
+    def test_the_npu_embedder_finds_each_paraphrase(self, client, npu_embedder):
+        assert _finds_each_paraphrase(client, npu_embedder) == []
+
+
+class TestGpuEmbedderBesideNpuChat:
+    """An NPU PC embeds on the GPU; Lemonade holds one model per type, so the
+    GPU embedder must not evict the FLM chat model."""
+
+    def test_npu_chat_and_gpu_embedder_coresident(self, client, require_lemonade):
+        from gaia.agents.registry import DEFAULT_EMBEDDING_MODEL
+
+        # A fresh --profile npu install has these two, not the FLM embedder.
+        _require_in_catalog(client, FLM_CHAT_MODEL)
+        client.load_model(
+            FLM_CHAT_MODEL, auto_download=True, prompt=False, ctx_size=32768
+        )
+        client.embeddings(["warm"], model=DEFAULT_EMBEDDING_MODEL, timeout=300)
+        health = client._send_request("GET", f"{client.base_url}/health", timeout=15)
+        loaded_ids = {
+            m.get("model_name") or m.get("id")
+            for m in health.get("all_models_loaded") or []
+            if isinstance(m, dict)
+        }
+        assert FLM_CHAT_MODEL in loaded_ids, (
+            f"the GPU embedder evicted {FLM_CHAT_MODEL} "
+            f"(loaded={sorted(str(i) for i in loaded_ids)})"
+        )
+        assert DEFAULT_EMBEDDING_MODEL.removeprefix("user.") in {
+            str(i).removeprefix("user.") for i in loaded_ids
+        }
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s", "-rs"])

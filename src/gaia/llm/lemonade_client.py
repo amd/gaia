@@ -2337,14 +2337,10 @@ MODELS = {
         # Q8_0 weights; held in memory beside the chat model (CO_RESIDENT_MODELS).
         size_gb=0.33,
     ),
-    # --- NPU-native FLM embedder for the NPU profile (#1744) ---
-    # EmbeddingGemma 300M built for the FastFlowLM/NPU backend. On a shared-
-    # memory Ryzen AI APU a GGUF embedder runs on Vulkan/llama.cpp and
-    # reclaims the memory the FLM chat model holds, so loading it evicts the
-    # chat model — every chat turn then thrashes NPU<->Vulkan (#1676). Keeping
-    # the embedder on the same FLM/NPU backend as the chat model lets both stay
-    # co-resident. Built-in Lemonade *-FLM model: pull by name only (no recipe;
-    # passing recipe triggers user-model registration and 400s — #1655).
+    # --- NPU-native FLM embedder (#1744) ---
+    # EmbeddingGemma 300M built for FastFlowLM. No profile uses it: its search
+    # ranked at chance on FLM 1.0.7 (GaiaConfig.TESTED_EMBEDDING_DEVICES).
+    # Built-in Lemonade *-FLM model: pull by name only (no recipe — #1655).
     "embed-gemma-flm": ModelRequirement(
         model_type=ModelType.EMBEDDING,
         model_id="embed-gemma-300m-FLM",
