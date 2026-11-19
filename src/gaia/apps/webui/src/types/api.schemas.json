@@ -1907,6 +1907,28 @@
     "title": "EditScheduleRequest",
     "type": "object"
   },
+  "EmbedderBody": {
+    "description": "``npu`` or ``gpu``; None is the default (the GPU).",
+    "properties": {
+      "device": {
+        "anyOf": [
+          {
+            "enum": [
+              "npu",
+              "gpu"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Device"
+      }
+    },
+    "title": "EmbedderBody",
+    "type": "object"
+  },
   "EvalMailboxRequest": {
     "properties": {
       "attached": {
