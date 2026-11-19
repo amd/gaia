@@ -116,6 +116,12 @@ not reserved ones: GAIA treats every file in the skill folder the same way, so
 any folder name (`reference/`, `docs/`, `templates/`) works as long as the body
 points at it by its path relative to the skill folder.
 
+`tools.py` may import modules the skill ships beside it (`helpers.py`, or a
+package folder such as `log-triage`'s `log_triage_engine/`): the skill folder is
+on `sys.path` while `tools.py` imports. Give them a name no other skill uses,
+because Python caches imported modules for the whole process. The audit and
+the freeze scan every `.py` in the folder, not just `tools.py`.
+
 This shape yields two flavors that sit on one spectrum:
 
 <Tabs>
@@ -411,8 +417,8 @@ loads from the `agent-bundled` root, which has no `skill-lock.json`, so its
 beside it. In a checkout the flagship reads `hub/skills` in place, and only
 when it runs from that checkout's `hub/agents/gaia/python/`: an installed
 package never treats a folder beside it as bundled. The frozen binary carries
-the pack under `gaia_agent/skills`, and the build fails if a bundled skill's
-code imports a module the binary would not contain. An import inside a `try`
+the pack under `gaia_agent/skills`, and the build fails if any `.py` in a
+bundled skill imports a module the binary would not contain. An import inside a `try`
 that catches `ImportError`, or under `if TYPE_CHECKING:`, is optional: it is
 bundled when installed and never fails the build.
 
