@@ -217,6 +217,12 @@ def main() -> int:
         help="Access service token secret (default: CF_ACCESS_CLIENT_SECRET)",
     )
     a = ap.parse_args()
+    if not TOKEN:
+        print(
+            'No GitHub token: set GITHUB_TOKEN, e.g. GITHUB_TOKEN="$(gh auth token)" with a logged-in GitHub CLI. Anonymous search allows only 10 queries a minute.',
+            file=sys.stderr,
+        )
+        return 2
     base = a.url.rstrip("/")
     dh = access_headers(a.client_id, a.client_secret)
 
