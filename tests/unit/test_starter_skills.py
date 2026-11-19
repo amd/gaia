@@ -53,6 +53,7 @@ STARTER_PACK = frozenset(
     {
         "analyze-recording",
         "automations",
+        "browser-pane",
         "calculators",
         "calendar",
         "check-in",
@@ -439,6 +440,21 @@ def test_starter_skill_read_window_never_starts_below_line_one(skill_dir: Path):
     assert not bad, (
         f"{skill.name} computes start_line={bad} with no max(1, ...) floor; "
         "near the top of a file that asks read_file for line 0 or lower"
+    )
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_references_never_start_below_line_one(skill_dir: Path):
+    """Reference files are loaded into the turn too, so they need the same floor."""
+    bad = {
+        ref.name: found
+        for ref in sorted((skill_dir / "references").glob("*.md"))
+        if (found := _unclamped_start_lines(ref.read_text(encoding="utf-8")))
+    }
+
+    assert not bad, (
+        f"{skill_dir.name} references compute start_line with no max(1, ...) "
+        f"floor: {bad}"
     )
 
 

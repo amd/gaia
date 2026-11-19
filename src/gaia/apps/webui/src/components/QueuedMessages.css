@@ -45,7 +45,9 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-primary);
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 

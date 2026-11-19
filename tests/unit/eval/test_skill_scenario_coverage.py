@@ -47,6 +47,10 @@ DEFERRED: dict[str, str] = {
         "Runs later through a delivery channel; its store, runner, CLI and policy "
         "are unit-tested."
     ),
+    "browser-pane": (
+        "Needs GAIA desktop's browser pane, which the eval lanes don't run; "
+        "its gating is covered end to end against a recorded pane bridge."
+    ),
     "calculators": (
         "The card does the math in the client; a skill scenario needs a judge "
         "that reads the card payload rather than the short reply."

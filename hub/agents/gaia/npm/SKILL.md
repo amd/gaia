@@ -446,6 +446,11 @@ alone does not tell you whether a call will ask. `browser_login` always asks.
 run signed in to, or when the target element's label reads irreversible, and
 run unasked on the open web. The hook **fails closed**: if the browser cannot
 be asked what state it is in, the call is treated as authenticated and prompts.
+In GAIA desktop's browser pane the same hook gates the bundled `browser-pane`
+skill's tools: they ask before a site not yet approved, a control that may not
+be undoable, or starting a dev server (`browser-pane/dev_server`, which runs
+code), and **`browser-pane/browser_eval`** is marked `requires_confirmation`
+and asks every time.
 Design a workflow around the approval path, not around a fixed tool list.
 
 **Contract ≥ 2.14 can answer one.** Send a `session_id` and leave
@@ -624,7 +629,9 @@ but none ship today — see below.
 Some bundled skills ship tools as well as a playbook. `guides` and
 `calculators` draw recipe, workout, how-to, checklist, itinerary, tip and loan
 cards; their tools (`guides/show_recipe`, `calculators/show_loan_calculator`, …)
-join the tool list only once the skill loads, so they are not in the 105.
+join the tool list only once the skill loads, so they are not in the 105. So
+do the nine `browser-pane` tools, and that skill is offered only in a chat open
+in GAIA desktop with the browser pane.
 
 Loaded skills are **not** all resident every turn: each turn the agent embeds
 the query against every loaded skill's description and renders only the
@@ -656,8 +663,7 @@ is enforced only when the request itself names a source document or asks for
 every item, and a file the user named as a deliverable is never a source.
 
 **No skill *set* loads.** `gaia-agent.yaml` ships its `skill_sets:` and
-`default_skill_set:` blocks **commented out** — following the email agent's
-precedent, because loading several skill bodies into every prompt costs tokens
+`default_skill_set:` blocks **commented out**, because loading several skill bodies into every prompt costs tokens
 and no eval has measured that trade for this agent yet. Re-enabling is
 uncommenting two blocks; no code change.
 
@@ -740,6 +746,13 @@ There is no silent null.
 
 ## Gotchas — read before debugging
 
+- **Mail needs a connector, and every send asks first.** The agent reads Gmail
+  or Outlook through eight read-only tools plus the `inbox-triage` skill once
+  the Google or Microsoft connector is connected and granted to it, and drafts
+  and sends through the `send-email` skill, which prompts before anything
+  leaves the mailbox. It never archives, labels or deletes received mail,
+  Gemma 4 E4B is not offered the mail tools, and there is no separate email
+  agent to call. See the README's Email section.
 - **`/health` green ≠ ready.** It never touches the model server. Use
   `GET /v1/gaia/init` and branch on `.ready`; it returns 503 with a full body and
   a `hint`, not an empty error.

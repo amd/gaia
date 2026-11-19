@@ -82,9 +82,9 @@ def test_the_daemon_hands_its_pid_to_the_sidecars_it_spawns(tmp_path, monkeypatc
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     # Dev mode delivers the secret by file, so no installed binary is needed.
-    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    monkeypatch.setenv("GAIA_GAIA_AGENT_MODE", "dev")
     m = mgr.AgentSidecarManager(
-        builtin_specs()["email"], cache_dir=tmp_path, log_dir=tmp_path / "logs"
+        builtin_specs()["gaia"], cache_dir=tmp_path, log_dir=tmp_path / "logs"
     )
     with pytest.raises(SidecarSpawnError):
         m._spawn_process(["sidecar"], {}, 9127)
@@ -173,10 +173,7 @@ def test_stop_ends_the_watcher_without_firing():
         daemon.kill()
 
 
-@pytest.mark.parametrize(
-    "agent, package",
-    [("gaia", "gaia_agent"), ("email", "gaia_agent_email")],
-)
+@pytest.mark.parametrize("agent, package", [("gaia", "gaia_agent")])
 def test_the_dev_mode_module_starts_the_watch_when_imported(
     monkeypatch, agent, package
 ):

@@ -17,11 +17,91 @@ Requires the `gaia` Python CLI 0.26.1+ on `PATH`.
   installs outside the project even with full access on. Use it only on a
   machine or container you are willing to let the agent change. Commands are
   still audit-logged and stopped at their timeout; HTTP sessions are unchanged.
+- **`gaia -p --time-limit` uses the time it is given.** One slow step made the
+  agent stop with minutes left, so a found answer often never reached the
+  requested file. It now stops two typical steps short of the limit, is always
+  warned first, and its closing step may run one last tool call, so a final
+  write lands. Every model call is capped to what the time left allows, and a
+  call still running past the limit is abandoned with the result still
+  reported. Qwen's `<function=…>` tool-call text now runs as a call instead of
+  being shown as the answer. The agent is told the time used at 25% and 50%,
+  its last tool call may run for half of the time left instead of being
+  refused, and the 70% warning no longer invites it to rewrite a finished file
+  or put caveats inside one.
+### Changed
+
+- **The skill suggestion now tells the model which skill to load.** Local models
+  ignored the old "skills that may fit this request" line: over 56 tasks one
+  called `load_skill` on 3. The line now reads "Call load_skill('pdf') before
+  you start: it covers this kind of request. Also consider: office-docs." It is
+  still one line in the user's message, with the skills in the same order.
+- **A skill that clearly fits the request can load before the turn (opt-in).**
+  With `GAIA_SKILL_AUTOLOAD=1` or `skill_autoload=True`, the best match loads
+  first when it scores at least 0.55 and is 0.03 ahead of every skill it does
+  not pair with. The request then opens with "Loaded report-from-sources
+  because it matches this request". Weaker matches are suggested as before.
+  - Skills that pair with the best match no longer block it, and the best of
+    them that also scores 0.55 loads with it. Two skills per turn at most.
+  - Only trusted skills load this way: ones that ship with the agent, and hub
+    installs at the `community` tier or above. A captured skill, your own
+    skill and anything from a `.claude` folder stay suggestions.
+  - A skill that grants a command-line program stays a suggestion in Ask mode.
+    Under full access it loads, with a warning naming the program. Switch full
+    access off and the skill is unloaded at the next turn.
+  - The skill bodies in the prompt, plus the new one, must fit in 18% of the
+    model's context window (about 5,900 tokens of the default 32,768).
+  - A skill unloaded earlier in the session is not auto-loaded again.
+  - `GAIA_SKILL_AUTOLOAD_TAU` and `GAIA_SKILL_AUTOLOAD_MARGIN` (or
+    `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.55 and
+    0.03.
+  - If you turn it on where it cannot run (catalogue or suggestions off, fast
+    mode, memory off, or an embedder other than `embeddinggemma-300m`), one
+    warning says it is inactive and why.
+
+  Off by default: 0.55 and 0.03 have not been re-measured on the current
+  labelled requests.
+- **Start a message with `/` and a skill's name to run that skill**, as in
+  Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
+  with the same checks as `load_skill` and follows it for the rest of the line.
+  A name that is not an installed skill is sent unchanged. Over stdio, the
+  model-state ping and `/skills` now carry the installed skills (`skills`), so
+  the terminal UI can list them when you type `/`.
+- **A command or snippet that starts a never-ending server is refused before it
+  runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
+  wait on it until the turn timed out; they now return an error that says so and
+  how to serve the folder instead. Code that only writes a server to a file still
+  runs. Each live-browser result now starts with where it ran, such as
+  `(headless browser)`.
+- **A chat in GAIA desktop can drive the browser pane beside it.** A new bundled
+  skill, `browser-pane`, adds nine tools that take a picture of the page, read
+  its console and network logs, press keys, answer page boxes, change screen
+  size, switch tabs, run several steps at once, run a short script on a
+  localhost page, and start a project's dev server on 127.0.0.1
+  (`browser-pane/dev_server`). The skill is offered only in a chat open in GAIA
+  desktop with the pane, and its tools join the list only once it loads, so the
+  registered tool count stays 105. `browser-pane/browser_eval` asks every time
+  and shows the whole script; the others ask before a site not yet approved, a
+  control that may not be undoable, or starting a server. Full access does not
+  skip the script or a new server: a person still approves them, and a run with
+  nobody to ask refuses them.
 
 ### Fixed
 
 - A reply that goes quiet partway through is requested again, up to twice,
   instead of ending the turn; the work done so far is kept either way.
+- A file a script wrote and the agent then showed whole with `cat` counts as
+  read back. Before, the answer still carried "has not been read back
+  completely" and the turn was marked unfinished.
+- A cloud model that spends a whole reply reasoning and returns nothing is
+  asked for its lowest reasoning level on the next request, so the turn moves
+  on. A turn now ends on its third cut-off reply in a row, not its third overall.
+- In a `gaia -p` run the agent is told nobody can answer questions, so it
+  settles an open choice itself and says what it assumed instead of ending on
+  an offer to change it later.
+- `run_python` no longer drops long output without saying so. Output past
+  8,000 characters used to be cut silently, so a scan's later hits never
+  reached the agent. It now gets the start and end, is told how much was left
+  out, and can read the rest, as it already could for a script run from a file.
 
 ## [0.3.6]
 
@@ -313,6 +393,17 @@ Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Changed
 
+- **The standalone email agent is gone; mail is this agent's job.**
+  `@amd-gaia/agent-email` and `gaia-agent-email` are removed, along with
+  `gaia email`. This agent reads Gmail or Outlook through its eight read-only
+  mail tools and the `inbox-triage` skill, and drafts and sends through the
+  `send-email` skill, with the Google or Microsoft connector. Organizing,
+  undo, briefings and autonomous runs went with the old agent. See the Email
+  section in the README.
+  On upgrade GAIA removes the old agent's install folder when it is provably
+  that install, clears its leftover connector state, and names any
+  scheduled email that will no longer be sent. The old agent's data stays in
+  `~/.gaia/email/`. Installing the `email` agent id is refused.
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,
