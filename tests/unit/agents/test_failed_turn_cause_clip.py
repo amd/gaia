@@ -75,7 +75,16 @@ def test_a_word_cut_reply_has_no_full_stop_after_the_ellipsis(agent):
 
 
 def test_the_closing_summary_note_never_ends_mid_word(agent):
+    note = agent._closing_failure_note(
+        RuntimeError("Check the server " * 40), "The summary"
+    )
+
+    assert note.startswith("The summary couldn't be written: Check the server")
+    assert note.rsplit(" ", 1)[-1] in ("Check…", "the…", "server…")
+
+
+def test_a_missing_model_closing_note_is_a_whole_sentence(agent):
     note = agent._closing_failure_note(RuntimeError(LEMONADE), "The summary")
 
-    assert "Check t" not in note.rsplit("`user.Phi-4-Mini-GGUF`.", 1)[-1]
-    assert note.endswith("`user.Phi-4-Mini-GGUF`.")
+    assert "`no-such-model-xyz-123`" in note
+    assert note.endswith(".") and "…" not in note

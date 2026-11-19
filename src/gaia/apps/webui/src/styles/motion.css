@@ -98,3 +98,59 @@
         opacity: 0.6;
     }
 }
+
+/* ── Arrivals: what appears when something opens or switches ─────────
+ * Each has one job: show where a thing came from, or that the view
+ * changed. Short and settling, never travelling far. */
+
+/* A menu rises out of the button that opened it, so the eye stays there. */
+.popover {
+    --popover-from: 4px;
+    animation: popoverIn var(--duration) var(--ease);
+}
+.popover-above {
+    --popover-from: 4px;
+    transform-origin: bottom center;
+}
+.popover-below {
+    --popover-from: -4px;
+    transform-origin: top center;
+}
+
+@keyframes popoverIn {
+    from { opacity: 0; transform: translateY(var(--popover-from)) scale(0.98); }
+    to { opacity: 1; transform: none; }
+}
+
+/* Another chat, page or Settings tab: a short fade says "somewhere else"
+   without moving the content the reader is about to read. */
+.task-view,
+.memory-dashboard-page,
+.settings-pane {
+    animation: fadeIn var(--duration) var(--ease);
+}
+
+/* A section opens by growing to its height, so what it reveals isn't a jump.
+   Browsers without ::details-content just open it as before. */
+:root {
+    interpolate-size: allow-keywords;
+}
+details::details-content {
+    block-size: 0;
+    /* In a flex disclosure its automatic minimum is its full height: open at once. */
+    min-block-size: 0;
+    overflow: clip;
+    overflow-clip-margin: 4px;
+    transition:
+        block-size var(--duration-slow) var(--ease),
+        content-visibility var(--duration-slow) var(--ease) allow-discrete;
+}
+details[open]::details-content {
+    block-size: auto;
+}
+
+/* Side panel sections are added and removed rather than folded: fade in. */
+.sp-section-body,
+.side-rail-section-body {
+    animation: fadeIn var(--duration) var(--ease);
+}

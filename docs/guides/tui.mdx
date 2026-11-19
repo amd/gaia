@@ -38,12 +38,13 @@ gaia-cli
   to `gaia-cli` (a copy on Windows), so shortcuts and scripts that use the old name still work. With
   the Windows setup and the macOS and Linux packages, type `gaia-cli`. Until this
   release `gaia-cli` was a second name for the Python `gaia` command; use `gaia`
-  for that.
+  for that. `/update` can't take a Windows setup or macOS package install back to
+  a release from before the rename: uninstall GAIA, then install that release.
 </Note>
 
 <Warning>
   This binary boots straight into the flagship, and it does not install, uninstall,
-  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email` for the email agent).
+  search, or vote on agents — that stays the Python CLI's job (`gaia init` installs the flagship).
   An earlier version of the TUI opened on an agent browser that did all of that,
   with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
   `uninstall` / `hub` subcommands that drove it, are gone for good.
@@ -714,15 +715,19 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
 | `/slack` | Connect this agent to Slack, or show the connection's status. See [Slack](/guides/slack) |
 | `/automations` | List the reminders, summaries, alerts and triggers GAIA runs on its own, numbered. `/automations pause 2`, `resume 2` or `remove 2` changes one; a name works too. See [Automations](/guides/automations) |
-| `/connectors` | List your connected apps (Gmail, Slack, GitHub…). Also a clickable entry in the status bar. See [Connectors](/connectors) |
+| `/connectors` | List your connected apps (Gmail, Slack, GitHub…). A connector with several accounts lists each one, marking the default and any whose sign-in expired. Also a clickable entry in the status bar. See [Connectors](/connectors) |
 | `/connectors personalize <id>` | Optional: let GAIA read a connected app's recent activity, save what it learns to memory, and suggest automations. Told only to read; creates no schedules. GAIA keeps access to the app afterwards |
-| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…), such as the access Personalize leaves on |
+| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…), such as the access Personalize leaves on. Google and Microsoft access comes with signing in, so use `/connectors remove` for those |
+| `/connectors remove <id> [address]` | Sign a Google or Microsoft account out of GAIA. With several accounts connected, name the one to remove, or GAIA lists them |
+| `/connectors add <id>` | Sign another Google or Microsoft account in beside the ones already connected. Your browser opens the provider's account picker; GAIA waits up to 15 minutes |
+| `/connectors reconnect <id> <address>` | Sign an account in again after its sign-in expired. `/connectors` marks expired accounts |
+| `/connectors default <id> <address>` | Choose the account GAIA uses when you don't name one |
 | `/full-access` | Explain full access; `/full-access confirm` then turns it on for this session (off by default) |
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
 | `/full-access never` | Stop it coming back on future launches |
 | `/read-aloud` | Read the last reply aloud through Lemonade's voice model, played by the PC's own player. Run it again, or `/read-aloud stop`, to stop. Works while the agent is still answering |
-| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply. Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui#settings) |
+| `/voice` | Show the read-aloud voice, speed and auto-read, and list the voices (American or British English, female or male). `/voice bm_george` picks one, `/voice speed 125` sets the speed in percent (50–200), `/voice auto on` reads each finished reply. Saved to `~/.gaia/config.json`, shared with the [Agent UI](/guides/agent-ui/chat#read-aloud) |
 | `/cost` | What this session has spent — time, steps, tool calls, tokens, dollars |
 | `/cost help` | Where the rates come from, and how to set your own |
 | `/copy` | Pick any message with `↑` / `↓` and copy it with `Enter` (`Esc` cancels) |
@@ -731,6 +736,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/update` | Check for a newer GAIA. `/update now` installs the newest, `/update v0.25.0` installs and pins that exact one, `/update back` returns to the version before the last update, `/update auto on` installs new releases when you quit (off by default), `/update rc on` offers release candidates too. See [Updating GAIA](/guides/install#updating-gaia) |
 | `/sessions` | Reopen a past session — see [Reopening a session](#reopening-a-session) |
 | `/sessions all` | The same list with eval and scheduled runs included |
+| `/<skill-name>` | Run an installed skill on the rest of the line, as in Claude Code: `/pdf turn notes.md into a report`. The palette lists your skills after the commands above. See [Skills](/guides/gaia#skills) |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
 their own — `/model`, `/skills`, `/setup`, `/models`, `/gpu` and `/provider` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
@@ -756,6 +762,11 @@ open `/help` first:
          │  ▸ /model   Switch the model this session runs on (gaia …  │
          ╰────────────────────────────────────────────────────────────╯
 ```
+
+Installed skills follow the commands, one `/<skill-name>` row each; when the list is
+taller than the window it scrolls to keep the selection in view. Picking a skill row
+runs it with no request, and the agent asks what it needs; to give the request up
+front, type the name, a space, then the request.
 
 Keep typing to narrow the list (`/mo` above narrows to `/model`), `↑`/`↓` to move the
 selection, `Enter` to run it, `Esc` to close the palette without touching the composer
@@ -1019,24 +1030,18 @@ under `~/.gaia/tui/history/`. When the agent is an installed binary that runs
 through the background service instead, it doesn't keep them yet: `/sessions`
 and `--resume` say so rather than showing an empty list.
 
-## Running another agent
+## Running an agent by id
 
-The flagship is the default, but `gaia-cli` can also drive `email` by id — it keeps
-its own five-row readiness gate:
-
-```bash
-gaia-cli run email
-gaia-cli run email --query "triage my inbox"   # one-shot: answer on stdout
-gaia-cli chat --agent email                    # same thing, via `chat`
-```
-
-Installing or removing it is the Python CLI's job:
+The flagship is the default, and `gaia-cli` can also drive an agent by its id:
 
 ```bash
-gaia hub list
-gaia hub install email
-gaia hub uninstall email
+gaia-cli run gaia
+gaia-cli run gaia --query "summarize my inbox"  # one-shot: answer on stdout
+gaia-cli chat --agent gaia                     # same thing, via `chat`
 ```
+
+Installing or removing an agent is the Python CLI's job (`gaia init` for the
+flagship, `gaia hub` for scripted installs).
 
 ## Colours (light vs dark terminals)
 

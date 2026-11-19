@@ -8,8 +8,16 @@ import { useChatStore } from '../../stores/chatStore';
 import { useT } from '../../i18n/useT';
 import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
 import { log } from '../../utils/logger';
-import type { ConnectorListEntry, Message } from '../../types';
+import type { ConnectorAccount, ConnectorListEntry, Message } from '../../types';
+import { accountRef, accountsOf, addedBesideDefault, middleCut, reconnectOffer, signInFixed, type ConnectOffer } from '../../utils/connectorAccounts';
+import { useConnectorPoll } from '../../hooks/useConnectorPoll';
+import { ltrIn } from '../setup/format';
 import { UnsupportedCard } from './UnsupportedCard';
+import {
+    CONNECT_ACCOUNT_RENDER,
+    isConnectAccountPayload,
+    type ConnectAccountPayload,
+} from '../../utils/connectCards';
 
 /**
  * ConnectAccountCard — the `connect_account` surface.
@@ -21,28 +29,7 @@ import { UnsupportedCard } from './UnsupportedCard';
  * step. A card that names no access asks for what the agent declares.
  */
 
-export const CONNECT_ACCOUNT_RENDER = 'connect_account';
-
-interface ConnectAccountPayload {
-    kind: typeof CONNECT_ACCOUNT_RENDER;
-    providers: string[];
-    agent_id?: string;
-    /** Providers connected already, whose fault is something signing in again fixes. */
-    reconnect?: string[];
-    /** Per provider, the access the failed call needs. */
-    scopes?: Record<string, string[]>;
-}
-
-function isScopeMap(value: unknown, providers: unknown[]): boolean {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-    return Object.entries(value as Record<string, unknown>).every(
-        ([p, s]) =>
-            providers.includes(p)
-            && Array.isArray(s)
-            && s.length > 0
-            && s.every((x) => typeof x === 'string' && x.length > 0),
-    );
-}
+export { CONNECT_ACCOUNT_RENDER, isConnectAccountPayload };
 
 /**
  * What a Connect press asks for: what the call needs, plus what the connection
@@ -52,21 +39,6 @@ function isScopeMap(value: unknown, providers: unknown[]): boolean {
 export function requestScopes(needed: string[] | undefined, held: string[] | undefined): string[] {
     if (!needed?.length) return [];
     return [...new Set([...(held ?? []), ...needed])];
-}
-
-export function isConnectAccountPayload(value: unknown): value is ConnectAccountPayload {
-    if (!value || typeof value !== 'object') return false;
-    const v = value as Record<string, unknown>;
-    return (
-        v.kind === CONNECT_ACCOUNT_RENDER &&
-        Array.isArray(v.providers) &&
-        v.providers.length > 0 &&
-        v.providers.every((p) => typeof p === 'string' && p.length > 0) &&
-        (v.agent_id === undefined || typeof v.agent_id === 'string') &&
-        (v.reconnect === undefined
-            || (Array.isArray(v.reconnect) && v.reconnect.every((p) => typeof p === 'string'))) &&
-        (v.scopes === undefined || isScopeMap(v.scopes, v.providers))
-    );
 }
 
 /** The providers whose becoming connected is the fix: those not connected when the tool ran. */
@@ -87,6 +59,17 @@ export function connectCardProviders(message: Pick<Message, 'cards'> | undefined
         }
     }
     return [...found];
+}
+
+/** Per provider, the account a message's Connect card offered to sign in to again. */
+export function connectCardAccounts(message: Pick<Message, 'cards'> | undefined): Record<string, string> {
+    const named: Record<string, string> = {};
+    for (const card of message?.cards ?? []) {
+        if (card.render === CONNECT_ACCOUNT_RENDER && isConnectAccountPayload(card.data)) {
+            Object.assign(named, card.data.account);
+        }
+    }
+    return named;
 }
 
 /** Whether a message carries a Connect card at all. */
@@ -132,8 +115,6 @@ function openAuthUrl(url: string): void {
     else window.open(url, '_blank', 'noopener');
 }
 
-const POLL_MS = 4000;
-
 /** Sign-in refused because this PC has no OAuth client for the provider yet. */
 function isUnconfigured(e: unknown): boolean {
     const err = e as { httpStatus?: number; body?: Record<string, unknown> | null };
@@ -144,6 +125,9 @@ function ProviderRow({
     connectorId,
     name,
     connected,
+    saysConnected,
+    added,
+    offer,
     needsSetup,
     grantAgents,
     scopes,
@@ -152,6 +136,11 @@ function ProviderRow({
     connectorId: string;
     name: string;
     connected: boolean;
+    /** Say the provider is connected: never while the account that failed may still be broken. */
+    saysConnected: boolean;
+    /** The account just signed in beside the default, which GAIA uses only when asked. */
+    added: ConnectorAccount | null;
+    offer: ConnectOffer;
     /** No OAuth client on this PC yet, so sign-in cannot start. */
     needsSetup: boolean;
     grantAgents: string[];
@@ -170,7 +159,7 @@ function ProviderRow({
         if (!needsSetup) setSetup(false);
     }, [needsSetup]);
 
-    const connect = useCallback(async () => {
+    const connect = useCallback(async (target?: api.AuthorizeTarget) => {
         if (needsSetup) {
             setError(null);
             setSetup(true);
@@ -185,7 +174,10 @@ function ProviderRow({
         setBusy(true);
         setError(null);
         try {
-            const flow = await api.authorizeConnector(connectorId, scopes, grantAgents);
+            // A plain Connect sends the request it always did.
+            const flow = target
+                ? await api.authorizeConnector(connectorId, scopes, grantAgents, target)
+                : await api.authorizeConnector(connectorId, scopes, grantAgents);
             openAuthUrl(flow.authorization_url);
             onOpened();
         } catch (e) {
@@ -196,24 +188,51 @@ function ProviderRow({
         }
     }, [connectorId, needsSetup, grantAgents, scopes, onOpened, openSettings]);
 
+    const icon = busy
+        ? <Loader2 size={12} className="render-connect__spinner" aria-hidden="true" />
+        : <ExternalLink size={12} aria-hidden="true" />;
     const label = t(connected ? 'connectCard.reconnect' : 'connectCard.connect', { name });
+    const { account } = offer;
     return (
         <div className="render-connect__provider">
-            <button
-                type="button"
-                className={`render-connect__button${connected ? ' render-connect__button--quiet' : ''}`}
-                onClick={() => void connect()}
-                disabled={busy}
-            >
-                {busy
-                    ? <Loader2 size={12} className="render-connect__spinner" aria-hidden="true" />
-                    : <ExternalLink size={12} aria-hidden="true" />}
-                <span>{label}</span>
-            </button>
-            {connected && (
+            {account ? (
+                <button
+                    type="button"
+                    className="render-connect__button"
+                    title={account.email || undefined}
+                    onClick={() => void connect({ account: accountRef(account) })}
+                    disabled={busy}
+                >
+                    {icon}
+                    <span>{t('connectCard.reconnectAccount', { address: ltrIn(t.locale, middleCut(account.email || account.account_id)) })}</span>
+                </button>
+            ) : (
+                <button
+                    type="button"
+                    className={`render-connect__button${connected ? ' render-connect__button--quiet' : ''}`}
+                    onClick={() => void connect()}
+                    disabled={busy}
+                >
+                    {icon}
+                    <span>{label}</span>
+                </button>
+            )}
+            {offer.otherAccount && (
+                <button
+                    type="button"
+                    className="render-connect__button render-connect__button--quiet"
+                    onClick={() => void connect({ addAccount: true })}
+                    disabled={busy}
+                >
+                    <span>{t('connectCard.otherAccount')}</span>
+                </button>
+            )}
+            {saysConnected && !account && (
                 <span className="render-connect__connected" role="status">
                     <CheckCircle2 size={13} aria-hidden="true" />
-                    {t('connectCard.connected', { name })}
+                    {added
+                        ? t('connectCard.addedAccount', { address: ltrIn(t.locale, middleCut(added.email || added.account_id)), name })
+                        : t('connectCard.connected', { name })}
                 </span>
             )}
             {error && (
@@ -262,13 +281,19 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
     const agents = useChatStore((s) => s.agents);
     const openSettings = useChatStore((s) => s.openSettings);
     const [connectors, setConnectors] = useState<ConnectorListEntry[]>([]);
+    // The connectors as this card first saw them: only a change since counts as the fix.
+    const [before, setBefore] = useState<ConnectorListEntry[] | null>(null);
     const [opened, setOpened] = useState(false);
     const [ended, setEnded] = useState<'cancelled' | 'failed' | null>(null);
     const valid = isConnectAccountPayload(data);
 
     const refresh = useCallback(() => {
         api.listConnectors()
-            .then((res) => setConnectors(res.connectors || []))
+            .then((res) => {
+                const rows = res.connectors || [];
+                setConnectors(rows);
+                setBefore((prev) => prev ?? rows);
+            })
             .catch((err) => log.ui.warn('ConnectAccountCard: connector fetch failed', err));
     }, []);
 
@@ -288,12 +313,13 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         settingsWasOpen.current = settingsOpen;
     }, [valid, settingsOpen, refresh]);
 
+    const rowOf = (rows: ConnectorListEntry[] | null, id: string) => rows?.find((c) => c.id === id);
+    const isFixed = (id: string) =>
+        valid && before !== null && signInFixed(rowOf(connectors, id), rowOf(before, id), data.account?.[id]);
+    const anyFixed = valid && awaited(data).some(isFixed);
+
     // While a sign-in tab is open, watch for the account to appear.
-    useEffect(() => {
-        if (!opened) return undefined;
-        const timer = setInterval(refresh, POLL_MS);
-        return () => clearInterval(timer);
-    }, [opened, refresh]);
+    useConnectorPoll(opened && !anyFixed, refresh);
 
     const onEnded = useCallback((why: 'cancelled' | 'failed') => {
         setOpened(false);
@@ -306,6 +332,8 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
 
     const isConnected = (id: string) =>
         connectors.some((c) => c.id === id && !('error' in c) && c.configured);
+    // With several accounts, a working one says nothing about the one that failed.
+    const saysConnected = (id: string) => isFixed(id) || (isConnected(id) && accountsOf(rowOf(connectors, id)).length <= 1);
     const needsSetup = (id: string) =>
         connectors.some(
             (c) => c.id === id && !('error' in c) && !c.configured && c.configurable === false,
@@ -318,10 +346,8 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         const row = connectors.find((c) => c.id === id);
         return row && !('error' in row) ? row.scopes : undefined;
     };
-    const anyConnected = awaited(data).some(isConnected);
-
     let prompt = t('connectCard.prompt');
-    if (anyConnected) prompt = t('connectCard.askAgain');
+    if (anyFixed) prompt = t('connectCard.askAgain');
     else if (ended) prompt = t(ended === 'cancelled' ? 'connectCard.cancelled' : 'connectCard.failed');
     else if (opened) prompt = t('connectCard.opened');
 
@@ -339,6 +365,9 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                         connectorId={id}
                         name={displayName(id)}
                         connected={isConnected(id)}
+                        saysConnected={saysConnected(id)}
+                        added={isFixed(id) ? addedBesideDefault(rowOf(connectors, id), rowOf(before, id)) : null}
+                        offer={reconnectOffer(rowOf(connectors, id), data.account?.[id])}
                         needsSetup={needsSetup(id)}
                         grantAgents={grantIdsFor(agents, data.agent_id, id)}
                         scopes={requestScopes(

@@ -25,7 +25,7 @@ export interface SessionEnvironment {
     internet: boolean;
     /** False when the chat's agent keeps its own file scope (a relayed sidecar). */
     enforced: boolean;
-    /** False when the chat's agent keeps its own network rules (the email agent). */
+    /** False when the chat's agent keeps its own network rules (a relayed sidecar). */
     internet_enforced: boolean;
 }
 
@@ -61,7 +61,7 @@ export interface AgentTool {
 }
 
 /** How a skill came to be loaded in a chat. */
-export type SkillOrigin = 'model' | 'auto' | 'always';
+export type SkillOrigin = 'model' | 'user' | 'auto' | 'always';
 
 export interface ActiveSkill {
     name: string;

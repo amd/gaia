@@ -73,6 +73,7 @@ from gaia.agents.base.skill_suggester import (
     suggest_env_override,
 )
 from gaia.agents.base.text_task import instruction_part
+from gaia.agents.base.tool_grants import BROWSER_PANE_SKILL
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
@@ -237,6 +238,10 @@ class GaiaAgentConfig(ChatAgentConfig):
     # "full" is the only spec whose tool_groups are the union this agent needs:
     # doc_rag + file_fs + data_scratch + web_browse + full_screenshot.
     prompt_profile: str = "full"
+
+    # The id Settings › Connectors activates MCP servers for, so the flagship
+    # offers a server's tools only once it is activated, however it was built.
+    namespaced_agent_id: Optional[str] = "installed:gaia"
 
     # None (the CLI's "not given") also resolves to the flagship limit.
     max_steps: Optional[int] = field(default_factory=flagship_max_steps)
@@ -522,16 +527,18 @@ class GaiaAgent(
 
     @property
     def skill_manager(self):
-        """Exclude the developer skill before metadata discovery in normal mode."""
+        """Exclude the developer skill before metadata discovery in normal mode,
+        and the browser-pane skill in a chat with no pane to drive."""
         if getattr(self, "_skill_manager", None) is None:
             from gaia.skills import SkillManager
 
+            excluded = () if self.config.developer_mode else (ENGINEERING_SKILL,)
+            if not self._browser_pane_attached:
+                excluded += (BROWSER_PANE_SKILL,)
             # The project's .claude/skills join the catalogue, as in Claude Code.
             self._skill_manager = SkillManager(
                 agent_skill_dirs=[*self.SKILL_DIRS, *self._bundled_skill_dirs()],
-                excluded_names=(
-                    () if self.config.developer_mode else (ENGINEERING_SKILL,)
-                ),
+                excluded_names=excluded,
                 project_dir=self._project_map_root(),
             )
         return self._skill_manager

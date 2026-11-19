@@ -1,0 +1,14 @@
+{
+  "entries": [
+    {
+      "seq": 3,
+      "at": 1761526800000,
+      "level": "error",
+      "text": "Uncaught TypeError: Cannot read properties of null (reading 'value')",
+      "source": "http://127.0.0.1:5000/broken.html:12"
+    }
+  ],
+  "lastSeq": 4,
+  "dropped": 0,
+  "url": "http://127.0.0.1:5000/broken.html"
+}

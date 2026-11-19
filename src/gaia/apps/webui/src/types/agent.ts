@@ -3,6 +3,8 @@
 
 /** Notification types, and the slice of the Electron preload API the UI uses. */
 
+import type { GaiaBrowserPaneAPI } from '../../services/browser-pane/contract';
+
 // ── Notification Types ───────────────────────────────────────────────────
 
 export type NotificationType =
@@ -228,6 +230,7 @@ declare global {
   interface Window {
     gaiaAPI?: GaiaElectronAPI;
     gaiaWindow?: GaiaWindowFrame;
+    gaiaBrowserPane?: GaiaBrowserPaneAPI;
     gaiaInstall?: GaiaInstallBridge;
   }
 }
