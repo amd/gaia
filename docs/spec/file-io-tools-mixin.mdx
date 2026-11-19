@@ -187,10 +187,12 @@ file as `.docx` / `.pptx` / `.xlsx` or PDF.
 
 A document whose text is too long to read in full is an error naming other
 ways to read it, best first: a loaded skill's tool that declares the file type,
-then `run_python` (for a range of rows), then `index_document`. Only tools the
-host has are named. Too-long results are cached like text, so the file is not
-re-parsed on every retry. **A too-long workbook** is not an error: it returns an
-overview instead, deliberately with no `content`, since it is not the file's text:
+then `index_document`. Only tools the host has are named. Too-long results are
+cached like text, so the file is not re-parsed on every retry. **A too-long
+workbook** read without a line range is not an error: it returns an overview
+instead, deliberately with no `content`, since it is not the file's text. Its
+`note` names the same routes, with `run_python` (for a range of rows) between
+the skill's tool and `index_document`:
 
 ```python
 {
