@@ -11,6 +11,7 @@ import json
 
 import httpx
 import pytest
+from _fake_accounts import install, tag, tool_account
 from _fake_mail_api import (
     NOW_MS,
     USER,
@@ -25,7 +26,7 @@ from gaia.agents.tools._email.phishing import (
     UNTRUSTED_BODY_CLOSE,
     UNTRUSTED_BODY_OPEN,
 )
-from gaia.agents.tools.email_tools import EmailToolsMixin
+from gaia.agents.tools.email_tools import EmailToolsMixin, Mailbox
 
 GMAIL_READONLY = "https://www.googleapis.com/auth/gmail.readonly"
 MAIL_READWRITE = "https://graph.microsoft.com/Mail.ReadWrite"
@@ -233,8 +234,8 @@ def test_both_backends_return_the_same_thread_shape():
 
 class _Harness(EmailToolsMixin):
     def __init__(self, backend, provider="google"):
-        self._email_backend = backend
-        self._email_provider = provider
+        self._email_mailboxes = [Mailbox(tool_account(provider=provider), backend)]
+        self._email_unusable = []
 
     def tool(self, name):
         from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -251,6 +252,9 @@ def _harness(backend, provider="google"):
 @pytest.fixture(params=["gmail", "graph"])
 def provider_api(request):
     return FakeGmailApi if request.param == "gmail" else FakeGraphApi
+
+
+T = tag("google", "me@example.com")
 
 
 def test_get_thread_tool_numbers_messages_and_fences_bodies(provider_api):
@@ -438,12 +442,8 @@ def connectors(monkeypatch):
 
     def apply(connections, grants):
         import gaia.connectors.api as api
-        import gaia.connectors.grants as grants_mod
 
-        monkeypatch.setattr(api, "get_connection", lambda p: connections.get(p))
-        monkeypatch.setattr(
-            grants_mod, "list_agent_grants", lambda p: dict(grants.get(p) or {})
-        )
+        install(monkeypatch, connections, grants)
 
         def no_network(**_):
             raise AssertionError("list_connected_mailboxes must not mint a token")
@@ -465,7 +465,7 @@ def _status_tool():
     return _TOOL_REGISTRY["list_connected_mailboxes"]["function"]
 
 
-def test_connected_mailboxes_names_the_active_one(connectors):
+def test_connected_mailboxes_names_what_it_reads(connectors):
     connectors(
         {"google": _conn([GMAIL_READONLY])},
         {"google": {"installed:gaia": [GMAIL_READONLY]}},
@@ -473,7 +473,8 @@ def test_connected_mailboxes_names_the_active_one(connectors):
     out = json.loads(_status_tool()())
     assert out["success"] is True
     assert out["connected"] is True
-    assert out["active"] == "google"
+    assert out["reads"] == ["me@example.com"]
+    assert out["sends_from_by_default"] == "me@example.com"
     by = {m["provider"]: m for m in out["mailboxes"]}
     assert by["google"]["usable"] is True
     assert by["google"]["account_email"] == "me@example.com"
@@ -494,28 +495,34 @@ def test_connected_but_ungranted_is_connected_not_active(connectors):
     assert by["google"]["connected"] is True
     assert by["google"]["usable"] is False
     assert "grants grant google installed:gaia" in by["google"]["status"]
-    assert out["active"] == "microsoft"
+    assert out["reads"] == ["me@corp.com"]
 
 
-def test_active_matches_what_the_mail_tools_would_select(connectors):
-    """Both usable: Gmail wins on registry order, as _resolve_mailbox does."""
+def test_every_usable_account_is_read_and_google_sends_by_default(connectors):
     connectors(
-        {"google": _conn([GMAIL_READONLY]), "microsoft": _conn([MAIL_READWRITE])},
+        {
+            "google": [
+                _conn([GMAIL_READONLY]),
+                _conn([GMAIL_READONLY], email="work@example.com"),
+            ],
+            "microsoft": _conn([MAIL_READWRITE], email="me@corp.com"),
+        },
         {
             "google": {"installed:gaia": [GMAIL_READONLY]},
             "microsoft": {"installed:gaia": [MAIL_READWRITE]},
         },
     )
     out = json.loads(_status_tool()())
-    chosen, *_ = EmailToolsMixin()._resolve_mailbox()
-    assert out["active"] == chosen == "google"
+    assert out["reads"] == ["me@example.com", "work@example.com", "me@corp.com"]
+    assert out["sends_from_by_default"] == "me@example.com"
+    assert [m["is_default"] for m in out["mailboxes"]] == [True, False, True]
 
 
 def test_nothing_connected_says_how_to_connect(connectors):
     connectors({}, {})
     out = json.loads(_status_tool()())
     assert out["connected"] is False
-    assert out["active"] is None
+    assert out["reads"] == []
     assert "gaia connectors connect" in out["message"]
 
 
@@ -536,9 +543,10 @@ def test_a_connector_failure_is_an_error_not_a_disconnected_mailbox(monkeypatch)
     monkeypatch.delenv(fixture.EVAL_MAILBOX_ENV, raising=False)
     import gaia.connectors.api as api
 
-    def boom(_):
+    def boom(*_, **__):
         raise RuntimeError("keyring locked")
 
+    monkeypatch.setattr(api, "list_accounts", boom)
     monkeypatch.setattr(api, "get_connection", boom)
     out = json.loads(_status_tool()())
     assert out["success"] is False
@@ -550,18 +558,21 @@ def test_a_connector_failure_is_an_error_not_a_disconnected_mailbox(monkeypatch)
 def test_eval_fixture_never_consults_the_connectors(monkeypatch, tmp_path, attached):
     from gaia.agents.tools._email import fixture
 
-    monkeypatch.setenv(fixture.EVAL_MAILBOX_ENV, str(tmp_path / "inbox.mbox"))
+    mbox = tmp_path / "inbox.mbox"
+    mbox.write_text("")
+    monkeypatch.setenv(fixture.EVAL_MAILBOX_ENV, str(mbox))
     monkeypatch.setattr(fixture, "_attached", attached)
     import gaia.connectors.api as api
 
-    def leak(_):
+    def leak(*_, **__):
         raise AssertionError("a real mailbox must not leak into an eval")
 
+    monkeypatch.setattr(api, "list_accounts", leak)
     monkeypatch.setattr(api, "get_connection", leak)
     out = json.loads(_status_tool()())
     assert out["success"] is True
     assert out["connected"] is attached
-    assert out["active"] == ("google" if attached else None)
+    assert bool(out["reads"]) is attached
 
 
 # --------------------------------------------------------------------------
@@ -588,8 +599,8 @@ def test_waiting_tool_finds_the_thread_on_both_providers(provider_api):
     assert out["success"] is True
     assert out["count"] == 1
     item = out["waiting_on_you"][0]
-    assert item["message_id"] == "a2"
-    assert item["thread_id"] == "t1"
+    assert item["message_id"] == f"{T}:a2"
+    assert item["thread_id"] == f"{T}:t1"
     assert item["from"] == "Dana <dana@example.com>"
     assert item["signal"] == "direct_ask"
     assert item["age_days"] == 3
@@ -603,7 +614,7 @@ def test_waiting_tool_orders_most_overdue_first(provider_api):
         Mail("b2", "t2", sender="Ben <ben@example.com>", body=ASK, age_days=12),
     ]
     out = _waiting(provider_api, mails)
-    assert [i["thread_id"] for i in out["waiting_on_you"]] == ["t2", "t1"]
+    assert [i["thread_id"] for i in out["waiting_on_you"]] == [f"{T}:t2", f"{T}:t1"]
 
 
 def test_waiting_tool_empty_result_is_success_not_error(provider_api):
@@ -660,7 +671,7 @@ def test_waiting_tool_reports_an_unreadable_long_thread():
         for i in range(101)
     ]
     out = _waiting(FakeGraphApi, long, provider="microsoft")
-    assert out["threads_unchecked"] == ["conv"]
+    assert out["threads_unchecked"] == [tag("microsoft", "me@example.com") + ":conv"]
     assert "incomplete" in out["note"]
 
 
@@ -700,8 +711,11 @@ def test_waiting_tool_reresolves_once_after_an_auth_failure(monkeypatch):
     )
     fresh = FakeGmailApi(_conversation()).backend()
     h = _harness(stale)
-    h._email_backend_is_owned = True
-    monkeypatch.setattr(h, "_build_email_backend", lambda: fresh)
+    h._email_mailboxes_owned = True
+    account = h._email_mailboxes[0].account
+    monkeypatch.setattr(
+        h, "_build_email_mailboxes", lambda: ([Mailbox(account, fresh)], [])
+    )
     out = json.loads(h.tool("list_waiting_on_you")())
     assert out["success"] is True
 

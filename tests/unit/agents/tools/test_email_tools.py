@@ -12,6 +12,7 @@ import json
 
 import httpx
 import pytest
+from _fake_accounts import install, tool_account
 
 from gaia.agents.tools._email.graph import (
     MailboxAuthError,
@@ -23,7 +24,12 @@ from gaia.agents.tools.email_tools import (
     EMAIL_AGENT_ID,
     MAIL_SCOPES,
     EmailToolsMixin,
+    Mailbox,
 )
+
+# The one injected account: an Outlook mailbox, its provider's default.
+ME = tool_account()
+T = ME.tag
 
 # --------------------------------------------------------------------------
 # fixtures
@@ -424,8 +430,9 @@ def test_user_email_falls_back_to_principal_name():
 class _Harness(EmailToolsMixin):
     """Minimal host for the mixin — no Agent machinery needed."""
 
-    def __init__(self, backend):
-        self._email_backend = backend
+    def __init__(self, backend, account=ME):
+        self._email_mailboxes = None if backend is None else [Mailbox(account, backend)]
+        self._email_unusable = []
         self.tools = {}
 
     def _tool(self, name):
@@ -496,8 +503,8 @@ def test_check_mailbox_access_reports_inbox_counts(harness_factory):
 
     out = json.loads(harness_factory(handler)._tool("check_mailbox_access")())
     assert out["success"] is True
-    assert out["address"] == "me@example.com"
-    assert out["inbox_unread"] == 4
+    assert out["accounts"][0]["address"] == "me@example.com"
+    assert out["accounts"][0]["inbox_unread"] == 4
 
 
 def test_limit_is_clamped_at_the_tool_boundary(harness_factory):
@@ -526,18 +533,15 @@ def mailbox_env(monkeypatch):
 
     def apply(connections, grants):
         import gaia.connectors.api as api
-        import gaia.connectors.grants as grants_mod
 
         minted = {}
-        monkeypatch.setattr(api, "get_connection", lambda p: connections.get(p))
-        monkeypatch.setattr(
-            grants_mod, "list_agent_grants", lambda p: dict(grants.get(p) or {})
-        )
+        install(monkeypatch, connections, grants)
 
-        def fake_token(*, provider, scopes, agent_id, **_):
+        def fake_token(*, provider, scopes, agent_id, account=None):
             minted["provider"] = provider
             minted["scopes"] = list(scopes)
             minted["agent_id"] = agent_id
+            minted["account"] = account
             return "test-token"
 
         monkeypatch.setattr(api, "get_access_token_sync", fake_token)
@@ -600,66 +604,51 @@ def test_backend_selected_from_resolved_read_capability(
     mailbox_env, connections, grants, provider, scope
 ):
     minted = mailbox_env(connections, grants)
-    backend = _Bare()._build_email_backend()
+    boxes, _ = _Bare()._build_email_mailboxes()
 
+    assert [b.account.provider for b in boxes] == [provider]
     expected = "GmailReadBackend" if provider == "google" else "OutlookReadBackend"
-    assert type(backend).__name__ == expected
+    assert type(boxes[0].backend).__name__ == expected
 
-    backend._access_token_fn()
+    boxes[0].backend._access_token_fn()
     assert minted["provider"] == provider
     # Exactly the one resolved scope, never the pair.
     assert minted["scopes"] == [scope]
     assert minted["agent_id"] == EMAIL_AGENT_ID
+    # The token is minted for that one account, never the provider's default.
+    assert minted["account"] == "me@example.com"
 
 
-def test_both_usable_prefers_google_and_announces_the_alternative(mailbox_env):
+BOTH_GRANTED = {
+    "google": {"installed:gaia": [GMAIL_READONLY]},
+    "microsoft": {"installed:gaia": [MAIL_READWRITE]},
+}
+
+
+def test_every_usable_account_is_read_google_first(mailbox_env):
     mailbox_env(
         {
             "google": connection([GMAIL_READONLY]),
             "microsoft": connection([MAIL_READWRITE]),
         },
-        {
-            "google": {"installed:gaia": [GMAIL_READONLY]},
-            "microsoft": {"installed:gaia": [MAIL_READWRITE]},
-        },
+        BOTH_GRANTED,
     )
-    mixin = _Bare()
-    mixin._build_email_backend()
-    assert mixin._email_provider == "google"
-    assert mixin._email_provider_source == "precedence"
-    assert mixin._email_alternatives == ["microsoft"]
+    boxes, unusable = _Bare()._build_email_mailboxes()
+    assert [b.account.provider for b in boxes] == ["google", "microsoft"]
+    assert unusable == []
 
 
-def test_revoking_the_grant_switches_the_selected_mailbox(mailbox_env):
-    """The only way to change the pick, and the one `check_mailbox_access` names.
-
-    Selection is connector-derived on purpose: an env-var override would choose
-    a mailbox without consulting the grant ledger, which is the gate that makes
-    the choice auditable in the first place.
-    """
+def test_revoking_a_grant_drops_only_that_connectors_accounts(mailbox_env):
+    """The grant ledger is still the gate: no env var or argument bypasses it."""
     both_connected = {
         "google": connection([GMAIL_READONLY]),
         "microsoft": connection([MAIL_READWRITE]),
     }
-    mailbox_env(
-        both_connected,
-        {
-            "google": {"installed:gaia": [GMAIL_READONLY]},
-            "microsoft": {"installed:gaia": [MAIL_READWRITE]},
-        },
-    )
-    mixin = _Bare()
-    mixin._build_email_backend()
-    assert mixin._email_provider == "google"
-
-    # `gaia connectors grants revoke google installed:gaia` — the google row
-    # is gone, so microsoft becomes the only eligible mailbox.
     mailbox_env(both_connected, {"microsoft": {"installed:gaia": [MAIL_READWRITE]}})
-    switched = _Bare()
-    switched._build_email_backend()
-    assert switched._email_provider == "microsoft"
-    assert switched._email_provider_source == "only-granted"
-    assert switched._email_alternatives == []
+    boxes, unusable = _Bare()._build_email_mailboxes()
+    assert [b.account.provider for b in boxes] == ["microsoft"]
+    assert [a.provider for a, _ in unusable] == ["google"]
+    assert "grant" in unusable[0][1]
 
 
 def test_no_environment_variable_can_choose_the_mailbox(mailbox_env, monkeypatch):
@@ -669,18 +658,13 @@ def test_no_environment_variable_can_choose_the_mailbox(mailbox_env, monkeypatch
             "google": connection([GMAIL_READONLY]),
             "microsoft": connection([MAIL_READWRITE]),
         },
-        {
-            "google": {"installed:gaia": [GMAIL_READONLY]},
-            "microsoft": {"installed:gaia": [MAIL_READWRITE]},
-        },
+        BOTH_GRANTED,
     )
     for name in ("GAIA_MAIL_PROVIDER", "GAIA_EMAIL_PROVIDER", "MAIL_PROVIDER"):
         monkeypatch.setenv(name, "microsoft")
 
-    mixin = _Bare()
-    mixin._build_email_backend()
-    assert mixin._email_provider == "google"
-    assert mixin._email_provider_source == "precedence"
+    boxes, _ = _Bare()._build_email_mailboxes()
+    assert [b.account.provider for b in boxes] == ["google", "microsoft"]
 
 
 @pytest.mark.parametrize(
@@ -726,7 +710,7 @@ def test_no_mailbox_error_names_each_providers_own_state(
 
     mailbox_env(connections, grants)
     with pytest.raises(MailboxError) as err:
-        _Bare()._build_email_backend()
+        _Bare()._build_email_mailboxes()
     message = str(err.value)
     assert needle in message
     # Both mailboxes are named, each with its own state.
@@ -742,7 +726,7 @@ def test_missing_scopes_remedy_never_names_only_the_gap(mailbox_env):
         {},
     )
     with pytest.raises(MailboxError) as err:
-        _Bare()._build_email_backend()
+        _Bare()._build_email_mailboxes()
     message = str(err.value)
     assert "calendar.events" in message
     assert "gmail.readonly" in message and "gmail.compose" in message
@@ -756,7 +740,7 @@ def test_the_full_mailbox_scope_is_never_requested(mailbox_env):
         {"google": connection([GMAIL_READONLY, SCOPE_GMAIL_FULL_MAILBOX])},
         {"google": {"installed:gaia": [GMAIL_READONLY, SCOPE_GMAIL_FULL_MAILBOX]}},
     )
-    _Bare()._build_email_backend()._access_token_fn()
+    _Bare()._build_email_mailboxes()[0][0].backend._access_token_fn()
     assert minted["scopes"] == [GMAIL_READONLY]
 
 
@@ -765,14 +749,15 @@ def test_backend_reresolves_once_after_an_auth_failure(harness_factory):
     builds = []
 
     class Flaky(_Harness):
-        def _build_email_backend(self):
+        def _build_email_mailboxes(self):
             builds.append(1)
             if len(builds) == 1:
-                return make_backend(lambda r: httpx.Response(401, text="expired"))
-            return make_backend(lambda r: json_response({"value": [GRAPH_MESSAGE]}))
+                dead = make_backend(lambda r: httpx.Response(401, text="expired"))
+                return [Mailbox(ME, dead)], []
+            live = make_backend(lambda r: json_response({"value": [GRAPH_MESSAGE]}))
+            return [Mailbox(ME, live)], []
 
     h = Flaky(backend=None)
-    h._email_backend = None
     h.register_email_tools()
     out = json.loads(h._tool("list_inbox")())
 
@@ -784,12 +769,12 @@ def test_a_second_auth_failure_is_surfaced_not_retried_forever(harness_factory):
     builds = []
 
     class AlwaysDead(_Harness):
-        def _build_email_backend(self):
+        def _build_email_mailboxes(self):
             builds.append(1)
-            return make_backend(lambda r: httpx.Response(401, text="expired"))
+            dead = make_backend(lambda r: httpx.Response(401, text="expired"))
+            return [Mailbox(ME, dead)], []
 
     h = AlwaysDead(backend=None)
-    h._email_backend = None
     h.register_email_tools()
     out = json.loads(h._tool("list_inbox")())
 
@@ -797,21 +782,26 @@ def test_a_second_auth_failure_is_surfaced_not_retried_forever(harness_factory):
     assert len(builds) == 2
 
 
-def test_check_mailbox_access_reports_the_resolved_provider(harness_factory):
+def test_check_mailbox_access_reports_each_account(harness_factory):
     def handler(request):
         if request.url.path.endswith("/me"):
             return json_response({"mail": "me@example.com"})
         return json_response({"value": []})
 
-    h = harness_factory(handler)
-    h._email_provider = "google"
-    h._email_provider_source = "precedence"
-    h._email_alternatives = ["microsoft"]
-    out = json.loads(h._tool("check_mailbox_access")())
+    out = json.loads(harness_factory(handler)._tool("check_mailbox_access")())
 
-    assert out["provider"] == "google"
-    assert out["provider_source"] == "precedence"
-    assert out["alternatives"] == ["microsoft"]
+    assert out["accounts"] == [
+        {
+            "account": "me@example.com",
+            "provider": "microsoft",
+            "is_default": True,
+            "address": "me@example.com",
+            "inbox_unread": None,
+            "inbox_total": None,
+            "folder_count": 0,
+        }
+    ]
+    assert out["accounts_read"] == ["me@example.com"]
 
 
 def test_read_email_body_is_bounded_and_truncation_is_visible(harness_factory):
@@ -839,7 +829,7 @@ def test_backend_is_not_built_until_a_tool_runs():
     """Composing the mixin must not touch the connectors layer."""
 
     class Eager(EmailToolsMixin):
-        def _build_email_backend(self):
+        def _build_email_mailboxes(self):
             raise AssertionError("backend built too early")
 
     Eager().register_email_tools()  # must not raise
@@ -1020,9 +1010,10 @@ def test_turn_budget_guard_runs_before_the_backend_call():
     """The refusal must not depend on which backend is behind the mailbox."""
 
     class _AssertingHost(EmailToolsMixin):
-        _email_backend = object()  # any truthy sentinel; must never be used
+        _email_mailboxes = [Mailbox(ME, object())]  # must never be used
+        _email_unusable = []
 
-        def _email_call(self, *args, **kwargs):
+        def _email_run_on(self, *args, **kwargs):
             raise AssertionError("backend must not be called once the turn is full")
 
         def _tool(self, name):
@@ -1671,3 +1662,130 @@ def test_a_failing_sweep_rung_does_not_discard_already_found_exact_hits(
     assert "expired" in out["sweep_incomplete"]
     assert "sweep" in out["note"].lower()
     assert len(calls) == 2
+
+
+# --------------------------------------------------------------------------
+# several accounts at once
+# --------------------------------------------------------------------------
+
+
+def _inbox(*messages):
+    def handler(request):
+        if "/messages/" in request.url.path:
+            wanted = request.url.path.rsplit("/", 1)[-1]
+            return json_response(next(m for m in messages if m["id"] == wanted))
+        return json_response({"value": list(messages)})
+
+    return make_backend(handler)
+
+
+def _mail(mid, received, account_note):
+    return {
+        **GRAPH_MESSAGE,
+        "id": mid,
+        "conversationId": f"c-{mid}",
+        "subject": account_note,
+        "receivedDateTime": received,
+    }
+
+
+HOME = tool_account("me@example.com", provider="microsoft")
+WORK = tool_account("work@example.com", provider="microsoft", is_default=False)
+
+
+def _two_inboxes(work_backend=None):
+    h = _Harness(_inbox(_mail("h1", "2026-09-02T08:00:00Z", "home")), HOME)
+    h._email_mailboxes.append(
+        Mailbox(
+            WORK,
+            work_backend or _inbox(_mail("w1", "2026-09-03T08:00:00Z", "work")),
+        )
+    )
+    h.register_email_tools()
+    return h
+
+
+def test_a_merged_inbox_is_newest_first_and_names_each_account():
+    out = json.loads(_two_inboxes()._tool("list_inbox")())
+    assert [(m["subject"], m["account"], m["id"]) for m in out["messages"]] == [
+        ("work", WORK.email, f"{WORK.tag}:w1"),
+        ("home", HOME.email, f"{HOME.tag}:h1"),
+    ]
+    assert out["accounts_read"] == [HOME.email, WORK.email]
+
+
+def test_a_read_follows_the_id_to_its_own_account():
+    h = _two_inboxes()
+    out = json.loads(h._tool("read_email")(message_id=f"{WORK.tag}:w1"))
+    assert out["message"]["subject"] == "work"
+    assert out["message"]["account"] == WORK.email
+
+
+def test_an_account_that_fails_is_named_and_the_rest_still_answer():
+    failing = make_backend(lambda request: graph_error(503, "ServiceUnavailable"))
+    out = json.loads(_two_inboxes(failing)._tool("list_inbox")())
+    assert out["success"] is True
+    assert [m["subject"] for m in out["messages"]] == ["home"]
+    [missed] = out["accounts_not_read"]
+    assert missed["account"] == WORK.email
+    assert WORK.email in out["accounts_note"]
+
+
+@pytest.mark.parametrize("wanted", ["outlook", "nobody@example.com"])
+def test_an_account_that_names_none_or_several_lists_the_choices(wanted):
+    out = json.loads(_two_inboxes()._tool("list_inbox")(account=wanted))
+    assert out["success"] is False
+    assert HOME.email in out["error"] and WORK.email in out["error"]
+
+
+def test_narrowing_reads_only_that_account():
+    out = json.loads(_two_inboxes()._tool("list_inbox")(account=WORK.email))
+    assert [m["account"] for m in out["messages"]] == [WORK.email]
+    assert out["accounts_read"] == [WORK.email]
+
+
+def test_an_untagged_id_is_refused_when_several_accounts_are_read():
+    out = json.loads(_two_inboxes()._tool("read_email")(message_id="w1"))
+    assert out["success"] is False
+    assert "does not say which account" in out["error"]
+
+
+class _WorkSignInExpires(_Harness):
+    """WORK's mailbox rejects the token; on the re-read its sign-in has expired."""
+
+    REASON = "its sign-in expired or was revoked. Reconnect it under Settings"
+
+    def __init__(self):
+        super().__init__(backend=None)
+        self.builds = 0
+
+    def _build_email_mailboxes(self):
+        self.builds += 1
+        home = Mailbox(HOME, _inbox(_mail("h1", "2026-09-02T08:00:00Z", "home")))
+        if self.builds == 1:
+            dead = make_backend(lambda r: httpx.Response(401, text="expired"))
+            return [home, Mailbox(WORK, dead)], []
+        return [home], [(WORK, self.REASON)]
+
+
+def test_a_sign_in_that_expires_mid_turn_says_reconnect_and_is_listed_once():
+    h = _WorkSignInExpires()
+    h.register_email_tools()
+    out = json.loads(h._tool("list_inbox")())
+
+    assert out["success"] is True
+    assert [m["subject"] for m in out["messages"]] == ["home"]
+    [missed] = out["accounts_not_read"]
+    assert missed["account"] == WORK.email
+    assert "Reconnect" in missed["error"]
+    assert "no longer connected" not in missed["error"]
+
+
+def test_reading_an_id_whose_sign_in_expired_says_reconnect():
+    h = _WorkSignInExpires()
+    h.register_email_tools()
+    out = json.loads(h._tool("read_email")(message_id=f"{WORK.tag}:w1"))
+
+    assert out["success"] is False
+    assert "Reconnect" in out["error"]
+    assert "no longer connected" not in out["error"]

@@ -825,6 +825,8 @@ async def list_agent_mcps(request: Request) -> Dict[str, Any]:
 
 class EvalMailboxRequest(BaseModel):
     attached: bool
+    # Also attach the second Gmail and the Outlook account.
+    multi_account: bool = False
 
 
 def _eval_mailbox_state() -> Dict[str, Any]:
@@ -844,6 +846,7 @@ def _eval_mailbox_state() -> Dict[str, Any]:
         "path": path,
         "exists": Path(path).expanduser().is_file(),
         "attached": fixture.is_attached(),
+        "multi_account": fixture.is_multi_account(),
     }
 
 
@@ -858,7 +861,7 @@ async def set_eval_mailbox(body: EvalMailboxRequest) -> Dict[str, Any]:
     from gaia.agents.tools._email import fixture
 
     _eval_mailbox_state()
-    fixture.set_attached(body.attached)
+    fixture.set_attached(body.attached, multi_account=body.multi_account)
     return _eval_mailbox_state()
 
 

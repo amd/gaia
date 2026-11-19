@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from _fake_accounts import install, tag
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.call_risk import EXACT_TEXT_ARG, NEEDS_PERSON_ARG
@@ -27,6 +28,7 @@ from gaia.agents.base.model_features import COMPACT, FULL, withheld_tools
 from gaia.agents.base.offline import ONLINE_SERVICE_TOOLS
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools._calendar.scopes import SCOPE_GOOGLE_CALENDAR_EVENTS
 from gaia.agents.tools._email import fixture
 from gaia.agents.tools._email.gmail import GMAIL_API_BASE, GmailWriteBackend
 from gaia.agents.tools._email.graph import GRAPH_API_BASE, OutlookWriteBackend
@@ -208,11 +210,36 @@ class _MailAgent(_SkillLoaded, Agent, EmailToolsMixin):
         return self.provider_class(token, http_client=client)
 
 
+class _Rows:
+    """The mailbox ``state`` as stored connector rows, read live."""
+
+    def __init__(self, state):
+        self.state = state
+
+    def get(self, provider):
+        entry = self.state.get(provider)
+        if not entry:
+            return None
+        rows = entry if isinstance(entry, list) else [entry]
+        return [
+            {
+                "scopes": row["scopes"],
+                "account_email": row.get("email", "me@example.com"),
+                "status": row.get("status", "ok"),
+                **({"account_id": row["account_id"]} if "account_id" in row else {}),
+            }
+            for row in rows
+        ]
+
+
 @pytest.fixture
 def mailbox(monkeypatch):
-    """A connected Google mailbox holding the given scopes."""
+    """A connected Google mailbox holding the given scopes.
+
+    A provider's entry may be a list of accounts (oldest, the default, first),
+    each with its own ``email``; ``grants`` is read from the first.
+    """
     import gaia.connectors.api as api
-    import gaia.connectors.grants as grants_mod
 
     state = {
         "google": {
@@ -222,24 +249,21 @@ def mailbox(monkeypatch):
         "microsoft": None,
     }
 
-    def conn(provider):
-        entry = state.get(provider)
-        if not entry:
-            return None
-        return {"scopes": entry["scopes"], "account_email": "me@example.com"}
-
-    def grants(provider):
-        entry = state.get(provider)
-        return {EMAIL_AGENT_ID: entry["grants"]} if entry else {}
+    class _Grants(_Rows):
+        def get(self, provider):
+            entry = self.state.get(provider)
+            if isinstance(entry, list):
+                entry = entry[0]
+            return {EMAIL_AGENT_ID: entry["grants"]} if entry else None
 
     state["minted"] = []
 
-    def token(*, provider, scopes, agent_id, **_):
+    def token(*, provider, scopes, agent_id, account=None, **_):
         state["minted"].append((provider, tuple(scopes)))
+        state.setdefault("minted_for", []).append(account)
         return "tok"
 
-    monkeypatch.setattr(api, "get_connection", conn)
-    monkeypatch.setattr(grants_mod, "list_agent_grants", grants)
+    install(monkeypatch, _Rows(state), _Grants(state))
     monkeypatch.setattr(api, "get_access_token_sync", token)
     monkeypatch.delenv(fixture.EVAL_MAILBOX_ENV, raising=False)
     monkeypatch.delenv("GAIA_AUTO_APPROVE_TOOLS", raising=False)
@@ -273,7 +297,8 @@ def _sent_mime(call):
 
 
 SEND_NOW = {"to": "dana@example.com", "subject": "Hi", "body": "Hello there"}
-# The account line every prompt opens with, from the `mailbox` fixture.
+# The `mailbox` fixture's account: its id tag, and the line every prompt opens with.
+G = tag("google", "me@example.com")
 FROM = "From: me@example.com (Google)\n"
 
 
@@ -692,7 +717,7 @@ def test_full_access_still_discards_a_draft_unasked(mailbox, agent_for):
     console = AgentConsole(auto_approve_gated_tools=True)
     gmail = _Gmail()
     out = agent_for(console, gmail)._execute_tool("discard_draft", {"draft_id": "d1"})
-    assert json.loads(out)["discarded"] == "d1"
+    assert json.loads(out)["discarded"] == f"{G}:d1"
 
 
 # --- Gmail wire shape -----------------------------------------------------
@@ -771,7 +796,7 @@ def test_gmail_draft_lifecycle(mailbox, agent_for):
     agent = agent_for(_Asked(), gmail)
 
     created = json.loads(agent._execute_tool("create_draft", {**SEND_NOW}))
-    assert created["draft_id"] == "d9" and created["sent"] is False
+    assert created["draft_id"] == f"{G}:d9" and created["sent"] is False
     assert _sent_mime(gmail.calls[0])["Subject"] == "Hi"
 
     json.loads(agent._execute_tool("update_draft", {"draft_id": "d1", "body": "New"}))
@@ -1012,8 +1037,8 @@ def test_read_only_connection_still_reads_but_write_says_reconnect(mailbox, agen
     drafted = json.loads(agent._execute_tool("create_draft", SEND_NOW))
     assert "Reconnect Google" in drafted["error"]
 
-    provider, scope, _, _ = agent._resolve_mailbox()
-    assert (provider, scope) == ("google", SCOPE_GMAIL_READONLY)
+    [(account, scope, _)] = agent._email_account_states()
+    assert (account.provider, scope) == ("google", SCOPE_GMAIL_READONLY)
 
 
 def test_user_who_unticked_compose_gets_the_same_remedy(mailbox, agent_for):
@@ -1156,7 +1181,7 @@ def test_fixture_mailbox_drafts_and_sends_in_memory(fixture_agent):
     sent = json.loads(agent._execute_tool("send_draft", {"draft_id": draft_id}))
     assert sent["sent"] is True and sent["body"] == "B"
 
-    api = agent._email().fixture_api
+    api = agent._email_boxes()[0].backend.fixture_api
     assert len(api.sent) == 1 and api.sent[0]["labelIds"] == ["SENT"]
     assert json.loads(agent._execute_tool("list_drafts", {}))["drafts"] == []
 
@@ -1579,7 +1604,7 @@ def test_with_both_connected_the_prompt_names_the_one_that_sends(mailbox, agent_
         ("update_draft", {"draft_id": "d1", "body": "New"}),
     ],
 )
-def test_mailbox_switched_while_asking_sends_nothing(mailbox, agent_for, tool, args):
+def test_account_changed_while_asking_sends_nothing(mailbox, agent_for, tool, args):
     gmail = _Gmail()
 
     class _SwitchedWhileAsking(_Asked):
@@ -1599,23 +1624,176 @@ def test_mailbox_switched_while_asking_sends_nothing(mailbox, agent_for, tool, a
     assert gmail.calls == []
 
 
-def test_unrecorded_address_is_named_plainly(mailbox, agent_for, monkeypatch):
-    import gaia.connectors.api as api
+def test_a_different_account_with_the_same_address_sends_nothing(outlook, agent_for):
+    """Personal and work Microsoft accounts can share one address; the prompt
+    showed one of them, so the other must not send in its place."""
+    scopes = [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND]
+    personal = {"scopes": scopes, "grants": scopes, "account_id": "personal"}
+    work = {"scopes": scopes, "grants": scopes, "account_id": "work"}
+    outlook["microsoft"] = [personal, work]
+    graph = _Graph()
 
-    monkeypatch.setattr(
-        api,
-        "get_connection",
-        lambda p: (
-            {"scopes": [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE]}
-            if p == "google"
-            else None
-        ),
+    class _DefaultSwappedWhileAsking(_Asked):
+        def confirm_tool_execution(self, tool_name, tool_args):
+            super().confirm_tool_execution(tool_name, tool_args)
+            outlook["microsoft"] = [work, personal]
+            return True
+
+    out = json.loads(
+        agent_for(
+            _DefaultSwappedWhileAsking(), graph, OutlookWriteBackend
+        )._execute_tool("send_now", SEND_NOW)
     )
+    assert out["success"] is False
+    assert "nothing was sent or changed" in out["error"]
+    assert graph.calls == []
+
+
+def test_unrecorded_address_is_named_plainly(mailbox, agent_for):
+    mailbox["google"]["email"] = ""
     console = _Asked(answer=False)
     agent_for(console, _Gmail())._execute_tool("send_now", SEND_NOW)
     assert console.shown[0][1][EXACT_TEXT_ARG].startswith(
         "From: your Google account (its address was not recorded)\n"
     )
+
+
+# --- several accounts ----------------------------------------------------------
+
+WORK = "work@example.com"
+
+
+def _two_gmails(mailbox):
+    """me@example.com (the default) and work@example.com, both able to send."""
+    scopes = [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE]
+    mailbox["google"] = [
+        {"scopes": scopes, "grants": scopes},
+        {"scopes": scopes, "grants": scopes, "email": WORK},
+    ]
+    return tag("google", WORK)
+
+
+def test_a_reply_goes_out_from_the_account_that_received_it(mailbox, agent_for):
+    work = _two_gmails(mailbox)
+    gmail = _Gmail()
+    console = _Asked()
+    agent = agent_for(console, gmail)
+    out = json.loads(
+        agent._execute_tool(
+            "reply_to_message", {"message_id": f"{work}:msg1", "body": "On it."}
+        )
+    )
+    assert console.shown[0][1][EXACT_TEXT_ARG].startswith(f"From: {WORK} (Google)\n")
+    assert out["sent"] is True and out["sent_from"] == f"{WORK} (Google)"
+    assert out["thread_id"].startswith(f"{work}:")
+    assert set(mailbox["minted_for"]) == {WORK}
+
+
+def test_new_mail_goes_out_from_the_default_unless_another_is_named(mailbox, agent_for):
+    _two_gmails(mailbox)
+    console = _Asked()
+    agent = agent_for(console, _Gmail())
+    agent._execute_tool("send_now", SEND_NOW)
+    agent._execute_tool("send_now", {**SEND_NOW, "from_account": WORK})
+    shown = [args[EXACT_TEXT_ARG] for _, args in console.shown]
+    assert shown[0].startswith(FROM)
+    assert shown[1].startswith(f"From: {WORK} (Google)\n")
+
+
+def _calendar_only_gmail_and_outlook(mailbox, gmail_status="ok"):
+    """A default Gmail connected for its calendar alone, and a mail Outlook."""
+    calendar = [SCOPE_GOOGLE_CALENDAR_EVENTS]
+    mail = [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND]
+    mailbox["google"] = {
+        "scopes": calendar,
+        "grants": calendar,
+        "email": "me@gmail.com",
+        "status": gmail_status,
+    }
+    mailbox["microsoft"] = {"scopes": mail, "grants": mail, "email": "me@outlook.com"}
+
+
+def test_a_calendar_only_gmail_does_not_block_new_mail_from_outlook(mailbox, agent_for):
+    _calendar_only_gmail_and_outlook(mailbox)
+    graph = _Graph()
+    console = _Asked()
+    out = json.loads(
+        agent_for(console, graph, OutlookWriteBackend)._execute_tool(
+            "send_now", SEND_NOW
+        )
+    )
+    assert console.shown[0][1][EXACT_TEXT_ARG].startswith(
+        "From: me@outlook.com (Microsoft)\n"
+    )
+    assert out["sent"] is True and out["sent_from"] == "me@outlook.com (Microsoft)"
+
+
+def test_an_expired_default_gmail_still_refuses_new_mail(mailbox, agent_for):
+    """Its scopes can't be read while signed out, so it may be meant for mail."""
+    _calendar_only_gmail_and_outlook(mailbox, gmail_status="reauth_required")
+    mailbox["google"]["scopes"] = [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE]
+    graph = _Graph()
+    console = _Asked()
+    result = agent_for(console, graph, OutlookWriteBackend)._execute_tool(
+        "send_now", SEND_NOW
+    )
+    assert "me@gmail.com" in result["error"]
+    assert "Reconnect" in result["error"]
+    assert console.shown == [] and graph.calls == []
+
+
+def test_an_untagged_id_with_several_accounts_is_refused_before_asking(
+    mailbox, agent_for
+):
+    _two_gmails(mailbox)
+    gmail = _Gmail()
+    console = _Asked()
+    result = agent_for(console, gmail)._execute_tool(
+        "reply_to_message", {"message_id": "msg1", "body": "Hi"}
+    )
+    assert "does not say which account" in result["error"]
+    assert console.shown == [] and gmail.calls == []
+
+
+def test_a_reply_draft_cannot_be_moved_to_another_account(mailbox, agent_for):
+    """An email that says "reply from my other address" can't reroute a reply."""
+    work = _two_gmails(mailbox)
+    gmail = _Gmail()
+    out = json.loads(
+        agent_for(_Asked(), gmail)._execute_tool(
+            "create_draft",
+            {
+                **SEND_NOW,
+                "reply_to_message_id": f"{work}:msg1",
+                "from_account": "me@example.com",
+            },
+        )
+    )
+    assert out["success"] is False
+    assert WORK in out["error"]
+    assert gmail.writes("/users/me/drafts") == []
+
+
+def test_a_reply_whose_account_is_removed_while_asking_sends_nothing(
+    mailbox, agent_for
+):
+    work = _two_gmails(mailbox)
+    gmail = _Gmail()
+
+    class _RemovedWhileAsking(_Asked):
+        def confirm_tool_execution(self, tool_name, tool_args):
+            super().confirm_tool_execution(tool_name, tool_args)
+            mailbox["google"] = mailbox["google"][:1]
+            return True
+
+    out = json.loads(
+        agent_for(_RemovedWhileAsking(), gmail)._execute_tool(
+            "reply_to_message", {"message_id": f"{work}:msg1", "body": "Hi"}
+        )
+    )
+    assert out["success"] is False
+    assert "no longer connected" in out["error"]
+    assert [c for c in gmail.calls if c[0] == "POST"] == []
 
 
 # --- a no, or no answer, never turns into a send ------------------------------
@@ -1671,3 +1849,32 @@ def test_a_yes_to_a_reroute_question_still_shows_the_exact_email(
     assert result["status"] == "denied"
     assert console.shown[0][1][EXACT_TEXT_ARG].startswith(FROM)
     assert gmail.calls == []
+
+
+def test_a_cut_draft_list_keeps_every_account_and_says_so(mailbox, agent_for):
+    from _fake_accounts import tool_account
+
+    from gaia.agents.tools.email_tools import Mailbox
+
+    class _Drafts:
+        def __init__(self, prefix):
+            self.prefix = prefix
+
+        def list_drafts(self, limit):
+            return [
+                {"draft_id": f"{self.prefix}{i}", "subject": "s"} for i in range(5)
+            ][:limit]
+
+    agent = agent_for(_Asked(), _Gmail())
+    home = tool_account("me@example.com", "google")
+    work = tool_account(WORK, "google", is_default=False)
+    agent._email_mailboxes = [
+        Mailbox(home, _Drafts("h")),
+        Mailbox(work, _Drafts("w")),
+    ]
+    agent._email_unusable = []
+
+    out = json.loads(agent._execute_tool("list_drafts", {"limit": 3}))
+    assert out["count"] == 3
+    assert {d["account"] for d in out["drafts"]} == {"me@example.com", WORK}
+    assert out["accounts_with_more"] == ["me@example.com", WORK]

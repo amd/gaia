@@ -303,6 +303,7 @@ class TestAgentEvalRunner:
             "local_blocked_win_shim",
             "requires_asr",
             "requires_vlm",
+            "multi_account",
         }
         gaia = [
             (path, data)

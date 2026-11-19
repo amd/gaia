@@ -101,7 +101,7 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
         "pip": (2, "amd/gaia#7338"),
     },
     "src/gaia/agents/tools/email_tools.py": {
-        "terminal command": (7, "amd/gaia#7338"),
+        "terminal command": (5, "amd/gaia#7338"),
     },
     "src/gaia/agents/tools/rag_tools.py": {
         "terminal command": (1, "amd/gaia#7338"),

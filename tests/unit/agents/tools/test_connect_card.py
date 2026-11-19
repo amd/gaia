@@ -10,6 +10,7 @@ import json
 import types
 
 import pytest
+from _fake_accounts import install, tool_account
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools._calendar.errors import CalendarError
@@ -298,6 +299,9 @@ def test_a_tool_cannot_build_a_card_for_another_account():
 # --- the mail tools, asked from each front-end ------------------------------
 
 
+GOOGLE_ACCOUNT = tool_account(provider="google")
+
+
 @pytest.fixture
 def mail(monkeypatch):
     """The mail tools of an agent on a front-end, over synthetic connector state."""
@@ -308,13 +312,9 @@ def mail(monkeypatch):
 
     def build(surface, connections=None, grants=None):
         import gaia.connectors.api as api
-        import gaia.connectors.grants as grants_mod
 
         connections, grants = connections or {}, grants or {}
-        monkeypatch.setattr(api, "get_connection", lambda p: connections.get(p))
-        monkeypatch.setattr(
-            grants_mod, "list_agent_grants", lambda p: dict(grants.get(p) or {})
-        )
+        install(monkeypatch, connections, grants)
 
         def _never(**_):
             raise AssertionError("no token is minted for an unusable mailbox")
@@ -390,14 +390,16 @@ def test_a_missing_mailbox_is_not_learned_as_a_tool_error(mail, surface):
 
 
 def test_a_write_the_connection_cannot_make_is_not_learned_either(monkeypatch):
-    import gaia.connectors.api as api
     from gaia.agents.base.memory import MemoryMixin
     from gaia.agents.tools.email_tools import OPERATION_SEND, _write_scopes
 
-    monkeypatch.setattr(api, "get_connection", lambda p: {"scopes": [GMAIL_READONLY]})
+    install(
+        monkeypatch,
+        {"google": {"scopes": [GMAIL_READONLY], "account_email": "me@example.com"}},
+    )
     for app in (True, False):
         with pytest.raises(MailboxError) as err:
-            _write_scopes("google", OPERATION_SEND, app=app)
+            _write_scopes(GOOGLE_ACCOUNT, OPERATION_SEND, app=app)
         out = with_connect_card(
             {"error": str(err.value)},
             err.value,
@@ -458,10 +460,12 @@ def test_in_an_app_a_refused_token_names_no_command(monkeypatch, surface):
     mixin = EmailToolsMixin()
     mixin.config = types.SimpleNamespace(surface=surface)
     with pytest.raises(MailboxError) as err:
-        mixin._mint_token("google", [GMAIL_READONLY])
+        mixin._mint_token(GOOGLE_ACCOUNT, [GMAIL_READONLY])
     assert "gaia connectors" not in str(err.value)
     assert "needs reconnecting" in str(err.value)
     assert err.value.connect == ("google",) == err.value.reconnect
+    # With several accounts, the card must offer the one that failed.
+    assert err.value.account == {"google": GOOGLE_ACCOUNT.ref}
 
 
 def test_in_an_app_a_busy_connection_is_a_retry_not_a_reconnect(monkeypatch):
@@ -475,7 +479,7 @@ def test_in_an_app_a_busy_connection_is_a_retry_not_a_reconnect(monkeypatch):
     mixin = EmailToolsMixin()
     mixin.config = types.SimpleNamespace(surface="agent_ui")
     with pytest.raises(MailboxError) as err:
-        mixin._mint_token("google", [GMAIL_READONLY])
+        mixin._mint_token(GOOGLE_ACCOUNT, [GMAIL_READONLY])
     assert "Retry in a moment" in str(err.value)
     assert err.value.connect == ()
 
@@ -493,7 +497,7 @@ def test_a_terminal_caller_keeps_the_connectors_own_error(monkeypatch):
 
     monkeypatch.setattr(api, "get_access_token_sync", _refuse)
     with pytest.raises(AuthRequiredError):
-        EmailToolsMixin()._mint_token("google", [GMAIL_READONLY])
+        EmailToolsMixin()._mint_token(GOOGLE_ACCOUNT, [GMAIL_READONLY])
 
 
 @pytest.mark.parametrize(
@@ -520,15 +524,18 @@ def test_in_the_agent_ui_an_ungranted_mailbox_points_at_settings(mail):
 
 
 def test_in_an_app_a_write_without_write_access_is_a_reconnect(monkeypatch):
-    import gaia.connectors.api as api
     from gaia.agents.tools.email_tools import OPERATION_SEND, _write_scopes
 
-    monkeypatch.setattr(api, "get_connection", lambda p: {"scopes": [GMAIL_READONLY]})
+    install(
+        monkeypatch,
+        {"google": {"scopes": [GMAIL_READONLY], "account_email": "me@example.com"}},
+    )
     with pytest.raises(MailboxError) as err:
-        _write_scopes("google", OPERATION_SEND, app=True)
+        _write_scopes(GOOGLE_ACCOUNT, OPERATION_SEND, app=True)
     assert err.value.connect == ("google",)
     assert f"lacks {GMAIL_COMPOSE}" in str(err.value)
     assert "gaia connectors" not in str(err.value)
+    assert err.value.account == {"google": GOOGLE_ACCOUNT.ref}
 
     # The card asks for the write when the write is what failed.
     out = with_connect_card(

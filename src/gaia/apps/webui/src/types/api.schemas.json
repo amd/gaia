@@ -1724,6 +1724,11 @@
       "attached": {
         "title": "Attached",
         "type": "boolean"
+      },
+      "multi_account": {
+        "default": false,
+        "title": "Multi Account",
+        "type": "boolean"
       }
     },
     "required": [

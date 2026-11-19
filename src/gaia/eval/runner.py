@@ -1785,7 +1785,12 @@ def preflight_check(backend_url, scenarios=None):
     return errors
 
 
-_MAILBOX_FIXTURE_STATES = {"attached": True, "detached": False}
+# setup.mailbox_fixture -> the eval-mailbox request that sets it.
+_MAILBOX_FIXTURE_STATES = {
+    "attached": {"attached": True, "multi_account": False},
+    "detached": {"attached": False, "multi_account": False},
+    "multi_account": {"attached": True, "multi_account": True},
+}
 
 
 def _apply_mailbox_fixture(backend_url: str, scenario_data: dict) -> Optional[str]:
@@ -1809,7 +1814,7 @@ def _apply_mailbox_fixture(backend_url: str, scenario_data: dict) -> Optional[st
     url = f"{backend_url}/api/connectors/eval-mailbox"
     req = urllib.request.Request(
         url,
-        data=json.dumps({"attached": _MAILBOX_FIXTURE_STATES[state]}).encode(),
+        data=json.dumps(_MAILBOX_FIXTURE_STATES[state]).encode(),
         headers={"Content-Type": "application/json", "X-Gaia-UI": "1"},
         method="POST",
     )
@@ -1822,7 +1827,8 @@ def _apply_mailbox_fixture(backend_url: str, scenario_data: dict) -> Optional[st
             "the backend with GAIA_EVAL_MAILBOX pointing at "
             "tests/fixtures/gaia/email/eval_inbox.mbox."
         )
-    if body.get("attached") != _MAILBOX_FIXTURE_STATES[state]:
+    wanted = _MAILBOX_FIXTURE_STATES[state]
+    if {key: body.get(key) for key in wanted} != wanted:
         return f"{url} did not switch the fixture mailbox to {state}: {body}"
     return None
 

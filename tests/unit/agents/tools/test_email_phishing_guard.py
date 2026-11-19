@@ -19,6 +19,7 @@ import unicodedata
 
 import httpx
 import pytest
+from _fake_accounts import tool_account
 
 from gaia.agents.tools._email.graph import OutlookReadBackend
 from gaia.agents.tools._email.phishing import (
@@ -27,7 +28,7 @@ from gaia.agents.tools._email.phishing import (
     assess_message,
     wrap_untrusted_body,
 )
-from gaia.agents.tools.email_tools import EmailToolsMixin
+from gaia.agents.tools.email_tools import EmailToolsMixin, Mailbox
 
 
 def make_backend(handler):
@@ -82,7 +83,8 @@ GENUINE = {
 
 class _Harness(EmailToolsMixin):
     def __init__(self, backend):
-        self._email_backend = backend
+        self._email_mailboxes = [Mailbox(tool_account(), backend)]
+        self._email_unusable = []
         self.tools = {}
 
     def _tool(self, name):
@@ -209,7 +211,9 @@ def test_the_guard_holds_with_no_skill_loaded(harness):
     assert not hasattr(h, "load_skill")
 
     out = json.loads(h._tool("list_inbox")())
-    lure = next(m for m in out["messages"] if m["id"] == "lure-1")
+    lure = next(
+        m for m in out["messages"] if m["id"] == tool_account().tag_id("lure-1")
+    )
     assert lure["suspicious"] is True
     assert lure["suspicious_reasons"]
     assert out["suspicious_guidance"]
@@ -218,9 +222,9 @@ def test_the_guard_holds_with_no_skill_loaded(harness):
 def test_listing_flags_the_lure_and_leaves_genuine_mail_alone(harness):
     out = json.loads(harness([LURE, GENUINE])._tool("list_inbox")())
     by_id = {m["id"]: m for m in out["messages"]}
-    assert by_id["lure-1"]["suspicious"] is True
-    assert by_id["lure-1"]["suspicious_reasons"]
-    assert "suspicious" not in by_id["real-1"]
+    assert by_id[tool_account().tag_id("lure-1")]["suspicious"] is True
+    assert by_id[tool_account().tag_id("lure-1")]["suspicious_reasons"]
+    assert "suspicious" not in by_id[tool_account().tag_id("real-1")]
 
 
 def test_listing_forbids_the_action_bucket_and_the_restated_ask(harness):

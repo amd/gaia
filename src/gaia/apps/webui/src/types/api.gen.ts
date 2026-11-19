@@ -646,6 +646,7 @@ export interface EmbedderBody {
 }
 export interface EvalMailboxRequest {
   attached: boolean;
+  multi_account?: boolean;
 }
 /**
  * Response with file content preview.

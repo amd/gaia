@@ -138,8 +138,9 @@ _GAIA_REQUIRED_CONNECTIONS = (
             "https://www.googleapis.com/auth/gmail.compose",
         ),
         reason=(
-            "Read and search your Gmail, draft and send mail when you approve it, "
-            "and see and, with your approval, change your Google calendar."
+            "Read and search the mail of each Gmail account you connect, draft "
+            "and send from them when you approve it, and see and, with your "
+            "approval, change their calendars."
         ),
     ),
     ConnectorRequirement(
@@ -155,9 +156,9 @@ _GAIA_REQUIRED_CONNECTIONS = (
             "https://graph.microsoft.com/Mail.Send",
         ),
         reason=(
-            "Read and search your Outlook mail, draft and send mail when you "
-            "approve it, and see and, with your approval, change your Outlook "
-            "calendar."
+            "Read and search mail in each Outlook account you connect, draft and "
+            "send mail from them when you approve it, and see and, with your "
+            "approval, change their calendars."
         ),
     ),
 )

@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from _fake_accounts import install, tag
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG
@@ -50,6 +51,7 @@ from gaia.agents.base.untrusted_text import (
     strip_untrusted_field_markers,
     wrap_untrusted_field,
 )
+from gaia.agents.tools._accounts import stored_accounts
 from gaia.agents.tools._calendar import GoogleCalendarBackend, GraphCalendarBackend
 from gaia.agents.tools._calendar.errors import CalendarError
 from gaia.agents.tools._calendar.scopes import (
@@ -132,6 +134,18 @@ class _FakeGraphCalendar:
         return httpx.Response(200, json={"value": []})
 
 
+class _FailingCalendar:
+    """A calendar whose every read fails on the provider's side."""
+
+    def backend(self):
+        return GraphCalendarBackend(
+            lambda: "tok",
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(lambda request: httpx.Response(503))
+            ),
+        )
+
+
 class _RecordingConsole(AgentConsole):
     def __init__(self):
         super().__init__()
@@ -191,6 +205,28 @@ class _CalendarAgent(Agent):
 
 
 ACCOUNT = "me@x.com"
+# The id tag of ACCOUNT, the one Google account the tests connect.
+G = tag("google", ACCOUNT)
+
+
+def key(provider: str, account_id: str = "default"):
+    """The calendar backend cache key of the account with ``account_id``."""
+    return (tag(provider, account_id), account_id)
+
+
+GK = key("google", ACCOUNT)
+
+
+class _ScopeGrants:
+    """Each connected account's own scopes, granted to the flagship."""
+
+    def __init__(self, connections):
+        self.connections = connections
+
+    def get(self, provider):
+        rows = self.connections.get(provider) or []
+        rows = rows if isinstance(rows, list) else [rows]
+        return {"installed:gaia": [s for row in rows for s in row.get("scopes", [])]}
 
 
 @pytest.fixture(autouse=True)
@@ -205,15 +241,7 @@ def connected_accounts(monkeypatch):
     connections = {
         "google": {"account_email": ACCOUNT, "scopes": [SCOPE_GOOGLE_CALENDAR_EVENTS]}
     }
-    monkeypatch.setattr(
-        "gaia.connectors.api.get_connection", lambda p: connections.get(p)
-    )
-    monkeypatch.setattr(
-        "gaia.connectors.grants.list_agent_grants",
-        lambda p: {
-            "installed:gaia": connections.get(p, {}).get("scopes", []),
-        },
-    )
+    install(monkeypatch, connections, _ScopeGrants(connections))
     return connections
 
 
@@ -225,8 +253,7 @@ def make_agent():
         with patch("gaia.agents.base.agent.AgentSDK"):
             built = _CalendarAgent(silent_mode=True, skip_lemonade=True)
         built.console = _RecordingConsole()
-        built._calendar_backend = fake.backend()
-        built._calendar_provider = "google"
+        built._calendar_backends = {GK: fake.backend()}
         return built
 
     try:
@@ -286,7 +313,7 @@ class TestApprovalGate:
             agent, "cancel_calendar_event", **{**TARGET, "expected_title": "Coffee"}
         )
         assert "Budget review" in result["error"]
-        assert result["actual_event"]["id"] == "g1"
+        assert result["actual_event"]["id"] == f"{G}:g1"
 
     def test_the_same_moment_in_another_offset_matches(self, make_agent):
         agent = make_agent(_FakeGoogle())
@@ -447,7 +474,7 @@ class TestUpdate:
             )
 
         agent = make_agent(_FakeGoogle())
-        agent._calendar_backend = GraphCalendarBackend(
+        agent._calendar_backends[GK] = GraphCalendarBackend(
             lambda: "tok",
             http_client=httpx.Client(transport=httpx.MockTransport(handler)),
         )
@@ -569,17 +596,83 @@ class TestCreate:
         self._create(agent)
         assert agent.console.asked[0][1]["calendar_account"] == ACCOUNT
 
-    @pytest.mark.parametrize("stated", ["", "work@corp.com"])
-    def test_a_wrong_account_is_refused_before_the_prompt(self, make_agent, stated):
+    def test_an_account_not_connected_is_refused_before_the_prompt(self, make_agent):
         fake = _FakeGoogle()
         agent = make_agent(fake)
-        result = self._create(agent, calendar_account=stated)
+        result = self._create(agent, calendar_account="work@corp.com")
         assert result["success"] is False and ACCOUNT in result["error"]
         assert agent.console.asked == [] and fake.writes == []
+
+    def test_no_account_named_lands_on_the_default_and_the_prompt_says_so(
+        self, make_agent
+    ):
+        agent = make_agent(_FakeGoogle())
+        result = self._create(agent, calendar_account="")
+        assert result["success"] is True and result["account"] == ACCOUNT
+        assert agent.console.asked[0][1]["calendar_account"] == ACCOUNT
 
     def test_the_result_names_the_account(self, make_agent):
         result = self._create(make_agent(_FakeGoogle()))
         assert result["account"] == ACCOUNT
+
+    def test_an_unshared_google_calendar_lets_new_events_land_on_outlook(
+        self, make_agent, connected_accounts
+    ):
+        """Google never shared its calendar, so Outlook is the only calendar."""
+        connected_accounts["google"]["scopes"] = ["https://mail.google.com/"]
+        connected_accounts["microsoft"] = {
+            "account_email": "me@outlook.com",
+            "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
+        }
+        outlook = _FakeGoogle()
+        agent = make_agent(_FakeGoogle())
+        agent._calendar_backends[key("microsoft", "me@outlook.com")] = outlook.backend()
+        result = self._create(agent, calendar_account="")
+        assert result["success"] is True and result["account"] == "me@outlook.com"
+
+    def test_an_expired_default_google_never_hands_the_event_to_outlook(
+        self, make_agent, connected_accounts
+    ):
+        connected_accounts["google"]["status"] = "reauth_required"
+        connected_accounts["microsoft"] = {
+            "account_email": "me@outlook.com",
+            "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
+        }
+        outlook = _FakeGoogle()
+        agent = make_agent(_FakeGoogle())
+        agent._calendar_backends[key("microsoft", "me@outlook.com")] = outlook.backend()
+        result = self._create(agent, calendar_account="")
+        assert result["success"] is False
+        assert ACCOUNT in result["error"] and "me@outlook.com" in result["error"]
+        assert agent.console.asked == [] and outlook.writes == []
+
+    def test_a_new_account_with_the_same_tag_and_address_creates_nothing(
+        self, make_agent, connected_accounts
+    ):
+        """Replaced while asking by an account whose id hashes to the same tag."""
+        first, second = "acct257", "acct303"
+        assert tag("microsoft", first) == tag("microsoft", second)
+        row = {
+            "account_email": "me@outlook.com",
+            "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
+        }
+        connected_accounts["microsoft"] = {**row, "account_id": first}
+        fakes = {first: _FakeGoogle(), second: _FakeGoogle()}
+        agent = make_agent(_FakeGoogle())
+        for ref, fake in fakes.items():
+            agent._calendar_backends[key("microsoft", ref)] = fake.backend()
+
+        class _ReplacedWhileAsking(_RecordingConsole):
+            def confirm_tool_execution(self, tool_name, tool_args):
+                super().confirm_tool_execution(tool_name, tool_args)
+                connected_accounts["microsoft"] = {**row, "account_id": second}
+                return True
+
+        agent.console = _ReplacedWhileAsking()
+        result = self._create(agent, calendar_account="me@outlook.com")
+        assert agent.console.asked[0][1]["calendar_account"] == "me@outlook.com"
+        assert result["success"] is False and "nothing was created" in result["error"]
+        assert all(f.writes == [] for f in fakes.values())
 
 
 class TestWhichCalendar:
@@ -591,31 +684,47 @@ class TestWhichCalendar:
 
     def test_reads_name_the_account_and_only_its_main_calendar(self, make_agent):
         for result in self._read(make_agent(_FakeGoogle())):
-            assert result["account"] == ACCOUNT
+            assert result["accounts_checked"] == [ACCOUNT]
             assert "main calendar" in result["calendars_checked"]
             assert ACCOUNT in result["calendars_checked"]
-            assert "other_calendars_not_checked" not in result
+            assert "accounts_not_checked" not in result
 
-    def test_another_usable_provider_is_named_as_not_checked(
+    def test_a_calendar_that_fails_is_named_and_free_is_unknown(
         self, make_agent, connected_accounts
     ):
+        """A second account that can't be read never lets "free" through."""
         connected_accounts["microsoft"] = {
             "account_email": "work@corp.com",
             "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
         }
-        for result in self._read(make_agent(_FakeGoogle())):
-            assert result["other_calendars_not_checked"] == ["work@corp.com"]
+        agent = make_agent(_FakeGoogle(items=[]))
+        agent._calendar_backends[key("microsoft", "work@corp.com")] = (
+            _FailingCalendar().backend()
+        )
+        for result in self._read(agent):
+            assert result["success"] is True
+            assert result["accounts_checked"] == [ACCOUNT]
+            [missed] = result["accounts_not_checked"]
+            assert missed["account"] == "work@corp.com"
             assert "work@corp.com" in result["calendars_checked"]
+        assert result["is_free"] is None and "free_slots" not in result
 
-    def test_a_provider_without_calendar_access_is_not_named(
+    def test_a_provider_without_calendar_access_is_named_but_not_unknown(
         self, make_agent, connected_accounts
     ):
         connected_accounts["microsoft"] = {
             "account_email": "work@corp.com",
             "scopes": ["Mail.Read"],
         }
-        for result in self._read(make_agent(_FakeGoogle())):
-            assert "other_calendars_not_checked" not in result
+        for result in self._read(make_agent(_FakeGoogle(items=[]))):
+            assert "accounts_not_checked" not in result
+            [unshared] = result["calendars_not_shared"]
+            assert unshared["account"] == "work@corp.com"
+            # Free stays true (the person never shared that calendar), but the
+            # answer must say which calendar it could not see.
+            assert "work@corp.com" in result["calendars_not_shared_note"]
+            assert "mention" in result["calendars_not_shared_note"]
+        assert result["is_free"] is True
 
     def test_the_availability_tool_forbids_claiming_free_overall(self, make_agent):
         make_agent(_FakeGoogle())
@@ -624,13 +733,132 @@ class TestWhichCalendar:
                 "description"
             ].split()
         )
-        assert "free overall" in described
+        assert "never that they are free" in described
 
     def test_update_and_cancel_results_name_the_account(self, make_agent):
         agent = make_agent(_FakeGoogle())
         assert _run(agent, "cancel_calendar_event", **TARGET)["account"] == ACCOUNT
         result = _run(agent, "update_calendar_event", **TARGET, new_title="Sync")
         assert result["account"] == ACCOUNT
+
+
+class TestSeveralAccounts:
+    """Two Google calendars and an Outlook one, each behind its own fake."""
+
+    WORK = "work@x.com"
+    OUTLOOK = "me@outlook.example"
+
+    @pytest.fixture
+    def three(self, make_agent, connected_accounts):
+        connected_accounts["google"] = [
+            connected_accounts["google"],
+            {
+                "account_email": self.WORK,
+                "scopes": [SCOPE_GOOGLE_CALENDAR_EVENTS],
+                "slot": f"id:{self.WORK}",
+            },
+        ]
+        connected_accounts["microsoft"] = {
+            "account_email": self.OUTLOOK,
+            "scopes": [SCOPE_GRAPH_CALENDARS_READWRITE],
+        }
+        work_tag = tag("google", self.WORK)
+        self.fakes = {
+            G: _FakeGoogle(
+                items=[_timed("home", "2026-11-03T15:00:00Z", "2026-11-03T16:00:00Z")]
+            ),
+            work_tag: _FakeGoogle(
+                {**EVENT, "id": "w1"},
+                items=[_timed("w1", "2026-11-03T14:00:00Z", "2026-11-03T15:00:00Z")],
+            ),
+            tag("microsoft", self.OUTLOOK): _FakeGoogle(items=[]),
+        }
+        self.work_tag = work_tag
+        agent = make_agent(_FakeGoogle())
+        refs = {
+            G: ACCOUNT,
+            work_tag: self.WORK,
+            tag("microsoft", self.OUTLOOK): self.OUTLOOK,
+        }
+        agent._calendar_backends = {
+            (t, refs[t]): f.backend() for t, f in self.fakes.items()
+        }
+        self.connections = connected_accounts
+        return agent
+
+    def test_a_listing_merges_every_calendar_and_labels_each_event(self, three):
+        result = _run(three, "list_calendar_events", start="2026-11-03T00:00:00Z")
+        assert [(e["id"], e["account"]) for e in result["events"]] == [
+            (f"{self.work_tag}:w1", self.WORK),
+            (f"{G}:home", ACCOUNT),
+        ]
+        assert result["accounts_checked"] == [ACCOUNT, self.WORK, self.OUTLOOK]
+
+    def test_a_listing_can_be_narrowed_to_one_account(self, three):
+        result = _run(
+            three,
+            "list_calendar_events",
+            start="2026-11-03T00:00:00Z",
+            account=self.WORK,
+        )
+        assert [e["account"] for e in result["events"]] == [self.WORK]
+
+    def test_an_ambiguous_account_is_refused_naming_the_choices(self, three):
+        result = _run(three, "list_calendar_events", account="gmail")
+        assert result["success"] is False
+        assert ACCOUNT in result["error"] and self.WORK in result["error"]
+
+    def test_a_change_goes_to_the_calendar_the_event_came_from(self, three):
+        result = _run(
+            three,
+            "cancel_calendar_event",
+            **{**TARGET, "event_id": f"{self.work_tag}:w1"},
+        )
+        assert result["success"] is True and result["account"] == self.WORK
+        assert len(self.fakes[self.work_tag].writes) == 1
+        assert self.fakes[G].writes == []
+
+    def test_an_untagged_event_id_is_refused_with_several_accounts(self, three):
+        result = _run(three, "cancel_calendar_event", **TARGET)
+        assert result["success"] is False
+        assert "does not say which account" in result["error"]
+        assert three.console.asked == []
+
+    def test_a_new_event_lands_on_the_named_account(self, three):
+        result = _run(
+            three,
+            "create_calendar_event",
+            title="Standup",
+            start="2026-11-04T09:00:00Z",
+            end="2026-11-04T09:15:00Z",
+            notify_attendees=[],
+            calendar_account=self.OUTLOOK,
+        )
+        assert three.console.asked[0][1]["calendar_account"] == self.OUTLOOK
+        assert result["account"] == self.OUTLOOK
+        assert len(self.fakes[tag("microsoft", self.OUTLOOK)].writes) == 1
+
+    def test_a_default_that_changes_while_asking_creates_nothing(self, three):
+        connections = self.connections
+
+        class _DefaultMovedWhileAsking(_RecordingConsole):
+            def confirm_tool_execution(self, tool_name, tool_args):
+                super().confirm_tool_execution(tool_name, tool_args)
+                connections["google"] = connections["google"][1:]
+                return True
+
+        three.console = _DefaultMovedWhileAsking()
+        result = _run(
+            three,
+            "create_calendar_event",
+            title="Standup",
+            start="2026-11-04T09:00:00Z",
+            end="2026-11-04T09:15:00Z",
+            notify_attendees=[],
+        )
+        assert three.console.asked[0][1]["calendar_account"] == ACCOUNT
+        assert result["success"] is False and "nothing was created" in result["error"]
+        assert all(f.writes == [] for f in self.fakes.values())
 
 
 class TestAWriteThatWentThrough:
@@ -680,7 +908,7 @@ class TestAConnectionThatChanged:
         self.tokens = {"google": ConnectionRevokedError("google")}
         self.graph = _FakeGraphCalendar()
 
-        def token(*, provider, scopes, agent_id):
+        def token(*, provider, scopes, agent_id, account=None):
             result = self.tokens.get(provider, "tok")
             if isinstance(result, Exception):
                 raise result
@@ -710,8 +938,7 @@ class TestAConnectionThatChanged:
             ),
         )
         built = make_agent(_FakeGoogle())
-        built._calendar_backend = None
-        built._calendar_provider = None
+        built._calendar_backends = None
         self.connections = connected_accounts
         return built
 
@@ -728,46 +955,54 @@ class TestAConnectionThatChanged:
         assert result["success"] is False
         assert "gaia connectors connect" in result["error"]
 
+    @staticmethod
+    def _connect(agent):
+        """Build the Google account's connection, as a first read does."""
+        [account] = _ops(agent)._calendar_accounts()[0]
+        _ops(agent)._calendar_run(account, lambda backend: backend)
+
     def test_an_unrelated_token_failure_is_not_translated(self, agent):
         self.tokens["google"] = "tok"
-        _ops(agent)._calendar_run(lambda backend: backend)
+        self._connect(agent)
         self.tokens["google"] = RuntimeError("not a connector error")
         with pytest.raises(RuntimeError):
-            agent._calendar_backend.get_event("x")
+            agent._calendar_backends[GK].get_event("x")
 
     def test_a_read_after_a_switch_answers_from_the_new_account(self, agent):
         self.tokens["google"] = "tok"
-        _ops(agent)._calendar_run(lambda backend: backend)
+        self._connect(agent)
         from gaia.connectors.errors import ConnectionRevokedError
 
         self.tokens["google"] = ConnectionRevokedError("google")
         self._switch_to_microsoft()
         result = _run(agent, "list_calendar_events")
         assert result["success"] is True
-        assert result["provider"] == "microsoft"
-        assert result["account"] == "work@corp.com"
+        assert result["accounts_checked"] == ["work@corp.com"]
 
     def test_a_write_after_a_switch_is_refused_and_sends_nothing(self, agent):
         self.tokens["google"] = "tok"
-        _ops(agent)._calendar_run(lambda backend: backend)
+        self._connect(agent)
         from gaia.connectors.errors import ConnectionRevokedError
 
         self.tokens["google"] = ConnectionRevokedError("google")
         self._switch_to_microsoft()
-        result = _run(agent, "cancel_calendar_event", **TARGET)
+        result = _run(
+            agent, "cancel_calendar_event", **{**TARGET, "event_id": f"{G}:g1"}
+        )
         assert result["success"] is False
-        assert "google" in result["error"] and "microsoft" in result["error"]
-        assert "nothing was changed" in result["error"].lower()
+        assert "no longer connected" in result["error"]
+        assert "work@corp.com" in result["error"]
+        assert "nothing was read or changed" in result["error"].lower()
         assert self.graph.requests == []
 
     def test_a_write_retries_when_the_provider_stays_the_same(self, agent):
         self.tokens["google"] = "tok"
-        _ops(agent)._calendar_run(lambda backend: backend)
+        self._connect(agent)
         from gaia.connectors.errors import ConnectionRevokedError
 
         calls = iter([ConnectionRevokedError("google")])
 
-        def once(*, provider, scopes, agent_id):
+        def once(*, provider, scopes, agent_id, account=None):
             for failure in calls:
                 raise failure
             return "tok"
@@ -951,7 +1186,7 @@ class TestAvailability:
         result = _run(make_agent(fake), "check_calendar_availability", **WINDOW)
         assert len(fake.requests) == 2
         assert result["is_free"] is False
-        assert [b["id"] for b in result["busy"]] == ["late"]
+        assert [b["id"] for b in result["busy"]] == [f"{G}:late"]
         assert [s["end"] for s in result["free_slots"]][0].startswith(
             "2026-11-03T16:00:00"
         )
@@ -1033,7 +1268,7 @@ class TestAvailability:
     def test_a_backend_failure_is_an_error_not_free(self, make_agent):
         fake = _FakeGoogle()
         agent = make_agent(fake)
-        agent._calendar_backend = GoogleCalendarBackend(
+        agent._calendar_backends[GK] = GoogleCalendarBackend(
             lambda: "tok",
             http_client=httpx.Client(
                 transport=httpx.MockTransport(lambda _: httpx.Response(500))
@@ -1047,20 +1282,40 @@ GMAIL_READ = "https://www.googleapis.com/auth/gmail.readonly"
 
 
 class TestConnectionErrors:
+    def test_in_an_app_a_refused_token_names_the_account_to_reconnect(
+        self, make_agent, monkeypatch
+    ):
+        """With several accounts, the connect card must offer the one that failed."""
+        import gaia.connectors.api as api
+        from gaia.agents.tools._calendar.errors import CalendarAuthError
+        from gaia.connectors.errors import AuthRequiredError
+
+        def _refuse(**_):
+            raise AuthRequiredError(
+                AuthRequiredError.Reason.NOT_CONNECTED, provider="google"
+            )
+
+        monkeypatch.setattr(api, "get_access_token_sync", _refuse)
+        agent = make_agent(_FakeGoogle())
+        agent.config = types.SimpleNamespace(surface="agent_ui")
+        tool = _TOOL_REGISTRY[_ns("list_calendar_events")]["function"]
+        ops = tool.__globals__["_CalendarOps"](agent)
+        [account] = ops._calendar_accounts()[0]
+        backend = ops._build_calendar_backend(account)
+        with pytest.raises(CalendarAuthError) as err:
+            backend._access_token_fn()
+        assert err.value.reconnect == ("google",)
+        assert err.value.account == {"google": account.ref}
+
     @pytest.fixture
     def agent(self, make_agent):
         built = make_agent(_FakeGoogle())
-        built._calendar_backend = None
+        built._calendar_backends = None
         return built
 
     @staticmethod
     def _state(monkeypatch, connections, grants):
-        monkeypatch.setattr(
-            "gaia.connectors.api.get_connection", lambda p: connections.get(p)
-        )
-        monkeypatch.setattr(
-            "gaia.connectors.grants.list_agent_grants", lambda p: grants.get(p, {})
-        )
+        install(monkeypatch, connections, grants)
 
     def test_not_connected_names_the_command(self, monkeypatch, agent):
         self._state(monkeypatch, {}, {})
@@ -1182,7 +1437,7 @@ class TestConnectionErrors:
         )
         assert _run(agent, "list_calendar_events")["success"] is True
 
-    def test_a_busy_first_provider_is_not_skipped(self, monkeypatch, agent):
+    def test_a_busy_account_is_named_and_free_stays_unknown(self, monkeypatch, agent):
         self._state(
             monkeypatch,
             {
@@ -1191,7 +1446,16 @@ class TestConnectionErrors:
             },
             {"microsoft": {"installed:gaia": [SCOPE_GRAPH_CALENDARS_READWRITE]}},
         )
-        assert "google" in _run(agent, "list_calendar_events")["error"]
+        agent._calendar_backends = {key("microsoft"): _FakeGoogle(items=[]).backend()}
+        result = _run(
+            agent,
+            "check_calendar_availability",
+            start="2026-11-03T09:00:00Z",
+            end="2026-11-03T10:00:00Z",
+        )
+        assert result["success"] is True and result["is_free"] is None
+        [busy] = result["accounts_not_checked"]
+        assert "Google" in busy["account"] and "Retry in a moment" in busy["error"]
 
     def test_the_second_provider_serves_when_the_first_has_no_scope(
         self, monkeypatch, agent
@@ -1204,21 +1468,22 @@ class TestConnectionErrors:
             },
             {"microsoft": {"installed:gaia": [SCOPE_GRAPH_CALENDARS_READWRITE]}},
         )
-        agent._calendar_backend = None
-        backend = _ops(agent)._build_calendar_backend()
-        assert isinstance(backend, GraphCalendarBackend)
-        assert agent._calendar_provider == "microsoft"
+        [account] = _ops(agent)._calendar_accounts()[0]
+        assert account.provider == "microsoft"
+        assert isinstance(_ops(agent)._calendar_backend(account), GraphCalendarBackend)
 
     def test_the_eval_fixture_never_reaches_connectors(self, monkeypatch, agent):
         monkeypatch.setenv(EVAL_MAILBOX_ENV, "/tmp/nowhere.json")
 
-        def explode(_):
+        def explode(*_, **__):
             raise AssertionError("consulted connectors under the eval fixture")
 
+        monkeypatch.setattr("gaia.connectors.api.list_accounts", explode)
         monkeypatch.setattr("gaia.connectors.api.get_connection", explode)
         assert "evaluation" in _run(agent, "list_calendar_events")["error"]
 
     def test_mail_still_resolves_without_calendar_scope(self, monkeypatch):
+        from gaia.agents.tools._accounts import stored_accounts
         from gaia.agents.tools.email_tools import _classify_mailbox
 
         self._state(
@@ -1226,9 +1491,11 @@ class TestConnectionErrors:
             {"google": {"scopes": [GMAIL_READ]}},
             {"google": {"installed:gaia": [GMAIL_READ]}},
         )
-        assert _classify_mailbox("google") == (GMAIL_READ, "ready")
+        [account] = stored_accounts()
+        assert _classify_mailbox(account, False) == (GMAIL_READ, "ready")
 
     def test_the_mail_grant_remedy_keeps_a_calendar_grant(self, monkeypatch):
+        from gaia.agents.tools._accounts import stored_accounts
         from gaia.agents.tools.email_tools import _classify_mailbox
 
         self._state(
@@ -1236,7 +1503,8 @@ class TestConnectionErrors:
             {"google": {"scopes": [GMAIL_READ, SCOPE_GOOGLE_CALENDAR_EVENTS]}},
             {"google": {"installed:gaia": [SCOPE_GOOGLE_CALENDAR_EVENTS]}},
         )
-        scope, why = _classify_mailbox("google")
+        [account] = stored_accounts()
+        scope, why = _classify_mailbox(account, False)
         assert scope is None
         assert SCOPE_GOOGLE_CALENDAR_EVENTS in why and GMAIL_READ in why
 
@@ -1315,7 +1583,9 @@ class TestEventsStateTheirWeekday:
             blocks_time=True,
             cancelled=False,
         )
-        return _event_payload(CalendarEvent(**{**base, **over}))["start_weekday"]
+        return _event_payload(CalendarEvent(**{**base, **over}), stored_accounts()[0])[
+            "start_weekday"
+        ]
 
     def test_all_day_event(self):
         assert (
@@ -1512,8 +1782,7 @@ class TestACalendarChangeNeedsAPerson:
         with patch("gaia.agents.base.agent.AgentSDK"):
             agent = _NeverAsks(silent_mode=True, skip_lemonade=True)
         agent.console = _RecordingConsole()
-        agent._calendar_backend = fake.backend()
-        agent._calendar_provider = "google"
+        agent._calendar_backends = {GK: fake.backend()}
         result = _run(agent, tool, **WRITE_CALLS[tool])
         assert result["success"] is False
         assert "always need" in result["error"]
@@ -1943,8 +2212,7 @@ class TestAPersonIsAskedWheneverOneCanAnswer:
             with patch("gaia.agents.base.agent.AgentSDK"):
                 agent = _Host(silent_mode=True, skip_lemonade=True)
             agent.console = _RecordingConsole()
-            agent._calendar_backend = _FakeGoogle().backend()
-            agent._calendar_provider = "google"
+            agent._calendar_backends = {GK: _FakeGoogle().backend()}
             _run(agent, "create_calendar_event", **{**CREATE, "title": f"A{RLO}"})
         finally:
             _TOOL_REGISTRY.clear()

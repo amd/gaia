@@ -29,8 +29,9 @@ MAILBOX_REQUIREMENTS: Tuple[ConnectorRequirement, ...] = (
         ],
         required_scopes=list(DECLARED_SCOPES[GOOGLE_CONNECTOR_ID]),
         reason=(
-            "Read and search your Gmail, draft and send mail when you approve it, "
-            "and see and, with your approval, change your Google calendar."
+            "Read and search the mail of each Gmail account you connect, draft "
+            "and send from them when you approve it, and see and, with your "
+            "approval, change their calendars."
         ),
     ),
     ConnectorRequirement(
@@ -43,9 +44,9 @@ MAILBOX_REQUIREMENTS: Tuple[ConnectorRequirement, ...] = (
         ],
         required_scopes=list(DECLARED_SCOPES[MICROSOFT_CONNECTOR_ID]),
         reason=(
-            "Read and search your Outlook mail, draft and send mail when you "
-            "approve it, and see and, with your approval, change your Outlook "
-            "calendar."
+            "Read and search mail in each Outlook account you connect, draft and "
+            "send mail from them when you approve it, and see and, with your "
+            "approval, change their calendars."
         ),
     ),
 )

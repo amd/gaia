@@ -17,8 +17,9 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.tool_outcome import tool_result_failed
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.turn_scope import _is_tool_failure
+from gaia.agents.tools._accounts import ToolAccount
 from gaia.agents.tools._email.graph import OutlookReadBackend
-from gaia.agents.tools.email_tools import EmailToolsMixin
+from gaia.agents.tools.email_tools import EmailToolsMixin, Mailbox
 from gaia.ui.sse_handler import tool_result_failed as ui_tool_result_failed
 
 
@@ -233,10 +234,19 @@ def _run_email(graph_handler):
         agent = _EmailAgent(silent_mode=True, skip_lemonade=True)
     agent.streaming = False
     agent._tool_requires_confirmation = lambda *_args, **_kwargs: False
-    agent._email_backend = OutlookReadBackend(
+    backend = OutlookReadBackend(
         lambda: "test-token",
         http_client=httpx.Client(transport=httpx.MockTransport(graph_handler)),
     )
+    account = ToolAccount(
+        provider="microsoft",
+        email="me@example.com",
+        ref="me",
+        tag="m1a2b",
+        is_default=True,
+    )
+    agent._email_mailboxes = [Mailbox(account, backend)]
+    agent._email_unusable = []
 
     sent = []
 
