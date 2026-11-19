@@ -15,11 +15,10 @@ import pytest
 from gaia.agents.tools.shell_tools import TIER_REFUSE
 from gaia.skills.binaries import human_only_gaia_call
 
-from .test_skill_commands_stay_with_the_user import (  # noqa: F401
-    _agent,
-    _refusal,
-    layout,
-)
+from . import test_skill_commands_stay_with_the_user as _skill_gate
+from .test_skill_commands_stay_with_the_user import _agent, _refusal
+
+layout = _skill_gate.layout
 
 MODES = ["interactive", "unattended", "full_access"]
 
