@@ -7155,10 +7155,15 @@ class LemonadeClient:
             except LemonadeClientError as e:
                 if produced:
                     raise
+
                 # A client outside the lease can evict the model after the
                 # check above; reload once, as chat_completions does.
+                def _reopen_chunks():
+                    check_cancelled(f"'{model}' to reload")
+                    return _open_chunks()
+
                 for chunk in self._execute_with_auto_download(
-                    _open_chunks, model, auto_download, error=e
+                    _reopen_chunks, model, auto_download, error=e
                 ):
                     produced = True
                     yield chunk

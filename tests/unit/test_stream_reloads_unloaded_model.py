@@ -141,3 +141,24 @@ def test_a_caller_that_turned_loading_off_gets_the_error(client):
 
     assert len(streams.calls) == 1
     assert client.ensure.call_count == 1
+
+
+def test_a_stop_during_the_reload_sends_nothing(client):
+    import threading
+
+    from gaia.daemon import broker_client
+
+    streams = _Streams([LemonadeClientError(NOT_LOADED)], CHUNKS)
+    cancel = threading.Event()
+
+    def stop_during_the_reload(*args, **kwargs):
+        if kwargs.get("force"):
+            cancel.set()
+
+    client.ensure.side_effect = stop_during_the_reload
+    with broker_client.lease_cancel_scope(cancel):
+        with pytest.raises(broker_client.LeaseWaitCancelled, match="to reload"):
+            _stream(client, streams)
+
+    assert len(streams.calls) == 1
+    assert client.ensure.call_count == 2
