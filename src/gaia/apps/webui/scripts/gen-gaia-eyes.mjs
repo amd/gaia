@@ -1,0 +1,488 @@
+#!/usr/bin/env node
+// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// Draws GAIA's pixel eyes: every frame of every animation, as one 1-bit PNG
+// sprite sheet (src/assets/gaia-eyes.png) plus the table that says where each
+// animation sits on it (src/components/gaiaEyesSheet.ts). To change a pose, or
+// add another variation of a state, edit the frames below and run:
+//
+//   node scripts/gen-gaia-eyes.mjs          # rewrite both files
+//   node scripts/gen-gaia-eyes.mjs --check  # exit 1 if either file is stale
+
+import { readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { deflateSync, inflateSync } from 'node:zlib';
+
+export const SHEET_PATH = fileURLToPath(new URL('../src/assets/gaia-eyes.png', import.meta.url));
+export const META_PATH = fileURLToPath(new URL('../src/components/gaiaEyesSheet.ts', import.meta.url));
+export const REGENERATE_HINT = 'cd src/gaia/apps/webui && npm run gen:gaia-eyes';
+
+/** One frame is a CELL x CELL grid; the eyes rest centred on these two points. */
+export const CELL = 16;
+const HOME = [[4, 8], [11, 8]];
+
+const SHAPES = {
+    happy: ['.###.', '##.##', '#...#'],
+    happyw: ['.#####.', '##...##'],
+    smug: ['#...#', '##.##', '.###.'],
+    gt: ['##..', '.##.', '..##', '.##.', '##..'],
+    lt: ['..##', '.##.', '##..', '.##.', '..##'],
+    q: ['.##.', '#..#', '..#.', '.#..', '....', '.#..'],
+    heart: ['.#.#.', '#####', '#####', '.###.', '..#..'],
+    heartB: ['.##.##.', '#######', '#######', '.#####.', '..###..', '...#...'],
+    angL: ['#...', '##..', '###.', '####', '####'],
+    angsL: ['#...', '###.', '####'],
+    sadL: ['...#', '..##', '.###', '####', '####'],
+    worL: ['..#', '.##', '###', '###', '###', '###'],
+};
+for (const name of ['ang', 'angs', 'sad', 'wor']) {
+    SHAPES[`${name}R`] = SHAPES[`${name}L`].map((row) => [...row].reverse().join(''));
+}
+
+/** A rectangular eye, `w` by `h`, moved `dx`,`dy` from its resting place. */
+const R = (w = 3, h = 5, dx = 0, dy = 0) => ({ rows: Array(h).fill('#'.repeat(w)), dx, dy });
+/** A shaped eye from SHAPES. */
+const S = (name, dx = 0, dy = 0) => ({ rows: SHAPES[name], dx, dy });
+/** A frame: the left eye, the right eye (the same when omitted), and loose pixels such as a tear. */
+const F = (left, right = left, px = []) => ({ eyes: [left, right ?? left], px });
+/** Both eyes the same shape. */
+const B = (name, dx = 0, dy = 0, px = []) => F(S(name, dx, dy), undefined, px);
+/** A mirrored pair, `<name>L` and `<name>R`. */
+const P = (name, dx = 0, dy = 0, px = []) => F(S(`${name}L`, dx, dy), S(`${name}R`, dx, dy), px);
+const hold = (frame, n) => Array(n).fill(frame);
+const cycle = (frames, n) => Array(n).fill(frames).flat();
+
+function render(frame) {
+    const grid = Array.from({ length: CELL }, () => new Uint8Array(CELL));
+    const dot = (x, y) => { if (x >= 0 && x < CELL && y >= 0 && y < CELL) grid[y][x] = 1; };
+    frame.eyes.forEach(({ rows, dx, dy }, side) => {
+        const [cx, cy] = HOME[side];
+        const x0 = cx - Math.floor((rows[0].length - 1) / 2) + dx;
+        const y0 = cy - Math.floor(rows.length / 2) + dy;
+        rows.forEach((row, y) => [...row].forEach((ch, x) => { if (ch === '#') dot(x0 + x, y0 + y); }));
+    });
+    for (const [x, y] of frame.px) dot(x, y);
+    return grid;
+}
+
+const SWEEP = [-3, -2, -1, 0, 1, 2, 3];
+const REST = F(R());
+const BLINK = F(R(5, 1));
+const SQUEEZE = [F(S('gt'), S('lt')), F(S('gt', 1), S('lt', -1))];
+// Looking up and to one side: the eye on that side narrows, like a turned head.
+const UP_LEFT = F(R(2, 5, -3, -3), R(3, 5, -2, -3));
+const UP_RIGHT = F(R(3, 5, 2, -3), R(2, 5, 2, -3));
+const WIDE = F(R(4, 6, 0, -1));
+const SAD = P('sad', 0, 1);
+const LOW = P('sad', 0, 2);
+const BEAT = F(S('heartB', -1, 0), S('heartB', 1, 0));
+const WINK = F(S('happy'), R(3, 5));
+const DOUBT = F(R(4, 2, 0, 1), R(3, 6, 0, -1));
+/** A tear falling from under the left (x = 3) or right (x = 12) eye. */
+const tears = (dy, ys, xs = [3]) => ys.map((y) => P('sad', 0, dy, xs.flatMap((x) => [[x, y], [x, y + 1]])));
+const BLUSH = [[2, 13], [4, 13], [6, 13], [9, 13], [11, 13], [13, 13]];
+const shy = (dx, dy) => F(R(3, 3, dx, dy), undefined, BLUSH);
+const zed = (x, y) => [[x, y], [x + 1, y], [x + 2, y], [x + 3, y], [x + 2, y + 1], [x + 1, y + 2], [x, y + 3], [x + 1, y + 3], [x + 2, y + 3], [x + 3, y + 3]];
+const ASLEEP = R(5, 1, 0, 3);
+const drop = (y) => [[15, y], [15, y + 1]];
+
+/**
+ * state -> { fps, loop, pose, variants }. Each variant is one way to play the
+ * state; the component picks among them at random so a state rarely repeats
+ * itself. `pose` is the frame of the first variant shown under reduced motion.
+ * Working states loop while GAIA works; `wait` and the moods play once.
+ */
+export const STATES = {
+    think: {
+        fps: 10, loop: true, pose: 6,
+        variants: [
+            [
+                ...hold(REST, 2), F(R(5, 3, 0, 1)), F(R(3, 7, -1, -2)), F(R(3, 4, -3, -4)), ...hold(UP_LEFT, 5),
+                F(R(5, 3, 0, -3)), ...hold(F(R(3, 5, 0, -3)), 3), ...hold(F(R(3, 3, 0, -3)), 3),
+                F(R(6, 2, 1, -3)), F(R(3, 4, 3, -4)), ...hold(UP_RIGHT, 6),
+                F(R(3, 4, 3, -1)), F(R(3, 4, 2, 1)), F(R(3, 4, 0, 2)), F(R(3, 4, -2, 1)), F(R(3, 4, -3, -1)), ...hold(UP_LEFT, 3),
+                F(R(4, 1, -2, -2)), ...hold(UP_LEFT, 2), F(R(3, 7, -1, -1)), F(R(5, 3, 0, 2)), F(R(3, 6, 0, -1)), ...hold(REST, 3),
+                ...hold(WIDE, 2), REST,
+            ],
+            // Starts to the right, drifts slowly across the top, narrows on the far side.
+            [
+                ...hold(REST, 2), F(R(5, 3, 0, 1)), F(R(3, 7, 1, -2)), F(R(3, 4, 3, -4)), ...hold(UP_RIGHT, 6), F(R(4, 1, 2, -2)),
+                ...hold(UP_RIGHT, 3), F(R(3, 5, 1, -3)), ...hold(F(R(3, 5, 0, -3)), 2), F(R(3, 5, -1, -3)), ...hold(UP_LEFT, 5),
+                ...hold(F(R(2, 3, -3, -3), R(3, 3, -2, -3)), 3), ...hold(UP_LEFT, 2), F(R(3, 7, -1, -1)), F(R(5, 3, 0, 2)),
+                F(R(3, 6, 0, -1)), ...hold(REST, 4),
+            ],
+            // Looks straight up and bobs as if counting, glances down, then snaps up to the right.
+            [
+                ...hold(REST, 2), F(R(5, 3, 0, 1)), F(R(3, 7, 0, -3)), ...hold(F(R(3, 5, 0, -3)), 3),
+                ...cycle([F(R(3, 4, 0, -2)), F(R(3, 5, 0, -4)), F(R(3, 5, 0, -3))], 3), F(R(3, 6, -1, 0)),
+                ...hold(F(R(3, 4, -2, 2)), 4), F(R(5, 1, -2, 3)), ...hold(F(R(3, 4, -2, 2)), 2), F(R(3, 7, 1, -1)),
+                ...hold(UP_RIGHT, 5), F(R(3, 7, 1, -1)), F(R(5, 3, 0, 2)), ...hold(REST, 3),
+            ],
+        ],
+    },
+    read: {
+        fps: 10, loop: true, pose: 3,
+        variants: [
+            [
+                ...SWEEP.map((d) => F(R(3, 3, d, -1))), F(R(7, 1, 0, 0)),
+                ...[-3, -2, -1, 0].map((d) => F(R(3, 3, d, 1))), ...hold(F(R(3, 4, 0, 1)), 2), F(R(3, 3, -1, 1)),
+                ...[0, 1, 2, 3].map((d) => F(R(3, 3, d, 1))), F(R(5, 1, 3, 1)), F(R(7, 1, 0, 0)),
+            ],
+            // Three short lines, skimmed, then a jump up to the next page.
+            [
+                ...[-2, 0, 2].flatMap((dy) => [...[-3, -1, 1, 3].map((d) => F(R(3, 3, d, dy))), F(R(7, 1, 0, dy))]),
+                F(R(5, 1, 0, 2)), F(R(3, 7, 0, -1)), ...hold(F(R(3, 3, -3, -2)), 2),
+            ],
+        ],
+    },
+    tool: {
+        fps: 10, loop: true, pose: 5,
+        variants: [
+            [
+                F(R(5, 3, 0, 1)), ...cycle(SQUEEZE, 2),
+                ...hold(F(R(4, 3, -2, 0)), 2), F(R(6, 1, 0, 0)), ...hold(F(R(4, 3, 2, 0)), 2), F(R(6, 1, 0, 0)),
+                F(R(4, 3, -1, 1)), F(R(4, 3, 1, 1)), ...SQUEEZE, ...hold(F(R(4, 7)), 2), F(R(5, 3, 0, 1)), REST,
+            ],
+            // Narrowed eyes check all four corners, then the effort and the "got it".
+            [
+                F(R(5, 3, 0, 1)), ...hold(F(R(4, 3, -2, -2)), 2), F(R(6, 1, 0, -2)), ...hold(F(R(4, 3, 2, -2)), 2), F(R(3, 6, 2, 0)),
+                ...hold(F(R(4, 3, 2, 2)), 2), F(R(6, 1, 0, 2)), ...hold(F(R(4, 3, -2, 2)), 2), F(R(3, 6, -2, 0)),
+                ...cycle(SQUEEZE, 2), ...hold(F(R(4, 7)), 2), F(R(5, 3, 0, 1)), REST,
+            ],
+        ],
+    },
+    wait: {
+        fps: 8, loop: false, pose: 0,
+        variants: [[
+            ...hold(WIDE, 2), F(R(5, 4, 0, 1)), F(R(3, 7, 0, -3)), F(R(4, 6, 0, -4)), F(R(4, 6, 0, -3)), F(R(5, 4, 0, 1)),
+            ...hold(WIDE, 2), ...hold(F(R(4, 6, -2, -1)), 2), ...hold(F(R(4, 6, 2, -1)), 2),
+            WIDE, BLINK, WIDE, BLINK, ...hold(WIDE, 2), ...hold(F(R(5, 7, 0, -1), R(3, 4, 0, -2)), 4), WIDE,
+        ]],
+    },
+    happy: {
+        fps: 10, loop: false, pose: -1,
+        variants: [
+            [
+                F(R(5, 3, 0, 2)), F(R(3, 7, 0, -2)), B('happy', 0, -4), B('happy', 0, -5), B('happy', 0, -3), B('happy', 0, 1), B('happyw', 0, 2),
+                B('happy', 0, -2), B('happy', 0, -3), B('happy', 0, -1), B('happyw', 0, 1), B('happy', 0, -1), ...hold(B('happy'), 3),
+                WINK, F(S('happy'), R(5, 1)), WINK, ...hold(B('happy'), 3),
+            ],
+            // A hop, then a contented sway from side to side.
+            [
+                F(R(5, 3, 0, 2)), F(R(3, 7, 0, -2)), B('happy', 0, -3),
+                ...cycle([B('happy', -1, -1), B('happy', -2, 0), B('happy', -1, -1), B('happy', 0, -2), B('happy', 1, -1), B('happy', 2, 0), B('happy', 1, -1), B('happy', 0, -2)], 2),
+                ...hold(B('happy'), 4),
+            ],
+        ],
+    },
+    excited: {
+        fps: 10, loop: false, pose: -1,
+        variants: [
+            [
+                ...cycle([F(R(5, 3, 0, 2)), F(R(3, 7, 0, -3)), F(R(4, 6, 0, -4))], 2), F(R(5, 3, 0, 2)),
+                B('happy', 0, -4), B('happy', 0, -2), B('happyw', 0, 2), B('happy', 0, -3), B('happy', 0, -1), B('happyw', 0, 1), ...hold(B('happy'), 4),
+            ],
+            // Can't keep still: a fast shake, then one big jump.
+            [
+                ...cycle([F(R(4, 6, -1, -1)), F(R(4, 6, 1, -1))], 4), F(R(5, 3, 0, 2)), F(R(3, 8, 0, -3)), B('happy', 0, -5), B('happy', 0, -2),
+                B('happyw', 0, 2), B('happy', 0, -1), ...hold(B('happy'), 4),
+            ],
+        ],
+    },
+    love: {
+        fps: 10, loop: false, pose: -1,
+        variants: [
+            [
+                REST, F(R(5, 3, 0, 1)), B('heart', 0, -3), B('heart', 0, -1),
+                ...cycle([BEAT, B('heart'), BEAT, B('heart'), B('heart'), B('heart')], 2), BEAT, B('heart'), B('heart'),
+            ],
+            // The hearts beat in turn, then float up and settle.
+            [
+                REST, F(R(5, 3, 0, 1)), B('heart'),
+                ...cycle([F(S('heartB', -1, 0), S('heart')), B('heart'), F(S('heart'), S('heartB', 1, 0)), B('heart')], 2),
+                B('heart', 0, -1), B('heart', 0, -2), B('heart', 0, -3), B('heart', 0, -2), B('heart', 0, -1), ...hold(B('heart'), 3),
+            ],
+        ],
+    },
+    laugh: {
+        fps: 10, loop: false, pose: 0,
+        variants: [
+            [
+                ...cycle([F(S('gt', 0, -2), S('lt', 0, -2)), F(S('gt', 0, 1), S('lt', 0, 1))], 6),
+                B('happy', 0, -2), B('happy', 0, 1), B('happy', 0, -1), ...hold(B('happy'), 3),
+            ],
+            // Shoulders shaking: the smile rocks side to side before it doubles over.
+            [
+                ...cycle([B('happy', -1, -1), B('happy', 1, 0)], 5),
+                ...cycle([F(S('gt', 0, -1), S('lt', 0, -1)), F(S('gt', 0, 2), S('lt', 0, 2))], 3), B('happy', 0, -2), ...hold(B('happy'), 3),
+            ],
+        ],
+    },
+    playful: {
+        fps: 10, loop: false, pose: 3,
+        variants: [[
+            REST, F(R(5, 3, 0, 1)), F(S('happy', 0, -1), R(3, 5, 0, -1)), ...hold(WINK, 3),
+            F(S('happy', 1), R(3, 5, 1)), F(S('happy', 2), R(3, 5, 2)), F(S('happy', 1), R(3, 5, 1)), WINK,
+            F(S('happy', -1), R(3, 5, -1)), WINK, REST, ...hold(F(R(3, 5), S('happy')), 4), ...hold(B('happy'), 3),
+        ]],
+    },
+    proud: {
+        fps: 10, loop: false, pose: -1,
+        variants: [[
+            REST, BLINK, ...hold(B('smug'), 2), B('smug', 0, -1), ...hold(B('smug', 0, -2), 4),
+            ...[1, 2, 1, 0, -1, -2, -1].map((d) => B('smug', d, -2)), ...hold(B('smug', 0, -2), 4),
+        ]],
+    },
+    curious: {
+        fps: 10, loop: false, pose: 4,
+        variants: [[
+            REST, F(R(5, 3, 0, 1)), F(R(3, 5, 2, -1)), ...hold(F(R(3, 5, 2, -1), R(4, 7, 2, -1)), 5), F(R(3, 1, 2, -1), R(4, 1, 2, -1)),
+            ...hold(F(R(3, 5, 2, -1), R(4, 7, 2, -1)), 2), F(R(6, 2, 0, -1)), ...hold(F(R(4, 7, -2, -1), R(3, 5, -2, -1)), 5),
+            F(R(3, 6, 0, -1)), ...hold(WIDE, 3),
+        ]],
+    },
+    surprised: {
+        fps: 10, loop: false, pose: 3,
+        variants: [
+            [
+                REST, F(R(5, 2, 0, 2)), F(R(3, 8, 0, -3)), ...hold(F(R(5, 7, 0, -2)), 2), WIDE, ...hold(F(R(2, 2, 0, -1)), 5),
+                BLINK, ...hold(F(R(2, 2, 0, -1)), 2), ...hold(WIDE, 3), REST,
+            ],
+            // A double take: looking away, then snapping back.
+            [
+                REST, ...hold(F(R(3, 5, -3, 0)), 3), F(R(6, 2, 0, 0)), ...hold(F(R(5, 7, 0, -2)), 2), ...hold(F(R(2, 2, 0, -1)), 4),
+                BLINK, ...hold(F(R(2, 2, 0, -1)), 2), BLINK, ...hold(WIDE, 3), REST,
+            ],
+        ],
+    },
+    confused: {
+        fps: 10, loop: false, pose: 0,
+        variants: [
+            [
+                ...hold(F(R(4, 6, 0, -1), R(3, 2, 0, 1)), 4), ...hold(F(R(3, 2, 0, 1), R(4, 6, 0, -1)), 4),
+                ...cycle([F(R(3, 5, -1, 0), S('q', 0, -1)), F(R(3, 5, -1, 0), S('q', 0, -2))], 3), BLINK,
+                ...hold(F(R(4, 6, 0, -1), R(3, 2, 0, 1)), 3),
+            ],
+            // Goes cross-eyed, uncrosses, and the question mark hops from one eye to the other.
+            [
+                ...hold(F(R(3, 5, 2, 0), R(3, 5, -1, 0)), 4), ...hold(F(R(3, 5, -2, 0), R(3, 5, 2, 0)), 3), ...hold(F(R(3, 5, 2, 0), R(3, 5, -1, 0)), 3),
+                ...cycle([F(R(3, 5, -1, 0), S('q', 0, -1)), F(R(3, 5, -1, 0), S('q', 0, -2))], 2), ...hold(F(S('q', 0, -1), R(3, 5, 1, 0)), 3), BLINK, REST,
+            ],
+        ],
+    },
+    skeptical: {
+        fps: 10, loop: false, pose: 1,
+        variants: [[
+            REST, ...hold(DOUBT, 5), ...hold(F(R(4, 2, -2, 1), R(3, 6, -2, -1)), 3), ...hold(F(R(4, 2, 2, 1), R(3, 6, 2, -1)), 3), ...hold(DOUBT, 2),
+            ...hold(F(R(3, 6, 0, -1), R(4, 2, 0, 1)), 4), BLINK, REST,
+        ]],
+    },
+    worried: {
+        fps: 10, loop: false, pose: 10,
+        variants: [
+            [
+                ...hold(WIDE, 2), ...cycle([P('wor', 1), P('wor', -1)], 3), ...hold(P('wor'), 2), ...hold(P('wor', -3), 3),
+                ...hold(P('wor', 3), 3), ...cycle([P('wor', 1), P('wor', -1)], 2), ...hold(P('wor'), 3),
+            ],
+            // A bead of sweat runs down beside the eyes.
+            [
+                ...hold(WIDE, 2), ...hold(P('wor', 0, -1), 2),
+                ...[3, 5, 7, 9].map((y, i) => P('wor', i % 2 ? 1 : -1, -1, drop(y))), ...hold(P('wor'), 2), ...hold(P('wor', -3), 2),
+                ...hold(P('wor', 2), 2), ...[3, 5, 7, 9].map((y, i) => P('wor', i % 2 ? 1 : -1, 0, drop(y))), ...hold(P('wor'), 3),
+            ],
+        ],
+    },
+    sad: {
+        fps: 10, loop: false, pose: 4,
+        variants: [
+            [
+                REST, F(R(3, 5, 0, 1)), ...hold(SAD, 3), ...tears(1, [12, 13, 14, 15]), P('sad'), SAD,
+                ...hold(F(R(5, 1, 0, 3)), 2), ...hold(LOW, 2), ...tears(2, [13, 14, 15]), ...hold(LOW, 4),
+            ],
+            // A slump, a look away, a tear from the other eye, then one from each.
+            [
+                REST, F(R(5, 3, 0, 2)), ...hold(LOW, 3), ...hold(P('sad', -1, 2), 2), ...tears(2, [13, 14, 15], [12]), SAD,
+                ...hold(LOW, 3), ...tears(2, [13, 14, 15], [3, 12]), ...hold(LOW, 3),
+            ],
+        ],
+    },
+    embarrassed: {
+        fps: 10, loop: false, pose: 4,
+        variants: [[
+            REST, ...hold(WIDE, 2), ...hold(shy(-2, 2), 4), ...hold(shy(0, 0), 2), ...hold(shy(2, 2), 4),
+            F(R(5, 1, 2, 3), undefined, BLUSH), ...hold(shy(0, 2), 3),
+        ]],
+    },
+    angry: {
+        fps: 10, loop: false, pose: 3,
+        variants: [
+            [
+                REST, F(R(5, 3, 0, 1)), P('ang', 0, -2), P('ang'), ...cycle([P('ang', 1), P('ang', -1)], 4),
+                ...hold(P('ang'), 4), ...hold(P('angs', 0, 1), 5), ...hold(P('ang'), 2),
+            ],
+            // Two stomps, then the glare.
+            [
+                REST, ...cycle([P('ang', 0, -3), P('ang', 0, 3), P('angs', 0, 3)], 2), ...hold(P('ang'), 3),
+                ...cycle([P('ang', 1), P('ang', -1)], 3), ...hold(P('angs', 0, 1), 4), ...hold(P('ang'), 2),
+            ],
+        ],
+    },
+    determined: {
+        fps: 10, loop: false, pose: 3,
+        variants: [[
+            REST, F(R(5, 3, 0, 1)), P('angs', 0, -1), ...hold(P('angs'), 3), ...cycle([P('angs', 0, 2), P('angs')], 2),
+            ...hold(P('angs'), 3), WIDE, ...hold(P('angs'), 3),
+        ]],
+    },
+    sleepy: {
+        fps: 10, loop: false, pose: 3,
+        variants: [[
+            REST, F(R(3, 4, 0, 1)), F(R(3, 3, 0, 1)), ...hold(F(R(4, 2, 0, 2)), 3), F(ASLEEP), ...hold(F(R(5, 1, 0, 4)), 2),
+            F(R(4, 6, 0, -2)), REST, F(R(3, 4, 0, 1)), F(R(3, 3, 0, 1)), F(R(4, 2, 0, 2)),
+            ...hold(F(ASLEEP, undefined, zed(11, 5)), 3), ...hold(F(ASLEEP, undefined, [...zed(11, 2), ...zed(6, 6)]), 3),
+            ...hold(F(ASLEEP, undefined, [...zed(11, 0), ...zed(6, 4)]), 3),
+        ]],
+    },
+};
+
+/** The sheet as one bit per pixel (1 = eye), one variant per row of cells, plus where each sits. */
+export function buildSheet() {
+    const rows = Object.entries(STATES).flatMap(([state, { variants, ...rest }]) =>
+        variants.map((frames, i) => ({ name: i ? `${state}${i + 1}` : state, state, frames, ...rest })));
+    const width = Math.max(...rows.map((row) => row.frames.length)) * CELL;
+    const height = rows.length * CELL;
+    const pixels = new Uint8Array(width * height);
+    const meta = {};
+    const variants = {};
+    rows.forEach(({ name, state, frames, fps, loop, pose }, row) => {
+        frames.forEach((frame, i) => {
+            render(frame).forEach((line, y) => line.forEach((on, x) => {
+                if (on) pixels[(row * CELL + y) * width + i * CELL + x] = 1;
+            }));
+        });
+        meta[name] = { row, frames: frames.length, fps, loop, pose: (pose + frames.length) % frames.length };
+        (variants[state] ??= []).push(name);
+    });
+    return { width, height, pixels, meta, variants };
+}
+
+const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+});
+
+function chunk(type, data) {
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    let crc = 0xffffffff;
+    for (const byte of body) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+    const out = Buffer.alloc(body.length + 8);
+    out.writeUInt32BE(data.length, 0);
+    body.copy(out, 4);
+    out.writeUInt32BE((crc ^ 0xffffffff) >>> 0, body.length + 4);
+    return out;
+}
+
+/** A 1-bit palette PNG: index 0 transparent, index 1 opaque white. The page colours it through a mask. */
+export function encodePng({ width, height, pixels }) {
+    const stride = Math.ceil(width / 8) + 1;
+    const raw = Buffer.alloc(stride * height);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            if (pixels[y * width + x]) raw[y * stride + 1 + (x >> 3)] |= 0x80 >> (x & 7);
+        }
+    }
+    const header = Buffer.alloc(13);
+    header.writeUInt32BE(width, 0);
+    header.writeUInt32BE(height, 4);
+    header.set([1, 3, 0, 0, 0], 8);
+    return Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        chunk('IHDR', header),
+        chunk('PLTE', Buffer.from([0, 0, 0, 255, 255, 255])),
+        chunk('tRNS', Buffer.from([0, 255])),
+        chunk('IDAT', deflateSync(raw, { level: 9 })),
+        chunk('IEND', Buffer.alloc(0)),
+    ]);
+}
+
+/** Reads back a PNG written by encodePng; throws on any other kind, so a hand-edited sheet is caught. */
+export function decodePng(png) {
+    const width = png.readUInt32BE(16);
+    const height = png.readUInt32BE(20);
+    if (png[24] !== 1 || png[25] !== 3) {
+        throw new Error(`gaia-eyes.png is not the 1-bit palette PNG this script writes. Regenerate it: ${REGENERATE_HINT}`);
+    }
+    const data = [];
+    for (let at = 8; at < png.length;) {
+        const length = png.readUInt32BE(at);
+        if (png.toString('latin1', at + 4, at + 8) === 'IDAT') data.push(png.subarray(at + 8, at + 8 + length));
+        at += length + 12;
+    }
+    const raw = inflateSync(Buffer.concat(data));
+    const stride = Math.ceil(width / 8) + 1;
+    const pixels = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            if (raw[y * stride + 1 + (x >> 3)] & (0x80 >> (x & 7))) pixels[y * width + x] = 1;
+        }
+    }
+    return { width, height, pixels };
+}
+
+/** The TypeScript table the component reads. */
+export function metaSource({ width, height, meta, variants }) {
+    const rows = Object.entries(meta).map(([name, m]) =>
+        `    ${name}: { row: ${m.row}, frames: ${m.frames}, fps: ${m.fps}, loop: ${m.loop}, pose: ${m.pose} },`);
+    const sets = Object.entries(variants).map(([state, names]) => `    ${state}: [${names.map((n) => `'${n}'`).join(', ')}],`);
+    return `// Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// AUTO-GENERATED by scripts/gen-gaia-eyes.mjs — do not edit.
+// Regenerate from the repo root: ${REGENERATE_HINT}
+
+/** Pixels per frame, and the size of src/assets/gaia-eyes.png. */
+export const EYES_CELL = ${CELL};
+export const EYES_SHEET_WIDTH = ${width};
+export const EYES_SHEET_HEIGHT = ${height};
+
+/** Where each animation sits on the sheet: its row, frame count, speed, and the still shown under reduced motion. */
+export const EYES_ANIMATIONS = {
+${rows.join('\n')}
+} as const;
+
+export type EyesAnimation = keyof typeof EYES_ANIMATIONS;
+
+/** Every way each state can be played; the first is the one shown under reduced motion. */
+export const EYES_VARIANTS = {
+${sets.join('\n')}
+} as const satisfies Record<string, readonly EyesAnimation[]>;
+
+export type EyesState = keyof typeof EYES_VARIANTS;
+`;
+}
+
+async function main() {
+    const sheet = buildSheet();
+    const source = metaSource(sheet);
+    if (process.argv.includes('--check')) {
+        const committed = decodePng(await readFile(SHEET_PATH));
+        const samePixels = committed.width === sheet.width && committed.height === sheet.height
+            && Buffer.compare(Buffer.from(committed.pixels), Buffer.from(sheet.pixels)) === 0;
+        const sameMeta = (await readFile(META_PATH, 'utf8')).replace(/\r\n/g, '\n') === source;
+        if (!samePixels || !sameMeta) {
+            console.error(`GAIA's eye sprite is stale. Regenerate it: ${REGENERATE_HINT}`);
+            process.exit(1);
+        }
+        return;
+    }
+    const png = encodePng(sheet);
+    await writeFile(SHEET_PATH, png);
+    await writeFile(META_PATH, source);
+    console.log(`Wrote ${Object.keys(sheet.meta).length} animations, ${sheet.width}x${sheet.height}, ${png.length} bytes.`);
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+    await main();
+}

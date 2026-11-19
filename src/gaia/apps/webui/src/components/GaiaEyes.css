@@ -1,0 +1,23 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* GAIA's pixel eyes: one frame of the sprite sheet, shown through a mask so the
+   colour follows the theme. GaiaEyes.tsx moves the mask from frame to frame. */
+.gaia-eyes {
+    display: inline-block;
+    inline-size: 16px;
+    block-size: 16px;
+    margin-inline-end: 6px;
+    vertical-align: -4px;
+    background-color: var(--accent-cyan);
+    -webkit-mask-image: url('../assets/gaia-eyes.png');
+    mask-image: url('../assets/gaia-eyes.png');
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    image-rendering: pixelated;
+}
+
+/* The eyes read and glance in the direction the text runs. */
+:root[dir="rtl"] .gaia-eyes {
+    transform: scaleX(-1);
+}

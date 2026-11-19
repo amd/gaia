@@ -1637,6 +1637,15 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         const seconds = line.locator('.thinking-indicator-elapsed bdi');
         await expect(seconds).toHaveText(/^\d+s$/);
         expect(await seconds.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        // GAIA's eyes lead the line: a drawn 16px square on the side the text starts from.
+        const eyes = line.locator('.gaia-eyes');
+        await expect(eyes).toHaveAttribute('data-eyes', 'read');
+        const eyesBox = (await eyes.boundingBox())!;
+        const textBox = (await line.locator('.thinking-indicator-text').boundingBox())!;
+        expect([eyesBox.width, eyesBox.height]).toEqual([16, 16]);
+        expect(await eyes.evaluate((el) => getComputedStyle(el).maskImage)).toContain('url(');
+        if (locale === 'ar') expect(eyesBox.x).toBeGreaterThanOrEqual(textBox.x + textBox.width);
+        else expect(eyesBox.x + eyesBox.width).toBeLessThanOrEqual(textBox.x);
         await shot(page, `live-status-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
