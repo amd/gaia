@@ -319,6 +319,18 @@ def test_render_suggestion():
     )
 
 
+def test_after_an_auto_load_the_other_matches_are_only_named_as_available():
+    """The best match is loaded already, so no name is an instruction."""
+    assert render_suggestion([], after_autoload=True) == ""
+    text = render_suggestion(["beta", "gamma"], after_autoload=True)
+    assert text == (
+        "Also available: beta, gamma. Call load_skill for one only if this "
+        "request needs it."
+    )
+    assert "before you start" not in text
+    assert len(text.splitlines()) == 1
+
+
 def test_a_suggestion_tells_the_model_to_load_the_best_match():
     """A local model passes over an offer, so the best match is an instruction;
     the others keep their order and stay an offer, all on one line."""
@@ -399,8 +411,9 @@ def test_two_unrelated_skills_scoring_alike_are_only_suggested():
 
 
 def test_companions_of_the_best_match_are_not_ambiguity():
-    """Skills that pair score alike by design: the leader loads with its best
-    companion even though neither leads the other by the margin."""
+    """Skills that pair score alike by design, so the leader loads although it
+    does not lead its companions by the margin. They stay suggestions: neither
+    leads the other, so neither clears the bar itself."""
     skills = _skills(
         _skill("slide-decks", pairs=["report-from-sources", "office-docs"]),
         _skill("report-from-sources", pairs=["office-docs"]),
@@ -411,7 +424,7 @@ def test_companions_of_the_best_match_are_not_ambiguity():
     embed = FakeEmbedder(list(skills), {"q": {**scores, "pdf": 0.30}})
     s = SkillSuggester(embed, autoload_threshold=0.55, margin=0.05)
     assert s.select("q", skills) == SkillMatches(
-        auto_load=["slide-decks", "report-from-sources"], suggest=["office-docs"]
+        auto_load=["slide-decks"], suggest=["report-from-sources", "office-docs"]
     )
 
 
@@ -457,10 +470,41 @@ def test_a_companion_below_the_threshold_is_only_suggested():
     assert s.select("q", skills) == SkillMatches(auto_load=["alpha"], suggest=["beta"])
 
 
-def test_a_companion_above_the_threshold_can_auto_load():
+def test_a_companion_that_clears_the_bar_itself_can_auto_load():
+    """At the threshold and leading every skill but the best match."""
     skills = _skills(_skill("alpha", pairs=["beta"]), _skill("beta"), _skill("gamma"))
     s, _ = _auto({"q": {"alpha": 0.70, "beta": 0.56, "gamma": 0.30}})
     assert s.select("q", skills).auto_load == ["alpha", "beta"]
+
+
+def test_a_companion_is_not_loaded_on_the_strength_of_its_partner():
+    """Above the threshold, but no further ahead of an unrelated skill than
+    that skill is of the next: the request is about the best match only."""
+    skills = _skills(_skill("alpha", pairs=["beta"]), _skill("beta"), _skill("gamma"))
+    s, _ = _auto({"q": {"alpha": 0.70, "beta": 0.57, "gamma": 0.56}}, margin=0.20)
+    assert s.select("q", skills) == SkillMatches(
+        auto_load=["alpha"], suggest=["beta", "gamma"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mate,rival,loads", [(0.60, 0.57, True), (0.60, 0.571, False), (0.60, 0.62, False)]
+)
+def test_a_companion_must_lead_the_remaining_skills_by_the_margin(mate, rival, loads):
+    skills = _skills(_skill("alpha", pairs=["beta"]), _skill("beta"), _skill("gamma"))
+    s, _ = _auto({"q": {"alpha": 0.90, "beta": mate, "gamma": rival}})
+    assert s.select("q", skills).auto_load == (
+        ["alpha", "beta"] if loads else ["alpha"]
+    )
+
+
+def test_a_second_companion_is_not_tried_when_the_best_one_falls_short():
+    """One candidate: a weaker companion never loads past a stronger one."""
+    skills = _skills(
+        _skill("alpha", pairs=["beta", "gamma"]), _skill("beta"), _skill("gamma")
+    )
+    s, _ = _auto({"q": {"alpha": 0.90, "beta": 0.60, "gamma": 0.59}})
+    assert s.select("q", skills).auto_load == ["alpha"]
 
 
 @pytest.mark.parametrize(
@@ -791,8 +835,12 @@ SWEEP_MARGINS = (0.00, 0.03, 0.05, 0.08)
 #: embeddinggemma-300m, 28 hub skills:
 #:
 #:     half      requests negatives precision recall loads wrong on-negatives
-#:     tuning         114        33      0.90   0.73   74    7  4
-#:     held-out       120        29      0.92   0.59   65    5  4
+#:     tuning         114        33      0.91   0.72   68    6  4
+#:     held-out       120        29      0.93   0.59   60    4  4
+#:
+#: A companion loads only when it leads the remaining skills itself. When
+#: reaching the floor was enough, the tuning half had 74 loads, 7 wrong
+#: (0.90, 0.73): 1 of the 7 companions loaded was a labelled skill.
 #:
 #: The floor and lead this replaced (0.55, 0.03, name-and-description text
 #: with no prompt) measured precision 0.91, recall 0.11 (12 loads) on the

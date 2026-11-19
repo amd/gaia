@@ -19,8 +19,10 @@ Auto-load is the opt-in exception (:meth:`SkillSuggester.select`): local models
 often ignore even a correct suggestion, so a host may ask for the matches far
 above the suggestion floor, and clearly ahead of every other skill, to load
 before the turn. Skills that pair with the best match (``pairs_with``) are
-expected to score close to it, so they do not count as a rival, and one of
-them may load with it. Everything below that bar is only suggested.
+expected to score close to it, so they do not count as a rival. Pairing loads
+nothing: a companion loads only when it clears the floor and leads every
+remaining skill itself; otherwise it is named after the loaded skill as
+available. Everything below that bar is only suggested.
 
 What is embedded: each skill's description under EmbeddingGemma's document
 prompt (:data:`DOC_PROMPT`) and the request under its classification prompt
@@ -198,7 +200,7 @@ class SkillMatches:
     suggest: List[str] = field(default_factory=list)
 
 
-def render_suggestion(names: Sequence[str]) -> str:
+def render_suggestion(names: Sequence[str], after_autoload: bool = False) -> str:
     """The turn-context line naming *names*, or ``""`` when there are none.
 
     It goes into the user's message, never the system prompt: the system prompt
@@ -206,9 +208,16 @@ def render_suggestion(names: Sequence[str]) -> str:
 
     The best match is an instruction, because a small local model passes over
     a line that only offers names. The rest keep their order and stay an offer.
+    With *after_autoload* the best match is already loaded, so every name is
+    an offer.
     """
     if not names:
         return ""
+    if after_autoload:
+        return (
+            f"Also available: {', '.join(names)}. Call load_skill for one only "
+            "if this request needs it."
+        )
     line = (
         f"Call load_skill('{names[0]}') before you start: it covers this kind "
         "of request."
@@ -357,8 +366,9 @@ class SkillSuggester:
 
         The best match scoring at least :attr:`autoload_threshold` becomes an
         auto-load when it leads every skill it does not pair with, loaded or
-        not, by :attr:`autoload_margin`. Its best-scoring companion that also
-        clears :attr:`autoload_threshold` loads with it, up to
+        not, by :attr:`autoload_margin`. Its best-scoring companion loads with
+        it only when it clears :attr:`autoload_threshold` and leads every
+        remaining skill by :attr:`autoload_margin` itself, up to
         :attr:`max_autoloads`. The rest stay suggestions, in the same order.
         With no :attr:`autoload_threshold` nothing is ever an auto-load.
         """
@@ -386,7 +396,8 @@ class SkillSuggester:
 
         A companion of the leader is expected to score close to it, so it is
         not a rival: only skills the leader does not pair with are held to the
-        margin.
+        margin. Pairing never loads the companion: it must clear the floor and
+        lead every skill but the leader on its own score.
         """
         if self.autoload_threshold is None or self.max_autoloads == 0:
             return []
@@ -409,8 +420,15 @@ class SkillSuggester:
         if scored[leader] - runner_up + AUTOLOAD_LEAD_EPSILON < self.autoload_margin:
             return []
         # At most one companion: a second body is a lot of prompt to add unasked.
-        mate = [name for name in eligible[1:] if name in mates][:1]
-        return ([leader] + mate)[: self.max_autoloads]
+        for mate in (name for name in eligible[1:] if name in mates):
+            rest = max(
+                (s for name, s in scored.items() if name not in (leader, mate)),
+                default=float("-inf"),
+            )
+            if scored[mate] - rest + AUTOLOAD_LEAD_EPSILON >= self.autoload_margin:
+                return [leader, mate][: self.max_autoloads]
+            break
+        return [leader]
 
     def _match(
         self,
