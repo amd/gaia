@@ -51,8 +51,10 @@ def session_id(client):
 def test_checking_an_impossible_folder_explains_it(client, path):
     r = client.post("/api/environment/folders/check", json={"path": path})
     assert r.status_code == 200
-    assert "is not a path this PC can open" in r.json()["refusal"]
-    assert len(r.json()["refusal"]) < 400
+    # Python 3.12 raises on these paths; 3.13+ just reports them as not a folder.
+    refusal = r.json()["refusal"]
+    assert "is not a path this PC can open" in refusal or "is not a folder" in refusal
+    assert len(refusal) < 400
 
 
 def test_adding_an_impossible_folder_is_refused(client, session_id, monkeypatch):
@@ -66,12 +68,14 @@ def test_adding_an_impossible_folder_is_refused(client, session_id, monkeypatch)
 
 def test_a_document_path_longer_than_windows_allows_is_refused(client):
     r = client.post("/api/documents/upload-path", json={"filepath": HUGE_PATH})
-    assert r.status_code == 400
+    # 400 where resolve() raises (3.12); 403 outside home where it doesn't (3.13+).
+    assert r.status_code in (400, 403)
 
 
 def test_opening_a_path_longer_than_windows_allows_is_refused(client):
     r = client.post("/api/files/open", json={"path": HUGE_PATH})
-    assert r.status_code == 400
+    assert r.status_code in (400, 403)
+    assert len(r.text) < 1000
 
 
 # Linux and macOS raise OSError(ENAMETOOLONG) where Windows raises ValueError.

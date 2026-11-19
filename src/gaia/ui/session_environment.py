@@ -34,6 +34,10 @@ class RelayedSwitchError(RuntimeError):
     """The Internet switch is saved, but the relayed turn running now wasn't told."""
 
 
+def _shorten(path: str) -> str:
+    return path if len(path) <= 120 else path[:120] + "…"
+
+
 def path_error_reason(error: Exception) -> str:
     """Why a path failed, without the path: POSIX errors repeat it in full."""
     return getattr(error, "strerror", None) or str(error)
@@ -370,12 +374,14 @@ def check_folder(path: str) -> Path:
         target = Path(os.path.expanduser(path)).resolve()
         is_dir = target.is_dir()
     except (ValueError, OSError) as e:  # a null byte, or a path too long for the OS
-        shown = path if len(path) <= 120 else path[:120] + "…"
         raise EnvironmentChangeError(
-            f"{shown!r} is not a path this PC can open: {path_error_reason(e)}."
+            f"{_shorten(path)!r} is not a path this PC can open: "
+            f"{path_error_reason(e)}."
         ) from e
     if not is_dir:
-        raise EnvironmentChangeError(f"{target} is not a folder on this PC.")
+        raise EnvironmentChangeError(
+            f"{_shorten(str(target))} is not a folder on this PC."
+        )
     reason = _unsafe_directory_grant_reason(target)
     if reason:
         raise EnvironmentChangeError(
