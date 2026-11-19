@@ -3965,6 +3965,11 @@ afterwards (or `swebench <run_dir>` does, later).
 
     skills_cli.add_subparser(subparsers)
 
+    # Project trust (issue #7003) — gaia project trust {list|add|decline|forget}
+    from gaia import project_trust_cli
+
+    project_trust_cli.add_subparser(subparsers)
+
     # Local models added from a Hugging Face link (shared with the Agent UI and TUI).
     from gaia.llm import custom_models_cli
 
@@ -6610,6 +6615,13 @@ Let me know your answer!
         from gaia.skills import cli as skills_cli  # pylint: disable=reimported
 
         rc = skills_cli.handle(args)
+        sys.exit(rc)
+
+    # Handle Project trust command (issue #7003)
+    if args.action in ("project", "trust"):
+        from gaia import project_trust_cli
+
+        rc = project_trust_cli.handle(args)
         sys.exit(rc)
 
     # Handle Diagnostics command

@@ -33,7 +33,10 @@ from gaia.project_trust import (
     ProjectTrustError,
     folder_key,
     folder_trust,
+    forget_folder_trust,
+    list_folder_trust,
     remember_folder_trust,
+    resolve_project_folder,
     trust_store_path,
 )
 
@@ -484,3 +487,97 @@ def test_the_sidecar_relay_never_offers_always_for_it():
     from gaia.ui.email_sidecar import relay
 
     assert PROJECT_TRUST_PROMPT_TOOL in relay._FRESH_CONSENT_TOOLS
+
+
+# ── list, forget and resolve ──────────────────────────────────────────────
+
+
+def test_list_folder_trust_returns_all_entries(repo, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    remember_folder_trust(repo, TRUSTED)
+    remember_folder_trust(other, DECLINED)
+
+    entries = list_folder_trust()
+    assert folder_key(repo) in entries
+    assert entries[folder_key(repo)]["decision"] == TRUSTED
+    assert folder_key(other) in entries
+    assert entries[folder_key(other)]["decision"] == DECLINED
+
+
+def test_list_folder_trust_raises_on_corrupted_store(repo):
+    store = trust_store_path()
+    store.write_text("{corrupt json", encoding="utf-8")
+    with pytest.raises(ProjectTrustError, match="project_trust.json"):
+        list_folder_trust()
+
+
+def test_forget_folder_trust_single_entry(repo, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    remember_folder_trust(repo, TRUSTED)
+    remember_folder_trust(other, DECLINED)
+
+    removed = forget_folder_trust(folder=repo)
+    assert removed == [folder_key(repo)]
+    assert folder_trust(repo) is None
+    assert folder_trust(other) == DECLINED
+
+
+def test_forget_folder_trust_all_entries(repo, tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    remember_folder_trust(repo, TRUSTED)
+    remember_folder_trust(other, DECLINED)
+
+    removed = forget_folder_trust(all_entries=True)
+    assert set(removed) == {folder_key(repo), folder_key(other)}
+    assert list_folder_trust() == {}
+
+
+def test_forget_folder_trust_missing_only(repo, tmp_path):
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    remember_folder_trust(repo, TRUSTED)
+    remember_folder_trust(gone, DECLINED)
+    # Now remove the folder on disk
+    gone.rmdir()
+
+    removed = forget_folder_trust(missing_only=True)
+    assert removed == [folder_key(gone)]
+    assert folder_trust(gone) is None
+    assert folder_trust(repo) == TRUSTED
+
+
+def test_forget_folder_trust_raises_on_corrupt_store():
+    store = trust_store_path()
+    store.write_text("invalid json content", encoding="utf-8")
+    with pytest.raises(ProjectTrustError, match="project_trust.json"):
+        forget_folder_trust(all_entries=True)
+
+
+def test_resolve_project_folder_finds_repo_root_from_subfolder(repo):
+    sub = repo / "src" / "deep"
+    sub.mkdir(parents=True)
+    assert resolve_project_folder(sub) == str(repo.resolve())
+
+
+def test_resolve_project_folder_finds_instruction_root_without_vcs(tmp_path):
+    project = tmp_path / "non_vcs_project"
+    project.mkdir()
+    (project / "CLAUDE.md").write_text("# Instructions\n", encoding="utf-8")
+    sub = project / "docs"
+    sub.mkdir()
+    assert resolve_project_folder(sub) == str(project.resolve())
+
+
+def test_resolve_project_folder_nonexistent_raises():
+    with pytest.raises(FileNotFoundError, match="not found"):
+        resolve_project_folder("/path/that/does/not/exist/anywhere")
+
+
+def test_resolve_project_folder_file_not_dir_raises(tmp_path):
+    some_file = tmp_path / "file.txt"
+    some_file.write_text("content", encoding="utf-8")
+    with pytest.raises(ValueError, match="not a directory"):
+        resolve_project_folder(some_file)
