@@ -447,6 +447,48 @@ bool mentionsRemoteUrl(const std::string& text) {
     return false;
 }
 
+// The command with each word reduced to the program name it would run: quotes dropped,
+// folders and a Windows suffix stripped, lowercased: "C:\Tools\Conda.EXE" install is conda install.
+// Never longer than the command, line for line, so it is as safe to scan.
+std::string programWords(const std::string& command) {
+    std::string out, word;
+    bool afterWord = false;
+    const auto flush = [&] {
+        if (word.empty()) return;
+        std::string name = lowerAscii(word.substr(word.find_last_of("/\\") + 1));
+        for (const char* ext : {".exe", ".cmd", ".bat", ".com", ".ps1"}) {
+            const size_t n = std::strlen(ext);
+            if (name.size() > n && name.compare(name.size() - n, n, ext) == 0) {
+                name.resize(name.size() - n);
+                break;
+            }
+        }
+        if (afterWord) out.push_back(' ');
+        out += name;
+        afterWord = true;
+        word.clear();
+    };
+    char quote = 0;
+    for (const char c : command) {
+        if (quote) {
+            if (c == quote) quote = 0;
+            else word.push_back(c);
+        } else if (c == '\'' || c == '"') {
+            quote = c;
+        } else if (c == ' ' || c == '\t' || c == '\r') {
+            flush();
+        } else if (c == '\n' || std::strchr(";|&()<>`", c)) {
+            flush();
+            out.push_back(c);
+            afterWord = false;
+        } else {
+            word.push_back(c);
+        }
+    }
+    flush();
+    return out;
+}
+
 bool anyRemoteUrl(const json& v) {
     if (v.is_string()) return mentionsRemoteUrl(v.get<std::string>());
     if (v.is_array() || v.is_object()) {
@@ -484,20 +526,35 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
             start = end + 1;
         }
         // Commands that go online with no URL in sight: a remote, a package index, an API.
+        // Kept in step with _ONLINE_COMMAND_RE in src/gaia/agents/base/offline.py.
         static const std::regex online(
             R"(\b(?:git\b.*\b(?:clone|fetch|pull|push|ls-remote|submodule\s+update)\b)"
             R"(|git\b.*\bremote\s+update\b)"
-            R"(|(?:pip[0-9.]*|uv\s+pip|(?:python[0-9.]*|py)\s+-m\s+pip)\s+(?:install|download)\b)"
-            R"(|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|ci|update|publish)\b|(?:npx|uvx|pipx|bunx)\s)"
-            R"(|uv\s+(?:add|sync|tool\s+install|run\s+--with)\b|cargo\s+(?:install|fetch|update)\b)"
-            R"(|go\s+(?:get|install|mod\s+download)\b|docker\s+(?:pull|push|login)\b)"
-            R"(|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum)\s+(?:install|upgrade|update)\b)"
+            R"(|(?:pip[0-9.]*|uv\s+pip|(?:python[0-9.]*|py)\s+-m\s+pip)\s+(?:install|download|wheel|index|search)\b)"
+            R"(|(?:npm|pnpm|yarn|bun)\s+(?:install|add|i|ci|update|upgrade|up|publish|dlx|exec|create|x|audit)"
+            R"(|outdated|view|info|search|login)\b|(?:npm|pnpm|yarn|bun)\s+init\s+[^-\s])"
+            R"(|(?:npx|uvx|pipx|bunx|pnpx)\s)"
+            R"(|uv\s+(?:add|sync|lock|tool\s+(?:install|upgrade)|python\s+install|run\s+--with|self\s+update)\b)"
+            R"(|(?:poetry|pdm)\s+(?:install|add|update|lock|sync|publish|self\s+update)\b)"
+            R"(|(?:conda|mamba|micromamba)\s+(?:install|create|update|upgrade|search|env\s+(?:create|update))\b)"
+            R"(|cargo\s+(?:install|fetch|update|publish|search|add|login)\b|go\s+(?:get|install|mod\s+(?:download|tidy))\b)"
+            R"(|gem\s+(?:install|update|fetch|push|search|sources)\b|bundler?\s+(?:install|update|add|outdated|lock)\b)"
+            R"(|composer\s+(?:install|update|require|create-project)\b)"
+            R"(|dotnet\s+(?:restore|add|new\s+install|tool\s+(?:install|update|restore)|workload|nuget)\b)"
+            R"(|nuget\s+(?:install|restore|update|push)\b|(?:docker|podman)\s+(?:pull|push|login|search)\b)"
+            R"(|(?:winget|choco|scoop|apt|apt-get|brew|dnf|yum|zypper|apk|snap|flatpak)\s+)"
+            R"((?:install|reinstall|upgrade|update|download|search|add|fetch|tap|source|dist-upgrade|full-upgrade)\b)"
+            R"(|pacman\s+-S|(?:install|update|find|save)-(?:module|package|script)\b|start-bitstransfer\b|bitsadmin\b)"
+            R"(|certutil\b.*-urlcache|aria2c\b|(?:huggingface-cli|hf)\s+(?:download|upload|login)\b|ollama\s+(?:pull|push)\b)"
             R"(|gh\s|ssh\b|scp\b|sftp\b|ftp\b|rsync\b|nc\b|ncat\b|telnet\b|socat\b)"
             R"(|nslookup\b|dig\b|ping\b|traceroute\b|tracert\b|/dev/(?:tcp|udp)/)"
             R"(|(?:https?|all|ftp)_proxy=)"
             R"(|(?:python3?|py|node|deno|bun|perl|ruby|php|pwsh|powershell)\b.*(?:socket|urllib|requests|httpx|aiohttp)"
             R"(|http\.client|https?\.(?:get|request)|fetch\(|net\.connect|WebClient|Net::HTTP|LWP|fsockopen|TCPSocket)))",
             std::regex::icase);
+        // Build tools that resolve dependencies from a remote repository on nearly every run.
+        static const std::regex buildTool(R"((?:^|[\s;&|(`])(?:mvn|mvnw|gradle|gradlew)(?=[\s;&|)`]|$))",
+                                          std::regex::icase);
         static const std::regex fetch(R"(\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b)", std::regex::icase);
         // bash opens a socket for a redirect to these names.
         const bool socketFile = command.find("/dev/tcp/") != std::string::npos ||
@@ -507,7 +564,10 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
         for (const char c : command) {
             if (c != '\'' && c != '"' && c != '\\') bare.push_back(c);
         }
+        // A full path, a quoted name or a Windows suffix still runs the program: C:\Tools\conda.exe is conda.
+        const std::string programs = programWords(command);
         if (socketFile || std::regex_search(command, online) || std::regex_search(bare, online) ||
+            std::regex_search(programs, online) || std::regex_search(programs, buildTool) ||
             mentionsRemoteUrl(command)) {
             return why + "`" + command.substr(0, 80) + "`, which goes online.";
         }
