@@ -1109,9 +1109,14 @@ struct ShellSession::Impl {
                 s << "set \"" << kv.first << "=" << batchQuote(kv.second)
                   << "\"\r\n";
             }
-            s << "call \"" << commandFile << "\" <nul\r\n";
+            // `call` doubles every ^ in a path it is given, so the command file is called as
+            // .\name from the folder this script is in; its own first line (popd) steps back into
+            // the session's folder before the command runs. A bare name is not enough: cmd.exe can
+            // be set to leave the current folder out of its search.
+            s << "pushd \"%~dp0\"\r\n";
+            s << "call .\\" << sfs::u8path(commandFile).filename().u8string() << " <nul\r\n";
             s << "set __GAIA_RC=%ERRORLEVEL%\r\n";
-            s << "> \"" << stateFile << "\" (\r\n";
+            s << "> \"" << batchQuote(stateFile) << "\" (\r\n";
             s << "  cd\r\n";
             s << "  echo " << kEnvMarker << "\r\n";
             s << "  set\r\n";
@@ -1245,7 +1250,9 @@ ProcessResult runSessionScript(const std::function<std::string(const std::string
     // The command gets its own file so it cannot splice into the script's
     // bookkeeping; on Windows it must be a .cmd for `call` to accept it.
     std::string commandFile;
-    if (!writeTempFile(scriptExt, command + "\n", commandFile)) {
+    // Under cmd.exe the script calls this file from the temp folder: see buildScript.
+    if (!writeTempFile(scriptExt, (posixScript ? std::string() : std::string("@popd\r\n")) + command + "\n",
+                       commandFile)) {
         result.exitCode = -1;
         result.stderr_output = tempError;
         return result;
@@ -1261,16 +1268,6 @@ ProcessResult runSessionScript(const std::function<std::string(const std::string
     temps.add(scriptFile);
 
 #ifdef _WIN32
-    // A batch script's `call` doubles every ^ in a path and expands %name%, so the files it names
-    // would not be found. Said plainly here; the shell's own error names no cause.
-    if (!posixScript && scriptFile.find_first_of("^%") != std::string::npos) {
-        result.exitCode = -1;
-        result.stderr_output =
-            "ShellSession: the temp folder (" + sfs::u8path(scriptFile).parent_path().u8string() +
-            ") has ^ or % in its path, which cmd.exe cannot pass to a script. Set TEMP and TMP to a folder "
-            "without them, or install Git for Windows so commands run in bash, where such a path works.";
-        return result;
-    }
     // The line goes through cmd /c, which drops the first and last quote of a line holding & or ^
     // and then splits it there. An outer pair of quotes is the pair it drops, and the path stays whole.
     const std::string invocation =
