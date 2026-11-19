@@ -385,6 +385,24 @@ def test_a_second_all_thinking_cut_off_keeps_the_effort_low_for_the_turn(agent):
     assert efforts == ["unset", "none", "unset", "none", "none"]
 
 
+def test_the_low_effort_does_not_carry_into_the_next_turn(agent):
+    agent.model_id = "fireworks.deepseek-v4p1-flash"
+    _register_lookup(agent)
+    efforts = _stub_effort_chat(
+        agent,
+        _ALL_THINKING,
+        _lookup("gfx90a"),
+        _ALL_THINKING,
+        _DONE,
+        _DONE,
+    )
+
+    agent.process_query("What about gfx90a?", max_steps=10)
+    agent.process_query("And gfx90b?", max_steps=10)
+
+    assert efforts == ["unset", "none", "unset", "none", "unset"]
+
+
 def test_a_model_with_no_known_lowest_effort_is_sent_no_effort(agent):
     agent.model_id = "fireworks.some-other-model"
     efforts = _stub_effort_chat(agent, _ALL_THINKING, _DONE)

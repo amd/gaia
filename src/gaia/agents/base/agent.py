@@ -11127,7 +11127,8 @@ Do NOT wrap conversational replies in JSON.
         """The reasoning effort for the next model call, if any is asked for.
 
         The agent's own choice (ReasoningEffortToolsMixin), except right after
-        a reply cut off with nothing but thinking in it.
+        a reply cut off with nothing but thinking in it, and for the rest of a
+        turn that has had two such replies.
         """
         if self._thinking_cut_off or self._thinking_cut_offs >= 2:
             # Thinking used a whole reply: ask a cloud model for its least.
