@@ -2282,7 +2282,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             unsupported += " Audio and video recordings ARE supported via `transcribe_media` — never refuse an .mp4/.m4a/.mp3/.wav as something you cannot process."
         data_file_rules += unsupported + "\n"
         data_file_rules += """
-**SLIDES / DECKS:** Asked to make one (not just mentioned) → a file, never an image. Make a PowerPoint (.pptx) unless the user asked for HTML; never ask which. For .pptx, load the `slide-decks` skill and build with its tools (no hand-written python-pptx); if that skill is not installed, load `office-docs`. For HTML, `write_file` one self-contained .html. Give the path.
+**SLIDES / DECKS:** Asked to make one (not just mentioned) → a file, never an image. Make a .pptx unless asked for HTML; never ask which. For .pptx, load `slide-decks` and use its tools (no hand-written python-pptx); without that skill, load `office-docs`. HTML: `write_file` one self-contained .html. Give the path.
 """
         # A rule about a tool the session lacks made the model offer images.
         if self._offers_image_generation():

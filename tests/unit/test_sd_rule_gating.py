@@ -23,10 +23,10 @@ def test_slides_are_pptx_files_built_without_asking(enabled):
         prompt = agent._get_system_prompt()
     assert "**SLIDES / DECKS:** Asked to make one (not just mentioned)" in prompt
     assert "a file, never an image" in prompt
-    assert "Make a PowerPoint (.pptx) unless the user asked for HTML" in prompt
+    assert "Make a .pptx unless asked for HTML" in prompt
     assert "never ask which" in prompt
-    assert "load the `slide-decks` skill and build with its tools" in prompt
-    assert "if that skill is not installed, load `office-docs`" in prompt
+    assert "load `slide-decks` and use its tools" in prompt
+    assert "without that skill, load `office-docs`" in prompt
     assert "build nothing until they answer" not in prompt
     assert "`run_python` with python-pptx" not in prompt
     if enabled:
