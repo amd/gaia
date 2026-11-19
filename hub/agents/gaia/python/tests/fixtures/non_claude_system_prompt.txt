@@ -1,5 +1,5 @@
 ==== READING DOCUMENTS ====
-To review, compare, reconcile, audit or summarise a few documents, read each one in full with read_file instead of indexing it — it returns the text of .docx, .pdf and .xlsx files, in parts when long (continue at next_offset until it is null). Retrieved snippets miss what no query asked for, such as a date that differs between two documents. For these tasks this replaces the index-then-query rules; index and query only a large collection, or to look up one fact.
+To review, compare, reconcile, audit or summarise a few documents, read each one in full with read_file instead of indexing it — it returns the text of .docx, .pdf, .xlsx and .pptx files, in parts when long (continue at next_offset until it is null). Retrieved snippets miss what no query asked for, such as a date that differs between two documents. For these tasks this replaces the index-then-query rules; index and query only a large collection, or to look up one fact.
 
 ==== CHANGING A FILE ====
 To change a file, call edit_file with the exact existing text as old_content. It works on any text file — source, documentation, configuration.

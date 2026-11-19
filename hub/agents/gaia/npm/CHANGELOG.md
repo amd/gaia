@@ -25,7 +25,10 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
   being shown as the answer. The agent is told the time used at 25% and 50%,
   its last tool call may run for half of the time left instead of being
   refused, and the 70% warning no longer invites it to rewrite a finished file
-  or put caveats inside one.
+  or put caveats inside one. The time kept back is never more than a quarter
+  of the limit, so one long early step no longer ends the turn near its
+  halfway point, and the answer after a time-limit stop is a short summary (at
+  most 2,048 tokens) that names files instead of repeating them.
 ### Changed
 
 - **Office files are checked before they are handed over.** The bundled
@@ -114,6 +117,22 @@ Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 - In a `gaia -p` run the agent is told nobody can answer questions, so it
   settles an open choice itself and says what it assumed instead of ending on
   an offer to change it later.
+- `run_python` runs a saved script by `path` (with optional `args`), so a
+  script is written once, fixed with `edit_file` and run again instead of
+  being typed out for every run. The call is checked and approved exactly as
+  `execute_python_file` is. Every Python result now says the interpreter is
+  new for that call, a `NameError` adds that each call starts fresh, and a
+  failed run says how to fix and re-run it without sending the code again.
+- `read_file` reads more without a detour. A .pptx comes back as slide text
+  with speaker notes. A workbook too long to read in full comes back as each
+  sheet's size and first rows, with how to read a range, instead of an error.
+  An .html file comes back as its text (`raw=true` for the markup).
+  `start_line` with `limit` reads that many lines, and a `start_line` of 0 is
+  the first line. When a loaded skill has a tool for the file's type, the
+  result names it before `index_document`.
+- A Python that `run_shell_command` starts reads and prints UTF-8, as
+  `run_python` already did, unless the command or the environment sets an
+  encoding itself.
 - `run_python` no longer drops long output without saying so. Output past
   8,000 characters used to be cut silently, so a scan's later hits never
   reached the agent. It now gets the start and end, is told how much was left
