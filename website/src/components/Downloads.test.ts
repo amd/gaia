@@ -228,6 +228,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 const ctas = () => descendants(rendered.root).filter((e) => 'data-dl-cta' in e.attrs);
@@ -682,8 +683,12 @@ describe('Downloads.astro against an incomplete release', () => {
   });
 
   it('fails the build when the GitHub API does', async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'test-token');
+    vi.stubEnv('GITHUB_FETCH_RETRIES', '0');
     stubReleases(() => new Response('rate limited', { status: 403 }));
-    await expect(renderHtml()).rejects.toThrow(/\[github\].*releases.*HTTP 403.*GITHUB_TOKEN/s);
+    await expect(renderHtml()).rejects.toThrow(
+      /\[github\].*releases.*HTTP 403.*hourly quota/s,
+    );
   });
 });
 

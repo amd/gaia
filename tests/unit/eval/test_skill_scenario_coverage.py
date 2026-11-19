@@ -47,6 +47,10 @@ DEFERRED: dict[str, str] = {
         "Runs later through a delivery channel; its store, runner, CLI and policy "
         "are unit-tested."
     ),
+    "browser-pane": (
+        "Needs GAIA desktop's browser pane, which the eval lanes don't run; "
+        "its gating is covered end to end against a recorded pane bridge."
+    ),
     "calculators": (
         "The card does the math in the client; a skill scenario needs a judge "
         "that reads the card payload rather than the short reply."
@@ -71,6 +75,7 @@ DEFERRED: dict[str, str] = {
     ),
     "log-triage": "Needs an invented multi-file log corpus with a planted incident.",
     "meeting-actions": "Needs a multi-meeting notes corpus with implicit commitments.",
+    "office-docs": "Needs a rubric that opens the produced .xlsx/.pptx/.docx files.",
     "price-watch": "Requires live web fetch; non-deterministic ground truth.",
     "send-email": (
         "Every send needs a person to approve the exact message; the email eval "

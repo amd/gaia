@@ -37,6 +37,7 @@ _SUPPORTED_TOOL_KWARGS = (
     "timeout_arg",
     "preflight",
     "dedup_key",
+    "model_view",
     "registry",
     "override",
 )
@@ -336,6 +337,7 @@ def tool(
     timeout_arg: str | None = None,
     preflight: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]] | None = None,
     dedup_key: list[str] | tuple[str, ...] | None = None,
+    model_view: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
     registry: dict[str, dict] | None = None,
     override: bool = False,
     **unexpected_kwargs: object,
@@ -367,6 +369,10 @@ def tool(
             Calls that agree on these count as repeats even when other
             arguments (e.g. a free-text ``reason``) differ. ``None`` (the
             default) compares every argument.
+        model_view: Given the tool's dict result, returns the copy the model
+            reads. For leaving out what the model already knows (its own
+            arguments echoed back, empty fields); the full result still goes
+            to the UI, the checks and the saved conversation.
 
         registry: An explicit instance-local destination. When omitted, register
             globally for existing callers. Passing an empty mapping is honored;
@@ -448,6 +454,7 @@ def tool(
             "timeout_arg": timeout_arg,
             "preflight": preflight,
             "dedup_key": dedup,
+            "model_view": model_view,
         }
 
         # Return the function unchanged

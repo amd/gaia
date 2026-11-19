@@ -128,12 +128,13 @@ the same time.
 
 ## Step 4 — Per-agent grants
 
-The connect panel shows **"Grant access to these agents when you
-connect"** — a default-on checkbox for every installed agent that
-declares Microsoft access. Checked agents are granted their declared
-Graph scopes automatically the moment the OAuth flow completes, so a
-fresh connect needs no follow-up command. Uncheck an agent before
-connecting to withhold its grant.
+Every installed agent that declares Microsoft access is granted its
+declared Graph scopes automatically the moment the OAuth flow completes,
+so a fresh connect needs no follow-up command. When more than one such
+agent is installed, the connect panel shows **"Grant access to these agents
+when you connect"** with a default-on checkbox per agent; uncheck one before
+connecting to withhold its grant. With GAIA the only agent, the list is
+hidden.
 
 You can adjust or revoke grants at any time from the same tile's
 **Per-agent grants** section, or via the CLI:
@@ -253,14 +254,38 @@ GAIA always requests `offline_access`, which is what makes Microsoft issue a
 refresh token. If you see this, disconnect and reconnect from the UI to
 restart the flow with the full default scope set.
 
+## More than one account
+
+Each Microsoft connector can hold several accounts, for example two
+Outlook.com addresses under `microsoft`. In the Agent UI, open Settings →
+Connectors → Microsoft and choose **Add another Microsoft account**; with two
+or more, each account has its own **Make default**, **Disconnect** and, when
+its sign-in expired, **Reconnect**. From the CLI:
+
+```bash
+gaia connectors connect microsoft --add   # Microsoft asks which account
+gaia connectors list microsoft            # one line per account
+gaia connectors set-default microsoft me@outlook.com
+gaia connectors disconnect microsoft --account old@outlook.com
+```
+
+The first account you connect is the default, and agents use it unless they
+name another. Signing in again as an account you already connected updates
+it; a different account is added beside it. Microsoft has no revoke API, so
+removing an account clears GAIA's copy only. The device-code flow has no
+account picker: sign in with the account you want in the browser it sends
+you to. `--add` and `--account` work with `--device` too.
+
 ## Revoking access
 
 Two places — both work, per connector:
 
 - **From GAIA**: Settings → Connectors → the connector tile →
-  **Disconnect**. Removes that connector's refresh token from the keyring;
-  the next API call for it errors with `NOT_CONNECTED`. The other Microsoft
-  connector (if connected) is unaffected.
+  **Disconnect**. With one account, removes its refresh token from the keyring;
+  the next API call for it errors with `NOT_CONNECTED`. With several, each
+  account has its own **Disconnect** and the others keep working. If a
+  **Disconnect** would remove several accounts, GAIA lists them and asks first.
+  The other Microsoft connector (if connected) is unaffected.
 - **From Microsoft**: personal accounts at <a href="https://account.live.com/consent/Manage"
   target="_blank">account.live.com/consent/Manage</a>; work/school accounts at
   <a href="https://myapps.microsoft.com" target="_blank">myapps.microsoft.com</a>

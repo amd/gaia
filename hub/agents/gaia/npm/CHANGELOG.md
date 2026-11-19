@@ -6,7 +6,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+Requires the `gaia` Python CLI 0.27.0+ on `PATH`.
 
 - **The session panel no longer keeps listing a file as approved after its
   agent is gone (contract 2.31).** A chat's "Files GAIA can reach" could
@@ -15,6 +15,161 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `error` now carry `session_created: true` when the sidecar had to rebuild
   the turn's agent, so a client can drop exactly the approvals that predate
   this turn and keep any the turn's own prompt just granted.
+- **Every chat on a PC embeds with one embedder, the GPU one.** The embedder
+  was chosen per session, so a chat on the other device could clear all of
+  memory's vectors. It is now one per PC, on an NPU PC too: FastFlowLM's NPU
+  embedder (`embed-gemma-300m-FLM`) ranked text no better than chance on
+  FastFlowLM 1.0.7, so `gaia init --profile npu` downloads the GPU embedder
+  instead. A choice saved in Settings › Memory reaches open sessions on their
+  next turn, keeping the conversation and loaded skills.
+- **`gaia -p --time-limit` uses the time it is given.** One slow step made the
+  agent stop with minutes left, so a found answer often never reached the
+  requested file. It now stops two typical steps short of the limit, is always
+  warned first, and its closing step may run one last tool call, so a final
+  write lands. Every model call is capped to what the time left allows, and a
+  call still running past the limit is abandoned with the result still
+  reported. Qwen's `<function=…>` tool-call text now runs as a call instead of
+  being shown as the answer. The agent is told the time used at 25% and 50%,
+  its last tool call may run for half of the time left instead of being
+  refused, and the 70% warning no longer invites it to rewrite a finished file
+  or put caveats inside one. The time kept back is never more than a quarter
+  of the limit, so one long early step no longer ends the turn near its
+  halfway point, and the answer after a time-limit stop is a short summary (at
+  most 2,048 tokens) that names files instead of repeating them.
+### Changed
+
+- **Office files are checked before they are handed over.** The bundled
+  `office-docs` skill ships two tools that never write the file.
+  `verify_workbook` recalculates a copy of an .xlsx (with LibreOffice when
+  installed) and names every cell with `#REF!`, `#VALUE!`, `#DIV/0!`,
+  `#NAME?`, a circular reference, a SUM/SUMIFS over text, or a criterion that
+  matches no row. A workbook with errors returns `status: errors_found`, and
+  one with typed totals and no formulas returns `no_formulas`. Without
+  LibreOffice nothing is computed: findings that depend on a value are
+  warnings, and the result tells the agent to compute the figures it reports
+  with pandas and to say the formulas were not recalculated. `verify_document`
+  confirms a .docx or .pptx is a real Word or PowerPoint file and counts its
+  headings, tables, pictures, slides and charts. Text saved under a .docx name
+  is an error that says how to build a real one. The skill also teaches real
+  headings and tables in Word files and native charts.
+- **The skill suggestion now tells the model which skill to load.** Local models
+  ignored the old "skills that may fit this request" line: over 56 tasks one
+  called `load_skill` on 3. The line now reads "Call load_skill('pdf') before
+  you start: it covers this kind of request. Also consider: office-docs." It is
+  still one line in the user's message, with the skills in the same order.
+- **A skill that clearly fits the request can load before the turn (opt-in).**
+  With `GAIA_SKILL_AUTOLOAD=1` or `skill_autoload=True`, the best match loads
+  first when it scores at least 0.40 and is 0.03 ahead of every skill it does
+  not pair with. The request then opens with "Loaded report-from-sources
+  because it matches this request". Weaker matches are suggested as before.
+  - Skills that pair with the best match no longer block it. A paired skill
+    loads with it only when it scores 0.40 and is 0.03 ahead of every
+    remaining skill itself; otherwise the request names it as "Also
+    available". Two skills per turn at most.
+  - Only trusted skills load this way: ones that ship with the agent, and hub
+    installs at the `community` tier or above. A captured skill, your own
+    skill and anything from a `.claude` folder stay suggestions.
+  - A skill that grants a command-line program stays a suggestion in Ask mode.
+    Under full access it loads, with a warning naming the program. Switch full
+    access off and the skill is unloaded at the next turn.
+  - The skill bodies in the prompt, plus the new one, must fit in 18% of the
+    model's context window (about 5,900 tokens of the default 32,768).
+  - A skill unloaded earlier in the session is not auto-loaded again.
+  - `GAIA_SKILL_AUTOLOAD_TAU` and `GAIA_SKILL_AUTOLOAD_MARGIN` (or
+    `skill_autoload_threshold` and `skill_autoload_margin`) set the 0.40 and
+    0.03.
+  - If you turn it on where it cannot run (catalogue or suggestions off, fast
+    mode, memory off, or an embedder other than `embeddinggemma-300m`), one
+    warning says it is inactive and why.
+
+  Off by default. On the held-out half of the labelled requests, 0.40 and
+  0.03 measured precision 0.93 and recall 0.59.
+- **Start a message with `/` and a skill's name to run that skill**, as in
+  Claude Code: `/pdf turn notes.md into a report`. The agent loads the skill
+  with the same checks as `load_skill` and follows it for the rest of the line.
+  A name that is not an installed skill is sent unchanged. Over stdio, the
+  model-state ping and `/skills` now carry the installed skills (`skills`), so
+  the terminal UI can list them when you type `/`.
+- **A command or snippet that starts a never-ending server is refused before it
+  runs.** `run_shell_command`, `run_python` and `execute_python_file` used to
+  wait on it until the turn timed out; they now return an error that says so and
+  how to serve the folder instead. Code that only writes a server to a file still
+  runs. Each live-browser result now starts with where it ran, such as
+  `(headless browser)`.
+- **A chat in GAIA desktop can drive the browser pane beside it.** A new bundled
+  skill, `browser-pane`, adds nine tools that take a picture of the page, read
+  its console and network logs, press keys, answer page boxes, change screen
+  size, switch tabs, run several steps at once, run a short script on a
+  localhost page, and start a project's dev server on 127.0.0.1
+  (`browser-pane/dev_server`). The skill is offered only in a chat open in GAIA
+  desktop with the pane, and its tools join the list only once it loads, so the
+  registered tool count stays 105. `browser-pane/browser_eval` asks every time
+  and shows the whole script; the others ask before a site not yet approved, a
+  control that may not be undoable, or starting a server. Full access does not
+  skip the script or a new server: a person still approves them, and a run with
+  nobody to ask refuses them.
+
+### Fixed
+
+- A reply that goes quiet partway through is requested again, up to twice,
+  instead of ending the turn; the work done so far is kept either way.
+- A file a script wrote and the agent then showed whole with `cat` counts as
+  read back. Before, the answer still carried "has not been read back
+  completely" and the turn was marked unfinished.
+- A cloud model that spends a whole reply reasoning and returns nothing is
+  asked for its lowest reasoning level on the next request, so the turn moves
+  on; after a second such reply in one turn, that level holds for the rest of
+  the turn. A turn now ends on its third cut-off reply in a row, not its third
+  overall.
+- In a `gaia -p` run the agent is told nobody can answer questions, so it
+  settles an open choice itself and says what it assumed instead of ending on
+  an offer to change it later.
+- `run_python` runs a saved script by `path` (with optional `args`), so a
+  script is written once, fixed with `edit_file` and run again instead of
+  being typed out for every run. The call is checked and approved exactly as
+  `execute_python_file` is. Every Python result now says the interpreter is
+  new for that call, a `NameError` adds that each call starts fresh, and a
+  failed run says how to fix and re-run it without sending the code again.
+- `read_file` reads more without a detour. A .pptx comes back as slide text
+  with speaker notes. A workbook too long to read in full comes back as each
+  sheet's size and first rows, with how to read a range, instead of an error.
+  An .html file comes back as its text (`raw=true` for the markup).
+  `start_line` with `limit` reads that many lines, and a `start_line` of 0 is
+  the first line. When a loaded skill has a tool for the file's type, the
+  result names it before `index_document`.
+- A Python that `run_shell_command` starts reads and prints UTF-8, as
+  `run_python` already did, unless the command or the environment sets an
+  encoding itself.
+- `run_python` no longer drops long output without saying so. Output past
+  8,000 characters used to be cut silently, so a scan's later hits never
+  reached the agent. It now gets the start and end, is told how much was left
+  out, and can read the rest, as it already could for a script run from a file.
+
+## [0.3.6]
+
+Released with GAIA 0.26.0, and requires the `gaia` Python CLI 0.26.0+ on `PATH`.
+
+- **A terminal UI chat follows Settings too.** Its one long-lived agent now
+  rebuilds before a message when the model server or an MCP connector changed,
+  keeping its transcript and what the session set, as Agent UI chats do.
+- **Skills added or removed reach open chats.** The skill list in an agent's
+  prompt came from a cached scan, so a skill added in Settings › Skills was
+  missing from chats already open, and a removed one stayed listed. Each turn
+  now checks the skill folders and rebuilds the list only when they changed,
+  in the Agent UI and the terminal UI.
+- **A model server chosen in Settings reaches open chats.** A session's model
+  client kept the Lemonade Server it was built on, so after switching between
+  GAIA's own and yours an open chat kept asking the old one, or waited for
+  GAIA's stopped server to come back. A session now rebuilds its agent on its
+  next turn when the chosen server changed, keeping the conversation.
+- **An MCP connector changed in Settings reaches open chats.** A session's
+  agent registered its MCP tools once, so a connector turned off stayed
+  callable and one turned on never appeared until GAIA restarted. A session now
+  rebuilds its agent on its next turn when the server list or activations
+  changed, keeping the conversation and loaded skills. The flagship also checks
+  activation as `installed:gaia` however it is built, as Settings shows it, and
+  offers only the MCP tools it registered itself, not those another session
+  left in the process.
 - **Deleting a conversation can stop its MCP servers (contract 2.30).**
   `DELETE /v1/gaia/sessions/{session_id}` ends a session and closes its agent,
   which stops the servers it started. Until now a session's servers ran until it
@@ -280,6 +435,17 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Changed
 
+- **The standalone email agent is gone; mail is this agent's job.**
+  `@amd-gaia/agent-email` and `gaia-agent-email` are removed, along with
+  `gaia email`. This agent reads Gmail or Outlook through its eight read-only
+  mail tools and the `inbox-triage` skill, and drafts and sends through the
+  `send-email` skill, with the Google or Microsoft connector. Organizing,
+  undo, briefings and autonomous runs went with the old agent. See the Email
+  section in the README.
+  On upgrade GAIA removes the old agent's install folder when it is provably
+  that install, clears its leftover connector state, and names any
+  scheduled email that will no longer be sent. The old agent's data stays in
+  `~/.gaia/email/`. Installing the `email` agent id is refused.
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,

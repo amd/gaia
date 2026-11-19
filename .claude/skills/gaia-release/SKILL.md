@@ -200,7 +200,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
      excited to announce", "finally", "blazing(-fast)", "game-changer", "seamless",
      "powerful", "unlock", "Here's the good stuff", "makes X effortless", "no more
      crashes", invented benchmarks.
-   - **Order by what users run.** Agents and commands first (`gaia hub`, `gaia email`, …);
+   - **Order by what users run.** Agents and commands first (`gaia-tui`, `gaia slack`, …);
      SDK, CI, and refactor work last, or omitted when it has no user-visible effect.
    - **Word budget — a cap, not a target.** **≤ 350 words** for a patch, **≤ 600** for a
      minor/major, measured from the top down to the first of `## Bug Fixes` / `## Known
@@ -213,14 +213,14 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    **Example — one highlight:**
 
    > **Bad** (prose block, promotional, three sentences where one works):
-   > ### Triage your inbox from the terminal — `gaia email`
-   > Point GAIA at your inbox and it sorts the noise from what needs you: drafts
-   > replies to routine mail, flags what's urgent, leaves the rest. Runs locally, so
-   > your mail never leaves your machine. Try it: `gaia email`.
+   > ### Talk to GAIA from Slack — `gaia slack`
+   > Bring GAIA into your workspace and it answers right where your team already
+   > talks. No more switching apps to ask a question — just message it and the
+   > answer appears in Slack. Try it: `gaia slack setup`.
 
    > **Good** (one bullet, plain, factual):
-   > - **Triage your inbox from the terminal** — `gaia email` sorts mail, drafts replies to
-   >   routine messages, and flags what needs you. Runs locally. (PR [#1234](https://github.com/amd/gaia/pull/1234))
+   > - **Talk to GAIA from Slack** — `gaia slack setup` connects a workspace so you can
+   >   message GAIA from Slack. (PR [#1234](https://github.com/amd/gaia/pull/1234))
 
 4. **Add the release page to [docs/docs.json](../../../docs/docs.json):** add `releases/v<version>` to the Releases tab. Step 5 stamps the navbar label.
 
@@ -379,7 +379,7 @@ Do not poll, do not auto-merge. Do not push the tag from the un-merged branch.
    ```
    If it fails, release the flagship in this order. Skipping step 2 deadlocks: `release_agent_gaia.yml` refuses to run until the Terminal UI (`terminal-hub`) version the lock pins is on the hub, and it normally publishes only on the final tag, which this gate blocks.
    1. Bump the flagship in a PR: edit `__version__` in `hub/agents/gaia/python/gaia_agent/__init__.py`, run `python util/release_versions.py --stamp`, add a `hub/agents/gaia/npm/CHANGELOG.md` entry. (`hub/agents/gaia/python/packaging/stamp_version.py` writes the same flagship fields and still works; `release_agent_gaia.yml` runs its `--check`.)
-   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its Windows-setup leg fails because there is no GitHub release or new flagship yet, and its installer-attach job finds no GitHub release, warns, and attaches nothing; neither publishes anything. **Publish terminal-hub** going green is what this step needs. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
+   2. **Publish the Terminal UI (`terminal-hub`) first.** Dispatch **Publish Hub Components (R2)** (`release_components.yml`) on main with `dry_run` unchecked; a dispatch skips this gate. Its Windows-setup leg is skipped because there is no GitHub release yet, and its installer-attach job finds no GitHub release, warns, and attaches nothing; neither publishes anything. **Publish terminal-hub** going green is what this step needs. Skip this if `hub/components/terminal-hub/gaia-agent.yaml`'s version is already on the hub.
    3. Tag `agent-pkg-gaia-v<flagship-version>` on the merged commit and approve `release_agent_gaia.yml`.
    4. Merge the PR the release opens once it publishes: its `pin-lock` job commits the regenerated `binaries.lock.json` (real hashes) to branch `flagship-lock/v<flagship-version>` and opens `chore(release): pin flagship agent <version>'s published hashes`. It is a bot PR, so CI only runs when the merge queue picks it up. Never hand-edit the hashes; if the PR is missing, re-run that release run's `pin-lock` job, which never opens a second PR and does nothing when main already matches. Then re-run Phase 3 on the merged commit. Code the binary is frozen from must not change between the agent tag and the core tag.
 

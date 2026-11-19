@@ -242,6 +242,12 @@ def test_the_daemon_survives_reset_connections():
     _assert_survives_resets(app, "/daemon/v1/status")
 
 
+def test_the_api_server_survives_reset_connections():
+    from gaia.api.openai_server import app
+
+    _assert_survives_resets(app, "/health")
+
+
 def test_the_agent_sidecar_survives_reset_connections(monkeypatch):
     pytest.importorskip("gaia_agent")
     from gaia_agent import caller_auth

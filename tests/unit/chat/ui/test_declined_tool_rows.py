@@ -47,6 +47,39 @@ def test_an_unanswered_prompt_is_not_a_decline():
     assert _denial(event) == "timedOut"
 
 
+def test_a_call_gaias_own_rule_stopped_is_not_a_decline():
+    """Nobody was asked, so "You declined a step" would be untrue."""
+    event = _result_event({**DENIED, "denied_by": "policy"})
+
+    assert event["denied_by"] == "policy"
+    assert _denial(event) == "refused"
+    assert "denied_by" in SUMMARY_VIEW_KEYS
+
+
+def test_a_failed_winget_step_says_what_its_exit_code_means():
+    """winget prints to stdout, so the row used to read "Command failed (exit N)"."""
+    event = _result_event(
+        {
+            "status": "success",
+            "command": "winget install --id Git.Git",
+            "stdout": "An unexpected error occurred",
+            "stderr": "",
+            "return_code": -1978335138,
+            "exit_code_meaning": "winget could not verify the source's certificate.",
+        }
+    )
+
+    assert event["summary"] == (
+        "winget could not verify the source's certificate. (exit -1978335138)"
+    )
+
+
+def test_a_saved_step_keeps_its_refused_flag():
+    step = AgentStepResponse(id=1, type="tool", label="Using run_python", refused=True)
+
+    assert step.model_dump()["refused"] is True
+
+
 def test_a_call_gaia_declined_unasked_is_not_the_users_decline():
     event = _result_event({**DENIED, "declined_by": "agent"})
 
@@ -65,6 +98,13 @@ def test_an_unknown_decliner_is_not_passed_on():
     "event, denial",
     [
         ({"type": "tool_result", "data": {"status": "denied"}}, "declined"),
+        (
+            {
+                "type": "tool_result",
+                "data": {"status": "denied", "denied_by": "policy"},
+            },
+            "refused",
+        ),
         (
             {"type": "tool_result", "data": {"status": "denied", "timed_out": True}},
             "timedOut",

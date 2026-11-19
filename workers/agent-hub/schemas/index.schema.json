@@ -204,7 +204,7 @@
         },
         "npm_package": {
           "type": "string",
-          "description": "npm package name when the agent is distributed via npm (e.g. \"@amd-gaia/agent-email\"); absent otherwise."
+          "description": "npm package name when the agent is distributed via npm (e.g. \"@amd-gaia/gaia\"); absent otherwise."
         },
         "playground_url": {
           "type": "string",
@@ -315,7 +315,7 @@
           "properties": {
             "filename": {
               "type": "string",
-              "description": "Zip artifact filename under the version dir, e.g. \"agent-email-0.2.1.zip\"."
+              "description": "Zip artifact filename under the version dir, e.g. \"agent-gaia-0.2.1.zip\"."
             },
             "size_bytes": { "type": "integer", "minimum": 0 },
             "files": {

@@ -191,6 +191,8 @@ def test_a_prompt_nothing_could_show_records_no_refusal(_isolated, reason):
     )
 
     assert denied["status"] == "denied"
+    # The Agent UI reads this so it does not say "You declined".
+    assert denied["denied_by"] == "policy"
     assert "hint" not in denied
     assert not agent._denied_effects
     assert written["status"] == "success"
