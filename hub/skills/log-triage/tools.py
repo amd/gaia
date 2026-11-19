@@ -77,6 +77,8 @@ MAX_ENTITY_KINDS = 300
 #: Entity lists up to this long ride inline in the compact result.
 OUT_ENTITY_LIST = 150
 MAX_LINE_CHARS = 8_192
+#: The rest of a longer line is read in chunks of this size and dropped.
+READ_CHUNK_CHARS = 64 * 1024
 MAX_MESSAGE_CHARS = 1_500
 TARGET_BUCKETS = 720
 MAX_BUCKETS = 3_000
@@ -1443,6 +1445,28 @@ def _open_text(path: Path) -> io.TextIOBase:
     return io.TextIOWrapper(raw, encoding=encoding, errors="replace", newline=None)
 
 
+class _BudgetSpent(Exception):
+    """The time budget ran out while a single over-long line was skipped."""
+
+
+def _read_line(f: io.TextIOBase, deadline: float) -> Tuple[str, bool]:
+    """The next line cut at MAX_LINE_CHARS, and whether it was longer.
+
+    ``readline`` gets a limit, so a file with no line breaks (a one-line JSON
+    export, a decompression bomb) is never held in memory whole. The rest of
+    an over-long line is read in chunks and dropped.
+    """
+    raw = f.readline(MAX_LINE_CHARS + 1)
+    if len(raw) <= MAX_LINE_CHARS or raw.endswith("\n"):
+        return raw, False
+    while True:
+        more = f.readline(READ_CHUNK_CHARS)
+        if not more or more.endswith("\n"):
+            return raw[:MAX_LINE_CHARS], True
+        if time.monotonic() > deadline:
+            raise _BudgetSpent()
+
+
 def _is_binary(path: Path) -> bool:
     if path.suffix.lower() == ".gz":
         skill_context.check_read(path)
@@ -1462,10 +1486,12 @@ def _sample_lines(path: Path) -> List[str]:
     lines: List[str] = []
     with _open_text(path) as f:
         for _ in range(SAMPLE_HEAD_LINES):
-            line = f.readline()
+            line = f.readline(MAX_LINE_CHARS + 1)
             if not line:
                 return [ln.rstrip("\r\n") for ln in lines]
-            lines.append(line)
+            lines.append(line[:MAX_LINE_CHARS])
+            if len(line) > MAX_LINE_CHARS and not line.endswith("\n"):
+                break  # an over-long line: the sample stops here
     if path.suffix.lower() == ".gz":
         return [ln.rstrip("\r\n") for ln in lines]
     size = path.stat().st_size
@@ -1706,6 +1732,7 @@ class FileReport:
     lines: int = 0
     blank: int = 0
     header: int = 0
+    long_lines: int = 0
     entries: int = 0
     continuation: int = 0
     unparsed: int = 0
@@ -1921,20 +1948,27 @@ class Analyzer:
             return
         plain = ctx.formats == ["plain"]
         pending: Optional[Tuple[Rec, int, str]] = None
+        deadline = self.started + self.opt.time_budget_s
+        n = 0
         try:
             with _open_text(path) as f:
-                for n, raw in enumerate(f, 1):
+                while True:
+                    try:
+                        raw, cut = _read_line(f, deadline)
+                    except _BudgetSpent:
+                        report.truncated_at_line = n + 1
+                        self.out_of_time = True
+                        break
+                    if not raw:
+                        break
+                    n += 1
                     report.lines = n
-                    if (
-                        n % 4096 == 0
-                        and time.monotonic() - self.started > self.opt.time_budget_s
-                    ):
+                    report.long_lines += cut
+                    if n % 4096 == 0 and time.monotonic() > deadline:
                         report.truncated_at_line = n
                         self.out_of_time = True
                         break
                     line = raw.rstrip("\r\n")
-                    if len(line) > MAX_LINE_CHARS:
-                        line = line[:MAX_LINE_CHARS]
                     if not line.strip():
                         report.blank += 1
                         continue
@@ -3073,6 +3107,17 @@ class TriageResult:
                     "timestamp; they are counted but not ranked by time. Pass "
                     "timestamp_regex if the lines do carry one."
                 )
+            if f.long_lines:
+                out.append(
+                    f"{f.name}: {f.long_lines} line(s) longer than {MAX_LINE_CHARS} "
+                    "characters were cut to that length"
+                    + (
+                        "; the file is one long line (a JSON array export?), so "
+                        "convert it to one record per line."
+                        if f.lines == 1
+                        else "."
+                    )
+                )
             if f.truncated_at_line:
                 out.append(
                     f"{f.name}: time budget ran out at line {f.truncated_at_line}; the rest "
@@ -3409,6 +3454,8 @@ class TriageResult:
             }
             if f.header:
                 row["header_lines"] = f.header
+            if f.long_lines:
+                row["long_lines_cut"] = f.long_lines
             if f.no_timestamp:
                 row["no_timestamp"] = f.no_timestamp
                 # What the lines look like, to fit timestamp_regex to.

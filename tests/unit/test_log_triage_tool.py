@@ -864,6 +864,48 @@ def test_large_generated_file_is_fully_read_in_bounded_structures(tmp_path):
     assert len(json.dumps(res.compact(), default=str)) < 12_000
 
 
+def test_a_file_with_no_line_breaks_is_never_read_whole(tmp_path, monkeypatch):
+    """A one-line export is cut at the line cap, not loaded into memory."""
+    path = tmp_path / "export.json"
+    record = '{"time": "2025-03-04T10:00:00Z", "level": "error", "msg": "boom"}'
+    path.write_text("[" + ",".join([record] * 60_000) + "]", encoding="utf-8")
+    assert path.stat().st_size > 3_000_000
+    largest = 0
+    real_open = lt._open_text
+
+    def open_and_watch(p):
+        f = real_open(p)
+        real_readline = f.readline
+
+        def readline(size=-1):
+            nonlocal largest
+            assert size is not None and size > 0, "an unbounded readline"
+            text = real_readline(size)
+            largest = max(largest, len(text))
+            return text
+
+        f.readline = readline
+        return f
+
+    monkeypatch.setattr(lt, "_open_text", open_and_watch)
+    res = lt.triage([str(path)])
+    f = res.an.files[0]
+    assert largest <= lt.READ_CHUNK_CHARS
+    assert (f.lines, f.entries, f.long_lines) == (1, 1, 1)
+    assert res.checks["ok"]
+    assert any("one long line" in w for w in res.warnings)
+    assert res.compact()["coverage"]["files"][0]["long_lines_cut"] == 1
+
+
+def test_an_over_long_line_is_cut_and_the_next_line_still_counts(tmp_path):
+    lines = [f"{_iso(T0 + i)} h-1 INFO ok {i}" for i in range(10)]
+    lines[4] = f"{_iso(T0 + 4)} h-1 ERROR dump " + "x" * 200_000
+    res, f = _formats(tmp_path, "a.log", lines)
+    assert (f.lines, f.entries, f.unparsed, f.long_lines) == (10, 10, 0, 1)
+    assert res.checks["ok"]
+    assert any("1 line(s) longer than 8192" in w for w in res.warnings)
+
+
 # ---------------------------------------------------------------------------
 # The tool: scope, output and registration
 # ---------------------------------------------------------------------------
