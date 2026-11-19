@@ -10,7 +10,7 @@ import { SettingsDisclosure } from './SettingsDisclosure';
 import { UpdatesSection } from './UpdatesSection';
 import { DEFAULT_CUSTOM, PALETTES, type CustomColors, type PaletteId } from '../../utils/palette';
 import { formatShortcut } from '../../utils/platform';
-import { browserPaneApi } from '../../stores/browserPaneStore';
+import { visibleShortcuts } from '../ShortcutsDialog';
 import { LOCALES, localeOptionLabel, type MessageKey } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
 
@@ -32,19 +32,6 @@ const PALETTE_NAME: Record<PaletteId, MessageKey> = {
     dusk: 'palette.dusk',
     custom: 'settings.colors.custom',
 };
-
-const SHORTCUTS: Array<[string, MessageKey]> = [
-    ['Enter', 'settings.shortcut.send'],
-    ['Shift+Enter', 'settings.shortcut.newLine'],
-    ['Esc', 'settings.shortcut.stop'],
-    ['Mod+Shift+O', 'settings.shortcut.newChat'],
-    ['Mod+K', 'settings.shortcut.search'],
-    ['Mod+B', 'settings.shortcut.sidebar'],
-    ['Mod+,', 'settings.shortcut.settings'],
-];
-
-/** The desktop app also has the browser pane. */
-const DESKTOP_SHORTCUTS: Array<[string, MessageKey]> = [['Mod+Shift+B', 'settings.shortcut.browserPane']];
 
 export function GeneralSettings() {
     const t = useT();
@@ -163,10 +150,10 @@ export function GeneralSettings() {
             <UpdatesSection />
             <SettingsDisclosure title={t('settings.shortcuts')}>
                 <dl className="shortcut-list">
-                    {[...SHORTCUTS, ...(browserPaneApi() ? DESKTOP_SHORTCUTS : [])].map(([keys, what]) => (
-                        <div key={keys} className="shortcut-row">
+                    {visibleShortcuts().map(({ label, keys }) => (
+                        <div key={label} className="shortcut-row">
                             <dt><kbd>{formatShortcut(keys)}</kbd></dt>
-                            <dd>{t(what)}</dd>
+                            <dd>{t(label)}</dd>
                         </div>
                     ))}
                 </dl>

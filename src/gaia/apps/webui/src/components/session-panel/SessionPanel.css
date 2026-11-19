@@ -105,7 +105,7 @@
 .sp-title {
     margin: 0;
     font-size: var(--sp-fs-title);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-secondary);
 }
 
@@ -126,7 +126,7 @@
     padding: var(--sp-space-3) var(--sp-space-1) 0;
     border-top: 1px solid var(--border-light);
     font-size: var(--sp-fs-sm);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-muted);
 }
 
@@ -139,7 +139,7 @@
     width: 100%;
     padding: var(--sp-space-3) var(--sp-space-1) var(--sp-space-2);
     font: inherit;
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-primary);
     text-align: start;
     border-radius: var(--radius-sm);
@@ -261,7 +261,9 @@
 
 .sp-item-name {
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
+    animation: fade-cut-inline both;
+    animation-timeline: scroll(self inline);
     white-space: nowrap;
 }
 
@@ -283,7 +285,7 @@
 .sp-tool-group-title {
     margin: 0 0 var(--sp-space-1);
     font-size: var(--sp-fs-sm);
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .sp-tool {

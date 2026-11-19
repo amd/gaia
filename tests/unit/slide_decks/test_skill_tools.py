@@ -244,9 +244,12 @@ def test_without_a_count_in_the_request_the_model_chooses(tools, tmp_path):
 
 
 def test_the_request_is_the_users_message(tools):
-    import tools as skill_tools  # the skill's tools.py, on sys.path via conftest
+    import sys
 
-    skill, _fns, _r = tools
+    skill, fns, _r = tools
+    # The module the loader gave this skill's tools.py: never a bare `tools` import,
+    # which another skill's tools.py on sys.path could answer.
+    skill_tools = sys.modules[fns["build_deck"].__module__]
     with bind(_Asking("one slide please"), skill) as call:
         assert skill_tools._request(call) == "one slide please"
     with bind(_Host(), skill) as call:

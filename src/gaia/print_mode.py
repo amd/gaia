@@ -24,6 +24,10 @@ log = get_logger(__name__)
 
 OUTPUT_FORMATS = ("text", "json")
 
+# How long a turn told to stop at its time limit gets to wind down before it is
+# abandoned: a model call already sent does not hear the stop.
+HARD_STOP_GRACE_S = 5.0
+
 #: Tools ``--no-web`` withholds: GAIA's own tools that search, read or download
 #: from the internet, or install from it. The shell and MCP tools stay on.
 WEB_TOOL_PATTERNS = (
@@ -544,6 +548,7 @@ def _run_turn(
         agent, disallowed_tools, no_web=no_web, no_skills=no_skills
     )
     configure_console(agent.console, skip_permissions, full_access)
+    agent.no_one_to_ask = True  # one shot: a question would go unanswered
     if full_access:
         log.warning("Full access ENABLED at launch (gaia -p): shell gates off")
         print(
@@ -555,14 +560,21 @@ def _run_turn(
 
     timer = _arm_time_limit(agent, time_limit) if time_limit else None
     started = time.time()
+    abandoned = False
     try:
-        result = agent.process_query(text + NO_WEB_NOTE if no_web else text) or {}
+        query = text + NO_WEB_NOTE if no_web else text
+        if time_limit:
+            result, abandoned = _query_within_limit(agent, query, time_limit)
+        else:
+            result = agent.process_query(query) or {}
     finally:
         if timer is not None:
             timer.cancel()
-        from gaia.agents.base.memory import drain_memory_extraction
+        # An abandoned turn still holds the model; its memory pass would wait on it.
+        if not abandoned:
+            from gaia.agents.base.memory import drain_memory_extraction
 
-        drain_memory_extraction(agent)
+            drain_memory_extraction(agent)
     record = summarize(
         result, agent.model_id or model, time.time() - started, verbose=verbose
     )
@@ -603,13 +615,47 @@ def restrict_tools(
     return withheld
 
 
+def _query_within_limit(
+    agent: Any, text: str, seconds: int
+) -> "tuple[Dict[str, Any], bool]":
+    """``(result, abandoned)`` for a turn given *seconds*.
+
+    A turn still running :data:`HARD_STOP_GRACE_S` past the limit is left to
+    end with the process, and its result is built from what it had so far.
+    """
+    outcome: Dict[str, Any] = {}
+
+    def _turn() -> None:
+        try:
+            outcome["result"] = agent.process_query(text) or {}
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=_turn, name="gaia-p-turn", daemon=True)
+    worker.start()
+    worker.join(seconds + HARD_STOP_GRACE_S)
+    if worker.is_alive():
+        log.warning("Abandoning the turn %ss past its time limit", HARD_STOP_GRACE_S)
+        return (
+            agent.time_limit_abandoned_result(
+                f"Stopped at the {seconds}-second time limit (--time-limit) "
+                "while a model call was still running."
+            ),
+            True,
+        )
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["result"], False
+
+
 def _arm_time_limit(agent: Any, seconds: int) -> threading.Timer:
     """Give the turn *seconds*: the agent wraps up before, a stop enforces it.
 
     The agent warns the model and stops its loop short of the limit so the
     requested files and the answer still get written. A turn still busy at the
-    limit is stopped: a shell or Python run ends there, a model call already
-    sent is waited for, and the turn ends at its next step.
+    limit is stopped: a shell or Python run ends there and the turn ends at
+    its next step. A model call already sent is not waited for past a short
+    grace (:func:`_query_within_limit`).
     """
     from gaia.agents.base.agent import TurnCancel
 

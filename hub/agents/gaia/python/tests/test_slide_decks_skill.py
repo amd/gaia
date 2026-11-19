@@ -360,3 +360,24 @@ def test_skill_folder_ships_its_assets():
     )
     for theme in ("light", "dark", "minimal"):
         assert (root / "templates" / f"{theme}.pptx").is_file()
+
+
+def test_auto_load_trusts_the_bundled_skill_and_registers_its_declared_tools(
+    flagship, gaia_home
+):
+    """It ships with the agent, so a deck request loads it before the first model call."""
+    agent = flagship
+    skill = agent.skill_manager.load(SKILL)
+    assert skill.root == ROOT_AGENT_BUNDLED
+    assert agent._autoload_distrust(skill) == ""
+    # Earlier tests unloaded it on this shared agent, which auto-load respects.
+    for dropped in ("_unloaded_skills", "_autoloaded_skills"):
+        agent._session_skill_set(dropped).discard(SKILL)
+    before = set(agent._tools_registry)
+    try:
+        loaded, left = agent._autoload_skills([SKILL], "Make a deck on our Q3 results")
+        assert (loaded, left) == ([SKILL], [])
+        assert set(agent._tools_registry) - before == TOOLS
+        assert {f"{SKILL}/{t.name}" for t in skill.gaia.tools} == TOOLS
+    finally:
+        agent.unload_skill(SKILL)

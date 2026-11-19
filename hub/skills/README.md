@@ -13,7 +13,8 @@ generation, and skills that ship their own tools: `rss-digest`; `calendar` and
 drives GAIA desktop's browser pane; and `guides` and
 `calculators`, whose tools draw a card in the client; and `slide-decks`,
 which builds and checks PowerPoint files) or a working practice
-(checking a report against its sources, log triage, action tracking). They are meant to be copied and edited,
+(checking a report against its sources, log triage with its own
+`triage_logs` tool, action tracking). They are meant to be copied and edited,
 not used verbatim — see the
 [starter skills guide](https://amd-gaia.ai/docs/guides/starter-skills).
 
@@ -26,6 +27,7 @@ hub/skills/
 └── <name>/
     ├── SKILL.md     # required — YAML front matter + the procedure body
     ├── tools.py     # optional — Python tools the skill registers
+    ├── <module>/    # optional — modules tools.py imports (see log-triage)
     └── scripts/     # optional — anything else it ships
 ```
 

@@ -576,10 +576,11 @@ error. To run the chat model in the cloud instead, see
   </Accordion>
 
   <Accordion title="A chat model fails with 'llama-server failed to start'" icon="triangle-exclamation">
-    llama.cpp exited while loading the model. GAIA starts a llama.cpp chat model with two
-    slots over one shared KV cache (`--parallel 2 --kv-unified --cache-ram 0
-    --slot-prompt-similarity 0.5`), so side work such as titles and memory doesn't evict the
-    conversation. Some models and llama.cpp builds can't start with those flags: Gemma 4 with
+    llama.cpp exited while loading the model. GAIA starts a llama.cpp chat model with three
+    slots over one shared KV cache (`--parallel 3 --kv-unified --cache-ram 0
+    --slot-prompt-similarity 0.5 --ctx-checkpoints 16`), so side work such as titles and
+    memory doesn't evict the conversation, and a long chat doesn't keep growing the model
+    server's memory. Some models and llama.cpp builds can't start with those flags: Gemma 4 with
     an MTP draft model aborts on llama.cpp b12020, for example
     ([#6221](https://github.com/amd/gaia/issues/6221)).
 
