@@ -356,7 +356,18 @@ class TestSlowButAliveEmbeddedServer:
             for kind in ("busy", "idle")
         }
         try:
-            time.sleep(3)  # let the children start
+            # The idle child is idle only once its interpreter has started,
+            # which takes seconds on a loaded box.
+            deadline = time.monotonic() + 60
+            settled = None
+            while time.monotonic() < deadline:
+                reading = emb.backend_activity(trees["idle"].pid)
+                if reading and reading == settled:
+                    break
+                settled = reading
+                time.sleep(1)
+            else:
+                pytest.fail(f"the idle child never settled: {settled}")
             before = {k: emb.backend_activity(t.pid) for k, t in trees.items()}
             time.sleep(1)
             after = {k: emb.backend_activity(t.pid) for k, t in trees.items()}
