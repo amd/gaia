@@ -42,6 +42,8 @@ everything for nearly any change.
 - Code run in a child process (``python -m gaia.daemon``), by a test or by
   shipped code, counts with all its imports, since coverage can't see inside.
   A module named only in a docstring is not run that way: docstrings never run.
+  Shipped code names a child only by a whole module name, never by part of a
+  URL, a file name (``gaia.log``) or a logger name (``getLogger("gaia.llm")``).
 - A test the map never ran, or source file it has no entry for (added since
   the nightly build), follows imports inside functions too.
 
@@ -336,6 +338,8 @@ class _Imports(ast.NodeVisitor):
         self.strings: List[str] = []
         # Never executed, so they name modules but never a child process.
         self.docstrings: List[str] = []
+        # First arguments of getLogger(): logger names, not child processes.
+        self.logger_names: List[str] = []
         # Pieces of a joined path: "SKILL.md" there is not a bare file name.
         self.path_pieces: List[str] = []
         self._joined: Set[int] = set()
@@ -345,6 +349,7 @@ class _Imports(ast.NodeVisitor):
         # Inner links of a `/` chain, already read with the whole chain.
         self._chained: Set[int] = set()
         self._docstring_ids: Set[int] = set()
+        self._logger_ids: Set[int] = set()
         self._depth = 0
 
     def _mark_docstring(self, node: ast.AST) -> None:
@@ -395,6 +400,8 @@ class _Imports(ast.NodeVisitor):
                 self.path_pieces.append(node.value)
             elif id(node) in self._docstring_ids:
                 self.docstrings.append(node.value)
+            elif id(node) in self._logger_ids:
+                self.logger_names.append(node.value)
             else:
                 self.strings.append(node.value)
 
@@ -437,7 +444,27 @@ class _Imports(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         if _joins_a_path(node):
             self._add_path(node.args)
+        name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+        if name == "getLogger" and node.args and isinstance(node.args[0], ast.Constant):
+            self._logger_ids.add(id(node.args[0]))
         self.generic_visit(node)
+
+
+def _names_a_child(
+    text: str, match: "re.Match[str]", module_files: Dict[str, str]
+) -> bool:
+    """Whether a dotted name in shipped code's string can be a module it runs.
+
+    Only a whole module name counts, so a file name ("gaia.log") or a module
+    path with an attribute is not one, and neither is part of a URL or a host
+    ("amd-gaia.ai").
+    """
+    if match.group() not in module_files:
+        return False
+    if text[match.start() - 1 : match.start()] in ("-", ".", "/", "@"):
+        return False
+    start = max(text.rfind(c, 0, match.start()) for c in " \t\n'\"") + 1
+    return "://" not in text[start : match.end()]
 
 
 def _joins_a_path(node: ast.AST) -> bool:
@@ -609,15 +636,18 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
             for text in found.folder_strings:
                 folders = folder_targets([p for p in _PATH_SPLIT_RE.split(text) if p])
                 graph.folder_reads[path].update(folders)
-        texts = [(s, False) for s in found.strings]
-        texts += [(s, True) for s in found.docstrings]
-        for text, docstring in texts:
+        texts = [(s, "code") for s in found.strings]
+        texts += [(s, "docstring") for s in found.docstrings]
+        texts += [(s, "logger") for s in found.logger_names]
+        for text, kind in texts:
             value = text.strip()
-            if package_code and spawns and not docstring and "." in value:
-                for name in embedded.findall(value):
-                    target = resolve(name)
-                    if target and module_files[target] != path:
-                        graph.spawn_deps[path].add(module_files[target])
+            if package_code and spawns and kind == "code":
+                for match in embedded.finditer(value):
+                    if not _names_a_child(value, match, module_files):
+                        continue
+                    target = module_files[match.group()]
+                    if target != path:
+                        graph.spawn_deps[path].add(target)
             if not package_code:
                 head = value.split(".")[0]
                 named: List[str] = []
@@ -630,7 +660,7 @@ def build_graph(repo: Path = REPO_ROOT, files: Optional[List[str]] = None) -> Gr
                 for name in named:
                     link(path, name, graph.deps, parent_only=True)
                     module = resolve(name)
-                    if spawns and module and not docstring:
+                    if spawns and module and kind != "docstring":
                         graph.subprocess_targets[path].add(module_files[module])
             pieces = [p for p in _PATH_SPLIT_RE.split(value) if p]
             if not pieces:

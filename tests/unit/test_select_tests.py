@@ -39,6 +39,14 @@ FILES = {
         "    subprocess.Popen([sys.executable, '-m', 'gaia.daemon_server'])\n"
     ),
     "src/gaia/daemon_server.py": "def main():\n    from gaia.core import consts\n",
+    # Each spawns something, and names a module in a string it never runs.
+    "src/gaia/spawn_prefix.py": "import subprocess\nLEVELS = 'gaia.core.levels'\n",
+    "src/gaia/spawn_url.py": (
+        "import subprocess\nDOCS = 'https://example.com/?m=gaia.core.consts'\n"
+    ),
+    "src/gaia/spawn_logger.py": (
+        "import logging, subprocess\nLOG = logging.getLogger('gaia.core.home')\n"
+    ),
     # Spawns something, and names the server only where nothing runs it.
     "src/gaia/daemon_hint.py": (
         '"""Pairs with ``python -m gaia.daemon_server``."""\n'
@@ -375,6 +383,19 @@ def test_a_module_named_only_in_a_docstring_is_not_a_spawned_child(graph):
     hit = _selected(graph, "src/gaia/daemon_server.py", coverage=coverage)
     assert "tests/unit/test_daemon_start.py" in hit
     assert "tests/unit/test_unrelated.py" not in hit
+
+
+@pytest.mark.parametrize(
+    "path, child",
+    [
+        ("src/gaia/spawn_prefix.py", None),
+        ("src/gaia/spawn_url.py", None),
+        ("src/gaia/spawn_logger.py", None),
+        ("src/gaia/daemon_client.py", "src/gaia/daemon_server.py"),
+    ],
+)
+def test_only_a_whole_module_name_in_running_code_names_a_child(graph, path, child):
+    assert graph.spawn_deps.get(path, set()) == ({child} if child else set())
 
 
 def test_a_mapped_test_that_reaches_nothing_stays_out(graph):
