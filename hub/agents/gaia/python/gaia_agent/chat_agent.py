@@ -1621,13 +1621,16 @@ class ChatAgent(
     def _standing_skill_tools(self) -> List[str]:
         """Tools that join the list for the skills in use, without a jump.
 
-        A loaded skill's own tools are registered whether or not its body renders
-        this turn, and an undeclared one cannot be called.
+        Every loaded skill counts, whether or not its body renders this turn:
+        its instructions name these tools, and an undeclared one cannot be
+        called.
         """
         tools = self._loaded_skill_tools()
         for skill in getattr(self, "loaded_skills", {}).values():
+            # getattr: test stubs stand in for a skill with a bare namespace.
+            tools.extend(getattr(getattr(skill, "gaia", None), "tools_required", ()))
             tools.extend(skill.namespaced_tool_name(tool) for tool in skill.tool_names)
-        return tools
+        return list(dict.fromkeys(tools))
 
     def _select_tools_for_turn(self, user_input: str) -> Optional[List[str]]:
         """Return this turn's tool list, or ``None`` for every tool.

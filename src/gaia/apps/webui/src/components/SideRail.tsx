@@ -11,8 +11,8 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import {
-    AlertTriangle, ChevronRight, Cloud, ExternalLink, FileText, FolderOpen,
-    Globe, Monitor,
+    AlertTriangle, Cloud, ExternalLink, FileText, FolderOpen,
+    Globe,
 } from 'lucide-react';
 import * as api from '../services/api';
 import { displayModelName, useModelNames } from '../stores/modelStore';
@@ -85,15 +85,12 @@ export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
     const t = useT();
     const state = railState(messages, busy);
     if (!state) return null;
+    // A running turn shows nothing here: the previous answer's facts are not its own.
     const summary = state.kind === 'turn' ? state.turn.turnSummary ?? null : null;
-    const noLiveData = summary ? liveDataFailed(summary) : false;
+    if (!summary) return null;
+    const noLiveData = liveDataFailed(summary);
     return (
         <div className="side-rail-body">
-            {!summary && (
-                <p className="side-rail-pending" role="status">
-                    {t('rail.pending')}
-                </p>
-            )}
             {noLiveData && (
                 <div className="side-rail-warn" role="status">
                     <AlertTriangle size={14} aria-hidden="true" />
@@ -123,19 +120,11 @@ export function ThisAnswer({ messages, busy = false }: ThisAnswerProps) {
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
-    const [open, setOpen] = useState(true);
+    // A plain label: the panel section around it is the one thing that collapses.
     return (
         <section className="side-rail-section">
-            <button
-                type="button"
-                className="side-rail-section-head"
-                onClick={() => setOpen(!open)}
-                aria-expanded={open}
-            >
-                <ChevronRight size={12} className={`side-rail-chevron${open ? ' open' : ''}`} aria-hidden="true" />
-                {title}
-            </button>
-            {open && <div className="side-rail-section-body">{children}</div>}
+            <h4 className="side-rail-section-head">{title}</h4>
+            <div className="side-rail-section-body">{children}</div>
         </section>
     );
 }
@@ -288,40 +277,70 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
     );
 }
 
+/** Whether the turn left anything worth a line: a local turn with no sources, files or sites did not. */
+export function turnHasDetails(summary: TurnSummary): boolean {
+    return !!summary.error
+        || liveDataFailed(summary)
+        || (summary.pages ?? []).length > 0
+        || (summary.documents ?? []).length > 0
+        || (summary.files ?? []).length > 0
+        || (summary.sites ?? []).length > 0
+        || summary.model?.remote !== false
+        || summary.cost.kind !== 'local';
+}
+
+/** Where the turn's data went. Only what happened gets a row: no cost for a model on this PC, no sites when none were contacted. */
 function ThisTurnSection({ summary, stopped, alone }: { summary: TurnSummary; stopped: boolean; alone: boolean }) {
     const t = useT();
     useModelNames();
     const { model } = summary;
     const sites = summary.sites ?? [];
     const usedDocs = (summary.documents ?? []).length > 0;
+    const remote = model?.remote === true;
+    const priced = summary.cost.kind !== 'local';
+    if (model && !remote && !usedDocs && sites.length === 0 && !priced) return null;
     const facts = (
         <dl className="side-rail-facts">
-            <dt>{t('rail.model')}</dt>
-            <dd>
-                {model ? (
-                    <span className={`side-rail-where${model.remote ? ' remote' : ''}`}>
-                        {model.remote ? <Cloud size={12} aria-hidden="true" /> : <Monitor size={12} aria-hidden="true" />}
-                        {model.remote ? t('rail.cloudModel', { name: model.provider_name }) : t('rail.thisPc')}
-                    </span>
-                ) : (
-                    <span className="side-rail-where">{t('rail.notReported')}</span>
-                )}
-                {model?.name && <span className="side-rail-meta" title={model.name} dir="ltr">{displayModelName(model.name)}</span>}
-            </dd>
+            {remote && (
+                <>
+                    <dt>{t('rail.model')}</dt>
+                    <dd>
+                        <span className="side-rail-where remote">
+                            <Cloud size={12} aria-hidden="true" />
+                            {t('rail.cloudModel', { name: model.provider_name })}
+                        </span>
+                        {model.name && <span className="side-rail-meta" title={model.name} dir="ltr">{displayModelName(model.name)}</span>}
+                    </dd>
+                </>
+            )}
+            {!model && (
+                <>
+                    <dt>{t('rail.model')}</dt>
+                    <dd><span className="side-rail-where">{t('rail.notReported')}</span></dd>
+                </>
+            )}
             {usedDocs && (
                 <>
                     <dt>{t('rail.documents')}</dt>
                     <dd>
-                        {model?.remote
+                        {remote
                             ? t('rail.docsSent', { provider: model.provider_name })
                             : t(model ? 'rail.docsLocal' : 'rail.docsSearched')}
                     </dd>
                 </>
             )}
-            <dt>{t('rail.websites')}</dt>
-            <dd>{sites.length > 0 ? <span dir="ltr">{sites.join(', ')}</span> : t('rail.noSites')}</dd>
-            <dt>{t('rail.cost')}</dt>
-            <dd>{costText(summary, t, stopped)}</dd>
+            {sites.length > 0 && (
+                <>
+                    <dt>{t('rail.websites')}</dt>
+                    <dd><span dir="ltr">{sites.join(', ')}</span></dd>
+                </>
+            )}
+            {priced && (
+                <>
+                    <dt>{t('rail.cost')}</dt>
+                    <dd>{costText(summary, t, stopped)}</dd>
+                </>
+            )}
         </dl>
     );
     // Alone under "This answer", a second heading only repeats it.
