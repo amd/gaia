@@ -1140,16 +1140,34 @@ _DARWIN_RE = re.compile(
 )
 
 
+def _unlisted_darwin_modules(sources):
+    """The paths, of ``{path: source}``, that branch on macOS but aren't gated."""
+    return sorted(
+        path
+        for path, source in sources.items()
+        if _DARWIN_RE.search(source) and not st.is_os_touching_path(path)
+    )
+
+
+def test_an_unlisted_module_that_branches_on_macos_fails_the_check():
+    sources = {
+        "src/gaia/not_listed_xyz.py": "import sys\nIS_MAC = sys.platform == 'darwin'\n",
+        "src/gaia/daemon/listed.py": "import sys\nIS_MAC = sys.platform == 'darwin'\n",
+        "src/gaia/no_branch.py": "X = 1\n",
+    }
+    assert _unlisted_darwin_modules(sources) == ["src/gaia/not_listed_xyz.py"]
+
+
 def test_every_module_that_branches_on_macos_runs_the_macos_lane():
     # A module with a darwin branch the gate doesn't list would merge without
     # the macOS lane ever running on its PR.
-    missing = []
-    for path in sorted((REPO / "src/gaia").rglob("*.py")):
-        if not _DARWIN_RE.search(path.read_text(encoding="utf-8", errors="ignore")):
-            continue
-        rel = path.relative_to(REPO).as_posix()
-        if not st.os_reason([rel], st.Graph(files=set())):
-            missing.append(rel)
+    sources = {
+        path.relative_to(REPO).as_posix(): path.read_text(
+            encoding="utf-8", errors="ignore"
+        )
+        for path in (REPO / "src/gaia").rglob("*.py")
+    }
+    missing = _unlisted_darwin_modules(sources)
     assert not missing, (
         "These modules branch on macOS but the macOS lane skips them on a PR. "
         f"Add them to OS_MODULE_PREFIXES in util/select_tests.py: {missing}"

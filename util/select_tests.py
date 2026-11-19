@@ -939,6 +939,15 @@ def read_only_class(path: str) -> Optional[str]:
     return None
 
 
+def is_os_touching_path(path: str) -> bool:
+    """Whether a path is in the installer tree or an OS_MODULE_PREFIXES module."""
+    module = _module_name(path, "src") or ""
+    return path.startswith(OS_PATH_PREFIXES) or any(
+        module == prefix or module.startswith(prefix + ".")
+        for prefix in OS_MODULE_PREFIXES
+    )
+
+
 def os_reason(changed: Iterable[str], graph: Graph) -> Optional[str]:
     """Why a change needs the macOS lane on a pull request, or None.
 
@@ -950,11 +959,7 @@ def os_reason(changed: Iterable[str], graph: Graph) -> Optional[str]:
     for path in sorted(changed):
         if forces_full_run(path):
             return f"{path} changed"
-        module = _module_name(path, "src") or ""
-        if path.startswith(OS_PATH_PREFIXES) or any(
-            module == prefix or module.startswith(prefix + ".")
-            for prefix in OS_MODULE_PREFIXES
-        ):
+        if is_os_touching_path(path):
             return f"{path} is OS-touching code"
         if not path.endswith(".py"):
             continue
