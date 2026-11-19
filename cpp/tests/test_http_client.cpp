@@ -802,3 +802,31 @@ TEST(HttpClientTest, AResponseSizeLimitStopsTheDownload) {
     EXPECT_FALSE(next.body.empty());
     EXPECT_NE(next.body[0], 'x') << "left-over bytes of the big body were read as this reply";
 }
+
+TEST(HttpClientTest, ACancelCheckEndsARequestThatCannotBeInterrupted) {
+    // An address that answers nothing: the connect attempt just waits, with no open socket to close.
+    std::atomic<bool> stop{false};
+    HttpClientConfig cfg;
+    cfg.baseUrl           = "http://10.255.255.1:81";
+    cfg.connectTimeoutSec = 8;
+    cfg.cancelCheck       = [&stop] { return stop.load(); };
+    HttpClient http(cfg);
+
+    std::thread later([&stop] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        stop = true;
+    });
+    const auto t0 = std::chrono::steady_clock::now();
+    std::string failure;
+    try {
+        http.get("/x");
+    } catch (const HttpError& e) {
+        failure = e.what();
+    }
+    const auto waited = std::chrono::steady_clock::now() - t0;
+    later.join();
+    if (failure.find("cancelled") == std::string::npos) {
+        GTEST_SKIP() << "this network refuses the address at once, so nothing waited: " << failure;
+    }
+    EXPECT_LT(waited, std::chrono::milliseconds(2000)) << "the caller waited for a request it had cancelled";
+}

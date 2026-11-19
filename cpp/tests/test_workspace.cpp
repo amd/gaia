@@ -317,3 +317,19 @@ TEST(WorkspaceTest, GitBashDevicePathsAreNotFiles) {
     EXPECT_NE(ws.checkCommand("cat /proc/registry/HKEY_CURRENT_USER/Environment/PATH"), "");
 #endif
 }
+
+TEST(WorkspaceTest, AVeryLongWordInACommandIsCheckedWithoutACrash) {
+    Dirs d;
+    Workspace ws({d.work.string()});
+    EXPECT_NO_THROW(ws.checkCommand("cat /" + std::string(60000, 'a')));
+    EXPECT_NE(ws.checkCommand("cat " + d.other.generic_string() + "/" + std::string(60000, 'a')), "")
+        << "a path outside the folder, however long";
+    EXPECT_EQ(ws.checkCommand("echo " + std::string(60000, 'a')), "");
+    EXPECT_NE(ws.checkCommand("dir \\\\" + std::string(60000, 'h') + "\\share"), "");
+    // The hand-written scan finds what the pattern did.
+    EXPECT_NE(ws.checkCommand("cat \"/etc/../home/x/secret\""), "");
+    EXPECT_NE(ws.checkCommand("cp a.txt ~/elsewhere"), "");
+    EXPECT_NE(ws.checkCommand("type C:\\Windows\\win.ini,D:\\x"), "");
+    EXPECT_EQ(ws.checkCommand("awk '{gsub(/ /, \"\"); print}' notes.txt"), "");
+    EXPECT_EQ(ws.checkCommand("curl https://example.com/a/b"), "") << "the tail of a URL is not a path";
+}

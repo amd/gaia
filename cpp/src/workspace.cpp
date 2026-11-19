@@ -155,7 +155,7 @@ namespace {
 // /s, /b, /a:d, /-c, /? : a cmd.exe switch rather than a place.
 bool looksLikeCmdSwitch(const std::string& token) {
     static const std::regex switchRe(R"(/-?[A-Za-z?](?::[^/\\]*)?)");
-    return std::regex_match(token, switchRe);
+    return token.size() <= 64 && std::regex_match(token, switchRe);
 }
 } // namespace
 
@@ -174,23 +174,36 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
         return "Refused: the command is " + std::to_string(command.size()) + " bytes long and the limit is " +
                std::to_string(kMaxCommandBytes) + ". Write long input to a file and have the command read it.";
     }
-    // Absolute POSIX paths, ~/ paths and Windows drive paths, as standalone words.
-    static const std::regex pathRe(
-        R"((?:^|[\s'"=(:,`])((?:/|~/|[A-Za-z]:[\\/])[^\s'"`;|&()<>,]*))");
-    for (auto it = std::sregex_iterator(command.begin(), command.end(), pathRe);
-         it != std::sregex_iterator(); ++it) {
-        std::string token = (*it)[1].str();
+    // Absolute POSIX paths, ~/ paths and Windows drive paths, as standalone words. Found by hand:
+    // std::regex recurses once per character, and a 60,000-character word overflows the stack.
+    std::vector<std::pair<size_t, std::string>> pathWords;
+    for (size_t i = 0; i < command.size(); ++i) {
+        static const std::string kBefore = " \t\n\v\f\r'\"=(:,`", kEnds = " \t\n\v\f\r'\"`;|&()<>,";
+        if (i > 0 && kBefore.find(command[i - 1]) == std::string::npos) continue;
+        const char c = command[i];
+        const char next = i + 1 < command.size() ? command[i + 1] : '\0';
+        const char third = i + 2 < command.size() ? command[i + 2] : '\0';
+        const bool starts = c == '/' || (c == '~' && next == '/') ||
+                            (std::isalpha(static_cast<unsigned char>(c)) && next == ':' &&
+                             (third == '\\' || third == '/'));
+        if (!starts) continue;
+        const size_t end = (std::min)(command.find_first_of(kEnds, i), command.size());
+        pathWords.emplace_back(i, command.substr(i, end - i));
+        i = end;  // the character that ended this word may open the next
+    }
+    for (const auto& [tokenAt, tokenText] : pathWords) {
+        std::string token = tokenText;
         if (!posixShell && looksLikeCmdSwitch(token)) continue;
         if (token.rfind("//", 0) == 0) {
             // After a colon it is the tail of a URL (https://…); otherwise a network share.
-            const size_t at = static_cast<size_t>((*it).position(1));
+            const size_t at = tokenAt;
             if (at > 0 && command[at - 1] == ':') continue;
             return refusal(token);
         }
         if (token == "/") {
             // The root only as a standalone word (find / …), not a regex
             // delimiter such as awk's gsub(/ /, …).
-            const size_t at = static_cast<size_t>((*it).position(1));
+            const size_t at = tokenAt;
             const char before = at == 0 ? ' ' : command[at - 1];
             const char after = at + 1 < command.size() ? command[at + 1] : ' ';
             const bool word = std::isspace(static_cast<unsigned char>(before)) &&
@@ -227,9 +240,12 @@ std::string Workspace::checkCommand(const std::string& command, bool posixShell)
         return refusal(token);
     }
     // \\host\share, which the path pattern above does not see.
-    static const std::regex uncRe(R"((?:^|[\s'"=(,`])(\\\\[^\s\\'"]+))");
-    std::smatch unc;
-    if (std::regex_search(command, unc, uncRe)) return refusal(unc[1].str());
+    for (size_t at = command.find("\\\\"); at != std::string::npos; at = command.find("\\\\", at + 1)) {
+        static const std::string kBefore = " \t\n\v\f\r'\"=(,`", kEnds = " \t\n\v\f\r\\'\"";
+        if (at > 0 && kBefore.find(command[at - 1]) == std::string::npos) continue;
+        const size_t end = (std::min)(command.find_first_of(kEnds, at + 2), command.size());
+        if (end > at + 2) return refusal(command.substr(at, end - at));
+    }
     // A relative name that exists here but resolves elsewhere is a link out of the folder.
     static const std::string kBreaks = " \t\r\n'\"`;|&()<>=,";
     std::error_code cwdError;

@@ -389,8 +389,10 @@ bool isReadOnlyShellCommand(const std::string& command, bool posixShell) {
 namespace {
 bool urlIsLocal(const std::string& url) {
     static const std::regex host(R"(^[A-Za-z][A-Za-z0-9+.\-]*://(?:[^/@?#]*@)?(\[[^\]]*\]|[^/:?#]*))");
+    // The host is at the front; a long tail would only deepen the matcher's recursion.
+    const std::string head = url.substr(0, 1024);
     std::smatch m;
-    if (!std::regex_search(url, m, host)) return false;
+    if (!std::regex_search(head, m, host)) return false;
     std::string h = lowerAscii(m[1].str());
     if (!h.empty() && h.front() == '[') h = h.substr(1, h.size() - 2);
     if (h == "localhost" || h == "::1") return true;
@@ -400,6 +402,9 @@ bool urlIsLocal(const std::string& url) {
 
 // Longer than any real command, and std::regex recurses once per character matched.
 constexpr size_t kMaxScannedBytes = 64 * 1024;
+// The patterns below match within one line, so one line bounds the recursion: a thread's
+// stack (512 KB on macOS) holds a few thousand characters of it.
+constexpr size_t kMaxScannedLine = 2048;
 
 bool isAsciiLetter(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'); }
 bool isSchemeChar(char c) { return isAsciiLetter(c) || (c >= '0' && c <= '9') || c == '+' || c == '.' || c == '-'; }
@@ -467,6 +472,15 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
                    std::to_string(kMaxScannedBytes) + " bytes it cannot be checked for going online. Write long "
                    "input to a file and have the command read it.";
         }
+        for (size_t start = 0; start <= command.size();) {
+            const size_t end = (std::min)(command.find('\n', start), command.size());
+            if (end - start > kMaxScannedLine) {
+                return why + "a command with a line of " + std::to_string(end - start) + " bytes: over " +
+                       std::to_string(kMaxScannedLine) + " bytes on one line it cannot be checked for going "
+                       "online. Break the line up, or write long input to a file and have the command read it.";
+            }
+            start = end + 1;
+        }
         // Commands that go online with no URL in sight: a remote, a package index, an API.
         static const std::regex online(
             R"(\b(?:git\b.*\b(?:clone|fetch|pull|push|ls-remote|submodule\s+update)\b)"
@@ -506,6 +520,46 @@ std::string internetRefusal(const ToolInfo& tool, const json& args) {
             if (!nextUrl(command, 0, urlBegin, urlEnd) || command.find("$(") != std::string::npos ||
                 command.find('`') != std::string::npos || command.find("${") != std::string::npos) {
                 return why + "`" + command.substr(0, 80) + "`, which goes online.";
+            }
+            // curl and wget take a bare host as a destination too (curl http://localhost/ example.com),
+            // and that has no scheme for the URL scan to find.
+            static const std::regex bareHost(R"(^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::[0-9]+)?(?:[/?#]|$))");
+            const auto isFetchProgram = [](const std::string& word) {
+                const std::string name = lowerAscii(word.substr(word.find_last_of("/\\") + 1));
+                return name == "curl" || name == "wget" || name == "curl.exe" || name == "wget.exe";
+            };
+            // Flags whose next word is a file or a value, not a destination.
+            static const std::set<std::string> takesValue = {
+                "-o", "-O", "--output", "--output-document", "-d", "--data", "--data-raw", "--data-binary",
+                "--data-urlencode", "-H", "--header", "-T", "--upload-file", "-F", "--form", "-u", "--user",
+                "-A", "--user-agent", "-b", "--cookie", "-c", "--cookie-jar", "-K", "--config", "-w",
+                "--write-out", "-X", "--request", "-m", "--max-time", "--retry", "--connect-timeout"};
+            std::istringstream words(bare);
+            bool fetching = false, skipNext = false;
+            for (std::string w; words >> w;) {
+                if (std::string(";|&<>").find(w[0]) != std::string::npos) {
+                    fetching = false;  // a redirect target or the next command
+                    skipNext = w.find_first_not_of("<>&|;") == std::string::npos && (w[0] == '<' || w[0] == '>');
+                    continue;
+                }
+                if (skipNext) {
+                    skipNext = false;
+                    continue;
+                }
+                if (isFetchProgram(w)) {
+                    fetching = true;
+                    continue;
+                }
+                if (!fetching) continue;
+                if (w[0] == '-') {
+                    // wget -O takes a file; curl -O takes none, and then the next word is a URL anyway.
+                    skipNext = takesValue.count(w) > 0;
+                    continue;
+                }
+                // Only the head is matched: std::regex recurses once per character of a long word.
+                const std::string head = w.substr(0, 300);
+                if (head.find("://") != std::string::npos || !std::regex_search(head, bareHost)) continue;
+                if (!urlIsLocal("http://" + head)) return why + "`" + command.substr(0, 80) + "`, which goes online.";
             }
         }
         return "";
