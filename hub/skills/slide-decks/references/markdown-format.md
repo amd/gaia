@@ -27,6 +27,10 @@ differently from what you wrote is in the result's `warnings`.
 - On a process of up to 6 steps, `Axis: More cost and effort` draws one arrow
   under the stages with that label. An `Axis:` line on a slide with no
   `Diagram:` line draws its boxes as a process.
+- `Dimension: Cost | Low | Medium | High` draws a labelled row under a
+  process with one cell per step, in step order. Write one line per
+  dimension. A `Dimension:` line with only a label (or a second `Axis:`
+  line) is drawn as its own arrow along the steps.
 - On a diagram slide, a plain line between the `##` title and the first `###`
   is the slide's subtitle; a plain line right under a `###` heading is that
   box's bold lead line, above its bullets.
@@ -53,6 +57,9 @@ A fenced block holds optional `key: value` lines, then CSV.
   scatter, combo or auto (the default). Keys: `y_title`, `x_title`,
   `y2_title`, `source`, `format`, `highlight`, `legend`, `footnote`. The CSV
   is a header row (category, series...) and one row per category.
+- In place of the CSV lines, `data: C:/data/sales.xlsx` with `range: A1:D8`
+  (and `sheet: Q3`) reads the rows from a .csv or .xlsx file; `series_in:
+  rows` when each series is a row. A ```` ```table ```` block takes the same.
 - ```` ```table ```` - the same CSV, shown as a table.
 - ```` ```kpi ```` - `label,value,delta,note` rows, shown as KPI tiles.
 - ```` ```slide ```` (or ```` ```json ````) - any slide fields as JSON,

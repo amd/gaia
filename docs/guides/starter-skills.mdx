@@ -222,6 +222,19 @@ said and no file, page or calculation the agent ran — comes back as a warning
 with the call that fixes it, not as a refusal. With no path given the deck is
 saved in the working folder.
 
+A chart or table takes its values in the call (`rows`: a header row, then one
+row per label) or from a .csv or .xlsx file (`data_path` with `range` and
+`sheet`), so no other tool is needed to get a series. Pass
+`expect={"min_charts": 4}` when the request asks for charts or tables: a deck
+with fewer fails its check, and the issue gives the call that adds one. Without
+`expect`, a text slide that is plainly numbers is a warning with the call that
+redraws it as a chart. A process diagram keeps every line of each step and
+draws `dimensions` as labelled rows under the steps, one cell per step.
+Slides are numbered from 1 with the cover as slide 1; `update_slide` names the
+slide it replaced and replaces a cover with a content slide only with
+`replace_cover`. Content a slide does not draw is reported as a
+`content_dropped` issue and lowers the deck's style score.
+
 - **Demonstrates** — a tool-providing skill built on `gaia.skills.context`:
   scope-checked paths, a declared program (`program:run:soffice`), per-call
   temporary files, and per-user preferences its own code validates.
