@@ -356,6 +356,26 @@ class SkillLibraryToolsMixin:
                 f"{existing} {unlisted_warning}" if existing else unlisted_warning
             )
 
+        from gaia import programs
+
+        absent = [
+            programs.BY_COMMAND[p.scope]
+            for p in skill.parsed_permissions()
+            if (p.domain, p.level) == ("program", "run")
+            and p.scope in programs.BY_COMMAND
+            and programs.find_command(p.scope) is None
+        ]
+        if absent:
+            payload["missing_programs"] = absent
+            notes = " ".join(
+                f"{programs.PROGRAMS[i].title} is not installed "
+                f"({programs.PROGRAMS[i].size}), so the steps that use it are "
+                f"skipped. If the user wants it, tell them to run "
+                f"`{programs.how_to_install(i)}` in a terminal."
+                for i in absent
+            )
+            payload["warning"] = f"{payload.get('warning', '')} {notes}".strip()
+
         # tools_required is advisory at load time — the base loader logs the
         # gap and loads anyway, so surface it here or the model discovers it
         # mid-recipe as a missing tool.

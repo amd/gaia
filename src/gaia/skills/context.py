@@ -53,7 +53,6 @@ from __future__ import annotations
 import contextvars
 import functools
 import os
-import platform
 import re
 import shutil
 import subprocess
@@ -102,23 +101,6 @@ PROGRAM_ENV_KEYS = (
     "DISPLAY",
     "XDG_RUNTIME_DIR",
 )
-
-#: Where an installer puts a program that it does not add to PATH. Checked
-#: after PATH, in order. Keys are the names a manifest declares.
-KNOWN_INSTALL_PATHS: Dict[str, Dict[str, Sequence[str]]] = {
-    "soffice": {
-        "Windows": (
-            "{ProgramFiles}/LibreOffice/program/soffice.exe",
-            "{ProgramFiles(x86)}/LibreOffice/program/soffice.exe",
-        ),
-        "Darwin": ("/Applications/LibreOffice.app/Contents/MacOS/soffice",),
-        "Linux": (
-            "/usr/bin/soffice",
-            "/usr/lib/libreoffice/program/soffice",
-            "/opt/libreoffice/program/soffice",
-        ),
-    },
-}
 
 _PATH_ARG_RE = re.compile(
     r"^(path|paths|file|filename|filepath|file_path|dir|directory|folder)$"
@@ -546,18 +528,17 @@ def copy_to_temp(source: str | os.PathLike, name: Optional[str] = None) -> Path:
 
 
 def find_program(name: str) -> Optional[str]:
-    """Absolute path of *name* on PATH or in a known install folder, or None."""
+    """Absolute path of *name* on PATH or where its installer puts it, or None.
+
+    The install folders are :data:`gaia.programs.PROGRAMS`, the one table GAIA
+    keeps of where each program lives.
+    """
     found = shutil.which(name)
     if found:
         return found
-    for pattern in KNOWN_INSTALL_PATHS.get(name, {}).get(platform.system(), ()):
-        try:
-            candidate = Path(pattern.format_map(os.environ))
-        except KeyError:
-            continue  # that Program Files variable is not set on this machine
-        if candidate.is_file():
-            return str(candidate)
-    return None
+    from gaia import programs
+
+    return programs.find_command(name)
 
 
 def run_program(

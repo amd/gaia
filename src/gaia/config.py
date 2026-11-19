@@ -269,6 +269,9 @@ class GaiaConfig:
             oldest turns go first. The size limit never removes the newest turn.
         skipped_models: Models the user chose not to download. ``gaia init``
             and first-run setup leave them out until the user asks for one.
+        skipped_programs: Programs (``git``, ``tesseract``, ``ffmpeg``,
+            ``libreoffice``) the user chose not to install. ``gaia init``
+            leaves them out until the user names one with ``--with-program``.
         vision_model: Model that reads scans and images, when the user chose
             one in setup. ``None`` uses the chat model if it reads images,
             else Gemma.
@@ -329,6 +332,7 @@ class GaiaConfig:
     undo_retention_days: int = 7
     undo_max_mb: int = 500
     skipped_models: List[str] = field(default_factory=list)
+    skipped_programs: List[str] = field(default_factory=list)
     project_context: Optional[str] = None
     image_model: Optional[str] = None
     image_size: Optional[str] = None
@@ -386,6 +390,8 @@ class GaiaConfig:
             return cls._coerce_lemonade_mode(value)
         if key == "lemonade_base_url":
             return cls._coerce_lemonade_url(value)
+        if key == "skipped_programs":
+            return cls._coerce_program_list(value)
         if key == "skipped_models":
             return cls._coerce_model_list(value)
         if key == "project_context":
@@ -446,6 +452,20 @@ class GaiaConfig:
             return normalize_external_url(str(value))
         except LemonadeChoiceError as e:
             raise GaiaConfigError(f"lemonade_base_url: {e}") from e
+
+    @staticmethod
+    def _coerce_program_list(value: Any) -> List[str]:
+        """A list of program ids; the CLI passes them comma-separated."""
+        from gaia.programs import PROGRAMS
+
+        if isinstance(value, str):
+            value = [v for v in (p.strip().lower() for p in value.split(",")) if v]
+        if not isinstance(value, list) or not all(v in PROGRAMS for v in value):
+            raise GaiaConfigError(
+                f"skipped_programs takes any of {', '.join(PROGRAMS)}, "
+                f"comma-separated, but got {value!r}."
+            )
+        return list(dict.fromkeys(value))
 
     @staticmethod
     def _coerce_model_list(value: Any) -> List[str]:
@@ -756,6 +776,16 @@ class GaiaConfig:
                     f"GAIA config at {config_file}: 'skipped_models' must be a "
                     f"list of model ids, but it is {skipped!r}. Fix it by hand, "
                     "or delete the key to download every model setup needs."
+                )
+        if "skipped_programs" in data:
+            programs = data["skipped_programs"]
+            if not isinstance(programs, list) or not all(
+                isinstance(v, str) for v in programs
+            ):
+                raise GaiaConfigError(
+                    f"GAIA config at {config_file}: 'skipped_programs' must be a "
+                    f"list of program names, but it is {programs!r}. Fix it by "
+                    "hand, or delete the key to be offered every program again."
                 )
         if "custom_models" in data:
             from gaia.llm.custom_models import validate_entries

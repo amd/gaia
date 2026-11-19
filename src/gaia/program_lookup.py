@@ -47,18 +47,26 @@ def refresh_path(after_install: bool = False) -> List[str]:
     Windows reads the registry, which is what a new terminal would get. macOS
     asks the login shell, which runs the user's startup files, so it does that
     only when *after_install* says an install command just ran. Linux package
-    managers install into folders already on ``PATH``.
+    managers install into folders already on ``PATH``. Every platform also gets
+    the folder of a registered program (:mod:`gaia.programs`) that is installed
+    where ``PATH`` does not look.
 
     Returns:
         The entries added, empty when nothing changed.
     """
+    # Imported here: gaia.programs calls back into this module after an install.
+    from gaia import programs  # pylint: disable=import-outside-toplevel
+
     with _refresh_lock:
         if sys.platform == "win32":
             candidates = _registry_path_entries()
         elif sys.platform == "darwin" and after_install:
             candidates = _login_path_entries()
         else:
-            return []
+            candidates = []
+        # Git for Windows in Program Files but off PATH, or a program GAIA
+        # unpacked itself, is installed all the same.
+        candidates += programs.known_path_entries()
         added = _append_new_entries(candidates)
     if added:
         logger.info("Added to PATH after an install: %s", os.pathsep.join(added))

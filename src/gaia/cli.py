@@ -3948,6 +3948,31 @@ afterwards (or `swebench <run_dir>` does, later).
         help="Skip building the Agent UI frontend (same effect as GAIA_SKIP_WEBUI_BUILD)",
     )
     init_parser.add_argument(
+        "--programs",
+        action="store_true",
+        help="Only find or install the programs skills use (Git, Tesseract; "
+        "ffmpeg and LibreOffice when named); no Lemonade or model steps. With "
+        "--check: list each one as found or missing.",
+    )
+    init_parser.add_argument(
+        "--with-program",
+        action="append",
+        default=[],
+        choices=["git", "tesseract", "ffmpeg", "libreoffice"],
+        metavar="NAME",
+        help="Install this program too (git, tesseract, ffmpeg, libreoffice). "
+        "ffmpeg and LibreOffice are installed only when named. Repeatable.",
+    )
+    init_parser.add_argument(
+        "--without-program",
+        action="append",
+        default=[],
+        choices=["git", "tesseract", "ffmpeg", "libreoffice"],
+        metavar="NAME",
+        help="Don't install this program, now or in later runs (saved as "
+        "skipped_programs in ~/.gaia/config.json). Repeatable.",
+    )
+    init_parser.add_argument(
         "--skip-pip-extras",
         action="store_true",
         help="Install no Python packages (the desktop app ships its own)",
@@ -6281,10 +6306,10 @@ Let me know your answer!
         profile = "minimal" if args.minimal else args.profile
 
         if args.agent_only:
-            if profile != "gaia" or args.check:
+            if profile != "gaia" or args.check or args.programs:
                 print(
                     "Error: --agent-only updates the GAIA agent; it does not "
-                    "combine with --profile, --minimal or --check.",
+                    "combine with --profile, --minimal, --check or --programs.",
                     file=sys.stderr,
                 )
                 sys.exit(2)
@@ -6292,6 +6317,27 @@ Let me know your answer!
 
             log_manager.configure_agent_console(debug=getattr(args, "verbose", False))
             sys.exit(run_agent_refresh())
+
+        if args.programs:
+            if profile != "gaia":
+                print(
+                    "Error: --programs only finds or installs programs; it does "
+                    "not combine with --profile, --minimal or --agent-only.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            from gaia.installer.init_command import run_programs
+
+            log_manager.configure_agent_console(debug=getattr(args, "verbose", False))
+            sys.exit(
+                run_programs(
+                    with_programs=args.with_program,
+                    without_programs=args.without_program,
+                    yes=args.yes,
+                    check=args.check,
+                    as_json=getattr(args, "json", False),
+                )
+            )
 
         # MCP profile has its own init flow (no Lemonade/models)
         if profile == "mcp":
@@ -6397,6 +6443,8 @@ Let me know your answer!
             remote=getattr(args, "remote", False),
             skip_webui_build=getattr(args, "skip_webui_build", False),
             skip_pip_extras=getattr(args, "skip_pip_extras", False),
+            with_programs=args.with_program,
+            without_programs=args.without_program,
             skip_chat_model=getattr(args, "skip_chat_model", False),
             lemonade_url=getattr(args, "lemonade_url", None),
             gaia_lemonade=getattr(args, "gaia_lemonade", False),
