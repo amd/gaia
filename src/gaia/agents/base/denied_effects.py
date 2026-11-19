@@ -771,17 +771,58 @@ _OPERANDS: "contextvars.ContextVar[Optional[Dict[str, List[frozenset]]]]" = (
 )
 
 
+#: Flags whose value is free text about the action, not what it acts on.
+_TEXT_FLAGS = frozenset({"--message", "--title", "--body", "--comment", "--notes"})
+#: Short forms of those, read only for the programs that give them that meaning.
+_SHORT_TEXT_FLAGS = {"git": frozenset({"-m"}), "gh": frozenset({"-m", "-b", "-t"})}
+#: Programs whose operands are packages, where ``pandas==2.2`` is ``pandas``.
+_PACKAGE_PROGRAMS = frozenset(
+    {"pip", "pip3", "uv", "pipx", "conda", "mamba", "npm", "pnpm", "yarn", "winget"}
+)
+_VERSION_PIN = re.compile(r"[\[<>=!~;@ ]")
+
+
+def _without_text_values(family: str, rest: Sequence[str]) -> List[str]:
+    """*rest* without the values of message-style flags.
+
+    ``git commit -m "fix bug"`` and ``git commit -m "Fix the bug"`` are one
+    action: the wording of a message is not what the command acts on.
+    """
+    flags = _TEXT_FLAGS | _SHORT_TEXT_FLAGS.get(family.split(" ")[0], frozenset())
+    kept: List[str] = []
+    skip = False
+    for word in rest:
+        if skip:
+            skip = False
+        elif word.lower() in flags:
+            skip = True
+        else:
+            kept.append(word)
+    return kept
+
+
+def _unpinned(word: str) -> str:
+    """A package operand without its version, extras or markers."""
+    # A leading ``@`` is an npm scope, not a pin.
+    return word[:1] + _VERSION_PIN.split(word[1:], maxsplit=1)[0]
+
+
 def _note_command(family: Optional[str], rest: Sequence[str], cwd: str) -> None:
     """Record what *family* was run on: the words after its subcommand.
 
     Each is kept as a path under *cwd*, so ``.`` holds ``a.txt`` and a plain
-    word (``pandas``) still only equals itself.
+    word (``pandas``) still only equals itself. The text of a message and the
+    version a package is pinned to are left out: a rewording, or the same
+    package at another version, is the same action.
     """
     sink = _OPERANDS.get()
     if sink is None or not family or family == TEST_SUITE:
         return
     depth = len(family.split(" ")) - 1
+    rest = _without_text_values(family, rest)
     words = [w.strip("'\"") for w in _command_words(rest)[depth:]]
+    if family.split(" ")[0] in _PACKAGE_PROGRAMS:
+        words = [_unpinned(w) for w in words]
     sink.setdefault(family, []).append(
         frozenset(_lexical_path(w, cwd) or w for w in words if w)
     )

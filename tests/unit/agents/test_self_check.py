@@ -716,3 +716,13 @@ def test_a_self_check_that_raises_is_skipped_not_fatal(caplog):
     with caplog.at_level(logging.ERROR):
         assert Agent._self_check_plan(agent) is None
     assert "could not run" in caplog.text
+
+
+def test_an_empty_file_that_is_meant_to_be_empty_is_not_raised(tmp_path):
+    notes = str(tmp_path / "notes.txt")
+    Path(notes).write_text("", encoding="utf-8")
+    assert mechanical_findings("Create notes.txt", [notes]) == ["`notes.txt` is empty."]
+    assert (
+        mechanical_findings("Create an empty notes.txt", [notes], empty_ok=[notes])
+        == []
+    )

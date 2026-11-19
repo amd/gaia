@@ -12038,6 +12038,12 @@ Do NOT wrap conversational replies in JSON.
             self._pending_deliverables(),
             prose=next(iter(prose.values())) if len(prose) == 1 else "",
             folder=os.getcwd(),
+            # An empty file the request asks for is not a miss.
+            empty_ok=[
+                path
+                for path in written
+                if _empty_by_design(path) or _requested_empty(path, request)
+            ],
         )
         built = any(suffix in BUILT_SUFFIXES for suffix in suffixes.values())
         if not (inputs or built or findings):
