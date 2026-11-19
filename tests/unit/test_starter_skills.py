@@ -69,6 +69,7 @@ STARTER_PACK = frozenset(
         "log-triage",
         "meeting-actions",
         "music-gen",
+        "office-docs",
         "price-watch",
         "recommendations",
         "report-from-sources",
@@ -568,7 +569,7 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
 
 
 def test_rss_digest_registers_its_declared_tool(pack_manager: SkillManager):
-    """The pack's one tool-providing skill really registers its @tool.
+    """A tool-providing skill really registers its @tool.
 
     Proves the manifest matches ``tools.py`` — the loader refuses on any
     signature drift, so this is a live contract check, not a formality.
