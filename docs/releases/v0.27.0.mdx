@@ -12,7 +12,8 @@ description: "Several mail accounts per provider, a browser pane in GAIA desktop
 - Type `/` and a skill's name to run that skill on a request.
 - New skills build and check Office files and triage logs.
 - The standalone email agent is gone; the main GAIA agent handles mail.
-- 8 contributors merged 87 PRs and closed 72 issues since v0.26.0.
+- Quitting GAIA desktop frees the model's memory.
+- 9 contributors merged 119 PRs and closed 135 issues since v0.26.0.
 
 ## Breaking Changes
 
@@ -23,21 +24,33 @@ description: "Several mail accounts per provider, a browser pane in GAIA desktop
 ## What's New
 
 - **Several accounts per mail provider** — `gaia connectors connect google --add` adds another account; Settings and the terminal UI list each one with its own Reconnect, Make default and Disconnect. (PRs [#8331](https://github.com/amd/gaia/pull/8331), [#8332](https://github.com/amd/gaia/pull/8332), [#8333](https://github.com/amd/gaia/pull/8333))
-- **Browser pane in GAIA desktop** — browse beside the chat while GAIA reads and drives the same tab, and pick part of a page to ask about. (PR [#5973](https://github.com/amd/gaia/pull/5973))
+- **Browser pane in GAIA desktop** — browse beside the chat while GAIA reads and drives the same tab. (PR [#5973](https://github.com/amd/gaia/pull/5973))
 - **Run a skill by name** — start a message with `/skill-name` in the Agent UI, terminal UI, `gaia -p` or the API; typing `/` lists installed skills. (PR [#8483](https://github.com/amd/gaia/pull/8483))
-- **Office documents** — the `office-docs` skill builds spreadsheets, decks with editable charts and Word files; its `verify_workbook` tool recalculates formulas to catch wrong cell references. (PR [#5417](https://github.com/amd/gaia/pull/5417))
-- **Log triage** — the `log-triage` skill's `triage_logs` tool reads every named log in one call and returns the anomalies, bursts and hosts hit. (PR [#5465](https://github.com/amd/gaia/pull/5465))
-- **Skill auto-load, opt-in** — with `GAIA_SKILL_AUTOLOAD=1` a skill that clearly matches the request loads before the turn. Off by default. (PR [#5442](https://github.com/amd/gaia/pull/5442))
+- **Office documents and reports** — the `office-docs` skill builds spreadsheets, decks and Word files and checks formulas for wrong cell references; `report-from-sources` reads named series from a folder's spreadsheets, citing each value's cell. (PRs [#5417](https://github.com/amd/gaia/pull/5417), [#5453](https://github.com/amd/gaia/pull/5453))
+- **Log triage** — the `log-triage` skill's `triage_logs` tool reads every named log in one call and returns the anomalies, bursts, hosts and affected ids. (PRs [#5465](https://github.com/amd/gaia/pull/5465), [#8537](https://github.com/amd/gaia/pull/8537))
+- **Skill auto-load, opt-in** — with `GAIA_SKILL_AUTOLOAD=1` a skill that clearly matches the request loads before the turn. Off by default. (PRs [#5442](https://github.com/amd/gaia/pull/5442), [#8510](https://github.com/amd/gaia/pull/8510))
 - **Document reranking, opt-in** — `RAGConfig(enable_reranking=True)` reorders retrieved passages with a downloaded Lemonade reranking model. (PR [#6136](https://github.com/amd/gaia/pull/6136))
 - **Review saved folder answers** — `gaia trust` lists, adds, declines and forgets GAIA's per-folder answers about project guidance files. (PR [#8480](https://github.com/amd/gaia/pull/8480))
-- **Sign in to Gmail over SSH** — `gaia connectors connect google --callback-port PORT` fixes the sign-in port so it can be forwarded. (PR [#8474](https://github.com/amd/gaia/pull/8474))
-- **Settings reach open chats** — a model server, connector or skill change applies on an open chat's next message, including in the terminal UI. (PR [#8400](https://github.com/amd/gaia/pull/8400))
+- **Sign in to Gmail over SSH** — `gaia connectors connect google --callback-port PORT` fixes the port so it can be forwarded. (PR [#8474](https://github.com/amd/gaia/pull/8474))
+- **Settings reach open chats** — a model server, connector or skill change applies on an open chat's next message. (PR [#8400](https://github.com/amd/gaia/pull/8400))
 - **Agent UI** — Ctrl+/ lists keyboard shortcuts, formulas render instead of LaTeX source, the library shows which chats use each document, a scheduled task can be edited in place with its past runs listed, and connector setup is shown as numbered steps. (PRs [#7504](https://github.com/amd/gaia/pull/7504), [#7499](https://github.com/amd/gaia/pull/7499), [#7514](https://github.com/amd/gaia/pull/7514), [#7527](https://github.com/amd/gaia/pull/7527), [#8281](https://github.com/amd/gaia/pull/8281), [#8279](https://github.com/amd/gaia/pull/8279), [#8280](https://github.com/amd/gaia/pull/8280))
-- **Scripted `gaia -p` runs** — `--disallowed-tools`, `--no-web` and `--no-skills` withhold tools; the run uses the apps' model without downloading one, uses its whole `--time-limit`, and the agent knows nobody is there to answer questions. (PRs [#8326](https://github.com/amd/gaia/pull/8326), [#7808](https://github.com/amd/gaia/pull/7808), [#8385](https://github.com/amd/gaia/pull/8385), [#8451](https://github.com/amd/gaia/pull/8451))
+- **Scripted `gaia -p` runs** — `--disallowed-tools`, `--no-web` and `--no-skills` withhold tools; a run uses the apps' model and its whole `--time-limit`, and the agent knows nobody is there to answer. (PRs [#8326](https://github.com/amd/gaia/pull/8326), [#7808](https://github.com/amd/gaia/pull/7808), [#8385](https://github.com/amd/gaia/pull/8385), [#8451](https://github.com/amd/gaia/pull/8451))
 - **Large tool results pass by handle** — a tool given an `output_…` handle gets the full result without it entering the prompt. (PR [#8121](https://github.com/amd/gaia/pull/8121))
 
 ## Bug Fixes
 
+- **Quitting GAIA desktop frees the model** — idle agents stop and the chat model unloads within seconds; another open GAIA app or a running `gaia` command still keeps it loaded. Closes [#8504](https://github.com/amd/gaia/issues/8504). (PR [#8511](https://github.com/amd/gaia/pull/8511))
+- **One embedder per PC, on the GPU**, shown in Settings › Memory, so a chat on another device no longer clears memory's search index. NPU embedding is shown but can't be chosen yet. (PR [#8368](https://github.com/amd/gaia/pull/8368))
+- **Long tasks keep their time and answers** — the agent runs a saved script by path, a time limit holds back less, `read_file` reads .pptx slides, .html text and long workbooks by sheet, and a reused scratch table reports its existing rows. (PR [#8536](https://github.com/amd/gaia/pull/8536))
+- **Reading an image no longer unloads another session's chat model.** (PR [#8509](https://github.com/amd/gaia/pull/8509))
+- **Hidden sensitive memories stay hidden in Memory › Advanced**, including from the editor, tooltips and expanded rows. (PR [#8518](https://github.com/amd/gaia/pull/8518))
+- **A file search that finds nothing names the folders it searched.** (PR [#8515](https://github.com/amd/gaia/pull/8515))
+- **`gaia api` keeps accepting requests on Windows after a client hangs up early.** (PR [#8519](https://github.com/amd/gaia/pull/8519))
+- **A cited document links even when its folder path has spaces.** (PR [#8522](https://github.com/amd/gaia/pull/8522))
+- **Setup blocks a model no runtime on this PC can run**, and an unread NPU shows as unchecked, not missing. (PR [#8523](https://github.com/amd/gaia/pull/8523))
+- **Settings › Privacy says what is stored on this PC and what is sent to a cloud model.** (PR [#8517](https://github.com/amd/gaia/pull/8517))
+- **The resource monitor retries a failed GPU read** instead of switching GPU and NPU usage off. (PR [#8516](https://github.com/amd/gaia/pull/8516))
+- **The terminal UI says when it is restoring the last model.** (PR [#8521](https://github.com/amd/gaia/pull/8521))
 - **A missing command-line program becomes a step to install it**, not a dead end. (PR [#8251](https://github.com/amd/gaia/pull/8251))
 - **A reply that stalls partway is requested again.** (PR [#8446](https://github.com/amd/gaia/pull/8446))
 - **A chat fails at once when the chosen model server is down**, instead of waiting. (PR [#8436](https://github.com/amd/gaia/pull/8436))
@@ -46,7 +59,7 @@ description: "Several mail accounts per provider, a browser pane in GAIA desktop
 - **Attached file names keep their spaces and non-Latin scripts.** (PR [#8461](https://github.com/amd/gaia/pull/8461))
 - **The agent can read images GAIA generated.** (PR [#8478](https://github.com/amd/gaia/pull/8478))
 - **A bare JSON answer ends the turn.** (PR [#8462](https://github.com/amd/gaia/pull/8462))
-- **A reply that was all thinking is told to act**, and the next one thinks less. (PRs [#8430](https://github.com/amd/gaia/pull/8430), [#8448](https://github.com/amd/gaia/pull/8448))
+- **A reply that was all thinking is told to act**, and the next one thinks less; after a second, reasoning stays low for the turn. (PRs [#8430](https://github.com/amd/gaia/pull/8430), [#8448](https://github.com/amd/gaia/pull/8448), [#8512](https://github.com/amd/gaia/pull/8512))
 - **A file shown whole with `cat` counts as read back.** (PR [#8458](https://github.com/amd/gaia/pull/8458))
 - **`run_python` says when long output was cut**, and a script missing a module is pointed at the system Python. (PRs [#8450](https://github.com/amd/gaia/pull/8450), [#8426](https://github.com/amd/gaia/pull/8426))
 - **Time limits are respected** — the model is told the limit, a command's timeout never outlasts it, and no test run is requested after it. (PRs [#8429](https://github.com/amd/gaia/pull/8429), [#8424](https://github.com/amd/gaia/pull/8424), [#8452](https://github.com/amd/gaia/pull/8452))
@@ -90,9 +103,10 @@ Thanks to the community members who contributed to this release:
 - [@bniladridas](https://github.com/bniladridas) — bare JSON answers, attachment names, failed-download reporting, and installer and test CI fixes (PRs [#8462](https://github.com/amd/gaia/pull/8462), [#8461](https://github.com/amd/gaia/pull/8461), [#8468](https://github.com/amd/gaia/pull/8468), [#8482](https://github.com/amd/gaia/pull/8482), [#8466](https://github.com/amd/gaia/pull/8466), [#8465](https://github.com/amd/gaia/pull/8465), [#8467](https://github.com/amd/gaia/pull/8467), [#8464](https://github.com/amd/gaia/pull/8464), [#8402](https://github.com/amd/gaia/pull/8402))
 - [@huong8373tt-beep](https://github.com/huong8373tt-beep) — optional Lemonade reranking for document search (PR [#6136](https://github.com/amd/gaia/pull/6136))
 - [@0z5a](https://github.com/0z5a) — sentence splitting for non-ASCII languages (PR [#8499](https://github.com/amd/gaia/pull/8499))
+- [@tharunsridhar](https://github.com/tharunsridhar) — skills eval scenarios that install a skill the agent doesn't bundle (PR [#8541](https://github.com/amd/gaia/pull/8541))
 
 ## Full Changelog
 
-**87 commits** since v0.26.0. The PR links above are the changelog.
+**119 commits** since v0.26.0. The PR links above are the changelog.
 
 Full Changelog: [v0.26.0...v0.27.0](https://github.com/amd/gaia/compare/v0.26.0...v0.27.0)

@@ -1,0 +1,109 @@
+---
+title: Context-sensitive session panel
+description: The Agent UI's session panel shows what matters for the work a chat is doing, and nothing for work it isn't
+---
+
+**Status: Built in the Agent UI.**
+
+The session panel used to show every chat the same long page. A person asking a
+quick question saw paragraphs about folder scope, sections that said "Nothing
+yet", and a cost line for a model running on their own PC. A person fixing a
+bug saw the same page, with the branch they were on nowhere in it.
+
+The panel now answers one question for whoever opens it: **what is this chat
+doing, and what can I do about it?** How to use it is in the
+[Agent UI guide](/guides/agent-ui/documents#the-session-panel).
+
+## Principles
+
+1. **Read the work from what happened, not from the words.** A chat is "coding"
+   because it changed files or ran `git`, not because the message said "code".
+   Guessing from wording would be wrong often enough to make the panel
+   untrustworthy.
+2. **Nothing appears until it has something to say.** No empty sections, no
+   placeholder text, no rows that state the default.
+3. **One line per fact or control.** Help opens from an info button or shows on
+   hover. A warning stays visible only while the risky state is on.
+4. **Environment is always there, and always first.** Where the chat runs and
+   what it may touch is the one thing every person needs in every chat.
+5. **New things ease in; nothing else moves.** Motion means "this just became
+   true", so it is never spent on what was already there.
+
+## What each person cares about
+
+| The person is… | They want to know | The panel shows |
+|---|---|---|
+| Asking a question | Is this private? Which model? Can it go online? | Where it runs, the model and its context window, Permissions, Internet. Nothing else. |
+| Writing or fixing code | Which repository and branch? What did it change? Can I take it back? | A **Coding** chip. Once it has changed files: the repository and branch with the uncommitted count, and **Changes** (review, undo, commit, pull request) directly under Environment. |
+| Having it run commands | What ran on my PC? What failed? What was refused? | A **Commands** chip and section: each command newest first, marked run, failed, stopped, running or not run, with failures counted. A command jumps to its turn. |
+| Asking about documents | Is my file ready? Did the answer really use it? Did it leave my PC? | A **Documents** chip and section: each file, indexing or failed with the reason, how many passages it has, how many the latest answer used. **This answer** says whether passages were sent to a cloud provider. |
+| Running an automation | When does it run next? Did the last run work? How do I stop it? | A **Scheduled** chip and a **Schedule** section: when it runs, the next run, the run count, the last failure, **Pause** and **Run now**. |
+| Watching a long task | How far along is it? What is it doing now? Did it finish? | A **Working a plan** chip while the reply runs, and a **Plan** checklist with a progress bar that stays as the turn left it until the next message. |
+| Researching on the web | Which sites did it contact? | A **Web** chip counting the sites across the whole chat; the latest answer's sites and sources are under **This answer**. |
+| Triaging email | Which mailbox is it reading? | An **Email** chip and the mailbox under Environment. |
+
+A chat can be several of these at once, and the chips stack.
+
+## How the panel decides
+
+Each signal is a fact the app already holds, so the panel makes no extra
+requests to decide what to show.
+
+| Chip | Shown when |
+|---|---|
+| Chat | None of the others apply |
+| Coding | The chat changed files, loaded a coding skill, or ran a developer tool (`git`, `npm`, `python`, `cargo` and similar) |
+| Commands | The chat's turns ran at least one shell command |
+| Documents | The chat holds at least one document |
+| Scheduled | A schedule runs in this chat, or a schedule started it |
+| Working a plan | The running turn made a plan |
+| Web | An answer in the chat contacted a website |
+| Email | The chat's agent is the email agent |
+
+Two stats appear on their own schedule rather than with a chip. The **context
+meter** shows once the chat has used any of its window and turns amber from
+80%, because it only matters once a chat has grown. A model on this PC never
+gets a **cost** line, because there is nothing to pay.
+
+## Motion
+
+A section, row or chip that turns up after the panel has settled opens to its
+height, fades in, and carries a brief wash of the accent that fades over about
+a second. A chip pops in slightly. Whatever is there when the panel opens, or
+when the person switches chats, is simply there: animating a whole panel on
+every chat switch would be noise.
+
+Plan steps tick over the way the transcript's checklist does, and the progress
+bar and context meter ease to their new width. All of it stops under the
+operating system's reduced-motion setting.
+
+## Not in scope
+
+- **Guessing intent from the message text.** See the first principle.
+- **Different panels per agent.** GAIA is one agent; the panel follows the
+  work, not a mode the person picks.
+- **Editing a schedule or a document from the panel.** The panel offers the two
+  or three actions a person reaches for mid-chat and links to the full screen
+  for the rest.
+- **The git branch of a folder the chat has not changed.** The backend reports
+  git state for files the chat changed; a branch row for an untouched working
+  folder needs a backend change.
+
+## Decisions
+
+- **A finished plan stays until the next message.** A person who walked away
+  from a long task comes back wanting one thing: did it finish? The checklist
+  stays as the turn left it, with nothing left spinning: each step is done,
+  failed, stopped or not started. It uses the same rule as the checklist in the
+  transcript, so the two never disagree, and a step is ticked only when a call
+  for it succeeded, never because the reply simply ended. The **Working a
+  plan** chip goes when the reply ends, because the work is over. The checklist
+  goes when the person sends their next message, because they have moved on.
+- **Commands is its own kind of work, not part of Coding.** A person can have
+  GAIA install a program or move files without writing any code, and calling
+  that "Coding" would be wrong. A chat that runs a developer tool gets both
+  chips.
+- **Chips are not dismissible.** Each chip states something that happened, such
+  as a file changing or a command running, so there is nothing to disagree
+  with. A dismissed chip would also need remembering per chat, for a row of
+  small labels that takes one line.
