@@ -2145,7 +2145,7 @@ gaia project trust <subcommand> [OPTIONS]
 
 _Alias:_ `gaia trust <subcommand> [OPTIONS]` — `gaia trust list`, `gaia trust add`, `gaia trust decline` and `gaia trust forget` behave exactly like their `gaia project trust` forms.
 
-Only you can trust a folder: `add` refuses to run when an agent, or a process an agent started, calls it.
+Only you can trust a folder. The agent cannot run `gaia trust` or `gaia project trust` from its tools, with or without your approval, and a `trusted` answer saved by an agent, or by a process it started, is refused.
 
 **Subcommands:**
 

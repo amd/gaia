@@ -220,17 +220,32 @@ def resolve_project_folder(
 
 
 def remember_folder_trust(
-    folder: Union[str, "os.PathLike[str]"], decision: str
+    folder: Union[str, "os.PathLike[str]"],
+    decision: str,
+    *,
+    asked_user: bool = False,
 ) -> None:
     """Save *decision* for *folder*, keeping every other folder's answer.
 
+    *asked_user* marks an answer the user just gave at the session's own trust
+    prompt; only then may a session started by an agent save ``trusted``.
+
     Raises:
-        ProjectTrustError: the store cannot be locked, read or written.
+        ProjectTrustError: the store cannot be locked, read or written, or an
+            agent tried to trust a folder.
     """
     if decision not in DECISIONS:
         raise ValueError(
             f"decision must be one of {', '.join(DECISIONS)}: {decision!r}"
         )
+    if decision == TRUSTED and not asked_user:
+        from gaia.skills.human_only import started_by_agent
+
+        if started_by_agent():
+            raise ProjectTrustError(
+                f"Refused to trust {folder}: only you can trust a folder, from "
+                "your own terminal (gaia project trust add)"
+            )
     store = trust_store_path()
     try:
         with file_lock(store):

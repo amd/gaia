@@ -461,7 +461,7 @@ def test_pre_approved_tools_never_answer_for_the_user(repo):
 def test_a_store_that_cannot_be_written_keeps_the_answer_for_the_session(
     repo, monkeypatch, caplog
 ):
-    def refuse(*_args):
+    def refuse(*_args, **_kwargs):
         raise ProjectTrustError("Cannot save the answer to x")
 
     monkeypatch.setattr("gaia.project_trust.remember_folder_trust", refuse)
@@ -583,3 +583,48 @@ def test_resolve_project_folder_file_not_dir_raises(tmp_path):
     some_file.write_text("content", encoding="utf-8")
     with pytest.raises(ValueError, match="not a directory"):
         resolve_project_folder(some_file)
+
+
+@pytest.fixture(params=["env_marker", "in_process_tool"])
+def as_agent(request, monkeypatch):
+    from gaia.skills.human_only import AGENT_CHILD_ENV, agent_tool_running
+
+    if request.param == "env_marker":
+        monkeypatch.setenv(AGENT_CHILD_ENV, "1")
+        yield
+    else:
+        monkeypatch.delenv(AGENT_CHILD_ENV, raising=False)
+        with agent_tool_running():
+            yield
+
+
+def test_an_agent_cannot_save_trusted_through_the_library(repo, as_agent):
+    with pytest.raises(ProjectTrustError, match="only you can trust a folder"):
+        remember_folder_trust(repo, TRUSTED)
+    assert folder_trust(repo) is None
+
+
+def test_an_agent_cannot_overwrite_a_declined_answer_with_trusted(repo, monkeypatch):
+    from gaia.skills.human_only import AGENT_CHILD_ENV
+
+    remember_folder_trust(repo, DECLINED)
+    monkeypatch.setenv(AGENT_CHILD_ENV, "1")
+    with pytest.raises(ProjectTrustError):
+        remember_folder_trust(repo, TRUSTED)
+    assert folder_trust(repo) == DECLINED
+
+
+def test_an_agent_may_still_save_declined(repo, as_agent):
+    remember_folder_trust(repo, DECLINED)
+    assert folder_trust(repo) == DECLINED
+
+
+def test_the_users_own_answer_at_the_session_prompt_is_saved_under_an_agent(
+    repo, as_agent
+):
+    console = _Console(answer=True)
+    agent = _FakeAgent(repo, console)
+    agent._on_task_start("hi")
+    assert len(console.asked) == 1
+    assert agent._full_project_context() is True
+    assert folder_trust(repo) == TRUSTED
